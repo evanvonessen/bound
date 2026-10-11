@@ -1,0 +1,20 @@
+diff --git a/Cores/MelonDSDeltaCore/MelonDSDeltaCore.xcodeproj/project.pbxproj b/Cores/MelonDSDeltaCore/MelonDSDeltaCore.xcodeproj/project.pbxproj
+index e0925d33..aca85946 100644
+--- a/Cores/MelonDSDeltaCore/MelonDSDeltaCore.xcodeproj/project.pbxproj
++++ b/Cores/MelonDSDeltaCore/MelonDSDeltaCore.xcodeproj/project.pbxproj
+@@ -1111,6 +1111,7 @@
+ 			buildSettings = {
+ 				CODE_SIGNING_ALLOWED = NO;
+ 				ALWAYS_SEARCH_USER_PATHS = NO;
++				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = "$(inherited) x86_64";
+ 				CLANG_ANALYZER_NONNULL = YES;
+ 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+ 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+@@ -1182,6 +1183,7 @@
+ 			buildSettings = {
+ 				CODE_SIGNING_ALLOWED = NO;
+ 				ALWAYS_SEARCH_USER_PATHS = NO;
++				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = "$(inherited) x86_64";
+ 				CLANG_ANALYZER_NONNULL = YES;
+ 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+ 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";

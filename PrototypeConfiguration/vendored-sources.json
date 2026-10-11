@@ -83,6 +83,10 @@
     {
       "path": "PrototypePatches/dependency-privacy.patch",
       "purpose": "Bundle source-audited elapsed-time API declaration in DeltaCore.framework; no runtime changes or upstream pin change."
+    },
+    {
+      "path": "PrototypePatches/melonds-simulator-arm64.patch",
+      "purpose": "Keep the existing ARM64-only MelonDS Xcode JIT source set on arm64 iOS Simulator builds; no emulator source or upstream pin changes."
     }
   ],
   "sha256": {
@@ -7769,7 +7773,7 @@
     "Cores/GPGXDeltaCore/Sources/GenesisPlusGX/Genesis-Plus-GX/sdl/unzip.h": "30a893cf5ce1c2c43c076060a9da31271471c86038148a0804e6caff802ad295",
     "Cores/GPGXDeltaCore/Sources/GenesisPlusGX/include/shared.h": "a49e79e561c5799d0b66a5bf032b354449c441fa85243cc449e38aa815fdd516",
     "Cores/MelonDSDeltaCore/MelonDSDeltaCore.podspec": "9d46e7b35fb7514382e48be0a4755155cbd02f5b35e36d64af095674fd04a00b",
-    "Cores/MelonDSDeltaCore/MelonDSDeltaCore.xcodeproj/project.pbxproj": "780015fcf9282188663ba611025c83f13bb37d7e979a79f6955a4398d7921f6a",
+    "Cores/MelonDSDeltaCore/MelonDSDeltaCore.xcodeproj/project.pbxproj": "89b1daf4704b2f804ceea4b2910547fd5e08a12fdf1d6af6c9ce09471bd1412e",
     "Cores/MelonDSDeltaCore/MelonDSDeltaCore.xcodeproj/project.xcworkspace/contents.xcworkspacedata": "087ebbb39ed9db3947f138a2f396928b1c0ef7704790e50ccc08e7a125e8a7a7",
     "Cores/MelonDSDeltaCore/MelonDSDeltaCore.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist": "dfa0f9bb85b95ccba9c6811adadf8cb407fb5d52088e89db83ebc308ec448542",
     "Cores/MelonDSDeltaCore/MelonDSDeltaCore.xcodeproj/xcshareddata/xcschemes/MelonDSDeltaCore.xcscheme": "8033ad7aeb83d580c37100606830528912e0aa0d8906741bc4bb431c2cd02ebd",
