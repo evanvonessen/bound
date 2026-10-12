@@ -1,0 +1,33 @@
+2048 Advance v1.3.1 — Basil Termini
+
+Official download: https://basil-termini.itch.io/2048-advance
+Creator source: https://github.com/Paperdomo101/2048-GBA
+Creator source snapshot: ae36800dfa1314f96c4c8785b5c2d077fb731aff
+The creator's game project, graphics and sounds carry CC0 1.0.
+Full creator license: LICENSE-CC0-1.0.txt
+
+Official ROM: 2048.gba, 262144 bytes (256 KiB), downloaded 2026-10-08.
+Creator itch.io upload ID: 18422861, labelled 2048.gba v1.3.1.
+ROM bytes are unmodified; GBA fixed header byte and header checksum verified.
+SHA-256: 6c6cfe318b1c724a29c5e08516a15e5ace354e32b2a04a08d388cfeb4c65ee58
+
+Linked library and runtime notices are distinct from the game project's CC0:
+- libtonc: Copyright 2005-2009 J Vijn; MIT notice in LICENSES/libtonc-MIT.txt.
+  Source: https://github.com/devkitPro/libtonc
+  Original author: https://www.coranac.com/projects/tonc/
+- Maxmod: Copyright 2008 Mukunda Johnson; notice in LICENSES/maxmod.txt.
+  Source: https://github.com/devkitPro/maxmod
+- Newlib C runtime: component notices in LICENSES/COPYING.NEWLIB.
+  Source: https://sourceware.org/newlib/
+- GCC runtime: LICENSES/GPL-3.0.txt and GCC-Runtime-Library-Exception-3.1.txt.
+  Source: https://gcc.gnu.org/
+- devkitARM GBA startup: MPL 2.0, in LICENSES/MPL-2.0.txt.
+  Source form is available at https://github.com/devkitPro/devkitarm-crtls
+
+The creator's prebuilt does not publish exact SDK revisions. The runtime notices
+are included conservatively; an exact matching startup/runtime revision is not
+asserted. SOURCE.json records the notice sources and hashes.
+
+Suggested visible credit: "2048 Advance by Basil Termini — gameplay shown in Bound."
+Do not imply creator endorsement. Keep the accompanying notices when redistributing.
+Import 2048.gba through Bound's + / Files picker. Use the D-pad to slide the tiles.

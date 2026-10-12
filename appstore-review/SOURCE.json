@@ -1,0 +1,68 @@
+{
+  "title": "2048 Advance",
+  "version": "1.3.1",
+  "creator": "Basil Termini",
+  "creator_page": "https://basil-termini.itch.io/2048-advance",
+  "upload_id": 18422861,
+  "source_commit": "ae36800dfa1314f96c4c8785b5c2d077fb731aff",
+  "bytes": 262144,
+  "sha256": "6c6cfe318b1c724a29c5e08516a15e5ace354e32b2a04a08d388cfeb4c65ee58",
+  "sha1": "758db9c19759510703b63743794b37630bf81bd5",
+  "header_title": "2048",
+  "header_checksum_valid": true,
+  "downloaded_on": "2026-10-08",
+  "rom_file": "2048.gba",
+  "official_download_route": "https://basil-termini.itch.io/2048-advance/file/18422861",
+  "creator_source": "https://github.com/Paperdomo101/2048-GBA/tree/ae36800dfa1314f96c4c8785b5c2d077fb731aff",
+  "rom_modified": false,
+  "license_notices": [
+    {
+      "file": "CREATOR-README.md",
+      "source": "https://raw.githubusercontent.com/Paperdomo101/2048-GBA/ae36800dfa1314f96c4c8785b5c2d077fb731aff/README.md",
+      "sha256": "ebdba7ab3b12712df474e42ec030ea21c56663cf314e3ff4575b501220140d1d"
+    },
+    {
+      "file": "LICENSE-CC0-1.0.txt",
+      "source": "https://raw.githubusercontent.com/Paperdomo101/2048-GBA/ae36800dfa1314f96c4c8785b5c2d077fb731aff/LICENSE",
+      "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499"
+    },
+    {
+      "file": "LICENSES/libtonc-MIT.txt",
+      "source": "https://raw.githubusercontent.com/gbadev-org/libtonc/master/license.txt",
+      "sha256": "225e35cf24750edda27c5dcbb06db4d8aa119c99e1972e5c3a51b128c3515fcf"
+    },
+    {
+      "file": "LICENSES/maxmod.txt",
+      "source": "https://raw.githubusercontent.com/devkitPro/maxmod/master/maxmod_license.txt",
+      "sha256": "b3c68af737a0bfc1cafd13b617323c0212e8def5b86ff2c02d07c07f4cbfc2a4"
+    },
+    {
+      "file": "LICENSES/COPYING.NEWLIB",
+      "source": "https://sourceware.org/newlib/COPYING.NEWLIB",
+      "sha256": "9a59b4ee3af067045fe0ea78786201c42d54756fe48cbccf44f3dfc398474717"
+    },
+    {
+      "file": "LICENSES/GPL-3.0.txt",
+      "source": "https://raw.githubusercontent.com/gcc-mirror/gcc/master/COPYING3",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    {
+      "file": "LICENSES/GCC-Runtime-Library-Exception-3.1.txt",
+      "source": "https://raw.githubusercontent.com/gcc-mirror/gcc/master/COPYING.RUNTIME",
+      "sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74"
+    },
+    {
+      "file": "LICENSES/MPL-2.0.txt",
+      "source": "https://www.mozilla.org/media/MPL/2.0/index.txt",
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+    }
+  ],
+  "runtime_source": {
+    "startup": "https://github.com/devkitPro/devkitarm-crtls",
+    "libtonc": "https://github.com/devkitPro/libtonc",
+    "maxmod": "https://github.com/devkitPro/maxmod",
+    "newlib": "https://sourceware.org/newlib/",
+    "gcc": "https://gcc.gnu.org/"
+  },
+  "runtime_versions": "The creator prebuilt does not identify exact SDK revisions; runtime notices are included conservatively."
+}
