@@ -90,6 +90,8 @@ class GameViewController: DeltaCore.GameViewController
     private var boundControlConfiguration: BoundControlConfiguration?
     private var boundAppliedSkinIdentifier: String?
     private let boundPanelActions = BoundPanelActionRouter()
+    var boundFastForwardPreferences = BoundFastForwardPreferences()
+    private var boundRestoredFastForward = false
     /// Assumed to be Delta.Game instance
     override var game: GameProtocol? {
         willSet {
@@ -118,6 +120,7 @@ class GameViewController: DeltaCore.GameViewController
             
             self.startTrackingAchievements()
             boundCompanion.bind(core: emulatorCore, gameID: game?.identifier ?? "")
+            self.restoreBoundFastForward()
         }
     }
     
@@ -265,6 +268,7 @@ class GameViewController: DeltaCore.GameViewController
         NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.didEnterBackground(with:)), name: UIApplication.didEnterBackgroundNotification, object: UIApplication.shared)
         
         NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.settingsDidChange(with:)), name: Settings.didChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.boundFastForwardExperimentsDidChange), name: BoundExperimentalFeaturesPreferences.didChangeNotification, object: nil)
         
         NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.deepLinkControllerWillLaunchGame(with:)), name: .deepLinkControllerWillLaunchGame, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.deepLinkControllerLaunchGame(with:)), name: .deepLinkControllerLaunchGame, object: nil)
@@ -315,7 +319,7 @@ class GameViewController: DeltaCore.GameViewController
             {
             case .quickSave: self.performQuickSaveAction()
             case .quickLoad: self.performQuickLoadAction()
-            case .fastForward: self.performFastForwardAction(activate: true)
+            case .fastForward: self.performFastForwardAction(activate: true, remember: false)
             case .reverseScreens: self.performReverseScreensAction()
             case .screenshot: self.performScreenshotAction()
             case .cycleBoundPanels: break // Handled independently above; never an emulated B input.
@@ -347,7 +351,7 @@ class GameViewController: DeltaCore.GameViewController
             {
             case .quickSave: break
             case .quickLoad: break
-            case .fastForward: self.performFastForwardAction(activate: false)
+            case .fastForward: self.performFastForwardAction(activate: false, remember: false)
             case .toggleFastForward: break
             case .reverseScreens: break
             case .screenshot: break
@@ -1396,9 +1400,41 @@ extension GameViewController
         }
     }
     
-    func performFastForwardAction(activate: Bool)
+    private var boundFastForwardGameID: String? {
+        guard let game = self.game else { return nil }
+        // Library ROM filenames and identifiers are stable across sandbox moves.
+        return (game as? Game)?.identifier ?? game.fileURL.lastPathComponent
+    }
+
+    private func restoreBoundFastForward() {
+        boundRestoredFastForward = false
+        guard BoundFeatureVisibility.experimentalFeaturesEnabled,
+              let gameID = boundFastForwardGameID else { return }
+        performFastForwardAction(activate: boundFastForwardPreferences.isEnabled(for: gameID), remember: false, showToast: false)
+        if let core = emulatorCore {
+            boundRestoredFastForward = core.rate != core.deltaCore.supportedRates.lowerBound
+        }
+    }
+
+    @objc private func boundFastForwardExperimentsDidChange() {
+        if BoundFeatureVisibility.experimentalFeaturesEnabled {
+            restoreBoundFastForward()
+        } else if boundRestoredFastForward {
+            performFastForwardAction(activate: false, remember: false, showToast: false)
+            boundRestoredFastForward = false
+        }
+    }
+
+    func performFastForwardAction(activate: Bool, remember: Bool = true, showToast: Bool = true)
     {
         guard let emulatorCore = self.emulatorCore, !emulatorCore.isWirelessMultiplayerActive else { return }
+
+        if remember {
+            boundRestoredFastForward = false
+            if BoundFeatureVisibility.experimentalFeaturesEnabled, let gameID = boundFastForwardGameID {
+                boundFastForwardPreferences.setEnabled(activate, for: gameID)
+            }
+        }
         
         if activate
         {
@@ -1427,7 +1463,7 @@ extension GameViewController
                 emulatorCore.rate = emulatorCore.deltaCore.supportedRates.upperBound
             }
 
-            if ExperimentalFeatures.shared.toastNotifications.fastForwardEnabled
+            if showToast && ExperimentalFeatures.shared.toastNotifications.fastForwardEnabled
             {
                 self.presentExperimentalToastView(NSLocalizedString("Fast Forward Enabled", comment: ""))
             }
@@ -1436,7 +1472,7 @@ extension GameViewController
         {
             emulatorCore.rate = emulatorCore.deltaCore.supportedRates.lowerBound
 
-            if ExperimentalFeatures.shared.toastNotifications.fastForwardEnabled
+            if showToast && ExperimentalFeatures.shared.toastNotifications.fastForwardEnabled
             {
                 self.presentExperimentalToastView(NSLocalizedString("Fast Forward Disabled", comment: ""))
             }

@@ -145,6 +145,60 @@ final class CompanionUITests: XCTestCase {
         if close.exists { close.tap() } else { app.buttons["Done"].firstMatch.tap() }
     }
 
+    func testFastForwardToggleSurvivesAppTerminationWhenExperimental() throws {
+        // Xcode 27 can miss the native menu's animation-idle notification.
+        // Skip that runner-only wait; every transition below checks real UI.
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originalImplementations: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            let replacement = imp_implementationWithBlock(skip)
+            originalImplementations.append((method, method_setImplementation(method, replacement)))
+        }
+        defer {
+            for (method, original) in originalImplementations {
+                let replacement = method_setImplementation(method, original)
+                imp_removeBlock(replacement)
+            }
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        defer {
+            app.terminate()
+            app.launch()
+            setExperimentalFeatures(false, in: app)
+            app.terminate()
+        }
+
+        func openGameAndPause() {
+            let game = app.collectionViews.cells.firstMatch
+            XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
+            XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+            openNativePause(in: app)
+        }
+        openGameAndPause()
+        let fastForward = app.buttons["Fast Forward"]
+        XCTAssertTrue(fastForward.waitForExistence(timeout: 5))
+        if fastForward.isSelected { fastForward.tap() }
+        fastForward.tap()
+        XCTAssertTrue(fastForward.isSelected)
+
+        app.terminate()
+        app.launch()
+        openGameAndPause()
+        XCTAssertTrue(fastForward.isSelected, "The enabled toggle must restore after the app process terminates")
+        fastForward.tap()
+        XCTAssertFalse(fastForward.isSelected)
+
+        app.terminate()
+        app.launch()
+        openGameAndPause()
+        XCTAssertFalse(fastForward.isSelected, "Turning fast forward off must also survive app termination")
+    }
+
     private func openRRDexPlayback(in app: XCUIApplication) {
         app.launch()
         setExperimentalFeatures(true, in: app)

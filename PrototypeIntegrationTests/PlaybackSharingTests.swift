@@ -96,6 +96,7 @@ private final class TransitionCount: @unchecked Sendable {
 }
 
 @MainActor final class PlaybackSharingTests: XCTestCase {
+    private let fastForwardRenderer = AppPacingNativeDelegate(metal: true)
     private func configuration() -> FriendSharingConfiguration {
         .init(appID: String(repeating: "0", count: 32), channel: "offline-fixture", uid: 1, remoteUID: 2, token: "offline-not-an-RTC-token")
     }
@@ -482,6 +483,151 @@ extension PlaybackSharingTests {
             XCTAssertFalse(gestures.contains { ($0 as? UITapGestureRecognizer)?.numberOfTapsRequired == 2 }, "Menu double taps must not save state")
             XCTAssertEqual(gestures.filter { $0 is UILongPressGestureRecognizer }.count, 1, "Only the existing game-screen reposition gesture remains; Menu long press must not load state")
         }
+    }
+
+    private func fastForwardOwner(for fixture: URL, defaults: UserDefaults) -> GameViewController {
+        let owner = GameViewController()
+        // Match the app's GBA Metal path; the synthetic GameProtocol fixture
+        // otherwise selects Simulator OpenGL and crashes on context teardown.
+        owner.delegate = fastForwardRenderer
+        owner.boundFastForwardPreferences = BoundFastForwardPreferences(defaults: defaults)
+        owner.loadViewIfNeeded()
+        owner.game = FixtureGame(fileURL: fixture,
+                                 gameSaveURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sav"))
+        return owner
+    }
+
+    private func isolatedFastForwardDefaults() -> (UserDefaults, String) {
+        let suite = "BoundFastForwardTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        return (defaults, suite)
+    }
+
+    func testFastForwardTogglePersistsPerFixtureAndRestoresOnGameRecreation() async throws {
+        let previousExperimentalState = BoundExperimentalFeaturesPreferences().isEnabled
+        BoundExperimentalFeaturesPreferences().isEnabled = true
+        let (defaults, suite) = isolatedFastForwardDefaults()
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            BoundExperimentalFeaturesPreferences().isEnabled = previousExperimentalState
+        }
+
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let owner = fastForwardOwner(for: fixture, defaults: defaults)
+        defer { owner.game = nil }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let priorWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = owner
+        window.makeKeyAndVisible()
+        defer {
+            _ = owner.pauseEmulation()
+            window.isHidden = true
+            window.rootViewController = nil
+            priorWindow?.makeKeyAndVisible()
+        }
+        let firstCore = try XCTUnwrap(owner.emulatorCore)
+        let gameID = fixture.lastPathComponent
+        for _ in 0..<40 where firstCore.state != .running { try await wait(0.05) }
+        XCTAssertEqual(firstCore.state, .running)
+        firstCore.audioManager.isEnabled = false
+
+        owner.performFastForwardAction(activate: true, showToast: false)
+        XCTAssertTrue(BoundFastForwardPreferences(defaults: defaults).isEnabled(for: gameID))
+        XCTAssertGreaterThan(firstCore.rate, firstCore.deltaCore.supportedRates.lowerBound)
+
+        // Replacing the core for the same ROM models a fresh app/game session.
+        owner.game = nil
+        owner.game = FixtureGame(fileURL: fixture,
+                                 gameSaveURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sav"))
+        let restoredCore = try XCTUnwrap(owner.emulatorCore)
+        XCTAssertGreaterThan(restoredCore.rate, restoredCore.deltaCore.supportedRates.lowerBound)
+        XCTAssertTrue(owner.resumeEmulation())
+        for _ in 0..<40 where restoredCore.state != .running { try await wait(0.05) }
+        XCTAssertEqual(restoredCore.state, .running)
+        XCTAssertGreaterThan(restoredCore.rate, restoredCore.deltaCore.supportedRates.lowerBound,
+                             "Starting the recreated GBA core must preserve the restored rate")
+        _ = owner.pauseEmulation()
+
+        owner.performFastForwardAction(activate: false, showToast: false)
+        XCTAssertFalse(BoundFastForwardPreferences(defaults: defaults).isEnabled(for: gameID))
+        XCTAssertEqual(restoredCore.rate, restoredCore.deltaCore.supportedRates.lowerBound)
+
+        let fixtureDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
+        let secondFixture = fixtureDirectory.appendingPathComponent("BoundDiagnostic-second.gba")
+        try FileManager.default.copyItem(at: fixture, to: secondFixture)
+        defer { try? FileManager.default.removeItem(at: secondFixture) }
+        BoundFastForwardPreferences(defaults: defaults).setEnabled(true, for: gameID)
+        owner.game = FixtureGame(fileURL: secondFixture,
+                                 gameSaveURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sav"))
+        let secondCore = try XCTUnwrap(owner.emulatorCore)
+        XCTAssertEqual(secondCore.rate, secondCore.deltaCore.supportedRates.lowerBound,
+                       "A different ROM filename must not inherit the first ROM's saved toggle")
+    }
+
+    func testFastForwardMomentaryActionsAndExperimentalGateDoNotPersist() throws {
+        let previousExperimentalState = BoundExperimentalFeaturesPreferences().isEnabled
+        BoundExperimentalFeaturesPreferences().isEnabled = true
+        let (defaults, suite) = isolatedFastForwardDefaults()
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            BoundExperimentalFeaturesPreferences().isEnabled = previousExperimentalState
+        }
+
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let gameID = fixture.lastPathComponent
+        let owner = fastForwardOwner(for: fixture, defaults: defaults)
+        defer { owner.game = nil }
+        let core = try XCTUnwrap(owner.emulatorCore)
+        let preferences = BoundFastForwardPreferences(defaults: defaults)
+
+        owner.performFastForwardAction(activate: true, remember: false, showToast: false)
+        XCTAssertFalse(preferences.isEnabled(for: gameID), "A held fast-forward action must not become a saved toggle")
+        owner.performFastForwardAction(activate: false, remember: false, showToast: false)
+        XCTAssertFalse(preferences.isEnabled(for: gameID))
+
+        BoundExperimentalFeaturesPreferences().isEnabled = false
+        owner.performFastForwardAction(activate: true, showToast: false)
+        XCTAssertFalse(preferences.isEnabled(for: gameID), "The build-13 fast-forward action must not write experimental state")
+        XCTAssertGreaterThan(core.rate, core.deltaCore.supportedRates.lowerBound,
+                             "The existing manual fast-forward action remains available with experiments off")
+        owner.performFastForwardAction(activate: false, remember: false, showToast: false)
+
+        BoundExperimentalFeaturesPreferences().isEnabled = true
+        core.isWirelessMultiplayerActive = true
+        owner.performFastForwardAction(activate: true, showToast: false)
+        XCTAssertFalse(preferences.isEnabled(for: gameID), "Wireless multiplayer must reject and not remember fast-forward")
+        XCTAssertEqual(core.rate, core.deltaCore.supportedRates.lowerBound)
+    }
+
+    func testFastForwardExperimentalGateRetainsPreferenceAndAppliesChanges() throws {
+        let previousExperimentalState = BoundExperimentalFeaturesPreferences().isEnabled
+        BoundExperimentalFeaturesPreferences().isEnabled = false
+        let (defaults, suite) = isolatedFastForwardDefaults()
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            BoundExperimentalFeaturesPreferences().isEnabled = previousExperimentalState
+        }
+
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let gameID = fixture.lastPathComponent
+        let preferences = BoundFastForwardPreferences(defaults: defaults)
+        preferences.setEnabled(true, for: gameID)
+        let owner = fastForwardOwner(for: fixture, defaults: defaults)
+        defer { owner.game = nil }
+        let core = try XCTUnwrap(owner.emulatorCore)
+
+        XCTAssertEqual(core.rate, core.deltaCore.supportedRates.lowerBound, "Saved fast-forward must not restore while experiments are off")
+        XCTAssertTrue(preferences.isEnabled(for: gameID), "The opt-in gate must retain the saved preference")
+
+        BoundExperimentalFeaturesPreferences().isEnabled = true
+        XCTAssertGreaterThan(core.rate, core.deltaCore.supportedRates.lowerBound, "Enabling experiments restores the current ROM's saved toggle")
+        BoundExperimentalFeaturesPreferences().isEnabled = false
+        XCTAssertEqual(core.rate, core.deltaCore.supportedRates.lowerBound, "Disabling experiments stops auto-restored fast-forward")
+        XCTAssertTrue(preferences.isEnabled(for: gameID), "Disabling experiments must preserve the saved preference")
     }
 
     func testControllerModeCancellationPreservesActualNativeExternalHeldAndSustainedA() async throws {

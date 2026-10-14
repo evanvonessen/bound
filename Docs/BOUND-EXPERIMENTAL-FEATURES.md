@@ -18,6 +18,13 @@ learnset randomizer configuration. See `Docs/RADICAL-RED-DEX.md` for provenance,
 save validation and coverage. Disabling experiments removes both reference panels
 and dismisses their keyboard, sheets and importer without erasing preferences.
 
+With experiments enabled, the pause-menu Fast Forward toggle (and mapped
+Toggle Fast Forward action) is remembered on this device for each ROM and
+restored when the game opens again, using its existing preferred speed. Holding
+a momentary Fast Forward input does not change the saved toggle. Turning
+experiments off stops an automatically restored fast-forward session without
+erasing the saved choice; ordinary manual fast forward remains available.
+
 Every new feature added after this switch must check
 `BoundFeatureVisibility.experimentalFeaturesEnabled` before making its UI or
 behavior accessible. Gate navigation destinations, actions and background work
