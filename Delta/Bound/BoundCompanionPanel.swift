@@ -649,6 +649,7 @@ private struct BoundFriendsSheet: View {
     @ObservedObject var sharing: FriendSharingSession
     @ObservedObject var onboarding: FriendOnboarding
     @ObservedObject var account: BoundFriendAccount
+    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentalFeaturesEnabled = false
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @State private var email = ""
@@ -717,7 +718,23 @@ private struct BoundFriendsSheet: View {
                         TextField("Your display name", text: $name)
                         Button("Create invite") { onboarding.create(name: name) }.disabled(onboarding.busy || name.isEmpty)
                         if let code = onboarding.inviteCode {
-                            Text(code).textSelection(.enabled)
+                            HStack {
+                                Text(code).textSelection(.enabled)
+                                if experimentalFeaturesEnabled {
+                                    Spacer()
+                                    Button {
+                                        guard BoundFeatureVisibility.experimentalFeaturesEnabled else { return }
+                                        UIPasteboard.general.string = code
+                                        UIAccessibility.post(notification: .announcement, argument: "Friend code copied")
+                                    } label: {
+                                        Image(systemName: "doc.on.clipboard")
+                                            .frame(minWidth: 44, minHeight: 44)
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .accessibilityLabel("Copy friend sharing code")
+                                    .accessibilityIdentifier("bound.copy-friend-code")
+                                }
+                            }
                         }
                         TextField("Friend's invite code", text: $invite).textInputAutocapitalization(.characters).autocorrectionDisabled()
                         Button("Accept invite") { onboarding.accept(code: invite, name: name); invite = "" }

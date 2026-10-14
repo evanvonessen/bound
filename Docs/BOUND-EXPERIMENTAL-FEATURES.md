@@ -25,6 +25,9 @@ a momentary Fast Forward input does not change the saved toggle. Turning
 experiments off stops an automatically restored fast-forward session without
 erasing the saved choice; ordinary manual fast forward remains available.
 
+The Friends sheet also shows a clipboard button beside a generated invite code
+when experiments are enabled. It copies just the code, ready to paste.
+
 Every new feature added after this switch must check
 `BoundFeatureVisibility.experimentalFeaturesEnabled` before making its UI or
 behavior accessible. Gate navigation destinations, actions and background work
