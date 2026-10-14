@@ -91,6 +91,53 @@ final class CompanionUITests: XCTestCase {
         add(attachment)
     }
 
+    func testLibraryExperimentalFeaturesSwitchPersistsAndKeepsBuild13Settings() throws {
+        let app = XCUIApplication()
+        #if DEBUG
+        app.launchArguments.append("--bound-ui-no-animations")
+        #endif
+        app.launch()
+
+        func openLibrarySettings() {
+            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20))
+            app.buttons["Settings"].tap()
+            XCTAssertTrue(app.switches["bound.enable-experimental-features"].waitForExistence(timeout: 10))
+        }
+        func assertBuild13Settings() {
+            XCTAssertTrue(app.staticTexts["Controllers"].exists)
+            XCTAssertTrue(app.staticTexts["Controller opacity"].exists)
+            XCTAssertFalse(app.staticTexts["Touch & Haptics"].exists)
+            XCTAssertFalse(app.staticTexts["Online Multiplayer"].exists)
+            XCTAssertFalse(app.staticTexts["Patreon"].exists)
+        }
+        openLibrarySettings()
+        let toggle = app.switches["bound.enable-experimental-features"]
+        func tapToggle() {
+            XCTAssertTrue(toggle.isHittable)
+            // SwiftUI exposes the whole Form row as the switch; tap its native track.
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        if toggle.value as? String == "1" { tapToggle() }
+        XCTAssertEqual(toggle.value as? String, "0")
+        assertBuild13Settings()
+        tapToggle()
+        XCTAssertEqual(toggle.value as? String, "1")
+        assertBuild13Settings()
+
+        app.terminate()
+        app.launch()
+        openLibrarySettings()
+        XCTAssertEqual(toggle.value as? String, "1")
+        tapToggle()
+        XCTAssertEqual(toggle.value as? String, "0")
+        app.terminate()
+        app.launch()
+        openLibrarySettings()
+        XCTAssertEqual(toggle.value as? String, "0")
+        assertBuild13Settings()
+        screenshot("Library-experimental-features-off")
+    }
+
     private func element(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }

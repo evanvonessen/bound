@@ -31,9 +31,21 @@ struct SettingsView: View
     @Environment(\.dismiss)
     private var dismiss
 
+    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey)
+    private var experimentalFeaturesEnabled = false
+
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Toggle("Enable Experimental Features", isOn: Binding(
+                        get: { experimentalFeaturesEnabled },
+                        set: { BoundExperimentalFeaturesPreferences().isEnabled = $0 }
+                    ))
+                    .accessibilityIdentifier("bound.enable-experimental-features")
+                } footer: {
+                    Text("Enable new features under development. Turn off to use the build 13 feature set.")
+                }
                 ControlsSection()
                 EmulationSection()
                 if !BoundFeatureVisibility.simplifiedSettings { OnlineMultiplayerSection() }

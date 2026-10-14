@@ -29,6 +29,7 @@ struct BoundEmulationDetails: Equatable {
 /// Restore this exact feature set by changing one flag; stored preferences remain intact.
 enum BoundFeatureVisibility {
     static let simplifiedSettings = true
+    static var experimentalFeaturesEnabled: Bool { BoundExperimentalFeaturesPreferences().isEnabled }
 }
 
 /// Appearance and screen arrangement are independent preferences. Touch feedback uses Delta's existing settings.
