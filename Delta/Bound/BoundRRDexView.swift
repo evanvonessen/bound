@@ -15,6 +15,7 @@ struct BoundRRDexView: View {
     @State private var showingImporter = false
     @State private var importError: String?
     @State private var sheet: Detail?
+    @State private var awaitingDetailDismissal = false
     private enum Detail: String, Identifiable { case weaknesses, learnset, information; var id: String { rawValue } }
     private var interacting: Bool { searching || showingImporter || sheet != nil || importError != nil }
 
@@ -29,7 +30,7 @@ struct BoundRRDexView: View {
                 }
                 .accessibilityElement(children: .contain).accessibilityIdentifier("bound.rrdex")
                 .onAppear { choice = preferences.read(gameID: gameID) }
-                .sheet(item: $sheet) { detail in
+                .sheet(item: $sheet, onDismiss: detailDismissed) { detail in
                     BoundRRDexDetail(title: detail == .weaknesses ? "Type matchups" : detail == .learnset ? "Learnset" : "RRDex") {
                         switch detail {
                         case .weaknesses: BoundRRDexMatchups(pokemon: pokemon, catalog: catalog)
@@ -47,11 +48,28 @@ struct BoundRRDexView: View {
         .alert("Save could not be imported", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("OK", role: .cancel) { importError = nil }
         } message: { Text(importError ?? "") }
-        .onChange(of: interacting) { _, active in presentationChanged(active) }
+        .onChange(of: interacting) { _, active in
+            if active || !awaitingDetailDismissal { presentationChanged(active) }
+        }
         .onChange(of: experimentsEnabled) { _, enabled in
             if !enabled { searching = false; showingImporter = false; sheet = nil; importError = nil }
         }
-        .onDisappear { searching = false; showingImporter = false; sheet = nil; presentationChanged(false) }
+        .onDisappear {
+            searching = false; showingImporter = false; sheet = nil
+            if !awaitingDetailDismissal { presentationChanged(false) }
+        }
+    }
+
+    private func showDetail(_ detail: Detail) {
+        guard experimentsEnabled else { return }
+        awaitingDetailDismissal = true
+        searching = false; sheet = detail
+    }
+
+    private func detailDismissed() {
+        // Keep the pause until UIKit clears the sheet, including a search-to-detail handoff.
+        awaitingDetailDismissal = false
+        if !interacting { presentationChanged(false) }
     }
 
     private func card(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog) -> some View {
@@ -63,7 +81,7 @@ struct BoundRRDexView: View {
                     guard experimentsEnabled else { return }; searching = false; showingImporter = true
                 } label: { Label(choice.save == nil ? "Import save" : "Save loaded", systemImage: choice.save == nil ? "square.and.arrow.down" : "checkmark.circle") }
                     .font(.system(size: 11, weight: .medium)).accessibilityIdentifier("bound.rrdex-import")
-                Button { searching = false; sheet = .information } label: { Image(systemName: "info.circle") }
+                Button { showDetail(.information) } label: { Image(systemName: "info.circle") }
                     .accessibilityLabel("Dex information").accessibilityIdentifier("bound.rrdex-info")
             }
             HStack(spacing: 6) {
@@ -126,7 +144,7 @@ struct BoundRRDexView: View {
 
     private func detailButton(_ title: String, icon: String, detail: Detail) -> some View {
         Button {
-            guard experimentsEnabled else { return }; searching = false; sheet = detail
+            showDetail(detail)
         } label: {
             Label(title, systemImage: icon).font(.system(size: 12, weight: .medium))
                 .frame(maxWidth: .infinity).padding(.vertical, 8)

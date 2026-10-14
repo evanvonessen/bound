@@ -132,6 +132,52 @@ final class CompanionUITests: XCTestCase {
         add(attachment)
     }
 
+    private func setExperimentalFeatures(_ enabled: Bool, in app: XCUIApplication) {
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20))
+        app.buttons["Settings"].tap()
+        let toggle = app.switches["bound.enable-experimental-features"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+        if (toggle.value as? String == "1") != enabled {
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        XCTAssertEqual(toggle.value as? String, enabled ? "1" : "0")
+        let close = app.buttons["Close"].firstMatch
+        if close.exists { close.tap() } else { app.buttons["Done"].firstMatch.tap() }
+    }
+
+    private func openRRDexPlayback(in app: XCUIApplication) {
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        let gameCell = app.collectionViews.cells.firstMatch
+        XCTAssertTrue(gameCell.waitForExistence(timeout: 20)); gameCell.tap()
+        selectCompanion("Dex", in: app)
+        XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(element("bound.game-screen", in: app).exists)
+    }
+
+    private func swipeDownDetail(named title: String, in app: XCUIApplication) {
+        let navigationBar = app.navigationBars[title].firstMatch
+        XCTAssertTrue(navigationBar.waitForExistence(timeout: 10))
+        let dragStart = navigationBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
+        let dragEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95))
+        dragStart.press(forDuration: 0.1, thenDragTo: dragEnd)
+    }
+
+    private func chooseRRDexDocument(_ filename: String, in app: XCUIApplication) {
+        let browse = app.buttons["Browse"].firstMatch
+        if browse.waitForExistence(timeout: 3) { browse.tap() }
+        let localFiles = app.staticTexts["On My iPhone"].firstMatch
+        if localFiles.waitForExistence(timeout: 3) { localFiles.tap() }
+        let fileView = app.collectionViews["File View"]
+        let folder = fileView.cells["Bound, Container"]
+        if folder.waitForExistence(timeout: 3) { folder.tap() }
+        let base = (filename as NSString).deletingPathExtension
+        let file = fileView.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", base)).firstMatch
+        XCTAssertTrue(file.waitForExistence(timeout: 10), "Find QA document \(filename) in the Bound app's Files container")
+        file.tap()
+        XCTAssertTrue(file.waitForNonExistence(timeout: 10), "Wait for the document picker to finish closing after choosing \(filename)")
+    }
+
     func testLibraryExperimentalFeaturesSwitchPersistsAndKeepsBuild13Settings() throws {
         let app = XCUIApplication()
         #if DEBUG
@@ -343,6 +389,136 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(element("bound.boss-guide", in: app).waitForExistence(timeout: 10))
         assertGamePixelsAnimate(game, in: app)
         screenshot("Boss-full-team-swipe-dismissal-resumes-game")
+    }
+
+    func testRRDexWeaknessesDismissalResumesGamePixels() throws {
+        let app = XCUIApplication()
+        defer {
+            app.terminate()
+            app.launch()
+            setExperimentalFeatures(false, in: app)
+        }
+        openRRDexPlayback(in: app)
+        let game = element("bound.game-screen", in: app)
+        assertGamePixelsAnimate(game, in: app)
+
+        let search = app.textFields["bound.rrdex-search"]
+        search.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10))
+        app.buttons["Done"].firstMatch.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 10), "Done should dismiss the search keyboard")
+        assertGamePixelsAnimate(game, in: app)
+
+        search.tap(); search.typeText("char")
+        XCTAssertEqual(search.value as? String, "char")
+        let charizard = app.buttons["bound.rrdex-suggestion-6"]
+        XCTAssertTrue(charizard.waitForExistence(timeout: 10)); charizard.tap()
+        XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Charizard")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 10), "Suggestion selection should dismiss the search keyboard")
+        assertGamePixelsAnimate(game, in: app)
+
+        search.tap(); search.typeText("bu")
+        app.buttons["bound.rrdex-info"].tap()
+        let infoText = app.staticTexts["Radical Red 4.1 · Normal difficulty"]
+        XCTAssertTrue(infoText.waitForExistence(timeout: 10))
+        app.buttons["bound.rrdex-close-detail"].tap()
+        XCTAssertTrue(infoText.waitForNonExistence(timeout: 10), "Wait for information to finish dismissing after search handoff")
+        assertGamePixelsAnimate(game, in: app)
+        app.buttons["bound.rrdex-clear-search"].tap()
+
+        app.buttons["bound.rrdex-weaknesses"].tap()
+        let matchups = element("bound.rrdex-matchups", in: app)
+        XCTAssertTrue(matchups.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["4×"].exists)
+        app.buttons["bound.rrdex-close-detail"].tap()
+        XCTAssertTrue(matchups.waitForNonExistence(timeout: 10), "Wait for the weaknesses sheet to finish dismissing")
+        XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 10))
+        assertGamePixelsAnimate(game, in: app)
+        screenshot("RRDex-weaknesses-dismissal-resumes-game")
+
+        app.buttons["bound.rrdex-weaknesses"].tap()
+        XCTAssertTrue(matchups.waitForExistence(timeout: 10))
+        swipeDownDetail(named: "Type matchups", in: app)
+        XCTAssertTrue(matchups.waitForNonExistence(timeout: 10), "A downward swipe should dismiss the weaknesses sheet")
+        assertGamePixelsAnimate(game, in: app)
+
+        app.buttons["bound.rrdex-learnset"].tap()
+        let moves = element("bound.rrdex-moves", in: app)
+        XCTAssertTrue(moves.waitForExistence(timeout: 10))
+        app.buttons["bound.rrdex-close-detail"].tap()
+        XCTAssertTrue(moves.waitForNonExistence(timeout: 10), "Wait for the learnset sheet to finish dismissing")
+        assertGamePixelsAnimate(game, in: app)
+
+        app.buttons["bound.rrdex-learnset"].tap()
+        XCTAssertTrue(moves.waitForExistence(timeout: 10))
+        swipeDownDetail(named: "Learnset", in: app)
+        XCTAssertTrue(moves.waitForNonExistence(timeout: 10), "A downward swipe should dismiss the learnset sheet")
+        assertGamePixelsAnimate(game, in: app)
+
+        app.buttons["bound.rrdex-info"].tap()
+        XCTAssertTrue(app.staticTexts["Radical Red 4.1 · Normal difficulty"].waitForExistence(timeout: 10))
+        app.buttons["bound.rrdex-close-detail"].tap()
+        XCTAssertTrue(app.staticTexts["Radical Red 4.1 · Normal difficulty"].waitForNonExistence(timeout: 10))
+        assertGamePixelsAnimate(game, in: app)
+
+        app.buttons["bound.rrdex-info"].tap()
+        XCTAssertTrue(app.staticTexts["Radical Red 4.1 · Normal difficulty"].waitForExistence(timeout: 10))
+        swipeDownDetail(named: "RRDex", in: app)
+        XCTAssertTrue(app.staticTexts["Radical Red 4.1 · Normal difficulty"].waitForNonExistence(timeout: 10), "A downward swipe should dismiss dex information")
+        assertGamePixelsAnimate(game, in: app)
+    }
+
+    func testRRDexSaveImporterDismissalsResumeGamePixels() throws {
+        let app = XCUIApplication()
+        defer {
+            app.terminate()
+            app.launch()
+            setExperimentalFeatures(false, in: app)
+        }
+        openRRDexPlayback(in: app)
+        let game = element("bound.game-screen", in: app)
+        assertGamePixelsAnimate(game, in: app)
+
+        let search = app.textFields["bound.rrdex-search"]
+        search.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10))
+        app.buttons["bound.rrdex-import"].tap()
+        let cancel = app.buttons["Cancel"].firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 10), "Opening the file picker should hand off from search cleanly")
+        cancel.tap()
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 10), "Wait for the file picker to finish cancelling")
+        XCTAssertTrue(app.buttons["bound.rrdex-import"].waitForExistence(timeout: 10))
+        assertGamePixelsAnimate(game, in: app)
+
+        app.buttons["bound.rrdex-import"].tap()
+        chooseRRDexDocument("BoundRRDexSeedQA.sav", in: app)
+        let importButton = app.buttons["bound.rrdex-import"]
+        XCTAssertTrue(importButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(importButton.label.contains("Save loaded"))
+        assertGamePixelsAnimate(game, in: app)
+        app.buttons["bound.rrdex-info"].tap()
+        let savedSummary = app.buttons["bound.rrdex-clear-save"]
+        XCTAssertTrue(savedSummary.waitForExistence(timeout: 10))
+        app.buttons["bound.rrdex-close-detail"].tap()
+        XCTAssertTrue(savedSummary.waitForNonExistence(timeout: 10), "Wait for save information to finish dismissing")
+        assertGamePixelsAnimate(game, in: app)
+
+        app.buttons["bound.rrdex-import"].tap()
+        chooseRRDexDocument("BoundRRDexInvalidQA.sav", in: app)
+        let errorAlert = app.alerts["Save could not be imported"]
+        XCTAssertTrue(errorAlert.waitForExistence(timeout: 10))
+        errorAlert.buttons["OK"].tap()
+        XCTAssertTrue(errorAlert.waitForNonExistence(timeout: 10), "Wait for the invalid-save alert to finish dismissing")
+        assertGamePixelsAnimate(game, in: app)
+
+        app.buttons["bound.rrdex-info"].tap()
+        XCTAssertTrue(savedSummary.waitForExistence(timeout: 10))
+        app.buttons["bound.rrdex-clear-save"].tap()
+        app.buttons["bound.rrdex-close-detail"].tap()
+        XCTAssertTrue(savedSummary.waitForNonExistence(timeout: 10), "Wait for the save reset sheet to finish dismissing")
+        XCTAssertTrue(app.buttons["bound.rrdex-import"].label.contains("Import save"))
+        assertGamePixelsAnimate(game, in: app)
     }
 
     func testExperimentalRRDexSearchDetailsSaveImportPersistenceAndOffGate() throws {
