@@ -33,6 +33,28 @@ final class CompanionCycleButtonTests: XCTestCase {
             host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent()
         }
     }
+    func testBossCardRendersAtPortraitAndLandscapePanelSizes() throws {
+        let preferences = BoundExperimentalFeaturesPreferences()
+        let wasEnabled = preferences.isEnabled
+        preferences.isEnabled = true
+        defer { preferences.isEnabled = wasEnabled }
+        let parent = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.windows.first?.rootViewController)
+        for (name, size) in [("portrait", CGSize(width: 390, height: 195)), ("landscape", CGSize(width: 330, height: 275))] {
+            let host = UIHostingController(rootView: BoundBossGuideView(gameID: "BOSS_RENDER_QA", presentationChanged: { _ in }))
+            parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)
+            host.view.frame = CGRect(origin: CGPoint(x: 0, y: 60), size: size)
+            host.view.setNeedsLayout(); host.view.layoutIfNeeded()
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+            host.view.layoutIfNeeded()
+            let renderer = UIGraphicsImageRenderer(size: size)
+            let snapshot = renderer.image { _ in host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true) }
+            XCTAssertEqual(snapshot.size, size)
+            XCTAssertGreaterThan(try XCTUnwrap(snapshot.pngData()).count, 5000)
+            let attachment = XCTAttachment(image: snapshot)
+            attachment.name = "Boss-guide-hosted-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
+            host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent()
+        }
+    }
     func testDexSearchDisablesCorrectionCapitalizationSpellingAndSmartEdits() {
         let field = BoundRRDexSearchField.makeTextField()
         XCTAssertEqual(field.autocapitalizationType, .none)

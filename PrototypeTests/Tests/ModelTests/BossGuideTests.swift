@@ -66,4 +66,89 @@ final class BossGuideTests: XCTestCase {
         XCTAssertEqual(BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: false), [.friend, .notes, .types])
         XCTAssertEqual(BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: true), [.friend, .notes, .types, .bosses, .dex])
     }
+
+    func testBossReferenceResolvesEveryDefaultSpeciesMoveAndDescriptionOffline() throws {
+        let bosses = try XCTUnwrap(BoundBossCatalog.bundled)
+        let reference = try XCTUnwrap(BoundBossReference.bundled)
+        let dex = try XCTUnwrap(BoundRRDexCatalog.bundled)
+        var speciesCount = 0
+        var describedAbilities = Set<String>()
+        var describedItems = Set<String>()
+
+        for team in bosses.teams {
+            for (pokemonIndex, pokemon) in team.pokemon.enumerated() {
+                let detail = reference.detail(for: pokemon, teamID: team.id, pokemonIndex: pokemonIndex)
+                XCTAssertNotNil(detail.species, "Unresolved boss species: \(pokemon.species)")
+                XCTAssertFalse(detail.types.isEmpty, "No types for boss species: \(pokemon.species)")
+                XCTAssertEqual(detail.moves.count, 4)
+                speciesCount += 1
+                if detail.abilityDescription != nil { describedAbilities.insert(pokemon.ability) }
+                if detail.itemDescription != nil { describedItems.insert(pokemon.item) }
+                for move in detail.moves where move.name != "-" {
+                    XCTAssertNotNil(move.type, "Missing type for \(move.name) on \(pokemon.species)")
+                    XCTAssertTrue(["PhysA.", "SpA.", "Status"].contains(move.categoryLabel), "Missing category for \(move.name)")
+                }
+                XCTAssertNotNil(detail.abilityDescription, "Missing ability description for \(pokemon.ability)")
+                XCTAssertNotNil(detail.itemDescription, "Missing item description for \(pokemon.item)")
+            }
+        }
+
+        XCTAssertEqual(speciesCount, 792)
+        XCTAssertEqual(describedAbilities.count, Set(bosses.teams.flatMap { $0.pokemon.map(\.ability) }).count)
+        XCTAssertEqual(describedItems.count, Set(bosses.teams.flatMap { $0.pokemon.map(\.item) }).count)
+
+        let geodude = try XCTUnwrap(reference.detail(for: bosses.defaultTeam.pokemon[0]).species)
+        XCTAssertEqual(geodude.name, "Geodude-Alola")
+        XCTAssertEqual(geodude.types.compactMap(dex.type(id:)).map(\.name), ["Rock", "Electric"])
+        let sturdy = try XCTUnwrap(reference.detail(for: bosses.defaultTeam.pokemon[0]).abilityDescription)
+        XCTAssertTrue(sturdy.contains("at full HP"))
+        XCTAssertFalse(sturdy.hasPrefix("Sturdy:"))
+    }
+
+    func testBossReferenceTypeIconsAndSheetMoveOverridesAreBundled() throws {
+        let reference = try XCTUnwrap(BoundBossReference.bundled)
+        let dex = try XCTUnwrap(BoundRRDexCatalog.bundled)
+        XCTAssertEqual(dex.types.count, 18)
+        XCTAssertTrue(dex.types.allSatisfy { reference.typeIconData(for: $0)?.starts(with: [0x89, 0x50, 0x4E, 0x47]) == true })
+
+        let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
+        let overrides = ["HP Grass", "HP Ice", "HP Fire", "Disarm. Voice", "HP Fighting", "HP Rock", "Supercell Slam", "HP Dark", "HP Dragon"]
+        let known = Set(catalog.teams.flatMap { $0.pokemon.flatMap(\.moves) })
+        XCTAssertTrue(overrides.allSatisfy(known.contains))
+        XCTAssertNotNil(BoundBossReferenceData.bundled?.typeIconLicenseText)
+    }
+
+    func testBossMoveTypeOverridesMatchAllSourceCellsAndApplyByContext() throws {
+        let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
+        let reference = try XCTUnwrap(BoundBossReference.bundled)
+        let source = try XCTUnwrap(BoundBossReferenceData.bundled)
+        let overrides = try XCTUnwrap(source.bossMoveTypeOverrides)
+        let cells = try XCTUnwrap(source.bossMoveTypeOverrideCells)
+        XCTAssertEqual(overrides.count, 53)
+        XCTAssertEqual(Set(overrides.keys), Set(cells.keys))
+
+        for (key, expectedType) in overrides {
+            let parts = key.split(separator: "|")
+            XCTAssertEqual(parts.count, 3, "Malformed context key: \(key)")
+            guard parts.count == 3,
+                  let team = catalog.team(id: String(parts[0])),
+                  let pokemonIndex = Int(parts[1]), team.pokemon.indices.contains(pokemonIndex),
+                  let moveIndex = Int(parts[2]), team.pokemon[pokemonIndex].moves.indices.contains(moveIndex) else {
+                XCTFail("Unknown boss move context: \(key)")
+                continue
+            }
+            XCTAssertFalse(cells[key, default: ""].isEmpty, "Missing spreadsheet cell for \(key)")
+            let detail = reference.detail(for: team.pokemon[pokemonIndex], teamID: team.id, pokemonIndex: pokemonIndex)
+            XCTAssertEqual(detail.moves[moveIndex].type?.name, expectedType, "Wrong type at \(cells[key] ?? key)")
+        }
+
+        func sheetType(teamID: String, pokemonIndex: Int, moveIndex: Int) throws -> String? {
+            let team = try XCTUnwrap(catalog.team(id: teamID))
+            let detail = reference.detail(for: team.pokemon[pokemonIndex], teamID: teamID, pokemonIndex: pokemonIndex)
+            return detail.moves[moveIndex].type?.name
+        }
+        XCTAssertEqual(try sheetType(teamID: "mini-bosses-366", pokemonIndex: 3, moveIndex: 2), "Fire")
+        XCTAssertEqual(try sheetType(teamID: "mini-bosses-289", pokemonIndex: 1, moveIndex: 2), "Ice")
+        XCTAssertEqual(try sheetType(teamID: "postgame-1149", pokemonIndex: 2, moveIndex: 0), "Water")
+    }
 }

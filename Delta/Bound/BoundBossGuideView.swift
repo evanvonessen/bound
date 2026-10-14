@@ -56,7 +56,8 @@ struct BoundBossGuideView: View {
     }
 
     private func card(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let detail = BoundBossReference.bundled?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
+        return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("RR 4.1 · DEFAULT").font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -81,25 +82,22 @@ struct BoundBossGuideView: View {
             }
             .buttonStyle(.plain).accessibilityLabel("Choose boss, \(team.name)")
             .accessibilityIdentifier("bound.boss-picker")
-            HStack(alignment: .firstTextBaseline) {
-                Text(pokemon.species).font(.system(size: 18, weight: .semibold)).lineLimit(1)
-                    .accessibilityIdentifier("bound.boss-pokemon")
-                Spacer()
-                Text(pokemon.levelLabel).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Ability · \(pokemon.ability)").foregroundStyle(.secondary)
-                Text("Item · \(pokemon.item)")
-            }.font(.system(size: 12)).lineLimit(1)
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 5) {
-                ForEach(Array(pokemon.moves.enumerated()), id: \.offset) { index, move in
-                    Text(move == "-" ? "—" : move).font(.system(size: 12))
-                        .lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 8).padding(.vertical, 7)
-                        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
-                        .accessibilityIdentifier("bound.boss-move-\(index)")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    BoundBossPokemonIdentity(pokemon: pokemon, species: detail?.species, types: detail?.types ?? [])
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 5) {
+                        ForEach(Array(pokemon.moves.enumerated()), id: \.offset) { index, move in
+                            BoundBossMoveRow(name: move, type: detail?.moves[index].type,
+                                             category: detail?.moves[index].categoryLabel ?? "—", index: index)
+                        }
+                    }
+                    BoundBossDescription(title: "Ability", name: pokemon.ability, description: detail?.abilityDescription,
+                                         identifier: "bound.boss-ability-description")
+                    BoundBossDescription(title: "Item", name: pokemon.item, description: detail?.itemDescription,
+                                         identifier: "bound.boss-item-description")
                 }
-            }
+            }.accessibilityIdentifier("bound.boss-details")
+                .id("\(team.id)-\(index)")
             HStack(spacing: 12) {
                 Button { advance(-1, team: team) } label: { Image(systemName: "chevron.left") }
                     .frame(width: 28, height: 28).disabled(index == 0)
@@ -127,6 +125,90 @@ struct BoundBossGuideView: View {
     private func advance(_ direction: Int, team: BoundBossTeam) {
         guard let catalog else { return }
         choose(BoundBossGuideSelection(teamID: team.id, pokemonIndex: selection.pokemonIndex + direction), catalog: catalog)
+    }
+}
+
+private struct BoundBossPokemonIdentity: View {
+    let pokemon: BoundBossPokemon
+    let species: BoundRRDexSpecies?
+    let types: [BoundRRDexType]
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Group {
+                if let sprite = species?.sprite, let data = Data(base64Encoded: sprite), let picture = UIImage(data: data) {
+                    Image(uiImage: picture).resizable().interpolation(.none).scaledToFit()
+                } else { Image(systemName: "photo").foregroundStyle(.secondary) }
+            }.frame(width: 46, height: 46)
+                .accessibilityLabel("\(pokemon.species) picture").accessibilityIdentifier("bound.boss-picture")
+            VStack(alignment: .leading, spacing: 4) {
+                Text(pokemon.species).font(.system(size: 17, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.75)
+                    .accessibilityIdentifier("bound.boss-pokemon")
+                HStack(spacing: 6) {
+                    ForEach(types) { type in
+                        HStack(spacing: 3) {
+                            BoundBossTypeIcon(type: type).frame(width: 13, height: 13).accessibilityHidden(true)
+                            Text(type.name).font(.system(size: 10, weight: .medium))
+                        }
+                    }
+                }.accessibilityElement(children: .ignore).accessibilityLabel("Pokémon types")
+                    .accessibilityValue(types.map(\.name).joined(separator: ", "))
+                    .accessibilityIdentifier("bound.boss-types")
+            }
+            Spacer(minLength: 4)
+            Text(pokemon.levelLabel).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+        }
+    }
+}
+
+private struct BoundBossTypeIcon: View {
+    let type: BoundRRDexType
+    var body: some View {
+        Group {
+            if let data = BoundBossReference.bundled?.typeIconData(for: type), let icon = UIImage(data: data) {
+                Image(uiImage: icon).resizable().scaledToFit()
+            } else {
+                Text(type.name).font(.system(size: 8, weight: .medium)).minimumScaleFactor(0.6)
+            }
+        }.accessibilityLabel(type.name)
+    }
+}
+
+private struct BoundBossMoveRow: View {
+    let name: String
+    let type: BoundRRDexType?
+    let category: String
+    let index: Int
+    var body: some View {
+        HStack(spacing: 5) {
+            if let type {
+                BoundBossTypeIcon(type: type).frame(width: 15, height: 15)
+                    .accessibilityIdentifier("bound.boss-move-type-\(index)")
+            }
+            Text(name == "-" ? "—" : name).font(.system(size: 11))
+                .lineLimit(1).minimumScaleFactor(0.75).frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("bound.boss-move-\(index)")
+            Text(category).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary).fixedSize()
+                .accessibilityIdentifier("bound.boss-move-category-\(index)")
+        }
+        .padding(.horizontal, 7).padding(.vertical, 7)
+        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+private struct BoundBossDescription: View {
+    let title: String
+    let name: String
+    let description: String?
+    let identifier: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("\(title) · \(name)").font(.system(size: 11, weight: .semibold))
+            Text(description ?? "Description unavailable for this entry.")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier(identifier)
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -250,7 +332,11 @@ private struct BoundBossGuideInfo: View {
             }
             Section("Source") {
                 Link(catalog.sourceTitle, destination: catalog.sourceURL)
+                Link("Pokémon and moves · Radical Red Pokédex", destination: URL(string: "https://dex.radicalred.net/")!)
+                Link("Type icons · PokeSprite", destination: URL(string: "https://github.com/msikma/pokesprite")!)
                 Text("Bundled for offline use. Check the original documentation for corrections.").font(.footnote)
+                Text("Boss teams use the Default guide, independently of any save imported into the Dex.").font(.footnote)
+                Text("Pokémon characters and artwork belong to their respective owners.").font(.footnote)
             }
         }.navigationTitle("Guide information")
     }

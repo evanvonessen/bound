@@ -32,6 +32,7 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		B13B00000000000000000002 /* BoundBossReference-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = B13B00000000000000000001 /* BoundBossReference-v1.json */; };
 		B13D00000000000000000006 /* RadicalRedDex-v4.1.json in Resources */ = {isa = PBXBuildFile; fileRef = B13D00000000000000000005 /* RadicalRedDex-v4.1.json */; };
 		B13D00000000000000000004 /* BoundRRDexView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B13D00000000000000000003 /* BoundRRDexView.swift */; };
 		B13D00000000000000000002 /* BoundRRDex.swift in Sources */ = {isa = PBXBuildFile; fileRef = B13D00000000000000000001 /* BoundRRDex.swift */; };
@@ -799,6 +800,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		B13B00000000000000000001 /* BoundBossReference-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Resources/BoundBossReference-v1.json; sourceTree = "<group>"; };
 		B13D00000000000000000005 /* RadicalRedDex-v4.1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Resources/RadicalRedDex-v4.1.json; sourceTree = "<group>"; };
 		B13D00000000000000000003 /* BoundRRDexView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundRRDexView.swift; sourceTree = "<group>"; };
 		B13D00000000000000000001 /* BoundRRDex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundRRDex.swift; sourceTree = "<group>"; };
@@ -1382,6 +1384,7 @@
 				700B4229FD43D2D7CC485768 /* BoundAppearancePreferences.swift */,
 				B13E00000000000000000001 /* BoundExperimentalFeaturesPreferences.swift */,
 				B13500000000000000000005 /* RadicalRedDefaultBosses-v4.1.json */,
+				B13B00000000000000000001 /* BoundBossReference-v1.json */,
 				B13500000000000000000003 /* BoundBossGuideView.swift */,
 				B13500000000000000000001 /* BoundBossGuide.swift */,
 				B13D00000000000000000005 /* RadicalRedDex-v4.1.json */,
@@ -2873,6 +2876,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B13500000000000000000006 /* RadicalRedDefaultBosses-v4.1.json in Resources */,
+				B13B00000000000000000002 /* BoundBossReference-v1.json in Resources */,
 				B13D00000000000000000006 /* RadicalRedDex-v4.1.json in Resources */,
 				EB82D09672944343A7156C01 /* SDWebImage_Privacy.bundle in Resources */,
 				10C306F1A66146C8B168ECA1 /* PrivacyInfo.xcprivacy in Resources */,

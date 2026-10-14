@@ -366,6 +366,33 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(search.waitForNonExistence(timeout: 10), "Wait for the boss picker sheet to finish dismissing")
         assertGamePixelsAnimate(game, in: app)
 
+        XCTAssertEqual(app.staticTexts["bound.boss-pokemon"].label, "Geodude-A")
+        let picture = element("bound.boss-picture", in: app)
+        XCTAssertTrue(picture.exists)
+        XCTAssertTrue(picture.label.contains("Geodude-A"))
+        let types = element("bound.boss-types", in: app)
+        XCTAssertEqual(types.value as? String, "Rock, Electric")
+        XCTAssertEqual(app.staticTexts["bound.boss-move-0"].label, "Bulldoze")
+        XCTAssertEqual(element("bound.boss-move-type-0", in: app).label, "Ground")
+        XCTAssertEqual(app.staticTexts["bound.boss-move-category-0"].label, "PhysA.")
+        XCTAssertTrue(app.buttons["bound.boss-picker"].isHittable)
+        screenshot("Boss-guide-portrait-reference-details")
+
+        let details = element("bound.boss-details", in: app)
+        XCTAssertTrue(details.exists)
+        details.swipeUp()
+        let abilityDescription = app.staticTexts["bound.boss-ability-description"]
+        let itemDescription = app.staticTexts["bound.boss-item-description"]
+        XCTAssertTrue(abilityDescription.waitForExistence(timeout: 10))
+        XCTAssertTrue(itemDescription.waitForExistence(timeout: 10))
+        XCTAssertTrue(abilityDescription.isHittable)
+        XCTAssertTrue(itemDescription.isHittable)
+        XCTAssertTrue(abilityDescription.label.contains("at full HP"))
+        XCTAssertTrue(itemDescription.label.contains("move first just once in a pinch."))
+        XCTAssertTrue(app.buttons["bound.boss-picker"].isHittable, "Boss selector stays pinned while details scroll")
+        XCTAssertTrue(app.buttons["bound.boss-full-team"].isHittable, "Boss navigation footer stays pinned while details scroll")
+        screenshot("Boss-guide-portrait-ability-item-details")
+
         for pass in 1...2 {
             app.buttons["bound.boss-full-team"].tap()
             XCTAssertTrue(element("bound.boss-full-team-list", in: app).waitForExistence(timeout: 10))
