@@ -37,6 +37,47 @@ private func closeBoundSheet(in app: XCUIApplication) {
     resumeNativePause(in: app)
 }
 
+private func gamePixelSample(_ game: XCUIElement, in app: XCUIApplication) -> Data? {
+    guard let screenshot = XCUIScreen.main.screenshot().image.cgImage else { return nil }
+    // Use the target app's measured bounds: the UI-test runner's UIScreen can
+    // have a different coordinate space from the application under test.
+    let appFrame = app.frame
+    guard appFrame.width > 0, appFrame.height > 0 else { return nil }
+    let scaleX = CGFloat(screenshot.width) / appFrame.width
+    let scaleY = CGFloat(screenshot.height) / appFrame.height
+    let frame = game.frame.intersection(appFrame)
+    let pixels = CGRect(x: (frame.minX - appFrame.minX) * scaleX,
+                        y: (frame.minY - appFrame.minY) * scaleY,
+                        width: frame.width * scaleX, height: frame.height * scaleY)
+        .integral.intersection(CGRect(x: 0, y: 0, width: screenshot.width, height: screenshot.height))
+    guard pixels.width > 0, pixels.height > 0,
+          let crop = screenshot.cropping(to: pixels) else { return nil }
+    let width = crop.width, height = crop.height
+    var rgba = [UInt8](repeating: 0, count: width * height * 4)
+    let rendered = rgba.withUnsafeMutableBytes { storage -> Bool in
+        guard let base = storage.baseAddress,
+              let context = CGContext(data: base, width: width, height: height,
+                                      bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+        context.draw(crop, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return true
+    }
+    return rendered ? Data(rgba) : nil
+}
+
+private func assertGamePixelsAnimate(_ game: XCUIElement, in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+    guard let initial = gamePixelSample(game, in: app) else {
+        XCTFail("Could not capture the game view pixels", file: file, line: line)
+        return
+    }
+    for _ in 0..<12 {
+        Thread.sleep(forTimeInterval: 0.25)
+        if let next = gamePixelSample(game, in: app), next != initial { return }
+    }
+    XCTFail("The game view pixels stayed unchanged for three seconds", file: file, line: line)
+}
+
 /// Actual DEBUG Simulator hit rectangles, read from the gameplay owner after native layout.
 /// This is observation only: real gestures still select every corner and size.
 private func actualPiPHitObstacles(in game: XCUIElement) throws -> [CGRect] {
@@ -227,6 +268,81 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(species.label, "Floatzel", "Selection is kept while experiments are off and across relaunch")
         app.terminate(); app.launch()
         setExperiments(false)
+    }
+
+    func testBossFullTeamDismissalResumesGamePixels() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        func setExperiments(_ enabled: Bool) {
+            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20))
+            app.buttons["Settings"].tap()
+            let toggle = app.switches["bound.enable-experimental-features"]
+            XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+            if (toggle.value as? String == "1") != enabled {
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+            XCTAssertEqual(toggle.value as? String, enabled ? "1" : "0")
+            let close = app.buttons["Close"].firstMatch
+            if close.exists { close.tap() } else { app.buttons["Done"].firstMatch.tap() }
+        }
+
+        // Leave the shared simulator's opt-in disabled even if a later assertion fails.
+        defer {
+            app.terminate()
+            app.launch()
+            setExperiments(false)
+        }
+
+        setExperiments(true)
+        let cell = app.collectionViews.cells.firstMatch
+        XCTAssertTrue(cell.waitForExistence(timeout: 20))
+        cell.tap()
+        let cycle = app.buttons["bound.panel-cycle"]
+        XCTAssertTrue(cycle.waitForExistence(timeout: 15))
+        for expected in ["Notes", "Types", "Bosses"] {
+            cycle.tap()
+            XCTAssertEqual(cycle.value as? String, expected)
+        }
+        XCTAssertTrue(element("bound.boss-guide", in: app).waitForExistence(timeout: 10))
+        let game = element("bound.game-screen", in: app)
+        XCTAssertTrue(game.exists)
+        assertGamePixelsAnimate(game, in: app)
+
+        // The boss picker shares the same emulator pause/resume lifecycle.
+        app.buttons["bound.boss-picker"].tap()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        search.tap(); search.typeText("Brock")
+        let brock = app.buttons["bound.boss-select-kanto-leaders-4"]
+        XCTAssertTrue(brock.waitForExistence(timeout: 10)); brock.tap()
+        XCTAssertTrue(element("bound.boss-guide", in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(search.waitForNonExistence(timeout: 10), "Wait for the boss picker sheet to finish dismissing")
+        assertGamePixelsAnimate(game, in: app)
+
+        for pass in 1...2 {
+            app.buttons["bound.boss-full-team"].tap()
+            XCTAssertTrue(element("bound.boss-full-team-list", in: app).waitForExistence(timeout: 10))
+            app.buttons["bound.boss-close-full-team"].tap()
+            XCTAssertTrue(element("bound.boss-guide", in: app).waitForExistence(timeout: 10))
+            XCTAssertTrue(element("bound.boss-full-team-list", in: app).waitForNonExistence(timeout: 10), "Wait for Full team to finish dismissing")
+            XCTAssertEqual(cycle.value as? String, "Bosses")
+            assertGamePixelsAnimate(game, in: app)
+            screenshot("Boss-full-team-dismissal-resumes-game-\(pass)")
+        }
+
+        app.buttons["bound.boss-full-team"].tap()
+        let team = element("bound.boss-full-team-list", in: app)
+        XCTAssertTrue(team.waitForExistence(timeout: 10))
+        let navigationBar = app.navigationBars.firstMatch
+        XCTAssertTrue(navigationBar.exists)
+        let dragStart = navigationBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
+        let dragEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95))
+        dragStart.press(forDuration: 0.1, thenDragTo: dragEnd)
+        XCTAssertTrue(team.waitForNonExistence(timeout: 10), "A downward sheet swipe should dismiss Full team")
+        XCTAssertTrue(element("bound.boss-guide", in: app).waitForExistence(timeout: 10))
+        assertGamePixelsAnimate(game, in: app)
+        screenshot("Boss-full-team-swipe-dismissal-resumes-game")
     }
 
     func testExperimentalRRDexSearchDetailsSaveImportPersistenceAndOffGate() throws {

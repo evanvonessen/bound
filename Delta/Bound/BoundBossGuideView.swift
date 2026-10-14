@@ -27,12 +27,14 @@ struct BoundBossGuideView: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("bound.boss-guide")
                 .onAppear { selection = preferences.read(gameID: gameID, catalog: catalog) }
-                .sheet(isPresented: $showingPicker) {
+                .sheet(isPresented: $showingPicker, onDismiss: presentationDismissed) {
                     BoundBossPicker(catalog: catalog, selectedID: selected.teamID) { id in
                         choose(BoundBossGuideSelection(teamID: id, pokemonIndex: 0), catalog: catalog)
                     }
                 }
-                .sheet(isPresented: $showingTeam) { BoundBossTeamView(catalog: catalog, team: team) }
+                .sheet(isPresented: $showingTeam, onDismiss: presentationDismissed) {
+                    BoundBossTeamView(catalog: catalog, team: team)
+                }
             } else if experimentsEnabled {
                 ContentUnavailableView("Boss guide unavailable", systemImage: "book.closed",
                                        description: Text("The bundled guide could not be loaded."))
@@ -42,8 +44,15 @@ struct BoundBossGuideView: View {
         .onChange(of: experimentsEnabled) { _, enabled in
             if !enabled { showingPicker = false; showingTeam = false }
         }
-        .onChange(of: showingPicker || showingTeam) { _, presented in presentationChanged(presented) }
-        .onDisappear { presentationChanged(false) }
+        .onChange(of: showingPicker || showingTeam) { _, presented in
+            if presented { presentationChanged(true) }
+        }
+    }
+
+    private func presentationDismissed() {
+        // The binding changes before UIKit finishes dismissing, while resuming is still blocked.
+        guard !showingPicker && !showingTeam else { return }
+        presentationChanged(false)
     }
 
     private func card(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int) -> some View {
