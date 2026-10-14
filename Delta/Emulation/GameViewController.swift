@@ -69,25 +69,6 @@ private extension GameViewController
             return actionInput
         }
     }
-    
-    struct SustainInputsMapping: GameControllerInputMappingProtocol
-    {
-        let gameController: GameController
-        
-        var gameControllerInputType: GameControllerInputType {
-            return self.gameController.inputType
-        }
-        
-        func input(forControllerInput controllerInput: Input) -> Input?
-        {
-            if let mappedInput = self.gameController.defaultInputMapping?.input(forControllerInput: controllerInput), mappedInput == StandardGameControllerInput.menu
-            {
-                return mappedInput
-            }
-            
-            return controllerInput
-        }
-    }
 }
 
 class GameViewController: DeltaCore.GameViewController
@@ -194,9 +175,6 @@ class GameViewController: DeltaCore.GameViewController
     
     // Gestures
     private var isMenuButtonHeldDown = false
-    private var ignoreNextMenuInput = false
-    private lazy var menuButtonGestureRecognizers = self.makeMenuButtonGestureRecognizers()
-    private lazy var menuButtonKeyboardGestureRecognizers = self.makeMenuButtonGestureRecognizers()
 
     private lazy var gameScreenRepositionGestureRecognizer: UILongPressGestureRecognizer = {
         let gestureRecognizer = UILongPressGestureRecognizer(target: self, action: #selector(GameViewController.handleGameScreenRepositionGesture(_:)))
@@ -218,16 +196,8 @@ class GameViewController: DeltaCore.GameViewController
     private var repositionResetButton: UIButton!
     private var repositionResetButtonTimer: Timer?
     
-    // Sustain Buttons
-    private var isSelectingSustainedButtons = false
-    private var sustainInputsMapping: SustainInputsMapping?
     private var shouldResetSustainedInputs = false
-    
-    private var sustainButtonsContentView: UIView!
-    private var sustainButtonsBlurView: UIVisualEffectView!
-    private var sustainButtonsBackgroundView: RSTPlaceholderView!
-    private var inputsToSustain = [AnyInput: Double]()
-    
+
     private var isGyroActive = false
     private var presentedGyroAlert = false
     
@@ -313,8 +283,6 @@ class GameViewController: DeltaCore.GameViewController
         NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.sceneSessionWillQuit(with:)), name: UISceneSession.willQuitNotification, object: nil)
         
         NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.sceneKeyboardFocusDidChange(with:)), name: UIScene.keyboardFocusDidChangeNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.keyboardDidShow(with:)), name: UIResponder.keyboardDidShowNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.keyboardDidChangeFrame(with:)), name: UIResponder.keyboardDidChangeFrameNotification, object: nil)
         
         self.automaticallyPausesWhileInactive = Settings.pauseWhileInactive
     }
@@ -336,21 +304,10 @@ class GameViewController: DeltaCore.GameViewController
         // Ignore unless we're the active scene.
         guard self.view.window?.windowScene?.hasKeyboardFocus == true else { return }
         
-        if self.isSelectingSustainedButtons
+        if let standardInput = StandardGameControllerInput(input: input), standardInput == .menu, gameController.inputType == .controllerSkin
         {
-            guard let pausingGameController = self.pausingGameController, gameController == pausingGameController else { return }
-            
-            if input != StandardGameControllerInput.menu
-            {
-                self.inputsToSustain[AnyInput(input)] = value
-            }
-        }
-        else if let standardInput = StandardGameControllerInput(input: input), standardInput == .menu, gameController.inputType == .controllerSkin
-        {
+            // Menu only opens the pause menu; other buttons keep their normal mapping.
             self.isMenuButtonHeldDown = true
-            
-            let sustainInputsMapping = SustainInputsMapping(gameController: gameController)
-            gameController.addReceiver(self, inputMapping: sustainInputsMapping)
         }
         else if let actionInput = ActionInput(input: input), let emulatorCore = self.emulatorCore, emulatorCore.state == .running
         {
@@ -367,21 +324,6 @@ class GameViewController: DeltaCore.GameViewController
                 self.performFastForwardAction(activate: !isFastForwarding)
             }
         }
-        else if self.isMenuButtonHeldDown
-        {
-            self.ignoreNextMenuInput = true
-            
-            if gameController.sustainedInputs.keys.contains(AnyInput(input))
-            {
-                DispatchQueue.main.async {
-                    gameController.unsustain(input)
-                }
-            }
-            else
-            {                
-                gameController.sustain(input, value: value)
-            }
-        }
     }
     
     override func gameController(_ gameController: GameController, didDeactivate input: Input)
@@ -395,19 +337,9 @@ class GameViewController: DeltaCore.GameViewController
         // Ignore unless we're the active scene.
         guard self.view.window?.windowScene?.hasKeyboardFocus == true else { return }
         
-        if self.isSelectingSustainedButtons
-        {
-            if input.isContinuous
-            {
-                self.inputsToSustain[AnyInput(input)] = nil
-            }
-        }
-        else if let standardInput = StandardGameControllerInput(input: input), standardInput == .menu, gameController.inputType == .controllerSkin
+        if let standardInput = StandardGameControllerInput(input: input), standardInput == .menu, gameController.inputType == .controllerSkin
         {
             self.isMenuButtonHeldDown = false
-            
-            // Reset controller mapping back to what it should be.
-            self.updateControllers()
         }
         else if let actionInput = ActionInput(input: input)
         {
@@ -433,7 +365,7 @@ class GameViewController: DeltaCore.GameViewController
                 && ExternalGameControllerManager.shared.connectedControllers.contains(where: { $0 === controller })
                 && self.view.window?.windowScene?.hasKeyboardFocus == true
                 && UIApplication.shared.applicationState == .active && self.presentedViewController == nil
-                && !self.isSelectingSustainedButtons && !self.boundCompanion.isEditingNotes
+                && !self.boundCompanion.isEditingNotes
                 && !self.boundCompanion.state.showingFriends && !self.boundCompanion.state.showingSettings
             self.boundPanelActions.activate(controller: controller, eligible: eligible) { self.boundCompanion.cyclePanels() }
         }
@@ -455,39 +387,9 @@ extension GameViewController
         super.viewDidLoad()
         boundCompanion.install(in: self)
         
-        // Lays out self.gameView, so we can pin self.sustainButtonsContentView to it without resulting in a temporary "cannot satisfy constraints".
         self.view.layoutIfNeeded()
         
         self.controllerView.translucentControllerSkinOpacity = Settings.translucentControllerSkinOpacity
-        
-        // Sustain Button
-        self.sustainButtonsContentView = UIView(frame: CGRect(x: 0, y: 0, width: self.gameView.bounds.width, height: self.gameView.bounds.height))
-        self.sustainButtonsContentView.translatesAutoresizingMaskIntoConstraints = false
-        self.sustainButtonsContentView.isHidden = true
-        self.view.insertSubview(self.sustainButtonsContentView, aboveSubview: self.gameView)
-        
-        let blurEffect = UIBlurEffect(style: .dark)
-        let vibrancyEffect = UIVibrancyEffect(blurEffect: blurEffect)
-        
-        self.sustainButtonsBlurView = UIVisualEffectView(effect: blurEffect)
-        self.sustainButtonsBlurView.frame = CGRect(x: 0, y: 0, width: self.sustainButtonsContentView.bounds.width, height: self.sustainButtonsContentView.bounds.height)
-        self.sustainButtonsBlurView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        self.sustainButtonsContentView.addSubview(self.sustainButtonsBlurView)
-        
-        let vibrancyView = UIVisualEffectView(effect: vibrancyEffect)
-        vibrancyView.frame = CGRect(x: 0, y: 0, width: self.sustainButtonsBlurView.contentView.bounds.width, height: self.sustainButtonsBlurView.contentView.bounds.height)
-        vibrancyView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        self.sustainButtonsBlurView.contentView.addSubview(vibrancyView)
-        
-        self.sustainButtonsBackgroundView = RSTPlaceholderView(frame: CGRect(x: 0, y: 0, width: vibrancyView.contentView.bounds.width, height: vibrancyView.contentView.bounds.height))
-        self.sustainButtonsBackgroundView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        self.sustainButtonsBackgroundView.textLabel.text = NSLocalizedString("Select Buttons to Hold Down", comment: "")
-        self.sustainButtonsBackgroundView.textLabel.numberOfLines = 1
-        self.sustainButtonsBackgroundView.textLabel.minimumScaleFactor = 0.5
-        self.sustainButtonsBackgroundView.textLabel.adjustsFontSizeToFitWidth = true
-        self.sustainButtonsBackgroundView.detailTextLabel.text = NSLocalizedString("Press the Menu button when finished.", comment: "")
-        self.sustainButtonsBackgroundView.alpha = 0.0
-        vibrancyView.contentView.addSubview(self.sustainButtonsBackgroundView)
         
         // Handoff
         self.handoffPlaceholderView = RSTPlaceholderView(frame: CGRect(x: 0, y: 0, width: self.view.bounds.width, height: self.view.bounds.height))
@@ -528,12 +430,6 @@ extension GameViewController
         self.repositionResetButton.isHidden = true
         self.view.addSubview(self.repositionResetButton)
 
-        // Gestures
-        for gestureRecognizer in self.menuButtonGestureRecognizers
-        {
-            self.view.addGestureRecognizer(gestureRecognizer)
-        }
-        
         self.view.addGestureRecognizer(self.gameScreenRepositionGestureRecognizer)
 
         // Auto Layout
@@ -541,11 +437,6 @@ extension GameViewController
             self.repositionResetButton.topAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.topAnchor, constant: 8),
             self.repositionResetButton.trailingAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
 
-            self.sustainButtonsContentView.leadingAnchor.constraint(equalTo: self.gameView.leadingAnchor),
-            self.sustainButtonsContentView.trailingAnchor.constraint(equalTo: self.gameView.trailingAnchor),
-            self.sustainButtonsContentView.topAnchor.constraint(equalTo: self.gameView.topAnchor),
-            self.sustainButtonsContentView.bottomAnchor.constraint(equalTo: self.gameView.bottomAnchor),
-            
             self.handoffPlaceholderView.leadingAnchor.constraint(equalTo: self.gameView.leadingAnchor),
             self.handoffPlaceholderView.trailingAnchor.constraint(equalTo: self.gameView.trailingAnchor),
             self.handoffPlaceholderView.topAnchor.constraint(equalTo: self.gameView.topAnchor),
@@ -612,12 +503,6 @@ extension GameViewController
         gameView.accessibilityIdentifier = "bound.game-screen"
         gameView.isAccessibilityElement = true
         gameView.accessibilityLabel = "Your gameplay screen"
-        
-        if let sustainButtonsBackgroundView
-        {
-            // Fixes Hold Button description laying out vertically after orientation change.
-            sustainButtonsBackgroundView.detailTextLabel.preferredMaxLayoutWidth = sustainButtonsBackgroundView.bounds.width
-        }
     }
     
     // MARK: - Segues
@@ -679,7 +564,7 @@ extension GameViewController
             pauseViewController.fastForwardItem?.action = { [unowned self] item in
                 self.performFastForwardAction(activate: item.isSelected)
             }
-            pauseViewController.sustainButtonsItem = MenuItem(text: boundCompanion.account.session == nil ? "Connect" : "Friends", image: UIImage(systemName: "person.2.fill")) { [weak self, weak pauseViewController] item in
+            pauseViewController.friendsItem = MenuItem(text: boundCompanion.account.session == nil ? "Connect" : "Friends", image: UIImage(systemName: "person.2.fill")) { [weak self, weak pauseViewController] item in
                 item.isSelected = false
                 guard let self, let presenter = pauseViewController else { return }
                 self.boundCompanion.presentFriends(from: presenter)
@@ -1449,60 +1334,6 @@ private extension GameViewController
     }
 }
 
-//MARK: - Sustain Buttons -
-private extension GameViewController
-{
-    func showSustainButtonView()
-    {
-        guard let gameController = self.pausingGameController else { return }
-        
-        self.isSelectingSustainedButtons = true
-        
-        let sustainInputsMapping = SustainInputsMapping(gameController: gameController)
-        gameController.addReceiver(self, inputMapping: sustainInputsMapping)
-        
-        let blurEffect = self.sustainButtonsBlurView.effect
-        self.sustainButtonsBlurView.effect = nil
-        
-        self.sustainButtonsContentView.isHidden = false
-        
-        UIView.animate(withDuration: 0.4) {
-            self.sustainButtonsBlurView.effect = blurEffect
-            self.sustainButtonsBackgroundView.alpha = 1.0
-        } completion: { _ in
-            self.controllerView.becomeFirstResponder()
-        }
-    }
-    
-    func hideSustainButtonView()
-    {
-        guard let gameController = self.pausingGameController else { return }
-        
-        self.isSelectingSustainedButtons = false
-        
-        self.updateControllers()
-        self.sustainInputsMapping = nil
-        
-        // Activate all sustained inputs, since they will now be mapped to game inputs.
-        for (input, value) in self.inputsToSustain
-        {
-            gameController.sustain(input, value: value)
-        }
-        
-        let blurEffect = self.sustainButtonsBlurView.effect
-        
-        UIView.animate(withDuration: 0.4, animations: {
-            self.sustainButtonsBlurView.effect = nil
-            self.sustainButtonsBackgroundView.alpha = 0.0
-        }) { (finished) in
-            self.sustainButtonsContentView.isHidden = true
-            self.sustainButtonsBlurView.effect = blurEffect
-        }
-        
-        self.inputsToSustain = [:]
-    }
-}
-
 //MARK: - Action Inputs -
 /// Action Inputs
 extension GameViewController
@@ -1785,22 +1616,12 @@ extension GameViewController: GameViewControllerDelegate
     {
         guard gameViewController == self else { return }
         
-        guard !self.ignoreNextMenuInput else {
-            self.ignoreNextMenuInput = false
-            return
-        }
-        
         if let pausingGameController = self.pausingGameController
         {
             guard pausingGameController == gameController else { return }
         }
         
-        if self.isSelectingSustainedButtons
-        {
-            self.hideSustainButtonView()
-        }
-        
-        if let pauseViewController = self.pauseViewController, !self.isSelectingSustainedButtons
+        if let pauseViewController = self.pauseViewController
         {
             pauseViewController.dismiss()
         }
@@ -1835,7 +1656,7 @@ extension GameViewController: GameViewControllerDelegate
         var result = false
         
         rst_dispatch_sync_on_main_thread {
-            result = !self.boundCompanion.isEditingNotes && (self.presentedViewController == nil || self.presentedViewController?.isDisappearing == true) && !self.isSelectingSustainedButtons && self.view.window != nil
+            result = !self.boundCompanion.isEditingNotes && (self.presentedViewController == nil || self.presentedViewController?.isDisappearing == true) && self.view.window != nil
         }
         
         return result
@@ -1891,29 +1712,6 @@ extension GameViewController: GameViewControllerDelegate
 /// Gestures
 extension GameViewController
 {
-    private func makeMenuButtonGestureRecognizers() -> Set<UIGestureRecognizer>
-    {
-        var gestureRecognizers = Set<UIGestureRecognizer>()
-        
-        let fastForwardSwipeGestureRecognizer = UISwipeGestureRecognizer(target: self, action: #selector(GameViewController.handleSwipeGesture(_:)))
-        fastForwardSwipeGestureRecognizer.delegate = self
-        fastForwardSwipeGestureRecognizer.direction = [.left, .right]
-        gestureRecognizers.insert(fastForwardSwipeGestureRecognizer)
-        
-        let quickLoadGestureRecognizer = UILongPressGestureRecognizer(target: self, action: #selector(GameViewController.handleQuickLoadGesture(_:)))
-        quickLoadGestureRecognizer.delegate = self
-        quickLoadGestureRecognizer.numberOfTapsRequired = 0
-        gestureRecognizers.insert(quickLoadGestureRecognizer)
-        
-        let quickSaveGestureRecognizer = UITapGestureRecognizer(target: self, action: #selector(GameViewController.handleQuickSaveGesture(_:)))
-        quickSaveGestureRecognizer.delegate = self
-        quickSaveGestureRecognizer.numberOfTapsRequired = 2
-        quickSaveGestureRecognizer.require(toFail: quickLoadGestureRecognizer)
-        gestureRecognizers.insert(quickSaveGestureRecognizer)
-        
-        return gestureRecognizers
-    }
-    
     override func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool
     {
         guard super.gestureRecognizer(gestureRecognizer, shouldReceive: touch) else { return false }
@@ -1945,42 +1743,10 @@ extension GameViewController
             return true
         }
 
-        if self.menuButtonGestureRecognizers.contains(gestureRecognizer) || self.menuButtonKeyboardGestureRecognizers.contains(gestureRecognizer)
-        {
-            let shouldBegin = self.isMenuButtonHeldDown && Settings.isQuickGesturesEnabled
-            return shouldBegin
-        }
-        
         // Default to true, as if this method wasn't overridden.
         return true
     }
     
-    @objc private func handleSwipeGesture(_ gestureRecognizer: UISwipeGestureRecognizer)
-    {
-        guard let emulatorCore = self.emulatorCore else { return }
-        
-        let isFastForwarding = (emulatorCore.rate != emulatorCore.deltaCore.supportedRates.lowerBound)
-        self.performFastForwardAction(activate: !isFastForwarding)
-        
-        self.ignoreNextMenuInput = true
-    }
-    
-    @objc private func handleQuickSaveGesture(_ gestureRecognizer: UITapGestureRecognizer)
-    {
-        self.performQuickSaveAction()
-        self.ignoreNextMenuInput = true
-    }
-    
-    @objc private func handleQuickLoadGesture(_ gestureRecognizer: UILongPressGestureRecognizer)
-    {
-        self.performQuickLoadAction()
-        self.ignoreNextMenuInput = true
-        
-        // Cancel gesture to prevent additional callbacks
-        gestureRecognizer.isEnabled = false
-        gestureRecognizer.isEnabled = true
-    }
-
     @objc private func handleGameScreenRepositionGesture(_ gestureRecognizer: UILongPressGestureRecognizer)
     {
         guard let traits = self.controllerView.controllerSkinTraits else { return }
@@ -2802,22 +2568,6 @@ private extension GameViewController
         {
             // DON'T disconnect, only connect when active (so it stays connected to last active scene)
         }
-    }
-    
-    @objc func keyboardDidShow(with notification: Notification)
-    {
-        guard let inputView = self.controllerView.inputView else { return }
-        
-        // Using keyboard game controller, so add gesture recognizers to keyboard.
-        for gestureRecognizer in self.menuButtonKeyboardGestureRecognizers
-        {
-            inputView.addGestureRecognizer(gestureRecognizer)
-        }
-    }
-    
-    @objc func keyboardDidChangeFrame(with notification: Notification)
-    {
-        self.keyboardDidShow(with: notification)
     }
 }
 

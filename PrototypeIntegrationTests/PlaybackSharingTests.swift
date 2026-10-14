@@ -402,6 +402,88 @@ extension PlaybackSharingTests {
 
 
 extension PlaybackSharingTests {
+    func testMenuChordsReleaseActualGBAInputsWithEitherGesturePreference() async throws {
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let priorWindow = scene.windows.first(where: \.isKeyWindow)
+        let owner = GameViewController(), menu = BoundMenuInputDelegate()
+        owner.delegate = menu
+        owner.loadViewIfNeeded()
+        owner.game = FixtureGame(fileURL: fixture, gameSaveURL: directory.appendingPathComponent("fixture.sav"))
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = owner
+        window.makeKeyAndVisible()
+        let core = try XCTUnwrap(owner.emulatorCore)
+        let touch = try XCTUnwrap(owner.controllerView)
+        touch.playerIndex = 0
+        let savedGestures = Settings.isQuickGesturesEnabled
+        defer {
+            for input in Array(touch.sustainedInputs.keys) { touch.unsustain(input) }
+            for input in Array(touch.activatedInputs.keys) { touch.deactivate(input) }
+            _ = owner.pauseEmulation()
+            _ = core.stop()
+            owner.game = nil
+            window.isHidden = true
+            priorWindow?.makeKeyAndVisible()
+            Settings.isQuickGesturesEnabled = savedGestures
+        }
+        for _ in 0..<40 where core.state != .running { try await wait(0.05) }
+        XCTAssertEqual(core.state, .running)
+        XCTAssertTrue(scene.hasKeyboardFocus)
+        core.audioManager.isEnabled = false
+        let bridge = try XCTUnwrap(core.deltaCore.emulatorBridge as? NSObject)
+        func nativeInputs() throws -> UInt32 {
+            // This is the real GBA bridge mask read by the emulator's KEYINPUT callback.
+            try XCTUnwrap(bridge.value(forKey: "activatedInputs") as? NSNumber).uint32Value
+        }
+        func input(_ name: String) -> AnyInput {
+            AnyInput(stringValue: name, intValue: nil, type: .controller(.controllerSkin))
+        }
+        for gesturesEnabled in [false, true] {
+            Settings.isQuickGesturesEnabled = gesturesEnabled
+            for direction in ["up", "down", "left", "right", "a", "b", "l", "r", "start", "select"] {
+                for releaseMenuFirst in [false, true] {
+                    let directionInput = input(direction), menuInput = input("menu")
+                    core.deltaCore.emulatorBridge.resetInputs()
+                    let previousMenus = menu.releases
+                    touch.activate(menuInput)
+                    touch.activate(directionInput)
+                    // Sustained inputs pulse off for two emulated frames before
+                    // reactivation. Observe the running core after that transition.
+                    try await wait(0.08)
+                    XCTAssertNotEqual(try nativeInputs(), 0, "Game buttons still reach the actual GBA core while Menu is held")
+                    if releaseMenuFirst { touch.deactivate(menuInput) }
+                    touch.deactivate(directionInput)
+                    if !releaseMenuFirst { touch.deactivate(menuInput) }
+                    try await wait(0.08)
+                    XCTAssertTrue(touch.sustainedInputs.isEmpty, "Menu + \(direction) must never enable Hold Buttons (gestures: \(gesturesEnabled))")
+                    XCTAssertTrue(touch.activatedInputs.isEmpty, "Lifting both fingers must release every touch input")
+                    XCTAssertEqual(try nativeInputs(), 0, "Actual GBA input must release without loading a save state")
+                    XCTAssertEqual(menu.releases, previousMenus + 1, "A chord must preserve the normal Menu release")
+                    // Keep a failing pre-fix case from contaminating the next direction.
+                    for held in Array(touch.sustainedInputs.keys) { touch.unsustain(held) }
+                }
+            }
+        }
+    }
+
+    func testGameplayDoesNotInstallInheritedMenuQuickGestures() {
+        let savedGestures = Settings.isQuickGesturesEnabled
+        defer { Settings.isQuickGesturesEnabled = savedGestures }
+        for gesturesEnabled in [false, true] {
+            Settings.isQuickGesturesEnabled = gesturesEnabled
+            let owner = GameViewController()
+            owner.loadViewIfNeeded()
+            let gestures = owner.view.gestureRecognizers ?? []
+            XCTAssertFalse(gestures.contains { $0 is UISwipeGestureRecognizer }, "Menu swipes must not toggle Fast Forward")
+            XCTAssertFalse(gestures.contains { ($0 as? UITapGestureRecognizer)?.numberOfTapsRequired == 2 }, "Menu double taps must not save state")
+            XCTAssertEqual(gestures.filter { $0 is UILongPressGestureRecognizer }.count, 1, "Only the existing game-screen reposition gesture remains; Menu long press must not load state")
+        }
+    }
+
     func testControllerModeCancellationPreservesActualNativeExternalHeldAndSustainedA() async throws {
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -594,6 +676,12 @@ private final class AppPacingNativeDelegate: GameViewControllerDelegate {
     let metal: Bool
     init(metal: Bool) { self.metal = metal }
     func gameViewController(_ gameViewController: DeltaCore.GameViewController, optionsFor game: GameProtocol) -> [EmulatorCore.Option: Any] { [.metal: metal] }
+}
+
+private final class BoundMenuInputDelegate: GameViewControllerDelegate {
+    var releases = 0
+    func gameViewController(_ gameViewController: DeltaCore.GameViewController, handleMenuInputFrom gameController: GameController) { releases += 1 }
+    func gameViewController(_ gameViewController: DeltaCore.GameViewController, optionsFor game: GameProtocol) -> [EmulatorCore.Option: Any] { [.metal: true] }
 }
 
 extension PlaybackSharingTests {

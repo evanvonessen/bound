@@ -20,7 +20,7 @@ class PauseViewController: UIViewController, PauseInfoProviding
     }
     
     var pauseItems: [MenuItem] {
-        return [self.saveStateItem, self.loadStateItem, self.cheatCodesItem, self.fastForwardItem, self.sustainButtonsItem, self.screenshotItem, self.controllerModeItem, self.askLuItem].compactMap { $0 }
+        return [self.saveStateItem, self.loadStateItem, self.cheatCodesItem, self.fastForwardItem, self.friendsItem, self.screenshotItem, self.controllerModeItem, self.askLuItem].compactMap { $0 }
     }
     
     var closeButtonTitle: String = NSLocalizedString("Main Menu", comment: "")
@@ -41,7 +41,7 @@ class PauseViewController: UIViewController, PauseInfoProviding
     var loadStateItem: MenuItem?
     var cheatCodesItem: MenuItem?
     var fastForwardItem: MenuItem?
-    var sustainButtonsItem: MenuItem?
+    var friendsItem: MenuItem?
     var screenshotItem: MenuItem?
     var controllerModeItem: MenuItem?
     var askLuItem: MenuItem?
@@ -238,7 +238,7 @@ private extension PauseViewController
         self.saveStateItem = nil
         self.loadStateItem = nil
         self.cheatCodesItem = nil
-        self.sustainButtonsItem = nil
+        self.friendsItem = nil
         self.fastForwardItem = nil
         self.screenshotItem = nil
         self.controllerModeItem = nil
@@ -284,7 +284,7 @@ private extension PauseViewController
         })
         
         self.fastForwardItem = MenuItem(text: NSLocalizedString("Fast Forward", comment: ""), image: #imageLiteral(resourceName: "FastForward"), action: { _ in })
-        self.sustainButtonsItem = MenuItem(text: NSLocalizedString("Connect", comment: ""), image: #imageLiteral(resourceName: "SustainButtons"), action: { _ in })
+        self.friendsItem = MenuItem(text: NSLocalizedString("Connect", comment: ""), image: UIImage(systemName: "person.2.fill"), action: { _ in })
         self.screenshotItem = MenuItem(text: NSLocalizedString("Bound Settings", comment: ""), image: #imageLiteral(resourceName: "Screenshot"), action: { _ in })
         
         self.controllerModeItem = MenuItem(text: "Controller Mode", image: UIImage(systemName: "gamecontroller.fill"), action: { item in

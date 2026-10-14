@@ -31,7 +31,6 @@ private extension SettingsViewController
         case multitasking
         case hapticFeedback
         case syncing
-        case gestures
         case airPlay
         case hapticTouch
         case cores
@@ -117,7 +116,6 @@ class SettingsViewController: UITableViewController
     @IBOutlet private var buttonHapticFeedbackEnabledSwitch: UISwitch!
     @IBOutlet private var thumbstickHapticFeedbackEnabledSwitch: UISwitch!
     @IBOutlet private var previewsEnabledSwitch: UISwitch!
-    @IBOutlet private var quickGesturesSwitch: UISwitch!
     @IBOutlet private var opensGamesInNewWindowSwitch: UISwitch!
     
     @IBOutlet private var versionLabel: UILabel!
@@ -282,7 +280,6 @@ private extension SettingsViewController
         self.buttonHapticFeedbackEnabledSwitch.isOn = Settings.isButtonHapticFeedbackEnabled
         self.thumbstickHapticFeedbackEnabledSwitch.isOn = Settings.isThumbstickHapticFeedbackEnabled
         self.previewsEnabledSwitch.isOn = Settings.isPreviewsEnabled
-        self.quickGesturesSwitch.isOn = Settings.isQuickGesturesEnabled
         
         self.tableView.reloadData()
     }
@@ -439,11 +436,6 @@ private extension SettingsViewController
         Settings.features.dsAirPlay.layoutAxis = sender.isOn ? .horizontal : .vertical
         
         self.tableView.reloadSections([Section.airPlay.rawValue], with: .none)
-    }
-    
-    @IBAction func toggleQuickGesturesEnabled(_ sender: UISwitch)
-    {
-        Settings.isQuickGesturesEnabled = sender.isOn
     }
     
     @IBAction func toggleOpensGamesInNewWindow(_ sender: UISwitch)
@@ -791,7 +783,7 @@ extension SettingsViewController
             case .exportLog: break
             }
             
-        case .controllerOpacity, .display, .gameAudio, .multitasking, .hapticFeedback, .gestures, .airPlay, .hapticTouch, .credits, .support: break
+        case .controllerOpacity, .display, .gameAudio, .multitasking, .hapticFeedback, .airPlay, .hapticTouch, .credits, .support: break
         }
 
         return cell
@@ -807,7 +799,7 @@ extension SettingsViewController
         case .controllers: self.performSegue(withIdentifier: Segue.controllers.rawValue, sender: cell)
         case .controllerSkins: self.performSegue(withIdentifier: Segue.controllerSkins.rawValue, sender: cell)
         case .display: self.performSegue(withIdentifier: Segue.altAppIcons.rawValue, sender: cell)
-        case .patreon, .controllerOpacity, .gameAudio, .multitasking, .hapticFeedback, .gestures, .airPlay, .hapticTouch, .syncing: break
+        case .patreon, .controllerOpacity, .gameAudio, .multitasking, .hapticFeedback, .airPlay, .hapticTouch, .syncing: break
         case .cores:
             let hostingController: UIViewController
             
