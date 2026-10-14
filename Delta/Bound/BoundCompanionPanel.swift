@@ -226,7 +226,7 @@ final class BoundCompanionCoordinator {
         let geometry = BoundPortraitScreenGeometry(bounds: bounds, safeTop: safeArea.top,
             controllerSize: controllerSize, gameAspect: owner.emulatorCore?.preferredRenderingSize ?? CGSize(width: 3, height: 2))
         overlay?.frame = geometry.friend
-        if state.content != .friend { overlay?.frame = CGRect(x: bounds.minX, y: geometry.friend.minY, width: bounds.width, height: geometry.friend.height) }
+        if state.content == .notes { overlay?.frame = CGRect(x: bounds.minX, y: geometry.friend.minY, width: bounds.width, height: geometry.friend.height) }
         if state.content == .types {
             overlay?.frame = BoundTypeChartGeometry.portraitViewport(bounds: bounds, gameFrame: geometry.game)
             if state.chartTopInset != safeArea.top { state.chartTopInset = safeArea.top }

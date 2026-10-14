@@ -25,7 +25,7 @@ struct BoundRRDexView: View {
                 GeometryReader { geometry in
                     let scale = min(geometry.size.width / 360, geometry.size.height / 300)
                     card(pokemon: pokemon, catalog: catalog)
-                        .frame(width: 360, height: 300).scaleEffect(scale)
+                        .frame(width: geometry.size.width / max(scale, 0.001), height: 300).scaleEffect(scale)
                         .frame(width: geometry.size.width, height: geometry.size.height)
                 }
                 .accessibilityElement(children: .contain).accessibilityIdentifier("bound.rrdex")

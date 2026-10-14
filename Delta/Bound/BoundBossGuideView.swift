@@ -20,7 +20,7 @@ struct BoundBossGuideView: View {
                 GeometryReader { geometry in
                     let scale = min(geometry.size.width / 360, geometry.size.height / 260)
                     card(team: team, pokemon: pokemon, index: selected.pokemonIndex)
-                        .frame(width: 360, height: 260)
+                        .frame(width: geometry.size.width / max(scale, 0.001), height: 260)
                         .scaleEffect(scale)
                         .frame(width: geometry.size.width, height: geometry.size.height)
                 }

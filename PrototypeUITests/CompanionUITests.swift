@@ -656,6 +656,88 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, "Friend")
     }
 
+    func testExperimentalPortraitBossAndRRDexCardsMatchFriendWidth() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-screen-layout-bound", "--bound-ui-friend-fixture", "--bound-ui-no-animations"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        defer {
+            app.terminate()
+            app.launch()
+            setExperimentalFeatures(false, in: app)
+        }
+
+        let gameCell = app.collectionViews.cells.firstMatch
+        XCTAssertTrue(gameCell.waitForExistence(timeout: 20))
+        gameCell.tap()
+        let cycle = app.buttons["bound.panel-cycle"]
+        XCTAssertTrue(cycle.waitForExistence(timeout: 15))
+        let game = element("bound.game-screen", in: app)
+        XCTAssertTrue(game.waitForExistence(timeout: 10))
+        let friend = element("bound.friend-screen", in: app)
+        XCTAssertTrue(friend.waitForExistence(timeout: 10))
+        let friendFrame = friend.frame
+        XCTAssertGreaterThan(friendFrame.width, 100)
+        screenshot("Experimental-portrait-friend-width-reference")
+
+        cycle.tap() // Notes
+        cycle.tap() // Types
+        cycle.tap() // Bosses
+        XCTAssertEqual(cycle.value as? String, "Bosses")
+        let bossGuide = element("bound.boss-guide", in: app)
+        XCTAssertTrue(bossGuide.waitForExistence(timeout: 10))
+        XCTAssertEqual(bossGuide.frame.minX, friendFrame.minX, accuracy: 2)
+        XCTAssertEqual(bossGuide.frame.maxX, friendFrame.maxX, accuracy: 2)
+        let bossPicker = app.buttons["bound.boss-picker"]
+        let bossCap = app.staticTexts["bound.boss-cap"]
+        XCTAssertTrue(bossPicker.isHittable)
+        XCTAssertTrue(bossCap.exists)
+        XCTAssertGreaterThanOrEqual(bossPicker.frame.minX, friendFrame.minX)
+        XCTAssertLessThanOrEqual(bossPicker.frame.maxX, friendFrame.maxX)
+        XCTAssertGreaterThanOrEqual(bossCap.frame.minX, friendFrame.minX)
+        XCTAssertLessThanOrEqual(bossCap.frame.maxX, friendFrame.maxX)
+        XCTAssertGreaterThanOrEqual(bossPicker.frame.width, friendFrame.width * 0.9,
+                                    "The boss picker row should span the visible friend-screen width")
+        XCTAssertEqual(bossPicker.frame.midX, friendFrame.midX, accuracy: 2)
+        screenshot("Experimental-portrait-boss-card-full-width")
+        app.buttons["bound.boss-full-team"].tap()
+        let fullTeam = element("bound.boss-full-team-list", in: app)
+        XCTAssertTrue(fullTeam.waitForExistence(timeout: 10))
+        app.buttons["bound.boss-close-full-team"].tap()
+        XCTAssertTrue(fullTeam.waitForNonExistence(timeout: 10))
+        assertGamePixelsAnimate(game, in: app)
+
+        cycle.tap() // Dex
+        XCTAssertEqual(cycle.value as? String, "Dex")
+        let dex = element("bound.rrdex", in: app)
+        XCTAssertTrue(dex.waitForExistence(timeout: 10))
+        XCTAssertEqual(dex.frame.minX, friendFrame.minX, accuracy: 2)
+        XCTAssertEqual(dex.frame.maxX, friendFrame.maxX, accuracy: 2)
+        let search = app.textFields["bound.rrdex-search"]
+        XCTAssertTrue(search.exists)
+        XCTAssertGreaterThanOrEqual(search.frame.width, friendFrame.width * 0.8,
+                                    "The Dex search field should use the widened portrait card")
+        let weaknesses = app.buttons["bound.rrdex-weaknesses"]
+        let learnset = app.buttons["bound.rrdex-learnset"]
+        for identifier in ["bound.rrdex-import", "bound.rrdex-info", "bound.rrdex-weaknesses", "bound.rrdex-learnset"] {
+            let control = app.buttons[identifier]
+            XCTAssertTrue(control.isHittable, "\(identifier) must remain tappable in the full-width portrait card")
+            XCTAssertGreaterThanOrEqual(control.frame.minX, friendFrame.minX)
+            XCTAssertLessThanOrEqual(control.frame.maxX, friendFrame.maxX)
+        }
+        let dexContentWidth = learnset.frame.maxX - weaknesses.frame.minX
+        XCTAssertGreaterThanOrEqual(dexContentWidth, friendFrame.width * 0.9,
+                                    "Dex detail buttons should span the visible friend-screen width")
+        XCTAssertEqual((learnset.frame.maxX + weaknesses.frame.minX) / 2, friendFrame.midX, accuracy: 2)
+        screenshot("Experimental-portrait-rrdex-card-full-width")
+        app.buttons["bound.rrdex-weaknesses"].tap()
+        let matchups = element("bound.rrdex-matchups", in: app)
+        XCTAssertTrue(matchups.waitForExistence(timeout: 10))
+        app.buttons["bound.rrdex-close-detail"].tap()
+        XCTAssertTrue(matchups.waitForNonExistence(timeout: 10))
+        assertGamePixelsAnimate(game, in: app)
+    }
+
     private func element(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
