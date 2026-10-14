@@ -5,6 +5,26 @@ import SwiftUI
 
 @MainActor
 final class CompanionCycleButtonTests: XCTestCase {
+    func testExperimentalBossCycleFallsBackImmediatelyWhenDisabled() {
+        let state = BoundCompanionState(experimentalFeaturesEnabled: false)
+        for expected in [BoundPiPContent.notes, .types, .friend, .notes, .types, .friend] {
+            state.advancePanel()
+            XCTAssertEqual(state.content, expected)
+        }
+        state.updateExperimentalFeatures(true)
+        for expected in [BoundPiPContent.notes, .types, .bosses] {
+            state.advancePanel()
+            XCTAssertEqual(state.content, expected)
+        }
+        state.hidden = true
+        state.updateExperimentalFeatures(false)
+        XCTAssertEqual(state.content, .friend)
+        XCTAssertEqual(state.selected, 0)
+        XCTAssertFalse(state.hidden)
+        XCTAssertEqual(state.availableContents, [.friend, .notes, .types])
+        state.selected = 3
+        XCTAssertEqual(state.content, .friend, "A stale experimental selection must not expose the guide")
+    }
     func testPortraitMirrorKeepsDefaultAndAvoidsMovedInput() throws {
         let canvas = CGRect(x: 0, y: 0, width: 390, height: 800)
         let menu = CGRect(x: 20, y: 740, width: 20, height: 20)
@@ -68,14 +88,17 @@ final class CompanionCycleButtonTests: XCTestCase {
             XCTAssertEqual(feedback, 1)
             XCTAssertEqual(cycles, 2)
             BoundAppearancePreferences().screenLayout = .delta
+            // Build 13's simplified presentation retains the saved choice but
+            // still uses Bound, including its existing native button feedback.
+            XCTAssertEqual(BoundAppearancePreferences().effectiveScreenLayout, .bound)
             Settings.isButtonHapticFeedbackEnabled = true
             button.sendActions(for: .touchUpInside)
-            XCTAssertEqual(feedback, 1)
+            XCTAssertEqual(feedback, 2)
             XCTAssertEqual(cycles, 3)
             BoundAppearancePreferences().screenLayout = .bound
             button.isEnabled = false
             button.sendActions(for: .touchUpInside)
-            XCTAssertEqual(feedback, 1)
+            XCTAssertEqual(feedback, 2)
             XCTAssertEqual(cycles, 3)
         }
     }

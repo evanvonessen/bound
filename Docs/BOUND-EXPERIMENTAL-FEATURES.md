@@ -5,8 +5,11 @@ Build 13 is preserved on the `build-13` branch at
 
 The ROM library's Settings screen contains **Enable Experimental Features**.
 It defaults to off and persists on this device. Off keeps the build 13 feature
-set, with the switch as the only new control. Enabling it currently stores an
-opt-in for future additions; it does not restore older hidden Delta controls.
+set, with the switch as the only new control. Enabling it adds the Radical Red
+4.1 Default boss guide as the fourth companion panel, after Friend, Notes and
+Types. It does not restore older hidden Delta controls. The guide is bundled
+for offline use, includes all nine boss tabs, and remembers the selected team
+and Pokémon per ROM. See `Docs/RADICAL-RED-BOSS-GUIDE.md` for source coverage.
 
 Every new feature added after this switch must check
 `BoundFeatureVisibility.experimentalFeaturesEnabled` before making its UI or

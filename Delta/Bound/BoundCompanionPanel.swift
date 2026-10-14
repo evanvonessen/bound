@@ -7,6 +7,7 @@ import DeltaCore
 @MainActor
 final class BoundCompanionState: ObservableObject {
     @Published var selected = 0
+    @Published private(set) var experimentalFeaturesEnabled: Bool
     @Published var landscape = false
     @Published var chartTopInset: CGFloat = 0
     @Published var hidden = false
@@ -25,13 +26,30 @@ final class BoundCompanionState: ObservableObject {
         #endif
     }
     let preferences: BoundPiPPreferences
-    init(preferences: BoundPiPPreferences? = nil) { self.preferences = preferences ?? BoundPiPPreferences() }
+    init(preferences: BoundPiPPreferences? = nil, experimentalFeaturesEnabled: Bool? = nil) {
+        self.preferences = preferences ?? BoundPiPPreferences()
+        self.experimentalFeaturesEnabled = experimentalFeaturesEnabled ?? BoundFeatureVisibility.experimentalFeaturesEnabled
+    }
     var changed: (() -> Void)?
     var pendingControlEditor = false
     var editControls: (() -> Void)?
     var sharingChanged: ((Bool) -> Void)?
     var selectionChanged: (() -> Void)?
-    var content: BoundPiPContent { selected == 1 ? .notes : selected == 2 ? .types : .friend }
+    var availableContents: [BoundPiPContent] { BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: experimentalFeaturesEnabled) }
+    var content: BoundPiPContent { availableContents.indices.contains(selected) ? availableContents[selected] : .friend }
+    func updateExperimentalFeatures(_ enabled: Bool) {
+        guard experimentalFeaturesEnabled != enabled else { return }
+        experimentalFeaturesEnabled = enabled
+        if !availableContents.indices.contains(selected) {
+            selectionChanged?(); selected = 0; hidden = false
+        }
+        refresh()
+    }
+    func advancePanel() {
+        if !hidden { selected = (selected + 1) % availableContents.count }
+        hidden = false
+        refresh()
+    }
     func refresh() { revision += 1; changed?() }
 }
 
@@ -119,6 +137,9 @@ final class BoundCompanionCoordinator {
             owner.view.setNeedsLayout()
         })
         observers.append(NotificationCenter.default.addObserver(forName: BoundAppearancePreferences.didChangeNotification, object: nil, queue: .main) { [weak self, weak owner] _ in self?.cancelInteractions(); owner?.view.setNeedsLayout() })
+        observers.append(NotificationCenter.default.addObserver(forName: BoundExperimentalFeaturesPreferences.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.state.updateExperimentalFeatures(BoundFeatureVisibility.experimentalFeaturesEnabled)
+        })
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.background() })
         // Restore foreground eligibility without automatically restarting authenticated sharing.
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in self?.foreground() })
@@ -243,7 +264,7 @@ final class BoundCompanionCoordinator {
         }.joined(separator: "|")
         #endif
         let layout = BoundPiPLayout(viewport: viewport,
-            baseSize: companionBaseSize(width: viewport.width * 0.36),
+            baseSize: companionBaseSize(width: viewport.width * (state.content == .bosses ? 0.42 : 0.36)),
             scale: CGFloat(state.preferences.scale(for: state.content)) * pinchScale, occupied: occupied)
         geometry = layout
         let corner = state.preferences.corner(for: state.content)
@@ -308,7 +329,7 @@ final class BoundCompanionCoordinator {
             canvas: bounds.inset(by: safeArea), occupied: occupied, rightShoulderFrame: rightFrame, menuHitSize: menuHitSize, boundPortrait: boundPortrait, selectArtwork: selectArtwork,
             rightControlGutter: owner.boundLandscapeControlGutter(),
             menuHitFrame: owner.controllerView.convert(menu.extendedFrame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height)), to: owner.view))
-        controls.accessibilityHint = state.hidden ? "Restores the hidden panel" : "Cycles Friend, Notes, and Types"
+        controls.accessibilityHint = state.hidden ? "Restores the hidden panel" : state.experimentalFeaturesEnabled ? "Cycles Friend, Notes, Types, and Bosses" : "Cycles Friend, Notes, and Types"
         owner.view.bringSubviewToFront(controls)
     }
     func presentFriends(from presenter: UIViewController) {
@@ -341,11 +362,11 @@ final class BoundCompanionCoordinator {
     func cyclePanels() {
         owner?.view.endEditing(true)
         cancelInteractions()
-        if !state.hidden { state.selected = (state.selected + 1) % 3 }
-        state.hidden = false; state.refresh()
+        state.advancePanel()
     }
     var allowsOpacityGesture: Bool { state.landscape && state.content != .types && !isEditingNotes }
     private func companionBaseSize(width: CGFloat) -> CGSize {
+        if state.content == .bosses { return CGSize(width: width, height: width * 260 / 360) }
         let image = state.landscape && state.content == .types ? UIImage(named: "PokemonTypeChart")?.size : nil
         let aspect = image.map { $0.width / max(1, $0.height) } ?? 1.5
         return CGSize(width: width, height: width / max(0.001, aspect))
@@ -444,16 +465,19 @@ struct BoundCompanionPanel: View {
     @ObservedObject var state: BoundCompanionState
     var gameID: String
     let editingChanged: (Bool) -> Void
+    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     var body: some View {
         Group {
-            if state.selected == 0 {
+            if state.content == .friend {
                 ZStack {
                     Color.black
                     BoundRemoteCanvas(view: sharing.remoteView).opacity(sharing.remoteVisible || state.displaysFixtureVideo ? 1 : 0)
                     if !sharing.remoteVisible && !state.displaysFixtureVideo { Text(sharing.active ? "Waiting for friend" : "Connect a friend").foregroundStyle(.white).font(.callout) }
                 }.accessibilityIdentifier("bound.friend-screen")
-            } else if state.selected == 1 {
+            } else if state.content == .notes {
                 BoundNotesEditor(gameID: gameID, floating: state.landscape, editingChanged: editingChanged).id(gameID)
+            } else if state.content == .bosses && experimentsEnabled {
+                BoundBossGuideView(gameID: gameID, presentationChanged: editingChanged).id(gameID)
             } else {
                 if state.landscape {
                     Image("PokemonTypeChart").resizable().scaledToFit()
@@ -465,6 +489,7 @@ struct BoundCompanionPanel: View {
         }.background(state.content == .types ? Color.black : Color(uiColor: .secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: state.landscape ? 8 : state.content == .types ? 0 : 4))
         .onChange(of: sharing.joined) { _ in state.refresh() }
+        .onChange(of: experimentsEnabled) { _, enabled in state.updateExperimentalFeatures(enabled) }
     }
 }
 

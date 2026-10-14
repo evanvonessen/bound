@@ -32,6 +32,9 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		B13500000000000000000006 /* RadicalRedDefaultBosses-v4.1.json in Resources */ = {isa = PBXBuildFile; fileRef = B13500000000000000000005 /* RadicalRedDefaultBosses-v4.1.json */; };
+		B13500000000000000000004 /* BoundBossGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B13500000000000000000003 /* BoundBossGuideView.swift */; };
+		B13500000000000000000002 /* BoundBossGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = B13500000000000000000001 /* BoundBossGuide.swift */; };
 		B13E00000000000000000002 /* BoundExperimentalFeaturesPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = B13E00000000000000000001 /* BoundExperimentalFeaturesPreferences.swift */; };
 		EB82D09672944343A7156C01 /* SDWebImage_Privacy.bundle in Resources */ = {isa = PBXBuildFile; fileRef = EB82D09672944343A7156C02 /* SDWebImage_Privacy.bundle */; };
 		10C306F1A66146C8B168ECA1 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 74E4919A740A48EFAE101408 /* PrivacyInfo.xcprivacy */; };
@@ -793,6 +796,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		B13500000000000000000005 /* RadicalRedDefaultBosses-v4.1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Resources/RadicalRedDefaultBosses-v4.1.json; sourceTree = "<group>"; };
+		B13500000000000000000003 /* BoundBossGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundBossGuideView.swift; sourceTree = "<group>"; };
+		B13500000000000000000001 /* BoundBossGuide.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundBossGuide.swift; sourceTree = "<group>"; };
 		B13E00000000000000000001 /* BoundExperimentalFeaturesPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundExperimentalFeaturesPreferences.swift; sourceTree = "<group>"; };
 		EB82D09672944343A7156C02 /* SDWebImage_Privacy.bundle */ = {isa = PBXFileReference; lastKnownFileType = wrapper.cfbundle; path = PrivacyManifests/SDWebImage_Privacy.bundle; sourceTree = SOURCE_ROOT; };
 		74E4919A740A48EFAE101408 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -1369,6 +1375,9 @@
 				DCAE7D666E24AD4015C010BC /* BoundAppearanceSettings.swift */,
 				700B4229FD43D2D7CC485768 /* BoundAppearancePreferences.swift */,
 				B13E00000000000000000001 /* BoundExperimentalFeaturesPreferences.swift */,
+				B13500000000000000000005 /* RadicalRedDefaultBosses-v4.1.json */,
+				B13500000000000000000003 /* BoundBossGuideView.swift */,
+				B13500000000000000000001 /* BoundBossGuide.swift */,
 				CDE48615FD1B95F2AA4C6B72 /* BoundControlPlacementSkin.swift */,
 				264DD31E8EAE7DFDEF8DA6D5 /* BoundStockControllerSkin.swift */,
 				E3BBCDAA4472481390EC1254 /* BoundNotesFont.swift */,
@@ -2854,6 +2863,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B13500000000000000000006 /* RadicalRedDefaultBosses-v4.1.json in Resources */,
 				EB82D09672944343A7156C01 /* SDWebImage_Privacy.bundle in Resources */,
 				10C306F1A66146C8B168ECA1 /* PrivacyInfo.xcprivacy in Resources */,
 				E638143CC17A4C2C89AAD42A /* DEPENDENCY-INVENTORY.md in Resources */,
@@ -3314,6 +3324,8 @@
 				0EF8EC59DD43C2CE2B8F47B2 /* BoundAppearanceSettings.swift in Sources */,
 				72FDE3D87998618604D197B4 /* BoundAppearancePreferences.swift in Sources */,
 				B13E00000000000000000002 /* BoundExperimentalFeaturesPreferences.swift in Sources */,
+				B13500000000000000000004 /* BoundBossGuideView.swift in Sources */,
+				B13500000000000000000002 /* BoundBossGuide.swift in Sources */,
 				76AFFCD28B307ADBADFF7D46 /* BoundControlPlacementSkin.swift in Sources */,
 				03452C62DFF4584B7406046D /* BoundStockControllerSkin.swift in Sources */,
 				52559A4FB7BF496EAFA2972D /* BoundNotesFont.swift in Sources */,

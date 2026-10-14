@@ -138,6 +138,98 @@ final class CompanionUITests: XCTestCase {
         screenshot("Library-experimental-features-off")
     }
 
+    func testExperimentalBossGuidePortraitLandscapeSelectionAndOffGate() throws {
+        let app = XCUIApplication()
+        #if DEBUG
+        app.launchArguments.append("--bound-ui-no-animations")
+        #endif
+        app.launch()
+        func setExperiments(_ enabled: Bool) {
+            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20))
+            app.buttons["Settings"].tap()
+            let toggle = app.switches["bound.enable-experimental-features"]
+            XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+            if (toggle.value as? String == "1") != enabled {
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+            XCTAssertEqual(toggle.value as? String, enabled ? "1" : "0")
+            let close = app.buttons["Close"].firstMatch
+            if close.exists { close.tap() } else { app.buttons["Done"].firstMatch.tap() }
+        }
+        func playAndCycle(to expected: String) {
+            let cell = app.collectionViews.cells.firstMatch
+            XCTAssertTrue(cell.waitForExistence(timeout: 20))
+            cell.tap()
+            let cycle = app.buttons["bound.panel-cycle"]
+            XCTAssertTrue(cycle.waitForExistence(timeout: 20))
+            XCTAssertEqual(cycle.value as? String, "Friend")
+            cycle.tap(); XCTAssertEqual(cycle.value as? String, "Notes")
+            cycle.tap(); XCTAssertEqual(cycle.value as? String, "Types")
+            cycle.tap(); XCTAssertEqual(cycle.value as? String, expected)
+        }
+        setExperiments(true)
+        playAndCycle(to: "Bosses")
+        let guide = element("bound.boss-guide", in: app)
+        XCTAssertTrue(guide.waitForExistence(timeout: 10))
+        let species = app.staticTexts["bound.boss-pokemon"]
+        // Exercise a known team without erasing a prior run's persisted choice.
+        app.buttons["bound.boss-picker"].tap()
+        let initialSearch = app.searchFields.firstMatch
+        XCTAssertTrue(initialSearch.waitForExistence(timeout: 10))
+        initialSearch.tap(); initialSearch.typeText("Brock")
+        let brock = app.buttons["bound.boss-select-kanto-leaders-4"]
+        XCTAssertTrue(brock.waitForExistence(timeout: 10)); brock.tap()
+        XCTAssertTrue(guide.waitForExistence(timeout: 10))
+        XCTAssertEqual(species.label, "Geodude-A")
+        XCTAssertTrue(app.staticTexts["Bulldoze"].exists)
+        XCTAssertTrue(app.staticTexts["Self-Destruct"].exists)
+        XCTAssertEqual(app.staticTexts["bound.boss-cap"].label, "Cap 15")
+        app.buttons["bound.boss-next"].tap()
+        XCTAssertEqual(species.label, "Varoom")
+        app.buttons["bound.boss-previous"].tap()
+        XCTAssertEqual(species.label, "Geodude-A")
+        screenshot("Boss-guide-portrait-Brock")
+
+        app.buttons["bound.boss-picker"].tap()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("Cerulean Misty")
+        let misty = app.buttons["bound.boss-select-kanto-leaders-27"]
+        XCTAssertTrue(misty.waitForExistence(timeout: 10)); misty.tap()
+        XCTAssertTrue(guide.waitForExistence(timeout: 10))
+        XCTAssertEqual(species.label, "Frogadier")
+        app.buttons["bound.boss-next"].tap()
+        XCTAssertEqual(species.label, "Floatzel")
+        app.buttons["bound.boss-full-team"].tap()
+        XCTAssertTrue(element("bound.boss-full-team-list", in: app).waitForExistence(timeout: 10))
+        screenshot("Boss-guide-full-team-Misty")
+        app.buttons["bound.boss-close-full-team"].tap()
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        waitForFrame(element("bound.game-screen", in: app)) { $0.width > $0.height }
+        XCTAssertTrue(guide.exists)
+        XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, "Bosses")
+        XCTAssertEqual(species.label, "Floatzel")
+        screenshot("Boss-guide-landscape-Misty")
+        app.buttons["bound.panel-cycle"].tap()
+        XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, "Friend")
+        app.buttons["bound.panel-cycle"].tap()
+        app.buttons["bound.panel-cycle"].tap()
+        app.buttons["bound.panel-cycle"].tap()
+        XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, "Bosses")
+        XCTAssertEqual(species.label, "Floatzel")
+
+        app.terminate(); XCUIDevice.shared.orientation = .portrait; app.launch()
+        setExperiments(false)
+        playAndCycle(to: "Friend")
+        XCTAssertFalse(element("bound.boss-guide", in: app).exists)
+        app.terminate(); app.launch()
+        setExperiments(true)
+        playAndCycle(to: "Bosses")
+        XCTAssertEqual(species.label, "Floatzel", "Selection is kept while experiments are off and across relaunch")
+        app.terminate(); app.launch()
+        setExperiments(false)
+    }
+
     private func element(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }

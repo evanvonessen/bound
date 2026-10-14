@@ -5,7 +5,12 @@ import CoreGraphics
 enum BoundPiPCorner: String, CaseIterable, Sendable {
     case topLeft, topRight, bottomLeft, bottomRight
 }
-enum BoundPiPContent: String, CaseIterable, Sendable { case friend, types, notes }
+enum BoundPiPContent: String, CaseIterable, Sendable {
+    case friend, types, notes, bosses
+    static func cycleOrder(experimentalFeaturesEnabled: Bool) -> [Self] {
+        experimentalFeaturesEnabled ? [.friend, .notes, .types, .bosses] : [.friend, .notes, .types]
+    }
+}
 enum BoundPiPHiddenSide: String, Sendable { case left, right }
 
 @MainActor
