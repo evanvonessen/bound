@@ -5,6 +5,44 @@ import SwiftUI
 
 @MainActor
 final class CompanionCycleButtonTests: XCTestCase {
+    func testDexCardRendersAtPortraitAndLandscapePanelSizes() throws {
+        let preferences = BoundExperimentalFeaturesPreferences()
+        let wasEnabled = preferences.isEnabled
+        preferences.isEnabled = true
+        defer { preferences.isEnabled = wasEnabled }
+        let parent = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.windows.first?.rootViewController)
+        for (name, size) in [("portrait", CGSize(width: 390, height: 195)), ("landscape", CGSize(width: 330, height: 275))] {
+            let host = UIHostingController(rootView: BoundRRDexView(gameID: "RRDEX_RENDER_QA", presentationChanged: { _ in }))
+            parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)
+            host.view.frame = CGRect(origin: CGPoint(x: 0, y: 60), size: size)
+            host.view.setNeedsLayout(); host.view.layoutIfNeeded()
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+            host.view.layoutIfNeeded()
+            func searchField(_ view: UIView) -> UITextField? {
+                if let field = view as? UITextField { return field }
+                return view.subviews.lazy.compactMap(searchField).first
+            }
+            let search = try XCTUnwrap(searchField(host.view))
+            XCTAssertGreaterThan(search.bounds.width, 150)
+            XCTAssertEqual(search.autocapitalizationType, .none)
+            let renderer = UIGraphicsImageRenderer(size: size)
+            let snapshot = renderer.image { _ in host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true) }
+            XCTAssertGreaterThan(try XCTUnwrap(snapshot.pngData()).count, 5000)
+            let attachment = XCTAttachment(image: snapshot)
+            attachment.name = "RRDex-hosted-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
+            host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent()
+        }
+    }
+    func testDexSearchDisablesCorrectionCapitalizationSpellingAndSmartEdits() {
+        let field = BoundRRDexSearchField.makeTextField()
+        XCTAssertEqual(field.autocapitalizationType, .none)
+        XCTAssertEqual(field.autocorrectionType, .no)
+        XCTAssertEqual(field.spellCheckingType, .no)
+        XCTAssertEqual(field.smartQuotesType, .no)
+        XCTAssertEqual(field.smartDashesType, .no)
+        XCTAssertEqual(field.smartInsertDeleteType, .no)
+        XCTAssertEqual(field.inlinePredictionType, .no)
+    }
     func testExperimentalBossCycleFallsBackImmediatelyWhenDisabled() {
         let state = BoundCompanionState(experimentalFeaturesEnabled: false)
         for expected in [BoundPiPContent.notes, .types, .friend, .notes, .types, .friend] {
@@ -12,7 +50,7 @@ final class CompanionCycleButtonTests: XCTestCase {
             XCTAssertEqual(state.content, expected)
         }
         state.updateExperimentalFeatures(true)
-        for expected in [BoundPiPContent.notes, .types, .bosses] {
+        for expected in [BoundPiPContent.notes, .types, .bosses, .dex] {
             state.advancePanel()
             XCTAssertEqual(state.content, expected)
         }

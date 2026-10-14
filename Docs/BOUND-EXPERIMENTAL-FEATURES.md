@@ -11,6 +11,13 @@ Types. It does not restore older hidden Delta controls. The guide is bundled
 for offline use, includes all nine boss tabs, and remembers the selected team
 and Pokémon per ROM. See `Docs/RADICAL-RED-BOSS-GUIDE.md` for source coverage.
 
+RRDex is the fifth panel, after Bosses. It includes the Radical Red 4.1 Normal
+dex, live Pokémon suggestions, sprites, base stats, abilities, evolution methods,
+type matchups and learnsets. A local battery-save import applies the ability and
+learnset randomizer configuration. See `Docs/RADICAL-RED-DEX.md` for provenance,
+save validation and coverage. Disabling experiments removes both reference panels
+and dismisses their keyboard, sheets and importer without erasing preferences.
+
 Every new feature added after this switch must check
 `BoundFeatureVisibility.experimentalFeaturesEnabled` before making its UI or
 behavior accessible. Gate navigation destinations, actions and background work

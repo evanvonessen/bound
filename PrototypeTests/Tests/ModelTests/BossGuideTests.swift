@@ -62,8 +62,8 @@ final class BossGuideTests: XCTestCase {
         XCTAssertEqual(store.read(gameID: "ROM_A", catalog: catalog), choice, "Turning experiments off must preserve the guide choice")
     }
 
-    func testExperimentGateKeepsTheBuild13CycleAndAddsOnlyBosses() {
+    func testExperimentGateKeepsTheBuild13CycleAndAddsReferencePanels() {
         XCTAssertEqual(BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: false), [.friend, .notes, .types])
-        XCTAssertEqual(BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: true), [.friend, .notes, .types, .bosses])
+        XCTAssertEqual(BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: true), [.friend, .notes, .types, .bosses, .dex])
     }
 }

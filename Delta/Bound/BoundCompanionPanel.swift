@@ -264,7 +264,7 @@ final class BoundCompanionCoordinator {
         }.joined(separator: "|")
         #endif
         let layout = BoundPiPLayout(viewport: viewport,
-            baseSize: companionBaseSize(width: viewport.width * (state.content == .bosses ? 0.42 : 0.36)),
+            baseSize: companionBaseSize(width: viewport.width * ([BoundPiPContent.bosses, .dex].contains(state.content) ? 0.42 : 0.36)),
             scale: CGFloat(state.preferences.scale(for: state.content)) * pinchScale, occupied: occupied)
         geometry = layout
         let corner = state.preferences.corner(for: state.content)
@@ -329,7 +329,7 @@ final class BoundCompanionCoordinator {
             canvas: bounds.inset(by: safeArea), occupied: occupied, rightShoulderFrame: rightFrame, menuHitSize: menuHitSize, boundPortrait: boundPortrait, selectArtwork: selectArtwork,
             rightControlGutter: owner.boundLandscapeControlGutter(),
             menuHitFrame: owner.controllerView.convert(menu.extendedFrame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height)), to: owner.view))
-        controls.accessibilityHint = state.hidden ? "Restores the hidden panel" : state.experimentalFeaturesEnabled ? "Cycles Friend, Notes, Types, and Bosses" : "Cycles Friend, Notes, and Types"
+        controls.accessibilityHint = state.hidden ? "Restores the hidden panel" : state.experimentalFeaturesEnabled ? "Cycles Friend, Notes, Types, Bosses, and Dex" : "Cycles Friend, Notes, and Types"
         owner.view.bringSubviewToFront(controls)
     }
     func presentFriends(from presenter: UIViewController) {
@@ -366,6 +366,7 @@ final class BoundCompanionCoordinator {
     }
     var allowsOpacityGesture: Bool { state.landscape && state.content != .types && !isEditingNotes }
     private func companionBaseSize(width: CGFloat) -> CGSize {
+        if state.content == .dex { return CGSize(width: width, height: width * 300 / 360) }
         if state.content == .bosses { return CGSize(width: width, height: width * 260 / 360) }
         let image = state.landscape && state.content == .types ? UIImage(named: "PokemonTypeChart")?.size : nil
         let aspect = image.map { $0.width / max(1, $0.height) } ?? 1.5
@@ -478,6 +479,8 @@ struct BoundCompanionPanel: View {
                 BoundNotesEditor(gameID: gameID, floating: state.landscape, editingChanged: editingChanged).id(gameID)
             } else if state.content == .bosses && experimentsEnabled {
                 BoundBossGuideView(gameID: gameID, presentationChanged: editingChanged).id(gameID)
+            } else if state.content == .dex && experimentsEnabled {
+                BoundRRDexView(gameID: gameID, presentationChanged: editingChanged).id(gameID)
             } else {
                 if state.landscape {
                     Image("PokemonTypeChart").resizable().scaledToFit()

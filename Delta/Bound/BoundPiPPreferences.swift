@@ -6,9 +6,9 @@ enum BoundPiPCorner: String, CaseIterable, Sendable {
     case topLeft, topRight, bottomLeft, bottomRight
 }
 enum BoundPiPContent: String, CaseIterable, Sendable {
-    case friend, types, notes, bosses
+    case friend, types, notes, bosses, dex
     static func cycleOrder(experimentalFeaturesEnabled: Bool) -> [Self] {
-        experimentalFeaturesEnabled ? [.friend, .notes, .types, .bosses] : [.friend, .notes, .types]
+        experimentalFeaturesEnabled ? [.friend, .notes, .types, .bosses, .dex] : [.friend, .notes, .types]
     }
 }
 enum BoundPiPHiddenSide: String, Sendable { case left, right }

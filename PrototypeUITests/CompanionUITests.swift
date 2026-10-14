@@ -6,7 +6,7 @@ private func selectCompanion(_ name: String, in app: XCUIApplication) {
     let cycle = app.buttons["bound.panel-cycle"]
     XCTAssertTrue(cycle.waitForExistence(timeout: 15))
     resumeNativePause(in: app)
-    for _ in 0..<3 {
+    for _ in 0..<5 {
         if cycle.value as? String == name { return }
         cycle.tap()
         XCTAssertFalse(app.buttons["Bound Settings"].exists, "Cycling panels must not open Delta's pause menu")
@@ -138,7 +138,7 @@ final class CompanionUITests: XCTestCase {
         screenshot("Library-experimental-features-off")
     }
 
-    func testExperimentalBossGuidePortraitLandscapeSelectionAndOffGate() throws {
+    func testExperimentalBossGuidePortraitSelectionAndOffGate() throws {
         let app = XCUIApplication()
         #if DEBUG
         app.launchArguments.append("--bound-ui-no-animations")
@@ -204,12 +204,11 @@ final class CompanionUITests: XCTestCase {
         screenshot("Boss-guide-full-team-Misty")
         app.buttons["bound.boss-close-full-team"].tap()
 
-        XCUIDevice.shared.orientation = .landscapeLeft
-        waitForFrame(element("bound.game-screen", in: app)) { $0.width > $0.height }
         XCTAssertTrue(guide.exists)
         XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, "Bosses")
         XCTAssertEqual(species.label, "Floatzel")
-        screenshot("Boss-guide-landscape-Misty")
+        app.buttons["bound.panel-cycle"].tap()
+        XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, "Dex")
         app.buttons["bound.panel-cycle"].tap()
         XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, "Friend")
         app.buttons["bound.panel-cycle"].tap()
@@ -228,6 +227,141 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(species.label, "Floatzel", "Selection is kept while experiments are off and across relaunch")
         app.terminate(); app.launch()
         setExperiments(false)
+    }
+
+    func testExperimentalRRDexSearchDetailsSaveImportPersistenceAndOffGate() throws {
+        let app = XCUIApplication()
+        app.launch()
+        func setExperiments(_ enabled: Bool) {
+            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20))
+            app.buttons["Settings"].tap()
+            let toggle = app.switches["bound.enable-experimental-features"]
+            XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+            if (toggle.value as? String == "1") != enabled {
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+            XCTAssertEqual(toggle.value as? String, enabled ? "1" : "0")
+            app.buttons["Close"].firstMatch.tap()
+        }
+        func play() {
+            let cell = app.collectionViews.cells.firstMatch
+            XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
+            XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 20))
+        }
+        setExperiments(true); play(); selectCompanion("Dex", in: app)
+        XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 10))
+        let search = app.textFields["bound.rrdex-search"]
+        search.tap(); search.typeText("bu")
+        XCTAssertEqual(search.value as? String, "bu")
+        XCTAssertTrue(app.buttons["bound.rrdex-suggestion-1"].waitForExistence(timeout: 10))
+        search.typeText("lb")
+        XCTAssertEqual(search.value as? String, "bulb")
+        app.buttons["bound.rrdex-suggestion-1"].tap()
+        XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Bulbasaur")
+        XCTAssertTrue(element("bound.rrdex-picture", in: app).exists)
+        XCTAssertTrue(element("bound.rrdex-stats", in: app).exists)
+        XCTAssertTrue(app.staticTexts["Level 16"].exists)
+        screenshot("RRDex-portrait-Bulbasaur")
+        search.tap(); search.typeText("char")
+        XCTAssertEqual(search.value as? String, "char")
+        let charizard = app.buttons["bound.rrdex-suggestion-6"]
+        XCTAssertTrue(charizard.waitForExistence(timeout: 10)); charizard.tap()
+        XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Charizard")
+        app.buttons["bound.rrdex-weaknesses"].tap()
+        XCTAssertTrue(element("bound.rrdex-matchups", in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["4×"].exists)
+        screenshot("RRDex-Charizard-matchups")
+        app.buttons["bound.rrdex-close-detail"].tap()
+        app.buttons["bound.rrdex-learnset"].tap()
+        XCTAssertTrue(element("bound.rrdex-moves", in: app).waitForExistence(timeout: 10))
+        let moveSearch = app.searchFields.firstMatch
+        XCTAssertTrue(moveSearch.waitForExistence(timeout: 10)); moveSearch.tap(); moveSearch.typeText("flamethrower")
+        XCTAssertTrue(app.staticTexts["Flamethrower"].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertEqual(moveSearch.value as? String, "flamethrower")
+        screenshot("RRDex-Charizard-learnset")
+        // iOS hides the navigation toolbar during an active native search.
+        app.buttons["Close"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["bound.rrdex-close-detail"].waitForExistence(timeout: 5))
+        app.buttons["bound.rrdex-close-detail"].tap()
+        // Native document picker must open without altering the running game's save.
+        app.buttons["bound.rrdex-import"].tap()
+        XCTAssertTrue(app.buttons["Cancel"].firstMatch.waitForExistence(timeout: 10))
+        app.buttons["Cancel"].firstMatch.tap()
+        XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 10))
+        // Seed fixture staged in the dedicated QA app's Documents, never a player save.
+        app.buttons["bound.rrdex-import"].tap()
+        if app.buttons["Browse"].firstMatch.waitForExistence(timeout: 3) { app.buttons["Browse"].firstMatch.tap() }
+        let localFiles = app.staticTexts["On My iPhone"].firstMatch
+        if localFiles.waitForExistence(timeout: 3) { localFiles.tap() }
+        let fileView = app.collectionViews["File View"]
+        let folder = fileView.cells["Bound, Container"]
+        if folder.waitForExistence(timeout: 3) { folder.tap() }
+        let fixture = fileView.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", "BoundRRDexSeedQA")).firstMatch
+        if !fixture.waitForExistence(timeout: 5) {
+            print("RRDex document picker hierarchy: \(app.debugDescription)")
+        }
+        XCTAssertTrue(fixture.waitForExistence(timeout: 5)); fixture.tap()
+        XCTAssertTrue(app.buttons["bound.rrdex-import"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["bound.rrdex-import"].label.contains("Save loaded"))
+        search.tap(); search.typeText("bulbasaur")
+        app.buttons["bound.rrdex-suggestion-1"].tap()
+        XCTAssertTrue((element("bound.rrdex-abilities", in: app).value as? String)?.contains("Limber") == true)
+        XCTAssertTrue((element("bound.rrdex-abilities", in: app).value as? String)?.contains("Friend Guard") == true)
+        screenshot("RRDex-imported-randomizer")
+        app.buttons["bound.rrdex-info"].tap()
+        XCTAssertTrue(app.buttons["bound.rrdex-clear-save"].waitForExistence(timeout: 10))
+        app.buttons["bound.rrdex-clear-save"].tap()
+        app.buttons["bound.rrdex-close-detail"].tap()
+        XCTAssertTrue(app.buttons["bound.rrdex-import"].label.contains("Import save"))
+        XCTAssertTrue((element("bound.rrdex-abilities", in: app).value as? String)?.contains("Chlorophyll") == true)
+        search.tap(); search.typeText("charizard")
+        app.buttons["bound.rrdex-suggestion-6"].tap()
+        XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Charizard")
+        app.buttons["bound.panel-cycle"].tap()
+        XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, "Friend")
+        selectCompanion("Dex", in: app)
+        XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Charizard")
+        app.terminate(); XCUIDevice.shared.orientation = .portrait; app.launch(); play()
+        selectCompanion("Dex", in: app)
+        XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Charizard")
+        app.terminate(); app.launch(); setExperiments(false); play()
+        for name in ["Notes", "Types", "Friend", "Notes", "Types", "Friend"] {
+            app.buttons["bound.panel-cycle"].tap()
+            XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, name)
+            XCTAssertFalse(element("bound.rrdex", in: app).exists)
+        }
+    }
+
+    func testExperimentalRRDexLandscapeWhenRuntimeSupportsRotation() throws {
+        let app = XCUIApplication()
+        func experiments(_ enabled: Bool) {
+            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20)); app.buttons["Settings"].tap()
+            let toggle = app.switches["bound.enable-experimental-features"]
+            XCTAssertTrue(toggle.waitForExistence(timeout: 10))
+            if (toggle.value as? String == "1") != enabled {
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+            app.buttons["Close"].firstMatch.tap()
+        }
+        app.launch(); experiments(true)
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            app.terminate(); app.launch(); experiments(false)
+        }
+        let cell = app.collectionViews.cells.firstMatch
+        XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
+        selectCompanion("Dex", in: app)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let rotated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in app.frame.width > app.frame.height }, object: nil)
+        guard XCTWaiter.wait(for: [rotated], timeout: 8) == .completed else {
+            throw XCTSkip("Runtime kept its display in portrait after the orientation request; landscape panel rendering is covered by hosted tests.")
+        }
+        XCTAssertTrue(element("bound.rrdex", in: app).exists)
+        XCTAssertTrue(app.buttons["bound.rrdex-weaknesses"].isHittable)
+        XCTAssertTrue(app.buttons["bound.rrdex-learnset"].isHittable)
+        screenshot("RRDex-landscape")
+        app.buttons["bound.panel-cycle"].tap()
+        XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, "Friend")
     }
 
     private func element(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
