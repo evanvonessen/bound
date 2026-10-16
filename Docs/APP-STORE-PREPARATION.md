@@ -17,11 +17,20 @@ existing public `developer@evanvonessen.com` address.
 
 ## Approved icon
 
-`Resources/AppIcon.icon/Assets/BoundIcon.png` is the approved glass artwork,
-resampled without creative changes to an opaque 1024 × 1024 PNG. The site uses the
-same image. Existing Icon Composer settings and Xcode asset wiring are preserved.
+`Resources/AppIcon.icon/Assets/BoundIcon.png` uses the red-and-cream pixel B
+selected by the user on 2026-10-15. The supplied reference is preserved in
+`Artwork/BoundIcon-reference.png`. Built-in imagegen prepared the reference as
+a square, opaque icon without the surrounding gray area or pre-rounded corners;
+the result is normalized to 1024 × 1024 for Xcode. The same artwork is used for
+the light and dark in-app primary-icon previews. Icon Composer glass, shadow,
+and translucency remain disabled; iOS applies the Home Screen mask.
+The website retains its previous artwork. Existing Xcode asset wiring is preserved.
 
-SHA-256: `2c95344af26c9600e30c37aa7cd8c4bc4fa8b92cb214d1619730ccc70ebd12af`.
+SHA-256: `c1a0fb65767430b231e18497cc3593188ce5a3ee52742f9305777f969dbf1046`.
+
+Preparation prompt: preserve the supplied cream pixel B, flat red background,
+proportions and silhouette; remove the surrounding gray and pre-rounded corner
+cutouts, fill the square canvas red, and add no new visual details.
 
 ## Privacy source checks
 
