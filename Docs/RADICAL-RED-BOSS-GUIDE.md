@@ -21,6 +21,25 @@ trainer order, factual interpretation notes, and the original source link.
 Selection is local to each ROM. No ROM/save/progress inspection or live download
 is performed; players choose the upcoming fight themselves.
 
+Choose boss uses a black background and white text, with an offline trainer icon
+beside each name. Alternate teams and conditions are grouped in collapsible
+encounters, including rival starter choices, weather teams and repeat phases.
+Separate fights at different locations or explicitly numbered source encounters
+stay separate. Search opens matching groups while keeping their alternatives
+available; the currently selected encounter opens when the picker returns.
+Unlabeled source alternatives retain neutral Team 1/2/3 labels.
+
+Trainer icons are unchanged original game sprites from the
+[Pokémon Showdown trainer directory](https://play.pokemonshowdown.com/sprites/trainers/).
+Named main trainers use their portraits; generic opponents use trainer-class
+icons, with an Ace Trainer fallback for custom characters without a matching
+portrait. Paired opponents retain both icons where appropriate. Per-team
+mappings, source URLs, SHA-256 hashes and PNG bytes are bundled in
+`BoundBossReference-v1.json`; no icon download occurs during play. Rebuild them
+with `PrototypeTools/import_radical_red_trainer_icons.py` using the catalog,
+reference resource and a local cache directory. The existing artwork and public
+distribution review still applies.
+
 Source: [Default Mode Bosses v4.1 (with EVs) - Radical Red](https://docs.google.com/spreadsheets/d/1ES8L4OzeJ8rCuMWFNvrDaZKArqR7Vys2ytFxjx2pbwE/edit),
 source modified time `2026-08-26T21:06:11.998Z`, retrieved October 13, 2026.
 The team snapshot contains factual records. Pictures, types, move categories,

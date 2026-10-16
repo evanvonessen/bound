@@ -268,34 +268,46 @@ private struct BoundBossPicker: View {
     @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     @State private var query = ""
     @State private var category: String?
+    @State private var expandedEncounters: Set<String> = []
     var body: some View {
         NavigationStack {
             List {
                 Picker("Category", selection: $category) {
                     Text("All bosses").tag(nil as String?)
                     ForEach(catalog.categories, id: \.self) { Text($0).tag(Optional($0)) }
-                }
-                ForEach(catalog.teams(matching: query, category: category)) { team in
-                    Button {
-                        guard experimentsEnabled else { return }
-                        choose(team.id); dismiss()
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(team.name).foregroundStyle(.primary).font(.headline)
-                                Text(team.subtitle).foregroundStyle(.secondary).font(.caption)
-                                Text("\(team.category) · \(team.pokemon.count) Pokémon")
-                                    .foregroundStyle(.secondary).font(.caption2)
+                }.listRowBackground(Color.black)
+                ForEach(catalog.encounters(matching: query, category: category)) { encounter in
+                    if encounter.teams.count > 1 {
+                        DisclosureGroup(isExpanded: Binding(get: { expandedEncounters.contains(encounter.id) }, set: { expanded in
+                            if expanded { expandedEncounters.insert(encounter.id) }
+                            else { expandedEncounters.remove(encounter.id) }
+                        })) {
+                            ForEach(encounter.teams) { team in
+                                selectionButton(team, title: encounter.optionTitle(for: team), subtitle: team.name)
                             }
-                            Spacer()
-                            if team.id == selectedID { Image(systemName: "checkmark") }
-                            if let cap = team.levelCap { Text("Cap \(cap)").font(.caption).foregroundStyle(.secondary) }
+                        } label: {
+                            pickerRow(encounter.primary, title: encounter.primary.name, subtitle: encounter.primary.location,
+                                      detail: "\(encounter.primary.category) · \(encounter.teams.count) options",
+                                      selected: encounter.teams.contains { $0.id == selectedID },
+                                      showsCap: encounter.teams.allSatisfy { $0.levelCap == encounter.primary.levelCap })
+                                .accessibilityIdentifier("bound.boss-options-\(encounter.id)")
                         }
-                    }.accessibilityIdentifier("bound.boss-select-\(team.id)")
+                        .listRowBackground(Color.black)
+                    } else {
+                        selectionButton(encounter.primary, title: encounter.primary.name, subtitle: encounter.primary.subtitle)
+                            .listRowBackground(Color.black)
+                    }
                 }
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Color.black)
+            .foregroundStyle(.white)
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Boss, location, or Pokémon")
             .navigationTitle("Choose boss")
+            .toolbarBackground(Color.black, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
                 ToolbarItem(placement: .primaryAction) {
@@ -303,7 +315,64 @@ private struct BoundBossPicker: View {
                         .accessibilityLabel("Guide information")
                 }
             }
-        }.onChange(of: experimentsEnabled) { _, enabled in if !enabled { dismiss() } }
+        }
+        .preferredColorScheme(.dark)
+        .tint(.white)
+        .onAppear {
+            if let current = catalog.encounters(matching: "").first(where: { $0.teams.count > 1 && $0.teams.contains { $0.id == selectedID } }) {
+                expandedEncounters.insert(current.id)
+            }
+        }
+        .onChange(of: query) { _, text in
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                expandedEncounters.formUnion(catalog.encounters(matching: text, category: category).filter { $0.teams.count > 1 }.map(\.id))
+            }
+        }
+        .onChange(of: experimentsEnabled) { _, enabled in if !enabled { dismiss() } }
+    }
+    private func selectionButton(_ team: BoundBossTeam, title: String, subtitle: String) -> some View {
+        Button {
+            guard experimentsEnabled else { return }
+            choose(team.id); dismiss()
+        } label: {
+            pickerRow(team, title: title, subtitle: subtitle, detail: "\(team.category) · \(team.pokemon.count) Pokémon", selected: team.id == selectedID)
+        }
+        .accessibilityIdentifier("bound.boss-select-\(team.id)")
+        .listRowBackground(Color.black)
+    }
+    private func pickerRow(_ team: BoundBossTeam, title: String, subtitle: String, detail: String, selected: Bool, showsCap: Bool = true) -> some View {
+        HStack(spacing: 12) {
+            BoundBossTrainerIcon(team: team)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline)
+                if !subtitle.isEmpty { Text(subtitle).font(.caption) }
+                Text(detail).font(.caption2)
+            }
+            Spacer(minLength: 4)
+            if selected { Image(systemName: "checkmark") }
+            if showsCap, let cap = team.levelCap { Text("Cap \(cap)").font(.caption).fixedSize() }
+        }.foregroundStyle(.white)
+    }
+}
+
+private struct BoundBossTrainerIcon: View {
+    let team: BoundBossTeam
+    var body: some View {
+        let pictures = BoundBossReference.bundled?.trainerIconData(for: team).compactMap { UIImage(data: $0) } ?? []
+        HStack(spacing: -8) {
+            if pictures.isEmpty {
+                Image(systemName: "person.crop.square.fill").font(.system(size: 30))
+            } else {
+                ForEach(pictures.indices, id: \.self) { index in
+                    Image(uiImage: pictures[index]).resizable().interpolation(.none).scaledToFit()
+                        .frame(width: pictures.count > 1 ? 28 : 44, height: 44)
+                }
+            }
+        }
+        .frame(width: 48, height: 48)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(team.name) trainer icon")
+        .accessibilityIdentifier("bound.boss-trainer-icon-\(team.id)")
     }
 }
 
@@ -382,6 +451,7 @@ private struct BoundBossGuideInfo: View {
                 Link(catalog.sourceTitle, destination: catalog.sourceURL)
                 Link("Pokémon and moves · Radical Red Pokédex", destination: URL(string: "https://dex.radicalred.net/")!)
                 Link("Type icons · PokeSprite", destination: URL(string: "https://github.com/msikma/pokesprite")!)
+                Link("Trainer icons · Pokémon Showdown", destination: URL(string: "https://play.pokemonshowdown.com/sprites/trainers/")!)
                 Text("Bundled for offline use. Check the original documentation for corrections.").font(.footnote)
                 Text("Boss teams use the Default guide, independently of any save imported into the Dex.").font(.footnote)
                 Text("Pokémon characters and artwork belong to their respective owners.").font(.footnote)

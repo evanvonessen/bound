@@ -3,6 +3,48 @@ import XCTest
 @testable import Models
 
 final class BossGuideTests: XCTestCase {
+    func testEncounterGroupsPreserveEveryTeamAndSeparateRepeatedFights() throws {
+        let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
+        let encounters = catalog.encounters(matching: "")
+        XCTAssertEqual(encounters.flatMap(\.teams).map(\.id).sorted(), catalog.teams.map(\.id).sorted())
+        XCTAssertEqual(Set(encounters.map(\.id)).count, encounters.count)
+        let route22 = catalog.encounters(matching: "Rival Route 22", category: "Rivals")
+        XCTAssertEqual(route22.count, 2, "Early and late Route 22 fights remain separate encounters")
+        XCTAssertTrue(route22.allSatisfy { $0.teams.count == 3 })
+        XCTAssertTrue(route22.allSatisfy { Set($0.teams.map(\.sourceLabel)).count == 1 })
+        let starterSearch = catalog.encounters(matching: "If Rival Has Squirtle", category: "Rivals")
+        XCTAssertEqual(starterSearch.count, 4)
+        XCTAssertTrue(starterSearch.allSatisfy { $0.teams.count == 3 }, "Search keeps each matching encounter's alternatives available")
+        let jasmine = try XCTUnwrap(catalog.encounters(matching: "Jasmine", category: "Johto Leaders").first)
+        XCTAssertEqual(jasmine.teams.map { jasmine.optionTitle(for: $0) }, ["Team One", "Team Two", "Team Three"])
+        let lorelei = try XCTUnwrap(catalog.encounters(matching: "Lorelei", category: "Indigo League").first)
+        XCTAssertEqual(lorelei.teams.map { lorelei.optionTitle(for: $0) }, ["Rain Team", "Snow Team"])
+        let champion = try XCTUnwrap(catalog.encounters(matching: "Rival Champion", category: "Indigo League").first)
+        XCTAssertEqual(champion.teams.map { champion.optionTitle(for: $0) }, ["Team 1", "Team 2", "Team 3"])
+    }
+
+    func testTrainerIconsCoverAllBossTeamsOffline() throws {
+        let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
+        let data = try XCTUnwrap(BoundBossReferenceData.bundled)
+        let icons = try XCTUnwrap(data.trainerIcons)
+        let mappings = try XCTUnwrap(data.trainerIconsByTeam)
+        let reference = try XCTUnwrap(BoundBossReference.bundled)
+        XCTAssertEqual(Set(mappings.keys), Set(catalog.teams.map(\.id)))
+        XCTAssertFalse(icons.isEmpty)
+        for team in catalog.teams {
+            let keys = try XCTUnwrap(mappings[team.id])
+            XCTAssertFalse(keys.isEmpty)
+            XCTAssertEqual(reference.trainerIconData(for: team).count, keys.count)
+            for key in keys {
+                let icon = try XCTUnwrap(icons[key])
+                XCTAssertTrue(Data(base64Encoded: icon.pngBase64)?.starts(with: [0x89, 0x50, 0x4E, 0x47]) == true)
+                XCTAssertEqual(icon.sourceURL.host, "play.pokemonshowdown.com")
+                XCTAssertEqual(icon.sha256.count, 64)
+            }
+        }
+        XCTAssertEqual(mappings[catalog.defaultTeam.id], ["brock-gen3"])
+        XCTAssertEqual(mappings["team-rocket-169"], ["ariana", "archer"])
+    }
     func testBundledCatalogCoversEveryBossSectionAndPokemon() throws {
         let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
         XCTAssertEqual(catalog.gameVersion, "4.1")

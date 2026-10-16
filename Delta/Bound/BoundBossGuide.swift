@@ -63,6 +63,31 @@ struct BoundBossCatalog: Decodable, Sendable {
             return $0.sourceRow < $1.sourceRow
         }
     }
+    func encounters(matching query: String, category: String? = nil) -> [BoundBossEncounter] {
+        let matches = Set(teams(matching: query, category: category).map(\.id))
+        var encounters: [BoundBossEncounter] = []
+        var indices: [String: Int] = [:]
+        for team in teams(matching: "", category: category) {
+            // Source labels distinguish repeated fights, including Route 22 #1/#2.
+            let key = team.category + "|" + team.sourceLabel
+            if let index = indices[key] { encounters[index].teams.append(team) }
+            else {
+                indices[key] = encounters.count
+                encounters.append(BoundBossEncounter(teams: [team]))
+            }
+        }
+        return encounters.filter { $0.teams.contains { matches.contains($0.id) } }
+    }
+}
+
+struct BoundBossEncounter: Identifiable, Sendable {
+    var teams: [BoundBossTeam]
+    var id: String { teams[0].id }
+    var primary: BoundBossTeam { teams[0] }
+    func optionTitle(for team: BoundBossTeam) -> String {
+        if !team.variant.isEmpty { return team.variant }
+        return "Team \((teams.firstIndex { $0.id == team.id } ?? 0) + 1)"
+    }
 }
 
 struct BoundBossTeam: Decodable, Identifiable, Sendable {
@@ -160,6 +185,11 @@ struct BoundBossReference: Sendable {
     func typeIconData(for type: BoundRRDexType) -> Data? {
         guard let encoded = data.typeIcons[type.name]?.pngBase64 else { return nil }
         return Data(base64Encoded: encoded)
+    }
+    func trainerIconData(for team: BoundBossTeam) -> [Data] {
+        (data.trainerIconsByTeam?[team.id] ?? []).compactMap { key in
+            data.trainerIcons?[key].flatMap { Data(base64Encoded: $0.pngBase64) }
+        }
     }
 
     private func species(for bossName: String) -> BoundRRDexSpecies? {
@@ -260,6 +290,7 @@ struct BoundBossReference: Sendable {
 
 struct BoundBossReferenceData: Decodable, Sendable {
     struct TypeIcon: Decodable, Sendable { let pngBase64: String; let sha256: String }
+    struct TrainerIcon: Decodable, Sendable { let pngBase64: String; let sha256: String; let sourceURL: URL }
     let schemaVersion: Int
     let typeIconSource: String
     let typeIconRevision: String
@@ -275,6 +306,10 @@ struct BoundBossReferenceData: Decodable, Sendable {
     let noItemDescription: String
     let bossMoveTypeOverrides: [String: String]?
     let bossMoveTypeOverrideCells: [String: String]?
+    let trainerIconSource: String?
+    let trainerIconAttribution: String?
+    let trainerIcons: [String: TrainerIcon]?
+    let trainerIconsByTeam: [String: [String]]?
 
     struct MoveOverride: Decodable, Sendable {
         let type: String

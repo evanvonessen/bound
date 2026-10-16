@@ -1106,6 +1106,71 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, "Friend")
     }
 
+    func testBossPickerUsesTrainerIconsAndCollapsibleVariants() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        defer {
+            app.terminate(); app.launch()
+            setExperimentalFeatures(false, in: app)
+            app.terminate()
+        }
+        let cell = app.collectionViews.cells.firstMatch
+        XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
+        selectCompanion("Bosses", in: app)
+        app.buttons["bound.boss-picker"].tap()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        func find(_ text: String) {
+            search.tap()
+            if let value = search.value as? String, value != search.placeholderValue {
+                search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count))
+            }
+            search.typeText(text)
+        }
+        func toggleOptions(_ id: String) {
+            let group = element("bound.boss-options-\(id)", in: app)
+            XCTAssertTrue(group.waitForExistence(timeout: 5))
+            group.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0))
+                .withOffset(CGVector(dx: 0, dy: 32)).tap()
+        }
+        find("Brock")
+        XCTAssertTrue(app.buttons["bound.boss-select-kanto-leaders-4"].waitForExistence(timeout: 5))
+        XCTAssertTrue(element("bound.boss-trainer-icon-kanto-leaders-4", in: app).exists)
+        screenshot("Choose-boss-black-background-white-text-trainer-icons")
+
+        find("Lorelei")
+        let rain = app.buttons["bound.boss-select-indigo-league-8"]
+        let snow = app.buttons["bound.boss-select-indigo-league-35"]
+        XCTAssertTrue(rain.waitForExistence(timeout: 5))
+        XCTAssertTrue(snow.exists)
+        toggleOptions("indigo-league-8")
+        XCTAssertTrue(rain.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(snow.exists)
+        toggleOptions("indigo-league-8")
+        XCTAssertTrue(rain.waitForExistence(timeout: 5))
+        XCTAssertTrue(snow.exists)
+        screenshot("Choose-boss-collapsible-weather-teams")
+
+        find("Rival Route 22")
+        let starterOptions = ["rivals-6", "rivals-30", "rivals-54"]
+        for id in starterOptions { XCTAssertTrue(app.buttons["bound.boss-select-\(id)"].waitForExistence(timeout: 5)) }
+        XCTAssertTrue(app.staticTexts["If Rival Has Squirtle"].firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["If Rival Has Charmander"].firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["If Rival Has Bulbasaur"].firstMatch.exists)
+        screenshot("Choose-boss-collapsible-starter-choices")
+        app.buttons["bound.boss-select-rivals-30"].tap()
+        XCTAssertTrue(search.waitForNonExistence(timeout: 10))
+        XCTAssertTrue(element("bound.boss-guide", in: app).exists)
+        assertGamePixelsAnimate(element("bound.game-screen", in: app), in: app)
+        app.buttons["bound.boss-picker"].tap()
+        XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["bound.boss-select-rivals-30"].waitForExistence(timeout: 5),
+                      "The selected encounter should open with its variants available")
+        app.buttons["Done"].firstMatch.tap()
+    }
+
     func testCompanionViewSwitchesPersistAndFilterCycle() throws {
         // Native pause-menu animation idle notifications can be lost on Xcode 27.
         // Observe the real controls and transitions explicitly throughout this test.
