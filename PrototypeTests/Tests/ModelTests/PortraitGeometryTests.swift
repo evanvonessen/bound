@@ -15,6 +15,10 @@ final class PortraitGeometryTests: XCTestCase {
             XCTAssertEqual(result.friend.width / result.friend.height, 1.5, accuracy: 0.001)
             XCTAssertGreaterThanOrEqual(result.friend.minY, inset)
             XCTAssertLessThanOrEqual(result.friend.maxY + 8, result.game.minY + 0.001)
+            XCTAssertEqual(result.referencePanel.minY, bounds.minY)
+            XCTAssertEqual(result.referencePanel.width, bounds.width)
+            XCTAssertEqual(result.referencePanel.maxY, result.game.minY, accuracy: 0.001)
+            XCTAssertGreaterThan(result.referencePanel.height - inset, result.friend.height)
         }
     }
 }

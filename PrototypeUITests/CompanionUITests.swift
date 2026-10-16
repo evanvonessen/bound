@@ -1128,6 +1128,8 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(friend.waitForExistence(timeout: 10))
         let screenFrame = app.frame
         XCTAssertGreaterThan(screenFrame.width, 100)
+        let safeContentTop = friend.frame.minY
+        let panel = element("bound.companion-container", in: app)
         screenshot("Experimental-portrait-full-screen-width-reference")
 
         cycle.tap() // Notes
@@ -1138,11 +1140,17 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(bossGuide.waitForExistence(timeout: 10))
         XCTAssertEqual(bossGuide.frame.minX, screenFrame.minX, accuracy: 2)
         XCTAssertEqual(bossGuide.frame.maxX, screenFrame.maxX, accuracy: 2)
+        XCTAssertEqual(panel.frame.minY, screenFrame.minY, accuracy: 2)
+        XCTAssertEqual(panel.frame.maxY, game.frame.minY, accuracy: 2)
+        XCTAssertEqual(bossGuide.frame.minY, safeContentTop, accuracy: 2)
+        XCTAssertEqual(bossGuide.frame.maxY, game.frame.minY, accuracy: 2)
         let bossPicker = app.buttons["bound.boss-picker"]
         let bossCap = app.staticTexts["bound.boss-cap"]
         let bossPicture = element("bound.boss-picture", in: app)
         XCTAssertTrue(bossPicker.isHittable)
+        XCTAssertGreaterThanOrEqual(bossPicker.frame.minY, safeContentTop)
         XCTAssertTrue(bossCap.exists)
+        let referenceHeaderTop = bossCap.frame.minY
         XCTAssertTrue(bossPicture.waitForExistence(timeout: 5))
         XCTAssertEqual(bossPicker.frame.minX, screenFrame.minX + 12, accuracy: 2)
         XCTAssertEqual(bossPicker.frame.maxX, screenFrame.maxX - 12, accuracy: 2)
@@ -1169,9 +1177,16 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(dex.waitForExistence(timeout: 10))
         XCTAssertEqual(dex.frame.minX, screenFrame.minX, accuracy: 2)
         XCTAssertEqual(dex.frame.maxX, screenFrame.maxX, accuracy: 2)
+        XCTAssertEqual(panel.frame.minY, screenFrame.minY, accuracy: 2)
+        XCTAssertEqual(panel.frame.maxY, game.frame.minY, accuracy: 2)
+        XCTAssertEqual(dex.frame.minY, safeContentTop, accuracy: 2)
+        XCTAssertEqual(dex.frame.maxY, game.frame.minY, accuracy: 2)
         let search = app.textFields["bound.rrdex-search"]
         let dexPicture = element("bound.rrdex-picture", in: app)
         XCTAssertTrue(search.exists)
+        XCTAssertGreaterThanOrEqual(app.buttons["bound.rrdex-import"].frame.minY, safeContentTop)
+        XCTAssertEqual(app.buttons["bound.rrdex-import"].frame.minY, referenceHeaderTop, accuracy: 8,
+                       "Closing Full team must preserve the Dynamic Island clearance for the next panel")
         XCTAssertTrue(dexPicture.waitForExistence(timeout: 5))
         XCTAssertGreaterThanOrEqual(search.frame.width, screenFrame.width - 80,
                                     "The Dex search field should remain full-width at normal text size")

@@ -10,6 +10,7 @@ final class BoundCompanionState: ObservableObject {
     @Published private(set) var experimentalFeaturesEnabled: Bool
     @Published var landscape = false
     @Published var chartTopInset: CGFloat = 0
+    @Published var referenceTopInset: CGFloat = 0
     @Published var hidden = false
     @Published var showingFriends = false
     @Published var showingSettings = false
@@ -152,7 +153,7 @@ final class BoundCompanionCoordinator {
             return try self.importCurrentRRDexSave(gameID: gameID)
         })
         let host = UIHostingController(rootView: panel)
-        // The coordinator already positions the overlay inside the game viewport.
+        // The coordinator positions the overlay and applies portrait top insets.
         // A second inherited home-indicator inset would shrink the visible video
         // and shift the bottom-corner content above its actual PiP frame.
         host.safeAreaRegions = []
@@ -220,6 +221,8 @@ final class BoundCompanionCoordinator {
         if previousScreenLayout != screenLayout { previousScreenLayout = screenLayout; cancelInteractions() }
         let landscape = bounds.width > bounds.height
         if state.landscape != landscape { state.landscape = landscape; cancelInteractions() }
+        let referenceTopInset = screenLayout == .bound && !landscape ? safeArea.top : 0
+        if state.referenceTopInset != referenceTopInset { state.referenceTopInset = referenceTopInset }
         if screenLayout == .delta {
             owner.gameScreenLayoutBounds = nil
             return nil // Native Delta must lay out first; companion positioning follows it.
@@ -233,15 +236,17 @@ final class BoundCompanionCoordinator {
         let geometry = BoundPortraitScreenGeometry(bounds: bounds, safeTop: safeArea.top,
             controllerSize: controllerSize, gameAspect: owner.emulatorCore?.preferredRenderingSize ?? CGSize(width: 3, height: 2))
         overlay?.frame = geometry.friend
-        if [.notes, .bosses, .dex].contains(state.content) {
-            // Text panels use the whole portrait strip rather than the video's aspect ratio.
+        if state.content == .notes {
             overlay?.frame = CGRect(x: bounds.minX, y: geometry.friend.minY, width: bounds.width, height: geometry.friend.height)
+        }
+        if [.bosses, .dex].contains(state.content) {
+            overlay?.frame = geometry.referencePanel
         }
         if state.content == .types {
             overlay?.frame = BoundTypeChartGeometry.portraitViewport(bounds: bounds, gameFrame: geometry.game)
             if state.chartTopInset != safeArea.top { state.chartTopInset = safeArea.top }
         }
-        if isEditingText {
+        if isEditingText && state.content != .dex {
             overlay?.frame.size.height = max(geometry.friend.height, min(220, bounds.height - keyboardHeight - geometry.friend.minY - 8))
         }
         overlay?.isHidden = false; overlay?.alpha = 1
@@ -536,10 +541,12 @@ struct BoundCompanionPanel: View {
                     editingChanged(editing)
                 }).id(gameID)
             } else if state.content == .bosses && experimentsEnabled {
-                BoundBossGuideView(gameID: gameID, floating: state.landscape, presentationChanged: editingChanged).id(gameID)
+                BoundBossGuideView(gameID: gameID, floating: state.landscape, presentationChanged: editingChanged)
+                    .padding(.top, state.referenceTopInset).id(gameID)
             } else if state.content == .dex && experimentsEnabled {
                 BoundRRDexView(gameID: gameID, floating: state.landscape, presentationChanged: editingChanged,
-                               textEditingChanged: textEditingChanged, currentSave: { try currentSave(gameID) }).id(gameID)
+                               textEditingChanged: textEditingChanged, currentSave: { try currentSave(gameID) })
+                    .padding(.top, state.referenceTopInset).id(gameID)
             } else {
                 if state.landscape {
                     Image("PokemonTypeChart").resizable().scaledToFit()
@@ -548,8 +555,8 @@ struct BoundCompanionPanel: View {
                         .accessibilityIdentifier("bound.type-chart")
                 } else { BoundTypeChartView(topInset: state.chartTopInset, constrainsPan: BoundAppearancePreferences().effectiveScreenLayout == .bound) }
             }
-        }.background(state.content == .types ? Color.black : Color(uiColor: .secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: state.landscape ? 8 : state.content == .types ? 0 : 4))
+        }.background(state.content == .types ? Color.black : Color(uiColor: [.bosses, .dex].contains(state.content) ? .systemBackground : .secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: state.landscape ? 8 : [.types, .bosses, .dex].contains(state.content) ? 0 : 4))
         .onChange(of: sharing.joined) { _ in state.refresh() }
         .onChange(of: experimentsEnabled) { _, enabled in state.updateExperimentalFeatures(enabled) }
     }
