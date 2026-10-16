@@ -15,7 +15,7 @@ enum BoundPiPContent: String, CaseIterable, Sendable {
 enum BoundPiPHiddenSide: String, Sendable { case left, right }
 
 enum BoundReferenceLayout: Int, CaseIterable, Sendable {
-    case layout1 = 1, layout2 = 2, layout3 = 3, layout4 = 4, layout5 = 5
+    case layout1 = 1, layout2 = 2, layout3 = 3, layout4 = 4, layout5 = 5, layout6 = 6
     var title: String { "Layout \(rawValue)" }
     var summary: String {
         switch self {
@@ -24,6 +24,7 @@ enum BoundReferenceLayout: Int, CaseIterable, Sendable {
         case .layout3: "Uses the full portrait space around the Dynamic Island."
         case .layout4: "Larger controls with expandable secondary details."
         case .layout5: "More information at a glance, with quick access to details."
+        case .layout6: "Keeps key stats in view and makes secondary details easier to reach."
         }
     }
 }

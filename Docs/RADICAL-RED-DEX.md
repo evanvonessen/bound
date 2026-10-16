@@ -14,7 +14,7 @@ Weaknesses and learnsets open native sheets; editing and presentations use the
 existing input cancellation and emulation pause/resume coordinator.
 
 In **Bound Settings → Reference layouts**, RR Dex has its own saved choice of
-Layout 1, 2, 3, 4, or 5. Layout 1 remains the default and preserves the original card.
+Layouts 1 through 6. Layout 1 remains the default and preserves the original card.
 Layout 2 pins species and tappable ability names while matchup summaries, base
 stats and evolutions scroll below. Layout 3 places Weaknesses and Learnset beside
 the Dynamic Island, compacts the species and abilities, and anchors import/info
@@ -27,6 +27,11 @@ until a query is needed. Identity and reference sections share one scroll area
 so smaller panels retain readable controls; search/import/info stay at the game edge.
 Layout 5 keeps all six base-stat values visible together with the total BST in
 the footer, and puts evolution methods behind a labeled expandable section.
+Layout 6 keeps the identity, matchups and six stats in the main panel and moves
+evolution methods into a dedicated sheet. Labeled footer buttons open Search,
+Evolution, save import and Info; evolution species buttons return directly to
+that species in the Dex. The sheet uses the same emulation pause/resume flow as
+other details.
 The selection changes presentation only, keeping the same RR 4.1 data and
 per-ROM imported save configuration. Ability descriptions use the bundled local
 reference, with an explicit unavailable message for an unlisted description.

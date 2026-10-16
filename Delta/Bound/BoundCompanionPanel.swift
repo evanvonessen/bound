@@ -639,12 +639,14 @@ private struct BoundPiPSettings: View {
             Text(title)
             Picker(title, selection: selection) {
                 ForEach(BoundReferenceLayout.allCases, id: \.rawValue) { layout in
-                    Text(layout.title).tag(layout)
+                    Text(String(layout.rawValue)).tag(layout)
                 }
             }
             .pickerStyle(.segmented)
+            .accessibilityLabel("\(title) layout")
             .accessibilityIdentifier(identifier)
-            Text(selection.wrappedValue.summary).font(.footnote).foregroundStyle(.secondary)
+            Text("\(selection.wrappedValue.title): \(selection.wrappedValue.summary)")
+                .font(.footnote).foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
     }

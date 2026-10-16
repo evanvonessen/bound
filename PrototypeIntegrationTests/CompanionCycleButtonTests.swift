@@ -18,7 +18,9 @@ final class CompanionCycleButtonTests: XCTestCase {
         let parent = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.windows.first?.rootViewController)
         for layout in BoundReferenceLayout.allCases {
             UserDefaults.standard.set(layout.rawValue, forKey: BoundReferenceLayoutPreferences.dexKey)
-            for (name, size) in [("island-portrait", CGSize(width: 393, height: 263)), ("portrait", CGSize(width: 390, height: 195)), ("compact-portrait", CGSize(width: 375, height: 100)), ("landscape", CGSize(width: 330, height: 275))] {
+            var sizes = [("island-portrait", CGSize(width: 393, height: 263)), ("portrait", CGSize(width: 390, height: 195)), ("compact-portrait", CGSize(width: 375, height: 100)), ("landscape", CGSize(width: 330, height: 275))]
+            if layout == .layout6 { sizes.append(("narrow-portrait", CGSize(width: 320, height: 195))) }
+            for (name, size) in sizes {
                 let host = UIHostingController(rootView: BoundRRDexView(gameID: "RRDEX_RENDER_QA", floating: name == "landscape", portraitTopInset: name == "island-portrait" ? 59 : 0, presentationChanged: { _ in }))
                 host.safeAreaRegions = []
                 parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)
@@ -58,7 +60,9 @@ final class CompanionCycleButtonTests: XCTestCase {
         let parent = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.windows.first?.rootViewController)
         for layout in BoundReferenceLayout.allCases {
             UserDefaults.standard.set(layout.rawValue, forKey: BoundReferenceLayoutPreferences.bossKey)
-            for (name, size) in [("island-portrait", CGSize(width: 393, height: 263)), ("portrait", CGSize(width: 390, height: 195)), ("compact-portrait", CGSize(width: 375, height: 100)), ("landscape", CGSize(width: 330, height: 275))] {
+            var sizes = [("island-portrait", CGSize(width: 393, height: 263)), ("portrait", CGSize(width: 390, height: 195)), ("compact-portrait", CGSize(width: 375, height: 100)), ("landscape", CGSize(width: 330, height: 275))]
+            if layout == .layout6 { sizes.append(("narrow-portrait", CGSize(width: 320, height: 195))) }
+            for (name, size) in sizes {
                 let host = UIHostingController(rootView: BoundBossGuideView(gameID: "BOSS_RENDER_QA", floating: name == "landscape", portraitTopInset: name == "island-portrait" ? 59 : 0, presentationChanged: { _ in }))
                 host.safeAreaRegions = []
                 parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)

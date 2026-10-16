@@ -22,13 +22,14 @@ struct BoundRRDexView: View {
     @State private var layout4EvolutionExpanded = false
     @State private var layout5EvolutionExpanded = false
     private enum Detail: Identifiable {
-        case weaknesses, learnset, information
+        case weaknesses, learnset, information, evolution
         case ability(String, String)
         var id: String {
             switch self {
             case .weaknesses: "weaknesses"
             case .learnset: "learnset"
             case .information: "information"
+            case .evolution: "evolution"
             case let .ability(name, _): "ability-\(name)"
             }
         }
@@ -49,7 +50,7 @@ struct BoundRRDexView: View {
                             compactCard(pokemon: pokemon, catalog: catalog)
                                 .frame(width: geometry.size.width)
                         }
-                        .id((layout == .layout4 || layout == .layout5) && (searching || !query.isEmpty))
+                        .id((layout == .layout4 || layout == .layout5 || layout == .layout6) && (searching || !query.isEmpty))
                         .scrollDismissesKeyboard(.interactively)
                         .frame(width: geometry.size.width, height: geometry.size.height)
                     } else {
@@ -79,6 +80,7 @@ struct BoundRRDexView: View {
                         case .weaknesses: BoundRRDexMatchups(pokemon: pokemon, catalog: catalog)
                         case .learnset: BoundRRDexLearnset(pokemon: pokemon, catalog: catalog, save: choice.save)
                         case .information: information(catalog: catalog)
+                        case .evolution: evolutionDetail(pokemon: pokemon, catalog: catalog)
                         case let .ability(name, description):
                             ScrollView { Text(description).frame(maxWidth: .infinity, alignment: .leading).padding() }
                                 .accessibilityIdentifier("bound.rrdex-ability-description")
@@ -112,6 +114,7 @@ struct BoundRRDexView: View {
         case .weaknesses: "Type matchups"
         case .learnset: "Learnset"
         case .information: "RRDex"
+        case .evolution: "Evolution and methods"
         case let .ability(name, _): name
         }
     }
@@ -138,6 +141,7 @@ struct BoundRRDexView: View {
         case .layout3: cardLayout3(pokemon: pokemon, catalog: catalog, compact: true, denseSizing: true)
         case .layout4: cardLayout4(pokemon: pokemon, catalog: catalog, compact: true, denseSizing: true)
         case .layout5: cardLayout5(pokemon: pokemon, catalog: catalog, compact: true, denseSizing: true)
+        case .layout6: cardLayout6(pokemon: pokemon, catalog: catalog, compact: true, denseSizing: true)
         }
     }
 
@@ -157,6 +161,9 @@ struct BoundRRDexView: View {
                         denseSizing: size.height < 250)
         case .layout5:
             cardLayout5(pokemon: pokemon, catalog: catalog, compact: size.height < 140,
+                        denseSizing: size.height < 250)
+        case .layout6:
+            cardLayout6(pokemon: pokemon, catalog: catalog, compact: size.height < 140,
                         denseSizing: size.height < 250)
         }
     }
@@ -465,12 +472,43 @@ struct BoundRRDexView: View {
         }
     }
 
+    /// Layout 6 keeps the full quick-reference row visible and moves evolution
+    /// methods into a dedicated sheet with clear, tappable species choices.
+    private func cardLayout6(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog,
+                             compact: Bool, denseSizing: Bool = false) -> some View {
+        cardLayoutShell(catalog: catalog, compact: compact, denseSizing: denseSizing,
+                        detailsIdentifier: "bound.rrdex-layout6-details",
+                        topPadding: compact ? 3 : 6, bottomPadding: compact ? 5 : 0,
+                        spacing: compact ? 3 : 5, bst: pokemon.stats.reduce(0, +),
+                        layout6Footer: true) {
+            layout6Content(pokemon: pokemon, catalog: catalog, denseSizing: $0)
+        }
+    }
+
+    private func layout6Content(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog,
+                                denseSizing: Bool) -> some View {
+        VStack(alignment: .leading, spacing: denseSizing ? 4 : 6) {
+            if searching || !query.isEmpty {
+                searchRow(catalog: catalog, comfortableTargets: true)
+            }
+            if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                suggestionRows(catalog: catalog)
+            } else {
+                layout4Identity(pokemon: pokemon, catalog: catalog, denseSizing: true)
+                matchupSummary(pokemon: pokemon, catalog: catalog, compact: true)
+                layout5StatsLine(pokemon: pokemon, identifier: "bound.rrdex-layout6-stats")
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
     private func cardLayoutShell<Content: View>(catalog: BoundRRDexCatalog, compact: Bool, denseSizing: Bool,
                                                 detailsIdentifier: String,
                                                 topPadding: CGFloat? = nil,
                                                 bottomPadding: CGFloat? = nil,
                                                 spacing: CGFloat? = nil,
                                                 bst: Int? = nil,
+                                                layout6Footer: Bool = false,
                                                 @ViewBuilder content: (Bool) -> Content) -> some View {
         VStack(alignment: .leading, spacing: spacing ?? (compact ? 4 : 6)) {
             if compact {
@@ -486,7 +524,11 @@ struct BoundRRDexView: View {
             if !hasIslandActions {
                 detailActions(compact: compact, comfortableTargets: true)
             }
-            toolbar(catalog: catalog, comfortableTargets: true, bst: bst)
+            if layout6Footer {
+                layout6Toolbar(bst: bst ?? 0)
+            } else {
+                toolbar(catalog: catalog, comfortableTargets: true, bst: bst)
+            }
         }
         .padding(.horizontal, compact ? 7 : 10)
         .padding(.top, topPadding ?? (compact ? 5 : 8))
@@ -529,7 +571,8 @@ struct BoundRRDexView: View {
         .accessibilityElement(children: .contain)
     }
 
-    private func layout5StatsLine(pokemon: BoundRRDexSpecies) -> some View {
+    private func layout5StatsLine(pokemon: BoundRRDexSpecies,
+                                  identifier: String = "bound.rrdex-layout5-stats") -> some View {
         HStack(spacing: 5) {
             ForEach(Array(zip(["HP", "Atk", "Def", "SpA", "SpD", "Spe"], pokemon.stats)), id: \.0) { label, stat in
                 VStack(spacing: 2) {
@@ -541,11 +584,49 @@ struct BoundRRDexView: View {
                 .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 5))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(label), \(stat)")
-                .accessibilityIdentifier("bound.rrdex-layout5-stat-\(label)")
+                .accessibilityIdentifier(identifier.replacingOccurrences(of: "-stats", with: "-stat-\(label)"))
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("bound.rrdex-layout5-stats")
+        .accessibilityIdentifier(identifier)
+    }
+
+    private func layout6Toolbar(bst: Int) -> some View {
+        HStack(spacing: 3) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("RR 4.1").font(.system(size: 9, weight: .medium, design: .monospaced))
+                Text("BST \(bst)").font(.system(size: 8, weight: .medium, design: .monospaced))
+            }
+            .foregroundStyle(.secondary)
+            .frame(minWidth: 43, alignment: .leading)
+            Spacer(minLength: 0)
+            footerAction("Search", icon: "magnifyingglass", identifier: "bound.rrdex-search-open", width: 56) { searching = true }
+            footerAction("Evolution", icon: "arrow.triangle.branch", identifier: "bound.rrdex-evolution-open", width: 64) { showDetail(.evolution) }
+            footerAction(choice.save == nil ? "Import save" : "Save loaded",
+                         icon: choice.save == nil ? "square.and.arrow.down" : "checkmark.circle",
+                         identifier: "bound.rrdex-import", width: 74) { importCurrentGameSave() }
+            footerAction("Info", icon: "info.circle", identifier: "bound.rrdex-info", width: 44) { showDetail(.information) }
+        }
+        .frame(height: 44)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("bound.rrdex-layout6-footer")
+    }
+
+    private func footerAction(_ title: String, icon: String, identifier: String, width: CGFloat,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 2) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .medium))
+                Text(title).font(.system(size: 10, weight: .medium)).lineLimit(1).minimumScaleFactor(0.72)
+            }
+            .frame(width: width, height: 44)
+            .contentShape(Rectangle())
+            .background(Color(uiColor: .deltaPurple).opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
+        .accessibilityLabel(title)
     }
 
     private func toolbar(catalog: BoundRRDexCatalog, comfortableTargets: Bool = false, bst: Int? = nil) -> some View {
@@ -849,6 +930,58 @@ struct BoundRRDexView: View {
             }
         }.accessibilityIdentifier("bound.rrdex-evolution")
     }
+    private func evolutionDetail(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Tap a Pokémon to view its stats and matchups.")
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
+                let links = catalog.evolutionLine(for: pokemon)
+                if links.isEmpty {
+                    Text("No evolutions listed for \(pokemon.name).")
+                        .font(.system(size: 14)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                } else {
+                    ForEach(links) { link in
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(spacing: 6) {
+                                evolutionSpeciesButton(link.from)
+                                Image(systemName: "arrow.right").font(.system(size: 11)).foregroundStyle(.secondary)
+                                evolutionSpeciesButton(link.to)
+                            }
+                            Text(link.method).font(.system(size: 12)).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.leading, 4)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            }
+            .padding(16)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("bound.rrdex-layout6-evolution-detail")
+    }
+
+    private func evolutionSpeciesButton(_ species: BoundRRDexSpecies) -> some View {
+        Button {
+            select(species)
+            sheet = nil
+        } label: {
+            Text(species.name)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1).minimumScaleFactor(0.8)
+                .frame(minWidth: 44, minHeight: 44)
+                .padding(.horizontal, 5)
+                .contentShape(Rectangle())
+                .background(Color(uiColor: .deltaPurple).opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("bound.rrdex-evolution-select-\(species.id)")
+        .accessibilityLabel(species.name)
+    }
+
     private func select(_ pokemon: BoundRRDexSpecies) {
         guard experimentsEnabled else { return }
         choice.speciesID = pokemon.id; query = ""; searching = false

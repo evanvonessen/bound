@@ -1281,6 +1281,10 @@ final class CompanionUITests: XCTestCase {
         try checkReferenceLayouts([5])
     }
 
+    func testLayout6KeepsMovesStatsAndEvolutionWithinReach() throws {
+        try checkReferenceLayouts([6])
+    }
+
     private func checkReferenceLayouts(_ layouts: [Int]) throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
@@ -1343,7 +1347,7 @@ final class CompanionUITests: XCTestCase {
             for name in ["boss", "rrdex"] {
                 let picker = app.segmentedControls["bound.\(name)-layout"]
                 scrollToSetting(picker, in: app)
-                picker.buttons["Layout \(layout)"].tap()
+                picker.buttons[String(layout)].tap()
             }
             closeBoundSheet(in: app)
             selectCompanion("Bosses", in: app)
@@ -1411,6 +1415,30 @@ final class CompanionUITests: XCTestCase {
             }
             XCTAssertTrue(element("bound.boss-condition-permanent-sun", in: app).exists)
             screenshot("Boss-layout-\(layout)-battle-conditions")
+            if layout == 6 {
+                let footerTop = app.buttons["bound.boss-next"].frame.minY
+                for index in 0..<4 {
+                    let move = app.staticTexts["bound.boss-move-\(index)"]
+                    XCTAssertTrue(move.exists)
+                    XCTAssertLessThanOrEqual(move.frame.maxY, footerTop + 1,
+                                            "All four moves must remain visible beside the base stats")
+                }
+                for stat in ["hp", "atk", "def", "spa", "spd", "spe"] {
+                    let cell = element("bound.boss-stat-\(stat)", in: app)
+                    XCTAssertTrue(cell.exists)
+                    XCTAssertLessThanOrEqual(cell.frame.maxY, footerTop + 1)
+                }
+                for index in 0..<6 {
+                    let member = app.buttons["bound.boss-team-member-\(index)"]
+                    XCTAssertTrue(member.isHittable)
+                    XCTAssertGreaterThanOrEqual(member.frame.width, 43.5)
+                    XCTAssertGreaterThanOrEqual(member.frame.minX, app.buttons["bound.boss-previous"].frame.maxX)
+                    XCTAssertLessThanOrEqual(member.frame.maxX, app.buttons["bound.boss-next"].frame.minX)
+                }
+                app.buttons["bound.boss-team-member-5"].tap()
+                XCTAssertEqual(app.staticTexts["bound.boss-page"].label, "6 / 6")
+                app.buttons["bound.boss-team-member-0"].tap()
+            }
             assertGeometry()
 
             selectCompanion("Dex", in: app)
@@ -1424,10 +1452,10 @@ final class CompanionUITests: XCTestCase {
             XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
             assertGeometry()
             screenshot("RRDex-layout-\(layout)-portrait")
-            if layout == 5 {
+            if layout >= 5 {
                 let footerTop = app.buttons["bound.rrdex-search-open"].frame.minY
                 for stat in ["HP", "Atk", "Def", "SpA", "SpD", "Spe"] {
-                    let cell = element("bound.rrdex-layout5-stat-\(stat)", in: app)
+                    let cell = element("bound.rrdex-layout\(layout)-stat-\(stat)", in: app)
                     XCTAssertTrue(cell.exists)
                     XCTAssertGreaterThan(cell.frame.height, 20)
                     XCTAssertLessThanOrEqual(cell.frame.maxY, footerTop + 1,
@@ -1444,7 +1472,7 @@ final class CompanionUITests: XCTestCase {
             XCTAssertTrue(element("bound.rrdex-matchups", in: app).waitForExistence(timeout: 5)); closeDetail()
             app.buttons["bound.rrdex-learnset"].tap()
             XCTAssertTrue(element("bound.rrdex-moves", in: app).waitForExistence(timeout: 5)); closeDetail()
-            if layout >= 4 {
+            if layout == 4 || layout == 5 {
                 let details = element("bound.rrdex-layout\(layout)-details", in: app)
                 let evolution = element("bound.rrdex-layout\(layout)-evolution", in: app)
                 reveal(evolution, in: details)
@@ -1458,6 +1486,24 @@ final class CompanionUITests: XCTestCase {
                 app.buttons["bound.rrdex-search-open"].tap()
                 XCTAssertTrue(search.waitForExistence(timeout: 5))
                 XCTAssertTrue(search.isHittable)
+                app.buttons["Done"].firstMatch.tap()
+                XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+            }
+            if layout == 6 {
+                let evolution = app.buttons["bound.rrdex-evolution-open"]
+                XCTAssertTrue(evolution.isHittable)
+                XCTAssertGreaterThanOrEqual(evolution.frame.height, 43.5)
+                evolution.tap()
+                let charmeleon = app.buttons.matching(identifier: "bound.rrdex-evolution-select-5").firstMatch
+                XCTAssertTrue(charmeleon.waitForExistence(timeout: 5))
+                XCTAssertGreaterThanOrEqual(charmeleon.frame.height, 43.5)
+                screenshot("RRDex-layout-6-evolution")
+                charmeleon.tap()
+                XCTAssertTrue(charmeleon.waitForNonExistence(timeout: 5))
+                assertGamePixelsAnimate(game, in: app)
+                XCTAssertTrue(app.staticTexts["Charmeleon"].exists)
+                app.buttons["bound.rrdex-search-open"].tap()
+                XCTAssertTrue(search.waitForExistence(timeout: 5)); XCTAssertTrue(search.isHittable)
                 app.buttons["Done"].firstMatch.tap()
                 XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
             }
@@ -1507,34 +1553,34 @@ final class CompanionUITests: XCTestCase {
         func assertChoice(_ name: String, _ number: Int) {
             let control = picker(name)
             scrollToSetting(control, in: app)
-            XCTAssertTrue(control.buttons["Layout \(number)"].isSelected)
+            XCTAssertTrue(control.buttons[String(number)].isSelected)
         }
         openBoundSettings(in: app)
         assertChoice("rrdex", 1); assertChoice("boss", 1)
-        picker("boss").buttons["Layout 5"].tap()
-        assertChoice("boss", 5); assertChoice("rrdex", 1)
-        picker("rrdex").buttons["Layout 3"].tap()
+        picker("boss").buttons["6"].tap()
+        assertChoice("boss", 6); assertChoice("rrdex", 1)
+        picker("rrdex").buttons["3"].tap()
         screenshot("Reference-layout-settings-independent-choices")
         closeBoundSheet(in: app)
         selectCompanion("Bosses", in: app)
-        XCTAssertEqual(element("bound.boss-guide", in: app).value as? String, "Layout 5")
+        XCTAssertEqual(element("bound.boss-guide", in: app).value as? String, "Layout 6")
         selectCompanion("Dex", in: app)
         XCTAssertEqual(element("bound.rrdex", in: app).value as? String, "Layout 3")
 
         app.terminate(); app.launch(); play()
         openBoundSettings(in: app)
-        assertChoice("boss", 5); assertChoice("rrdex", 3)
+        assertChoice("boss", 6); assertChoice("rrdex", 3)
         closeBoundSheet(in: app)
         selectCompanion("Bosses", in: app)
-        XCTAssertEqual(element("bound.boss-guide", in: app).value as? String, "Layout 5")
+        XCTAssertEqual(element("bound.boss-guide", in: app).value as? String, "Layout 6")
         selectCompanion("Dex", in: app)
         XCTAssertEqual(element("bound.rrdex", in: app).value as? String, "Layout 3")
 
         openBoundSettings(in: app)
         scrollToSetting(picker("boss"), in: app)
-        picker("boss").buttons["Layout 3"].tap()
+        picker("boss").buttons["3"].tap()
         scrollToSetting(picker("rrdex"), in: app)
-        picker("rrdex").buttons["Layout 5"].tap()
+        picker("rrdex").buttons["6"].tap()
         closeBoundSheet(in: app)
         app.terminate(); app.launch(); setExperimentalFeatures(false, in: app); play()
         openBoundSettings(in: app)
@@ -1546,7 +1592,7 @@ final class CompanionUITests: XCTestCase {
         }
         app.terminate(); app.launch(); setExperimentalFeatures(true, in: app); play()
         openBoundSettings(in: app)
-        assertChoice("boss", 3); assertChoice("rrdex", 5)
+        assertChoice("boss", 3); assertChoice("rrdex", 6)
         closeBoundSheet(in: app)
     }
 
