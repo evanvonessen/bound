@@ -3,6 +3,26 @@ import CoreGraphics
 import XCTest
 @testable import Models
 final class PiPTests: XCTestCase {
+    @MainActor func testEnabledViewsDefaultToAllAndPersistWithoutChangingBaselineCycle() throws {
+        let suite = "BoundCompanionViews." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        let all = BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: true)
+        XCTAssertEqual(preferences.enabledContents(experimentalFeaturesEnabled: true), all)
+        for content in all { XCTAssertTrue(preferences.isEnabled(content)) }
+        for content in [BoundPiPContent.notes, .types, .dex] { preferences.setEnabled(false, for: content) }
+
+        let restarted = BoundPiPPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
+        XCTAssertEqual(restarted.enabledContents(experimentalFeaturesEnabled: true), [.friend, .bosses])
+        XCTAssertEqual(restarted.enabledContents(experimentalFeaturesEnabled: false), [.friend, .notes, .types])
+        restarted.setEnabled(false, for: .friend)
+        restarted.setEnabled(false, for: .bosses)
+        XCTAssertTrue(restarted.enabledContents(experimentalFeaturesEnabled: true).isEmpty)
+        XCTAssertEqual(restarted.enabledContents(experimentalFeaturesEnabled: false), [.friend, .notes, .types])
+        restarted.setEnabled(true, for: .bosses)
+        XCTAssertEqual(preferences.enabledContents(experimentalFeaturesEnabled: true), [.bosses])
+    }
     @MainActor func testLegacyCornerMigratesPerPanelAndTypesIgnoresLegacyTransparency() throws {
         let suite = "BoundPiPIndependent." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

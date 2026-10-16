@@ -36,17 +36,31 @@ final class BoundCompanionState: ObservableObject {
     var editControls: (() -> Void)?
     var sharingChanged: ((Bool) -> Void)?
     var selectionChanged: (() -> Void)?
-    var availableContents: [BoundPiPContent] { BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: experimentalFeaturesEnabled) }
+    var availableContents: [BoundPiPContent] { preferences.enabledContents(experimentalFeaturesEnabled: experimentalFeaturesEnabled) }
     var content: BoundPiPContent { availableContents.indices.contains(selected) ? availableContents[selected] : .friend }
     func updateExperimentalFeatures(_ enabled: Bool) {
         guard experimentalFeaturesEnabled != enabled else { return }
+        let previousContent = content
         experimentalFeaturesEnabled = enabled
-        if !availableContents.indices.contains(selected) {
-            selectionChanged?(); selected = 0; hidden = false
-        }
+        reconcileSelection(previousContent: previousContent)
         refresh()
     }
+    func setContentEnabled(_ enabled: Bool, for content: BoundPiPContent) {
+        guard experimentalFeaturesEnabled, preferences.isEnabled(content) != enabled else { return }
+        let previousContent = self.content
+        preferences.setEnabled(enabled, for: content)
+        reconcileSelection(previousContent: previousContent)
+        refresh()
+    }
+    private func reconcileSelection(previousContent: BoundPiPContent) {
+        if let index = availableContents.firstIndex(of: previousContent) {
+            selected = index
+        } else {
+            selectionChanged?(); selected = 0; hidden = false
+        }
+    }
     func advancePanel() {
+        guard !availableContents.isEmpty else { return }
         if !hidden { selected = (selected + 1) % availableContents.count }
         hidden = false
         refresh()
@@ -249,7 +263,7 @@ final class BoundCompanionCoordinator {
         if isEditingText && state.content != .dex {
             overlay?.frame.size.height = max(geometry.friend.height, min(220, bounds.height - keyboardHeight - geometry.friend.minY - 8))
         }
-        overlay?.isHidden = false; overlay?.alpha = 1
+        overlay?.isHidden = state.availableContents.isEmpty; overlay?.alpha = 1
         host?.view.frame = overlay?.bounds ?? .zero
         owner.gameScreenLayoutBounds = geometry.game
         owner.view.bringSubviewToFront(overlay!); layoutCycleButton(bounds: bounds, safeArea: safeArea)
@@ -267,6 +281,7 @@ final class BoundCompanionCoordinator {
     /// One final placement, using the settled native viewport and actual hit regions.
     private func layoutFloatingPanel() {
         guard let owner, let overlay, let controls else { return }
+        guard !state.availableContents.isEmpty else { overlay.isHidden = true; geometry = nil; return }
         let game = owner.gameView.convert(owner.gameView.bounds, to: owner.view)
         let viewport = game.intersection(owner.view.bounds.inset(by: owner.view.safeAreaInsets))
         guard !viewport.isNull, viewport.width > 0, viewport.height > 0 else { overlay.isHidden = true; return }
@@ -344,7 +359,12 @@ final class BoundCompanionCoordinator {
             canvas: bounds.inset(by: safeArea), occupied: occupied, rightShoulderFrame: rightFrame, menuHitSize: menuHitSize, boundPortrait: boundPortrait, selectArtwork: selectArtwork,
             rightControlGutter: owner.boundLandscapeControlGutter(),
             menuHitFrame: owner.controllerView.convert(menu.extendedFrame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height)), to: owner.view))
-        controls.accessibilityHint = state.hidden ? "Restores the hidden panel" : state.experimentalFeaturesEnabled ? "Cycles Friend, Notes, Types, Bosses, and Dex" : "Cycles Friend, Notes, and Types"
+        if state.availableContents.isEmpty {
+            controls.accessibilityValue = "No views enabled"
+            controls.accessibilityHint = "Enable companion views in Bound Settings"
+        } else {
+            controls.accessibilityHint = state.hidden ? "Restores the hidden panel" : "Cycles " + state.availableContents.map(\.title).joined(separator: ", ")
+        }
         owner.view.bringSubviewToFront(controls)
     }
     func presentFriends(from presenter: UIViewController) {
@@ -379,7 +399,7 @@ final class BoundCompanionCoordinator {
         cancelInteractions()
         state.advancePanel()
     }
-    var allowsOpacityGesture: Bool { state.landscape && state.content != .types && !isEditingNotes }
+    var allowsOpacityGesture: Bool { !state.availableContents.isEmpty && state.landscape && state.content != .types && !isEditingNotes }
     private func companionBaseSize(width: CGFloat) -> CGSize {
         if state.content == .dex { return CGSize(width: width, height: width * 300 / 360) }
         if state.content == .bosses { return CGSize(width: width, height: width * 260 / 360) }
@@ -395,7 +415,7 @@ final class BoundCompanionCoordinator {
             && !overlay.frame.contains(point)
     }
     private func shouldReceive(_ touch: UITouch) -> Bool {
-        guard (state.landscape || (BoundAppearancePreferences().effectiveScreenLayout == .delta && state.content != .types)), !isEditingNotes, !state.showingFriends, !state.showingSettings,
+        guard !state.availableContents.isEmpty, (state.landscape || (BoundAppearancePreferences().effectiveScreenLayout == .delta && state.content != .types)), !isEditingNotes, !state.showingFriends, !state.showingSettings,
               let owner, let controls, !state.hidden else { return false }
         let p = touch.location(in: owner.view)
         guard !controls.frame.contains(p), owner.gameView.convert(owner.gameView.bounds, to: owner.view).contains(p) else { return false }
@@ -529,7 +549,9 @@ struct BoundCompanionPanel: View {
     @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     var body: some View {
         Group {
-            if state.content == .friend {
+            if state.availableContents.isEmpty {
+                Color.clear
+            } else if state.content == .friend {
                 ZStack {
                     Color.black
                     BoundRemoteCanvas(view: sharing.remoteView).opacity(sharing.remoteVisible || state.displaysFixtureVideo ? 1 : 0)
@@ -564,11 +586,23 @@ struct BoundCompanionPanel: View {
 
 private struct BoundPiPSettings: View {
     @ObservedObject var state: BoundCompanionState
+    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     var closed: () -> Void = {}
     @Environment(\.dismiss) var dismiss
     var body: some View {
         NavigationStack {
             Form {
+                if experimentsEnabled {
+                    Section {
+                        ForEach(BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: true), id: \.rawValue) { content in
+                            Toggle(content.title, isOn: Binding(get: { state.preferences.isEnabled(content) },
+                                                               set: { state.setContentEnabled($0, for: content) }))
+                                .accessibilityIdentifier("bound.companion-enabled.\(content.rawValue)")
+                        }
+                    } header: { Text("Companion views") } footer: {
+                        Text("Choose which views the Bound button cycles through. All are on by default. Turn all off to hide the companion panel.")
+                    }
+                }
                 BoundAppearanceSettings(emulationDetails: state.emulationDetails)
                 if !BoundFeatureVisibility.simplifiedSettings {
                 Section("Picture in picture") {

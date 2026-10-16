@@ -21,6 +21,14 @@ and dismisses their keyboard, sheets and alerts without erasing preferences.
 Reference menus and import alerts keep the companion panel's position and size.
 Notes and Dex text editing can expand the panel to make room for the keyboard.
 
+Bound Settings includes **Companion views** when experiments are enabled. Friend,
+Notes, Types, Bosses and RR Dex each have a switch, all on by default. The Bound
+button and mapped cycle action skip disabled views in portrait and landscape.
+Choices persist on this device across app launches. Turning the current view off
+selects the first enabled view; turning every view off hides the companion while
+leaving the Bound button and pause-menu Settings available. Turning experiments
+off restores the Build 13 Friend/Notes/Types cycle without erasing these choices.
+
 With experiments enabled, the pause-menu Fast Forward toggle (and mapped
 Toggle Fast Forward action) is remembered on this device for each ROM and
 restored when the game opens again, using its existing preferred speed. Holding

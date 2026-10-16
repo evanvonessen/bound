@@ -108,6 +108,48 @@ final class CompanionCycleButtonTests: XCTestCase {
         state.selected = 3
         XCTAssertEqual(state.content, .friend, "A stale experimental selection must not expose the guide")
     }
+    func testEnabledViewsPreserveSelectionAndHandleNoneAcrossRestartAndExperimentalGate() throws {
+        let suite = "BoundCompanionCycle." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        let state = BoundCompanionState(preferences: preferences, experimentalFeaturesEnabled: true)
+        state.selected = 3
+        XCTAssertEqual(state.content, .bosses)
+        var selectionChanges = 0
+        state.selectionChanged = { selectionChanges += 1 }
+        state.setContentEnabled(false, for: .notes)
+        state.setContentEnabled(false, for: .types)
+        state.setContentEnabled(false, for: .dex)
+        XCTAssertEqual(state.content, .bosses, "Removing earlier entries must preserve the visible view")
+        XCTAssertEqual(state.availableContents, [.friend, .bosses])
+        XCTAssertEqual(selectionChanges, 0)
+        for expected in [BoundPiPContent.friend, .bosses, .friend, .bosses] {
+            state.advancePanel()
+            XCTAssertEqual(state.content, expected)
+        }
+        state.setContentEnabled(false, for: .bosses)
+        XCTAssertEqual(state.content, .friend)
+        XCTAssertEqual(selectionChanges, 1, "Removing the visible view cancels its active interactions")
+        state.setContentEnabled(false, for: .friend)
+        XCTAssertTrue(state.availableContents.isEmpty)
+        state.advancePanel() // All off must never divide by zero or expose Friend.
+        state.landscape = true
+        XCTAssertFalse(BoundCompanionCoordinator(state: state).allowsOpacityGesture)
+
+        let restarted = BoundCompanionState(preferences: BoundPiPPreferences(defaults: defaults), experimentalFeaturesEnabled: true)
+        XCTAssertTrue(restarted.availableContents.isEmpty)
+        restarted.updateExperimentalFeatures(false)
+        XCTAssertEqual(restarted.availableContents, [.friend, .notes, .types])
+        restarted.setContentEnabled(true, for: .bosses)
+        XCTAssertFalse(preferences.isEnabled(.bosses), "The experimental settings action is gated too")
+        restarted.updateExperimentalFeatures(true)
+        XCTAssertTrue(restarted.availableContents.isEmpty)
+        restarted.setContentEnabled(true, for: .bosses)
+        XCTAssertEqual(restarted.content, .bosses)
+        restarted.advancePanel()
+        XCTAssertEqual(restarted.content, .bosses, "One enabled view stays selected")
+    }
     func testPortraitMirrorKeepsDefaultAndAvoidsMovedInput() throws {
         let canvas = CGRect(x: 0, y: 0, width: 390, height: 800)
         let menu = CGRect(x: 20, y: 740, width: 20, height: 20)

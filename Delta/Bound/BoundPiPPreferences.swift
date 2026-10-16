@@ -7,6 +7,7 @@ enum BoundPiPCorner: String, CaseIterable, Sendable {
 }
 enum BoundPiPContent: String, CaseIterable, Sendable {
     case friend, types, notes, bosses, dex
+    var title: String { self == .dex ? "RR Dex" : rawValue.capitalized }
     static func cycleOrder(experimentalFeaturesEnabled: Bool) -> [Self] {
         experimentalFeaturesEnabled ? [.friend, .notes, .types, .bosses, .dex] : [.friend, .notes, .types]
     }
@@ -21,6 +22,16 @@ final class BoundPiPPreferences {
         self.defaults = defaults; self.namespace = namespace
     }
     private func key(_ suffix: String) -> String { namespace + "." + suffix }
+    func isEnabled(_ content: BoundPiPContent) -> Bool {
+        defaults.object(forKey: key(content.rawValue + ".enabled")) as? Bool ?? true
+    }
+    func setEnabled(_ enabled: Bool, for content: BoundPiPContent) {
+        defaults.set(enabled, forKey: key(content.rawValue + ".enabled"))
+    }
+    func enabledContents(experimentalFeaturesEnabled: Bool) -> [BoundPiPContent] {
+        let contents = BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: experimentalFeaturesEnabled)
+        return experimentalFeaturesEnabled ? contents.filter { isEnabled($0) } : contents
+    }
     var corner: BoundPiPCorner {
         get { BoundPiPCorner(rawValue: defaults.string(forKey: key("corner")) ?? "") ?? .topRight }
         set { defaults.set(newValue.rawValue, forKey: key("corner")) }

@@ -1106,6 +1106,104 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, "Friend")
     }
 
+    func testCompanionViewSwitchesPersistAndFilterCycle() throws {
+        // Native pause-menu animation idle notifications can be lost on Xcode 27.
+        // Observe the real controls and transitions explicitly throughout this test.
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originalImplementations: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originalImplementations.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer {
+            for (method, original) in originalImplementations {
+                imp_removeBlock(method_setImplementation(method, original))
+            }
+        }
+        let app = XCUIApplication()
+        let arguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        app.launchArguments = arguments + ["--bound-ui-reset-layout"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        func openFirstGame() {
+            let cell = app.collectionViews.cells.firstMatch
+            XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
+            XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+        }
+        defer {
+            app.terminate()
+            app.launchArguments = arguments + ["--bound-ui-reset-layout"]
+            app.launch()
+            setExperimentalFeatures(false, in: app)
+            openFirstGame() // Reset only the dedicated QA simulator's test preferences.
+            app.terminate()
+        }
+        openFirstGame()
+        app.launchArguments = arguments // Relaunch must retain the saved view switches.
+        let contents = ["friend", "notes", "types", "bosses", "dex"]
+        func toggle(_ content: String) -> XCUIElement { app.switches["bound.companion-enabled.\(content)"] }
+        func setView(_ content: String, enabled: Bool) {
+            let control = toggle(content)
+            XCTAssertTrue(control.waitForExistence(timeout: 5))
+            if (control.value as? String == "1") != enabled {
+                control.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+            XCTAssertEqual(control.value as? String, enabled ? "1" : "0")
+        }
+        openBoundSettings(in: app)
+        for content in contents {
+            XCTAssertTrue(toggle(content).waitForExistence(timeout: 5))
+            XCTAssertEqual(toggle(content).value as? String, "1", "Every view starts enabled")
+        }
+        for content in ["notes", "types", "dex"] { setView(content, enabled: false) }
+        screenshot("Companion-views-Friend-and-Bosses-enabled")
+        closeBoundSheet(in: app)
+        let cycle = app.buttons["bound.panel-cycle"]
+        for expected in ["Bosses", "Friend", "Bosses", "Friend"] {
+            cycle.tap(); XCTAssertEqual(cycle.value as? String, expected)
+        }
+
+        app.terminate(); app.launch(); openFirstGame()
+        openBoundSettings(in: app)
+        for content in contents {
+            XCTAssertEqual(toggle(content).value as? String, ["friend", "bosses"].contains(content) ? "1" : "0")
+        }
+        setView("friend", enabled: false)
+        closeBoundSheet(in: app)
+        XCTAssertEqual(cycle.value as? String, "Bosses", "Disabling the visible view selects an enabled view")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        waitForFrame(element("bound.game-screen", in: app)) { app.frame.width > app.frame.height && $0.width > $0.height }
+        cycle.tap(); XCTAssertEqual(cycle.value as? String, "Bosses")
+        XCUIDevice.shared.orientation = .portrait
+        waitForFrame(element("bound.game-screen", in: app)) { app.frame.height > app.frame.width && $0.width > $0.height }
+
+        openBoundSettings(in: app)
+        setView("bosses", enabled: false)
+        closeBoundSheet(in: app)
+        XCTAssertEqual(cycle.value as? String, "No views enabled")
+        for identifier in ["bound.friend-screen", "bound.boss-guide", "bound.rrdex", "bound.type-chart", "bound.notes-editor", "bound.notes-preview"] {
+            XCTAssertFalse(element(identifier, in: app).exists, "Disabled views must leave the view hierarchy")
+        }
+        cycle.tap(); XCTAssertEqual(cycle.value as? String, "No views enabled")
+        assertGamePixelsAnimate(element("bound.game-screen", in: app), in: app)
+        openBoundSettings(in: app)
+        setView("friend", enabled: true)
+        setView("bosses", enabled: true)
+        closeBoundSheet(in: app)
+        XCTAssertEqual(cycle.value as? String, "Friend")
+
+        app.terminate(); app.launch()
+        setExperimentalFeatures(false, in: app)
+        openFirstGame()
+        for expected in ["Notes", "Types", "Friend"] {
+            cycle.tap(); XCTAssertEqual(cycle.value as? String, expected)
+        }
+        openBoundSettings(in: app)
+        XCTAssertFalse(toggle("friend").exists, "The new settings follow the experimental feature opt-in")
+        closeBoundSheet(in: app)
+    }
+
     func testExperimentalPortraitBossAndRRDexCardsUseFullScreenWidthWithoutScalingSprites() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--bound-ui-screen-layout-bound", "--bound-ui-friend-fixture", "--bound-ui-no-animations"]
