@@ -272,7 +272,9 @@ extension SaveStatesViewController
         
         if self.isEditing { self.setEditing(false, animated: false) }
 
-        self.resetEmulatorCoreIfNeeded()
+        self.withStoppedPreview {
+            self.resetEmulatorCoreIfNeeded()
+        }
     }
     
     override func viewWillTransition(to size: CGSize, with coordinator: any UIViewControllerTransitionCoordinator) 
@@ -928,8 +930,9 @@ private extension SaveStatesViewController
             name = nil
         }
         
+        let objectID = saveState.objectID
         DatabaseManager.shared.performBackgroundTask { (context) in
-            let saveState = context.object(with: saveState.objectID) as! SaveState
+            guard let saveState = try? context.existingObject(with: objectID) as? SaveState else { return }
             saveState.name = name
             
             context.saveWithErrorLogging()
@@ -975,21 +978,24 @@ private extension SaveStatesViewController
     
     func lockSaveState(_ saveState: SaveState)
     {
-        let backgroundContext = DatabaseManager.shared.newBackgroundContext()
-        backgroundContext.performAndWait() {
-            let temporarySaveState = backgroundContext.object(with: saveState.objectID) as! SaveState
-            temporarySaveState.type = .locked
-            backgroundContext.saveWithErrorLogging()
-        }
+        self.setSaveState(saveState, locked: true)
     }
     
     func unlockSaveState(_ saveState: SaveState)
     {
-        let backgroundContext = DatabaseManager.shared.newBackgroundContext()
-        backgroundContext.performAndWait() {
-            let temporarySaveState = backgroundContext.object(with: saveState.objectID) as! SaveState
-            temporarySaveState.type = .general
-            backgroundContext.saveWithErrorLogging()
+        self.setSaveState(saveState, locked: false)
+    }
+
+    func setSaveState(_ saveState: SaveState, locked: Bool)
+    {
+        let objectID = saveState.objectID
+        self.withStoppedPreview {
+            let backgroundContext = DatabaseManager.shared.newBackgroundContext()
+            backgroundContext.performAndWait {
+                guard let temporarySaveState = try? backgroundContext.existingObject(with: objectID) as? SaveState else { return }
+                temporarySaveState.type = locked ? .locked : .general
+                backgroundContext.saveWithErrorLogging()
+            }
         }
     }
     
@@ -1228,6 +1234,7 @@ private extension SaveStatesViewController
         
         if let saveState = self.emulatorCoreSaveState
         {
+            self.emulatorCoreSaveState = nil
             // Remove temporary save state file
             do
             {
@@ -1333,14 +1340,14 @@ private extension SaveStatesViewController
     func commitPreviewTransition()
     {
         guard let gameViewController = self._previewTransitionViewController else { return }
-        gameViewController.pauseEmulation()
-        
         let fileURL = FileManager.default.uniqueTemporaryURL()
-        if let saveState = gameViewController.emulatorCore?.saveSaveState(to: fileURL)
+        if let saveState = gameViewController.stopPreview(savingTo: fileURL)
         {
-            gameViewController.emulatorCore?.stop()
-            
             self.loadSaveState(TemporaryPreviewSaveState(saveState))
+        }
+        else if let saveState = gameViewController.previewSaveState
+        {
+            self.loadSaveState(saveState)
         }
     }
 }
@@ -1396,8 +1403,14 @@ extension SaveStatesViewController
                 case .auto, .info: break
                 case .quick, .general:
                     let backgroundContext = DatabaseManager.shared.newBackgroundContext()
+                    let objectID = saveState.objectID
+                    var temporarySaveState: SaveState?
                     backgroundContext.performAndWait() {
-                        let temporarySaveState = backgroundContext.object(with: saveState.objectID) as! SaveState
+                        temporarySaveState = try? backgroundContext.existingObject(with: objectID) as? SaveState
+                    }
+                    if let temporarySaveState {
+                        // Preview shutdown and delegate/UI work belong on main;
+                        // updateSaveState enters the context only for the write.
                         self.updateSaveState(temporarySaveState)
                     }
                     

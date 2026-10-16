@@ -14,6 +14,29 @@ private struct RendererFixtureGame: GameProtocol {
 
 @MainActor
 final class StockControlAndGestureTests: XCTestCase {
+    func testStoppedSaveStatePreviewCannotRestartAfterHandoff() async throws {
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rom = directory.appendingPathComponent("preview.gba")
+        try FileManager.default.copyItem(at: fixture, to: rom)
+        let preview = PreviewGameViewController()
+        preview.game = RendererFixtureGame(fileURL: rom, type: .gba)
+        preview.loadViewIfNeeded()
+        let core = try XCTUnwrap(preview.emulatorCore)
+        defer { core.stop(); preview.game = nil }
+
+        let stopped = expectation(description: "Preview relinquished the shared emulator")
+        preview.stopPreview { stopped.fulfill() }
+        await fulfillment(of: [stopped], timeout: 5)
+
+        // UIKit may finish presenting a context-menu preview after its action
+        // has requested shutdown. Its inherited startup path must stay inert.
+        XCTAssertFalse(preview.startEmulation(), "A dismissed preview must never reacquire gameplay's bridge")
+        XCTAssertEqual(core.state, .stopped)
+    }
+
     func testSaveStatePreviewUsesGameplayRendererOptions() throws {
         let gameplayController = GameViewController()
         let previewController = PreviewGameViewController()
@@ -67,6 +90,64 @@ final class StockControlAndGestureTests: XCTestCase {
         XCTAssertEqual(previewOptions[.openGLES2] as? Bool, true)
         XCTAssertNil(gameplayOptions[.metal])
         XCTAssertNil(previewOptions[.metal])
+    }
+
+    func testPreviewCommitAndLateDismissalPreserveGameplayCore() throws {
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rom = directory.appendingPathComponent("handoff.gba")
+        try FileManager.default.copyItem(at: fixture, to: rom)
+        let game = RendererFixtureGame(fileURL: rom, type: .gba)
+        let gameplay = try XCTUnwrap(EmulatorCore(game: game, options: [.metal: true]))
+        defer { gameplay.stop() }
+        XCTAssertTrue(gameplay.start())
+        XCTAssertTrue(gameplay.pause())
+        let selected = gameplay.saveSaveState(to: directory.appendingPathComponent("selected.svs"))
+        gameplay.stop()
+
+        for iteration in 0..<3 {
+            let preview = PreviewGameViewController()
+            preview.game = game
+            preview.previewSaveState = selected
+            preview.loadViewIfNeeded()
+            let previewCore = try XCTUnwrap(preview.emulatorCore)
+            var stopNotifications = 0
+            preview.onPreviewStopped = { stopNotifications += 1 }
+            var runningTransitions = 0
+            let prepared = keyValueObservingExpectation(for: previewCore, keyPath: #keyPath(EmulatorCore.state)) { _, change in
+                guard (change[NSKeyValueChangeKey.newKey] as? NSNumber)?.intValue == EmulatorCore.State.running.rawValue else { return false }
+                runningTransitions += 1
+                return runningTransitions == 2 // Initial start, then resume after loading the selected state.
+            }
+            XCTAssertTrue(preview.startEmulation())
+            wait(for: [prepared], timeout: 5)
+            let committed = preview.stopPreview(savingTo: directory.appendingPathComponent("commit-\(iteration).svs"))
+            XCTAssertNotNil(committed, "A prepared live preview must commit its current snapshot")
+            XCTAssertEqual(previewCore.state, .stopped)
+            XCTAssertEqual(stopNotifications, 1)
+
+            XCTAssertTrue(gameplay.start())
+            XCTAssertTrue(gameplay.pause())
+            // Load the committed preview after gameplay owns the bridge, then
+            // deliver late UIKit callbacks from the old preview controller.
+            try gameplay.load(committed ?? selected)
+            preview.beginAppearanceTransition(true, animated: false)
+            preview.endAppearanceTransition()
+            XCTAssertFalse(preview.startEmulation())
+            preview.beginAppearanceTransition(false, animated: false)
+            preview.endAppearanceTransition()
+            preview.stopPreview()
+            XCTAssertEqual(stopNotifications, 1, "Repeated UIKit cleanup must be idempotent")
+            XCTAssertEqual(gameplay.state, .paused)
+            let after = gameplay.saveSaveState(to: directory.appendingPathComponent("after-\(iteration).svs"))
+            XCTAssertGreaterThan(try Data(contentsOf: after.fileURL).count, 0)
+            try gameplay.load(after)
+            XCTAssertTrue(gameplay.resume())
+            XCTAssertTrue(gameplay.pause())
+            gameplay.stop()
+        }
     }
 
     func testBoundControllerActionUsesNativeMappingTransformerAndActualReceiverPipeline() throws {

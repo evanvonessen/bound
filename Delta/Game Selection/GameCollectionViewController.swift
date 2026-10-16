@@ -1307,21 +1307,18 @@ private extension GameCollectionViewController
         guard let gameViewController = _previewTransitionViewController else { return }
         
         let game = gameViewController.game as! Game
-        gameViewController.pauseEmulation()
-        
         let indexPath = self.dataSource.fetchedResultsController.indexPath(forObject: game)!
         let fileURL = FileManager.default.uniqueTemporaryURL()
         
         if gameViewController.isLivePreview
         {
-            self.activeSaveState = gameViewController.emulatorCore?.saveSaveState(to: fileURL)
+            self.activeSaveState = gameViewController.stopPreview(savingTo: fileURL) ?? gameViewController.previewSaveState
         }
         else
         {
+            gameViewController.stopPreview()
             self.activeSaveState = gameViewController.previewSaveState
         }
-        
-        gameViewController.emulatorCore?.stop()
         
         _performingPreviewTransition = true
         

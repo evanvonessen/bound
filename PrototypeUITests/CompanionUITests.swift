@@ -213,15 +213,23 @@ final class CompanionUITests: XCTestCase {
         XCTAssertFalse(fastForward.isSelected, "Turning fast forward off must also survive app termination")
     }
 
-    func testSaveStateRenameSurvivesConfirmationAndRelaunch() throws {
-        try checkSaveStateRename(previewsEnabled: true, sorting: "name")
+    func testSaveStateRenameUnlockedWithPreviewsAndNameSorting() throws {
+        try checkSaveStateRename(previewsEnabled: true, initiallyLocked: false)
     }
 
-    func testSaveStateRenameWithoutPreviewSurvivesConfirmationAndRelaunch() throws {
-        try checkSaveStateRename(previewsEnabled: false, sorting: "date")
+    func testSaveStateRenameLockedWithPreviewsAndNameSorting() throws {
+        try checkSaveStateRename(previewsEnabled: true, initiallyLocked: true)
     }
 
-    private func checkSaveStateRename(previewsEnabled: Bool, sorting: String) throws {
+    func testSaveStateRenameUnlockedWithoutPreviewsAndNameSorting() throws {
+        try checkSaveStateRename(previewsEnabled: false, initiallyLocked: false)
+    }
+
+    func testSaveStateRenameLockedWithoutPreviewsAndNameSorting() throws {
+        try checkSaveStateRename(previewsEnabled: false, initiallyLocked: true)
+    }
+
+    private func checkSaveStateRename(previewsEnabled: Bool, initiallyLocked: Bool) throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originalImplementations: [(Method, IMP)] = []
         for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
@@ -237,12 +245,13 @@ final class CompanionUITests: XCTestCase {
 
         let app = XCUIApplication()
         app.launchArguments = ["--bound-ui-no-animations", "-isPreviewsEnabled", previewsEnabled ? "YES" : "NO",
-                               "-preferredSaveStatesSorting", "date", "-prefersDescendingSaveStatesSorting", "NO"]
+                               "-preferredSaveStatesSorting", "name", "-prefersDescendingSaveStatesSorting", "NO"]
         defer { app.terminate() }
         let suffix = UUID().uuidString.prefix(8)
-        let middleName = "Middle Rename QA " + suffix
-        let newName = "Zulu Rename QA " + suffix
-        let finalName = "Alpha Rename QA " + suffix
+        let testNamePrefix = "ZZZ Rename QA " + suffix + " "
+        let middleName = testNamePrefix + "Middle"
+        let newName = testNamePrefix + "Zulu"
+        let finalName = testNamePrefix + "Alpha"
         func openStates(_ mode: String = "Save State") {
             app.launch()
             let game = app.collectionViews.cells.containing(.staticText, identifier: "BoundPickerDiagnostic").firstMatch
@@ -258,98 +267,219 @@ final class CompanionUITests: XCTestCase {
         let rename = app.buttons["Rename"].firstMatch
         let alert = app.alerts["Rename Save State"]
         let field = alert.textFields.firstMatch
-        func pressState(_ state: XCUIElement) {
+        var stateIDsByName = [String: String]()
+        func currentStateSnapshots() -> [XCUIElementSnapshot] {
+            // Use one immutable accessibility snapshot. Resolving a list of
+            // live cell queries while scrolling can hit recycled cells.
+            guard let snapshot = try? states.snapshot() else { return [] }
+            func snapshots(in snapshot: XCUIElementSnapshot) -> [XCUIElementSnapshot] {
+                if snapshot.elementType == .cell, snapshot.identifier.hasPrefix("bound.save-state.") {
+                    return [snapshot]
+                }
+                return snapshot.children.flatMap { snapshots(in: $0) }
+            }
+            return snapshots(in: snapshot)
+        }
+        func currentOrderedStateIDs() -> [String] {
+            currentStateSnapshots().map(\.identifier)
+        }
+        func currentStateIDs() -> Set<String> {
+            Set(currentOrderedStateIDs())
+        }
+        func scrollStates(up: Bool) {
+            let top = states.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
+            let bottom = states.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+            // End the drag stationary so deceleration cannot recycle a row
+            // between revealing it and tapping it with quiescence disabled.
+            (up ? bottom : top).press(forDuration: 0.05, thenDragTo: up ? top : bottom,
+                                     withVelocity: .fast, thenHoldForDuration: 0.2)
+        }
+        func allStateIDs() -> [String] {
+            var previousIDs: Set<String>?
+            for _ in 0..<24 {
+                let ids = currentStateIDs()
+                if ids == previousIDs { break }
+                previousIDs = ids
+                scrollStates(up: false)
+            }
+            var result = [String]()
+            previousIDs = nil
+            for _ in 0..<24 {
+                let ids = currentOrderedStateIDs()
+                for id in ids where !result.contains(id) { result.append(id) }
+                if Set(ids) == previousIDs { break }
+                previousIDs = Set(ids)
+                scrollStates(up: true)
+            }
+            return result
+        }
+        func reveal(_ state: XCUIElement) -> Bool {
+            for scrollUp in [true, false] {
+                var previousIDs: Set<String>?
+                var unchangedScrolls = 0
+                for _ in 0..<24 {
+                    if state.exists && state.isHittable { return true }
+                    // Offscreen collection cells may not have a snapshot at all;
+                    // reading their frame fails XCTest before we can scroll.
+                    let ids = currentStateIDs()
+                    unchangedScrolls = ids == previousIDs ? unchangedScrolls + 1 : 0
+                    if unchangedScrolls == 2 { break }
+                    previousIDs = ids
+                    scrollStates(up: scrollUp)
+                }
+            }
+            return state.exists && state.isHittable
+        }
+        func waitForStableState(_ state: XCUIElement, id: String) {
             var priorFrame: CGRect?
             let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                let frame = state.frame
+                guard let frame = currentStateSnapshots().first(where: { $0.identifier == id })?.frame else {
+                    priorFrame = nil
+                    return false
+                }
                 defer { priorFrame = frame }
-                return state.isHittable && frame == priorFrame
+                return frame == priorFrame && state.exists && state.isHittable
             }, object: nil)
             XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 5), .completed)
+        }
+        func pressState(_ state: XCUIElement, id: String) {
+            waitForStableState(state, id: id)
             state.press(forDuration: 1)
         }
-        func bottomState() -> XCUIElement {
-            var previousID: String?
-            for _ in 0..<12 {
-                guard let lastID = cells.allElementsBoundByAccessibilityElement.last?.identifier else { continue }
-                let last = cells[lastID]
-                if lastID == previousID && last.isHittable { return last }
-                previousID = lastID
-                states.swipeUp()
-            }
-            return cells.allElementsBoundByAccessibilityElement.last ?? cells.firstMatch
-        }
         func addAndRename(to name: String) {
-            let previousID = cells.count > 0 ? bottomState().identifier : nil
+            let previousIDs = Set(allStateIDs())
             app.navigationBars["Save State"].buttons["Add"].tap()
-            let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                guard let last = cells.allElementsBoundByAccessibilityElement.last else { return false }
-                return last.identifier != previousID
-            }, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed)
-            // Ascending date order places the new general state last.
-            let createdState = bottomState()
-            XCTAssertNotEqual(createdState.identifier, previousID)
-            pressState(createdState)
+            let addedIDs = Set(allStateIDs()).subtracting(previousIDs)
+            XCTAssertEqual(addedIDs.count, 1, "Identify the newly saved state across the entire collection")
+            guard let createdID = addedIDs.first else {
+                XCTFail("Creating a save state must add a unique collection item")
+                return
+            }
+            let createdState = cells[createdID]
+            XCTAssertTrue(reveal(createdState), "The new save state must be reachable after name sorting")
+            pressState(createdState, id: createdID)
             XCTAssertTrue(rename.waitForExistence(timeout: 10)); rename.tap()
             XCTAssertTrue(alert.waitForExistence(timeout: 10))
+            XCTAssertTrue((field.value as? String ?? "").isEmpty || field.value as? String == "Name", "Only rename the new unnamed fixture state")
             field.tap(); field.typeText(name)
             alert.buttons["Rename"].tap()
-            XCTAssertTrue(app.staticTexts[name].waitForExistence(timeout: 10))
+            stateIDsByName[name] = createdID
+            let renamedCell = cells[createdID]
+            XCTAssertTrue(reveal(renamedCell), "The renamed cell must be reachable after its sort position changes")
+            XCTAssertTrue(renamedCell.staticTexts[name].waitForExistence(timeout: 10))
+        }
+        func performStateAction(named stateName: String, actionTitle: String) {
+            guard let id = stateIDsByName[stateName] else {
+                XCTFail("No stable collection ID recorded for save state \(stateName)")
+                return
+            }
+            let state = cells[id]
+            XCTAssertTrue(reveal(state), "Expected save state \(stateName) to be available for \(actionTitle)")
+            pressState(state, id: id)
+            let action = app.buttons[actionTitle].firstMatch
+            XCTAssertTrue(action.waitForExistence(timeout: 10), "Expected \(actionTitle) for save state \(stateName)")
+            action.tap()
+        }
+        func cancelRename(of stateName: String) {
+            guard let id = stateIDsByName[stateName] else {
+                XCTFail("No stable collection ID recorded for save state \(stateName)")
+                return
+            }
+            let state = cells[id]
+            XCTAssertTrue(reveal(state))
+            pressState(state, id: id)
+            XCTAssertTrue(rename.waitForExistence(timeout: 10)); rename.tap()
+            XCTAssertTrue(alert.waitForExistence(timeout: 10))
+            alert.buttons["Cancel"].tap()
+            XCTAssertTrue(app.staticTexts[stateName].waitForExistence(timeout: 10), "Cancelling must preserve the saved name")
+        }
+        func renameState(from oldName: String, to newName: String) {
+            guard let id = stateIDsByName[oldName] else {
+                XCTFail("No stable collection ID recorded for save state \(oldName)")
+                return
+            }
+            let state = cells[id]
+            XCTAssertTrue(reveal(state), "Expected save state \(oldName) to be available for renaming")
+            pressState(state, id: id)
+            XCTAssertTrue(rename.waitForExistence(timeout: 10)); rename.tap()
+            XCTAssertTrue(alert.waitForExistence(timeout: 10))
+            // UIAlertController focuses this field with the cursor at its end.
+            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: oldName.count))
+            field.typeText(newName)
+            alert.buttons["Rename"].tap()
+            stateIDsByName.removeValue(forKey: oldName)
+            stateIDsByName[newName] = id
+            let renamedCell = cells[id]
+            XCTAssertTrue(reveal(renamedCell), "The renamed cell must be reachable after its sort position changes")
+            XCTAssertTrue(renamedCell.staticTexts[newName].waitForExistence(timeout: 10))
         }
         addAndRename(to: String(middleName))
         addAndRename(to: String(newName))
-        if sorting == "name" {
-            app.navigationBars["Save State"].buttons["Options"].tap()
-            let nameSort = app.buttons["Name"].firstMatch
-            XCTAssertTrue(nameSort.waitForExistence(timeout: 5)); nameSort.tap()
-            if !nameSort.waitForNonExistence(timeout: 1) {
-                app.navigationBars["Save State"].staticTexts["Save State"].tap()
-            }
-            XCTAssertTrue(nameSort.waitForNonExistence(timeout: 5))
+        if initiallyLocked {
+            performStateAction(named: String(middleName), actionTitle: "Lock")
+            performStateAction(named: String(newName), actionTitle: "Lock")
         }
 
-        func reopenRename() {
-            let state = cells.containing(.staticText, identifier: String(newName)).firstMatch
-            for _ in 0..<12 {
-                if state.exists && state.isHittable { break }
-                states.swipeUp()
-            }
-            XCTAssertTrue(state.isHittable)
-            pressState(state)
-            XCTAssertTrue(rename.waitForExistence(timeout: 10)); rename.tap()
-            XCTAssertTrue(alert.waitForExistence(timeout: 10))
+        cancelRename(of: String(newName))
+        renameState(from: String(newName), to: String(finalName))
+        let namesAfterSortedRename = allStateIDs()
+        let renamedID = try XCTUnwrap(stateIDsByName[String(finalName)])
+        let middleID = try XCTUnwrap(stateIDsByName[String(middleName)])
+        XCTAssertLessThan(try XCTUnwrap(namesAfterSortedRename.firstIndex(of: renamedID)),
+                          try XCTUnwrap(namesAfterSortedRename.firstIndex(of: middleID)),
+                          "Renaming Zulu to Alpha must move the state before Middle in its section")
+
+        if initiallyLocked {
+            performStateAction(named: String(finalName), actionTitle: "Unlock")
+            let unlockedName = testNamePrefix + "Bravo"
+            renameState(from: String(finalName), to: unlockedName)
+        } else {
+            let lockedName = testNamePrefix + "Bravo"
+            performStateAction(named: String(finalName), actionTitle: "Lock")
+            renameState(from: String(finalName), to: lockedName)
         }
-        reopenRename()
-        alert.buttons["Cancel"].tap()
-        XCTAssertTrue(app.staticTexts[String(newName)].waitForExistence(timeout: 10), "Cancelling must preserve the saved name")
-        reopenRename()
-        // UIAlertController already focuses this field with the cursor at its end.
-        // Tapping the middle first would leave a suffix when deleting the name.
-        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: newName.count))
-        field.typeText(String(finalName))
-        alert.buttons["Rename"].tap()
-        XCTAssertTrue(app.staticTexts[String(finalName)].waitForExistence(timeout: 10))
-        if sorting == "name" {
-            let names = cells.allElementsBoundByAccessibilityElement.flatMap { $0.staticTexts.allElementsBoundByAccessibilityElement.map(\.label) }
-            XCTAssertLessThan(try XCTUnwrap(names.firstIndex(of: String(finalName))),
-                              try XCTUnwrap(names.firstIndex(of: String(middleName))),
-                              "Renaming Zulu to Alpha must move the state before Middle when sorted by name")
-        }
+
+        let persistedName = testNamePrefix + "Bravo"
+        let persistedState = cells[try XCTUnwrap(stateIDsByName[persistedName])]
+        XCTAssertTrue(reveal(persistedState))
+
+        // Renaming and section moves must leave the collection usable for another save.
+        let previousIDs = Set(allStateIDs())
+        app.navigationBars["Save State"].buttons["Add"].tap()
+        XCTAssertEqual(Set(allStateIDs()).subtracting(previousIDs).count, 1)
+
         XCTAssertEqual(app.state, .runningForeground)
         app.terminate()
         openStates("Load State")
-        let renamedState = cells.containing(.staticText, identifier: String(finalName)).firstMatch
-        for _ in 0..<12 {
-            if renamedState.exists && renamedState.isHittable { break }
-            states.swipeUp()
-        }
-        XCTAssertTrue(renamedState.waitForExistence(timeout: 10), "Renaming must survive app termination")
-        renamedState.tap()
+        let persistedID = try XCTUnwrap(stateIDsByName[persistedName])
+        let renamedState = cells[persistedID]
+        XCTAssertTrue(reveal(renamedState), "Renaming and lock state must survive app termination")
+        pressState(renamedState, id: persistedID)
+        let expectedLockAction = initiallyLocked ? "Lock" : "Unlock"
+        XCTAssertTrue(app.buttons[expectedLockAction].waitForExistence(timeout: 10), "The final lock state must persist across app termination")
+        app.buttons[expectedLockAction].tap()
+        XCTAssertTrue(app.buttons[expectedLockAction].waitForNonExistence(timeout: 5))
+        let stateAfterLockToggle = cells[persistedID]
+        XCTAssertTrue(reveal(stateAfterLockToggle))
+        waitForStableState(stateAfterLockToggle, id: persistedID)
+        stateAfterLockToggle.tap()
         XCTAssertTrue(app.navigationBars["Load State"].waitForNonExistence(timeout: 10))
         let gameScreen = element("bound.game-screen", in: app)
         XCTAssertTrue(gameScreen.waitForExistence(timeout: 10))
         assertGamePixelsAnimate(gameScreen, in: app)
+
+        for _ in 0..<2 {
+            openNativePause(in: app)
+            app.buttons["Load State"].tap()
+            XCTAssertTrue(app.navigationBars["Load State"].waitForExistence(timeout: 10))
+            let repeatedLoadState = cells[persistedID]
+            XCTAssertTrue(reveal(repeatedLoadState), "The renamed state must remain loadable during active gameplay")
+            waitForStableState(repeatedLoadState, id: persistedID)
+            repeatedLoadState.tap()
+            XCTAssertTrue(app.navigationBars["Load State"].waitForNonExistence(timeout: 10))
+            XCTAssertTrue(gameScreen.waitForExistence(timeout: 10))
+            assertGamePixelsAnimate(gameScreen, in: app)
+        }
     }
 
     private func openRRDexPlayback(in app: XCUIApplication) {
