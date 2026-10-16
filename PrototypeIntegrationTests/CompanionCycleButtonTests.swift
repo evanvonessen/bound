@@ -30,7 +30,7 @@ final class CompanionCycleButtonTests: XCTestCase {
                     if let field = view as? UITextField { return field }
                     return view.subviews.lazy.compactMap(searchField).first
                 }
-                if layout != .layout4 {
+                if layout.rawValue < 4 {
                     let search = try XCTUnwrap(searchField(host.view))
                     XCTAssertGreaterThan(search.bounds.width, 150)
                     XCTAssertEqual(search.autocapitalizationType, .none)

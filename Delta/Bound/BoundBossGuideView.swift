@@ -15,6 +15,7 @@ struct BoundBossGuideView: View {
     @State private var showingTeam = false
     @State private var detailSheet: DetailSheet?
     @State private var showsLayout4Stats = false
+    @State private var layout5ShowsStats = false
 
     private enum DetailSheet: Identifiable {
         case ability(String, String?), item(String, String?)
@@ -30,7 +31,7 @@ struct BoundBossGuideView: View {
     private var anyPresentation: Bool {
         showingPicker || showingTeam || detailSheet != nil
     }
-    private var usesIslandActions: Bool { (layout == .layout3 || layout == .layout4) && !floating && portraitTopInset >= 51 }
+    private var usesIslandActions: Bool { (layout == .layout3 || layout == .layout4 || layout == .layout5) && !floating && portraitTopInset >= 51 }
 
     var body: some View {
         Group {
@@ -99,6 +100,9 @@ struct BoundBossGuideView: View {
                     } else if layout == .layout4 {
                         layout4Card(team: team, pokemon: pokemon, index: index,
                                     compact: true, scrollsDetails: false)
+                    } else if layout == .layout5 {
+                        layout5Card(team: team, pokemon: pokemon, index: index,
+                                    compact: true, scrollsDetails: false)
                     } else {
                         enhancedCard(team: team, pokemon: pokemon, index: index,
                                      compact: true, scrollsDetails: false)
@@ -124,6 +128,10 @@ struct BoundBossGuideView: View {
                     layout4Card(team: team, pokemon: pokemon, index: index,
                                 compact: size.height < 235, scrollsDetails: true,
                                 scrollsOverview: size.height < 235 && !usesIslandActions)
+                case .layout5:
+                    layout5Card(team: team, pokemon: pokemon, index: index,
+                                compact: size.height < 235, scrollsDetails: true,
+                                scrollsOverview: size.height < 235 && !usesIslandActions)
                 }
             }
             .frame(width: size.width, height: size.height)
@@ -142,6 +150,9 @@ struct BoundBossGuideView: View {
             floatingCard = AnyView(enhancedCard(team: team, pokemon: pokemon, index: index, compact: true))
         case .layout4:
             floatingCard = AnyView(layout4Card(team: team, pokemon: pokemon, index: index,
+                                              compact: true, scrollsDetails: true))
+        case .layout5:
+            floatingCard = AnyView(layout5Card(team: team, pokemon: pokemon, index: index,
                                               compact: true, scrollsDetails: true))
         }
         return floatingCard
@@ -382,6 +393,164 @@ struct BoundBossGuideView: View {
         .padding(.horizontal, compact ? 6 : 9).padding(.vertical, 2)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(uiColor: .systemBackground))
+    }
+
+    /// Layout 5 keeps the same encounter context as Layout 4 while making the
+    /// Moves/Stats choice obvious and placing the team strip on a dependable footer.
+    private func layout5Card(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, compact: Bool,
+                             scrollsDetails: Bool, scrollsOverview: Bool = false) -> some View {
+        let reference = BoundBossReference.bundled
+        let detail = reference?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
+        let overview = VStack(alignment: .leading, spacing: 1) {
+            layout5Header(team: team, compact: compact)
+            conditionBadges(team, compact: true)
+            layout5SelectedSummary(pokemon: pokemon, detail: detail, index: index, count: team.pokemon.count)
+        }
+        let detailContent = layout5DetailContent(pokemon: pokemon, detail: detail)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            if scrollsOverview {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        if !usesIslandActions {
+                            islandActions(pokemon: pokemon, onIsland: false).frame(height: 44)
+                        }
+                        overview
+                        detailContent
+                    }
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("bound.boss-details")
+                .id("layout5-\(team.id)-\(index)")
+            } else {
+                if !usesIslandActions {
+                    islandActions(pokemon: pokemon, onIsland: false).frame(height: 44)
+                }
+                overview
+                Group {
+                    if scrollsDetails {
+                        ScrollView(.vertical, showsIndicators: false) { detailContent }
+                            .frame(maxHeight: .infinity)
+                    } else {
+                        detailContent
+                    }
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("bound.boss-details")
+                .id("layout5-\(team.id)-\(index)")
+            }
+            layout4Navigation(team: team, index: index, reference: reference)
+        }
+        .padding(.horizontal, compact ? 6 : 9)
+        .padding(.vertical, 0)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(uiColor: .systemBackground))
+    }
+
+    private func layout5Header(team: BoundBossTeam, compact: Bool) -> some View {
+        HStack(spacing: 5) {
+            BoundBossTrainerIcon(team: team, size: 30)
+            Button { showingPicker = true } label: {
+                HStack(spacing: 4) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(team.name).font(.system(size: compact ? 13 : 15, weight: .bold)).lineLimit(1)
+                        Text([team.location, team.variant].filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(height: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Choose boss, \(team.name)")
+            .accessibilityHint("Opens the boss list")
+            .accessibilityIdentifier("bound.boss-picker")
+            capBadge(team)
+            layout5DetailSelector()
+        }
+        .frame(height: 44)
+    }
+
+    private func layout5DetailSelector() -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.16)) { layout5ShowsStats.toggle() }
+        } label: {
+            VStack(spacing: 2) {
+                Image(systemName: layout5ShowsStats ? "bolt.fill" : "chart.bar.fill")
+                Text(layout5ShowsStats ? "Moves" : "Stats")
+            }
+            .font(.system(size: 10, weight: .semibold))
+            .frame(width: 48, height: 44)
+            .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(layout5ShowsStats ? "Show Pokémon moves" : "Show Pokémon stats")
+        .accessibilityIdentifier("bound.boss-layout5-detail-toggle")
+        .accessibilityValue(layout5ShowsStats ? "Stats" : "Moves")
+    }
+
+    @ViewBuilder
+    private func layout5DetailContent(pokemon: BoundBossPokemon, detail: BoundBossReference.Detail?) -> some View {
+        if layout5ShowsStats {
+            BoundBossStats(stats: pokemon.stats)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("bound.boss-layout5-stats")
+        } else {
+            moveGrid(pokemon: pokemon, detail: detail, compact: true)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("bound.boss-layout5-moves")
+        }
+    }
+
+    private func layout5SelectedSummary(pokemon: BoundBossPokemon, detail: BoundBossReference.Detail?,
+                                       index: Int, count: Int) -> some View {
+        HStack(spacing: 4) {
+            pokemonPicture(pokemon, species: detail?.species, size: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pokemon.species).font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1).minimumScaleFactor(0.75)
+                typeNames(detail?.types ?? [])
+                HStack(spacing: 5) {
+                    Text(pokemon.levelLabel)
+                    Text("\(index + 1) / \(count)")
+                        .accessibilityIdentifier("bound.boss-page")
+                }
+                .font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
+                .lineLimit(1).minimumScaleFactor(0.75)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            layout5InfoTile(icon: "sparkles", title: "Ability", value: pokemon.ability) {
+                guard experimentsEnabled else { return }
+                detailSheet = .ability(pokemon.ability, detail?.abilityDescription)
+            }
+            .accessibilityIdentifier("bound.boss-ability")
+            layout5InfoTile(icon: "shippingbox", title: "Held item", value: pokemon.item) {
+                guard experimentsEnabled else { return }
+                detailSheet = .item(pokemon.item, detail?.itemDescription)
+            }
+            .accessibilityIdentifier("bound.boss-item")
+        }
+        .frame(height: 48)
+    }
+
+    private func layout5InfoTile(icon: String, title: String, value: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 1) {
+                Label(title, systemImage: icon).labelStyle(.titleAndIcon)
+                    .font(.system(size: 8, weight: .medium)).lineLimit(1).minimumScaleFactor(0.8)
+                Text(value).font(.system(size: 10, weight: .semibold))
+                    .lineLimit(2).minimumScaleFactor(0.85)
+            }
+            .frame(width: 78, height: 44)
+            .contentShape(Rectangle())
+            .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title): \(value). Show description")
     }
 
     private func layout4SelectedSummary(pokemon: BoundBossPokemon, detail: BoundBossReference.Detail?,
@@ -662,6 +831,7 @@ struct BoundBossGuideView: View {
     private func choose(_ next: BoundBossGuideSelection, catalog: BoundBossCatalog) {
         guard experimentsEnabled else { return }
         showsLayout4Stats = false
+        if selection.teamID != next.teamID { layout5ShowsStats = false }
         selection = next.resolved(in: catalog)
         preferences.write(selection, gameID: gameID, catalog: catalog)
     }

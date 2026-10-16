@@ -1277,6 +1277,10 @@ final class CompanionUITests: XCTestCase {
         try checkReferenceLayouts([4])
     }
 
+    func testLayout5KeepsReferenceDetailsVisibleAndActionsUsable() throws {
+        try checkReferenceLayouts([5])
+    }
+
     private func checkReferenceLayouts(_ layouts: [Int]) throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
@@ -1350,7 +1354,7 @@ final class CompanionUITests: XCTestCase {
             XCTAssertTrue(member.isHittable); member.tap()
             XCTAssertTrue(member.isSelected)
             XCTAssertEqual(app.staticTexts["bound.boss-page"].label, "2 / 4")
-            if layout == 4 {
+            if layout >= 4 {
                 XCTAssertGreaterThanOrEqual(member.frame.height, 43.5)
                 app.buttons["bound.boss-next"].tap()
                 XCTAssertEqual(app.staticTexts["bound.boss-page"].label, "3 / 4")
@@ -1358,7 +1362,7 @@ final class CompanionUITests: XCTestCase {
                 XCTAssertEqual(app.staticTexts["bound.boss-page"].label, "2 / 4")
             }
             for id in ["bound.boss-ability", "bound.boss-item"] {
-                if layout == 4 { XCTAssertGreaterThanOrEqual(app.buttons[id].frame.height, 43.5) }
+                if layout >= 4 { XCTAssertGreaterThanOrEqual(app.buttons[id].frame.height, 43.5) }
                 XCTAssertTrue(app.buttons[id].isHittable); app.buttons[id].tap(); closeDetail()
             }
             app.buttons["bound.boss-team-member-0"].tap()
@@ -1372,7 +1376,7 @@ final class CompanionUITests: XCTestCase {
                 XCTAssertLessThanOrEqual(fullTeam.frame.maxY, safeTop + 1)
             }
             screenshot("Boss-layout-\(layout)-portrait")
-            if layout == 4 {
+            if layout >= 4 {
                 app.buttons["bound.boss-full-team"].tap(); closeDetail()
             }
             matchups.tap()
@@ -1388,14 +1392,30 @@ final class CompanionUITests: XCTestCase {
                 XCTAssertTrue(element("bound.boss-layout4-stats", in: app).exists)
                 screenshot("Boss-layout-4-expanded-stats")
             }
+            if layout == 5 {
+                let toggle = app.buttons["bound.boss-layout5-detail-toggle"]
+                XCTAssertTrue(toggle.isHittable)
+                XCTAssertGreaterThanOrEqual(toggle.frame.height, 43.5)
+                XCTAssertEqual(toggle.value as? String, "Moves")
+                toggle.tap()
+                XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+                    predicate: NSPredicate(format: "value == %@", "Stats"), object: toggle)], timeout: 3), .completed)
+                XCTAssertTrue(element("bound.boss-layout5-stats", in: app).exists)
+                app.buttons["bound.boss-next"].tap()
+                XCTAssertEqual(toggle.value as? String, "Stats")
+                screenshot("Boss-layout-5-stats")
+            }
             chooseBoss("kanto-leaders-145", search: "Blaine")
+            if layout == 5 {
+                XCTAssertEqual(app.buttons["bound.boss-layout5-detail-toggle"].value as? String, "Moves")
+            }
             XCTAssertTrue(element("bound.boss-condition-permanent-sun", in: app).exists)
             screenshot("Boss-layout-\(layout)-battle-conditions")
             assertGeometry()
 
             selectCompanion("Dex", in: app)
             XCTAssertEqual(element("bound.rrdex", in: app).value as? String, "Layout \(layout)")
-            if layout == 4 { app.buttons["bound.rrdex-search-open"].tap() }
+            if layout >= 4 { app.buttons["bound.rrdex-search-open"].tap() }
             let search = app.textFields["bound.rrdex-search"]
             XCTAssertTrue(search.waitForExistence(timeout: 5))
             XCTAssertTrue(search.isHittable); search.tap(); search.typeText("charizard")
@@ -1404,26 +1424,36 @@ final class CompanionUITests: XCTestCase {
             XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
             assertGeometry()
             screenshot("RRDex-layout-\(layout)-portrait")
+            if layout == 5 {
+                let footerTop = app.buttons["bound.rrdex-search-open"].frame.minY
+                for stat in ["HP", "Atk", "Def", "SpA", "SpD", "Spe"] {
+                    let cell = element("bound.rrdex-layout5-stat-\(stat)", in: app)
+                    XCTAssertTrue(cell.exists)
+                    XCTAssertGreaterThan(cell.frame.height, 20)
+                    XCTAssertLessThanOrEqual(cell.frame.maxY, footerTop + 1,
+                                            "Every base stat must be fully visible without scrolling")
+                }
+            }
             XCTAssertTrue(app.buttons["bound.rrdex-import"].isHittable)
             XCTAssertTrue(app.buttons["bound.rrdex-info"].isHittable)
             app.buttons["bound.rrdex-info"].tap(); closeDetail()
             let ability = app.buttons["bound.rrdex-ability-0"]
-            if layout == 4 { XCTAssertGreaterThanOrEqual(ability.frame.height, 43.5) }
+            if layout >= 4 { XCTAssertGreaterThanOrEqual(ability.frame.height, 43.5) }
             XCTAssertTrue(ability.isHittable); ability.tap(); closeDetail()
             app.buttons["bound.rrdex-weaknesses"].tap()
             XCTAssertTrue(element("bound.rrdex-matchups", in: app).waitForExistence(timeout: 5)); closeDetail()
             app.buttons["bound.rrdex-learnset"].tap()
             XCTAssertTrue(element("bound.rrdex-moves", in: app).waitForExistence(timeout: 5)); closeDetail()
-            if layout == 4 {
-                let details = element("bound.rrdex-layout4-details", in: app)
-                let evolution = element("bound.rrdex-layout4-evolution", in: app)
+            if layout >= 4 {
+                let details = element("bound.rrdex-layout\(layout)-details", in: app)
+                let evolution = element("bound.rrdex-layout\(layout)-evolution", in: app)
                 reveal(evolution, in: details)
                 XCTAssertEqual(evolution.value as? String, "Collapsed")
                 evolution.tap()
                 XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
                     predicate: NSPredicate(format: "value == %@", "Expanded"), object: evolution)], timeout: 3), .completed)
                 XCTAssertTrue(element("bound.rrdex-evolution", in: app).exists)
-                screenshot("RRDex-layout-4-expanded-evolution")
+                screenshot("RRDex-layout-\(layout)-expanded-evolution")
                 // Search opens from the fixed footer even after scrolling down.
                 app.buttons["bound.rrdex-search-open"].tap()
                 XCTAssertTrue(search.waitForExistence(timeout: 5))
@@ -1435,7 +1465,7 @@ final class CompanionUITests: XCTestCase {
             if layout >= 3 {
                 XCUIDevice.shared.orientation = .landscapeLeft
                 waitForFrame(game) { app.frame.width > app.frame.height && $0.width > $0.height }
-                if layout == 4 { XCTAssertTrue(app.buttons["bound.rrdex-search-open"].isHittable) }
+                if layout >= 4 { XCTAssertTrue(app.buttons["bound.rrdex-search-open"].isHittable) }
                 else { XCTAssertTrue(search.isHittable) }
                 screenshot("RRDex-layout-\(layout)-landscape")
                 selectCompanion("Bosses", in: app)
@@ -1481,22 +1511,22 @@ final class CompanionUITests: XCTestCase {
         }
         openBoundSettings(in: app)
         assertChoice("rrdex", 1); assertChoice("boss", 1)
-        picker("boss").buttons["Layout 4"].tap()
-        assertChoice("boss", 4); assertChoice("rrdex", 1)
+        picker("boss").buttons["Layout 5"].tap()
+        assertChoice("boss", 5); assertChoice("rrdex", 1)
         picker("rrdex").buttons["Layout 3"].tap()
         screenshot("Reference-layout-settings-independent-choices")
         closeBoundSheet(in: app)
         selectCompanion("Bosses", in: app)
-        XCTAssertEqual(element("bound.boss-guide", in: app).value as? String, "Layout 4")
+        XCTAssertEqual(element("bound.boss-guide", in: app).value as? String, "Layout 5")
         selectCompanion("Dex", in: app)
         XCTAssertEqual(element("bound.rrdex", in: app).value as? String, "Layout 3")
 
         app.terminate(); app.launch(); play()
         openBoundSettings(in: app)
-        assertChoice("boss", 4); assertChoice("rrdex", 3)
+        assertChoice("boss", 5); assertChoice("rrdex", 3)
         closeBoundSheet(in: app)
         selectCompanion("Bosses", in: app)
-        XCTAssertEqual(element("bound.boss-guide", in: app).value as? String, "Layout 4")
+        XCTAssertEqual(element("bound.boss-guide", in: app).value as? String, "Layout 5")
         selectCompanion("Dex", in: app)
         XCTAssertEqual(element("bound.rrdex", in: app).value as? String, "Layout 3")
 
@@ -1504,7 +1534,7 @@ final class CompanionUITests: XCTestCase {
         scrollToSetting(picker("boss"), in: app)
         picker("boss").buttons["Layout 3"].tap()
         scrollToSetting(picker("rrdex"), in: app)
-        picker("rrdex").buttons["Layout 4"].tap()
+        picker("rrdex").buttons["Layout 5"].tap()
         closeBoundSheet(in: app)
         app.terminate(); app.launch(); setExperimentalFeatures(false, in: app); play()
         openBoundSettings(in: app)
@@ -1516,7 +1546,7 @@ final class CompanionUITests: XCTestCase {
         }
         app.terminate(); app.launch(); setExperimentalFeatures(true, in: app); play()
         openBoundSettings(in: app)
-        assertChoice("boss", 3); assertChoice("rrdex", 4)
+        assertChoice("boss", 3); assertChoice("rrdex", 5)
         closeBoundSheet(in: app)
     }
 

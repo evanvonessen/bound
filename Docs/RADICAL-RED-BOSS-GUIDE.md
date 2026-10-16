@@ -30,7 +30,7 @@ stay separate. Search opens matching groups while keeping their alternatives
 available; the currently selected encounter opens when the picker returns.
 Unlabeled source alternatives retain neutral Team 1/2/3 labels.
 
-**Bound Settings → Reference layouts → Boss View** chooses between four saved
+**Bound Settings → Reference layouts → Boss View** chooses between five saved
 presentations independently of RR Dex. Layout 1 preserves the original card and
 is the default. Layout 2 adds source-derived battle-condition badges, a tappable
 opposing-team strip, ability and item description buttons, a typing-matchup
@@ -44,6 +44,11 @@ below the moves. Matchups use the selected
 opponent's published typing, with explicit warnings that abilities, items and
 battle conditions may change damage. They never use the player's randomized
 save configuration.
+Layout 5 adds a Moves/Stats button, labeled ability and held-item tiles,
+and keeps the selected-team strip, island shortcuts and game-edge navigation
+available while switching detail sections. That detail choice follows the
+selected team member and returns to moves when choosing a different encounter.
+The boss name has a chevron to make the encounter chooser easier to recognize.
 
 Trainer icons are unchanged original game sprites from the
 [Pokémon Showdown trainer directory](https://play.pokemonshowdown.com/sprites/trainers/).

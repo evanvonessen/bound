@@ -29,13 +29,17 @@ selects the first enabled view; turning every view off hides the companion while
 leaving the Bound button and pause-menu Settings available. Turning experiments
 off restores the Build 13 Friend/Notes/Types cycle without erasing these choices.
 
-The **Reference layouts** section in Bound Settings has independent four-way
+The **Reference layouts** section in Bound Settings has independent five-way
 selectors for **RR Dex** and **Boss View**. Both default to **Layout 1**, preserving
 the original presentation. Choices persist on this device across app launches
 and remain saved when experiments are disabled. Layout 2 surfaces more reference
 information; Layout 3 rearranges the portrait area from either side of the Dynamic
 Island down to the game screen. Layout 4 refines that arrangement with larger
 touch targets, clearer content groups and expandable secondary details.
+Layout 5 adds a compact, glanceable Dex stats row with the total base-stat score
+in the footer and an expandable evolution section. Boss Layout 5 switches moves
+and stats with one button while keeping team navigation and Dynamic Island
+shortcuts within reach. Each layout selector describes the selected option.
 Layout choices do not change the ROM, guide data
 version, selected encounter, selected species, or imported randomizer settings.
 
