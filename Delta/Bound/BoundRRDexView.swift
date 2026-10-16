@@ -4,6 +4,7 @@ import UIKit
 struct BoundRRDexView: View {
     let gameID: String
     var floating = false
+    var portraitTopInset: CGFloat = 0
     let presentationChanged: (Bool) -> Void
     var textEditingChanged: (Bool) -> Void = { _ in }
     var currentSave: () throws -> BoundRRDexSave = { throw BoundRRDexSave.ImportError.currentGameUnavailable }
@@ -19,6 +20,7 @@ struct BoundRRDexView: View {
     @State private var awaitingDetailDismissal = false
     private enum Detail: String, Identifiable { case weaknesses, learnset, information; var id: String { rawValue } }
     private var interacting: Bool { searching || sheet != nil || importError != nil }
+    private var hasIslandActions: Bool { !floating && portraitTopInset >= 51 }
 
     var body: some View {
         Group {
@@ -41,6 +43,19 @@ struct BoundRRDexView: View {
                     } else {
                         card(pokemon: pokemon, catalog: catalog)
                             .frame(width: geometry.size.width, height: geometry.size.height)
+                    }
+                }
+                .padding(.top, portraitTopInset)
+                .overlay(alignment: .top) {
+                    if hasIslandActions {
+                        HStack(spacing: 0) {
+                            detailButton("Weaknesses", icon: "shield.lefthalf.filled", detail: .weaknesses, besideIsland: true)
+                            // Reserve the center for the Dynamic Island and its clearance.
+                            Spacer().frame(width: 160)
+                            detailButton("Learnset", icon: "list.bullet.rectangle", detail: .learnset, besideIsland: true)
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(height: portraitTopInset)
                     }
                 }
                 .accessibilityElement(children: .contain).accessibilityIdentifier("bound.rrdex")
@@ -131,9 +146,11 @@ struct BoundRRDexView: View {
                     .accessibilityIdentifier("bound.rrdex-details")
                     .scrollDismissesKeyboard(.interactively)
                 }
-                HStack(spacing: 8) {
-                    detailButton("Weaknesses", icon: "shield.lefthalf.filled", detail: .weaknesses)
-                    detailButton("Learnset", icon: "list.bullet.rectangle", detail: .learnset)
+                if !hasIslandActions {
+                    HStack(spacing: 8) {
+                        detailButton("Weaknesses", icon: "shield.lefthalf.filled", detail: .weaknesses)
+                        detailButton("Learnset", icon: "list.bullet.rectangle", detail: .learnset)
+                    }
                 }
             }
         }
@@ -175,12 +192,14 @@ struct BoundRRDexView: View {
         }
     }
 
-    private func detailButton(_ title: String, icon: String, detail: Detail) -> some View {
+    private func detailButton(_ title: String, icon: String, detail: Detail, besideIsland: Bool = false) -> some View {
         Button {
             showDetail(detail)
         } label: {
-            Label(title, systemImage: icon).font(.system(size: 12, weight: .medium))
-                .frame(maxWidth: .infinity).padding(.vertical, 8)
+            Label(title, systemImage: icon).font(.system(size: besideIsland ? 11 : 12, weight: .medium))
+                .lineLimit(1).minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity).frame(height: besideIsland ? 44 : nil)
+                .padding(.vertical, besideIsland ? 0 : 8)
                 .background(Color(uiColor: .deltaPurple).opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
         }.accessibilityIdentifier("bound.rrdex-\(detail.rawValue)")
     }

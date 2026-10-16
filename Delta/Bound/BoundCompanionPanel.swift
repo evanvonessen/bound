@@ -566,9 +566,9 @@ struct BoundCompanionPanel: View {
                 BoundBossGuideView(gameID: gameID, floating: state.landscape, presentationChanged: editingChanged)
                     .padding(.top, state.referenceTopInset).id(gameID)
             } else if state.content == .dex && experimentsEnabled {
-                BoundRRDexView(gameID: gameID, floating: state.landscape, presentationChanged: editingChanged,
+                BoundRRDexView(gameID: gameID, floating: state.landscape, portraitTopInset: state.referenceTopInset, presentationChanged: editingChanged,
                                textEditingChanged: textEditingChanged, currentSave: { try currentSave(gameID) })
-                    .padding(.top, state.referenceTopInset).id(gameID)
+                    .id(gameID)
             } else {
                 if state.landscape {
                     Image("PokemonTypeChart").resizable().scaledToFit()

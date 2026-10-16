@@ -1261,6 +1261,9 @@ final class CompanionUITests: XCTestCase {
                         "The boss sprite should retain its normal portrait size")
         XCTAssertEqual(bossPicture.frame.height, 46, accuracy: 2,
                         "The boss sprite should retain its normal portrait size")
+        XCTAssertLessThanOrEqual(game.frame.minY - app.buttons["bound.boss-next"].frame.maxY, 12,
+                                 "The arrow glyph should sit close to gameplay inside its lowered navigation row")
+        XCTAssertLessThanOrEqual(game.frame.minY - app.buttons["bound.boss-full-team"].frame.maxY, 14)
         screenshot("Experimental-portrait-boss-card-full-width")
         app.buttons["bound.boss-full-team"].tap()
         let fullTeam = element("bound.boss-full-team-list", in: app)
@@ -1277,7 +1280,8 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(dex.frame.maxX, screenFrame.maxX, accuracy: 2)
         XCTAssertEqual(panel.frame.minY, screenFrame.minY, accuracy: 2)
         XCTAssertEqual(panel.frame.maxY, game.frame.minY, accuracy: 2)
-        XCTAssertEqual(dex.frame.minY, safeContentTop, accuracy: 2)
+        XCTAssertGreaterThanOrEqual(dex.frame.minY, screenFrame.minY)
+        XCTAssertLessThanOrEqual(dex.frame.minY, safeContentTop)
         XCTAssertEqual(dex.frame.maxY, game.frame.minY, accuracy: 2)
         let search = app.textFields["bound.rrdex-search"]
         let dexPicture = element("bound.rrdex-picture", in: app)
@@ -1309,12 +1313,27 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(weaknesses.frame.minX, screenFrame.minX + 12, accuracy: 2)
         XCTAssertEqual(learnset.frame.maxX, screenFrame.maxX - 12, accuracy: 2)
         XCTAssertEqual((learnset.frame.maxX + weaknesses.frame.minX) / 2, screenFrame.midX, accuracy: 2)
+        if safeContentTop - screenFrame.minY >= 51 {
+            XCTAssertLessThanOrEqual(weaknesses.frame.maxX, screenFrame.midX - 80 + 2)
+            XCTAssertGreaterThanOrEqual(learnset.frame.minX, screenFrame.midX + 80 - 2)
+            for control in [weaknesses, learnset] {
+                XCTAssertGreaterThanOrEqual(control.frame.minY, screenFrame.minY)
+                XCTAssertLessThanOrEqual(control.frame.maxY, safeContentTop)
+                XCTAssertGreaterThanOrEqual(control.frame.height, 44)
+            }
+        }
         screenshot("Experimental-portrait-rrdex-card-full-width")
         app.buttons["bound.rrdex-weaknesses"].tap()
         let matchups = element("bound.rrdex-matchups", in: app)
         XCTAssertTrue(matchups.waitForExistence(timeout: 10))
         app.buttons["bound.rrdex-close-detail"].tap()
         XCTAssertTrue(matchups.waitForNonExistence(timeout: 10))
+        assertGamePixelsAnimate(game, in: app)
+        learnset.tap()
+        let moves = element("bound.rrdex-moves", in: app)
+        XCTAssertTrue(moves.waitForExistence(timeout: 10))
+        app.buttons["bound.rrdex-close-detail"].tap()
+        XCTAssertTrue(moves.waitForNonExistence(timeout: 10))
         assertGamePixelsAnimate(game, in: app)
     }
 

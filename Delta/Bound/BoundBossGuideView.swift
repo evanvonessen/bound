@@ -128,6 +128,7 @@ struct BoundBossGuideView: View {
                         .font(.system(size: 12, weight: .medium))
                 }.accessibilityIdentifier("bound.boss-full-team")
             }
+            .offset(y: floating ? 0 : 8)
         }
         .padding(12).background(Color(uiColor: .systemBackground))
     }
