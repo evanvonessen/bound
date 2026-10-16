@@ -1,11 +1,74 @@
 import XCTest
 import UIKit
 import AVFoundation
+import CoreData
 import DeltaCore
 @testable import Delta
+@testable import class Delta.Game
+@testable import class Delta.GameViewController
+
+private struct RendererFixtureGame: GameProtocol {
+    let fileURL: URL
+    let type: GameType
+}
 
 @MainActor
 final class StockControlAndGestureTests: XCTestCase {
+    func testSaveStatePreviewUsesGameplayRendererOptions() throws {
+        let gameplayController = GameViewController()
+        let previewController = PreviewGameViewController()
+
+        func options(for game: GameProtocol) -> ([EmulatorCore.Option: Any], [EmulatorCore.Option: Any]) {
+            let gameplayOptions = gameplayController.gameViewController(gameplayController, optionsFor: game)
+            let previewOptions = previewController.gameViewController(previewController, optionsFor: game)
+            return (gameplayOptions, previewOptions)
+        }
+
+        // Use a private, unsaved context: Game's computed settings need a context,
+        // but these fixtures must never enter DatabaseManager's library.
+        let modelURL = try XCTUnwrap(Bundle(for: DatabaseManager.self).url(forResource: "Delta", withExtension: "momd"))
+        let model = try XCTUnwrap(NSManagedObjectModel(contentsOf: modelURL))
+        let entity = try XCTUnwrap(model.entitiesByName["Game"])
+        let context = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
+        context.persistentStoreCoordinator = NSPersistentStoreCoordinator(managedObjectModel: model)
+        defer { context.reset() }
+
+        func makeGame(type: GameType, settings: [Game.Setting: Any] = [:]) -> Game {
+            let game = Game(entity: entity, insertInto: context)
+            game.type = type
+            game.filename = "renderer-options-fixture.rom"
+            game.identifier = UUID().uuidString
+            game.name = "Renderer Options Fixture"
+            game.settings = settings
+            return game
+        }
+
+        let previousMetalPreference = ExperimentalFeatures.shared.metal.isEnabled
+        defer { ExperimentalFeatures.shared.metal.isEnabled = previousMetalPreference }
+
+        let gba = RendererFixtureGame(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("renderer-fixture.gba"), type: .gba)
+        ExperimentalFeatures.shared.metal.isEnabled = false
+        var (gameplayOptions, previewOptions) = options(for: gba)
+        XCTAssertEqual(gameplayOptions[.metal] as? Bool, true)
+        XCTAssertEqual(previewOptions[.metal] as? Bool, true, "GBA previews must use the same Metal path as gameplay")
+        XCTAssertEqual(previewOptions[.metal] as? Bool, gameplayOptions[.metal] as? Bool)
+
+        let otherGame = makeGame(type: .gbc)
+        for enabled in [false, true] {
+            ExperimentalFeatures.shared.metal.isEnabled = enabled
+            (gameplayOptions, previewOptions) = options(for: otherGame)
+            XCTAssertEqual(gameplayOptions[.metal] as? Bool, enabled)
+            XCTAssertEqual(previewOptions[.metal] as? Bool, enabled)
+        }
+
+        let n64 = makeGame(type: .n64, settings: [.openGLES2: true])
+        (gameplayOptions, previewOptions) = options(for: n64)
+        XCTAssertEqual(gameplayOptions[.openGLES2] as? Bool, true)
+        XCTAssertEqual(previewOptions[.openGLES2] as? Bool, true)
+        XCTAssertNil(gameplayOptions[.metal])
+        XCTAssertNil(previewOptions[.metal])
+    }
+
     func testBoundControllerActionUsesNativeMappingTransformerAndActualReceiverPipeline() throws {
         let controller = BoundVirtualMappingController()
         var mapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: controller.inputType)

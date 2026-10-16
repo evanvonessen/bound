@@ -3,6 +3,7 @@ import UIKit
 
 struct BoundBossGuideView: View {
     let gameID: String
+    var floating = false
     let presentationChanged: (Bool) -> Void
     private let catalog = BoundBossCatalog.bundled
     private let preferences = BoundBossGuidePreferences()
@@ -18,11 +19,22 @@ struct BoundBossGuideView: View {
                 let team = catalog.team(id: selected.teamID) ?? catalog.defaultTeam
                 let pokemon = team.pokemon[selected.pokemonIndex]
                 GeometryReader { geometry in
-                    let scale = min(geometry.size.width / 360, geometry.size.height / 260)
-                    card(team: team, pokemon: pokemon, index: selected.pokemonIndex)
-                        .frame(width: geometry.size.width / max(scale, 0.001), height: 260)
-                        .scaleEffect(scale)
-                        .frame(width: geometry.size.width, height: geometry.size.height)
+                    if floating {
+                        let scale = min(geometry.size.width / 360, geometry.size.height / 260)
+                        card(team: team, pokemon: pokemon, index: selected.pokemonIndex)
+                            .frame(width: geometry.size.width / max(scale, 0.001), height: 260)
+                            .scaleEffect(scale)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    } else if geometry.size.height < 140 {
+                        // Short portrait strips scroll the controls with the details.
+                        ScrollView {
+                            card(team: team, pokemon: pokemon, index: selected.pokemonIndex, scrollsDetails: false)
+                                .frame(width: geometry.size.width)
+                        }
+                    } else {
+                        card(team: team, pokemon: pokemon, index: selected.pokemonIndex)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    }
                 }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("bound.boss-guide")
@@ -55,8 +67,22 @@ struct BoundBossGuideView: View {
         presentationChanged(false)
     }
 
-    private func card(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int) -> some View {
+    private func card(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, scrollsDetails: Bool = true) -> some View {
         let detail = BoundBossReference.bundled?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
+        let details = VStack(alignment: .leading, spacing: 8) {
+            BoundBossPokemonIdentity(pokemon: pokemon, species: detail?.species, types: detail?.types ?? [])
+            BoundBossStats(stats: pokemon.stats)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 5) {
+                ForEach(Array(pokemon.moves.enumerated()), id: \.offset) { index, move in
+                    BoundBossMoveRow(name: move, type: detail?.moves[index].type,
+                                     category: detail?.moves[index].categoryLabel ?? "—", index: index)
+                }
+            }
+            BoundBossDescription(title: "Ability", name: pokemon.ability, description: detail?.abilityDescription,
+                                 identifier: "bound.boss-ability-description")
+            BoundBossDescription(title: "Item", name: pokemon.item, description: detail?.itemDescription,
+                                 identifier: "bound.boss-item-description")
+        }
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("RR 4.1 · DEFAULT").font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -82,22 +108,11 @@ struct BoundBossGuideView: View {
             }
             .buttonStyle(.plain).accessibilityLabel("Choose boss, \(team.name)")
             .accessibilityIdentifier("bound.boss-picker")
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    BoundBossPokemonIdentity(pokemon: pokemon, species: detail?.species, types: detail?.types ?? [])
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 5) {
-                        ForEach(Array(pokemon.moves.enumerated()), id: \.offset) { index, move in
-                            BoundBossMoveRow(name: move, type: detail?.moves[index].type,
-                                             category: detail?.moves[index].categoryLabel ?? "—", index: index)
-                        }
-                    }
-                    BoundBossDescription(title: "Ability", name: pokemon.ability, description: detail?.abilityDescription,
-                                         identifier: "bound.boss-ability-description")
-                    BoundBossDescription(title: "Item", name: pokemon.item, description: detail?.itemDescription,
-                                         identifier: "bound.boss-item-description")
-                }
-            }.accessibilityIdentifier("bound.boss-details")
-                .id("\(team.id)-\(index)")
+            Group {
+                if scrollsDetails { ScrollView { details } } else { details }
+            }
+            .accessibilityIdentifier("bound.boss-details")
+            .id("\(team.id)-\(index)")
             HStack(spacing: 12) {
                 Button { advance(-1, team: team) } label: { Image(systemName: "chevron.left") }
                     .frame(width: 28, height: 28).disabled(index == 0)
@@ -158,6 +173,38 @@ private struct BoundBossPokemonIdentity: View {
             Spacer(minLength: 4)
             Text(pokemon.levelLabel).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
         }
+    }
+}
+
+private struct BoundBossStats: View {
+    let stats: [BoundBossPokemon.Stat]
+    private static let labels: [String: (short: String, full: String)] = [
+        "HP": ("HP", "HP"), "ATK": ("Atk", "Attack"), "DEF": ("Def", "Defense"),
+        "SPA": ("SpAtk", "Special Attack"), "SPD": ("SpDef", "Special Defense"), "SPE": ("Speed", "Speed")
+    ]
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text("Base stats").font(.system(size: 8, weight: .medium)).foregroundStyle(.secondary).fixedSize()
+            ForEach(stats, id: \.name) { stat in
+                let label = Self.labels[stat.name] ?? (short: stat.name, full: stat.name)
+                Spacer(minLength: 4)
+                HStack(spacing: 3) {
+                    Text(label.short).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
+                    Text(stat.base.map(String.init) ?? "—")
+                        .font(.system(size: 11, weight: .semibold)).monospacedDigit()
+                }
+                .lineLimit(1)
+                .fixedSize()
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(label.full)
+                .accessibilityValue(stat.base.map(String.init) ?? "Unavailable")
+                .accessibilityIdentifier("bound.boss-stat-\(stat.name.lowercased())")
+            }
+        }
+        .padding(.horizontal, 6).padding(.vertical, 4)
+        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
+        .accessibilityIdentifier("bound.boss-stats")
     }
 }
 

@@ -8,7 +8,8 @@ guide sheets; saved guide and baseline preferences remain intact.
 
 The native card follows Bound's system backgrounds and purple accent. It shows
 the selected fight, earliest documented level cap when available, Pokémon,
-level/scaling rule, Pokémon picture and types, and four move slots with the source
+level/scaling rule, Pokémon picture and types, a compact row of HP, Attack,
+Defense, Special Attack, Special Defense and Speed base stats, and four move slots with the source
 guide's type icons and PhysA./SpA./Status damage categories. Ability and held-item
 descriptions appear inline below the moves. The body scrolls inside the panel;
 boss selection and previous/next controls stay visible. Changing Pokémon resets

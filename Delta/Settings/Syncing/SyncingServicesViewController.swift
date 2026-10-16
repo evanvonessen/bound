@@ -54,7 +54,7 @@ class SyncingServicesViewController: UITableViewController
     @IBOutlet private var syncingEnabledSwitch: UISwitch!
     private var activityIndicatorView: UIActivityIndicatorView!
     
-    private var selectedSyncingService = Settings.syncingService
+    private var selectedSyncingService = SyncManager.experimentalSettingsService
     
     override func viewDidLoad()
     {
@@ -77,7 +77,14 @@ private extension SyncingServicesViewController
     {
         if sender.isOn
         {
-            self.changeService(to: SyncManager.Service.allCases.first)
+            let service = SyncManager.experimentalSettingsServices.first(where: SyncManager.isServiceConfigured)
+            guard let service else {
+                sender.setOn(false, animated: true)
+                self.tableView.reloadData()
+                self.presentProviderConfigurationAlert()
+                return
+            }
+            self.changeService(to: service)
         }
         else
         {
@@ -101,6 +108,12 @@ private extension SyncingServicesViewController
     
     func changeService(to service: SyncManager.Service?)
     {
+        if BoundFeatureVisibility.experimentalFeaturesEnabled, let service,
+           !SyncManager.isServiceConfigured(service) {
+            self.presentProviderConfigurationAlert()
+            return
+        }
+
         SyncManager.shared.reset(for: service) { (result) in
             DispatchQueue.main.async {
                 do
@@ -133,11 +146,27 @@ private extension SyncingServicesViewController
                 }
                 catch
                 {
+                    if self.selectedSyncingService == nil {
+                        self.syncingEnabledSwitch.setOn(false, animated: true)
+                        self.tableView.reloadData()
+                    }
                     let alertController = UIAlertController(title: NSLocalizedString("Unable to Change Syncing Service", comment: ""), error: error)
                     self.present(alertController, animated: true, completion: nil)
                 }
             }
         }
+    }
+
+    func presentProviderConfigurationAlert()
+    {
+        let unavailable = SyncManager.experimentalSettingsServices.filter { !SyncManager.isServiceConfigured($0) }
+            .map(\.localizedName).joined(separator: ", ")
+        let alert = UIAlertController(
+            title: NSLocalizedString("Cloud Sync Not Configured", comment: ""),
+            message: String(format: NSLocalizedString("Sign-in is not configured for %@ in this Bound app yet.", comment: ""), unavailable),
+            preferredStyle: .alert)
+        alert.addAction(.init(title: UIAlertAction.ok.title, style: .default))
+        self.present(alert, animated: true)
     }
 }
 
@@ -147,7 +176,7 @@ private extension SyncingServicesViewController
     {
         switch section
         {
-        case .service: return !self.syncingEnabledSwitch.isOn
+        case .service: return !BoundFeatureVisibility.experimentalFeaturesEnabled && !self.syncingEnabledSwitch.isOn
         case .account: return !self.syncingEnabledSwitch.isOn || SyncManager.shared.coordinator?.account == nil
         case .authenticate: return !self.syncingEnabledSwitch.isOn
         default: return false
@@ -167,8 +196,15 @@ extension SyncingServicesViewController
             cell.textLabel?.text = NSLocalizedString("Syncing", comment: "")
             
         case .service:
-            let service = SyncManager.Service.allCases[indexPath.row]
+            let service = SyncManager.experimentalSettingsServices[indexPath.row]
             cell.accessoryType = (service == self.selectedSyncingService) ? .checkmark : .none
+            if BoundFeatureVisibility.experimentalFeaturesEnabled, !SyncManager.isServiceConfigured(service) {
+                cell.textLabel?.text = "\(service.localizedName) — \(NSLocalizedString("Not configured", comment: ""))"
+                cell.textLabel?.textColor = .secondaryLabel
+            } else {
+                cell.textLabel?.text = service.localizedName
+                cell.textLabel?.textColor = .label
+            }
             
         case .account:
             guard let account = SyncManager.shared.coordinator?.account else { return cell }
@@ -195,6 +231,16 @@ extension SyncingServicesViewController
         
         return cell
     }
+
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String?
+    {
+        guard Section.allCases[section] == .service,
+              BoundFeatureVisibility.experimentalFeaturesEnabled,
+              SyncManager.experimentalSettingsServices.contains(where: { !SyncManager.isServiceConfigured($0) }) else {
+            return super.tableView(tableView, titleForFooterInSection: section)
+        }
+        return NSLocalizedString("Cloud sync sign-in providers must be configured specifically for Bound. Unconfigured providers cannot be selected.", comment: "")
+    }
     
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath)
     {
@@ -203,8 +249,14 @@ extension SyncingServicesViewController
         case .syncing: break
             
         case .service:
-            let syncingService = SyncManager.Service.allCases[indexPath.row]
+            let syncingService = SyncManager.experimentalSettingsServices[indexPath.row]
+            if BoundFeatureVisibility.experimentalFeaturesEnabled, !SyncManager.isServiceConfigured(syncingService) {
+                self.presentProviderConfigurationAlert()
+                tableView.deselectRow(at: indexPath, animated: true)
+                return
+            }
             guard syncingService != self.selectedSyncingService else { return }
+            self.syncingEnabledSwitch.setOn(true, animated: true)
             
             if SyncManager.shared.coordinator?.account != nil
             {
@@ -288,6 +340,7 @@ extension SyncingServicesViewController
         switch section
         {
         case let section where self.isSectionHidden(section): return 0
+        case .service: return SyncManager.experimentalSettingsServices.count
         case .account where SyncManager.shared.coordinator?.account?.emailAddress == nil: return 1
         default: return super.tableView(tableView, numberOfRowsInSection: section.rawValue)
         }

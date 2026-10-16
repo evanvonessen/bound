@@ -1714,6 +1714,11 @@ extension GameViewController: GameViewControllerDelegate
     
     func gameViewController(_ gameViewController: DeltaCore.GameViewController, optionsFor game: GameProtocol) -> [EmulatorCore.Option: Any]
     {
+        Self.emulatorCoreOptions(for: game)
+    }
+
+    static func emulatorCoreOptions(for game: GameProtocol) -> [EmulatorCore.Option: Any]
+    {
         if let game = game as? Game, game.type == .n64
         {
             if let useOpenGLES2 = game.settings[.openGLES2] as? Bool, useOpenGLES2
@@ -1730,7 +1735,7 @@ extension GameViewController: GameViewControllerDelegate
             var options: [EmulatorCore.Option: Any] = [.metal: ExperimentalFeatures.shared.metal.isEnabled]
             // Use Delta's existing Metal bitmap path for the resizable GBA companion layout.
             // The Simulator GL driver crashes when keyboard/layout resize races a resumed draw.
-            if let game = game as? Game, game.type == .gba { options[.metal] = true }
+            if game.type == .gba { options[.metal] = true }
             
             if #available(iOS 18, macOS 15, *), ProcessInfo.processInfo.isiOSAppOnMac
             {

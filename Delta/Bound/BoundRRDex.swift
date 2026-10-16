@@ -160,11 +160,13 @@ struct BoundRRDexSave: Codable, Equatable, Sendable {
         return flags.isEmpty ? "Standard abilities and moves" : flags.joined(separator: " · ")
     }
     enum ImportError: LocalizedError {
-        case format, incomplete, difficulty
+        case cannotPause, currentGameUnavailable, format, incomplete, difficulty
         var errorDescription: String? {
             switch self {
-            case .format: return "Choose a raw Radical Red 4.1 battery save (.sav or .srm), exported after saving in-game. Save states are not supported."
-            case .incomplete: return "This save has no complete save slot. Save in-game again and export a new .sav file."
+            case .cannotPause: return "The current game cannot be paused for import. Finish the multiplayer session and try again."
+            case .currentGameUnavailable: return "A current-game battery save is unavailable. Start an active GBA game with Radical Red 4.1 and try again."
+            case .format: return "The current game's battery save is not a supported Radical Red 4.1 save."
+            case .incomplete: return "This run has no complete Radical Red battery save yet. Save once in-game, then tap Import save again."
             case .difficulty: return "This panel supports Normal difficulty. This save has Hardcore or Restricted mode enabled."
             }
         }
@@ -195,6 +197,47 @@ struct BoundRRDexSave: Codable, Equatable, Sendable {
         guard bytes[flags + 0xdb2] & 0x10 == 0, bytes[flags + 0xdc3] & 0x40 == 0 else { throw ImportError.difficulty }
         let random = bytes[trainer + 0xf2c]
         return Self(trainerID: u32(trainer + 0xa), randomAbilities: random & 4 != 0, randomLearnset: random & 2 != 0)
+    }
+}
+
+enum BoundRRDexCurrentSaveImport {
+    private static let maximumFileSize = 0x20000
+
+    static func capture(temporaryDirectory: URL = FileManager.default.temporaryDirectory,
+                        export: (URL) throws -> Void) throws -> BoundRRDexSave {
+        let directory = temporaryDirectory.appendingPathComponent("bound-rrdex-export-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try export(directory.appendingPathComponent("current-game.sav"))
+        } catch {
+            throw BoundRRDexSave.ImportError.currentGameUnavailable
+        }
+
+        let saveURL = directory.appendingPathComponent("current-game.sav")
+        let fileSize: Int
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: saveURL.path)
+            guard let size = attributes[.size] as? NSNumber else {
+                throw BoundRRDexSave.ImportError.currentGameUnavailable
+            }
+            fileSize = size.intValue
+        } catch let error as BoundRRDexSave.ImportError {
+            throw error
+        } catch {
+            throw BoundRRDexSave.ImportError.currentGameUnavailable
+        }
+        guard fileSize <= maximumFileSize else { throw BoundRRDexSave.ImportError.format }
+
+        let data: Data
+        do {
+            data = try Data(contentsOf: saveURL, options: [.mappedIfSafe])
+        } catch {
+            throw BoundRRDexSave.ImportError.currentGameUnavailable
+        }
+        guard data.count <= maximumFileSize else { throw BoundRRDexSave.ImportError.format }
+        return try BoundRRDexSave.parse(data)
     }
 }
 

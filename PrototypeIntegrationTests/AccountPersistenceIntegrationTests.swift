@@ -180,4 +180,36 @@ final class FriendModerationIntegrationTests: XCTestCase {
         model.signOut(); XCTAssertEqual(model.blocks, []); XCTAssertEqual(model.rooms, [])
         model.close()
     }
+
+    func testRemoveFriendStopsSelectedSharingAndOnlyRemovesAfterServerReceipt() async throws {
+        let identity = try identity(), room = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
+        var allowRemoval = false
+        var calls: [(String, [String: String])] = []
+        let model = FriendOnboarding(call: { _, action, payload in
+            calls.append((action, payload))
+            if action == "list" { return .init(ok: true, rooms: [room], username: "River") }
+            XCTAssertEqual(action, "remove")
+            XCTAssertEqual(payload, ["roomID": room.roomID])
+            return .init(ok: allowRemoval)
+        }, observeAccount: { OnboardingObservation($0) })
+        let sharing = FriendSharingSession(configuration: nil, authenticatedMode: true)
+        model.open(sharing: sharing, existing: { identity })
+        for _ in 0..<1000 { if !model.busy { break }; await Task.yield() }
+        XCTAssertEqual(model.accountUsername, "River")
+        model.select(room)
+        model.remove(room)
+        XCTAssertNil(model.selected)
+        XCTAssertFalse(sharing.active)
+        for _ in 0..<1000 { if !model.busy { break }; await Task.yield() }
+        XCTAssertEqual(model.rooms, [room], "A rejected remove must retain the friend")
+        allowRemoval = true
+        model.remove(room)
+        for _ in 0..<1000 { if !model.busy { break }; await Task.yield() }
+        XCTAssertTrue(model.rooms.isEmpty)
+        let before = calls.count
+        model.remove(room)
+        await Task.yield()
+        XCTAssertEqual(calls.count, before, "A stale row cannot remove another room")
+        model.close()
+    }
 }

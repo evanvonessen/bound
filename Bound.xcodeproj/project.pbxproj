@@ -425,6 +425,10 @@
 		EA6D6C6888DE48088B40234B /* Early GameBoy.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 0518FF9D56C3450A9CA81DD6 /* Early GameBoy.ttf */; };
 		FAFC9B8D033F4C2291D93430 /* EARLY-GAMEBOY-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 7221F449D198453FBB429D8B /* EARLY-GAMEBOY-LICENSE.txt */; };
 		52559A4FB7BF496EAFA2972D /* BoundNotesFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3BBCDAA4472481390EC1254 /* BoundNotesFont.swift */; };
+		F9AFD206089B4A1CA0FCFDBC /* BoundAccountSocial.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73551A9F3458410E9D491E3B /* BoundAccountSocial.swift */; };
+		720C1BBDC97744F4AE7CA3F3 /* BoundAccountSocialTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82832C7AA5F5408995A7C407 /* BoundAccountSocialTests.swift */; };
+		103E571A4D9543839A7D90EB /* BoundDropboxOAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 627E26C66C2C4CB98A005612 /* BoundDropboxOAuth.swift */; };
+		DC44859A7C07464BBE63B016 /* BoundDropboxOAuthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF068D284BCE47409FBF25C2 /* BoundDropboxOAuthTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1209,6 +1213,10 @@
 		0518FF9D56C3450A9CA81DD6 /* Early GameBoy.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Early GameBoy.ttf"; sourceTree = "<group>"; };
 		7221F449D198453FBB429D8B /* EARLY-GAMEBOY-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSES/EARLY-GAMEBOY-LICENSE.txt; sourceTree = "SOURCE_ROOT"; };
 		E3BBCDAA4472481390EC1254 /* BoundNotesFont.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundNotesFont.swift; sourceTree = "<group>"; };
+		73551A9F3458410E9D491E3B /* BoundAccountSocial.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundAccountSocial.swift; sourceTree = "<group>"; };
+		82832C7AA5F5408995A7C407 /* BoundAccountSocialTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundAccountSocialTests.swift; sourceTree = "<group>"; };
+		627E26C66C2C4CB98A005612 /* BoundDropboxOAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundDropboxOAuth.swift; sourceTree = "<group>"; };
+		EF068D284BCE47409FBF25C2 /* BoundDropboxOAuthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundDropboxOAuthTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1327,6 +1335,8 @@
 				E73281A93C2F67F4A56FA290 /* BoundDiagnostic.gba */,
 				1EAF49DF04CC61B325DAF2E0 /* TypeChartViewTests.swift */,
 				B8A586A10E1DB92A87DB45B1 /* CompanionCycleButtonTests.swift */,
+				82832C7AA5F5408995A7C407 /* BoundAccountSocialTests.swift */,
+				EF068D284BCE47409FBF25C2 /* BoundDropboxOAuthTests.swift */,
 				104D04088215A199CB56949A /* StockControlAndGestureTests.swift */,
 				B2476C2B0032441E97FF3CD5 /* AccountPersistenceIntegrationTests.swift */,
 			);
@@ -1371,6 +1381,7 @@
 				87F89619153040A1B064B58F /* BoundSourceAndLicenses.swift */,
 				100D7B126A5A87377393E29C /* AgoraSharingTransport.swift */,
 				1610A5E4B1140888AA9EFF6F /* BoundFriendAccount.swift */,
+				73551A9F3458410E9D491E3B /* BoundAccountSocial.swift */,
 				EAA7562AAABA52F743D74FFA /* BoundNotesStore.swift */,
 				CD57C331890EA530190F8FB0 /* FriendOnboarding.swift */,
 				5A0C6786CF517CB9DDCDEA08 /* FriendSharingConfiguration.swift */,
@@ -1809,6 +1820,7 @@
 			isa = PBXGroup;
 			children = (
 				BFAB9F7C219A43380080EC7D /* SyncManager.swift */,
+				627E26C66C2C4CB98A005612 /* BoundDropboxOAuth.swift */,
 				D5CDCCEC2A859B2B00E22131 /* SyncValidationError.swift */,
 				BF1F45A321AF274D00EF9895 /* SyncResultViewController.swift */,
 				BF1F45AA21AF4B5800EF9895 /* SyncResultsViewController.storyboard */,
@@ -2555,6 +2567,7 @@
 						LastSwiftMigration = 1020;
 						ProvisioningStyle = Automatic;
 						SystemCapabilities = {
+							com.apple.Push = { enabled = 1; };
 							com.apple.iCloud = {
 								enabled = 0;
 							};
@@ -3079,6 +3092,8 @@
 				273B677E21CFB932EFA82ACD /* AppearanceIntegrationTests.swift in Sources */,
 				3EC156C10490F4D05AACF9C7 /* TypeChartViewTests.swift in Sources */,
 				531059D8A4211817FB949969 /* CompanionCycleButtonTests.swift in Sources */,
+				720C1BBDC97744F4AE7CA3F3 /* BoundAccountSocialTests.swift in Sources */,
+				DC44859A7C07464BBE63B016 /* BoundDropboxOAuthTests.swift in Sources */,
 				D1CCDE2C67C0DCD2A3EF9645 /* StockControlAndGestureTests.swift in Sources */,
 				47AF26DA565A4105BA138CAF /* AccountPersistenceIntegrationTests.swift in Sources */,
 			);
@@ -3278,6 +3293,7 @@
 				D56F7ABC2B05988700490ACB /* AttributedHeaderFooterView.swift in Sources */,
 				D52DB1B72F5F8AE000C7491E /* PauseView.swift in Sources */,
 				BFAB9F7D219A43380080EC7D /* SyncManager.swift in Sources */,
+				103E571A4D9543839A7D90EB /* BoundDropboxOAuth.swift in Sources */,
 				82C63BDB2E57BB4700B0C812 /* UIColor+Hex.swift in Sources */,
 				BFCEA67E1D56FF640061A534 /* UIViewControllerContextTransitioning+Conveniences.swift in Sources */,
 				D55917DA2B51D097007B7DC0 /* LocalDeviceController.swift in Sources */,
@@ -3328,6 +3344,7 @@
 				CA0001102E60000100000010 /* VideoSettingsView.swift in Sources */,
 				061BD9D9D29F92EBDB48A354 /* AgoraSharingTransport.swift in Sources */,
 				C074ECB1EA7E3F7B476BEB91 /* BoundFriendAccount.swift in Sources */,
+				F9AFD206089B4A1CA0FCFDBC /* BoundAccountSocial.swift in Sources */,
 				48B56AE0B73C7AAE7DAC60F2 /* BoundNotesStore.swift in Sources */,
 				E8A7206B7421C6BC0900D58C /* FriendOnboarding.swift in Sources */,
 				72E6585EF2788D220A64B750 /* FriendSharingConfiguration.swift in Sources */,
@@ -3560,6 +3577,8 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 3N83BX5M9G;
+				OTHER_LDFLAGS = (
+				);
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(BUILT_PRODUCTS_DIR)",
@@ -3585,6 +3604,8 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 3N83BX5M9G;
+				OTHER_LDFLAGS = (
+				);
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(BUILT_PRODUCTS_DIR)",
@@ -3785,6 +3806,10 @@
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_MODULES_AUTOLINK = NO;
 				CODE_SIGN_ENTITLEMENTS = Delta/Delta.entitlements;
+				BOUND_APNS_ENVIRONMENT = development;
+				BOUND_GOOGLE_CLIENT_ID = "";
+				BOUND_GOOGLE_REVERSED_CLIENT_ID = "bound-google-unconfigured";
+				BOUND_DROPBOX_APP_KEY = qky6pxxx8ks3d2k;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
@@ -3861,6 +3886,10 @@
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_MODULES_AUTOLINK = NO;
 				CODE_SIGN_ENTITLEMENTS = Delta/Delta.entitlements;
+				BOUND_APNS_ENVIRONMENT = production;
+				BOUND_GOOGLE_CLIENT_ID = "";
+				BOUND_GOOGLE_REVERSED_CLIENT_ID = "bound-google-unconfigured";
+				BOUND_DROPBOX_APP_KEY = qky6pxxx8ks3d2k;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;

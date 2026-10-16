@@ -97,8 +97,10 @@ final class BoundCompanionCoordinator {
     private var gameID = ""
     private var notesPaused = false
     private(set) var isEditingNotes = false
+    private var isEditingText = false
     private var keyboardHeight: CGFloat = 0
     private var observers: [NSObjectProtocol] = []
+    private var foregroundTask: Task<Void, Never>?
     private var gestures: BoundPiPGestures?
     private var geometry: BoundPiPLayout?
     private var previousScreenLayout: BoundScreenLayout?
@@ -138,12 +140,17 @@ final class BoundCompanionCoordinator {
         })
         observers.append(NotificationCenter.default.addObserver(forName: BoundAppearancePreferences.didChangeNotification, object: nil, queue: .main) { [weak self, weak owner] _ in self?.cancelInteractions(); owner?.view.setNeedsLayout() })
         observers.append(NotificationCenter.default.addObserver(forName: BoundExperimentalFeaturesPreferences.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.state.updateExperimentalFeatures(BoundFeatureVisibility.experimentalFeaturesEnabled)
+            let enabled = BoundFeatureVisibility.experimentalFeaturesEnabled
+            self?.state.updateExperimentalFeatures(enabled)
+            self?.sharing.experimentalFeaturesChanged(enabled)
         })
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.background() })
-        // Restore foreground eligibility without automatically restarting authenticated sharing.
+        // The sharing session restores a prior active connection when experiments allow it.
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in self?.foreground() })
-        let panel = BoundCompanionPanel(sharing: sharing, state: state, gameID: (owner.game as? Game)?.identifier ?? "", editingChanged: { [weak self] in self?.notesEditing($0) })
+        let panel = BoundCompanionPanel(sharing: sharing, state: state, gameID: (owner.game as? Game)?.identifier ?? "", editingChanged: { [weak self] in self?.notesEditing($0) }, textEditingChanged: { [weak self] in self?.textEditing($0) }, currentSave: { [weak self] gameID in
+            guard let self else { throw BoundRRDexSave.ImportError.currentGameUnavailable }
+            return try self.importCurrentRRDexSave(gameID: gameID)
+        })
         let host = UIHostingController(rootView: panel)
         // The coordinator already positions the overlay inside the game viewport.
         // A second inherited home-indicator inset would shrink the visible video
@@ -196,7 +203,7 @@ final class BoundCompanionCoordinator {
     }
     func bind(core: EmulatorCore?, gameID: String) {
         guard boundCore !== core || self.gameID != gameID else { return }
-        cancelInteractions(); tap.setEnabled(false); sharing.stop(); notesPaused = false; isEditingNotes = false; owner?.controllerView.isUserInteractionEnabled = true; self.gameID = gameID
+        cancelInteractions(); tap.setEnabled(false); sharing.stop(); notesPaused = false; isEditingNotes = false; isEditingText = false; owner?.controllerView.isUserInteractionEnabled = true; self.gameID = gameID
         host?.rootView.gameID = gameID
         guard let core else { boundCore = nil; state.emulationDetails = nil; return }
         state.emulationDetails = BoundEmulationDetails(packageName: core.deltaCore.name, packageIdentifier: core.deltaCore.identifier, packageVersion: core.deltaCore.version)
@@ -226,12 +233,15 @@ final class BoundCompanionCoordinator {
         let geometry = BoundPortraitScreenGeometry(bounds: bounds, safeTop: safeArea.top,
             controllerSize: controllerSize, gameAspect: owner.emulatorCore?.preferredRenderingSize ?? CGSize(width: 3, height: 2))
         overlay?.frame = geometry.friend
-        if state.content == .notes { overlay?.frame = CGRect(x: bounds.minX, y: geometry.friend.minY, width: bounds.width, height: geometry.friend.height) }
+        if [.notes, .bosses, .dex].contains(state.content) {
+            // Text panels use the whole portrait strip rather than the video's aspect ratio.
+            overlay?.frame = CGRect(x: bounds.minX, y: geometry.friend.minY, width: bounds.width, height: geometry.friend.height)
+        }
         if state.content == .types {
             overlay?.frame = BoundTypeChartGeometry.portraitViewport(bounds: bounds, gameFrame: geometry.game)
             if state.chartTopInset != safeArea.top { state.chartTopInset = safeArea.top }
         }
-        if isEditingNotes {
+        if isEditingText {
             overlay?.frame.size.height = max(geometry.friend.height, min(220, bounds.height - keyboardHeight - geometry.friend.minY - 8))
         }
         overlay?.isHidden = false; overlay?.alpha = 1
@@ -273,7 +283,7 @@ final class BoundCompanionCoordinator {
         let center = translation == .zero ? layout.center(corner) : layout.dragCenter(from: corner, translation: translation)
         var panel = CGRect(x: center.x - layout.size.width / 2, y: center.y - layout.size.height / 2,
                            width: layout.size.width, height: layout.size.height)
-        if isEditingNotes {
+        if isEditingText {
             let available = owner.view.bounds.inset(by: owner.view.safeAreaInsets)
             let top = available.minY + (state.landscape ? 4 : 48)
             panel = CGRect(x: available.midX - min(400, available.width) / 2, y: top,
@@ -283,7 +293,7 @@ final class BoundCompanionCoordinator {
         overlay.frame = panel
         host?.view.frame = overlay.bounds
         overlay.isHidden = state.hidden || layout.size.width == 0 || layout.size.height == 0
-        overlay.alpha = isEditingNotes ? 1 : liveOpacity ?? state.preferences.opacity(for: state.content)
+        overlay.alpha = isEditingText ? 1 : liveOpacity ?? state.preferences.opacity(for: state.content)
         owner.view.bringSubviewToFront(overlay)
     }
     private func layoutCycleButton(bounds: CGRect, safeArea: UIEdgeInsets) {
@@ -430,28 +440,71 @@ final class BoundCompanionCoordinator {
     }
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
     func foreground() {
+        foregroundTask?.cancel()
+        if BoundFeatureVisibility.experimentalFeaturesEnabled, sharing.authenticatedMode {
+            foregroundTask = Task { [weak self] in
+                guard let self else { return }
+                await self.account.refreshIfNeeded()
+                guard !Task.isCancelled else { return }
+                self.sharing.foreground()
+                self.foregroundTask = nil
+            }
+            return
+        }
         sharing.foreground()
         #if DEBUG && targetEnvironment(simulator)
         if usesLocalPairedFixture { sharing.start() }
         #endif
     }
-    func background() { cancelInteractions(); tap.setEnabled(false); sharing.background(); onboarding.close() }
+    func background() { foregroundTask?.cancel(); foregroundTask = nil; cancelInteractions(); tap.setEnabled(false); sharing.background(); onboarding.close() }
     func stop() {
+        foregroundTask?.cancel(); foregroundTask = nil
         cancelInteractions(); tap.setEnabled(false); sharing.stop(); onboarding.close()
-        notesPaused = false; isEditingNotes = false; owner?.controllerView.isUserInteractionEnabled = true; host?.view.endEditing(true)
+        notesPaused = false; isEditingNotes = false; isEditingText = false; owner?.controllerView.isUserInteractionEnabled = true; host?.view.endEditing(true)
+    }
+    func importCurrentRRDexSave(gameID: String) throws -> BoundRRDexSave {
+        guard BoundFeatureVisibility.experimentalFeaturesEnabled,
+              let owner, let core = owner.emulatorCore, core === boundCore,
+              let game = owner.game as? Game, game.identifier == gameID, self.gameID == gameID,
+              core.game.type == .gba, core.state == .running || core.state == .paused else {
+            throw BoundRRDexSave.ImportError.currentGameUnavailable
+        }
+        let wasRunning = core.state == .running
+        if wasRunning, !owner.pauseEmulation() { throw BoundRRDexSave.ImportError.cannotPause }
+        defer {
+            if wasRunning, owner.emulatorCore === core, core.state == .paused,
+               (owner.game as? Game)?.identifier == gameID, owner.view.window != nil,
+               UIApplication.shared.applicationState == .active {
+                owner.resumeEmulation()
+            }
+        }
+        guard core.state == .paused else { throw BoundRRDexSave.ImportError.cannotPause }
+        return try BoundRRDexCurrentSaveImport.capture { url in
+            // Export the live battery buffer, including data restored from a save
+            // state, instead of importing a potentially older file from disk.
+            core.deltaCore.emulatorBridge.saveGameSave(to: url)
+        }
+    }
+    private func textEditing(_ editing: Bool) {
+        guard isEditingText != editing else { return }
+        // Only keyboard editing needs a larger, keyboard-safe panel. Reference
+        // sheets and import alerts pause gameplay without changing its placement.
+        isEditingText = editing
+        owner?.view.setNeedsLayout()
     }
     private func notesEditing(_ editing: Bool) {
+        guard isEditingNotes != editing else { return }
         isEditingNotes = editing; owner?.controllerView.cancelTouchInputs()
         owner?.controllerView.isUserInteractionEnabled = !editing
         owner?.view.setNeedsLayout()
-        guard let core = owner?.emulatorCore else { return }
+        guard let owner, let core = owner.emulatorCore else { return }
         if editing {
-            notesPaused = core.state == .running
+            notesPaused = core.state == .running && owner.gameViewControllerShouldPauseEmulation(owner)
             if notesPaused { core.pause() }
         } else {
             let resume = notesPaused; notesPaused = false
-            if resume, core.state == .paused, owner?.view.window != nil,
-               UIApplication.shared.applicationState == .active, let owner,
+            if resume, core.state == .paused, owner.view.window != nil,
+               UIApplication.shared.applicationState == .active,
                owner.gameViewControllerShouldResumeEmulation(owner) { core.resume() }
         }
     }
@@ -466,6 +519,8 @@ struct BoundCompanionPanel: View {
     @ObservedObject var state: BoundCompanionState
     var gameID: String
     let editingChanged: (Bool) -> Void
+    var textEditingChanged: (Bool) -> Void = { _ in }
+    var currentSave: (String) throws -> BoundRRDexSave = { _ in throw BoundRRDexSave.ImportError.currentGameUnavailable }
     @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     var body: some View {
         Group {
@@ -476,11 +531,15 @@ struct BoundCompanionPanel: View {
                     if !sharing.remoteVisible && !state.displaysFixtureVideo { Text(sharing.active ? "Waiting for friend" : "Connect a friend").foregroundStyle(.white).font(.callout) }
                 }.accessibilityIdentifier("bound.friend-screen")
             } else if state.content == .notes {
-                BoundNotesEditor(gameID: gameID, floating: state.landscape, editingChanged: editingChanged).id(gameID)
+                BoundNotesEditor(gameID: gameID, floating: state.landscape, editingChanged: { editing in
+                    textEditingChanged(editing)
+                    editingChanged(editing)
+                }).id(gameID)
             } else if state.content == .bosses && experimentsEnabled {
-                BoundBossGuideView(gameID: gameID, presentationChanged: editingChanged).id(gameID)
+                BoundBossGuideView(gameID: gameID, floating: state.landscape, presentationChanged: editingChanged).id(gameID)
             } else if state.content == .dex && experimentsEnabled {
-                BoundRRDexView(gameID: gameID, presentationChanged: editingChanged).id(gameID)
+                BoundRRDexView(gameID: gameID, floating: state.landscape, presentationChanged: editingChanged,
+                               textEditingChanged: textEditingChanged, currentSave: { try currentSave(gameID) }).id(gameID)
             } else {
                 if state.landscape {
                     Image("PokemonTypeChart").resizable().scaledToFit()
@@ -658,6 +717,7 @@ private struct BoundFriendsSheet: View {
     @State private var invite = ""
     @State private var reportingRoom: FriendRoom?
     @State private var blockingRoom: FriendRoom?
+    @State private var removingRoom: FriendRoom?
     var closed: () -> Void = {}
     var body: some View {
         NavigationStack {
@@ -678,7 +738,7 @@ private struct BoundFriendsSheet: View {
                             BoundCreateAccountView(account: account, signInEmail: $email) { onboarding.synchronizeAccount() }
                         }.disabled(account.busy)
                     } else {
-                        Button("Sign out") { sharing.stop(); onboarding.signOut(); account.signOut() }.disabled(account.busy)
+                        Button("Sign out") { BoundJiggleNotifications.shared.prepareForSignOut(); sharing.stop(); onboarding.signOut(); account.signOut() }.disabled(account.busy)
                     }
                     Text(account.status).font(.caption)
                 }
@@ -690,6 +750,10 @@ private struct BoundFriendsSheet: View {
                                 Button(room.displayName) { onboarding.select(room) }
                                 Spacer()
                                 Menu {
+                                    if experimentalFeaturesEnabled {
+                                        Button("Jiggle", systemImage: "hand.wave") { onboarding.jiggle(room) }
+                                        Button("Remove Friend", systemImage: "person.badge.minus", role: .destructive) { removingRoom = room }
+                                    }
                                     Button("Report") { reportingRoom = room }
                                     Button("Block", role: .destructive) { blockingRoom = room }
                                 } label: { Image(systemName: "ellipsis.circle") }
@@ -715,8 +779,14 @@ private struct BoundFriendsSheet: View {
                         }
                     }
                     Section("Add a friend") {
-                        TextField("Your display name", text: $name)
-                        Button("Create invite") { onboarding.create(name: name) }.disabled(onboarding.busy || name.isEmpty)
+                        if experimentalFeaturesEnabled {
+                            LabeledContent("Your username", value: onboarding.accountUsername ?? "Loading…")
+                            Text("Change your username in Library Settings.").font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            TextField("Your display name", text: $name)
+                        }
+                        Button("Create invite") { onboarding.create(name: name) }
+                            .disabled(onboarding.busy || (experimentalFeaturesEnabled ? onboarding.accountUsername == nil : name.isEmpty))
                         if let code = onboarding.inviteCode {
                             HStack {
                                 Text(code).textSelection(.enabled)
@@ -738,7 +808,7 @@ private struct BoundFriendsSheet: View {
                         }
                         TextField("Friend's invite code", text: $invite).textInputAutocapitalization(.characters).autocorrectionDisabled()
                         Button("Accept invite") { onboarding.accept(code: invite, name: name); invite = "" }
-                            .disabled(onboarding.busy || invite.count != 16 || name.isEmpty)
+                            .disabled(onboarding.busy || invite.count != 16 || (experimentalFeaturesEnabled ? onboarding.accountUsername == nil : name.isEmpty))
                     }
                     Section {
                         NavigationLink {
@@ -755,6 +825,13 @@ private struct BoundFriendsSheet: View {
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(account.busy) } }
         }
         .onAppear { onboarding.open(sharing: sharing, existing: { account.session }) }
+        .onReceive(NotificationCenter.default.publisher(for: BoundAccountProfile.didChangeNotification)) { _ in
+            if experimentalFeaturesEnabled { onboarding.refresh() }
+        }
+        .onChange(of: experimentalFeaturesEnabled) { _, _ in
+            removingRoom = nil
+            onboarding.experimentalFeaturesChanged()
+        }
         .onChange(of: scenePhase) { phase in
             if phase == .active { onboarding.open(sharing: sharing, existing: { account.session }) }
             else { onboarding.close() }
@@ -762,6 +839,13 @@ private struct BoundFriendsSheet: View {
         .onDisappear { password = ""; onboarding.close(); closed() }
         .interactiveDismissDisabled(account.busy)
         .sheet(item: $reportingRoom) { room in BoundReportView(onboarding: onboarding, room: room) }
+        .confirmationDialog("Remove this friend?", isPresented: Binding(get: { removingRoom != nil }, set: { if !$0 { removingRoom = nil } }), titleVisibility: .visible) {
+            Button("Remove Friend", role: .destructive) {
+                if experimentalFeaturesEnabled, let room = removingRoom { onboarding.remove(room) }
+                removingRoom = nil
+            }
+            Button("Cancel", role: .cancel) { removingRoom = nil }
+        } message: { Text("This ends your friendship and stops sharing. You can add each other again with a new invite.") }
         .confirmationDialog("Block this friend?", isPresented: Binding(get: { blockingRoom != nil }, set: { if !$0 { blockingRoom = nil } }), titleVisibility: .visible) {
             Button("Block", role: .destructive) { if let room = blockingRoom { onboarding.block(room) }; blockingRoom = nil }
             Button("Cancel", role: .cancel) { blockingRoom = nil }

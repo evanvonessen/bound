@@ -54,6 +54,10 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
     }
     fileprivate func invalidate() { snapshot.update(token: nil, expiry: .distantPast) }
     func credentials() throws { _ = try validToken() }
+    func isSameSession(as other: AppCloudSession?) -> Bool {
+        guard let other else { return false }
+        return owner == other.owner && snapshot === other.snapshot && (try? credentials()) != nil
+    }
     private func validToken() throws -> String {
         let value = snapshot.read()
         guard let token = value.token, value.expiry > Date() else { throw BoundFriendError.signIn }
@@ -71,6 +75,12 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
     }
     func friendOnboardingRequest(action: String, payload: [String: String]) throws -> URLRequest {
         try request(path: "/rest/v1/rpc/cup050_friends", body: ["action": action, "payload": payload])
+    }
+    func friendSocialRequest(action: String, payload: [String: String]) throws -> URLRequest {
+        try request(path: "/rest/v1/rpc/bound_social_v1", body: ["action": action, "payload": payload])
+    }
+    func friendJiggleRequest(roomID: String, requestID: String) throws -> URLRequest {
+        try request(path: "/functions/v1/bound-jiggle", body: ["roomID": roomID, "requestID": requestID])
     }
     func friendSharingRequest(roomID: String) throws -> URLRequest {
         try request(path: "/functions/v1/agora-token", body: ["roomID": roomID])
@@ -205,6 +215,7 @@ final class BoundFriendAccount: ObservableObject {
     nonisolated static let origin = "https://qevnxhngdtlyihhmvnjv.supabase.co"
     // All production game coordinators share one owner of the rotating refresh token.
     static let shared = BoundFriendAccount()
+    static let willSignOutNotification = Notification.Name("BoundFriendAccountWillSignOut")
     @Published private(set) var session: AppCloudSession?
     @Published private(set) var busy = false
     @Published private(set) var status = "Sign in with your existing Bound account."
@@ -349,6 +360,7 @@ final class BoundFriendAccount: ObservableObject {
         }
     }
     func signOut() {
+        if session != nil { NotificationCenter.default.post(name: Self.willSignOutNotification, object: self) }
         generation = UUID(); refreshTask?.cancel(); refreshTask = nil; timer?.cancel(); timer = nil
         session?.invalidate(); session = nil; saved = nil; busy = false
         deletionEmail = nil; deletionIdentityOwner = nil

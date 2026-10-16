@@ -295,8 +295,9 @@ private extension SettingsViewController
         if BoundFeatureVisibility.simplifiedSettings && [.controllerSkins, .hapticFeedback, .hapticTouch, .airPlay, .credits].contains(section) { return true }
         switch section
         {
-        // This app uses Bound's friend service; upstream subscription/sync is inactive.
-        case .patreon, .syncing, .display: return true
+        // Patreon and app-icon management are not part of Bound's settings surface.
+        case .patreon, .display: return true
+        case .syncing: return !BoundFeatureVisibility.experimentalFeaturesEnabled
         #if !DEBUG
         case .advanced: return true
         #endif

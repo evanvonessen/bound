@@ -1,10 +1,12 @@
 import SwiftUI
-import UniformTypeIdentifiers
 import UIKit
 
 struct BoundRRDexView: View {
     let gameID: String
+    var floating = false
     let presentationChanged: (Bool) -> Void
+    var textEditingChanged: (Bool) -> Void = { _ in }
+    var currentSave: () throws -> BoundRRDexSave = { throw BoundRRDexSave.ImportError.currentGameUnavailable }
     private let catalog = BoundRRDexCatalog.bundled
     private let preferences = BoundRRDexPreferences()
     @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
@@ -12,21 +14,34 @@ struct BoundRRDexView: View {
     @State private var query = ""
     // UIKit owns focus; a SwiftUI FocusState without a .focused view resets it.
     @State private var searching = false
-    @State private var showingImporter = false
     @State private var importError: String?
     @State private var sheet: Detail?
     @State private var awaitingDetailDismissal = false
     private enum Detail: String, Identifiable { case weaknesses, learnset, information; var id: String { rawValue } }
-    private var interacting: Bool { searching || showingImporter || sheet != nil || importError != nil }
+    private var interacting: Bool { searching || sheet != nil || importError != nil }
 
     var body: some View {
         Group {
             if experimentsEnabled, let catalog, let pokemon = catalog.pokemon(id: choice.speciesID) ?? catalog.species.first {
                 GeometryReader { geometry in
-                    let scale = min(geometry.size.width / 360, geometry.size.height / 300)
-                    card(pokemon: pokemon, catalog: catalog)
-                        .frame(width: geometry.size.width / max(scale, 0.001), height: 300).scaleEffect(scale)
+                    if floating {
+                        let scale = min(geometry.size.width / 360, geometry.size.height / 300)
+                        card(pokemon: pokemon, catalog: catalog)
+                            .frame(width: geometry.size.width / max(scale, 0.001), height: 300).scaleEffect(scale)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    } else if geometry.size.height < 140 {
+                        // Keep fixed controls reachable when the portrait strip
+                        // is too short to hold them beside a scrolling list.
+                        ScrollView {
+                            card(pokemon: pokemon, catalog: catalog, compact: true)
+                                .frame(width: geometry.size.width)
+                        }
+                        .scrollDismissesKeyboard(.interactively)
                         .frame(width: geometry.size.width, height: geometry.size.height)
+                    } else {
+                        card(pokemon: pokemon, catalog: catalog)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    }
                 }
                 .accessibilityElement(children: .contain).accessibilityIdentifier("bound.rrdex")
                 .onAppear { choice = preferences.read(gameID: gameID) }
@@ -44,18 +59,19 @@ struct BoundRRDexView: View {
             }
         }
         .tint(Color(uiColor: .deltaPurple))
-        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.item]) { result in importSave(result) }
         .alert("Save could not be imported", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("OK", role: .cancel) { importError = nil }
         } message: { Text(importError ?? "") }
+        .onChange(of: searching) { _, active in textEditingChanged(active) }
         .onChange(of: interacting) { _, active in
             if active || !awaitingDetailDismissal { presentationChanged(active) }
         }
         .onChange(of: experimentsEnabled) { _, enabled in
-            if !enabled { searching = false; showingImporter = false; sheet = nil; importError = nil }
+            if !enabled { searching = false; sheet = nil; importError = nil }
         }
         .onDisappear {
-            searching = false; showingImporter = false; sheet = nil
+            searching = false; sheet = nil
+            textEditingChanged(false)
             if !awaitingDetailDismissal { presentationChanged(false) }
         }
     }
@@ -72,15 +88,16 @@ struct BoundRRDexView: View {
         if !interacting { presentationChanged(false) }
     }
 
-    private func card(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog) -> some View {
+    private func card(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog, compact: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {
                 Text("RR 4.1 · NORMAL").font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(.secondary)
                 Spacer()
                 Button {
-                    guard experimentsEnabled else { return }; searching = false; showingImporter = true
+                    importCurrentGameSave()
                 } label: { Label(choice.save == nil ? "Import save" : "Save loaded", systemImage: choice.save == nil ? "square.and.arrow.down" : "checkmark.circle") }
                     .font(.system(size: 11, weight: .medium)).accessibilityIdentifier("bound.rrdex-import")
+                    .accessibilityHint("Imports or refreshes the current game's save automatically")
                 Button { showDetail(.information) } label: { Image(systemName: "info.circle") }
                     .accessibilityLabel("Dex information").accessibilityIdentifier("bound.rrdex-info")
             }
@@ -99,47 +116,63 @@ struct BoundRRDexView: View {
             .font(.system(size: 14)).padding(.horizontal, 9).frame(height: 32)
             .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 7))
             if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                suggestions(catalog: catalog).frame(maxHeight: .infinity)
+                if compact {
+                    suggestionRows(catalog: catalog)
+                } else {
+                    suggestions(catalog: catalog).frame(maxHeight: .infinity)
+                }
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack(spacing: 10) {
-                            BoundRRDexSprite(pokemon: pokemon).frame(width: 58, height: 58)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(pokemon.name).font(.system(size: 19, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.65)
-                                    .accessibilityIdentifier("bound.rrdex-pokemon")
-                                HStack(spacing: 5) {
-                                    ForEach(pokemon.types, id: \.self) { id in
-                                        if let type = catalog.type(id: id) { BoundRRDexTypePill(type: type) }
-                                    }
-                                    Text("#\(pokemon.dexNumber)").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        Text(catalog.abilityNames(for: pokemon, save: choice.save).joined(separator: " · "))
-                            .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                            .accessibilityLabel("Abilities").accessibilityValue(catalog.abilityNames(for: pokemon, save: choice.save).joined(separator: ", "))
-                            .accessibilityIdentifier("bound.rrdex-abilities")
-                        HStack(spacing: 5) {
-                            ForEach(Array(zip(["HP", "Atk", "Def", "SpA", "SpD", "Spe"], pokemon.stats)), id: \.0) { label, stat in
-                                VStack(spacing: 2) {
-                                    Text(label).font(.system(size: 9)).foregroundStyle(.secondary)
-                                    Text(String(stat)).font(.system(size: 13, weight: .semibold, design: .rounded))
-                                }.frame(maxWidth: .infinity).padding(.vertical, 5)
-                                    .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 5))
-                                    .accessibilityElement(children: .ignore).accessibilityLabel("\(label), \(stat)")
-                            }
-                        }.accessibilityIdentifier("bound.rrdex-stats")
-                        evolutionLine(pokemon: pokemon, catalog: catalog)
+                if compact {
+                    details(pokemon: pokemon, catalog: catalog)
+                } else {
+                    ScrollView {
+                        details(pokemon: pokemon, catalog: catalog)
                     }
-                }.scrollDismissesKeyboard(.interactively)
+                    .accessibilityIdentifier("bound.rrdex-details")
+                    .scrollDismissesKeyboard(.interactively)
+                }
                 HStack(spacing: 8) {
                     detailButton("Weaknesses", icon: "shield.lefthalf.filled", detail: .weaknesses)
                     detailButton("Learnset", icon: "list.bullet.rectangle", detail: .learnset)
                 }
             }
-        }.padding(12).background(Color(uiColor: .systemBackground))
+        }
+        .padding(compact ? 10 : 12)
+        .background(Color(uiColor: .systemBackground))
+    }
+
+    private func details(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 10) {
+                BoundRRDexSprite(pokemon: pokemon).frame(width: 58, height: 58)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(pokemon.name).font(.system(size: 19, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.65)
+                        .accessibilityIdentifier("bound.rrdex-pokemon")
+                    HStack(spacing: 5) {
+                        ForEach(pokemon.types, id: \.self) { id in
+                            if let type = catalog.type(id: id) { BoundRRDexTypePill(type: type) }
+                        }
+                        Text("#\(pokemon.dexNumber)").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            Text(catalog.abilityNames(for: pokemon, save: choice.save).joined(separator: " · "))
+                .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("Abilities").accessibilityValue(catalog.abilityNames(for: pokemon, save: choice.save).joined(separator: ", "))
+                .accessibilityIdentifier("bound.rrdex-abilities")
+            HStack(spacing: 5) {
+                ForEach(Array(zip(["HP", "Atk", "Def", "SpA", "SpD", "Spe"], pokemon.stats)), id: \.0) { label, stat in
+                    VStack(spacing: 2) {
+                        Text(label).font(.system(size: 9)).foregroundStyle(.secondary)
+                        Text(String(stat)).font(.system(size: 13, weight: .semibold, design: .rounded))
+                    }.frame(maxWidth: .infinity).padding(.vertical, 5)
+                        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 5))
+                        .accessibilityElement(children: .ignore).accessibilityLabel("\(label), \(stat)")
+                }
+            }.accessibilityIdentifier("bound.rrdex-stats")
+            evolutionLine(pokemon: pokemon, catalog: catalog)
+        }
     }
 
     private func detailButton(_ title: String, icon: String, detail: Detail) -> some View {
@@ -152,25 +185,29 @@ struct BoundRRDexView: View {
         }.accessibilityIdentifier("bound.rrdex-\(detail.rawValue)")
     }
     private func suggestions(catalog: BoundRRDexCatalog) -> some View {
-        let results = catalog.suggestions(query)
-        return ScrollView {
-            LazyVStack(spacing: 0) {
-                if results.isEmpty {
-                    Text("No Pokémon found").font(.system(size: 13)).foregroundStyle(.secondary).padding(.top, 20)
-                }
-                ForEach(results) { pokemon in
-                    Button { select(pokemon) } label: {
-                        HStack {
-                            Text(pokemon.name).font(.system(size: 13, weight: .medium)).foregroundStyle(.primary)
-                            Spacer()
-                            Text(pokemon.types.compactMap { catalog.type(id: $0)?.name }.joined(separator: " / "))
-                                .font(.system(size: 10)).foregroundStyle(.secondary)
-                        }.padding(.vertical, 10).contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityIdentifier("bound.rrdex-suggestion-\(pokemon.id)")
-                    Divider()
-                }
-            }
+        ScrollView {
+            suggestionRows(catalog: catalog)
         }.accessibilityIdentifier("bound.rrdex-suggestions")
+    }
+
+    private func suggestionRows(catalog: BoundRRDexCatalog) -> some View {
+        let results = catalog.suggestions(query)
+        return LazyVStack(spacing: 0) {
+            if results.isEmpty {
+                Text("No Pokémon found").font(.system(size: 13)).foregroundStyle(.secondary).padding(.top, 20)
+            }
+            ForEach(results) { pokemon in
+                Button { select(pokemon) } label: {
+                    HStack {
+                        Text(pokemon.name).font(.system(size: 13, weight: .medium)).foregroundStyle(.primary)
+                        Spacer()
+                        Text(pokemon.types.compactMap { catalog.type(id: $0)?.name }.joined(separator: " / "))
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                    }.padding(.vertical, 10).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityIdentifier("bound.rrdex-suggestion-\(pokemon.id)")
+                Divider()
+            }
+        }
     }
     private func evolutionLine(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog) -> some View {
         let links = catalog.evolutionLine(for: pokemon)
@@ -198,25 +235,21 @@ struct BoundRRDexView: View {
         choice.speciesID = pokemon.id; query = ""; searching = false
         preferences.write(choice, gameID: gameID)
     }
-    private func importSave(_ result: Result<URL, Error>) {
+    private func importCurrentGameSave() {
         guard experimentsEnabled else { return }
+        searching = false
         do {
-            let url = try result.get()
-            guard ["sav", "srm"].contains(url.pathExtension.lowercased()) else { throw BoundRRDexSave.ImportError.format }
-            let access = url.startAccessingSecurityScopedResource()
-            defer { if access { url.stopAccessingSecurityScopedResource() } }
-            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard size <= 0x20000 else { throw BoundRRDexSave.ImportError.format }
-            choice.save = try BoundRRDexSave.parse(Data(contentsOf: url))
+            let save = try currentSave()
+            choice.save = save
             preferences.write(choice, gameID: gameID)
-        } catch CocoaError.userCancelled { } catch { importError = error.localizedDescription }
+        } catch { importError = error.localizedDescription }
     }
     private func information(catalog: BoundRRDexCatalog) -> some View {
         List {
             Section("Save") {
                 Text(choice.save?.summary ?? "Browsing the standard Normal dex")
-                Text("Import a Radical Red 4.1 Normal battery save (.sav or .srm) to match randomized abilities and level-up moves. Save in-game before exporting. Import again when you start a new run.")
-                Text("Your save stays on this device. Bound keeps only the randomizer seed and settings for this ROM; it never changes your game save.")
+                Text("Tap Import save to read the current Radical Red 4.1 Normal game's battery save automatically. Unsaved in-game changes aren't included. Tap Save loaded to refresh it after the game has saved new settings.")
+                Text("Bound deletes the temporary export after reading it and keeps only the randomizer seed and settings for this ROM on this device.")
                 if choice.save != nil {
                     Button("Use standard dex", role: .destructive) {
                         guard experimentsEnabled else { return }

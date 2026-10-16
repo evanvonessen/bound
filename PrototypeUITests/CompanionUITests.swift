@@ -43,13 +43,27 @@ private func gamePixelSample(_ game: XCUIElement, in app: XCUIApplication) -> Da
     // have a different coordinate space from the application under test.
     let appFrame = app.frame
     guard appFrame.width > 0, appFrame.height > 0 else { return nil }
-    let scaleX = CGFloat(screenshot.width) / appFrame.width
-    let scaleY = CGFloat(screenshot.height) / appFrame.height
     let frame = game.frame.intersection(appFrame)
-    let pixels = CGRect(x: (frame.minX - appFrame.minX) * scaleX,
-                        y: (frame.minY - appFrame.minY) * scaleY,
-                        width: frame.width * scaleX, height: frame.height * scaleY)
-        .integral.intersection(CGRect(x: 0, y: 0, width: screenshot.width, height: screenshot.height))
+    let x = (frame.minX - appFrame.minX) / appFrame.width
+    let y = (frame.minY - appFrame.minY) / appFrame.height
+    let normalizedWidth = frame.width / appFrame.width, normalizedHeight = frame.height / appFrame.height
+    let screenshotWidth = CGFloat(screenshot.width), screenshotHeight = CGFloat(screenshot.height)
+    let sample: CGRect
+    if appFrame.width > appFrame.height && screenshot.width < screenshot.height {
+        // XCTest can keep screenshot pixels in the display's portrait orientation
+        // while accessibility frames have already rotated into landscape.
+        if XCUIDevice.shared.orientation == .landscapeRight {
+            sample = CGRect(x: y * screenshotWidth, y: (1 - x - normalizedWidth) * screenshotHeight,
+                            width: normalizedHeight * screenshotWidth, height: normalizedWidth * screenshotHeight)
+        } else {
+            sample = CGRect(x: (1 - y - normalizedHeight) * screenshotWidth, y: x * screenshotHeight,
+                            width: normalizedHeight * screenshotWidth, height: normalizedWidth * screenshotHeight)
+        }
+    } else {
+        sample = CGRect(x: x * screenshotWidth, y: y * screenshotHeight,
+                        width: normalizedWidth * screenshotWidth, height: normalizedHeight * screenshotHeight)
+    }
+    let pixels = sample.integral.intersection(CGRect(x: 0, y: 0, width: screenshot.width, height: screenshot.height))
     guard pixels.width > 0, pixels.height > 0,
           let crop = screenshot.cropping(to: pixels) else { return nil }
     let width = crop.width, height = crop.height
@@ -199,6 +213,145 @@ final class CompanionUITests: XCTestCase {
         XCTAssertFalse(fastForward.isSelected, "Turning fast forward off must also survive app termination")
     }
 
+    func testSaveStateRenameSurvivesConfirmationAndRelaunch() throws {
+        try checkSaveStateRename(previewsEnabled: true, sorting: "name")
+    }
+
+    func testSaveStateRenameWithoutPreviewSurvivesConfirmationAndRelaunch() throws {
+        try checkSaveStateRename(previewsEnabled: false, sorting: "date")
+    }
+
+    private func checkSaveStateRename(previewsEnabled: Bool, sorting: String) throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originalImplementations: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originalImplementations.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer {
+            for (method, original) in originalImplementations {
+                imp_removeBlock(method_setImplementation(method, original))
+            }
+        }
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations", "-isPreviewsEnabled", previewsEnabled ? "YES" : "NO",
+                               "-preferredSaveStatesSorting", "date", "-prefersDescendingSaveStatesSorting", "NO"]
+        defer { app.terminate() }
+        let suffix = UUID().uuidString.prefix(8)
+        let middleName = "Middle Rename QA " + suffix
+        let newName = "Zulu Rename QA " + suffix
+        let finalName = "Alpha Rename QA " + suffix
+        func openStates(_ mode: String = "Save State") {
+            app.launch()
+            let game = app.collectionViews.cells.containing(.staticText, identifier: "BoundPickerDiagnostic").firstMatch
+            XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
+            XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+            openNativePause(in: app)
+            app.buttons[mode].tap()
+            XCTAssertTrue(app.navigationBars[mode].waitForExistence(timeout: 10))
+        }
+        openStates()
+        let states = app.collectionViews["bound.save-states"]
+        let cells = states.cells
+        let rename = app.buttons["Rename"].firstMatch
+        let alert = app.alerts["Rename Save State"]
+        let field = alert.textFields.firstMatch
+        func pressState(_ state: XCUIElement) {
+            var priorFrame: CGRect?
+            let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                let frame = state.frame
+                defer { priorFrame = frame }
+                return state.isHittable && frame == priorFrame
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 5), .completed)
+            state.press(forDuration: 1)
+        }
+        func bottomState() -> XCUIElement {
+            var previousID: String?
+            for _ in 0..<12 {
+                guard let lastID = cells.allElementsBoundByAccessibilityElement.last?.identifier else { continue }
+                let last = cells[lastID]
+                if lastID == previousID && last.isHittable { return last }
+                previousID = lastID
+                states.swipeUp()
+            }
+            return cells.allElementsBoundByAccessibilityElement.last ?? cells.firstMatch
+        }
+        func addAndRename(to name: String) {
+            let previousID = cells.count > 0 ? bottomState().identifier : nil
+            app.navigationBars["Save State"].buttons["Add"].tap()
+            let saved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                guard let last = cells.allElementsBoundByAccessibilityElement.last else { return false }
+                return last.identifier != previousID
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [saved], timeout: 10), .completed)
+            // Ascending date order places the new general state last.
+            let createdState = bottomState()
+            XCTAssertNotEqual(createdState.identifier, previousID)
+            pressState(createdState)
+            XCTAssertTrue(rename.waitForExistence(timeout: 10)); rename.tap()
+            XCTAssertTrue(alert.waitForExistence(timeout: 10))
+            field.tap(); field.typeText(name)
+            alert.buttons["Rename"].tap()
+            XCTAssertTrue(app.staticTexts[name].waitForExistence(timeout: 10))
+        }
+        addAndRename(to: String(middleName))
+        addAndRename(to: String(newName))
+        if sorting == "name" {
+            app.navigationBars["Save State"].buttons["Options"].tap()
+            let nameSort = app.buttons["Name"].firstMatch
+            XCTAssertTrue(nameSort.waitForExistence(timeout: 5)); nameSort.tap()
+            if !nameSort.waitForNonExistence(timeout: 1) {
+                app.navigationBars["Save State"].staticTexts["Save State"].tap()
+            }
+            XCTAssertTrue(nameSort.waitForNonExistence(timeout: 5))
+        }
+
+        func reopenRename() {
+            let state = cells.containing(.staticText, identifier: String(newName)).firstMatch
+            for _ in 0..<12 {
+                if state.exists && state.isHittable { break }
+                states.swipeUp()
+            }
+            XCTAssertTrue(state.isHittable)
+            pressState(state)
+            XCTAssertTrue(rename.waitForExistence(timeout: 10)); rename.tap()
+            XCTAssertTrue(alert.waitForExistence(timeout: 10))
+        }
+        reopenRename()
+        alert.buttons["Cancel"].tap()
+        XCTAssertTrue(app.staticTexts[String(newName)].waitForExistence(timeout: 10), "Cancelling must preserve the saved name")
+        reopenRename()
+        // UIAlertController already focuses this field with the cursor at its end.
+        // Tapping the middle first would leave a suffix when deleting the name.
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: newName.count))
+        field.typeText(String(finalName))
+        alert.buttons["Rename"].tap()
+        XCTAssertTrue(app.staticTexts[String(finalName)].waitForExistence(timeout: 10))
+        if sorting == "name" {
+            let names = cells.allElementsBoundByAccessibilityElement.flatMap { $0.staticTexts.allElementsBoundByAccessibilityElement.map(\.label) }
+            XCTAssertLessThan(try XCTUnwrap(names.firstIndex(of: String(finalName))),
+                              try XCTUnwrap(names.firstIndex(of: String(middleName))),
+                              "Renaming Zulu to Alpha must move the state before Middle when sorted by name")
+        }
+        XCTAssertEqual(app.state, .runningForeground)
+        app.terminate()
+        openStates("Load State")
+        let renamedState = cells.containing(.staticText, identifier: String(finalName)).firstMatch
+        for _ in 0..<12 {
+            if renamedState.exists && renamedState.isHittable { break }
+            states.swipeUp()
+        }
+        XCTAssertTrue(renamedState.waitForExistence(timeout: 10), "Renaming must survive app termination")
+        renamedState.tap()
+        XCTAssertTrue(app.navigationBars["Load State"].waitForNonExistence(timeout: 10))
+        let gameScreen = element("bound.game-screen", in: app)
+        XCTAssertTrue(gameScreen.waitForExistence(timeout: 10))
+        assertGamePixelsAnimate(gameScreen, in: app)
+    }
+
     private func openRRDexPlayback(in app: XCUIApplication) {
         app.launch()
         setExperimentalFeatures(true, in: app)
@@ -209,12 +362,21 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(element("bound.game-screen", in: app).exists)
     }
 
-    private func swipeDownDetail(named title: String, in app: XCUIApplication) {
-        let navigationBar = app.navigationBars[title].firstMatch
-        XCTAssertTrue(navigationBar.waitForExistence(timeout: 10))
-        let dragStart = navigationBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
-        let dragEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95))
-        dragStart.press(forDuration: 0.1, thenDragTo: dragEnd)
+    private func clearLibrarySearch(in app: XCUIApplication) {
+        let search = app.searchFields["Search"].firstMatch
+        if search.exists, let value = search.value as? String, !value.isEmpty, value != search.placeholderValue {
+            search.tap()
+            search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: value.count))
+            search.typeText("\n")
+        }
+    }
+
+    private func libraryGame(named name: String, in app: XCUIApplication) -> XCUIElement {
+        clearLibrarySearch(in: app)
+        let search = app.searchFields["Search"].firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        search.tap(); search.typeText(name); search.typeText("\n")
+        return app.collectionViews.cells.containing(.staticText, identifier: name).firstMatch
     }
 
     private func chooseRRDexDocument(_ filename: String, in app: XCUIApplication) {
@@ -229,7 +391,93 @@ final class CompanionUITests: XCTestCase {
         let file = fileView.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", base)).firstMatch
         XCTAssertTrue(file.waitForExistence(timeout: 10), "Find QA document \(filename) in the Bound app's Files container")
         file.tap()
+        let open = app.buttons["Open"].firstMatch
+        if open.exists { open.tap() }
         XCTAssertTrue(file.waitForNonExistence(timeout: 10), "Wait for the document picker to finish closing after choosing \(filename)")
+    }
+
+    func testImportRRDexCurrentGameFixture() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations"]
+        app.launch()
+        let title = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        if title.waitForExistence(timeout: 5) { return }
+
+        app.buttons["Add"].tap()
+        chooseRRDexDocument("BoundRRDexDiagnostic.gba", in: app)
+        let imported = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(imported.waitForExistence(timeout: 20), "The staged current-save fixture ROM must be available in the library")
+    }
+
+    func testRRDexImportsCurrentGameSaveWithoutPickerAndRefreshes() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        defer {
+            app.terminate()
+            app.launch()
+            setExperimentalFeatures(false, in: app)
+            app.terminate()
+        }
+
+        func openDex() {
+            let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+            XCTAssertTrue(game.waitForExistence(timeout: 20), "The dedicated RR Dex QA game must be visible through library search")
+            game.tap()
+            XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+            selectCompanion("Dex", in: app)
+            XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 10))
+        }
+
+        openDex()
+        let gameScreen = element("bound.game-screen", in: app)
+        XCTAssertTrue(gameScreen.waitForExistence(timeout: 10))
+        let importButton = app.buttons["bound.rrdex-import"]
+        if importButton.label.contains("Save loaded") {
+            app.buttons["bound.rrdex-info"].tap()
+            let clearSave = app.buttons["bound.rrdex-clear-save"]
+            XCTAssertTrue(clearSave.waitForExistence(timeout: 10))
+            clearSave.tap()
+            XCTAssertTrue(importButton.label.contains("Import save"))
+            app.buttons["bound.rrdex-close-detail"].tap()
+        }
+
+        assertGamePixelsAnimate(gameScreen, in: app)
+        importButton.tap()
+        let loadedLabel = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in importButton.label.contains("Save loaded") }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [loadedLabel], timeout: 15), .completed)
+        XCTAssertFalse(app.buttons["Cancel"].exists, "Current-save import must not present the Files picker")
+        XCTAssertFalse(app.collectionViews["File View"].exists, "Current-save import must not present Files")
+        assertGamePixelsAnimate(gameScreen, in: app)
+
+        app.buttons["bound.rrdex-info"].tap()
+        let randomizedSummary = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "Random abilities", "Random learnset")).firstMatch
+        XCTAssertTrue(randomizedSummary.waitForExistence(timeout: 10), "The imported fixture should expose both randomizer flags")
+        app.buttons["bound.rrdex-close-detail"].tap()
+        assertGamePixelsAnimate(gameScreen, in: app)
+
+        app.terminate()
+        app.launch()
+        openDex()
+        let relaunchedGameScreen = element("bound.game-screen", in: app)
+        let relaunchedImportButton = app.buttons["bound.rrdex-import"]
+        XCTAssertTrue(relaunchedImportButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(relaunchedImportButton.label.contains("Save loaded"), "The imported current-save settings must persist for this game")
+        assertGamePixelsAnimate(relaunchedGameScreen, in: app)
+        relaunchedImportButton.tap()
+        XCTAssertTrue(relaunchedImportButton.label.contains("Save loaded"), "Refresh should retain the loaded-save state")
+        XCTAssertFalse(app.buttons["Cancel"].exists, "Refreshing the current save must not present the Files picker")
+        XCTAssertFalse(app.collectionViews["File View"].exists, "Refreshing the current save must not present Files")
+        assertGamePixelsAnimate(relaunchedGameScreen, in: app)
+    }
+
+    private func swipeDownDetail(named title: String, in app: XCUIApplication) {
+        let navigationBar = app.navigationBars[title].firstMatch
+        XCTAssertTrue(navigationBar.waitForExistence(timeout: 10))
+        let dragStart = navigationBar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.05))
+        let dragEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95))
+        dragStart.press(forDuration: 0.1, thenDragTo: dragEnd)
     }
 
     func testLibraryExperimentalFeaturesSwitchPersistsAndKeepsBuild13Settings() throws {
@@ -244,7 +492,7 @@ final class CompanionUITests: XCTestCase {
             app.buttons["Settings"].tap()
             XCTAssertTrue(app.switches["bound.enable-experimental-features"].waitForExistence(timeout: 10))
         }
-        func assertBuild13Settings() {
+        func assertBaseSettings() {
             XCTAssertTrue(app.staticTexts["Controllers"].exists)
             XCTAssertTrue(app.staticTexts["Controller opacity"].exists)
             XCTAssertFalse(app.staticTexts["Touch & Haptics"].exists)
@@ -260,22 +508,50 @@ final class CompanionUITests: XCTestCase {
         }
         if toggle.value as? String == "1" { tapToggle() }
         XCTAssertEqual(toggle.value as? String, "0")
-        assertBuild13Settings()
+        assertBaseSettings()
+        XCTAssertFalse(app.staticTexts["Delta Sync"].exists, "Cloud sync configuration stays hidden while experiments are off")
         tapToggle()
         XCTAssertEqual(toggle.value as? String, "1")
-        assertBuild13Settings()
+        assertBaseSettings()
+        XCTAssertTrue(app.staticTexts["Delta Sync"].waitForExistence(timeout: 5), "Cloud sync configuration appears after opting in")
+
+        app.buttons["bound.delta-sync-settings"].tap()
+        XCTAssertTrue(app.navigationBars["Syncing Service"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Google Drive")).firstMatch.exists,
+                       "Google Drive must not be exposed in the provider options")
+        let dropboxUnconfigured = app.staticTexts["Dropbox — Not configured"]
+        let dropbox = app.staticTexts["Dropbox"]
+        XCTAssertTrue(dropbox.waitForExistence(timeout: 3), "Dropbox is the only available provider")
+        XCTAssertFalse(app.alerts["Cloud Sync Not Configured"].exists, "Opening provider options must not show a Google Drive alert")
+        if dropboxUnconfigured.waitForExistence(timeout: 3) {
+            dropboxUnconfigured.tap()
+            let providerAlert = app.alerts["Cloud Sync Not Configured"]
+            XCTAssertTrue(providerAlert.waitForExistence(timeout: 3))
+            XCTAssertTrue(providerAlert.staticTexts["Sign-in is not configured for Dropbox in this Bound app yet."].exists)
+            providerAlert.buttons["OK"].tap()
+            let syncingSwitch = app.switches.firstMatch
+            XCTAssertEqual(syncingSwitch.value as? String, "0")
+            syncingSwitch.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            XCTAssertTrue(providerAlert.waitForExistence(timeout: 3), "Enabling sync without provider credentials should explain the missing setup")
+            XCTAssertEqual(syncingSwitch.value as? String, "0", "Sync must remain off when no provider is configured")
+            providerAlert.buttons["OK"].tap()
+        }
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.buttons["bound.delta-sync-settings"].waitForExistence(timeout: 5))
 
         app.terminate()
         app.launch()
         openLibrarySettings()
         XCTAssertEqual(toggle.value as? String, "1")
+        XCTAssertTrue(app.staticTexts["Delta Sync"].exists, "Cloud sync availability follows the persisted opt-in")
         tapToggle()
         XCTAssertEqual(toggle.value as? String, "0")
+        XCTAssertFalse(app.staticTexts["Delta Sync"].exists)
         app.terminate()
         app.launch()
         openLibrarySettings()
         XCTAssertEqual(toggle.value as? String, "0")
-        assertBuild13Settings()
+        assertBaseSettings()
         screenshot("Library-experimental-features-off")
     }
 
@@ -472,6 +748,98 @@ final class CompanionUITests: XCTestCase {
         screenshot("Boss-full-team-swipe-dismissal-resumes-game")
     }
 
+    func testBossAndDexPresentationsDoNotMoveCompanionPanel() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound", "--bound-ui-reset-layout"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            app.terminate()
+            app.launch()
+            setExperimentalFeatures(false, in: app)
+            app.terminate()
+        }
+
+        let gameCell = libraryGame(named: "BoundPickerDiagnostic", in: app)
+        XCTAssertTrue(gameCell.waitForExistence(timeout: 20)); gameCell.tap()
+        let cycle = app.buttons["bound.panel-cycle"]
+        XCTAssertTrue(cycle.waitForExistence(timeout: 15))
+        let game = element("bound.game-screen", in: app)
+        let panel = element("bound.companion-container", in: app)
+        XCTAssertTrue(game.waitForExistence(timeout: 10))
+
+        func assertFrame(_ actual: CGRect, matches expected: CGRect, label: String, file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertEqual(actual.minX, expected.minX, accuracy: 2, "\(label) x position", file: file, line: line)
+            XCTAssertEqual(actual.minY, expected.minY, accuracy: 2, "\(label) y position", file: file, line: line)
+            XCTAssertEqual(actual.width, expected.width, accuracy: 2, "\(label) width", file: file, line: line)
+            XCTAssertEqual(actual.height, expected.height, accuracy: 2, "\(label) height", file: file, line: line)
+        }
+
+        func verifyPresentation(_ label: String, presented: XCUIElement, open: () -> Void, dismiss: () -> Void) {
+            XCTAssertTrue(panel.waitForExistence(timeout: 5), "Companion container should exist before \(label)")
+            let originalFrame = panel.frame
+            open()
+            XCTAssertTrue(presented.waitForExistence(timeout: 10), "\(label) should appear")
+            XCTAssertTrue(panel.exists, "Companion container should remain measurable while \(label) is presented")
+            assertFrame(panel.frame, matches: originalFrame, label: label + " presented")
+            dismiss()
+            XCTAssertTrue(presented.waitForNonExistence(timeout: 10), "\(label) should dismiss")
+            waitForFrame(panel) { frame in
+                abs(frame.minX - originalFrame.minX) < 2 && abs(frame.minY - originalFrame.minY) < 2
+                    && abs(frame.width - originalFrame.width) < 2 && abs(frame.height - originalFrame.height) < 2
+            }
+            assertFrame(panel.frame, matches: originalFrame, label: label + " dismissed")
+            XCTContext.runActivity(named: "Playback after " + label) { _ in
+                assertGamePixelsAnimate(game, in: app)
+            }
+        }
+
+        func runPortraitAndFloatingLandscapeCases() {
+            selectCompanion("Bosses", in: app)
+            verifyPresentation("Boss picker", presented: app.searchFields.firstMatch, open: {
+                app.buttons["bound.boss-picker"].tap()
+            }, dismiss: {
+                app.buttons["Done"].firstMatch.tap()
+            })
+            verifyPresentation("Boss full team", presented: element("bound.boss-full-team-list", in: app), open: {
+                app.buttons["bound.boss-full-team"].tap()
+            }, dismiss: {
+                app.buttons["bound.boss-close-full-team"].tap()
+            })
+
+            selectCompanion("Dex", in: app)
+            verifyPresentation("Dex weaknesses", presented: element("bound.rrdex-matchups", in: app), open: {
+                app.buttons["bound.rrdex-weaknesses"].tap()
+            }, dismiss: {
+                app.buttons["bound.rrdex-close-detail"].tap()
+            })
+            verifyPresentation("Dex learnset", presented: element("bound.rrdex-moves", in: app), open: {
+                app.buttons["bound.rrdex-learnset"].tap()
+            }, dismiss: {
+                app.buttons["bound.rrdex-close-detail"].tap()
+            })
+            verifyPresentation("Dex information", presented: app.staticTexts["Radical Red 4.1 · Normal difficulty"], open: {
+                app.buttons["bound.rrdex-info"].tap()
+            }, dismiss: {
+                app.buttons["bound.rrdex-close-detail"].tap()
+            })
+            verifyPresentation("Current-save import error", presented: app.alerts["Save could not be imported"], open: {
+                app.buttons["bound.rrdex-import"].tap()
+            }, dismiss: {
+                app.alerts["Save could not be imported"].buttons["OK"].tap()
+            })
+        }
+
+        runPortraitAndFloatingLandscapeCases()
+        assertGamePixelsAnimate(game, in: app)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        waitForFrame(game) { app.frame.width > app.frame.height && $0.width > $0.height }
+        assertGamePixelsAnimate(game, in: app)
+        runPortraitAndFloatingLandscapeCases()
+        assertGamePixelsAnimate(game, in: app)
+    }
+
     func testRRDexWeaknessesDismissalResumesGamePixels() throws {
         let app = XCUIApplication()
         defer {
@@ -549,56 +917,45 @@ final class CompanionUITests: XCTestCase {
         assertGamePixelsAnimate(game, in: app)
     }
 
-    func testRRDexSaveImporterDismissalsResumeGamePixels() throws {
+    func testRRDexCurrentSaveImportErrorResumesGamePixels() throws {
         let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
         defer {
             app.terminate()
             app.launch()
             setExperimentalFeatures(false, in: app)
         }
-        openRRDexPlayback(in: app)
+
+        let gameCell = libraryGame(named: "BoundPickerDiagnostic", in: app)
+        XCTAssertTrue(gameCell.waitForExistence(timeout: 20)); gameCell.tap()
+        selectCompanion("Dex", in: app)
+        XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 10))
         let game = element("bound.game-screen", in: app)
         assertGamePixelsAnimate(game, in: app)
 
-        let search = app.textFields["bound.rrdex-search"]
-        search.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10))
-        app.buttons["bound.rrdex-import"].tap()
-        let cancel = app.buttons["Cancel"].firstMatch
-        XCTAssertTrue(cancel.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 10), "Opening the file picker should hand off from search cleanly")
-        cancel.tap()
-        XCTAssertTrue(cancel.waitForNonExistence(timeout: 10), "Wait for the file picker to finish cancelling")
-        XCTAssertTrue(app.buttons["bound.rrdex-import"].waitForExistence(timeout: 10))
-        assertGamePixelsAnimate(game, in: app)
-
-        app.buttons["bound.rrdex-import"].tap()
-        chooseRRDexDocument("BoundRRDexSeedQA.sav", in: app)
         let importButton = app.buttons["bound.rrdex-import"]
-        XCTAssertTrue(importButton.waitForExistence(timeout: 10))
-        XCTAssertTrue(importButton.label.contains("Save loaded"))
-        assertGamePixelsAnimate(game, in: app)
-        app.buttons["bound.rrdex-info"].tap()
-        let savedSummary = app.buttons["bound.rrdex-clear-save"]
-        XCTAssertTrue(savedSummary.waitForExistence(timeout: 10))
-        app.buttons["bound.rrdex-close-detail"].tap()
-        XCTAssertTrue(savedSummary.waitForNonExistence(timeout: 10), "Wait for save information to finish dismissing")
-        assertGamePixelsAnimate(game, in: app)
-
-        app.buttons["bound.rrdex-import"].tap()
-        chooseRRDexDocument("BoundRRDexInvalidQA.sav", in: app)
+        let previousImportLabel = importButton.label
+        let search = app.textFields["bound.rrdex-search"]
+        search.tap(); search.typeText("char")
+        XCTAssertTrue(app.buttons["bound.rrdex-suggestion-6"].waitForExistence(timeout: 10))
+        app.buttons["bound.rrdex-suggestion-6"].tap()
+        XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Charizard")
+        search.tap(); search.typeText("bulb")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10))
+        importButton.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 10), "Import should dismiss search before exporting the current game save")
         let errorAlert = app.alerts["Save could not be imported"]
-        XCTAssertTrue(errorAlert.waitForExistence(timeout: 10))
+        XCTAssertTrue(errorAlert.waitForExistence(timeout: 10), "The original diagnostic ROM does not contain a valid Radical Red save")
+        XCTAssertFalse(app.buttons["Cancel"].exists, "Current-save import must not open the Files picker")
+        XCTAssertFalse(app.collectionViews["File View"].exists, "Current-save import must not open the Files browser")
         errorAlert.buttons["OK"].tap()
-        XCTAssertTrue(errorAlert.waitForNonExistence(timeout: 10), "Wait for the invalid-save alert to finish dismissing")
-        assertGamePixelsAnimate(game, in: app)
-
-        app.buttons["bound.rrdex-info"].tap()
-        XCTAssertTrue(savedSummary.waitForExistence(timeout: 10))
-        app.buttons["bound.rrdex-clear-save"].tap()
-        app.buttons["bound.rrdex-close-detail"].tap()
-        XCTAssertTrue(savedSummary.waitForNonExistence(timeout: 10), "Wait for the save reset sheet to finish dismissing")
-        XCTAssertTrue(app.buttons["bound.rrdex-import"].label.contains("Import save"))
+        XCTAssertTrue(errorAlert.waitForNonExistence(timeout: 10), "Wait for the current-save error to finish dismissing")
+        let clearSearch = app.buttons["bound.rrdex-clear-search"]
+        if clearSearch.exists { clearSearch.tap() }
+        XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Charizard", "A failed import must preserve the current dex selection")
+        XCTAssertEqual(importButton.label, previousImportLabel, "A failed import must preserve the previously loaded save configuration")
         assertGamePixelsAnimate(game, in: app)
     }
 
@@ -617,12 +974,26 @@ final class CompanionUITests: XCTestCase {
             app.buttons["Close"].firstMatch.tap()
         }
         func play() {
-            let cell = app.collectionViews.cells.firstMatch
+            let cell = libraryGame(named: "BoundRRDexDiagnostic", in: app)
             XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
             XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 20))
         }
+        func assertImportedAbilities() {
+            let abilities = element("bound.rrdex-abilities", in: app)
+            let value = abilities.value as? String ?? ""
+            XCTAssertTrue(value.contains("Limber"))
+            XCTAssertTrue(value.contains("Friend Guard"))
+        }
         setExperiments(true); play(); selectCompanion("Dex", in: app)
         XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 10))
+        let game = element("bound.game-screen", in: app)
+        if app.buttons["bound.rrdex-import"].label.contains("Save loaded") {
+            app.buttons["bound.rrdex-info"].tap()
+            let clear = app.buttons["bound.rrdex-clear-save"]
+            XCTAssertTrue(clear.waitForExistence(timeout: 10)); clear.tap()
+            app.buttons["bound.rrdex-close-detail"].tap()
+            XCTAssertTrue(clear.waitForNonExistence(timeout: 10))
+        }
         let search = app.textFields["bound.rrdex-search"]
         search.tap(); search.typeText("bu")
         XCTAssertEqual(search.value as? String, "bu")
@@ -633,7 +1004,8 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Bulbasaur")
         XCTAssertTrue(element("bound.rrdex-picture", in: app).exists)
         XCTAssertTrue(element("bound.rrdex-stats", in: app).exists)
-        XCTAssertTrue(app.staticTexts["Level 16"].exists)
+        let level = app.staticTexts["Level 16"]
+        XCTAssertTrue(level.exists)
         screenshot("RRDex-portrait-Bulbasaur")
         search.tap(); search.typeText("char")
         XCTAssertEqual(search.value as? String, "char")
@@ -656,37 +1028,29 @@ final class CompanionUITests: XCTestCase {
         app.buttons["Close"].firstMatch.tap()
         XCTAssertTrue(app.buttons["bound.rrdex-close-detail"].waitForExistence(timeout: 5))
         app.buttons["bound.rrdex-close-detail"].tap()
-        // Native document picker must open without altering the running game's save.
-        app.buttons["bound.rrdex-import"].tap()
-        XCTAssertTrue(app.buttons["Cancel"].firstMatch.waitForExistence(timeout: 10))
-        app.buttons["Cancel"].firstMatch.tap()
-        XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 10))
-        // Seed fixture staged in the dedicated QA app's Documents, never a player save.
-        app.buttons["bound.rrdex-import"].tap()
-        if app.buttons["Browse"].firstMatch.waitForExistence(timeout: 3) { app.buttons["Browse"].firstMatch.tap() }
-        let localFiles = app.staticTexts["On My iPhone"].firstMatch
-        if localFiles.waitForExistence(timeout: 3) { localFiles.tap() }
-        let fileView = app.collectionViews["File View"]
-        let folder = fileView.cells["Bound, Container"]
-        if folder.waitForExistence(timeout: 3) { folder.tap() }
-        let fixture = fileView.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", "BoundRRDexSeedQA")).firstMatch
-        if !fixture.waitForExistence(timeout: 5) {
-            print("RRDex document picker hierarchy: \(app.debugDescription)")
-        }
-        XCTAssertTrue(fixture.waitForExistence(timeout: 5)); fixture.tap()
-        XCTAssertTrue(app.buttons["bound.rrdex-import"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["bound.rrdex-import"].label.contains("Save loaded"))
+        // This dedicated fixture starts with a synthetic valid Radical Red battery save.
+        // Import should export the current native game save directly, without Files.
+        let importButton = app.buttons["bound.rrdex-import"]
+        importButton.tap()
+        XCTAssertTrue(importButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(importButton.label.contains("Save loaded"))
+        XCTAssertFalse(app.buttons["Cancel"].exists, "Importing the current save must not open the Files picker")
+        XCTAssertFalse(app.collectionViews["File View"].exists, "Importing the current save must not open the Files browser")
+        assertGamePixelsAnimate(game, in: app)
         search.tap(); search.typeText("bulbasaur")
         app.buttons["bound.rrdex-suggestion-1"].tap()
-        XCTAssertTrue((element("bound.rrdex-abilities", in: app).value as? String)?.contains("Limber") == true)
-        XCTAssertTrue((element("bound.rrdex-abilities", in: app).value as? String)?.contains("Friend Guard") == true)
+        assertImportedAbilities()
         screenshot("RRDex-imported-randomizer")
+        // Re-import refreshes the current native save and keeps the randomizer settings.
+        importButton.tap()
+        XCTAssertTrue(importButton.label.contains("Save loaded"))
+        assertGamePixelsAnimate(game, in: app)
+        search.tap(); search.typeText("bulbasaur")
+        app.buttons["bound.rrdex-suggestion-1"].tap()
+        assertImportedAbilities()
         app.buttons["bound.rrdex-info"].tap()
         XCTAssertTrue(app.buttons["bound.rrdex-clear-save"].waitForExistence(timeout: 10))
-        app.buttons["bound.rrdex-clear-save"].tap()
         app.buttons["bound.rrdex-close-detail"].tap()
-        XCTAssertTrue(app.buttons["bound.rrdex-import"].label.contains("Import save"))
-        XCTAssertTrue((element("bound.rrdex-abilities", in: app).value as? String)?.contains("Chlorophyll") == true)
         search.tap(); search.typeText("charizard")
         app.buttons["bound.rrdex-suggestion-6"].tap()
         XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Charizard")
@@ -694,9 +1058,14 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, "Friend")
         selectCompanion("Dex", in: app)
         XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Charizard")
+        XCTAssertTrue(app.buttons["bound.rrdex-import"].label.contains("Save loaded"))
         app.terminate(); XCUIDevice.shared.orientation = .portrait; app.launch(); play()
         selectCompanion("Dex", in: app)
         XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Charizard")
+        XCTAssertTrue(app.buttons["bound.rrdex-import"].label.contains("Save loaded"))
+        search.tap(); search.typeText("bulbasaur")
+        app.buttons["bound.rrdex-suggestion-1"].tap()
+        assertImportedAbilities()
         app.terminate(); app.launch(); setExperiments(false); play()
         for name in ["Notes", "Types", "Friend", "Notes", "Types", "Friend"] {
             app.buttons["bound.panel-cycle"].tap()
@@ -737,7 +1106,7 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, "Friend")
     }
 
-    func testExperimentalPortraitBossAndRRDexCardsMatchFriendWidth() throws {
+    func testExperimentalPortraitBossAndRRDexCardsUseFullScreenWidthWithoutScalingSprites() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--bound-ui-screen-layout-bound", "--bound-ui-friend-fixture", "--bound-ui-no-animations"]
         app.launch()
@@ -757,9 +1126,9 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(game.waitForExistence(timeout: 10))
         let friend = element("bound.friend-screen", in: app)
         XCTAssertTrue(friend.waitForExistence(timeout: 10))
-        let friendFrame = friend.frame
-        XCTAssertGreaterThan(friendFrame.width, 100)
-        screenshot("Experimental-portrait-friend-width-reference")
+        let screenFrame = app.frame
+        XCTAssertGreaterThan(screenFrame.width, 100)
+        screenshot("Experimental-portrait-full-screen-width-reference")
 
         cycle.tap() // Notes
         cycle.tap() // Types
@@ -767,19 +1136,25 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(cycle.value as? String, "Bosses")
         let bossGuide = element("bound.boss-guide", in: app)
         XCTAssertTrue(bossGuide.waitForExistence(timeout: 10))
-        XCTAssertEqual(bossGuide.frame.minX, friendFrame.minX, accuracy: 2)
-        XCTAssertEqual(bossGuide.frame.maxX, friendFrame.maxX, accuracy: 2)
+        XCTAssertEqual(bossGuide.frame.minX, screenFrame.minX, accuracy: 2)
+        XCTAssertEqual(bossGuide.frame.maxX, screenFrame.maxX, accuracy: 2)
         let bossPicker = app.buttons["bound.boss-picker"]
         let bossCap = app.staticTexts["bound.boss-cap"]
+        let bossPicture = element("bound.boss-picture", in: app)
         XCTAssertTrue(bossPicker.isHittable)
         XCTAssertTrue(bossCap.exists)
-        XCTAssertGreaterThanOrEqual(bossPicker.frame.minX, friendFrame.minX)
-        XCTAssertLessThanOrEqual(bossPicker.frame.maxX, friendFrame.maxX)
-        XCTAssertGreaterThanOrEqual(bossCap.frame.minX, friendFrame.minX)
-        XCTAssertLessThanOrEqual(bossCap.frame.maxX, friendFrame.maxX)
-        XCTAssertGreaterThanOrEqual(bossPicker.frame.width, friendFrame.width * 0.9,
-                                    "The boss picker row should span the visible friend-screen width")
-        XCTAssertEqual(bossPicker.frame.midX, friendFrame.midX, accuracy: 2)
+        XCTAssertTrue(bossPicture.waitForExistence(timeout: 5))
+        XCTAssertEqual(bossPicker.frame.minX, screenFrame.minX + 12, accuracy: 2)
+        XCTAssertEqual(bossPicker.frame.maxX, screenFrame.maxX - 12, accuracy: 2)
+        XCTAssertGreaterThanOrEqual(bossCap.frame.minX, screenFrame.minX + 10)
+        XCTAssertLessThanOrEqual(bossCap.frame.maxX, screenFrame.maxX - 10)
+        XCTAssertGreaterThanOrEqual(bossPicker.frame.width, screenFrame.width - 28,
+                                    "The boss picker should span the full-screen card inside its 12 pt side padding")
+        XCTAssertEqual(bossPicker.frame.midX, screenFrame.midX, accuracy: 2)
+        XCTAssertEqual(bossPicture.frame.width, 46, accuracy: 2,
+                        "The boss sprite should retain its normal portrait size")
+        XCTAssertEqual(bossPicture.frame.height, 46, accuracy: 2,
+                        "The boss sprite should retain its normal portrait size")
         screenshot("Experimental-portrait-boss-card-full-width")
         app.buttons["bound.boss-full-team"].tap()
         let fullTeam = element("bound.boss-full-team-list", in: app)
@@ -792,24 +1167,35 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(cycle.value as? String, "Dex")
         let dex = element("bound.rrdex", in: app)
         XCTAssertTrue(dex.waitForExistence(timeout: 10))
-        XCTAssertEqual(dex.frame.minX, friendFrame.minX, accuracy: 2)
-        XCTAssertEqual(dex.frame.maxX, friendFrame.maxX, accuracy: 2)
+        XCTAssertEqual(dex.frame.minX, screenFrame.minX, accuracy: 2)
+        XCTAssertEqual(dex.frame.maxX, screenFrame.maxX, accuracy: 2)
         let search = app.textFields["bound.rrdex-search"]
+        let dexPicture = element("bound.rrdex-picture", in: app)
         XCTAssertTrue(search.exists)
-        XCTAssertGreaterThanOrEqual(search.frame.width, friendFrame.width * 0.8,
-                                    "The Dex search field should use the widened portrait card")
+        XCTAssertTrue(dexPicture.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(search.frame.width, screenFrame.width - 80,
+                                    "The Dex search field should remain full-width at normal text size")
+        XCTAssertGreaterThanOrEqual(search.frame.minX, screenFrame.minX + 12)
+        XCTAssertEqual(search.frame.maxX, screenFrame.maxX - 21, accuracy: 3,
+                        "The search field should end at the standard card and search-row insets")
+        XCTAssertEqual(dexPicture.frame.width, 58, accuracy: 2,
+                       "The Dex sprite should retain its normal portrait size")
+        XCTAssertEqual(dexPicture.frame.height, 58, accuracy: 2,
+                       "The Dex sprite should retain its normal portrait size")
         let weaknesses = app.buttons["bound.rrdex-weaknesses"]
         let learnset = app.buttons["bound.rrdex-learnset"]
         for identifier in ["bound.rrdex-import", "bound.rrdex-info", "bound.rrdex-weaknesses", "bound.rrdex-learnset"] {
             let control = app.buttons[identifier]
             XCTAssertTrue(control.isHittable, "\(identifier) must remain tappable in the full-width portrait card")
-            XCTAssertGreaterThanOrEqual(control.frame.minX, friendFrame.minX)
-            XCTAssertLessThanOrEqual(control.frame.maxX, friendFrame.maxX)
+            XCTAssertGreaterThanOrEqual(control.frame.minX, screenFrame.minX + 10)
+            XCTAssertLessThanOrEqual(control.frame.maxX, screenFrame.maxX - 10)
         }
         let dexContentWidth = learnset.frame.maxX - weaknesses.frame.minX
-        XCTAssertGreaterThanOrEqual(dexContentWidth, friendFrame.width * 0.9,
-                                    "Dex detail buttons should span the visible friend-screen width")
-        XCTAssertEqual((learnset.frame.maxX + weaknesses.frame.minX) / 2, friendFrame.midX, accuracy: 2)
+        XCTAssertGreaterThanOrEqual(dexContentWidth, screenFrame.width - 28,
+                                    "Dex detail buttons should span the full-screen card inside its 12 pt side padding")
+        XCTAssertEqual(weaknesses.frame.minX, screenFrame.minX + 12, accuracy: 2)
+        XCTAssertEqual(learnset.frame.maxX, screenFrame.maxX - 12, accuracy: 2)
+        XCTAssertEqual((learnset.frame.maxX + weaknesses.frame.minX) / 2, screenFrame.midX, accuracy: 2)
         screenshot("Experimental-portrait-rrdex-card-full-width")
         app.buttons["bound.rrdex-weaknesses"].tap()
         let matchups = element("bound.rrdex-matchups", in: app)

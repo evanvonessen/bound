@@ -7,6 +7,7 @@
 //
 
 import UIKit
+import GoogleSignIn
 
 import DeltaCore
 import Harmony
@@ -204,6 +205,7 @@ private extension SceneDelegate
                 
             case .handoff: _ = self.deepLinkController.handle(deepLink)
             case .url(let url):
+                if BoundFeatureVisibility.experimentalFeaturesEnabled, GIDSignIn.sharedInstance.handle(url) { return }
                 if url.isFileURL
                 {
                     if GameType(fileExtension: url.pathExtension) != nil || url.pathExtension.lowercased() == "zip"
@@ -217,6 +219,7 @@ private extension SceneDelegate
                 }
                 else if url.scheme?.hasPrefix("db-") == true
                 {
+                    guard BoundFeatureVisibility.experimentalFeaturesEnabled, DropboxService.shared.clientID != nil else { return }
                     _ = DropboxService.shared.handleDropboxURL(url)
                 }
                 else if url.scheme?.lowercased() == "delta"

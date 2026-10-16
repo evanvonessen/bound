@@ -28,6 +28,7 @@ class PreviewGameViewController: DeltaCore.GameViewController
     }
     
     var isLivePreview: Bool = true
+    var onPreviewStopped: (() -> Void)?
     
     private var emulatorCoreQueue = DispatchQueue(label: "com.rileytestut.Delta.PreviewGameViewController.emulatorCoreQueue", qos: .userInitiated)
     private var copiedSaveFiles = [(originalURL: URL, copyURL: URL)]()
@@ -144,15 +145,8 @@ extension PreviewGameViewController
             // This also ensures if the core is never stopped (for some reason), saves are still restored.
             self.restoreSaveFiles(removeCopyDirectory: false)
             
-            self.emulatorCoreQueue.async {
-                // Explicitly stop emulatorCore _before_ we remove ourselves as observer
-                // so we can wait until stopped before restoring save files (again).
-                self.emulatorCore?.stop()
-                reset()
-            }
         }
-        else
-        {
+        self.stopPreview {
             reset()
         }
     }
@@ -169,6 +163,19 @@ extension PreviewGameViewController
     {
         super.didReceiveMemoryWarning()
         // Dispose of any resources that can be recreated.
+    }
+
+    func stopPreview(completion: @escaping () -> Void)
+    {
+        let core = self.emulatorCore
+        self.emulatorCoreQueue.async {
+            // Finish any queued startup/load before releasing the shared bridge.
+            core?.stop()
+            DispatchQueue.main.async {
+                self.onPreviewStopped?()
+                completion()
+            }
+        }
     }
     
     override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?)
@@ -217,6 +224,9 @@ private extension PreviewGameViewController
     
     func preparePreview()
     {
+        // Startup's KVO callback can enqueue this work after a stop was requested.
+        // A stopped preview must not load into the bridge now owned by gameplay.
+        guard let emulatorCore = self.emulatorCore, emulatorCore.state != .stopped else { return }
         var previewSaveState = self.previewSaveState
         
         if let saveState = self.previewSaveState as? SaveState
@@ -312,15 +322,8 @@ extension PreviewGameViewController: GameViewControllerDelegate
     
     func gameViewController(_ gameViewController: DeltaCore.GameViewController, optionsFor game: GameProtocol) -> [EmulatorCore.Option: Any]
     {
-        guard let game = game as? Game, game.type == .n64 else { return [:] }
-        
-        if let useOpenGLES2 = game.settings[.openGLES2] as? Bool, useOpenGLES2
-        {
-            return [.openGLES2: true]
-        }
-        else
-        {
-            return [:]
-        }
+        // Context-menu previews need gameplay's renderer, including the Metal
+        // GBA path that avoids OpenGL crashes while attaching the preview view.
+        GameViewController.emulatorCoreOptions(for: game)
     }
 }

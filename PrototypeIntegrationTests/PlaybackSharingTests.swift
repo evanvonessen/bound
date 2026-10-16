@@ -13,6 +13,27 @@ private struct FixtureGame: GameProtocol {
     let gameSaveURL: URL
     var type: GameType { System.gba.gameType }
 }
+
+private func rrDexBatteryFixture(trainerID: UInt32, randomAbilities: Bool, randomLearnset: Bool) -> Data {
+    var bytes = [UInt8](repeating: 0, count: 0x20000)
+    func put(_ value: UInt32, at offset: Int, count: Int = 4) {
+        for index in 0..<count { bytes[offset + index] = UInt8(truncatingIfNeeded: value >> (index * 8)) }
+    }
+    for slot in 0..<2 {
+        for physical in 0..<14 {
+            let sector = (physical + (slot == 1 ? 11 : 0)) % 14
+            let offset = slot * 0xe000 + physical * 0x1000
+            put(UInt32(sector), at: offset + 0xff4, count: 2)
+            put(0x08012025, at: offset + 0xff8)
+            put(UInt32(slot + 10), at: offset + 0xffc)
+            if sector == 0 {
+                put(trainerID, at: offset + 0xa)
+                bytes[offset + 0xf2c] = (randomAbilities ? 4 : 0) | (randomLearnset ? 2 : 0)
+            }
+        }
+    }
+    return Data(bytes)
+}
 private final class FrameProbe: @unchecked Sendable {
     private let lock = NSLock()
     private var stamps: [Double] = []
@@ -101,6 +122,73 @@ private final class TransitionCount: @unchecked Sendable {
         .init(appID: String(repeating: "0", count: 32), channel: "offline-fixture", uid: 1, remoteUID: 2, token: "offline-not-an-RTC-token")
     }
     private func wait(_ seconds: Double) async throws { try await Task.sleep(nanoseconds: UInt64(seconds * 1e9)) }
+
+    func testCurrentRRDexCaptureExportsLiveGBABatteryAndCleansTemporaryFiles() throws {
+        let fixtureROM = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let exportDirectory = directory.appendingPathComponent("exports", isDirectory: true)
+        try FileManager.default.createDirectory(at: exportDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let rom = directory.appendingPathComponent("fixture-flash1m.gba")
+        try FileManager.default.copyItem(at: fixtureROM, to: rom)
+        let romHandle = try FileHandle(forWritingTo: rom)
+        try romHandle.seekToEnd()
+        let romAttributes = try FileManager.default.attributesOfItem(atPath: rom.path)
+        let romSize = try XCTUnwrap((romAttributes[.size] as? NSNumber)?.intValue)
+        let alignmentPadding = (4 - romSize % 4) % 4
+        if alignmentPadding > 0 { try romHandle.write(contentsOf: Data(repeating: 0, count: alignmentPadding)) }
+        try romHandle.write(contentsOf: Data("FLASH1M_V103".utf8))
+        try romHandle.close()
+
+        let staleBatteryURL = directory.appendingPathComponent("fixture.sav")
+        let staleBattery = rrDexBatteryFixture(trainerID: 42, randomAbilities: false, randomLearnset: false)
+        try staleBattery.write(to: staleBatteryURL)
+        let core = try XCTUnwrap(EmulatorCore(game: FixtureGame(fileURL: rom, gameSaveURL: staleBatteryURL), options: [.metal: true]))
+        defer { _ = core.stop() }
+        XCTAssertTrue(core.start())
+        XCTAssertTrue(core.pause())
+        XCTAssertEqual(core.state, .paused)
+
+        // Change the GBA bridge's battery-backed RAM after startup so a copy of
+        // the original on-disk .sav would be observably stale.
+        let liveBatteryURL = directory.appendingPathComponent("live.sav")
+        let liveBattery = rrDexBatteryFixture(trainerID: 123456789, randomAbilities: true, randomLearnset: true)
+        try liveBattery.write(to: liveBatteryURL)
+        core.deltaCore.emulatorBridge.loadGameSave(from: liveBatteryURL)
+        let sourceAfterPause = try Data(contentsOf: staleBatteryURL)
+
+        let captured = try BoundRRDexCurrentSaveImport.capture(temporaryDirectory: exportDirectory) { url in
+            core.deltaCore.emulatorBridge.saveGameSave(to: url)
+        }
+        XCTAssertEqual(captured, BoundRRDexSave(trainerID: 123456789, randomAbilities: true, randomLearnset: true))
+        XCTAssertEqual(core.state, .paused, "Capturing the bridge battery must not change core playback state")
+        XCTAssertEqual(try Data(contentsOf: staleBatteryURL), sourceAfterPause, "Export must not replace the ROM's managed battery file")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: exportDirectory.path), [], "Successful capture must remove its temporary .sav and directory")
+
+        XCTAssertThrowsError(try BoundRRDexCurrentSaveImport.capture(temporaryDirectory: exportDirectory) { url in
+            try Data(repeating: 0, count: 123).write(to: url)
+        }) { error in
+            guard let error = error as? BoundRRDexSave.ImportError else {
+                XCTFail("Expected unsupported battery format, got \(error)")
+                return
+            }
+            if case .format = error { } else { XCTFail("Expected unsupported battery format, got \(error)") }
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: exportDirectory.path), [], "Invalid capture must also remove temporary files")
+
+        XCTAssertThrowsError(try BoundRRDexCurrentSaveImport.capture(temporaryDirectory: exportDirectory) { _ in
+            throw CocoaError(.fileWriteUnknown)
+        }) { error in
+            guard let error = error as? BoundRRDexSave.ImportError else {
+                XCTFail("Expected current-game export failure, got \(error)")
+                return
+            }
+            if case .currentGameUnavailable = error { } else { XCTFail("Expected current-game export failure, got \(error)") }
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: exportDirectory.path), [], "Exporter failure must remove temporary files")
+    }
+
     func testMalformedCanvasPreservesValidFrame() throws {
         let presenter = FriendSharingCanvasPresenter(), host = UIView()
         XCTAssertFalse(presenter.present(Data(count: 1), in: host)); XCTAssertTrue(host.subviews.isEmpty)
@@ -771,6 +859,134 @@ extension PlaybackSharingTests {
         link.cancel()
         let onboarding = FriendOnboarding()
         onboarding.close()
+    }
+}
+
+@MainActor
+private final class ForegroundReconnectFixture {
+    var owner = UUID()
+    var room = "friend-room"
+    var featuresEnabled = true
+    var tokenRequests = 0
+    var failNextTokenRequest = false
+
+    func identity() throws -> AppCloudSession {
+        let claims = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
+        let payload = claims.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        return try AppCloudSession(owner: owner, key: "fixture-public-key", token: "fixture.\(payload).signature")
+    }
+
+    func lease(room: String, owner: UUID, request: Int) -> FriendSharingTokenLease {
+        FriendSharingTokenLease(roomID: room, ownerID: owner,
+            appID: String(repeating: "0", count: 32), channel: "fresh-\(request)", uid: 1, remoteUID: 2,
+            token: "server-issued-fixture-\(request)", issuedAt: Date().timeIntervalSince1970,
+            expiresAt: Date().timeIntervalSince1970 + 90)
+    }
+}
+
+extension PlaybackSharingTests {
+    private func authenticatedReconnectSession(_ fixture: ForegroundReconnectFixture,
+                                               transport: OfflineVideoTransport? = nil) -> FriendSharingSession {
+        FriendSharingSession(configuration: nil, transport: transport ?? OfflineVideoTransport(), authenticatedMode: true,
+            roomProvider: { fixture.room }, experimentalFeaturesEnabled: { fixture.featuresEnabled },
+            tokenFetcher: { room, identity in
+                fixture.tokenRequests += 1
+                if fixture.failNextTokenRequest {
+                    fixture.failNextTokenRequest = false
+                    throw FriendSharingTokenError.unavailable
+                }
+                return fixture.lease(room: room, owner: identity.owner, request: fixture.tokenRequests)
+            })
+    }
+
+    func testAuthenticatedSharingRestoresWithFreshTokenAfterForegroundOnlyWhenPreviouslyActive() async throws {
+        let fixture = ForegroundReconnectFixture()
+        let transport = OfflineVideoTransport()
+        let session = authenticatedReconnectSession(fixture, transport: transport)
+        session.configureAuthenticatedRoom(fixture.room, identity: { try? fixture.identity() })
+
+        session.background(); session.foreground()
+        try await wait(0.05)
+        XCTAssertEqual(fixture.tokenRequests, 0, "Foreground must not start sharing that was not active before backgrounding")
+        session.start()
+        try await wait(0.05)
+        XCTAssertTrue(session.joined)
+        XCTAssertEqual(session.configuration?.channel, "fresh-1")
+
+        session.background()
+        XCTAssertFalse(session.active)
+        session.foreground()
+        try await wait(0.05)
+        XCTAssertTrue(session.joined)
+        XCTAssertEqual(fixture.tokenRequests, 2)
+        XCTAssertEqual(session.configuration?.channel, "fresh-2", "Reconnect must fetch a fresh server-issued lease")
+
+        session.stop()
+        session.background(); session.foreground()
+        try await wait(0.05)
+        XCTAssertEqual(fixture.tokenRequests, 2, "A manual stop cancels remembered reconnect intent")
+        session.stop()
+    }
+
+    func testForegroundReconnectRequiresSameRoomOwnerAndExperimentalOptIn() async throws {
+        for changed in ["room", "owner", "opt-out"] {
+            let fixture = ForegroundReconnectFixture()
+            let transport = OfflineVideoTransport()
+            let session = authenticatedReconnectSession(fixture, transport: transport)
+            session.configureAuthenticatedRoom(fixture.room, identity: { try? fixture.identity() })
+            session.start(); try await wait(0.05)
+            XCTAssertTrue(session.joined)
+            session.background()
+            switch changed {
+            case "room":
+                fixture.room = "different-room"
+                session.configureAuthenticatedRoom(fixture.room, identity: { try? fixture.identity() })
+            case "owner": fixture.owner = UUID()
+            default: fixture.featuresEnabled = false; session.experimentalFeaturesChanged(false)
+            }
+            session.foreground(); try await wait(0.05)
+            XCTAssertEqual(fixture.tokenRequests, 1, "Reconnect must be fenced when \(changed) changes")
+            XCTAssertFalse(session.active)
+            session.stop()
+        }
+    }
+
+    func testForegroundReconnectRetriesTransientAuthorizationFailureWithBackoff() async throws {
+        let fixture = ForegroundReconnectFixture()
+        let session = authenticatedReconnectSession(fixture)
+        session.configureAuthenticatedRoom(fixture.room, identity: { try? fixture.identity() })
+        session.start(); try await wait(0.05)
+        XCTAssertTrue(session.joined)
+
+        session.background()
+        fixture.failNextTokenRequest = true
+        session.foreground(); try await wait(0.1)
+        XCTAssertFalse(session.active)
+        XCTAssertEqual(fixture.tokenRequests, 2)
+        session.foreground(); try await wait(0.1)
+        XCTAssertEqual(fixture.tokenRequests, 2, "Duplicate foreground notifications must not bypass retry backoff")
+        try await wait(0.5)
+        XCTAssertEqual(fixture.tokenRequests, 2, "Retry must wait for backoff instead of rapidly repeating token requests")
+        try await wait(1.2)
+        XCTAssertTrue(session.joined)
+        XCTAssertEqual(fixture.tokenRequests, 3)
+        XCTAssertEqual(session.configuration?.channel, "fresh-3")
+        session.stop()
+    }
+
+    func testExperimentalOptOutPreservesManuallyStartedBaselineSharing() async throws {
+        let fixture = ForegroundReconnectFixture()
+        let session = authenticatedReconnectSession(fixture)
+        session.configureAuthenticatedRoom(fixture.room, identity: { try? fixture.identity() })
+        session.start(); try await wait(0.05)
+        XCTAssertTrue(session.joined)
+        fixture.featuresEnabled = false
+        session.experimentalFeaturesChanged(false)
+        XCTAssertTrue(session.active, "The Build 13 manual sharing action remains available")
+        session.background(); session.foreground(); try await wait(0.05)
+        XCTAssertFalse(session.active, "Automatic restoration is gated off")
+        XCTAssertEqual(fixture.tokenRequests, 1)
+        session.stop()
     }
 }
 

@@ -87,6 +87,10 @@
     {
       "path": "PrototypePatches/melonds-simulator-arm64.patch",
       "purpose": "Keep the existing ARM64-only MelonDS Xcode JIT source set on arm64 iOS Simulator builds; no emulator source or upstream pin changes."
+    },
+    {
+      "path": "PrototypePatches/harmony-dropbox-oauth-hooks.patch",
+      "purpose": "Add a cancellable Harmony sync barrier and optional app-owned Dropbox OAuth hooks with coalesced, cancellable account validation; preserve pinned dependency revisions."
     }
   ],
   "sha256": {
@@ -13759,7 +13763,7 @@
     "External/Harmony/Backends/Dropbox/Harmony-Dropbox/DropboxService+Files.swift": "c4467e21b21327d1d50cb14ebafc302927bd3f15448bf6231c8c1e0b4b361f0b",
     "External/Harmony/Backends/Dropbox/Harmony-Dropbox/DropboxService+Records.swift": "407714e02bbc7b528e360e22a969b1fad04df389f8c57e0c80cf54c02fd13b5c",
     "External/Harmony/Backends/Dropbox/Harmony-Dropbox/DropboxService+Versions.swift": "cdd8df633e0b2e512b99a33317f065a37673554cb301b51c73da04770a69b91e",
-    "External/Harmony/Backends/Dropbox/Harmony-Dropbox/DropboxService.swift": "90e9073dfb3edb540cf8ab3968a225a9c3270205ab64f7299174ee74a3ad3a44",
+    "External/Harmony/Backends/Dropbox/Harmony-Dropbox/DropboxService.swift": "d6bf53beb33ed1bc8eb518ad2ef20851af817f98df6f16adf4d8d49733690d4e",
     "External/Harmony/Backends/Dropbox/Harmony-Dropbox/Extensions/PropertyGroup+Harmony.swift": "e883ee214d4cc986de99d56b86baeaa8e46a8b8d2cdef932c8c9c254997b0db2",
     "External/Harmony/Backends/Dropbox/Harmony-Dropbox/Extensions/RemoteFile+Dropbox.swift": "31d679a1faa912ecaf684d191ef26f8a9d83834acd28aa7c234b2c6ece82e6d1",
     "External/Harmony/Backends/Dropbox/Harmony-Dropbox/Extensions/RemoteRecord+Dropbox.swift": "f5afadbaca60d4786e404ebd4461ada6cadfd7f1af5d5e3c9a78020dcabf2678",
@@ -14213,7 +14217,7 @@
     "External/Harmony/Harmony/Protocols/RecordEntry.swift": "c3e20690cfe162d0cb225c495b03e97fadee747606df7d3f31017824e4371111",
     "External/Harmony/Harmony/Protocols/Service.swift": "56b6aebfa51bc19daee2c3843889513cc37b5b7a3ca47e7928a919ddb7977cbe",
     "External/Harmony/Harmony/Protocols/Syncable.swift": "d7c7e9f8c2a2262709a30c59351030dc2e59fdc959e28abe049be83bfb0c0c6e",
-    "External/Harmony/Harmony/SyncCoordinator.swift": "0b537a0841827d0a9c4e604fef907d1294f49e8b7d6c7b2b485ea68261ad7ef2",
+    "External/Harmony/Harmony/SyncCoordinator.swift": "c961caa5f01aeb8edc1151377d0519b8ee6a56d1d0df97586a00d15f776b57a6",
     "External/Harmony/Harmony/Types/AnyCodable.swift": "24ee1c5147374b3a5cb5f393c1ba9aeeaae759336feea6eaf8539971d66249d5",
     "External/Harmony/Harmony/Types/Errors.swift": "43b43f8964fdeca7d4d6c20a69016840ba3952ac8ab818b630a78a72ccf97bf3",
     "External/Harmony/Harmony/Types/SyncProgress.swift": "bb3018bdd786e5ce9b2812ab3d61f8785f50b9f8a037fa535df0893143dea924",

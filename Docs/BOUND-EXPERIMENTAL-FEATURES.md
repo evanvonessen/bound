@@ -13,10 +13,13 @@ and Pokémon per ROM. See `Docs/RADICAL-RED-BOSS-GUIDE.md` for source coverage.
 
 RRDex is the fifth panel, after Bosses. It includes the Radical Red 4.1 Normal
 dex, live Pokémon suggestions, sprites, base stats, abilities, evolution methods,
-type matchups and learnsets. A local battery-save import applies the ability and
-learnset randomizer configuration. See `Docs/RADICAL-RED-DEX.md` for provenance,
+type matchups and learnsets. Import save automatically exports the current GBA
+session's battery save, applies its ability and learnset randomizer configuration,
+and deletes the temporary export. See `Docs/RADICAL-RED-DEX.md` for provenance,
 save validation and coverage. Disabling experiments removes both reference panels
-and dismisses their keyboard, sheets and importer without erasing preferences.
+and dismisses their keyboard, sheets and alerts without erasing preferences.
+Reference menus and import alerts keep the companion panel's position and size.
+Notes and Dex text editing can expand the panel to make room for the keyboard.
 
 With experiments enabled, the pause-menu Fast Forward toggle (and mapped
 Toggle Fast Forward action) is remembered on this device for each ROM and
@@ -27,6 +30,24 @@ erasing the saved choice; ordinary manual fast forward remains available.
 
 The Friends sheet also shows a clipboard button beside a generated invite code
 when experiments are enabled. It copies just the code, ready to paste.
+
+The same opt-in adds account usernames (Library Settings), Remove Friend and
+Jiggle actions, and restoration of sharing that was active before backgrounding.
+Restoration fetches a fresh room token, checks account and room ownership, and
+retries temporary failures with backoff. Manual stop, account changes, removal,
+or disabling experiments cancel restoration. It does not start a previously
+inactive connection. Jiggle reception requires notification permission and a
+per-account device opt-in; sound and vibration follow the device's notification
+settings. Its new RPC and Edge Function are additive; Build 13's friend, token,
+moderation and account-deletion endpoints retain their existing definitions.
+
+Library Settings also exposes Delta Sync and Sync Status for Dropbox. Google
+Drive is not offered in Bound's sync settings; its pinned backend remains for
+compatibility. A previously saved Google selection is retained but ignored, so
+sync stays inactive until Dropbox is selected. Bound-owned OAuth configuration is required before sign-in can run. See
+`Docs/BOUND-CLOUD-SYNC.md` for setup and validation limits. Opting out cancels
+active sync operations and stops the coordinator after they drain, retaining the
+selected service and authentication for later use.
 
 Every new feature added after this switch must check
 `BoundFeatureVisibility.experimentalFeaturesEnabled` before making its UI or

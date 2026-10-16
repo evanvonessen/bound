@@ -11,8 +11,9 @@ final class CompanionCycleButtonTests: XCTestCase {
         preferences.isEnabled = true
         defer { preferences.isEnabled = wasEnabled }
         let parent = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.windows.first?.rootViewController)
-        for (name, size) in [("portrait", CGSize(width: 390, height: 195)), ("landscape", CGSize(width: 330, height: 275))] {
-            let host = UIHostingController(rootView: BoundRRDexView(gameID: "RRDEX_RENDER_QA", presentationChanged: { _ in }))
+        for (name, size) in [("portrait", CGSize(width: 390, height: 195)), ("compact-portrait", CGSize(width: 375, height: 100)), ("landscape", CGSize(width: 330, height: 275))] {
+            let host = UIHostingController(rootView: BoundRRDexView(gameID: "RRDEX_RENDER_QA", floating: name == "landscape", presentationChanged: { _ in }))
+            host.safeAreaRegions = []
             parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)
             host.view.frame = CGRect(origin: CGPoint(x: 0, y: 60), size: size)
             host.view.setNeedsLayout(); host.view.layoutIfNeeded()
@@ -30,6 +31,7 @@ final class CompanionCycleButtonTests: XCTestCase {
             XCTAssertGreaterThan(try XCTUnwrap(snapshot.pngData()).count, 5000)
             let attachment = XCTAttachment(image: snapshot)
             attachment.name = "RRDex-hosted-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
+            if name == "compact-portrait" { try checkCompactCardScrolls(in: host.view, size: size, name: "RRDex") }
             host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent()
         }
     }
@@ -39,8 +41,9 @@ final class CompanionCycleButtonTests: XCTestCase {
         preferences.isEnabled = true
         defer { preferences.isEnabled = wasEnabled }
         let parent = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.windows.first?.rootViewController)
-        for (name, size) in [("portrait", CGSize(width: 390, height: 195)), ("landscape", CGSize(width: 330, height: 275))] {
-            let host = UIHostingController(rootView: BoundBossGuideView(gameID: "BOSS_RENDER_QA", presentationChanged: { _ in }))
+        for (name, size) in [("portrait", CGSize(width: 390, height: 195)), ("compact-portrait", CGSize(width: 375, height: 100)), ("landscape", CGSize(width: 330, height: 275))] {
+            let host = UIHostingController(rootView: BoundBossGuideView(gameID: "BOSS_RENDER_QA", floating: name == "landscape", presentationChanged: { _ in }))
+            host.safeAreaRegions = []
             parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)
             host.view.frame = CGRect(origin: CGPoint(x: 0, y: 60), size: size)
             host.view.setNeedsLayout(); host.view.layoutIfNeeded()
@@ -52,9 +55,29 @@ final class CompanionCycleButtonTests: XCTestCase {
             XCTAssertGreaterThan(try XCTUnwrap(snapshot.pngData()).count, 5000)
             let attachment = XCTAttachment(image: snapshot)
             attachment.name = "Boss-guide-hosted-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
+            if name == "compact-portrait" { try checkCompactCardScrolls(in: host.view, size: size, name: "Boss-guide") }
             host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent()
         }
     }
+
+    private func checkCompactCardScrolls(in view: UIView, size: CGSize, name: String) throws {
+        func scrollingContent(in view: UIView) -> UIScrollView? {
+            if let scroll = view as? UIScrollView, scroll.contentSize.height > scroll.bounds.height + 1 { return scroll }
+            return view.subviews.lazy.compactMap { scrollingContent(in: $0) }.first
+        }
+        let scroll = try XCTUnwrap(scrollingContent(in: view), "A short portrait panel must scroll instead of shrinking or clipping its content")
+        let bottom = max(-scroll.adjustedContentInset.top, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+        scroll.setContentOffset(CGPoint(x: 0, y: bottom), animated: false)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        view.layoutIfNeeded()
+        XCTAssertGreaterThan(scroll.contentOffset.y, 0)
+        let snapshot = UIGraphicsImageRenderer(size: size).image { _ in
+            view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: snapshot)
+        attachment.name = "\(name)-hosted-compact-portrait-footer"; attachment.lifetime = .keepAlways; add(attachment)
+    }
+
     func testDexSearchDisablesCorrectionCapitalizationSpellingAndSmartEdits() {
         let field = BoundRRDexSearchField.makeTextField()
         XCTAssertEqual(field.autocapitalizationType, .none)

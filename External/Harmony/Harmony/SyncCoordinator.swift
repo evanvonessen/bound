@@ -189,6 +189,15 @@ public extension SyncCoordinator
             return syncRecordsOperation.syncProgress
         }
     }
+
+    /// Cancels queued and active sync work without deauthenticating the account
+    /// or resetting the Harmony database. Callers should wait for the sync
+    /// completion notification before stopping the coordinator's record store.
+    public func cancelSyncing(completionHandler: @escaping () -> Void)
+    {
+        self.syncOperationQueue.cancelAllOperations()
+        self.syncOperationQueue.addBarrierBlock(completionHandler)
+    }
 }
 
 public extension SyncCoordinator

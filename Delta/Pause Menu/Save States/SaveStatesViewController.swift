@@ -20,6 +20,24 @@ protocol SaveStatesViewControllerDelegate: AnyObject
     func saveStatesViewController(_ saveStatesViewController: SaveStatesViewController, loadSaveState saveState: SaveStateProtocol)
 }
 
+/// Retain preview-commit files until the loading owner has consumed the state.
+private final class TemporaryPreviewSaveState: SaveStateProtocol
+{
+    let fileURL: URL
+    let gameType: GameType
+
+    init(_ saveState: SaveStateProtocol)
+    {
+        self.fileURL = saveState.fileURL
+        self.gameType = saveState.gameType
+    }
+
+    deinit
+    {
+        try? FileManager.default.removeItem(at: fileURL)
+    }
+}
+
 extension SaveStatesViewController
 {
     enum Mode
@@ -128,6 +146,7 @@ class SaveStatesViewController: UICollectionViewController
     private var incompatibleButton: UIButton!
     
     private weak var _previewTransitionViewController: PreviewGameViewController?
+    private var activePreviewViewController: PreviewGameViewController?
     private weak var _importingSaveState: SaveState?
     private var _exportedSaveStateURL: URL?
     
@@ -157,11 +176,26 @@ class SaveStatesViewController: UICollectionViewController
     }
 }
 
+extension SaveStatesViewController: NSFetchedResultsControllerDelegate
+{
+    func controllerDidChangeContent(_ controller: NSFetchedResultsController<NSFetchRequestResult>)
+    {
+        // Roxas schedules a second batch after moved items finish animating. Renaming
+        // or updating an autosave can leave that batch pending after this screen is
+        // dismissed and its data source is gone. Refresh this list without batching.
+        self.dataSource.prefetchItemCache.removeAllObjects()
+        guard self.isViewLoaded else { return }
+        self.collectionView?.reloadData()
+        self.updateToolbarState()
+    }
+}
+
 extension SaveStatesViewController
 {
     override func viewDidLoad()
     {
         super.viewDidLoad()
+        self.collectionView.accessibilityIdentifier = "bound.save-states"
         
         self.collectionView?.dataSource = self.dataSource
         self.collectionView?.prefetchDataSource = self.dataSource
@@ -472,9 +506,7 @@ private extension SaveStatesViewController
             self.deleteSelectionItem = nil
         }
 
-        // Update only the visible cells' selection appearance in place.
-        // A full reloadData() here would race with the FRC-driven performBatchUpdates
-        // that animates deletions, causing an "invalid number of items" crash.
+        // Update selection appearance without discarding the current selection.
         for indexPath in self.collectionView.indexPathsForVisibleItems
         {
             guard let cell = self.collectionView.cellForItem(at: indexPath) as? GridCollectionViewCell else { continue }
@@ -559,7 +591,9 @@ private extension SaveStatesViewController
         let predicate = self.makePredicate(filter: self.filter)
         fetchRequest.predicate = predicate
         
-        self.fetchedDataSource.fetchedResultsController = NSFetchedResultsController(fetchRequest: fetchRequest, managedObjectContext: DatabaseManager.shared.viewContext, sectionNameKeyPath: #keyPath(SaveState.type), cacheName: nil)
+        let controller = NSFetchedResultsController(fetchRequest: fetchRequest, managedObjectContext: DatabaseManager.shared.viewContext, sectionNameKeyPath: #keyPath(SaveState.type), cacheName: nil)
+        controller.delegate = self
+        self.fetchedDataSource.fetchedResultsController = controller
     }
     
     func makePredicate(filter: Filter) -> NSPredicate
@@ -699,6 +733,7 @@ private extension SaveStatesViewController
     func configure(_ cell: GridCollectionViewCell, for indexPath: IndexPath)
     {
         let saveState = self.dataSource.item(at: indexPath)
+        cell.accessibilityIdentifier = "bound.save-state." + saveState.identifier
         
         cell.imageView.backgroundColor = UIColor.white
         cell.imageView.image = UIImage(named: "DeltaPlaceholder")
@@ -823,21 +858,22 @@ private extension SaveStatesViewController
     
     func updateSaveState(_ saveState: SaveState)
     {
-        // Switch back to self.emulatorCore
-        self.prepareEmulatorCore()
-        
-        saveState.managedObjectContext?.performAndWait {
-            self.delegate?.saveStatesViewController(self, updateSaveState: saveState)
-            saveState.managedObjectContext?.saveWithErrorLogging()
+        let context = saveState.managedObjectContext
+        self.withStoppedPreview {
+            self.prepareEmulatorCore()
+            context?.performAndWait {
+                self.delegate?.saveStatesViewController(self, updateSaveState: saveState)
+                context?.saveWithErrorLogging()
+            }
         }
     }
     
     func loadSaveState(_ saveState: SaveStateProtocol)
     {
-        // Stop previewGameViewController.emulatorCore, and switch to self.emulatorCore
-        self.prepareEmulatorCore()
-        
-        self.delegate?.saveStatesViewController(self, loadSaveState: saveState)
+        self.withStoppedPreview {
+            self.prepareEmulatorCore()
+            self.delegate?.saveStatesViewController(self, loadSaveState: saveState)
+        }
         
         // Implicit assumption that loadSaveState will always result in SaveStatesViewController being dismissed
         // Mostly because the method used in updateSaveState(_:) to detect this doesn't work for peek/pop, and too lazy to care rn
@@ -861,6 +897,13 @@ private extension SaveStatesViewController
     }
     
     func renameSaveState(_ saveState: SaveState)
+    {
+        self.withStoppedPreview {
+            self.presentRenameSaveState(saveState)
+        }
+    }
+
+    func presentRenameSaveState(_ saveState: SaveState)
     {
         let alertController = UIAlertController(title: NSLocalizedString("Rename Save State", comment: ""), message: nil, preferredStyle: .alert)
         alertController.addTextField { (textField) in
@@ -1233,29 +1276,57 @@ private extension SaveStatesViewController
 
 private extension SaveStatesViewController
 {
-    private func prepareEmulatorCoreSaveState()
+    func withStoppedPreview(_ completion: @escaping () -> Void)
     {
-        guard let emulatorCore = self.emulatorCore else { return }
+        guard let preview = self.activePreviewViewController else {
+            completion()
+            return
+        }
+        preview.stopPreview(completion: completion)
+    }
+
+    @discardableResult private func prepareEmulatorCoreSaveState() -> Bool
+    {
+        guard let emulatorCore = self.emulatorCore, emulatorCore.state != .stopped else { return true }
         
         // Store reference to current game state before we stop emulation so we can resume it if user decides to not load a save state
         
+        let wasRunning = emulatorCore.state == .running
+        if wasRunning { emulatorCore.pause() }
         let fileURL = FileManager.default.uniqueTemporaryURL()
-        self.emulatorCoreSaveState = emulatorCore.saveSaveState(to: fileURL)
-        
-        if self.emulatorCoreSaveState != nil
-        {
-            emulatorCore.stop()
+        let saveState = emulatorCore.saveSaveState(to: fileURL)
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+              let size = attributes[.size] as? NSNumber, size.intValue > 0 else {
+            if wasRunning { emulatorCore.resume() }
+            return false
         }
+
+        let previousSaveState = self.emulatorCoreSaveState
+        self.emulatorCoreSaveState = saveState
+        emulatorCore.stop()
+        if let previousSaveState {
+            try? FileManager.default.removeItem(at: previousSaveState.fileURL)
+        }
+        return true
     }
     
-    func makePreviewGameViewController(for saveState: SaveState) -> PreviewGameViewController
+    func makePreviewGameViewController(for saveState: SaveState) -> PreviewGameViewController?
     {
+        guard self.activePreviewViewController == nil else { return nil }
+        // Saving a state may have restarted the gameplay core since this screen
+        // opened. Stop it before a preview takes over the shared emulator bridge.
+        guard self.prepareEmulatorCoreSaveState() else { return nil }
         let previewImage = self.dataSource.prefetchItemCache.object(forKey: saveState) ?? UIImage(contentsOfFile: saveState.imageFileURL.path)
         
         let gameViewController = PreviewGameViewController()
         gameViewController.game = self.game
         gameViewController.previewSaveState = saveState
         gameViewController.previewImage = previewImage
+        self.activePreviewViewController = gameViewController
+        gameViewController.onPreviewStopped = { [weak self, weak gameViewController] in
+            guard let self, self.activePreviewViewController === gameViewController else { return }
+            self.activePreviewViewController = nil
+        }
         return gameViewController
     }
     
@@ -1269,16 +1340,7 @@ private extension SaveStatesViewController
         {
             gameViewController.emulatorCore?.stop()
             
-            self.loadSaveState(saveState)
-            
-            do
-            {
-                try FileManager.default.removeItem(at: fileURL)
-            }
-            catch
-            {
-                print(error)
-            }
+            self.loadSaveState(TemporaryPreviewSaveState(saveState))
         }
     }
 }

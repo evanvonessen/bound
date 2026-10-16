@@ -76,6 +76,86 @@ final class RRDexTests: XCTestCase {
         restricted[0xe000 + 7 * 0x1000 + 0xdc3] = 0x40
         XCTAssertThrowsError(try BoundRRDexSave.parse(restricted))
     }
+    func testCurrentSaveCaptureUsesFreshExportAndCleansUpOnSuccess() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let originalURL = directory.appendingPathComponent("game.sav")
+        let originalData = Self.saveFixture(trainerID: 42)
+        try originalData.write(to: originalURL)
+        let freshData = Self.saveFixture(trainerID: 987654321)
+        var exportedURL: URL?
+
+        let captured = try BoundRRDexCurrentSaveImport.capture(temporaryDirectory: directory) { url in
+            exportedURL = url
+            XCTAssertNotEqual(url, originalURL)
+            XCTAssertEqual(url.lastPathComponent, "current-game.sav")
+            try freshData.write(to: url)
+        }
+
+        XCTAssertEqual(captured, BoundRRDexSave(trainerID: 987654321, randomAbilities: true, randomLearnset: true))
+        XCTAssertEqual(try Data(contentsOf: originalURL), originalData, "Capturing a current save must not modify the game's battery save")
+        let exportDirectory = try XCTUnwrap(exportedURL).deletingLastPathComponent()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: exportDirectory.path), "Temporary export files must be removed after parsing")
+    }
+
+    func testCurrentSaveCaptureCleansUpPartialExportAndPreservesPreferencesOnFailure() throws {
+        let suite = "RRDexCurrentSaveTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundRRDexPreferences(defaults: defaults)
+        let previous = BoundRRDexPreferences.Choice(speciesID: 6, save: try BoundRRDexSave.parse(Self.saveFixture(trainerID: 42)))
+        preferences.write(previous, gameID: "ROM_A")
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let originalURL = directory.appendingPathComponent("game.sav")
+        let originalData = Data("original battery save".utf8)
+        try originalData.write(to: originalURL)
+        var exportedURL: URL?
+
+        XCTAssertThrowsError(try BoundRRDexCurrentSaveImport.capture(temporaryDirectory: directory) { url in
+            exportedURL = url
+            try Data("partial export".utf8).write(to: url)
+            throw NSError(domain: "RRDexSaveExporterFixture", code: 1)
+        }) { error in
+            XCTAssertEqual(error as? BoundRRDexSave.ImportError, .currentGameUnavailable)
+        }
+
+        let exportDirectory = try XCTUnwrap(exportedURL).deletingLastPathComponent()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: exportDirectory.path), "Partial temporary exports must be removed after exporter failure")
+        XCTAssertEqual(try Data(contentsOf: originalURL), originalData)
+        XCTAssertEqual(preferences.read(gameID: "ROM_A"), previous, "A failed import must leave the caller's previous choice unchanged")
+    }
+
+    func testCurrentSaveCaptureRejectsInvalidAndOversizedExportsAndCleansUp() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let originalURL = directory.appendingPathComponent("game.sav")
+        let originalData = Data("original battery save".utf8)
+        try originalData.write(to: originalURL)
+
+        for (name, output, expectedError) in [
+            ("invalid", Data(repeating: 0, count: 0x20000), BoundRRDexSave.ImportError.incomplete),
+            ("oversized", Data(repeating: 0, count: 0x20001), BoundRRDexSave.ImportError.format)
+        ] {
+            var exportedURL: URL?
+            XCTAssertThrowsError(try BoundRRDexCurrentSaveImport.capture(temporaryDirectory: directory) { url in
+                exportedURL = url
+                try output.write(to: url)
+            }, name) { error in
+                XCTAssertEqual(error as? BoundRRDexSave.ImportError, expectedError, name)
+            }
+            let exportDirectory = try XCTUnwrap(exportedURL).deletingLastPathComponent()
+            XCTAssertFalse(FileManager.default.fileExists(atPath: exportDirectory.path), "\(name) temporary exports must be removed")
+            XCTAssertEqual(try Data(contentsOf: originalURL), originalData)
+        }
+    }
+
     func testImportedConfigurationPersistsPerROMWithoutStoringRawSave() throws {
         let suite = "RRDexTests." + UUID().uuidString, defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -93,7 +173,7 @@ final class RRDexTests: XCTestCase {
         XCTAssertNil(store.read(gameID: "ROM_A").save)
         XCTAssertEqual(store.read(gameID: "ROM_A").speciesID, 6)
     }
-    private static func saveFixture() -> Data {
+    private static func saveFixture(trainerID: UInt32 = 123456789) -> Data {
         var bytes = [UInt8](repeating: 0, count: 0x20000)
         func put(_ value: UInt32, _ offset: Int, count: Int = 4) {
             for n in 0..<count { bytes[offset + n] = UInt8(truncatingIfNeeded: value >> (n * 8)) }
@@ -103,7 +183,7 @@ final class RRDexTests: XCTestCase {
                 let sector = (physical + (slot == 1 ? 11 : 0)) % 14, offset = slot * 0xe000 + physical * 0x1000
                 put(UInt32(sector), offset + 0xff4, count: 2)
                 put(0x08012025, offset + 0xff8); put(UInt32(slot + 10), offset + 0xffc)
-                if sector == 0 { put(slot == 1 ? 123456789 : 42, offset + 0xa); bytes[offset + 0xf2c] = slot == 1 ? 6 : 0 }
+                if sector == 0 { put(slot == 1 ? trainerID : 42, offset + 0xa); bytes[offset + 0xf2c] = slot == 1 ? 6 : 0 }
             }
         }
         return Data(bytes)

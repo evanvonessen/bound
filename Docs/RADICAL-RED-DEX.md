@@ -42,10 +42,18 @@ licensing review in `AGENTS.md`. No claim of ownership is made.
 
 ## Save import
 
-Import an exported **Radical Red 4.1 Normal battery save**, `.sav` or `.srm`.
-Browsing the standard dex works before import. The file is read locally; there
-is no network request, game-save replacement, ROM modification or automatic
-reading of the player's active save. The document picker is security scoped.
+While playing **Radical Red 4.1 Normal**, tap **Import save**. Bound briefly pauses
+the active GBA core and exports its live battery buffer to a unique temporary
+`.sav`, reads it locally, then deletes the export and its directory on success
+or failure. Only a core paused by this operation is resumed afterward; existing
+search or sheet pauses remain under the presentation coordinator. The button
+does not open Files. **Save loaded** repeats the operation to refresh the Dex.
+
+Browsing the standard dex works before import. There is no network request,
+ROM modification, or loading a save back into the emulator. Normal emulator
+pause behavior can flush the managed battery file, but only the temporary
+export is deleted. A new run must have a complete in-game save first: battery
+export cannot commit unsaved game RAM or newly changed settings to save slots.
 Only the trainer seed and randomizer flags are persisted, isolated per ROM.
 Raw save bytes, trainer names, party/box data and filenames are not retained.
 “Use standard dex” removes the imported configuration while retaining selection.
@@ -54,9 +62,9 @@ The parser accepts 112 KiB or 128 KiB raw saves, scans both fourteen-sector
 rotating slots, verifies sector signatures and unique sector IDs, and selects
 the latest complete consistent save index (including counter rollover).
 An interrupted newer slot falls back to the previous complete slot. It rejects
-incomplete saves, unsupported sizes, save-state extensions and Hardcore or
+incomplete saves, unsupported sizes, save-state data and Hardcore or
 Restricted flags. The GBA save container does not identify the ROM version:
-users must select their RR 4.1 Normal save. Sector checksums are not used because
+the active game must be RR 4.1 Normal. Sector checksums are not used because
 the upstream dex's RR-specific format does not validate them; signature/slot
 validation cannot prove every payload byte is intact.
 
@@ -79,33 +87,44 @@ can alter damage. Stats are base stats, rather than calculated party stats.
 Focused model checks cover complete dataset decoding and PNG data, live-search
 narrowing, RR-specific types and evolutions, dual-type matchups, upstream
 randomizer vectors, rotating/torn save slots, rejected formats/difficulties,
-per-ROM persistence and clearing configuration. Hosted coordinator checks cover
+per-ROM persistence and clearing configuration. Export checks cover fresh data,
+temporary-file cleanup after success, export failure and parse failure, and
+preserving the managed save and previous Dex configuration. A native GBA bridge
+test changes battery RAM after startup to prove capture reads the live buffer.
+Hosted coordinator checks cover
 the five-panel cycle, immediate off-gate fallback and native card rendering at
 portrait and landscape PiP sizes. Native UI checks cover
 progressive lowercase search, selection, pictures/stats/evolution, matchup and
-learnset sheets, document-picker presentation, persistence
+learnset sheets, automatic current-game import, refresh, error recovery, persistence
 and the three-panel off cycle. The Release iPhone build is required before
 publication. Simulator/synthetic-save checks do not establish physical-device
 coverage or validation with a player's real randomized RR save.
 
 The UI test `testExperimentalRRDexSearchDetailsSaveImportPersistenceAndOffGate`
-also imports a synthetic seed through Files, verifies Bulbasaur's randomized
-Limber/Friend Guard abilities, then clears the configuration and verifies
-Chlorophyll returns. Stage `BoundRRDexSeedQA.sav` in the dedicated QA app's
-Documents before running that test. Generate it with
+automatically imports the active `BoundRRDexDiagnostic` fixture game's synthetic
+battery save, verifies Bulbasaur's randomized Limber/Friend Guard abilities,
+refreshes it and checks gameplay resumes and configuration persists after relaunch.
+Import the original generated diagnostic ROM with an appended `FLASH1M_V103`
+marker as `BoundRRDexDiagnostic.gba`, then stage the synthetic save at that ROM's
+managed battery path in the dedicated QA app before launching gameplay.
+Generate the save with
 `python3 PrototypeTools/generate_rrdex_save_fixture.py .build/fixtures/BoundRRDexSeedQA.sav`.
 It contains only parser-test metadata and is never suitable for gameplay.
 
 The separate landscape UI test waits for the app window to rotate. It reports
 a skip if the runtime keeps its display in portrait, rather than treating the
-GBA screen's naturally wide aspect ratio as proof of landscape. This environment
-has a headless iOS 26.3 runtime and no Simulator app, so device rotation could
-not be verified here. Hosted snapshots cover the native landscape panel's
-rendering; a physical-device rotation check remains necessary.
+GBA screen's naturally wide aspect ratio as proof of landscape. Hosted snapshots
+also cover the native landscape panel's rendering.
 
-Validation results: 71 model tests, 10 hosted companion tests and both portrait
+Initial catalog validation: 71 model tests, 10 hosted companion tests and both portrait
 UI regressions passed. The landscape rotation UI test skipped for the runtime
 limitation above. The unsigned Release iPhone build and the 16,879-file pinned
 source check passed. Every one of the 1,343 normalized forms was compared with
 the live source for names, stats, typing, abilities, pictures, learnsets and
 evolution targets. No player-owned save or physical device was used.
+
+Current-save automation validation (2026-10-15): eight RR Dex model tests, the
+native GBA bridge export/cleanup test, one-tap import/refresh/relaunch UI coverage,
+and unsupported-save playback recovery pass. The unsigned Release iPhone build
+passes. Runtime checks use an original generated diagnostic ROM and synthetic
+battery metadata; no player-owned save or physical device was used.

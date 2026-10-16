@@ -46,6 +46,10 @@ struct SettingsView: View
                 } footer: {
                     Text("Enable new features under development. Turn off to use the build 13 feature set.")
                 }
+                if experimentalFeaturesEnabled {
+                    DeltaSyncSettingsSection()
+                }
+                if experimentalFeaturesEnabled { BoundAccountSocialSettings() }
                 ControlsSection()
                 EmulationSection()
                 if !BoundFeatureVisibility.simplifiedSettings { OnlineMultiplayerSection() }
@@ -244,19 +248,16 @@ struct OnlineMultiplayerView: View
 
 // MARK: - Services
 
-private struct ServicesSection: View
+private struct DeltaSyncSettingsSection: View
 {
     @SwiftUI.State
-    private var syncingServiceName: String? = Settings.syncingService?.localizedName
+    private var syncingServiceName: String? = SyncManager.experimentalSettingsService?.localizedName
     
     @SwiftUI.State
     private var syncConflictsCount: Int = 0
     
     @SwiftUI.State
     private var isAccountConnected: Bool = SyncManager.shared.coordinator?.account != nil
-
-    @SwiftUI.State
-    private var retroAchievementsUsername: String? = Keychain.shared.retroAchievementsUsername
 
     var body: some View {
         Section {
@@ -270,6 +271,7 @@ private struct ServicesSection: View
                     }
                 }
             }
+            .accessibilityIdentifier("bound.delta-sync-settings")
 
             if isAccountConnected
             {
@@ -290,37 +292,30 @@ private struct ServicesSection: View
                 }
             }
 
-            NavigationLink {
-                AchievementAccount()
-            } label: {
-                SettingsRow(label: Text("RetroAchievements"), systemImage: "medal", color: .indigo) {
-                    if let username = retroAchievementsUsername {
-                        Text(username).foregroundStyle(.secondary)
-                    }
-                }
-            }
+        } header: {
+            Text("Cloud Sync")
+        } footer: {
+            Text("Sync games, battery saves, save states, artwork and library data with Dropbox. Sync runs automatically while enabled.")
         }
         .onReceive(NotificationCenter.default.publisher(for: Settings.didChangeNotification)) { notification in
             guard let name = notification.userInfo?[Settings.NotificationUserInfoKey.name] as? Settings.Name,
                   name == .syncingService else { return }
             
-            syncingServiceName = Settings.syncingService?.localizedName
-            isAccountConnected = SyncManager.shared.coordinator?.account != nil
-            refreshSyncConflicts()
+            refreshSyncStatus()
         }
         .onReceive(NotificationCenter.default.publisher(for: SyncCoordinator.didFinishSyncingNotification).receive(on: DispatchQueue.main)) { _ in
-            refreshSyncConflicts()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: AchievementsManager.didFinishAuthenticatingNotification).receive(on: DispatchQueue.main)) { _ in
-            retroAchievementsUsername = Keychain.shared.retroAchievementsUsername
+            refreshSyncStatus()
         }
         .onAppear {
-            refreshSyncConflicts()
+            refreshSyncStatus()
         }
     }
 
-    private func refreshSyncConflicts()
+    private func refreshSyncStatus()
     {
+        syncingServiceName = SyncManager.experimentalSettingsService?.localizedName
+        isAccountConnected = SyncManager.shared.coordinator?.account != nil
+
         do {
             let records = try SyncManager.shared.recordController?.fetchConflictedRecords() ?? []
             syncConflictsCount = records.count

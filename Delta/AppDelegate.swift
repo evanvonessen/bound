@@ -7,6 +7,7 @@
 //
 
 import UIKit
+import GoogleSignIn
 
 import DeltaCore
 import Harmony
@@ -44,6 +45,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate
         }
         #endif
         Settings.registerDefaults()
+        BoundJiggleNotifications.shared.start()
         
         self.registerCores()
         self.configureAppearance()
@@ -83,6 +85,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate
         self.startOperator()
 
         return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        BoundJiggleNotifications.shared.registered(token: deviceToken)
+    }
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        BoundJiggleNotifications.shared.registrationFailed()
     }
 
     func applicationWillResignActive(_ application: UIApplication)
@@ -216,6 +225,7 @@ extension AppDelegate
     
     @discardableResult private func openURL(_ url: URL) -> Bool
     {
+        if BoundFeatureVisibility.experimentalFeaturesEnabled, GIDSignIn.sharedInstance.handle(url) { return true }
         if url.isFileURL
         {
             if GameType(fileExtension: url.pathExtension) != nil || url.pathExtension.lowercased() == "zip"
@@ -229,6 +239,7 @@ extension AppDelegate
         }
         else if url.scheme?.hasPrefix("db-") == true
         {
+            guard BoundFeatureVisibility.experimentalFeaturesEnabled, DropboxService.shared.clientID != nil else { return false }
             return DropboxService.shared.handleDropboxURL(url)
         }
         else if url.scheme?.lowercased() == "delta"
