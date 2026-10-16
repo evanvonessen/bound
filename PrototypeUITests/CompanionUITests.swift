@@ -1269,9 +1269,194 @@ final class CompanionUITests: XCTestCase {
         closeBoundSheet(in: app)
     }
 
+    func testEnhancedReferenceLayoutsKeepActionsUsableAndGameGeometryStable() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+        let app = XCUIApplication()
+        let arguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound", "--bound-ui-reset-layout"]
+        app.launchArguments = arguments
+        app.launch(); setExperimentalFeatures(true, in: app)
+        func play() {
+            let cell = app.collectionViews.cells.firstMatch
+            XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
+            XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+        }
+        defer {
+            app.terminate(); XCUIDevice.shared.orientation = .portrait
+            app.launch(); setExperimentalFeatures(false, in: app); play(); app.terminate()
+        }
+        play()
+        let game = element("bound.game-screen", in: app)
+        let originalGame = game.frame
+        let safeTop = element("bound.friend-screen", in: app).frame.minY
+        func chooseBoss(_ id: String, search: String) {
+            app.buttons["bound.boss-picker"].tap()
+            let field = app.searchFields.firstMatch
+            XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(search)
+            let row = app.buttons["bound.boss-select-\(id)"]
+            XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+            XCTAssertTrue(field.waitForNonExistence(timeout: 5))
+        }
+        func assertGeometry() {
+            XCTAssertEqual(game.frame.minY, originalGame.minY, accuracy: 1)
+            XCTAssertEqual(game.frame.height, originalGame.height, accuracy: 1)
+            let panel = element("bound.companion-container", in: app)
+            XCTAssertEqual(panel.frame.minY, app.frame.minY, accuracy: 1)
+            XCTAssertEqual(panel.frame.maxY, game.frame.minY, accuracy: 1)
+        }
+        func closeDetail() {
+            let done = app.buttons["Done"].firstMatch
+            XCTAssertTrue(done.waitForExistence(timeout: 5)); done.tap()
+            XCTAssertTrue(done.waitForNonExistence(timeout: 5))
+            assertGamePixelsAnimate(game, in: app)
+        }
+        for layout in [2, 3] {
+            openBoundSettings(in: app)
+            for name in ["boss", "rrdex"] {
+                let picker = app.segmentedControls["bound.\(name)-layout"]
+                scrollToSetting(picker, in: app)
+                picker.buttons["Layout \(layout)"].tap()
+            }
+            closeBoundSheet(in: app)
+            selectCompanion("Bosses", in: app)
+            chooseBoss("kanto-leaders-4", search: "Brock")
+            XCTAssertEqual(element("bound.boss-guide", in: app).value as? String, "Layout \(layout)")
+            assertGeometry()
+            let member = app.buttons["bound.boss-team-member-1"]
+            XCTAssertTrue(member.isHittable); member.tap()
+            XCTAssertTrue(member.isSelected)
+            XCTAssertEqual(app.staticTexts["bound.boss-page"].label, "2 / 4")
+            for id in ["bound.boss-ability", "bound.boss-item"] {
+                XCTAssertTrue(app.buttons[id].isHittable); app.buttons[id].tap(); closeDetail()
+            }
+            app.buttons["bound.boss-team-member-0"].tap()
+            let matchups = app.buttons["bound.boss-weaknesses"]
+            XCTAssertTrue(matchups.isHittable)
+            if layout == 3 && safeTop >= 51 {
+                XCTAssertLessThanOrEqual(matchups.frame.maxY, safeTop + 1)
+                XCTAssertLessThanOrEqual(matchups.frame.maxX, app.frame.midX - 78)
+                let fullTeam = app.buttons["bound.boss-full-team"]
+                XCTAssertGreaterThanOrEqual(fullTeam.frame.minX, app.frame.midX + 78)
+                XCTAssertLessThanOrEqual(fullTeam.frame.maxY, safeTop + 1)
+            }
+            screenshot("Boss-layout-\(layout)-portrait")
+            matchups.tap()
+            XCTAssertTrue(element("bound.rrdex-matchups", in: app).waitForExistence(timeout: 5))
+            closeDetail()
+            chooseBoss("kanto-leaders-145", search: "Blaine")
+            XCTAssertTrue(element("bound.boss-condition-permanent-sun", in: app).exists)
+            screenshot("Boss-layout-\(layout)-battle-conditions")
+            assertGeometry()
+
+            selectCompanion("Dex", in: app)
+            XCTAssertEqual(element("bound.rrdex", in: app).value as? String, "Layout \(layout)")
+            let search = app.textFields["bound.rrdex-search"]
+            XCTAssertTrue(search.isHittable); search.tap(); search.typeText("charizard")
+            let suggestion = app.buttons["bound.rrdex-suggestion-6"]
+            XCTAssertTrue(suggestion.waitForExistence(timeout: 5)); suggestion.tap()
+            XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+            assertGeometry()
+            screenshot("RRDex-layout-\(layout)-portrait")
+            XCTAssertTrue(app.buttons["bound.rrdex-import"].isHittable)
+            XCTAssertTrue(app.buttons["bound.rrdex-info"].isHittable)
+            app.buttons["bound.rrdex-info"].tap(); closeDetail()
+            let ability = app.buttons["bound.rrdex-ability-0"]
+            XCTAssertTrue(ability.isHittable); ability.tap(); closeDetail()
+            app.buttons["bound.rrdex-weaknesses"].tap()
+            XCTAssertTrue(element("bound.rrdex-matchups", in: app).waitForExistence(timeout: 5)); closeDetail()
+            app.buttons["bound.rrdex-learnset"].tap()
+            XCTAssertTrue(element("bound.rrdex-moves", in: app).waitForExistence(timeout: 5)); closeDetail()
+            assertGeometry()
+            if layout == 3 {
+                XCUIDevice.shared.orientation = .landscapeLeft
+                waitForFrame(game) { app.frame.width > app.frame.height && $0.width > $0.height }
+                XCTAssertTrue(search.isHittable)
+                screenshot("RRDex-layout-3-landscape")
+                selectCompanion("Bosses", in: app)
+                XCTAssertTrue(app.buttons["bound.boss-picker"].isHittable)
+                screenshot("Boss-layout-3-landscape")
+                XCUIDevice.shared.orientation = .portrait
+                waitForFrame(game) { app.frame.height > app.frame.width && abs($0.minY - originalGame.minY) < 2 }
+            }
+        }
+    }
+
+    func testReferenceLayoutChoicesPersistIndependentlyAndFollowExperimentGate() throws {
+        // Avoid Xcode 27's lost native pause-menu idle notifications; wait for real controls.
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+        let app = XCUIApplication()
+        let arguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        app.launchArguments = arguments + ["--bound-ui-reset-layout"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        func play() {
+            let cell = app.collectionViews.cells.firstMatch
+            XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
+            XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+        }
+        defer {
+            app.terminate(); app.launchArguments = arguments + ["--bound-ui-reset-layout"]
+            app.launch(); setExperimentalFeatures(false, in: app); play(); app.terminate()
+        }
+        play()
+        app.launchArguments = arguments
+        func picker(_ name: String) -> XCUIElement { app.segmentedControls["bound.\(name)-layout"] }
+        func assertChoice(_ name: String, _ number: Int) {
+            let control = picker(name)
+            scrollToSetting(control, in: app)
+            XCTAssertTrue(control.buttons["Layout \(number)"].isSelected)
+        }
+        openBoundSettings(in: app)
+        assertChoice("rrdex", 1); assertChoice("boss", 1)
+        picker("boss").buttons["Layout 2"].tap()
+        assertChoice("boss", 2); assertChoice("rrdex", 1)
+        picker("rrdex").buttons["Layout 3"].tap()
+        screenshot("Reference-layout-settings-independent-choices")
+        closeBoundSheet(in: app)
+        selectCompanion("Bosses", in: app)
+        XCTAssertEqual(element("bound.boss-guide", in: app).value as? String, "Layout 2")
+        selectCompanion("Dex", in: app)
+        XCTAssertEqual(element("bound.rrdex", in: app).value as? String, "Layout 3")
+
+        app.terminate(); app.launch(); play()
+        openBoundSettings(in: app)
+        assertChoice("boss", 2); assertChoice("rrdex", 3)
+        closeBoundSheet(in: app)
+        selectCompanion("Bosses", in: app)
+        XCTAssertEqual(element("bound.boss-guide", in: app).value as? String, "Layout 2")
+        selectCompanion("Dex", in: app)
+        XCTAssertEqual(element("bound.rrdex", in: app).value as? String, "Layout 3")
+
+        app.terminate(); app.launch(); setExperimentalFeatures(false, in: app); play()
+        openBoundSettings(in: app)
+        XCTAssertFalse(picker("boss").exists); XCTAssertFalse(picker("rrdex").exists)
+        closeBoundSheet(in: app)
+        for expected in ["Notes", "Types", "Friend"] {
+            app.buttons["bound.panel-cycle"].tap()
+            XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, expected)
+        }
+        app.terminate(); app.launch(); setExperimentalFeatures(true, in: app); play()
+        openBoundSettings(in: app)
+        assertChoice("boss", 2); assertChoice("rrdex", 3)
+        closeBoundSheet(in: app)
+    }
+
     func testExperimentalPortraitBossAndRRDexCardsUseFullScreenWidthWithoutScalingSprites() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["--bound-ui-screen-layout-bound", "--bound-ui-friend-fixture", "--bound-ui-no-animations"]
+        app.launchArguments = ["--bound-ui-screen-layout-bound", "--bound-ui-reset-layout", "--bound-ui-friend-fixture", "--bound-ui-no-animations"]
         app.launch()
         setExperimentalFeatures(true, in: app)
         defer {

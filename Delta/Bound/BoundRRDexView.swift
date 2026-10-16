@@ -11,6 +11,7 @@ struct BoundRRDexView: View {
     private let catalog = BoundRRDexCatalog.bundled
     private let preferences = BoundRRDexPreferences()
     @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
+    @AppStorage(BoundReferenceLayoutPreferences.dexKey) private var layout = BoundReferenceLayout.layout1
     @State private var choice = BoundRRDexPreferences.Choice()
     @State private var query = ""
     // UIKit owns focus; a SwiftUI FocusState without a .focused view resets it.
@@ -18,7 +19,18 @@ struct BoundRRDexView: View {
     @State private var importError: String?
     @State private var sheet: Detail?
     @State private var awaitingDetailDismissal = false
-    private enum Detail: String, Identifiable { case weaknesses, learnset, information; var id: String { rawValue } }
+    private enum Detail: Identifiable {
+        case weaknesses, learnset, information
+        case ability(String, String)
+        var id: String {
+            switch self {
+            case .weaknesses: "weaknesses"
+            case .learnset: "learnset"
+            case .information: "information"
+            case let .ability(name, _): "ability-\(name)"
+            }
+        }
+    }
     private var interacting: Bool { searching || sheet != nil || importError != nil }
     private var hasIslandActions: Bool { !floating && portraitTopInset >= 51 }
 
@@ -27,21 +39,18 @@ struct BoundRRDexView: View {
             if experimentsEnabled, let catalog, let pokemon = catalog.pokemon(id: choice.speciesID) ?? catalog.species.first {
                 GeometryReader { geometry in
                     if floating {
-                        let scale = min(geometry.size.width / 360, geometry.size.height / 300)
-                        card(pokemon: pokemon, catalog: catalog)
-                            .frame(width: geometry.size.width / max(scale, 0.001), height: 300).scaleEffect(scale)
-                            .frame(width: geometry.size.width, height: geometry.size.height)
+                        floatingCard(pokemon: pokemon, catalog: catalog, size: geometry.size)
                     } else if geometry.size.height < 140 {
                         // Keep fixed controls reachable when the portrait strip
                         // is too short to hold them beside a scrolling list.
                         ScrollView {
-                            card(pokemon: pokemon, catalog: catalog, compact: true)
+                            compactCard(pokemon: pokemon, catalog: catalog)
                                 .frame(width: geometry.size.width)
                         }
                         .scrollDismissesKeyboard(.interactively)
                         .frame(width: geometry.size.width, height: geometry.size.height)
                     } else {
-                        card(pokemon: pokemon, catalog: catalog)
+                        selectedCard(pokemon: pokemon, catalog: catalog, size: geometry.size)
                             .frame(width: geometry.size.width, height: geometry.size.height)
                     }
                 }
@@ -59,13 +68,17 @@ struct BoundRRDexView: View {
                     }
                 }
                 .accessibilityElement(children: .contain).accessibilityIdentifier("bound.rrdex")
+                .accessibilityValue(layout.title)
                 .onAppear { choice = preferences.read(gameID: gameID) }
                 .sheet(item: $sheet, onDismiss: detailDismissed) { detail in
-                    BoundRRDexDetail(title: detail == .weaknesses ? "Type matchups" : detail == .learnset ? "Learnset" : "RRDex") {
+                    BoundRRDexDetail(title: detailTitle(detail)) {
                         switch detail {
                         case .weaknesses: BoundRRDexMatchups(pokemon: pokemon, catalog: catalog)
                         case .learnset: BoundRRDexLearnset(pokemon: pokemon, catalog: catalog, save: choice.save)
                         case .information: information(catalog: catalog)
+                        case let .ability(name, description):
+                            ScrollView { Text(description).frame(maxWidth: .infinity, alignment: .leading).padding() }
+                                .accessibilityIdentifier("bound.rrdex-ability-description")
                         }
                     }
                 }
@@ -88,6 +101,52 @@ struct BoundRRDexView: View {
             searching = false; sheet = nil
             textEditingChanged(false)
             if !awaitingDetailDismissal { presentationChanged(false) }
+        }
+    }
+
+    private func detailTitle(_ detail: Detail) -> String {
+        switch detail {
+        case .weaknesses: "Type matchups"
+        case .learnset: "Learnset"
+        case .information: "RRDex"
+        case let .ability(name, _): name
+        }
+    }
+
+    @ViewBuilder
+    private func floatingCard(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog, size: CGSize) -> some View {
+        let scale = min(size.width / 360, size.height / 300)
+        if layout == .layout1 {
+            card(pokemon: pokemon, catalog: catalog)
+                .frame(width: size.width / max(scale, 0.001), height: 300).scaleEffect(scale)
+                .frame(width: size.width, height: size.height)
+        } else {
+            selectedCard(pokemon: pokemon, catalog: catalog, size: CGSize(width: size.width / max(scale, 0.001), height: 300))
+                .frame(width: size.width / max(scale, 0.001), height: 300).scaleEffect(scale)
+                .frame(width: size.width, height: size.height)
+        }
+    }
+
+    @ViewBuilder
+    private func compactCard(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog) -> some View {
+        switch layout {
+        case .layout1: card(pokemon: pokemon, catalog: catalog, compact: true)
+        case .layout2: cardLayout2(pokemon: pokemon, catalog: catalog, compact: true, denseSizing: true)
+        case .layout3: cardLayout3(pokemon: pokemon, catalog: catalog, compact: true, denseSizing: true)
+        }
+    }
+
+    @ViewBuilder
+    private func selectedCard(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog, size: CGSize) -> some View {
+        switch layout {
+        case .layout1:
+            card(pokemon: pokemon, catalog: catalog)
+        case .layout2:
+            cardLayout2(pokemon: pokemon, catalog: catalog, compact: size.height < 140,
+                        denseSizing: size.height < 250)
+        case .layout3:
+            cardLayout3(pokemon: pokemon, catalog: catalog, compact: size.height < 140,
+                        denseSizing: size.height < 250)
         }
     }
 
@@ -158,6 +217,306 @@ struct BoundRRDexView: View {
         .background(Color(uiColor: .systemBackground))
     }
 
+    private func cardLayout2(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog,
+                             compact: Bool, denseSizing: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: denseSizing ? 4 : compact ? 5 : 7) {
+            toolbar(catalog: catalog)
+            if denseSizing && !compact && !hasIslandActions {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        searchRow(catalog: catalog)
+                        if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            suggestionRows(catalog: catalog)
+                        } else {
+                            layout2Content(pokemon: pokemon, catalog: catalog, compact: true, denseSizing: true)
+                        }
+                    }
+                }
+                .accessibilityIdentifier("bound.rrdex-details")
+                .scrollDismissesKeyboard(.interactively)
+                detailActions(compact: true, dense: true)
+            } else {
+                searchRow(catalog: catalog)
+                if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if compact { suggestionRows(catalog: catalog) }
+                    else { suggestions(catalog: catalog).frame(maxHeight: .infinity) }
+                } else if compact {
+                    layout2Content(pokemon: pokemon, catalog: catalog, compact: true, denseSizing: denseSizing)
+                    if !hasIslandActions { detailActions(compact: true, dense: denseSizing) }
+                } else {
+                    if denseSizing {
+                        layout2DenseHeader(pokemon: pokemon, catalog: catalog)
+                    } else {
+                        speciesIdentity(pokemon: pokemon, catalog: catalog, spriteSize: 62)
+                        pinnedAbilities(pokemon: pokemon, catalog: catalog)
+                    }
+                    ScrollView {
+                        layout2Details(pokemon: pokemon, catalog: catalog, denseSizing: denseSizing)
+                    }
+                    .accessibilityIdentifier("bound.rrdex-details")
+                    .scrollDismissesKeyboard(.interactively)
+                    if !hasIslandActions { detailActions(compact: denseSizing, dense: denseSizing) }
+                }
+            }
+        }
+        .padding(denseSizing ? 4 : compact ? 8 : 12)
+        .background(Color(uiColor: .systemBackground))
+    }
+
+    @ViewBuilder
+    private func layout2Content(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog,
+                                compact: Bool, denseSizing: Bool) -> some View {
+        if denseSizing {
+            layout2DenseHeader(pokemon: pokemon, catalog: catalog)
+        } else {
+            speciesIdentity(pokemon: pokemon, catalog: catalog, spriteSize: compact ? 44 : 62)
+            pinnedAbilities(pokemon: pokemon, catalog: catalog)
+        }
+        layout2Details(pokemon: pokemon, catalog: catalog, denseSizing: denseSizing)
+    }
+
+    private func layout2DenseHeader(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog) -> some View {
+        HStack(alignment: .center, spacing: 6) {
+            BoundRRDexSprite(pokemon: pokemon).frame(width: 42, height: 42)
+            VStack(alignment: .leading, spacing: 2) {
+                speciesHeading(pokemon: pokemon, catalog: catalog, denseSizing: true)
+                pinnedAbilities(pokemon: pokemon, catalog: catalog, compact: true, showTitle: false)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func layout2Details(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog,
+                                denseSizing: Bool) -> some View {
+        VStack(alignment: .leading, spacing: denseSizing ? 4 : 8) {
+            matchupSummary(pokemon: pokemon, catalog: catalog, compact: denseSizing)
+            statsLine(pokemon: pokemon, compact: denseSizing)
+            evolutionLine(pokemon: pokemon, catalog: catalog)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func cardLayout3(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog,
+                             compact: Bool, denseSizing: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: compact ? 3 : 5) {
+            if denseSizing && !compact && !hasIslandActions {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 5) {
+                        layout3Content(pokemon: pokemon, catalog: catalog, compact: true, denseSizing: true,
+                                       includeSearch: true)
+                    }
+                }
+                .accessibilityIdentifier("bound.rrdex-layout3-details")
+                .scrollDismissesKeyboard(.interactively)
+                .frame(maxHeight: .infinity, alignment: .top)
+            } else {
+                layout3Content(pokemon: pokemon, catalog: catalog, compact: compact,
+                               denseSizing: denseSizing, includeSearch: true)
+            }
+            VStack(spacing: 2) {
+                if !hasIslandActions { detailActions(compact: true) }
+                toolbar(catalog: catalog)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("bound.rrdex-layout3-actions")
+        }
+        .padding(.horizontal, compact ? 7 : 10)
+        .padding(.top, compact ? 5 : 8)
+        .padding(.bottom, compact ? 7 : 0)
+        .frame(maxHeight: compact ? nil : .infinity, alignment: .top)
+        .background(Color(uiColor: .systemBackground))
+    }
+
+    @ViewBuilder
+    private func layout3Content(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog,
+                                compact: Bool, denseSizing: Bool, includeSearch: Bool) -> some View {
+        if includeSearch { searchRow(catalog: catalog) }
+        if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if compact { suggestionRows(catalog: catalog) }
+            else { suggestions(catalog: catalog).frame(maxHeight: .infinity) }
+        } else {
+            HStack(alignment: .center, spacing: 8) {
+                BoundRRDexSprite(pokemon: pokemon).frame(width: denseSizing ? 42 : compact ? 42 : 54,
+                                                         height: denseSizing ? 42 : compact ? 42 : 54)
+                VStack(alignment: .leading, spacing: 2) {
+                    speciesHeading(pokemon: pokemon, catalog: catalog, denseSizing: denseSizing)
+                    pinnedAbilities(pokemon: pokemon, catalog: catalog, compact: true,
+                                    showTitle: !denseSizing)
+                }
+            }
+            if compact {
+                VStack(alignment: .leading, spacing: 5) {
+                    matchupSummary(pokemon: pokemon, catalog: catalog, compact: true)
+                    statsLine(pokemon: pokemon, compact: true)
+                    evolutionLine(pokemon: pokemon, catalog: catalog).font(.system(size: 10))
+                }
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 5) {
+                        matchupSummary(pokemon: pokemon, catalog: catalog, compact: true)
+                        statsLine(pokemon: pokemon, compact: true)
+                        evolutionLine(pokemon: pokemon, catalog: catalog).font(.system(size: 10))
+                    }
+                }
+                .accessibilityIdentifier("bound.rrdex-layout3-details")
+                .frame(maxHeight: .infinity, alignment: .top)
+            }
+        }
+    }
+
+    private func toolbar(catalog: BoundRRDexCatalog) -> some View {
+        HStack {
+            Text("RR 4.1 · NORMAL").font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(.secondary)
+            Spacer()
+            Button { importCurrentGameSave() } label: {
+                Label(choice.save == nil ? "Import save" : "Save loaded", systemImage: choice.save == nil ? "square.and.arrow.down" : "checkmark.circle")
+            }
+            .font(.system(size: 11, weight: .medium)).accessibilityIdentifier("bound.rrdex-import")
+            .accessibilityHint("Imports or refreshes the current game's save automatically")
+            Button { showDetail(.information) } label: { Image(systemName: "info.circle") }
+                .accessibilityLabel("Dex information").accessibilityIdentifier("bound.rrdex-info")
+        }
+        .frame(minHeight: 28)
+    }
+
+    private func searchRow(catalog: BoundRRDexCatalog) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            BoundRRDexSearchField(text: $query, focused: Binding(get: { searching }, set: { searching = $0 })) {
+                if let first = catalog.suggestions(query).first { select(first) } else { searching = false }
+            }
+            if !query.isEmpty {
+                Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                    .accessibilityLabel("Clear search").accessibilityIdentifier("bound.rrdex-clear-search")
+            } else if searching {
+                Button("Done") { searching = false }.font(.system(size: 11))
+            }
+        }
+        .font(.system(size: 14)).padding(.horizontal, 9).frame(height: 32)
+        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func speciesIdentity(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog, spriteSize: CGFloat) -> some View {
+        HStack(spacing: 9) {
+            BoundRRDexSprite(pokemon: pokemon).frame(width: spriteSize, height: spriteSize)
+            VStack(alignment: .leading, spacing: 4) { speciesHeading(pokemon: pokemon, catalog: catalog) }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func speciesHeading(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog,
+                                denseSizing: Bool = false) -> some View {
+        let name = HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Text(pokemon.name).font(.system(size: denseSizing ? 14 : 19, weight: .semibold))
+                .lineLimit(1).minimumScaleFactor(0.65)
+                .accessibilityIdentifier("bound.rrdex-pokemon")
+            Text("#\(pokemon.dexNumber)").font(.system(size: denseSizing ? 9 : 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        let types = HStack(spacing: 5) {
+            ForEach(pokemon.types, id: \.self) { id in
+                if let type = catalog.type(id: id) { BoundRRDexTypePill(type: type) }
+            }
+        }
+        return Group {
+            if denseSizing {
+                HStack(spacing: 6) { name; Spacer(minLength: 2); types }
+            } else {
+                VStack(alignment: .leading, spacing: 4) { name; types }
+            }
+        }
+    }
+
+    private func statsLine(pokemon: BoundRRDexSpecies, compact: Bool) -> some View {
+        HStack(spacing: 5) {
+            ForEach(Array(zip(["HP", "Atk", "Def", "SpA", "SpD", "Spe"], pokemon.stats)), id: \.0) { label, stat in
+                VStack(spacing: 2) {
+                    Text(label).font(.system(size: compact ? 8 : 9)).foregroundStyle(.secondary)
+                    Text(String(stat)).font(.system(size: compact ? 11 : 13, weight: .semibold, design: .rounded))
+                }.frame(maxWidth: .infinity).padding(.vertical, compact ? 3 : 5)
+                    .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 5))
+                    .accessibilityElement(children: .ignore).accessibilityLabel("\(label), \(stat)")
+            }
+        }.accessibilityIdentifier("bound.rrdex-stats")
+    }
+
+    private func pinnedAbilities(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog,
+                                compact: Bool = false, showTitle: Bool = true) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if showTitle { Text("ABILITIES").font(.system(size: 8, weight: .medium, design: .monospaced)).foregroundStyle(.secondary) }
+            HStack(spacing: 5) {
+                ForEach(Array(catalog.abilityNames(for: pokemon, save: choice.save).enumerated()), id: \.offset) { index, name in
+                    Button { showDetail(.ability(name, abilityDescription(name))) } label: {
+                        Text(name).font(.system(size: compact ? 9 : 10, weight: .medium)).lineLimit(1).minimumScaleFactor(0.75)
+                            .padding(.horizontal, 7).padding(.vertical, compact ? 3 : 4)
+                            .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("bound.rrdex-ability-\(index)")
+                    .accessibilityLabel("Ability: \(name)")
+                }
+                if catalog.abilityNames(for: pokemon, save: choice.save).isEmpty {
+                    Text("No ability data").font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func abilityDescription(_ name: String) -> String {
+        let key = name.replacingOccurrences(of: " (Hidden)", with: "").folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .filter { $0.isLetter || $0.isNumber }
+        return BoundBossReferenceData.bundled?.abilityDescriptions[key]
+            ?? "A description for this ability is not included in the bundled reference."
+    }
+
+    private func matchupSummary(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog, compact: Bool = false) -> some View {
+        let entries = catalog.defensiveMatchups(for: pokemon)
+        let fourTimes = entries.filter { $0.multiplier >= 4 }
+        let twoTimes = entries.filter { $0.multiplier == 2 }
+        let immunities = entries.filter { $0.multiplier == 0 }
+        return Button { showDetail(.weaknesses) } label: {
+            VStack(alignment: .leading, spacing: compact ? 3 : 4) {
+                HStack(spacing: 4) {
+                    Image(systemName: "shield.lefthalf.filled").font(.system(size: 9))
+                    Text("TYPING ONLY").font(.system(size: 8, weight: .semibold, design: .monospaced))
+                    Spacer()
+                    Text("All matchups ›").font(.system(size: 9, weight: .medium))
+                }.foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 5) {
+                    matchupChip("4×", types: fourTimes, color: .red)
+                    matchupChip("2×", types: twoTimes, color: .orange)
+                    matchupChip("Immune", types: immunities, color: .green)
+                }
+            }
+            .padding(compact ? 6 : 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("bound.rrdex-matchup-summary")
+        .accessibilityHint("Shows defensive type matchups. Abilities and battle effects may change damage.")
+    }
+
+    private func matchupChip(_ title: String, types: [BoundRRDexCatalog.Matchup], color: Color) -> some View {
+        HStack(alignment: .top, spacing: 3) {
+            Text(title).font(.system(size: 8, weight: .bold, design: .rounded)).foregroundStyle(color)
+            Text(types.isEmpty ? "—" : types.map(\.type.name).joined(separator: ", "))
+                .font(.system(size: 8, weight: .medium)).lineLimit(2).minimumScaleFactor(0.75)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func detailActions(compact: Bool = false, dense: Bool = false) -> some View {
+        HStack(spacing: 8) {
+            detailButton("Weaknesses", icon: "shield.lefthalf.filled", detail: .weaknesses, dense: dense)
+            detailButton("Learnset", icon: "list.bullet.rectangle", detail: .learnset, dense: dense)
+        }
+        .padding(.top, compact ? 2 : 0)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("bound.rrdex-actions")
+    }
+
     private func details(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 10) {
@@ -192,16 +551,17 @@ struct BoundRRDexView: View {
         }
     }
 
-    private func detailButton(_ title: String, icon: String, detail: Detail, besideIsland: Bool = false) -> some View {
+    private func detailButton(_ title: String, icon: String, detail: Detail,
+                              besideIsland: Bool = false, dense: Bool = false) -> some View {
         Button {
             showDetail(detail)
         } label: {
-            Label(title, systemImage: icon).font(.system(size: besideIsland ? 11 : 12, weight: .medium))
+            Label(title, systemImage: icon).font(.system(size: besideIsland ? 11 : dense ? 10 : 12, weight: .medium))
                 .lineLimit(1).minimumScaleFactor(0.8)
                 .frame(maxWidth: .infinity).frame(height: besideIsland ? 44 : nil)
-                .padding(.vertical, besideIsland ? 0 : 8)
+                .padding(.vertical, besideIsland ? 0 : dense ? 4 : 8)
                 .background(Color(uiColor: .deltaPurple).opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
-        }.accessibilityIdentifier("bound.rrdex-\(detail.rawValue)")
+        }.accessibilityIdentifier("bound.rrdex-\(detail.id)")
     }
     private func suggestions(catalog: BoundRRDexCatalog) -> some View {
         ScrollView {
@@ -368,9 +728,10 @@ private struct BoundRRDexDetail<Content: View>: View {
             .onChange(of: experimentsEnabled) { _, enabled in if !enabled { dismiss() } }
     }
 }
-private struct BoundRRDexMatchups: View {
+struct BoundRRDexMatchups: View {
     let pokemon: BoundRRDexSpecies
     let catalog: BoundRRDexCatalog
+    var highlightsExtremes = false
     var body: some View {
         List {
             Section {
@@ -384,7 +745,13 @@ private struct BoundRRDexMatchups: View {
                 Section(section) {
                     if entries.isEmpty { Text("None").foregroundStyle(.secondary) }
                     ForEach(entries) { entry in
-                        HStack { BoundRRDexTypePill(type: entry.type); Spacer(); Text(entry.label).monospacedDigit() }
+                        HStack {
+                            BoundRRDexTypePill(type: entry.type)
+                            Spacer()
+                            Text(entry.label).monospacedDigit()
+                                .fontWeight(highlightsExtremes && (entry.multiplier >= 4 || entry.multiplier == 0) ? .bold : .regular)
+                                .foregroundStyle(highlightsExtremes && entry.multiplier >= 4 ? Color.red : highlightsExtremes && entry.multiplier == 0 ? Color.green : Color.primary)
+                        }
                             .accessibilityElement(children: .combine)
                     }
                 }

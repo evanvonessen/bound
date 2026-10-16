@@ -29,6 +29,14 @@ selects the first enabled view; turning every view off hides the companion while
 leaving the Bound button and pause-menu Settings available. Turning experiments
 off restores the Build 13 Friend/Notes/Types cycle without erasing these choices.
 
+The **Reference layouts** section in Bound Settings has independent three-way
+selectors for **RR Dex** and **Boss View**. Both default to **Layout 1**, preserving
+the original presentation. Choices persist on this device across app launches
+and remain saved when experiments are disabled. Layout 2 surfaces more reference
+information; Layout 3 rearranges the portrait area from either side of the Dynamic
+Island down to the game screen. Layout choices do not change the ROM, guide data
+version, selected encounter, selected species, or imported randomizer settings.
+
 With experiments enabled, the pause-menu Fast Forward toggle (and mapped
 Toggle Fast Forward action) is remembered on this device for each ROM and
 restored when the game opens again, using its existing preferred speed. Holding

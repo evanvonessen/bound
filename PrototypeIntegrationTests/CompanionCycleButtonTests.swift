@@ -9,54 +9,70 @@ final class CompanionCycleButtonTests: XCTestCase {
         let preferences = BoundExperimentalFeaturesPreferences()
         let wasEnabled = preferences.isEnabled
         preferences.isEnabled = true
-        defer { preferences.isEnabled = wasEnabled }
+        let savedLayout = UserDefaults.standard.object(forKey: BoundReferenceLayoutPreferences.dexKey)
+        defer {
+            preferences.isEnabled = wasEnabled
+            if let savedLayout { UserDefaults.standard.set(savedLayout, forKey: BoundReferenceLayoutPreferences.dexKey) }
+            else { UserDefaults.standard.removeObject(forKey: BoundReferenceLayoutPreferences.dexKey) }
+        }
         let parent = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.windows.first?.rootViewController)
-        for (name, size) in [("portrait", CGSize(width: 390, height: 195)), ("compact-portrait", CGSize(width: 375, height: 100)), ("landscape", CGSize(width: 330, height: 275))] {
-            let host = UIHostingController(rootView: BoundRRDexView(gameID: "RRDEX_RENDER_QA", floating: name == "landscape", presentationChanged: { _ in }))
-            host.safeAreaRegions = []
-            parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)
-            host.view.frame = CGRect(origin: CGPoint(x: 0, y: 60), size: size)
-            host.view.setNeedsLayout(); host.view.layoutIfNeeded()
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
-            host.view.layoutIfNeeded()
-            func searchField(_ view: UIView) -> UITextField? {
-                if let field = view as? UITextField { return field }
-                return view.subviews.lazy.compactMap(searchField).first
+        for layout in BoundReferenceLayout.allCases {
+            UserDefaults.standard.set(layout.rawValue, forKey: BoundReferenceLayoutPreferences.dexKey)
+            for (name, size) in [("island-portrait", CGSize(width: 393, height: 263)), ("portrait", CGSize(width: 390, height: 195)), ("compact-portrait", CGSize(width: 375, height: 100)), ("landscape", CGSize(width: 330, height: 275))] {
+                let host = UIHostingController(rootView: BoundRRDexView(gameID: "RRDEX_RENDER_QA", floating: name == "landscape", portraitTopInset: name == "island-portrait" ? 59 : 0, presentationChanged: { _ in }))
+                host.safeAreaRegions = []
+                parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)
+                host.view.frame = CGRect(origin: CGPoint(x: 0, y: 60), size: size)
+                host.view.setNeedsLayout(); host.view.layoutIfNeeded()
+                RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+                host.view.layoutIfNeeded()
+                func searchField(_ view: UIView) -> UITextField? {
+                    if let field = view as? UITextField { return field }
+                    return view.subviews.lazy.compactMap(searchField).first
+                }
+                let search = try XCTUnwrap(searchField(host.view))
+                XCTAssertGreaterThan(search.bounds.width, 150)
+                XCTAssertEqual(search.autocapitalizationType, .none)
+                let renderer = UIGraphicsImageRenderer(size: size)
+                let snapshot = renderer.image { _ in host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true) }
+                XCTAssertGreaterThan(try XCTUnwrap(snapshot.pngData()).count, 5000)
+                let attachment = XCTAttachment(image: snapshot)
+                attachment.name = "RRDex-hosted-layout-\(layout.rawValue)-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
+                if name == "compact-portrait" { try checkCompactCardScrolls(in: host.view, size: size, name: "RRDex") }
+                host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent()
             }
-            let search = try XCTUnwrap(searchField(host.view))
-            XCTAssertGreaterThan(search.bounds.width, 150)
-            XCTAssertEqual(search.autocapitalizationType, .none)
-            let renderer = UIGraphicsImageRenderer(size: size)
-            let snapshot = renderer.image { _ in host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true) }
-            XCTAssertGreaterThan(try XCTUnwrap(snapshot.pngData()).count, 5000)
-            let attachment = XCTAttachment(image: snapshot)
-            attachment.name = "RRDex-hosted-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
-            if name == "compact-portrait" { try checkCompactCardScrolls(in: host.view, size: size, name: "RRDex") }
-            host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent()
         }
     }
     func testBossCardRendersAtPortraitAndLandscapePanelSizes() throws {
         let preferences = BoundExperimentalFeaturesPreferences()
         let wasEnabled = preferences.isEnabled
         preferences.isEnabled = true
-        defer { preferences.isEnabled = wasEnabled }
+        let savedLayout = UserDefaults.standard.object(forKey: BoundReferenceLayoutPreferences.bossKey)
+        defer {
+            preferences.isEnabled = wasEnabled
+            if let savedLayout { UserDefaults.standard.set(savedLayout, forKey: BoundReferenceLayoutPreferences.bossKey) }
+            else { UserDefaults.standard.removeObject(forKey: BoundReferenceLayoutPreferences.bossKey) }
+        }
         let parent = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.windows.first?.rootViewController)
-        for (name, size) in [("portrait", CGSize(width: 390, height: 195)), ("compact-portrait", CGSize(width: 375, height: 100)), ("landscape", CGSize(width: 330, height: 275))] {
-            let host = UIHostingController(rootView: BoundBossGuideView(gameID: "BOSS_RENDER_QA", floating: name == "landscape", presentationChanged: { _ in }))
-            host.safeAreaRegions = []
-            parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)
-            host.view.frame = CGRect(origin: CGPoint(x: 0, y: 60), size: size)
-            host.view.setNeedsLayout(); host.view.layoutIfNeeded()
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
-            host.view.layoutIfNeeded()
-            let renderer = UIGraphicsImageRenderer(size: size)
-            let snapshot = renderer.image { _ in host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true) }
-            XCTAssertEqual(snapshot.size, size)
-            XCTAssertGreaterThan(try XCTUnwrap(snapshot.pngData()).count, 5000)
-            let attachment = XCTAttachment(image: snapshot)
-            attachment.name = "Boss-guide-hosted-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
-            if name == "compact-portrait" { try checkCompactCardScrolls(in: host.view, size: size, name: "Boss-guide") }
-            host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent()
+        for layout in BoundReferenceLayout.allCases {
+            UserDefaults.standard.set(layout.rawValue, forKey: BoundReferenceLayoutPreferences.bossKey)
+            for (name, size) in [("island-portrait", CGSize(width: 393, height: 263)), ("portrait", CGSize(width: 390, height: 195)), ("compact-portrait", CGSize(width: 375, height: 100)), ("landscape", CGSize(width: 330, height: 275))] {
+                let host = UIHostingController(rootView: BoundBossGuideView(gameID: "BOSS_RENDER_QA", floating: name == "landscape", portraitTopInset: name == "island-portrait" ? 59 : 0, presentationChanged: { _ in }))
+                host.safeAreaRegions = []
+                parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)
+                host.view.frame = CGRect(origin: CGPoint(x: 0, y: 60), size: size)
+                host.view.setNeedsLayout(); host.view.layoutIfNeeded()
+                RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+                host.view.layoutIfNeeded()
+                let renderer = UIGraphicsImageRenderer(size: size)
+                let snapshot = renderer.image { _ in host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true) }
+                XCTAssertEqual(snapshot.size, size)
+                XCTAssertGreaterThan(try XCTUnwrap(snapshot.pngData()).count, 5000)
+                let attachment = XCTAttachment(image: snapshot)
+                attachment.name = "Boss-guide-hosted-layout-\(layout.rawValue)-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
+                if name == "compact-portrait" { try checkCompactCardScrolls(in: host.view, size: size, name: "Boss-guide") }
+                host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent()
+            }
         }
     }
 

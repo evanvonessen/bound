@@ -13,7 +13,8 @@ Defense, Special Attack, Special Defense and Speed base stats, and four move slo
 guide's type icons and PhysA./SpA./Status damage categories. Ability and held-item
 descriptions appear inline below the moves. The body scrolls inside the panel;
 boss selection and previous/next controls stay visible. Changing Pokémon resets
-the scroll position. Both reference panels match the Friend viewport in portrait.
+the scroll position. Both reference panels fill the full-width area above gameplay
+in Bound portrait, applying safe top clearance to their content.
 The boss selector searches names, locations, variants and Pokémon across every
 category. Full team includes nature, base stats, EVs, speed examples, conditions,
 and variant notes. Guide information contains all 18 level caps, the 97-entry
@@ -28,6 +29,18 @@ Separate fights at different locations or explicitly numbered source encounters
 stay separate. Search opens matching groups while keeping their alternatives
 available; the currently selected encounter opens when the picker returns.
 Unlabeled source alternatives retain neutral Team 1/2/3 labels.
+
+**Bound Settings → Reference layouts → Boss View** chooses between three saved
+presentations independently of RR Dex. Layout 1 preserves the original card and
+is the default. Layout 2 adds source-derived battle-condition badges, a tappable
+opposing-team strip, ability and item description buttons, a typing-matchup
+shortcut, location/variant context, and the trainer portrait. Layout 3 uses a
+compact arrangement with controls beside the Dynamic Island, flexible scrolling
+details and navigation at the game edge. Short panels keep content reachable by
+scrolling, and landscape uses an enhanced compact card. Matchups use the selected
+opponent's published typing, with explicit warnings that abilities, items and
+battle conditions may change damage. They never use the player's randomized
+save configuration.
 
 Trainer icons are unchanged original game sprites from the
 [Pokémon Showdown trainer directory](https://play.pokemonshowdown.com/sprites/trainers/).

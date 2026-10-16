@@ -14,6 +14,17 @@ enum BoundPiPContent: String, CaseIterable, Sendable {
 }
 enum BoundPiPHiddenSide: String, Sendable { case left, right }
 
+enum BoundReferenceLayout: Int, CaseIterable, Sendable {
+    case layout1 = 1, layout2 = 2, layout3 = 3
+    var title: String { "Layout \(rawValue)" }
+}
+
+enum BoundReferenceLayoutPreferences {
+    // Separate, device-local choices; keeping the existing layout is the default.
+    static let bossKey = "bound.delta.pip.v1.bosses.layout"
+    static let dexKey = "bound.delta.pip.v1.dex.layout"
+}
+
 @MainActor
 final class BoundPiPPreferences {
     private let defaults: UserDefaults

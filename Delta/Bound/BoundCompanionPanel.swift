@@ -563,8 +563,8 @@ struct BoundCompanionPanel: View {
                     editingChanged(editing)
                 }).id(gameID)
             } else if state.content == .bosses && experimentsEnabled {
-                BoundBossGuideView(gameID: gameID, floating: state.landscape, presentationChanged: editingChanged)
-                    .padding(.top, state.referenceTopInset).id(gameID)
+                BoundBossGuideView(gameID: gameID, floating: state.landscape, portraitTopInset: state.referenceTopInset,
+                                   presentationChanged: editingChanged).id(gameID)
             } else if state.content == .dex && experimentsEnabled {
                 BoundRRDexView(gameID: gameID, floating: state.landscape, portraitTopInset: state.referenceTopInset, presentationChanged: editingChanged,
                                textEditingChanged: textEditingChanged, currentSave: { try currentSave(gameID) })
@@ -587,6 +587,8 @@ struct BoundCompanionPanel: View {
 private struct BoundPiPSettings: View {
     @ObservedObject var state: BoundCompanionState
     @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
+    @AppStorage(BoundReferenceLayoutPreferences.dexKey) private var dexLayout = BoundReferenceLayout.layout1
+    @AppStorage(BoundReferenceLayoutPreferences.bossKey) private var bossLayout = BoundReferenceLayout.layout1
     var closed: () -> Void = {}
     @Environment(\.dismiss) var dismiss
     var body: some View {
@@ -601,6 +603,12 @@ private struct BoundPiPSettings: View {
                         }
                     } header: { Text("Companion views") } footer: {
                         Text("Choose which views the Bound button cycles through. All are on by default. Turn all off to hide the companion panel.")
+                    }
+                    Section {
+                        layoutPicker("RR Dex", selection: $dexLayout, identifier: "bound.rrdex-layout")
+                        layoutPicker("Boss View", selection: $bossLayout, identifier: "bound.boss-layout")
+                    } header: { Text("Reference layouts") } footer: {
+                        Text("Layout 1 keeps the original view. Layout 2 brings more details into view. Layout 3 uses the full portrait area around the Dynamic Island. Each choice is saved separately on this device.")
                     }
                 }
                 BoundAppearanceSettings(emulationDetails: state.emulationDetails)
@@ -624,6 +632,20 @@ private struct BoundPiPSettings: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
         }.onDisappear(perform: closed)
+    }
+
+    private func layoutPicker(_ title: String, selection: Binding<BoundReferenceLayout>, identifier: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+            Picker(title, selection: selection) {
+                ForEach(BoundReferenceLayout.allCases, id: \.rawValue) { layout in
+                    Text(layout.title).tag(layout)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier(identifier)
+        }
+        .padding(.vertical, 4)
     }
 }
 

@@ -3,6 +3,14 @@ import XCTest
 @testable import Models
 
 final class BossGuideTests: XCTestCase {
+    func testBattleConditionBadgesPreserveMultipleConditionsPerNote() throws {
+        let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
+        XCTAssertEqual(catalog.team(id: "kanto-leaders-97")?.battleConditionBadges, ["Doubles"])
+        XCTAssertEqual(catalog.team(id: "team-rocket-169")?.battleConditionBadges, ["Doubles", "Partner battle"])
+        XCTAssertEqual(catalog.team(id: "mini-bosses-340")?.battleConditionBadges, ["Back-to-back", "Permanent snow"])
+        XCTAssertEqual(catalog.team(id: "mini-bosses-441")?.battleConditionBadges, ["Doubles", "Permanent sun"])
+    }
+
     func testEncounterGroupsPreserveEveryTeamAndSeparateRepeatedFights() throws {
         let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
         let encounters = catalog.encounters(matching: "")

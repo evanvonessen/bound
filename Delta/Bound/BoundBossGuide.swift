@@ -103,6 +103,21 @@ struct BoundBossTeam: Decodable, Identifiable, Sendable {
     let order: Int
     let pokemon: [BoundBossPokemon]
     var subtitle: String { [location, variant].filter { !$0.isEmpty }.joined(separator: " · ") }
+    var battleConditionBadges: [String] {
+        var badges: [String] = []
+        for note in notes {
+            let value = note.uppercased()
+            if value.contains("DOUBLES"), !badges.contains("Doubles") { badges.append("Doubles") }
+            for (source, label) in [("PERMANENT SUN", "Permanent sun"), ("PERMANENT RAIN", "Permanent rain"),
+                                    ("PERMANENT SAND", "Permanent sand"), ("PERMANENT HAIL", "Permanent hail"),
+                                    ("PERMANENT SNOW", "Permanent snow")] {
+                if value.contains(source), !badges.contains(label) { badges.append(label) }
+            }
+            if value.contains("PARTNER"), !badges.contains("Partner battle") { badges.append("Partner battle") }
+            if value.contains("BACK TO BACK"), !badges.contains("Back-to-back") { badges.append("Back-to-back") }
+        }
+        return badges
+    }
 }
 
 struct BoundBossPokemon: Decodable, Sendable {

@@ -13,6 +13,17 @@ keyboard. The content scrolls for larger evolution families and form branches.
 Weaknesses and learnsets open native sheets; editing and presentations use the
 existing input cancellation and emulation pause/resume coordinator.
 
+In **Bound Settings → Reference layouts**, RR Dex has its own saved choice of
+Layout 1, 2, or 3. Layout 1 remains the default and preserves the original card.
+Layout 2 pins species and tappable ability names while matchup summaries, base
+stats and evolutions scroll below. Layout 3 places Weaknesses and Learnset beside
+the Dynamic Island, compacts the species and abilities, and anchors import/info
+controls at the game edge. On screens without an Island, the detail shortcuts
+stay below the safe top inset. Short panels scroll; landscape retains its PiP
+scale. The selection changes presentation only, keeping the same RR 4.1 data and
+per-ROM imported save configuration. Ability descriptions use the bundled local
+reference, with an explicit unavailable message for an unlisted description.
+
 ## Source and refresh
 
 Primary source: <https://dex.radicalred.net/>, JwowSquared's
