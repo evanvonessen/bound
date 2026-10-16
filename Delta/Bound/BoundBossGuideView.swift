@@ -14,6 +14,7 @@ struct BoundBossGuideView: View {
     @State private var showingPicker = false
     @State private var showingTeam = false
     @State private var detailSheet: DetailSheet?
+    @State private var showsLayout4Stats = false
 
     private enum DetailSheet: Identifiable {
         case ability(String, String?), item(String, String?)
@@ -29,7 +30,7 @@ struct BoundBossGuideView: View {
     private var anyPresentation: Bool {
         showingPicker || showingTeam || detailSheet != nil
     }
-    private var usesIslandActions: Bool { layout == .layout3 && !floating && portraitTopInset >= 51 }
+    private var usesIslandActions: Bool { (layout == .layout3 || layout == .layout4) && !floating && portraitTopInset >= 51 }
 
     var body: some View {
         Group {
@@ -38,47 +39,7 @@ struct BoundBossGuideView: View {
                 let team = catalog.team(id: selected.teamID) ?? catalog.defaultTeam
                 let pokemon = team.pokemon[selected.pokemonIndex]
                 GeometryReader { geometry in
-                    if floating {
-                        let scale = min(geometry.size.width / 360, geometry.size.height / 260)
-                        let floatingCard: AnyView = layout != .layout1
-                            ? AnyView(enhancedCard(team: team, pokemon: pokemon, index: selected.pokemonIndex,
-                                                  compact: true))
-                            : AnyView(card(team: team, pokemon: pokemon, index: selected.pokemonIndex))
-                        floatingCard
-                            .frame(width: geometry.size.width / max(scale, 0.001), height: 260)
-                            .scaleEffect(scale)
-                            .frame(width: geometry.size.width, height: geometry.size.height)
-                    } else if geometry.size.height < 140 {
-                        // Short portrait strips scroll the controls with the details.
-                        ScrollView {
-                            Group {
-                                if layout == .layout1 {
-                                    card(team: team, pokemon: pokemon, index: selected.pokemonIndex, scrollsDetails: false)
-                                } else {
-                                    enhancedCard(team: team, pokemon: pokemon, index: selected.pokemonIndex,
-                                                 compact: true, scrollsDetails: false)
-                                }
-                            }.frame(width: geometry.size.width)
-                        }
-                    } else {
-                        Group {
-                            switch layout {
-                            case .layout1:
-                                card(team: team, pokemon: pokemon, index: selected.pokemonIndex)
-                            case .layout2:
-                                enhancedCard(team: team, pokemon: pokemon, index: selected.pokemonIndex,
-                                             compact: geometry.size.height < 330)
-                            case .layout3:
-                                if !usesIslandActions && geometry.size.height < 240 {
-                                    enhancedCard(team: team, pokemon: pokemon, index: selected.pokemonIndex, compact: true)
-                                } else {
-                                    fullHeightCard(team: team, pokemon: pokemon, index: selected.pokemonIndex,
-                                                   width: geometry.size.width, height: geometry.size.height)
-                                }
-                            }
-                        }
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                    }
+                    sizedCard(team: team, pokemon: pokemon, index: selected.pokemonIndex, size: geometry.size)
                 }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("bound.boss-guide")
@@ -122,6 +83,71 @@ struct BoundBossGuideView: View {
         .onChange(of: anyPresentation) { _, presented in
             if presented { presentationChanged(true) }
         }
+    }
+
+    @ViewBuilder
+    private func sizedCard(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, size: CGSize) -> some View {
+        if floating {
+            floatingLayout(team: team, pokemon: pokemon, index: index, size: size)
+        } else if size.height < 140 {
+            // Very short strips scroll the entire card so pinned controls
+            // cannot consume the space needed to read the content.
+            ScrollView {
+                Group {
+                    if layout == .layout1 {
+                        card(team: team, pokemon: pokemon, index: index, scrollsDetails: false)
+                    } else if layout == .layout4 {
+                        layout4Card(team: team, pokemon: pokemon, index: index,
+                                    compact: true, scrollsDetails: false)
+                    } else {
+                        enhancedCard(team: team, pokemon: pokemon, index: index,
+                                     compact: true, scrollsDetails: false)
+                    }
+                }.frame(width: size.width)
+            }
+        } else {
+            Group {
+                switch layout {
+                case .layout1:
+                    card(team: team, pokemon: pokemon, index: index)
+                case .layout2:
+                    enhancedCard(team: team, pokemon: pokemon, index: index,
+                                 compact: size.height < 330)
+                case .layout3:
+                    if !usesIslandActions && size.height < 240 {
+                        enhancedCard(team: team, pokemon: pokemon, index: index, compact: true)
+                    } else {
+                        fullHeightCard(team: team, pokemon: pokemon, index: index,
+                                       width: size.width, height: size.height)
+                    }
+                case .layout4:
+                    layout4Card(team: team, pokemon: pokemon, index: index,
+                                compact: size.height < 235, scrollsDetails: true,
+                                scrollsOverview: size.height < 235 && !usesIslandActions)
+                }
+            }
+            .frame(width: size.width, height: size.height)
+        }
+    }
+
+    private func floatingLayout(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, size: CGSize) -> some View {
+        let scale = min(size.width / 360, size.height / 260)
+        let floatingCard: AnyView
+        switch layout {
+        case .layout1:
+            floatingCard = AnyView(card(team: team, pokemon: pokemon, index: index))
+        case .layout2:
+            floatingCard = AnyView(enhancedCard(team: team, pokemon: pokemon, index: index, compact: true))
+        case .layout3:
+            floatingCard = AnyView(enhancedCard(team: team, pokemon: pokemon, index: index, compact: true))
+        case .layout4:
+            floatingCard = AnyView(layout4Card(team: team, pokemon: pokemon, index: index,
+                                              compact: true, scrollsDetails: true))
+        }
+        return floatingCard
+            .frame(width: size.width / max(scale, 0.001), height: 260)
+            .scaleEffect(scale)
+            .frame(width: size.width, height: size.height)
     }
 
     private func presentationDismissed() {
@@ -275,6 +301,181 @@ struct BoundBossGuideView: View {
         .padding(.horizontal, 8).padding(.vertical, 2)
         .frame(width: width, height: height, alignment: .top)
         .background(Color(uiColor: .systemBackground))
+    }
+
+    /// A more touch-friendly version of the full-height guide. The team strip is the
+    /// primary Pokémon navigator; the arrows stay available for one-at-a-time review.
+    /// Moves remain the first detail module, while stats can be opened on demand.
+    private func layout4Card(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, compact: Bool,
+                             scrollsDetails: Bool, scrollsOverview: Bool = false) -> some View {
+        let reference = BoundBossReference.bundled
+        let detail = reference?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
+        let overview = VStack(alignment: .leading, spacing: compact ? 1 : 3) {
+            HStack(spacing: 6) {
+                BoundBossTrainerIcon(team: team, size: compact ? 30 : 34)
+                Button { showingPicker = true } label: {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(team.name).font(.system(size: compact ? 14 : 16, weight: .bold)).lineLimit(1)
+                        Text([team.location, team.variant].filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(.system(size: compact ? 9 : 10)).foregroundStyle(.secondary).lineLimit(1)
+                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).accessibilityLabel("Choose boss, \(team.name)")
+                .accessibilityIdentifier("bound.boss-picker")
+                capBadge(team)
+            }
+            conditionBadges(team, compact: true)
+            layout4SelectedSummary(pokemon: pokemon, detail: detail, index: index, count: team.pokemon.count)
+        }
+        let details = VStack(alignment: .leading, spacing: 3) {
+            moveGrid(pokemon: pokemon, detail: detail, compact: true)
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) { showsLayout4Stats.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: showsLayout4Stats ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("Stats").font(.system(size: 11, weight: .semibold))
+                    Spacer()
+                    Text(showsLayout4Stats ? "Hide" : "Show").font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(Rectangle())
+                .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(showsLayout4Stats ? "Hide Pokémon stats" : "Show Pokémon stats")
+            .accessibilityIdentifier("bound.boss-layout4-stats-toggle")
+            .accessibilityValue(showsLayout4Stats ? "Expanded" : "Collapsed")
+            if showsLayout4Stats {
+                BoundBossStats(stats: pokemon.stats)
+                    .accessibilityIdentifier("bound.boss-layout4-stats")
+            }
+        }
+        return VStack(alignment: .leading, spacing: compact ? 1 : 3) {
+            if !usesIslandActions {
+                islandActions(pokemon: pokemon, onIsland: false).frame(height: 44)
+            }
+            if scrollsOverview {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        overview
+                        details
+                    }
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("bound.boss-details")
+                .id("layout4-\(team.id)-\(index)")
+            } else {
+                overview
+                Group {
+                    if scrollsDetails { ScrollView(.vertical) { details }.frame(maxHeight: .infinity) }
+                    else { details }
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("bound.boss-details")
+                .id("layout4-\(team.id)-\(index)")
+            }
+            layout4Navigation(team: team, index: index, reference: reference)
+        }
+        .padding(.horizontal, compact ? 6 : 9).padding(.vertical, 2)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(uiColor: .systemBackground))
+    }
+
+    private func layout4SelectedSummary(pokemon: BoundBossPokemon, detail: BoundBossReference.Detail?,
+                                       index: Int, count: Int) -> some View {
+        HStack(spacing: 5) {
+            pokemonPicture(pokemon, species: detail?.species, size: 36)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pokemon.species).font(.system(size: 12, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.75)
+                typeNames(detail?.types ?? [])
+                HStack(spacing: 6) {
+                    Text(pokemon.levelLabel).font(.system(size: 9)).foregroundStyle(.secondary)
+                    Text("\(index + 1) / \(count)")
+                        .font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("bound.boss-page")
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            layout4TagButton(icon: "sparkles", name: pokemon.ability) {
+                guard experimentsEnabled else { return }
+                detailSheet = .ability(pokemon.ability, detail?.abilityDescription)
+            }
+            .accessibilityLabel("Ability: \(pokemon.ability). Show description")
+            .accessibilityIdentifier("bound.boss-ability")
+            layout4TagButton(icon: "shippingbox", name: pokemon.item) {
+                guard experimentsEnabled else { return }
+                detailSheet = .item(pokemon.item, detail?.itemDescription)
+            }
+            .accessibilityLabel("Held item: \(pokemon.item). Show description")
+            .accessibilityIdentifier("bound.boss-item")
+        }
+        .frame(minHeight: 48)
+    }
+
+    private func layout4TagButton(icon: String, name: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 2) {
+                Image(systemName: icon).font(.system(size: 11))
+                Text(name).font(.system(size: 10, weight: .medium)).lineLimit(2).minimumScaleFactor(0.85)
+            }
+            .frame(width: 64, height: 44)
+            .contentShape(Rectangle())
+            .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func layout4Navigation(team: BoundBossTeam, index: Int, reference: BoundBossReference?) -> some View {
+        HStack(spacing: 4) {
+            Button { advance(-1, team: team) } label: {
+                Image(systemName: "chevron.left").frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .disabled(index == 0)
+            .accessibilityLabel("Previous Pokémon")
+            .accessibilityIdentifier("bound.boss-previous")
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(Array(team.pokemon.enumerated()), id: \.offset) { memberIndex, member in
+                            let species = reference?.detail(for: member, teamID: team.id, pokemonIndex: memberIndex).species
+                            Button {
+                                if let catalog {
+                                    choose(BoundBossGuideSelection(teamID: team.id, pokemonIndex: memberIndex), catalog: catalog)
+                                }
+                            } label: {
+                                pokemonPicture(member, species: species, size: 28)
+                                    .frame(width: 50, height: 44)
+                                    .background(memberIndex == index ? Color(uiColor: .deltaPurple).opacity(0.20) : Color(uiColor: .tertiarySystemFill),
+                                                in: RoundedRectangle(cornerRadius: 7))
+                                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(memberIndex == index ? Color(uiColor: .deltaPurple) : .clear, lineWidth: 1.5))
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Show \(member.species), team member \(memberIndex + 1) of \(team.pokemon.count)")
+                            .accessibilityIdentifier("bound.boss-team-member-\(memberIndex)")
+                            .accessibilityAddTraits(memberIndex == index ? .isSelected : [])
+                            .id(memberIndex)
+                        }
+                    }.padding(.vertical, 1)
+                }
+                .onAppear { proxy.scrollTo(index, anchor: .center) }
+                .onChange(of: index) { _, newIndex in
+                    withAnimation(.easeInOut(duration: 0.18)) { proxy.scrollTo(newIndex, anchor: .center) }
+                }
+            }.id(team.id)
+            Button { advance(1, team: team) } label: {
+                Image(systemName: "chevron.right").frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .disabled(index == team.pokemon.count - 1)
+            .accessibilityLabel("Next Pokémon")
+            .accessibilityIdentifier("bound.boss-next")
+            Spacer(minLength: 0)
+        }
+        .frame(height: 46)
     }
 
     private func capBadge(_ team: BoundBossTeam) -> some View {
@@ -460,6 +661,7 @@ struct BoundBossGuideView: View {
 
     private func choose(_ next: BoundBossGuideSelection, catalog: BoundBossCatalog) {
         guard experimentsEnabled else { return }
+        showsLayout4Stats = false
         selection = next.resolved(in: catalog)
         preferences.write(selection, gameID: gameID, catalog: catalog)
     }

@@ -30,9 +30,11 @@ final class CompanionCycleButtonTests: XCTestCase {
                     if let field = view as? UITextField { return field }
                     return view.subviews.lazy.compactMap(searchField).first
                 }
-                let search = try XCTUnwrap(searchField(host.view))
-                XCTAssertGreaterThan(search.bounds.width, 150)
-                XCTAssertEqual(search.autocapitalizationType, .none)
+                if layout != .layout4 {
+                    let search = try XCTUnwrap(searchField(host.view))
+                    XCTAssertGreaterThan(search.bounds.width, 150)
+                    XCTAssertEqual(search.autocapitalizationType, .none)
+                }
                 let renderer = UIGraphicsImageRenderer(size: size)
                 let snapshot = renderer.image { _ in host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true) }
                 XCTAssertGreaterThan(try XCTUnwrap(snapshot.pngData()).count, 5000)

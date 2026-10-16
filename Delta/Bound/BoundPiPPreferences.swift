@@ -15,7 +15,7 @@ enum BoundPiPContent: String, CaseIterable, Sendable {
 enum BoundPiPHiddenSide: String, Sendable { case left, right }
 
 enum BoundReferenceLayout: Int, CaseIterable, Sendable {
-    case layout1 = 1, layout2 = 2, layout3 = 3
+    case layout1 = 1, layout2 = 2, layout3 = 3, layout4 = 4
     var title: String { "Layout \(rawValue)" }
 }
 

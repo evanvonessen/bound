@@ -30,14 +30,17 @@ stay separate. Search opens matching groups while keeping their alternatives
 available; the currently selected encounter opens when the picker returns.
 Unlabeled source alternatives retain neutral Team 1/2/3 labels.
 
-**Bound Settings → Reference layouts → Boss View** chooses between three saved
+**Bound Settings → Reference layouts → Boss View** chooses between four saved
 presentations independently of RR Dex. Layout 1 preserves the original card and
 is the default. Layout 2 adds source-derived battle-condition badges, a tappable
 opposing-team strip, ability and item description buttons, a typing-matchup
 shortcut, location/variant context, and the trainer portrait. Layout 3 uses a
 compact arrangement with controls beside the Dynamic Island, flexible scrolling
 details and navigation at the game edge. Short panels keep content reachable by
-scrolling, and landscape uses an enhanced compact card. Matchups use the selected
+scrolling, and landscape uses an enhanced compact card. Layout 4 refines that
+portrait arrangement with larger team sprite buttons and paging arrows together
+at the game edge, tappable ability/item cards, and an expandable Stats section
+below the moves. Matchups use the selected
 opponent's published typing, with explicit warnings that abilities, items and
 battle conditions may change damage. They never use the player's randomized
 save configuration.

@@ -608,7 +608,7 @@ private struct BoundPiPSettings: View {
                         layoutPicker("RR Dex", selection: $dexLayout, identifier: "bound.rrdex-layout")
                         layoutPicker("Boss View", selection: $bossLayout, identifier: "bound.boss-layout")
                     } header: { Text("Reference layouts") } footer: {
-                        Text("Layout 1 keeps the original view. Layout 2 brings more details into view. Layout 3 uses the full portrait area around the Dynamic Island. Each choice is saved separately on this device.")
+                        Text("Layout 1 keeps the original view. Layout 2 brings more details into view. Layout 3 uses the full portrait area around the Dynamic Island. Layout 4 refines that space with clearer groups and larger controls. Each choice is saved separately on this device.")
                     }
                 }
                 BoundAppearanceSettings(emulationDetails: state.emulationDetails)
