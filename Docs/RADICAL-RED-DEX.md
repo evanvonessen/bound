@@ -37,7 +37,7 @@ magnifying glass to the right of the Dynamic Island (or the top toolbar on
 other screens). Info moves to the left. Each ability has its own exact RR Dex
 description, with the hidden ability marked, and stat numbers use the upstream
 rank colors. Compact Learnset and Weaknesses buttons sit beside the evolution
-line. Layout 7 has no import/save-loaded button. The Boss picker remains 1–6.
+line. Layout 7 has no import/save-loaded button or version banner.
 The selection changes presentation only, keeping the same RR 4.1 data and
 per-ROM imported save configuration. Ability names and descriptions come from
 the pinned local RR Dex catalog, including abilities selected by randomizer

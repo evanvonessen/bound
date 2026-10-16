@@ -99,6 +99,7 @@ struct BoundBossTeam: Decodable, Identifiable, Sendable {
     let sourceRow: Int
     let variant: String
     let notes: [String]
+    let speedContext: String?
     let levelCap: Int?
     let order: Int
     let pokemon: [BoundBossPokemon]
@@ -129,7 +130,24 @@ struct BoundBossPokemon: Decodable, Sendable {
     let moves: [String]
     let stats: [Stat]
     let speed: [Speed]
-    struct Stat: Decodable, Sendable { let name: String; let base: Int?; let ev: Int }
+    struct Stat: Decodable, Sendable {
+        let name: String
+        let base: Int?
+        let ev: Int
+
+        /// Matches the base-stat bar colors in the published boss spreadsheet.
+        var colorHex: String? {
+            guard let base else { return nil }
+            switch base {
+            case ..<30: return "#F34444"
+            case 30..<60: return "#FF7F0F"
+            case 60..<90: return "#FFDD57"
+            case 90..<120: return "#A0E515"
+            case 120..<150: return "#23CD5E"
+            default: return "#00C2B8"
+            }
+        }
+    }
     struct Speed: Decodable, Sendable { let label: String; let value: String }
     var levelLabel: String { Double(level) == nil ? level : "Lv. " + level }
 }

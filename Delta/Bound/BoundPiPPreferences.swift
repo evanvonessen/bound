@@ -16,7 +16,7 @@ enum BoundPiPHiddenSide: String, Sendable { case left, right }
 
 enum BoundReferenceLayout: Int, CaseIterable, Sendable {
     case layout1 = 1, layout2 = 2, layout3 = 3, layout4 = 4, layout5 = 5, layout6 = 6, layout7 = 7
-    static var bossLayouts: [Self] { allCases.filter { $0 != .layout7 } }
+    static var bossLayouts: [Self] { allCases }
     var title: String { "Layout \(rawValue)" }
     var summary: String {
         switch self {
@@ -26,7 +26,7 @@ enum BoundReferenceLayout: Int, CaseIterable, Sendable {
         case .layout4: "Larger controls with expandable secondary details."
         case .layout5: "More information at a glance, with quick access to details."
         case .layout6: "Keeps key stats in view and makes secondary details easier to reach."
-        case .layout7: "The original Dex with ability descriptions, colored stats, and compact shortcuts."
+        case .layout7: "The original reference view with colored stats, more detail, and compact shortcuts."
         }
     }
 }

@@ -6,6 +6,7 @@
   "sourceURL": "https://docs.google.com/spreadsheets/d/1ES8L4OzeJ8rCuMWFNvrDaZKArqR7Vys2ytFxjx2pbwE/edit",
   "sourceModifiedTime": "2026-08-26T21:06:11.998Z",
   "sourceSHA256": "6db0743e59f6b5f1dc3a2da4ff45e88cd9a111ddb0658d1fb38fee29ec3b3c4b",
+  "speedContextSourceSHA256": "b6fea328b3420a672557ec364fe98cdc525ab48736cd00a40dc94afdc7053dd6",
   "categories": [
     "Kanto Leaders",
     "Kanto Rematch",
@@ -3389,7 +3390,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "kanto-rematch-30",
@@ -3716,7 +3718,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "kanto-rematch-55",
@@ -4043,7 +4046,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "kanto-rematch-80",
@@ -4369,7 +4373,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "johto-leaders-4",
@@ -4761,7 +4766,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 27"
     },
     {
       "id": "johto-leaders-56",
@@ -5084,7 +5090,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 44"
     },
     {
       "id": "johto-leaders-79",
@@ -5353,7 +5360,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 34"
     },
     {
       "id": "johto-leaders-102",
@@ -5673,7 +5681,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 44"
     },
     {
       "id": "johto-leaders-125",
@@ -5995,7 +6004,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 59"
     },
     {
       "id": "johto-leaders-149",
@@ -6321,7 +6331,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 73"
     },
     {
       "id": "johto-leaders-175",
@@ -6643,7 +6654,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 73"
     },
     {
       "id": "johto-leaders-199",
@@ -6965,7 +6977,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 73"
     },
     {
       "id": "johto-leaders-223",
@@ -7287,7 +7300,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 73"
     },
     {
       "id": "rivals-6",
@@ -7977,7 +7991,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 27"
     },
     {
       "id": "rivals-126",
@@ -8197,7 +8212,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 27"
     },
     {
       "id": "rivals-150",
@@ -8417,7 +8433,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 27"
     },
     {
       "id": "rivals-173",
@@ -8635,7 +8652,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 34"
     },
     {
       "id": "rivals-198",
@@ -8906,7 +8924,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 56"
     },
     {
       "id": "rivals-222",
@@ -9177,7 +9196,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 56"
     },
     {
       "id": "rivals-246",
@@ -9448,7 +9468,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 56"
     },
     {
       "id": "rivals-269",
@@ -9772,7 +9793,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "rivals-293",
@@ -10422,7 +10444,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 82"
     },
     {
       "id": "rivals-344",
@@ -10748,7 +10771,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 82"
     },
     {
       "id": "rivals-369",
@@ -11078,7 +11102,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 82"
     },
     {
       "id": "rivals-393",
@@ -11787,7 +11812,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 27"
     },
     {
       "id": "team-rocket-50",
@@ -12005,7 +12031,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 34"
     },
     {
       "id": "team-rocket-74",
@@ -12225,7 +12252,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 47"
     },
     {
       "id": "team-rocket-98",
@@ -12445,7 +12473,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 47"
     },
     {
       "id": "team-rocket-122",
@@ -12665,7 +12694,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 47"
     },
     {
       "id": "team-rocket-145",
@@ -14892,7 +14922,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 15"
     },
     {
       "id": "mini-bosses-27",
@@ -15008,7 +15039,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 15"
     },
     {
       "id": "mini-bosses-51",
@@ -15228,7 +15260,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 22"
     },
     {
       "id": "mini-bosses-75",
@@ -15397,7 +15430,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 27"
     },
     {
       "id": "mini-bosses-99",
@@ -15566,7 +15600,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 27"
     },
     {
       "id": "mini-bosses-123",
@@ -15735,7 +15770,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 27"
     },
     {
       "id": "mini-bosses-146",
@@ -15902,7 +15938,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 27"
     },
     {
       "id": "mini-bosses-169",
@@ -16069,7 +16106,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 27"
     },
     {
       "id": "mini-bosses-193",
@@ -16340,7 +16378,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 34"
     },
     {
       "id": "mini-bosses-217",
@@ -16611,7 +16650,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 34"
     },
     {
       "id": "mini-bosses-240",
@@ -17171,7 +17211,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-313",
@@ -17348,7 +17389,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-340",
@@ -17471,7 +17513,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-366",
@@ -17695,7 +17738,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-391",
@@ -17970,7 +18014,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-416",
@@ -18198,7 +18243,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-441",
@@ -18477,7 +18523,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-466",
@@ -18697,7 +18744,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-490",
@@ -18921,7 +18969,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-515",
@@ -19149,7 +19198,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-540",
@@ -19318,7 +19368,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-566",
@@ -19390,7 +19441,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-593",
@@ -19509,7 +19561,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-617",
@@ -19733,7 +19786,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-642",
@@ -19957,7 +20011,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-667",
@@ -20232,7 +20287,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-692",
@@ -20452,7 +20508,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-716",
@@ -20676,7 +20733,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-741",
@@ -20896,7 +20954,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-765",
@@ -21120,7 +21179,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "mini-bosses-790",
@@ -21395,7 +21455,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 76"
     },
     {
       "id": "mini-bosses-815",
@@ -21666,7 +21727,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 76"
     },
     {
       "id": "mini-bosses-839",
@@ -21937,7 +21999,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 76"
     },
     {
       "id": "mini-bosses-862",
@@ -22206,7 +22269,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 85"
     },
     {
       "id": "mini-bosses-885",
@@ -22475,7 +22539,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 85"
     },
     {
       "id": "mini-bosses-908",
@@ -23013,7 +23078,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 85"
     },
     {
       "id": "mini-bosses-954",
@@ -23286,7 +23352,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 85"
     },
     {
       "id": "mini-bosses-978",
@@ -23555,7 +23622,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 85"
     },
     {
       "id": "mini-bosses-1001",
@@ -23875,7 +23943,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 85"
     },
     {
       "id": "optional-bosses-4",
@@ -24195,7 +24264,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 59"
     },
     {
       "id": "optional-bosses-27",
@@ -24519,7 +24589,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 59"
     },
     {
       "id": "optional-bosses-51",
@@ -24686,7 +24757,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 59"
     },
     {
       "id": "optional-bosses-76",
@@ -24906,7 +24978,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 59"
     },
     {
       "id": "optional-bosses-99",
@@ -25234,7 +25307,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 68"
     },
     {
       "id": "optional-bosses-123",
@@ -25558,7 +25632,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 73"
     },
     {
       "id": "optional-bosses-150",
@@ -25884,7 +25959,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 81"
     },
     {
       "id": "optional-bosses-176",
@@ -26210,7 +26286,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 81"
     },
     {
       "id": "optional-bosses-200",
@@ -26479,7 +26556,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 82"
     },
     {
       "id": "optional-bosses-223",
@@ -26748,7 +26826,8 @@
             }
           ]
         }
-      ]
+      ],
+      "speedContext": "IF YOU'RE LEVEL 82"
     },
     {
       "id": "indigo-league-8",

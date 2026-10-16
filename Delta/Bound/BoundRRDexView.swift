@@ -284,8 +284,6 @@ struct BoundRRDexView: View {
             if !hasIslandActions {
                 HStack {
                     layout7InformationButton
-                    Text("RR 4.1 · NORMAL").font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.secondary)
                     Spacer(minLength: 0)
                     layout7SearchButton
                 }

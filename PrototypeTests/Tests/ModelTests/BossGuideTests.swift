@@ -94,6 +94,32 @@ final class BossGuideTests: XCTestCase {
         XCTAssertTrue(catalog.teams(matching: "Cerulean Misty").contains { $0.id == "kanto-leaders-27" })
     }
 
+    func testConditionalSpeedContextIsPreservedFromSource() throws {
+        let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
+        XCTAssertEqual(catalog.team(id: "johto-leaders-31")?.speedContext, "IF YOU'RE LEVEL 27")
+        XCTAssertEqual(catalog.team(id: "johto-leaders-56")?.speedContext, "IF YOU'RE LEVEL 44")
+        XCTAssertNil(catalog.team(id: "kanto-leaders-4")?.speedContext)
+        XCTAssertEqual(catalog.team(id: "johto-leaders-31")?.pokemon[0].speed.first?.label, "SPEED STAT:")
+    }
+
+    func testBossBaseStatColorsMatchSpreadsheetBarPalette() {
+        func color(_ base: Int?) -> String? {
+            BoundBossPokemon.Stat(name: "HP", base: base, ev: 0).colorHex
+        }
+        XCTAssertEqual(color(20), "#F34444")
+        XCTAssertEqual(color(29), "#F34444")
+        XCTAssertEqual(color(30), "#FF7F0F")
+        XCTAssertEqual(color(59), "#FF7F0F")
+        XCTAssertEqual(color(60), "#FFDD57")
+        XCTAssertEqual(color(89), "#FFDD57")
+        XCTAssertEqual(color(90), "#A0E515")
+        XCTAssertEqual(color(119), "#A0E515")
+        XCTAssertEqual(color(120), "#23CD5E")
+        XCTAssertEqual(color(149), "#23CD5E")
+        XCTAssertEqual(color(150), "#00C2B8")
+        XCTAssertNil(color(nil))
+    }
+
     func testSelectionsPersistPerROMAndInvalidSavedIndicesRecover() throws {
         let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
         let suite = "BoundBossGuideTests." + UUID().uuidString

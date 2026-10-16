@@ -97,6 +97,12 @@ def import_workbook(path, modified_time=None):
             elif len(parts) >= 2 and parts[-2].startswith("GOON"):
                 name = parts[-2] + " " + parts[-1]
             location = " · ".join(title_case(p) for p in parts[:-1])
+            speed_context = None
+            if cell(r + 18, 2) == "IF YOU'RE":
+                level_match = re.fullmatch(r"LEVEL\s+(\d+)\s*->>?", cell(r + 19, 2))
+                if not level_match:
+                    raise ValueError(f"Unparsed conditional speed level in {tab} row {r + 1}")
+                speed_context = f"IF YOU'RE LEVEL {level_match.group(1)}"
             annotations = []
             previous_end = headers[block_index - 1] + 20 if block_index else 0
             for rr in range(previous_end, r):
@@ -136,6 +142,7 @@ def import_workbook(path, modified_time=None):
                           "category": tab, "name": title_case(name), "location": location,
                           "sourceLabel": raw_label, "sourceRow": r + 1,
                           "variant": title_case(variant), "notes": annotations,
+                          "speedContext": speed_context,
                           "levelCap": 100 if tab == "Postgame" else None,
                           "order": 1000 + len(teams), "pokemon": pokemon})
     # Exported hyperlinks point to the row immediately above the trainer header.
@@ -186,10 +193,11 @@ def import_workbook(path, modified_time=None):
     assert len(caps) == 18
     assert len(teams) == 167, f"Source coverage changed: {len(teams)} teams"
     counts = dict(collections.Counter(t["category"] for t in teams))
+    workbook_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
     return {"schemaVersion": 1, "gameVersion": "4.1", "difficulty": "Default",
             "sourceTitle": "Default Mode Bosses v4.1 (with EVs) - Radical Red",
             "sourceURL": SOURCE_URL, "sourceModifiedTime": modified_time,
-            "sourceSHA256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "sourceSHA256": workbook_sha256, "speedContextSourceSHA256": workbook_sha256,
             "categories": TABS, "categoryCounts": counts, "levelCaps": caps,
             "trainerOrder": trainer_order, "teams": teams}
 

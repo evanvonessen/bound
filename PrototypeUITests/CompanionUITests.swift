@@ -1435,6 +1435,111 @@ final class CompanionUITests: XCTestCase {
         try checkReferenceLayouts([6])
     }
 
+    func testLayout7ShowsConditionalSpeedAndTappableTeamStrip() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+
+        let app = XCUIApplication()
+        XCUIDevice.shared.orientation = .portrait
+        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        func playDiagnosticGame() {
+            let cell = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+            XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
+            XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+        }
+        defer {
+            app.terminate(); XCUIDevice.shared.orientation = .portrait
+            app.launch(); setExperimentalFeatures(false, in: app); playDiagnosticGame(); app.terminate()
+        }
+        playDiagnosticGame()
+        openBoundSettings(in: app)
+        let layout = app.segmentedControls["bound.boss-layout"]
+        scrollToSetting(layout, in: app)
+        layout.buttons["7"].tap()
+        closeBoundSheet(in: app)
+        selectCompanion("Bosses", in: app)
+
+        func chooseBoss(_ id: String, search: String) {
+            app.buttons["bound.boss-picker"].tap()
+            let field = app.searchFields.firstMatch
+            XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(search)
+            let row = app.buttons["bound.boss-select-\(id)"]
+            XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+            XCTAssertTrue(field.waitForNonExistence(timeout: 5))
+        }
+        let guide = element("bound.boss-guide", in: app)
+        XCTAssertEqual(guide.value as? String, "Layout 7")
+        chooseBoss("johto-leaders-4", search: "Falkner")
+        XCTAssertTrue(app.buttons["bound.boss-picker"].label.contains("Falkner"))
+        XCTAssertEqual(app.staticTexts["bound.boss-cap"].label, "Cap 15")
+
+        let firstIcon = app.buttons["bound.boss-team-member-0"]
+        let flittleIcon = app.buttons["bound.boss-team-member-2"]
+        XCTAssertTrue(firstIcon.isHittable); XCTAssertTrue(flittleIcon.isHittable)
+        let pokemonName = app.staticTexts["bound.boss-pokemon"]
+        let pokemonLevel = app.staticTexts["bound.boss-pokemon-level"]
+        XCTAssertEqual(pokemonName.label, "Rufflet")
+        XCTAssertEqual(pokemonLevel.label, "Lv. 12")
+        XCTAssertLessThan(firstIcon.frame.midY, guide.frame.midY, "Team sprites should sit in the selected Pokémon row near the top of the card.")
+
+        flittleIcon.tap()
+        XCTAssertEqual(pokemonName.label, "Flittle")
+        XCTAssertEqual(pokemonLevel.label, "Lv. 14")
+        let baseSpeed = element("bound.boss-speed-0", in: app)
+        let boostedSpeed = element("bound.boss-speed-1", in: app)
+        XCTAssertTrue(baseSpeed.waitForExistence(timeout: 5))
+        XCTAssertEqual(baseSpeed.label, "SPEED STAT:")
+        XCTAssertEqual(baseSpeed.value as? String, "30")
+        XCTAssertEqual(boostedSpeed.label, "1 S. BOOST:")
+        XCTAssertEqual(boostedSpeed.value as? String, "45")
+        let speed = element("bound.boss-speed", in: app)
+        let stats = element("bound.boss-stats", in: app)
+        XCTAssertGreaterThanOrEqual(speed.frame.minY, stats.frame.minY)
+        screenshot("Boss-Layout7-Flittle-Speed")
+        XCTAssertFalse(app.buttons["bound.boss-next"].exists, "Layout 7 navigates through the team strip, without bottom arrows.")
+        XCTAssertFalse(app.buttons["bound.boss-previous"].exists, "Layout 7 navigates through the team strip, without bottom arrows.")
+        XCTAssertFalse(element("bound.boss-page", in: app).exists, "Layout 7 omits the page counter.")
+
+        let fullTeam = app.buttons["bound.boss-full-team"]
+        XCTAssertTrue(fullTeam.isHittable)
+        XCTAssertLessThan(fullTeam.frame.midY, 70, "Full team should stay beside the Dynamic Island at the top of the screen.")
+        XCTAssertGreaterThan(fullTeam.frame.midX, app.frame.midX, "Full team should sit to the right of the Dynamic Island.")
+        fullTeam.tap()
+        let fullTeamSheet = element("bound.boss-full-team-list", in: app)
+        XCTAssertTrue(fullTeamSheet.waitForExistence(timeout: 5))
+        app.buttons["bound.boss-close-full-team"].tap()
+        XCTAssertTrue(fullTeamSheet.waitForNonExistence(timeout: 5))
+        assertGamePixelsAnimate(element("bound.game-screen", in: app), in: app)
+
+        chooseBoss("johto-leaders-31", search: "Bugsy Pre Lt. Surge")
+        XCTAssertEqual(app.staticTexts["bound.boss-cap"].label, "Cap 27")
+        XCTAssertEqual(pokemonLevel.label, "Highest Lv -2")
+        let preSurgeContext = element("bound.boss-speed-context", in: app)
+        let preSurgeContextLabel = preSurgeContext.label
+        XCTAssertEqual(preSurgeContextLabel, "IF YOU'RE LEVEL 27")
+        chooseBoss("johto-leaders-56", search: "Bugsy Post Lt. Surge")
+        XCTAssertFalse(app.staticTexts["bound.boss-cap"].exists)
+        XCTAssertEqual(pokemonLevel.label, "Highest Lv -2")
+        let postSurgeContext = element("bound.boss-speed-context", in: app)
+        XCTAssertEqual(postSurgeContext.label, "IF YOU'RE LEVEL 44")
+        XCTAssertNotEqual(preSurgeContextLabel, postSurgeContext.label,
+                          "Speed examples should explain the current team's conditional level context.")
+        let bugsyTeamIcons = (0..<6).map { app.buttons["bound.boss-team-member-\($0)"] }
+        bugsyTeamIcons.forEach { XCTAssertTrue($0.isHittable, "All six members should be reachable from the team strip.") }
+        screenshot("Boss-Layout7-Bugsy-Six-Member-Team")
+        bugsyTeamIcons[5].tap()
+        XCTAssertEqual(pokemonName.label, "Vikavolt")
+        XCTAssertEqual(pokemonLevel.label, "Highest Lv -2")
+    }
+
     private func checkReferenceLayouts(_ layouts: [Int]) throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []

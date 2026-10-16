@@ -104,12 +104,21 @@ final class CompanionCycleButtonTests: XCTestCase {
             else { UserDefaults.standard.removeObject(forKey: BoundReferenceLayoutPreferences.bossKey) }
         }
         let parent = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.windows.first?.rootViewController)
+        var selectionKeys: [String] = []
+        defer { selectionKeys.forEach { UserDefaults.standard.removeObject(forKey: $0) } }
         for layout in BoundReferenceLayout.bossLayouts {
             UserDefaults.standard.set(layout.rawValue, forKey: BoundReferenceLayoutPreferences.bossKey)
             var sizes = [("island-portrait", CGSize(width: 393, height: 263)), ("portrait", CGSize(width: 390, height: 195)), ("compact-portrait", CGSize(width: 375, height: 100)), ("landscape", CGSize(width: 330, height: 275))]
-            if layout == .layout6 { sizes.append(("narrow-portrait", CGSize(width: 320, height: 195))) }
+            if layout == .layout6 || layout == .layout7 { sizes.append(("narrow-portrait", CGSize(width: 320, height: 195))) }
             for (name, size) in sizes {
-                let host = UIHostingController(rootView: BoundBossGuideView(gameID: "BOSS_RENDER_QA", floating: name == "landscape", portraitTopInset: name == "island-portrait" ? 59 : 0, presentationChanged: { _ in }))
+                let gameID = "BOSS_RENDER_QA_\(layout.rawValue)_\(name)"
+                if layout == .layout7, name == "narrow-portrait",
+                   let selection = try? JSONEncoder().encode(BoundBossGuideSelection(teamID: "johto-leaders-56", pokemonIndex: 0)) {
+                    let key = "bound.boss-guide.selection.v1." + gameID
+                    selectionKeys.append(key)
+                    UserDefaults.standard.set(selection, forKey: key)
+                }
+                let host = UIHostingController(rootView: BoundBossGuideView(gameID: gameID, floating: name == "landscape", portraitTopInset: name == "island-portrait" ? 59 : 0, presentationChanged: { _ in }))
                 host.safeAreaRegions = []
                 parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)
                 host.view.frame = CGRect(origin: CGPoint(x: 0, y: 60), size: size)
@@ -123,9 +132,37 @@ final class CompanionCycleButtonTests: XCTestCase {
                 let attachment = XCTAttachment(image: snapshot)
                 attachment.name = "Boss-guide-hosted-layout-\(layout.rawValue)-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
                 if name == "compact-portrait" { try checkCompactCardScrolls(in: host.view, size: size, name: "Boss-guide") }
+                if layout == .layout7, name == "narrow-portrait" {
+                    let team = try XCTUnwrap(BoundBossCatalog.bundled?.team(id: "johto-leaders-56"))
+                    XCTAssertEqual(team.pokemon.count, 6, "The narrow Layout 7 fixture should use a full six-member team.")
+                    XCTAssertNil(team.levelCap, "Post-Surge Bugsy must retain its source data without an invented cap.")
+                    try checkCompactCardScrolls(in: host.view, size: size, name: "Boss-guide-layout7-narrow")
+                }
                 host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent()
             }
         }
+    }
+
+    func testBossLayout7ReferenceDataIncludesConditionalSpeedAndLevelContext() throws {
+        let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
+        let falkner = try XCTUnwrap(catalog.team(id: "johto-leaders-4"))
+        XCTAssertEqual(falkner.name, "Falkner")
+        XCTAssertEqual(falkner.levelCap, 15)
+        let flittle = try XCTUnwrap(falkner.pokemon.first { $0.species == "Flittle" })
+        XCTAssertEqual(flittle.speed.map(\.label), ["SPEED STAT:", "1 S. BOOST:"])
+        XCTAssertEqual(flittle.speed.map(\.value), ["30", "45"])
+
+        let preSurgeBugsy = try XCTUnwrap(catalog.team(id: "johto-leaders-31"))
+        XCTAssertEqual(preSurgeBugsy.name, "Bugsy")
+        XCTAssertEqual(preSurgeBugsy.levelCap, 27)
+        XCTAssertEqual(preSurgeBugsy.speedContext, "IF YOU'RE LEVEL 27")
+        XCTAssertEqual(preSurgeBugsy.pokemon.first?.level, "Highest Lv -2")
+        let postSurgeBugsy = try XCTUnwrap(catalog.team(id: "johto-leaders-56"))
+        XCTAssertEqual(postSurgeBugsy.name, "Bugsy")
+        XCTAssertNil(postSurgeBugsy.levelCap)
+        XCTAssertEqual(postSurgeBugsy.speedContext, "IF YOU'RE LEVEL 44")
+        XCTAssertEqual(postSurgeBugsy.pokemon.count, 6)
+        XCTAssertEqual(postSurgeBugsy.pokemon.first?.level, "Highest Lv -2")
     }
 
     private func checkCompactCardScrolls(in view: UIView, size: CGSize, name: String) throws {

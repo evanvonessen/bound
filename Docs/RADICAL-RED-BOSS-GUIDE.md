@@ -30,7 +30,7 @@ stay separate. Search opens matching groups while keeping their alternatives
 available; the currently selected encounter opens when the picker returns.
 Unlabeled source alternatives retain neutral Team 1/2/3 labels.
 
-**Bound Settings → Reference layouts → Boss View** chooses between six saved
+**Bound Settings → Reference layouts → Boss View** chooses between seven saved
 presentations independently of RR Dex. Layout 1 preserves the original card and
 is the default. Layout 2 adds source-derived battle-condition badges, a tappable
 opposing-team strip, ability and item description buttons, a typing-matchup
@@ -54,6 +54,19 @@ badges beside the encounter heading, and fits all six team members between the
 navigation arrows in the standard portrait panel. Smaller panels can scroll
 without shrinking the touch targets. Ability/item descriptions and the island
 shortcuts remain available.
+Layout 7 starts from Layout 1, removes the version banner and bottom paging
+controls, and places the trainer portrait, boss name and cap on one row. All team
+sprites sit beside the selected Pokémon's name and level and select a member
+directly. Full team moves to the right of the Dynamic Island (or a top toolbar
+on other displays). Base-stat numbers use the source workbook's color scale;
+the selected member's speed and boost rows appear immediately below, including
+the workbook's player-level assumption for scaling encounters. Ability and item
+descriptions remain inline, and the details scroll independently of team selection.
+Panels too short for pinned controls scroll the whole card.
+The source bar palette is red below 30, orange at 30–59, yellow at 60–89,
+lime at 90–119, green at 120–149 and cyan from 150. The supplied screenshots
+provide the higher bands; a live Kanto Leaders PDF export confirms the red
+Speed 20 bar beside Geodude-A's orange Special Attack 30 bar.
 
 Trainer icons are unchanged original game sprites from the
 [Pokémon Showdown trainer directory](https://play.pokemonshowdown.com/sprites/trainers/).
@@ -68,6 +81,10 @@ distribution review still applies.
 
 Source: [Default Mode Bosses v4.1 (with EVs) - Radical Red](https://docs.google.com/spreadsheets/d/1ES8L4OzeJ8rCuMWFNvrDaZKArqR7Vys2ytFxjx2pbwE/edit),
 source modified time `2026-08-26T21:06:11.998Z`, retrieved October 13, 2026.
+The 78 player-level assumptions were recovered from a fresh export on October 16,
+2026; its hash is recorded separately as `speedContextSourceSHA256`. The baseline
+snapshot and all its existing factual fields remain unchanged. The source's live
+modified time was not reverified for this supplementary export.
 The team snapshot contains factual records. Pictures, types, move categories,
 and descriptions are resolved offline through the existing RR 4.1 Dex snapshot;
 the guide's type icons come from PokeSprite. Source locations,
