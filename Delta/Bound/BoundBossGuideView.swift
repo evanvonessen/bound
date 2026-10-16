@@ -95,7 +95,7 @@ struct BoundBossGuideView: View {
             // cannot consume the space needed to read the content.
             ScrollView {
                 Group {
-                    if layout == .layout1 {
+                    if layout == .layout1 || layout == .layout7 {
                         card(team: team, pokemon: pokemon, index: index, scrollsDetails: false)
                     } else if layout == .layout4 {
                         layout4Card(team: team, pokemon: pokemon, index: index,
@@ -115,7 +115,7 @@ struct BoundBossGuideView: View {
         } else {
             Group {
                 switch layout {
-                case .layout1:
+                case .layout1, .layout7:
                     card(team: team, pokemon: pokemon, index: index)
                 case .layout2:
                     enhancedCard(team: team, pokemon: pokemon, index: index,
@@ -149,7 +149,7 @@ struct BoundBossGuideView: View {
         let scale = min(size.width / 360, size.height / 260)
         let floatingCard: AnyView
         switch layout {
-        case .layout1:
+        case .layout1, .layout7:
             floatingCard = AnyView(card(team: team, pokemon: pokemon, index: index))
         case .layout2:
             floatingCard = AnyView(enhancedCard(team: team, pokemon: pokemon, index: index, compact: true))
@@ -1392,12 +1392,10 @@ private struct BoundBossGuideInfo: View {
                 }
             }
             Section("Source") {
-                Link(catalog.sourceTitle, destination: catalog.sourceURL)
-                Link("Pokémon and moves · Radical Red Pokédex", destination: URL(string: "https://dex.radicalred.net/")!)
                 Link("Type icons · PokeSprite", destination: URL(string: "https://github.com/msikma/pokesprite")!)
                 Link("Trainer icons · Pokémon Showdown", destination: URL(string: "https://play.pokemonshowdown.com/sprites/trainers/")!)
-                Text("Bundled for offline use. Check the original documentation for corrections.").font(.footnote)
-                Text("Boss teams use the Default guide, independently of any save imported into the Dex.").font(.footnote)
+                Text("Bundled for offline use. Original documentation is in Settings → Source and licenses.").font(.footnote)
+                Text("Boss teams use the Default guide, independently of the Dex's current save.").font(.footnote)
                 Text("Pokémon characters and artwork belong to their respective owners.").font(.footnote)
             }
         }.navigationTitle("Guide information")

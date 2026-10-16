@@ -106,7 +106,13 @@ class GameViewController: DeltaCore.GameViewController
             let game = self.game as? Game
             NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.managedObjectContextDidChange(with:)), name: .NSManagedObjectContextObjectsDidChange, object: game?.managedObjectContext)
             
-            self.emulatorCore?.saveHandler = { [weak self] _ in self?.updateGameSave() }
+            let gameIdentifier = game?.identifier
+            self.emulatorCore?.saveHandler = { [weak self, gameIdentifier] _ in
+                self?.updateGameSave()
+                if BoundFeatureVisibility.experimentalFeaturesEnabled, let gameIdentifier {
+                    BoundRRDexSaveRefreshEvent.post(gameID: gameIdentifier)
+                }
+            }
             
             if oldValue?.fileURL != game?.fileURL
             {
@@ -1221,7 +1227,7 @@ extension GameViewController: SaveStatesViewControllerDelegate
         }
     }
     
-    private func load(_ saveState: SaveStateProtocol)
+    @discardableResult private func load(_ saveState: SaveStateProtocol) -> Bool
     {
         let isRunning = (self.emulatorCore?.state == .running)
         
@@ -1251,6 +1257,7 @@ extension GameViewController: SaveStatesViewControllerDelegate
         
         self.updateAutoSaveState()
         
+        var didLoad = false
         do
         {
             if let temporarySaveState = temporarySaveState
@@ -1262,6 +1269,8 @@ extension GameViewController: SaveStatesViewControllerDelegate
             {
                 try self.emulatorCore?.load(saveState)
             }
+
+            didLoad = true
             
             if ExperimentalFeatures.shared.toastNotifications.stateLoadEnabled
             {
@@ -1283,6 +1292,8 @@ extension GameViewController: SaveStatesViewControllerDelegate
         {
             self.resumeEmulation()
         }
+
+        return didLoad
     }
     
     //MARK: - SaveStatesViewControllerDelegate
@@ -1305,7 +1316,10 @@ extension GameViewController: SaveStatesViewControllerDelegate
     {
         self._isLoadingSaveState = true
         
-        self.load(saveState)
+        let didLoad = self.load(saveState)
+        if BoundFeatureVisibility.experimentalFeaturesEnabled, didLoad, let game = self.game as? Game {
+            BoundRRDexSaveRefreshEvent.post(gameID: game.identifier)
+        }
         
         self.pauseViewController?.dismiss()
     }

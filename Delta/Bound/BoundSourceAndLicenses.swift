@@ -4,6 +4,8 @@ import SwiftUI
 enum BoundSourceNotices {
     static let availability = "Bound source, build instructions, and modification notices are available in its source repository."
     static let sourceRepository = URL(string: "https://github.com/evanvonessen/bound")!
+    static let radicalRedPokedex = URL(string: "https://dex.radicalred.net/")!
+    static let radicalRedBossDocumentation = URL(string: "https://docs.google.com/spreadsheets/d/1ES8L4OzeJ8rCuMWFNvrDaZKArqR7Vys2ytFxjx2pbwE/edit")!
     static func version(in bundle: Bundle = .main) -> String {
         let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
         let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
@@ -40,6 +42,7 @@ enum BoundSourceNotices {
 }
 
 struct BoundSourceAndLicenses: View {
+    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     var body: some View {
         Form {
             Section("This build") {
@@ -53,6 +56,16 @@ struct BoundSourceAndLicenses: View {
             Section("Upstream") {
                 Text("Built on Delta. Delta and its emulator dependencies retain their original copyright and license notices.")
                 Link("Delta upstream source", destination: URL(string: "https://github.com/rileytestut/Delta")!)
+            }
+            if experimentsEnabled {
+                Section("Radical Red references") {
+                    Link("Pokémon and moves · Radical Red Pokédex", destination: BoundSourceNotices.radicalRedPokedex)
+                        .accessibilityIdentifier("bound.source-radical-red-pokedex")
+                    Link("Trainer data · Radical Red 4.1 documentation", destination: BoundSourceNotices.radicalRedBossDocumentation)
+                        .accessibilityIdentifier("bound.source-radical-red-docs")
+                    Text("The Pokédex is by JwowSquared. Radical Red is a community project; Pokémon characters and artwork belong to their respective owners.")
+                        .font(.footnote)
+                }
             }
             Section("Bundled notices") {
                 NavigationLink("Software licenses") {

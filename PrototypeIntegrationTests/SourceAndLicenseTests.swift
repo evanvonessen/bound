@@ -25,6 +25,8 @@ final class SourceAndLicenseTests: XCTestCase {
     func testSourceAvailabilityAndVersionDescribeCurrentBundle() throws {
         XCTAssertEqual(BoundSourceNotices.availability, "Bound source, build instructions, and modification notices are available in its source repository.")
         XCTAssertEqual(BoundSourceNotices.sourceRepository.absoluteString, "https://github.com/evanvonessen/bound")
+        XCTAssertEqual(BoundSourceNotices.radicalRedPokedex.absoluteString, "https://dex.radicalred.net/")
+        XCTAssertEqual(BoundSourceNotices.radicalRedBossDocumentation.absoluteString, "https://docs.google.com/spreadsheets/d/1ES8L4OzeJ8rCuMWFNvrDaZKArqR7Vys2ytFxjx2pbwE/edit")
         let version = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
         let build = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
         XCTAssertEqual(BoundSourceNotices.version(), "\(version) (\(build))")

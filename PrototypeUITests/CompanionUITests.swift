@@ -533,73 +533,100 @@ final class CompanionUITests: XCTestCase {
         let title = libraryGame(named: "BoundRRDexDiagnostic", in: app)
         if title.waitForExistence(timeout: 5) { return }
 
+        // Close the native search presentation before looking for Library Add.
+        let closeSearch = app.buttons["close"].firstMatch
+        if closeSearch.exists { closeSearch.tap() }
+        XCTAssertTrue(app.buttons["Add"].waitForExistence(timeout: 5))
         app.buttons["Add"].tap()
         chooseRRDexDocument("BoundRRDexDiagnostic.gba", in: app)
         let imported = libraryGame(named: "BoundRRDexDiagnostic", in: app)
         XCTAssertTrue(imported.waitForExistence(timeout: 20), "The staged current-save fixture ROM must be available in the library")
     }
 
-    func testRRDexImportsCurrentGameSaveWithoutPickerAndRefreshes() throws {
+    func testRRDexLayout7SearchDescriptionsAndAutomaticSaveRefresh() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["--bound-ui-no-animations"]
+        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound",
+                               "-bound.delta.pip.v1.dex.layout", "7"]
         app.launch()
         setExperimentalFeatures(true, in: app)
         defer {
-            app.terminate()
-            app.launch()
+            app.terminate(); app.launch()
             setExperimentalFeatures(false, in: app)
             app.terminate()
         }
-
         func openDex() {
             let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
-            XCTAssertTrue(game.waitForExistence(timeout: 20), "The dedicated RR Dex QA game must be visible through library search")
+            XCTAssertTrue(game.waitForExistence(timeout: 20))
             game.tap()
             XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
             selectCompanion("Dex", in: app)
             XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 10))
+            XCTAssertEqual(element("bound.rrdex", in: app).value as? String, "Layout 7")
         }
-
+        func assertAutomaticSave() {
+            XCTAssertFalse(app.buttons["bound.rrdex-import"].exists, "Layout 7 has no manual save control")
+            XCTAssertFalse(app.alerts["Save could not be imported"].exists)
+            app.buttons["bound.rrdex-info"].tap()
+            let summary = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "Random abilities", "Random learnset")).firstMatch
+            XCTAssertTrue(summary.waitForExistence(timeout: 10), "Current-save randomizer settings must load without an import tap")
+            XCTAssertFalse(app.links["Radical Red Pokédex · JwowSquared"].exists)
+            app.buttons["bound.rrdex-close-detail"].tap()
+            XCTAssertTrue(app.buttons["bound.rrdex-close-detail"].waitForNonExistence(timeout: 5))
+        }
         openDex()
         let gameScreen = element("bound.game-screen", in: app)
         XCTAssertTrue(gameScreen.waitForExistence(timeout: 10))
-        let importButton = app.buttons["bound.rrdex-import"]
-        if importButton.label.contains("Save loaded") {
-            app.buttons["bound.rrdex-info"].tap()
-            let clearSave = app.buttons["bound.rrdex-clear-save"]
-            XCTAssertTrue(clearSave.waitForExistence(timeout: 10))
-            clearSave.tap()
-            XCTAssertTrue(importButton.label.contains("Import save"))
-            app.buttons["bound.rrdex-close-detail"].tap()
+        assertAutomaticSave()
+        assertGamePixelsAnimate(gameScreen, in: app)
+        XCTAssertFalse(app.textFields["bound.rrdex-search"].exists)
+        let searchButton = app.buttons["bound.rrdex-search-open"]
+        XCTAssertTrue(searchButton.isHittable)
+        XCTAssertGreaterThan(searchButton.frame.minX, app.frame.midX + 78)
+        XCTAssertLessThan(app.buttons["bound.rrdex-info"].frame.maxX, app.frame.midX - 78)
+        searchButton.tap()
+        let search = app.textFields["bound.rrdex-search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.typeText("bulbasaur")
+        app.buttons["bound.rrdex-suggestion-1"].tap()
+        XCTAssertTrue(search.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Bulbasaur")
+        let ability0 = app.staticTexts["bound.rrdex-ability-description-0"]
+        let ability1 = app.staticTexts["bound.rrdex-ability-description-1"]
+        XCTAssertTrue(ability0.label.contains("Friend Guard"))
+        XCTAssertTrue(ability1.label.contains("Limber"))
+        XCTAssertGreaterThan(ability1.frame.minY, ability0.frame.minY, "Each ability occupies its own line")
+        XCTAssertTrue(ability1.label.contains("Hidden"))
+        screenshot("RRDex-layout-7-auto-save-abilities")
+        let details = element("bound.rrdex-details", in: app)
+        func reveal(_ button: XCUIElement) {
+            for _ in 0..<6 {
+                if button.isHittable && details.frame.contains(button.frame) { return }
+                details.swipeUp()
+            }
+            XCTAssertTrue(button.isHittable)
         }
-
-        assertGamePixelsAnimate(gameScreen, in: app)
-        importButton.tap()
-        let loadedLabel = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in importButton.label.contains("Save loaded") }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [loadedLabel], timeout: 15), .completed)
-        XCTAssertFalse(app.buttons["Cancel"].exists, "Current-save import must not present the Files picker")
-        XCTAssertFalse(app.collectionViews["File View"].exists, "Current-save import must not present Files")
-        assertGamePixelsAnimate(gameScreen, in: app)
-
-        app.buttons["bound.rrdex-info"].tap()
-        let randomizedSummary = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "Random abilities", "Random learnset")).firstMatch
-        XCTAssertTrue(randomizedSummary.waitForExistence(timeout: 10), "The imported fixture should expose both randomizer flags")
+        let learnset = app.buttons["bound.rrdex-learnset"]
+        reveal(learnset)
+        let evolution = element("bound.rrdex-evolution", in: app)
+        XCTAssertGreaterThan(learnset.frame.minX, evolution.frame.minX)
+        screenshot("RRDex-layout-7-evolution-shortcuts")
+        learnset.tap()
+        XCTAssertTrue(element("bound.rrdex-moves", in: app).waitForExistence(timeout: 10))
         app.buttons["bound.rrdex-close-detail"].tap()
+        XCTAssertTrue(app.buttons["bound.rrdex-close-detail"].waitForNonExistence(timeout: 5))
+        let weaknesses = app.buttons["bound.rrdex-weaknesses"]
+        reveal(weaknesses); weaknesses.tap()
+        XCTAssertTrue(element("bound.rrdex-matchups", in: app).waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Based on typing. Abilities, items, and battle effects can change damage."].exists)
+        app.buttons["bound.rrdex-close-detail"].tap()
+        XCTAssertTrue(app.buttons["bound.rrdex-close-detail"].waitForNonExistence(timeout: 5))
         assertGamePixelsAnimate(gameScreen, in: app)
-
-        app.terminate()
-        app.launch()
-        openDex()
-        let relaunchedGameScreen = element("bound.game-screen", in: app)
-        let relaunchedImportButton = app.buttons["bound.rrdex-import"]
-        XCTAssertTrue(relaunchedImportButton.waitForExistence(timeout: 10))
-        XCTAssertTrue(relaunchedImportButton.label.contains("Save loaded"), "The imported current-save settings must persist for this game")
-        assertGamePixelsAnimate(relaunchedGameScreen, in: app)
-        relaunchedImportButton.tap()
-        XCTAssertTrue(relaunchedImportButton.label.contains("Save loaded"), "Refresh should retain the loaded-save state")
-        XCTAssertFalse(app.buttons["Cancel"].exists, "Refreshing the current save must not present the Files picker")
-        XCTAssertFalse(app.collectionViews["File View"].exists, "Refreshing the current save must not present Files")
-        assertGamePixelsAnimate(relaunchedGameScreen, in: app)
+        XCTAssertFalse(app.collectionViews["File View"].exists)
+        app.terminate(); app.launch(); openDex()
+        assertAutomaticSave()
+        XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Bulbasaur")
+        assertGamePixelsAnimate(element("bound.game-screen", in: app), in: app)
     }
 
     private func swipeDownDetail(named title: String, in app: XCUIApplication) {
@@ -1117,13 +1144,6 @@ final class CompanionUITests: XCTestCase {
         setExperiments(true); play(); selectCompanion("Dex", in: app)
         XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 10))
         let game = element("bound.game-screen", in: app)
-        if app.buttons["bound.rrdex-import"].label.contains("Save loaded") {
-            app.buttons["bound.rrdex-info"].tap()
-            let clear = app.buttons["bound.rrdex-clear-save"]
-            XCTAssertTrue(clear.waitForExistence(timeout: 10)); clear.tap()
-            app.buttons["bound.rrdex-close-detail"].tap()
-            XCTAssertTrue(clear.waitForNonExistence(timeout: 10))
-        }
         let search = app.textFields["bound.rrdex-search"]
         search.tap(); search.typeText("bu")
         XCTAssertEqual(search.value as? String, "bu")
@@ -1179,7 +1199,7 @@ final class CompanionUITests: XCTestCase {
         app.buttons["bound.rrdex-suggestion-1"].tap()
         assertImportedAbilities()
         app.buttons["bound.rrdex-info"].tap()
-        XCTAssertTrue(app.buttons["bound.rrdex-clear-save"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Random abilities")).firstMatch.waitForExistence(timeout: 10))
         app.buttons["bound.rrdex-close-detail"].tap()
         search.tap(); search.typeText("charizard")
         app.buttons["bound.rrdex-suggestion-6"].tap()

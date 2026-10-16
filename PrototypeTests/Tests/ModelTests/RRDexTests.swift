@@ -173,6 +173,88 @@ final class RRDexTests: XCTestCase {
         XCTAssertNil(store.read(gameID: "ROM_A").save)
         XCTAssertEqual(store.read(gameID: "ROM_A").speciesID, 6)
     }
+
+    func testAutomaticRefreshStoresOnlyConfigurationAndHandlesFailuresSafely() throws {
+        let suite = "RRDexAutoRefreshTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let preferences = BoundRRDexPreferences(defaults: defaults)
+        let originalSave = try BoundRRDexSave.parse(Self.saveFixture(trainerID: 42))
+        let newSave = try BoundRRDexSave.parse(Self.saveFixture(trainerID: 123456789))
+        preferences.write(.init(speciesID: 150, save: originalSave), gameID: "ROM_A")
+
+        var captureCount = 0
+        let refreshed = try preferences.refreshCurrentSave(gameID: "ROM_A") {
+            captureCount += 1
+            return newSave
+        }
+        XCTAssertEqual(captureCount, 1)
+        XCTAssertEqual(refreshed, .init(speciesID: 150, save: newSave), "Automatic refresh must preserve the selected species.")
+        XCTAssertEqual(preferences.read(gameID: "ROM_A"), refreshed)
+
+        XCTAssertThrowsError(try preferences.refreshCurrentSave(gameID: "ROM_A") {
+            throw BoundRRDexSave.ImportError.currentGameUnavailable
+        })
+        XCTAssertEqual(preferences.read(gameID: "ROM_A"), refreshed, "Transient export failures must keep the last good configuration.")
+
+        XCTAssertThrowsError(try preferences.refreshCurrentSave(gameID: "ROM_A") {
+            throw BoundRRDexSave.ImportError.difficulty
+        })
+        XCTAssertEqual(preferences.read(gameID: "ROM_A"), .init(speciesID: 150), "An unsupported active save must clear stale randomizer settings while preserving species selection.")
+
+        var invalidGameCaptureCalled = false
+        XCTAssertThrowsError(try preferences.refreshCurrentSave(gameID: "ROM/A") {
+            invalidGameCaptureCalled = true
+            return newSave
+        })
+        XCTAssertFalse(invalidGameCaptureCalled, "Invalid game identifiers must not invoke the live-save exporter.")
+    }
+
+    func testAutomaticRefreshEventsArePerGameAndSuppressCapturePauseCallbacks() {
+        let recorder = NotificationRecorder()
+        let observer = NotificationCenter.default.addObserver(forName: BoundRRDexSaveRefreshEvent.notificationName,
+                                                               object: nil, queue: nil) { recorder.append($0) }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        BoundRRDexSaveRefreshEvent.suppressWhileCapturing(gameID: "ROM_A") {
+            BoundRRDexSaveRefreshEvent.post(gameID: "ROM_A")
+            BoundRRDexSaveRefreshEvent.post(gameID: "ROM_B")
+        }
+        XCTAssertEqual(recorder.notifications.count, 1)
+        XCTAssertEqual(recorder.notifications.first?.userInfo?[BoundRRDexSaveRefreshEvent.gameIDKey] as? String, "ROM_B")
+
+        BoundRRDexSaveRefreshEvent.post(gameID: "ROM_A")
+        XCTAssertEqual(recorder.notifications.count, 2)
+        XCTAssertEqual(recorder.notifications.last?.userInfo?[BoundRRDexSaveRefreshEvent.gameIDKey] as? String, "ROM_A")
+    }
+
+    func testAbilityDescriptionsFollowRandomizedAbilityAndRRDexStatColors() throws {
+        let catalog = try XCTUnwrap(BoundRRDexCatalog.bundled)
+        let bulbasaur = try XCTUnwrap(catalog.pokemon(id: 1))
+        let standard = catalog.abilityDetails(for: bulbasaur, save: nil)
+        XCTAssertEqual(standard.map(\.name), ["Overgrow", "Chlorophyll"])
+        XCTAssertEqual(standard.map(\.description), [
+            "Boosts Grass moves by 50% at 1/3 or less HP.",
+            "Doubles Speed in Sun."
+        ])
+        XCTAssertEqual(standard.map(\.isHidden), [false, true])
+
+        let randomized = catalog.abilityDetails(for: bulbasaur,
+                                                save: .init(trainerID: 123456789, randomAbilities: true, randomLearnset: false))
+        XCTAssertEqual(randomized.map(\.name), ["Friend Guard", "Limber"])
+        XCTAssertEqual(randomized.map(\.description), ["Reduces damage done to allies.", "Prevents paralysis."])
+
+        let boundaries: [(Int, String)] = [
+            (29, "#CC0000"), (30, "#ce4d00"), (59, "#ce4d00"), (60, "#ffe100"),
+            (89, "#ffe100"), (90, "#0d8d00"), (119, "#0d8d00"), (120, "#25d65e"),
+            (149, "#25d65e"), (150, "#15c9c7")
+        ]
+        for (value, expected) in boundaries {
+            XCTAssertEqual(BoundRRDexCatalog.statColorHex(for: value), expected, "Unexpected RR Dex stat color at \(value).")
+        }
+    }
+
     private static func saveFixture(trainerID: UInt32 = 123456789) -> Data {
         var bytes = [UInt8](repeating: 0, count: 0x20000)
         func put(_ value: UInt32, _ offset: Int, count: Int = 4) {
@@ -187,5 +269,18 @@ final class RRDexTests: XCTestCase {
             }
         }
         return Data(bytes)
+    }
+
+    private final class NotificationRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: [Notification] = []
+        var notifications: [Notification] {
+            lock.lock(); defer { lock.unlock() }
+            return stored
+        }
+        func append(_ notification: Notification) {
+            lock.lock(); defer { lock.unlock() }
+            stored.append(notification)
+        }
     }
 }

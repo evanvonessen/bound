@@ -466,6 +466,9 @@ final class BoundCompanionCoordinator {
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
     func foreground() {
         foregroundTask?.cancel()
+        if BoundFeatureVisibility.experimentalFeaturesEnabled, state.content == .dex {
+            BoundRRDexSaveRefreshEvent.post(gameID: gameID)
+        }
         if BoundFeatureVisibility.experimentalFeaturesEnabled, sharing.authenticatedMode {
             foregroundTask = Task { [weak self] in
                 guard let self else { return }
@@ -494,20 +497,22 @@ final class BoundCompanionCoordinator {
               core.game.type == .gba, core.state == .running || core.state == .paused else {
             throw BoundRRDexSave.ImportError.currentGameUnavailable
         }
-        let wasRunning = core.state == .running
-        if wasRunning, !owner.pauseEmulation() { throw BoundRRDexSave.ImportError.cannotPause }
-        defer {
-            if wasRunning, owner.emulatorCore === core, core.state == .paused,
-               (owner.game as? Game)?.identifier == gameID, owner.view.window != nil,
-               UIApplication.shared.applicationState == .active {
-                owner.resumeEmulation()
+        return try BoundRRDexSaveRefreshEvent.suppressWhileCapturing(gameID: gameID) {
+            let wasRunning = core.state == .running
+            if wasRunning, !owner.pauseEmulation() { throw BoundRRDexSave.ImportError.cannotPause }
+            defer {
+                if wasRunning, owner.emulatorCore === core, core.state == .paused,
+                   (owner.game as? Game)?.identifier == gameID, owner.view.window != nil,
+                   UIApplication.shared.applicationState == .active {
+                    owner.resumeEmulation()
+                }
             }
-        }
-        guard core.state == .paused else { throw BoundRRDexSave.ImportError.cannotPause }
-        return try BoundRRDexCurrentSaveImport.capture { url in
-            // Export the live battery buffer, including data restored from a save
-            // state, instead of importing a potentially older file from disk.
-            core.deltaCore.emulatorBridge.saveGameSave(to: url)
+            guard core.state == .paused else { throw BoundRRDexSave.ImportError.cannotPause }
+            return try BoundRRDexCurrentSaveImport.capture { url in
+                // Export the live battery buffer, including data restored from a save
+                // state, instead of importing a potentially older file from disk.
+                core.deltaCore.emulatorBridge.saveGameSave(to: url)
+            }
         }
     }
     private func textEditing(_ editing: Bool) {
@@ -606,7 +611,7 @@ private struct BoundPiPSettings: View {
                     }
                     Section {
                         layoutPicker("RR Dex", selection: $dexLayout, identifier: "bound.rrdex-layout")
-                        layoutPicker("Boss View", selection: $bossLayout, identifier: "bound.boss-layout")
+                        layoutPicker("Boss View", selection: $bossLayout, identifier: "bound.boss-layout", layouts: BoundReferenceLayout.bossLayouts)
                     } header: { Text("Reference layouts") } footer: {
                         Text("Each choice is saved separately on this device. Layout 1 is the default.")
                     }
@@ -634,11 +639,12 @@ private struct BoundPiPSettings: View {
         }.onDisappear(perform: closed)
     }
 
-    private func layoutPicker(_ title: String, selection: Binding<BoundReferenceLayout>, identifier: String) -> some View {
+    private func layoutPicker(_ title: String, selection: Binding<BoundReferenceLayout>, identifier: String,
+                              layouts: [BoundReferenceLayout] = BoundReferenceLayout.allCases) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
             Picker(title, selection: selection) {
-                ForEach(BoundReferenceLayout.allCases, id: \.rawValue) { layout in
+                ForEach(layouts, id: \.rawValue) { layout in
                     Text(String(layout.rawValue)).tag(layout)
                 }
             }

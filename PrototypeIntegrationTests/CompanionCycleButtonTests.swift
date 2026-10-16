@@ -5,6 +5,52 @@ import SwiftUI
 
 @MainActor
 final class CompanionCycleButtonTests: XCTestCase {
+    func testDexAutomaticallyRefreshesMatchingSaveEventsOnMain() throws {
+        let preferences = BoundExperimentalFeaturesPreferences()
+        let wasEnabled = preferences.isEnabled
+        let savedLayout = UserDefaults.standard.object(forKey: BoundReferenceLayoutPreferences.dexKey)
+        let gameID = "RRDEX_AUTO_QA_" + UUID().uuidString
+        let dexPreferences = BoundRRDexPreferences()
+        defer {
+            preferences.isEnabled = wasEnabled
+            if let savedLayout { UserDefaults.standard.set(savedLayout, forKey: BoundReferenceLayoutPreferences.dexKey) }
+            else { UserDefaults.standard.removeObject(forKey: BoundReferenceLayoutPreferences.dexKey) }
+            UserDefaults.standard.removeObject(forKey: "bound.rrdex.choice.v1." + gameID)
+        }
+        preferences.isEnabled = true
+        UserDefaults.standard.set(7, forKey: BoundReferenceLayoutPreferences.dexKey)
+        var captureCount = 0
+        var save = BoundRRDexSave(trainerID: 1, randomAbilities: false, randomLearnset: false)
+        var expectedCapture: XCTestExpectation? = expectation(description: "Read current save on entry")
+        let firstCapture = try XCTUnwrap(expectedCapture)
+        let host = UIHostingController(rootView: BoundRRDexView(gameID: gameID, presentationChanged: { _ in }, currentSave: {
+            XCTAssertTrue(Thread.isMainThread, "Emulator save callbacks must reach SwiftUI on main")
+            captureCount += 1
+            expectedCapture?.fulfill(); expectedCapture = nil
+            return save
+        }))
+        let parent = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.windows.first?.rootViewController)
+        parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)
+        host.view.frame = CGRect(x: 0, y: 60, width: 393, height: 263)
+        defer { host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent() }
+        host.view.layoutIfNeeded()
+        wait(for: [firstCapture], timeout: 5)
+        XCTAssertEqual(dexPreferences.read(gameID: gameID).save, save)
+        save = BoundRRDexSave(trainerID: 42, randomAbilities: true, randomLearnset: true)
+        expectedCapture = expectation(description: "Refresh current save after worker callback")
+        let refreshed = try XCTUnwrap(expectedCapture)
+        DispatchQueue.global().async { BoundRRDexSaveRefreshEvent.post(gameID: gameID) }
+        wait(for: [refreshed], timeout: 5)
+        XCTAssertEqual(dexPreferences.read(gameID: gameID).save, save)
+        XCTAssertEqual(captureCount, 2)
+        let unrelated = expectation(description: "Other ROMs must not trigger a capture")
+        unrelated.isInverted = true
+        expectedCapture = unrelated
+        BoundRRDexSaveRefreshEvent.post(gameID: "UNRELATED_ROM")
+        wait(for: [unrelated], timeout: 0.2)
+        XCTAssertEqual(captureCount, 2)
+    }
+
     func testDexCardRendersAtPortraitAndLandscapePanelSizes() throws {
         let preferences = BoundExperimentalFeaturesPreferences()
         let wasEnabled = preferences.isEnabled
@@ -19,7 +65,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         for layout in BoundReferenceLayout.allCases {
             UserDefaults.standard.set(layout.rawValue, forKey: BoundReferenceLayoutPreferences.dexKey)
             var sizes = [("island-portrait", CGSize(width: 393, height: 263)), ("portrait", CGSize(width: 390, height: 195)), ("compact-portrait", CGSize(width: 375, height: 100)), ("landscape", CGSize(width: 330, height: 275))]
-            if layout == .layout6 { sizes.append(("narrow-portrait", CGSize(width: 320, height: 195))) }
+            if layout == .layout6 || layout == .layout7 { sizes.append(("narrow-portrait", CGSize(width: 320, height: 195))) }
             for (name, size) in sizes {
                 let host = UIHostingController(rootView: BoundRRDexView(gameID: "RRDEX_RENDER_QA", floating: name == "landscape", portraitTopInset: name == "island-portrait" ? 59 : 0, presentationChanged: { _ in }))
                 host.safeAreaRegions = []
@@ -58,7 +104,7 @@ final class CompanionCycleButtonTests: XCTestCase {
             else { UserDefaults.standard.removeObject(forKey: BoundReferenceLayoutPreferences.bossKey) }
         }
         let parent = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.windows.first?.rootViewController)
-        for layout in BoundReferenceLayout.allCases {
+        for layout in BoundReferenceLayout.bossLayouts {
             UserDefaults.standard.set(layout.rawValue, forKey: BoundReferenceLayoutPreferences.bossKey)
             var sizes = [("island-portrait", CGSize(width: 393, height: 263)), ("portrait", CGSize(width: 390, height: 195)), ("compact-portrait", CGSize(width: 375, height: 100)), ("landscape", CGSize(width: 330, height: 275))]
             if layout == .layout6 { sizes.append(("narrow-portrait", CGSize(width: 320, height: 195))) }

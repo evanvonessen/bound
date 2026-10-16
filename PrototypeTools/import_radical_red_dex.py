@@ -72,7 +72,12 @@ def main():
               "sourceSHA256": hashlib.sha256(data_path.read_bytes()).hexdigest(),
               "species": sorted(species, key=lambda p: p["id"]),
               "types": list(raw["types"].values()),
-              "abilities": [{k: a[k] for k in ["ID", "names"]} for a in raw["abilities"].values()],
+              # The upstream site shows each localized name variant with the
+              # exact same ability description. Keep descriptions parallel to
+              # names so consumers can resolve a randomized name consistently.
+              "abilities": [{"ID": a["ID"], "names": a["names"],
+                             "descriptions": [a["description"]] * len(a["names"])}
+                            for a in raw["abilities"].values()],
               "moves": [{k: m[k] for k in ["ID", "name", "power", "accuracy", "pp", "type", "split"]} for m in raw["moves"].values()],
               "normalAbilities": table("ABILITIES_NORMAL"), "normalMoves": table("MOVES_NORMAL")}
     ids = {p["id"] for p in species}
