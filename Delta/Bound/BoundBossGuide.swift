@@ -152,6 +152,31 @@ struct BoundBossPokemon: Decodable, Sendable {
     var levelLabel: String { Double(level) == nil ? level : "Lv. " + level }
 }
 
+/// Canonical in-battle stat modifiers for Pokémon natures, displayed without
+/// depending on the current player's save or randomized encounter settings.
+enum BoundBossNatureDescription {
+    private static let effects: [String: String] = [
+        "Hardy": "no stat changes", "Docile": "no stat changes", "Serious": "no stat changes",
+        "Bashful": "no stat changes", "Quirky": "no stat changes",
+        "Lonely": "+10% Attack, −10% Defense", "Brave": "+10% Attack, −10% Speed",
+        "Adamant": "+10% Attack, −10% Sp. Atk", "Naughty": "+10% Attack, −10% Sp. Def",
+        "Bold": "+10% Defense, −10% Attack", "Relaxed": "+10% Defense, −10% Speed",
+        "Impish": "+10% Defense, −10% Sp. Atk", "Lax": "+10% Defense, −10% Sp. Def",
+        "Timid": "+10% Speed, −10% Attack", "Hasty": "+10% Speed, −10% Defense",
+        "Jolly": "+10% Speed, −10% Sp. Atk", "Naive": "+10% Speed, −10% Sp. Def",
+        "Modest": "+10% Sp. Atk, −10% Attack", "Mild": "+10% Sp. Atk, −10% Defense",
+        "Quiet": "+10% Sp. Atk, −10% Speed", "Rash": "+10% Sp. Atk, −10% Sp. Def",
+        "Calm": "+10% Sp. Def, −10% Attack", "Gentle": "+10% Sp. Def, −10% Defense",
+        "Sassy": "+10% Sp. Def, −10% Speed", "Careful": "+10% Sp. Def, −10% Sp. Atk"
+    ]
+
+    static func label(for nature: String) -> String {
+        let normalized = nature.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effect = effects.first { $0.key.caseInsensitiveCompare(normalized) == .orderedSame }?.value
+        return "Nature · \(normalized.isEmpty ? "Unknown" : normalized) · \(effect ?? "nature effects unavailable")"
+    }
+}
+
 /// Joins the published Default boss sheet to the bundled, Normal-difficulty RR Dex.
 /// It deliberately does not accept a save, so opponent choices cannot be randomized.
 struct BoundBossReference: Sendable {

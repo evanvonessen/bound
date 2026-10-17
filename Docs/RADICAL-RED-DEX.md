@@ -14,7 +14,7 @@ Weaknesses and learnsets open native sheets; editing and presentations use the
 existing input cancellation and emulation pause/resume coordinator.
 
 In **Bound Settings → Reference layouts**, RR Dex has its own saved choice of
-Layouts 1 through 9. Layout 1 remains the default and preserves the original card.
+Layouts 1 through 10. Layout 1 remains the default and preserves the original card.
 Layout 2 pins species and tappable ability names while matchup summaries, base
 stats and evolutions scroll below. Layout 3 places Weaknesses and Learnset beside
 the Dynamic Island, compacts the species and abilities, and anchors import/info
@@ -52,6 +52,11 @@ Learnset opens an independent move-name filter; closing it clears that filter.
 Move search uses the same current-save randomizer results as the move rows,
 while Weaknesses and Info retain their sheets. Search editing uses the existing
 keyboard-safe panel and emulation pause/resume behavior.
+Layout 10 copies Layout 9 and replaces the Weaknesses button with compact,
+colored type pills between Evolution and Learnset. Weaknesses, Resistances and
+Immunities each occupy a wrapping row only when that group has entries; neutral
+types are omitted. The summary uses the same type chart as the matchup sheet,
+and the inline learnset and its independent move search remain below it.
 Automatic save refresh continues when the Dex opens, after game saves or state
 loads, and when the app returns to the foreground.
 The selection changes presentation only, keeping the same RR 4.1 data and

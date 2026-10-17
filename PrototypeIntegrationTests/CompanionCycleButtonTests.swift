@@ -89,6 +89,9 @@ final class CompanionCycleButtonTests: XCTestCase {
                 XCTAssertGreaterThan(try XCTUnwrap(snapshot.pngData()).count, 5000)
                 let attachment = XCTAttachment(image: snapshot)
                 attachment.name = "RRDex-hosted-layout-\(layout.rawValue)-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
+                if layout == .layout10, name == "island-portrait" {
+                    try captureLayout10MatchupScroll(in: host.view, size: size, name: "light")
+                }
                 if layout.rawValue >= 8 {
                     host.overrideUserInterfaceStyle = .dark
                     host.view.setNeedsLayout(); host.view.layoutIfNeeded()
@@ -96,6 +99,9 @@ final class CompanionCycleButtonTests: XCTestCase {
                     let darkSnapshot = renderer.image { _ in host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true) }
                     let darkAttachment = XCTAttachment(image: darkSnapshot)
                     darkAttachment.name = "RRDex-hosted-layout-\(layout.rawValue)-\(name)-dark"; darkAttachment.lifetime = .keepAlways; add(darkAttachment)
+                    if layout == .layout10, name == "island-portrait" {
+                        try captureLayout10MatchupScroll(in: host.view, size: size, name: "dark")
+                    }
                 }
                 if name == "compact-portrait" { try checkCompactCardScrolls(in: host.view, size: size, name: "RRDex") }
                 host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent()
@@ -121,7 +127,7 @@ final class CompanionCycleButtonTests: XCTestCase {
             if layout.rawValue >= 6 { sizes.append(("narrow-portrait", CGSize(width: 320, height: 195))) }
             for (name, size) in sizes {
                 let gameID = "BOSS_RENDER_QA_\(layout.rawValue)_\(name)"
-                if (layout.rawValue == 7 || layout.rawValue == 8 || layout.rawValue == 9), name == "narrow-portrait",
+                if layout.rawValue >= 7, name == "narrow-portrait",
                    let selection = try? JSONEncoder().encode(BoundBossGuideSelection(teamID: "johto-leaders-56", pokemonIndex: 0)) {
                     let key = "bound.boss-guide.selection.v1." + gameID
                     selectionKeys.append(key)
@@ -150,7 +156,7 @@ final class CompanionCycleButtonTests: XCTestCase {
                     darkAttachment.name = "Boss-guide-hosted-layout-\(layout.rawValue)-\(name)-dark"; darkAttachment.lifetime = .keepAlways; add(darkAttachment)
                 }
                 if name == "compact-portrait" { try checkCompactCardScrolls(in: host.view, size: size, name: "Boss-guide") }
-                if (layout.rawValue == 7 || layout.rawValue == 8 || layout.rawValue == 9), name == "narrow-portrait" {
+                if layout.rawValue >= 7, name == "narrow-portrait" {
                     let team = try XCTUnwrap(BoundBossCatalog.bundled?.team(id: "johto-leaders-56"))
                     XCTAssertEqual(team.pokemon.count, 6, "The narrow layout fixture should use a full six-member team.")
                     XCTAssertNil(team.levelCap, "Post-Surge Bugsy must retain its source data without an invented cap.")
@@ -201,6 +207,25 @@ final class CompanionCycleButtonTests: XCTestCase {
         attachment.name = "\(name)-hosted-compact-portrait-footer"; attachment.lifetime = .keepAlways; add(attachment)
     }
 
+    private func captureLayout10MatchupScroll(in view: UIView, size: CGSize, name: String) throws {
+        func scrollingContent(in view: UIView) -> UIScrollView? {
+            if let scroll = view as? UIScrollView, scroll.contentSize.height > scroll.bounds.height + 1 { return scroll }
+            return view.subviews.lazy.compactMap { scrollingContent(in: $0) }.first
+        }
+        let scroll = try XCTUnwrap(scrollingContent(in: view), "Layout 10 needs a scroll view for its inline learnset.")
+        let originalOffset = scroll.contentOffset
+        defer { scroll.setContentOffset(originalOffset, animated: false) }
+        let targetOffset = min(250, max(0, scroll.contentSize.height - scroll.bounds.height))
+        scroll.setContentOffset(CGPoint(x: 0, y: targetOffset), animated: false)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        view.layoutIfNeeded()
+        let snapshot = UIGraphicsImageRenderer(size: size).image { _ in
+            view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: snapshot)
+        attachment.name = "RRDex-layout10-matchups-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
+    }
+
     func testDexSearchDisablesCorrectionCapitalizationSpellingAndSmartEdits() {
         let field = BoundRRDexSearchField.makeTextField()
         XCTAssertEqual(field.autocapitalizationType, .none)
@@ -210,6 +235,24 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(field.smartDashesType, .no)
         XCTAssertEqual(field.smartInsertDeleteType, .no)
         XCTAssertEqual(field.inlinePredictionType, .no)
+    }
+
+    func testBossLayout10NatureEffectsCoverBundledNaturesAndFallbacks() throws {
+        let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
+        let natures = Set(catalog.teams.flatMap { $0.pokemon.map(\.nature) })
+        XCTAssertTrue(natures.contains("Random"), "The source includes an unknown/random nature that must not get invented modifiers.")
+        for nature in natures where nature.caseInsensitiveCompare("Random") != .orderedSame {
+            XCTAssertTrue(BoundBossNatureDescription.label(for: nature).hasPrefix("Nature · \(nature) · "))
+            XCTAssertFalse(BoundBossNatureDescription.label(for: nature).contains("unavailable"), nature)
+        }
+        XCTAssertEqual(BoundBossNatureDescription.label(for: "Adamant"), "Nature · Adamant · +10% Attack, −10% Sp. Atk")
+        XCTAssertEqual(BoundBossNatureDescription.label(for: "Jolly"), "Nature · Jolly · +10% Speed, −10% Sp. Atk")
+        XCTAssertEqual(BoundBossNatureDescription.label(for: "Modest"), "Nature · Modest · +10% Sp. Atk, −10% Attack")
+        XCTAssertEqual(BoundBossNatureDescription.label(for: "Hardy"), "Nature · Hardy · no stat changes")
+        XCTAssertEqual(BoundBossNatureDescription.label(for: "  adamant  "), "Nature · adamant · +10% Attack, −10% Sp. Atk")
+        XCTAssertEqual(BoundBossNatureDescription.label(for: "Random"), "Nature · Random · nature effects unavailable")
+        XCTAssertEqual(BoundBossNatureDescription.label(for: "Unlisted"), "Nature · Unlisted · nature effects unavailable")
+        XCTAssertEqual(BoundBossNatureDescription.label(for: ""), "Nature · Unknown · nature effects unavailable")
     }
     func testExperimentalBossCycleFallsBackImmediatelyWhenDisabled() {
         let state = BoundCompanionState(experimentalFeaturesEnabled: false)

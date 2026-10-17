@@ -56,7 +56,7 @@ struct BoundRRDexView: View {
                             compactCard(pokemon: pokemon, catalog: catalog)
                                 .frame(width: geometry.size.width)
                         }
-                        .id((layout == .layout4 || layout == .layout5 || layout == .layout6 || layout == .layout7 || layout == .layout8 || layout == .layout9) && (searching || !query.isEmpty))
+                        .id((layout == .layout4 || layout == .layout5 || layout == .layout6 || layout == .layout7 || layout == .layout8 || layout == .layout9 || layout == .layout10) && (searching || !query.isEmpty))
                         .scrollDismissesKeyboard(.interactively)
                         .frame(width: geometry.size.width, height: geometry.size.height)
                     } else {
@@ -67,7 +67,7 @@ struct BoundRRDexView: View {
                 .padding(.top, portraitTopInset)
                 .overlay(alignment: .top) {
                     if hasIslandActions {
-                        if layout == .layout8 || layout == .layout9 {
+                        if layout == .layout8 || layout == .layout9 || layout == .layout10 {
                             HStack(spacing: 0) {
                                 Spacer(minLength: 0)
                                 layout8InformationButton
@@ -114,7 +114,7 @@ struct BoundRRDexView: View {
                         case .weaknesses: BoundRRDexMatchups(pokemon: pokemon, catalog: catalog)
                         case .learnset: BoundRRDexLearnset(pokemon: pokemon, catalog: catalog, save: choice.save)
                         case .information:
-                            if layout == .layout8 || layout == .layout9 { informationLayout8() }
+                            if layout == .layout8 || layout == .layout9 || layout == .layout10 { informationLayout8() }
                             else { information(catalog: catalog) }
                         case .evolution: evolutionDetail(pokemon: pokemon, catalog: catalog)
                         case let .ability(name, description):
@@ -179,7 +179,7 @@ struct BoundRRDexView: View {
         case .layout5: cardLayout5(pokemon: pokemon, catalog: catalog, compact: true, denseSizing: true)
         case .layout6: cardLayout6(pokemon: pokemon, catalog: catalog, compact: true, denseSizing: true)
         case .layout7: cardLayout7(pokemon: pokemon, catalog: catalog, compact: true)
-        case .layout8, .layout9: cardLayout8(pokemon: pokemon, catalog: catalog, compact: true)
+        case .layout8, .layout9, .layout10: cardLayout8(pokemon: pokemon, catalog: catalog, compact: true)
         }
     }
 
@@ -205,7 +205,7 @@ struct BoundRRDexView: View {
                         denseSizing: size.height < 250)
         case .layout7:
             cardLayout7(pokemon: pokemon, catalog: catalog)
-        case .layout8, .layout9:
+        case .layout8, .layout9, .layout10:
             cardLayout8(pokemon: pokemon, catalog: catalog)
         }
     }
@@ -466,14 +466,16 @@ struct BoundRRDexView: View {
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-bst")
-                if layout != .layout9 {
+                if layout == .layout8 {
                     detailButton("Learnset", icon: "list.bullet.rectangle", detail: .learnset,
                                  comfortableTargets: true, identifier: "bound.rrdex-layout8-learnset")
                 }
-                detailButton("Weaknesses", icon: "shield.lefthalf.filled", detail: .weaknesses,
-                             comfortableTargets: true, identifier: "bound.rrdex-layout\(layout.rawValue)-weaknesses")
+                if layout != .layout10 {
+                    detailButton("Weaknesses", icon: "shield.lefthalf.filled", detail: .weaknesses,
+                                 comfortableTargets: true, identifier: "bound.rrdex-layout\(layout.rawValue)-weaknesses")
+                }
             }
-            .frame(width: 126, alignment: .trailing)
+            .frame(width: layout == .layout10 ? nil : 126, alignment: .trailing)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-actions")
         }
@@ -504,14 +506,14 @@ struct BoundRRDexView: View {
                 }
                 .buttonStyle(.plain).foregroundStyle(.primary)
                 .accessibilityLabel(moveSearchVisible ? "Close move search" : "Search moves")
-                .accessibilityIdentifier("bound.rrdex-layout9-learnset-search-toggle")
+                .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-learnset-search-toggle")
                 Spacer(minLength: 0)
             }
             .id("learnset")
             if moveSearchVisible {
                 HStack(spacing: 6) {
                     BoundRRDexSearchField(text: $moveQuery, focused: $moveSearchFocused,
-                                         placeholder: "Find a move", identifier: "bound.rrdex-layout9-learnset-search") {
+                                         placeholder: "Find a move", identifier: "bound.rrdex-layout\(layout.rawValue)-learnset-search") {
                         moveSearchFocused = false
                     }
                     if !moveQuery.isEmpty {
@@ -519,7 +521,7 @@ struct BoundRRDexView: View {
                             Image(systemName: "xmark.circle.fill").frame(width: 44, height: 44)
                         }
                         .accessibilityLabel("Clear move search")
-                        .accessibilityIdentifier("bound.rrdex-layout9-learnset-clear")
+                        .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-learnset-clear")
                     }
                 }
                 .buttonStyle(.plain).foregroundStyle(.primary)
@@ -541,14 +543,14 @@ struct BoundRRDexView: View {
                                 if let move = catalog.learnedMove(entry, pokemon: pokemon, save: choice.save) {
                                     BoundRRDexLearnsetMoveRow(move: move, level: entry.level, catalog: catalog)
                                         .accessibilityElement(children: .combine)
-                                        .accessibilityIdentifier("bound.rrdex-layout9-learnset-move-\(index)")
+                                        .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-learnset-move-\(index)")
                                     Divider()
                                 }
                             }
                         } header: {
                             Text(method).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                                 .accessibilityAddTraits(.isHeader)
-                                .accessibilityIdentifier("bound.rrdex-layout9-learnset-method-\(method)")
+                                .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-learnset-method-\(method)")
                         }
                     }
                 }
@@ -558,12 +560,12 @@ struct BoundRRDexView: View {
                 }) {
                     Text(filter.isEmpty ? "No moves available" : "No moves found")
                         .font(.caption).foregroundStyle(.secondary)
-                        .accessibilityIdentifier("bound.rrdex-layout9-learnset-empty")
+                        .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-learnset-empty")
                 }
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("bound.rrdex-layout9-learnset")
+        .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-learnset")
     }
 
     private func cardLayout2(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog,
@@ -1193,10 +1195,14 @@ struct BoundRRDexView: View {
                         .accessibilityElement(children: .ignore).accessibilityLabel("\(label), \(stat)")
                 }
             }.accessibilityIdentifier(layout.rawValue >= 8 ? "bound.rrdex-layout\(layout.rawValue)-stats" : "bound.rrdex-stats")
-            if expandedReference, layout == .layout8 || layout == .layout9 { layout8Evolution(pokemon: pokemon, catalog: catalog) }
+            if expandedReference, layout == .layout8 || layout == .layout9 || layout == .layout10 { layout8Evolution(pokemon: pokemon, catalog: catalog) }
             else if expandedReference { layout7Evolution(pokemon: pokemon, catalog: catalog) }
             else { evolutionLine(pokemon: pokemon, catalog: catalog) }
-            if layout == .layout9 { inlineLearnset(pokemon: pokemon, catalog: catalog) }
+            if layout == .layout10 {
+                BoundRRDexCompactMatchups(pokemon: pokemon, catalog: catalog,
+                                         identifier: "bound.rrdex-layout10-matchups")
+            }
+            if layout == .layout9 || layout == .layout10 { inlineLearnset(pokemon: pokemon, catalog: catalog) }
         }
     }
 
@@ -1495,6 +1501,85 @@ struct BoundRRDexMatchups: View {
         }.accessibilityIdentifier("bound.rrdex-matchups")
     }
 }
+
+/// Compact type-only matchups shared by the Layout 10 reference cards.
+struct BoundRRDexCompactMatchups: View {
+    let pokemon: BoundRRDexSpecies
+    let catalog: BoundRRDexCatalog
+    let identifier: String
+
+    var body: some View {
+        let matchups = catalog.defensiveMatchups(for: pokemon)
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(["Weaknesses", "Resistances", "Immunities"], id: \.self) { group in
+                let entries = matchups.filter { entry in
+                    switch group {
+                    case "Weaknesses": entry.multiplier > 1
+                    case "Resistances": entry.multiplier > 0 && entry.multiplier < 1
+                    default: entry.multiplier == 0
+                    }
+                }
+                if !entries.isEmpty {
+                    HStack(alignment: .top, spacing: 6) {
+                        Text(group + ":").font(.system(size: 11, weight: .semibold))
+                            .padding(.top, 3).frame(width: 76, alignment: .leading)
+                        BoundRRDexTypeFlowLayout {
+                            ForEach(entries) { entry in
+                                BoundRRDexTypePill(type: entry.type)
+                                    .accessibilityLabel(entry.type.name)
+                                    .accessibilityValue(entry.label)
+                                    .accessibilityIdentifier("\(identifier)-\(group.lowercased())-type-\(entry.type.id)")
+                            }
+                        }
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("\(identifier)-\(group.lowercased())")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+/// Keep type pills at their natural width and wrap them within a narrow panel.
+private struct BoundRRDexTypeFlowLayout: Layout {
+    private let spacing: CGFloat = 5
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let naturalWidth = subviews.reduce(CGFloat.zero) { $0 + $1.sizeThatFits(.unspecified).width }
+            + CGFloat(max(0, subviews.count - 1)) * spacing
+        let width = max(0, proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? naturalWidth)
+        let rows = arrangement(width: width, subviews: subviews)
+        return CGSize(width: width, height: rows.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let rows = arrangement(width: bounds.width, subviews: subviews)
+        for (index, frame) in rows.frames.enumerated() {
+            subviews[index].place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                                  anchor: .topLeading, proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    private func arrangement(width: CGFloat, subviews: Subviews) -> (frames: [CGRect], height: CGFloat) {
+        var frames: [CGRect] = []
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
+        for subview in subviews {
+            let natural = subview.sizeThatFits(.unspecified)
+            let size = subview.sizeThatFits(ProposedViewSize(width: min(width, natural.width), height: nil))
+            if x > 0 && x + size.width > width {
+                x = 0; y += rowHeight + spacing; rowHeight = 0
+            }
+            frames.append(CGRect(origin: CGPoint(x: x, y: y), size: size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return (frames, y + rowHeight)
+    }
+}
+
 private struct BoundRRDexLearnset: View {
     let pokemon: BoundRRDexSpecies
     let catalog: BoundRRDexCatalog

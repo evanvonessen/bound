@@ -1690,6 +1690,127 @@ final class CompanionUITests: XCTestCase {
         closeBoundSheet(in: app)
     }
 
+    func testLayout10InlineMatchupsAndNatureEffects() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+
+        openBoundSettings(in: app)
+        let bossLayout = app.segmentedControls["bound.boss-layout"]
+        scrollToSetting(bossLayout, in: app); bossLayout.buttons["10"].tap()
+        let dexLayout = app.segmentedControls["bound.rrdex-layout"]
+        scrollToSetting(dexLayout, in: app); dexLayout.buttons["10"].tap()
+        var originalEnabledStates: [String: Bool] = [:]
+        for content in ["bosses", "dex"] {
+            let toggle = app.switches["bound.companion-enabled.\(content)"]
+            scrollToSetting(toggle, in: app)
+            XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+            originalEnabledStates[content] = toggle.value as? String == "1"
+            if toggle.value as? String != "1" {
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+        }
+        closeBoundSheet(in: app)
+        defer {
+            app.terminate(); app.launch()
+            setExperimentalFeatures(false, in: app)
+            app.terminate()
+        }
+
+        selectCompanion("Bosses", in: app)
+        XCTAssertEqual(element("bound.boss-guide", in: app).value as? String, "Layout 10")
+        XCTAssertFalse(app.buttons["bound.boss-full-team"].exists)
+        app.buttons["bound.boss-picker"].tap()
+        let bossSearch = app.searchFields.firstMatch
+        XCTAssertTrue(bossSearch.waitForExistence(timeout: 5)); bossSearch.tap(); bossSearch.typeText("Falkner")
+        let falkner = app.buttons["bound.boss-select-johto-leaders-4"]
+        XCTAssertTrue(falkner.waitForExistence(timeout: 5)); falkner.tap()
+        XCTAssertTrue(bossSearch.waitForNonExistence(timeout: 5))
+        let bossNature = element("bound.boss-nature", in: app)
+        XCTAssertTrue(bossNature.waitForExistence(timeout: 5))
+        XCTAssertEqual(bossNature.label, "Nature · Jolly · +10% Speed, −10% Sp. Atk")
+        let bossMatchups = element("bound.boss-layout10-matchups", in: app)
+        XCTAssertTrue(bossMatchups.waitForExistence(timeout: 5))
+        let bossAbility = element("bound.boss-ability-description", in: app)
+        let bossItem = element("bound.boss-item-description", in: app)
+        XCTAssertTrue(bossAbility.exists); XCTAssertTrue(bossItem.exists)
+        XCTAssertLessThan(bossAbility.frame.minY, bossItem.frame.minY)
+        XCTAssertLessThan(bossItem.frame.minY, bossMatchups.frame.minY,
+                          "Boss matchups follow the selected Pokémon's Ability and Item.")
+        XCTAssertFalse(app.staticTexts["Neutral:"].exists, "Neutral matchups are implicit and are not listed.")
+        let bossDetails = app.scrollViews["bound.boss-details"]
+        for _ in 0..<10 where !bossMatchups.isHittable || !bossDetails.frame.contains(bossMatchups.frame) {
+            let below = bossMatchups.frame.midY > bossDetails.frame.midY
+            bossDetails.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: below ? 0.8 : 0.4))
+                .press(forDuration: 0.1, thenDragTo: bossDetails.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: below ? 0.4 : 0.8)),
+                       withVelocity: .slow, thenHoldForDuration: 0.2)
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        screenshot("Boss-Layout10-Matchups")
+
+        selectCompanion("Dex", in: app)
+        XCTAssertEqual(element("bound.rrdex", in: app).value as? String, "Layout 10")
+        app.buttons["bound.rrdex-search-open"].tap()
+        let speciesSearch = app.textFields["bound.rrdex-search"]
+        XCTAssertTrue(speciesSearch.waitForExistence(timeout: 5)); speciesSearch.tap(); speciesSearch.typeText("bulbasaur")
+        let bulbasaur = app.buttons["bound.rrdex-suggestion-1"]
+        XCTAssertTrue(bulbasaur.waitForExistence(timeout: 5)); bulbasaur.tap()
+        let details = app.scrollViews["bound.rrdex-layout10-details"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["bound.rrdex-layout10-weaknesses"].exists)
+        let matchups = element("bound.rrdex-layout10-matchups", in: app)
+        XCTAssertTrue(matchups.waitForExistence(timeout: 5))
+        let weaknesses = element("bound.rrdex-layout10-matchups-weaknesses", in: app)
+        let resistances = element("bound.rrdex-layout10-matchups-resistances", in: app)
+        let immunities = element("bound.rrdex-layout10-matchups-immunities", in: app)
+        for _ in 0..<10 where !weaknesses.isHittable || !details.frame.contains(weaknesses.frame) {
+            let below = weaknesses.frame.midY > details.frame.midY
+            details.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: below ? 0.8 : 0.4))
+                .press(forDuration: 0.1, thenDragTo: details.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: below ? 0.4 : 0.8)),
+                       withVelocity: .slow, thenHoldForDuration: 0.2)
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        XCTAssertTrue(weaknesses.isHittable); XCTAssertTrue(resistances.exists)
+        XCTAssertTrue(app.staticTexts["Weaknesses:"].exists)
+        XCTAssertTrue(app.staticTexts["Resistances:"].exists)
+        XCTAssertTrue(element("bound.rrdex-layout10-matchups-weaknesses-type-10", in: app).label.contains("Fire"))
+        XCTAssertTrue(element("bound.rrdex-layout10-matchups-weaknesses-type-14", in: app).label.contains("Psychic"))
+        XCTAssertTrue(element("bound.rrdex-layout10-matchups-resistances-type-1", in: app).label.contains("Fighting"))
+        XCTAssertTrue(element("bound.rrdex-layout10-matchups-resistances-type-23", in: app).label.contains("Fairy"))
+        XCTAssertFalse(immunities.exists, "Empty matchup categories are omitted entirely.")
+        XCTAssertFalse(app.staticTexts["Neutral:"].exists)
+        XCTAssertTrue(element("bound.rrdex-layout10-evolution", in: app).exists)
+        let learnset = element("bound.rrdex-layout10-learnset", in: app)
+        XCTAssertTrue(learnset.exists)
+        XCTAssertLessThan(element("bound.rrdex-layout10-evolution", in: app).frame.minY, matchups.frame.minY)
+        XCTAssertLessThan(matchups.frame.maxY, learnset.frame.minY,
+                          "The compact matchup summary sits between Evolution and the inline Learnset.")
+        screenshot("RRDex-Layout10-Matchups")
+
+        openBoundSettings(in: app)
+        for (content, wasEnabled) in originalEnabledStates {
+            let toggle = app.switches["bound.companion-enabled.\(content)"]
+            scrollToSetting(toggle, in: app)
+            if (toggle.value as? String == "1") != wasEnabled {
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+        }
+        closeBoundSheet(in: app)
+    }
+
     func testLayout9InlineLearnsetSearchAndAutomaticRandomizedMoves() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
