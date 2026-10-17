@@ -1747,11 +1747,11 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(falkner.waitForExistence(timeout: 5)); falkner.tap()
         XCTAssertTrue(bossSearch.waitForNonExistence(timeout: 5))
         let bossPicker = app.buttons["bound.boss-picker"]
-        let fullTeam = app.buttons["bound.boss-full-team"]
-        XCTAssertTrue(bossPicker.isHittable); XCTAssertTrue(fullTeam.isHittable)
-        XCTAssertLessThan(bossPicker.frame.midY, 70); XCTAssertLessThan(fullTeam.frame.midY, 70)
+        XCTAssertFalse(app.buttons["bound.boss-full-team"].exists)
+        XCTAssertTrue(bossPicker.isHittable)
+        XCTAssertLessThan(bossPicker.frame.midY, 70)
         XCTAssertLessThan(bossPicker.frame.midX, app.frame.midX)
-        XCTAssertGreaterThan(fullTeam.frame.midX, app.frame.midX)
+        XCTAssertLessThanOrEqual(bossPicker.frame.maxX, app.frame.midX - 78)
         XCTAssertEqual(app.staticTexts["bound.boss-cap"].label, "Cap 15")
 
         selectCompanion("Dex", in: app)

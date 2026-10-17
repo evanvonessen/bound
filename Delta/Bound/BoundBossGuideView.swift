@@ -340,13 +340,17 @@ struct BoundBossGuideView: View {
             .accessibilityLabel("Choose boss, \(team.name)")
             .accessibilityIdentifier("bound.boss-picker")
             if onIsland { Color.clear.frame(width: 160, height: 1).accessibilityHidden(true) }
-            Button { showingTeam = true } label: {
-                Label("Full Team", systemImage: "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 11, weight: .medium)).lineLimit(1).minimumScaleFactor(0.75)
-                    .frame(maxWidth: .infinity, alignment: .trailing).frame(height: 44)
-                    .contentShape(Rectangle())
+            if layout != .layout9 {
+                Button { showingTeam = true } label: {
+                    Label("Full Team", systemImage: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 11, weight: .medium)).lineLimit(1).minimumScaleFactor(0.75)
+                        .frame(maxWidth: .infinity, alignment: .trailing).frame(height: 44)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityIdentifier("bound.boss-full-team")
+            } else if onIsland {
+                Color.clear.frame(maxWidth: .infinity).frame(height: 44).accessibilityHidden(true)
             }
-            .accessibilityIdentifier("bound.boss-full-team")
         }
         .buttonStyle(.plain).foregroundStyle(.primary)
     }

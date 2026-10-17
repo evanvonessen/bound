@@ -74,8 +74,8 @@ old encounter row lifts the Pokémon and details. The cap appears on the right
 of the speed and conditional-level notes, and the selected Pokémon's nature
 appears below its moves and above the ability and held item. Displays without
 an Island keep both controls in a top toolbar.
-Layout 9 copies Layout 8 with the same Island controls, speed and cap placement,
-inline nature, team strip, and scroll behavior.
+Layout 9 copies Layout 8's trainer picker, speed and cap placement, inline nature,
+team strip, and scroll behavior, and removes the Full Team button on all displays.
 
 Trainer icons are unchanged original game sprites from the
 [Pokémon Showdown trainer directory](https://play.pokemonshowdown.com/sprites/trainers/).
