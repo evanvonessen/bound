@@ -440,6 +440,157 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         sharing.stop()
     }
 
+    func testPendingJiggleIsCanceledAcrossAccountSwitchAndSignOut() async throws {
+        let preferences = BoundExperimentalFeaturesPreferences()
+        let previousExperimentalState = preferences.isEnabled
+        preferences.isEnabled = true
+        defer { preferences.isEnabled = previousExperimentalState }
+
+        let firstOwner = UUID(), secondOwner = UUID()
+        var identity: AppCloudSession? = try makeIdentity(owner: firstOwner)
+        let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+                self.makeLease(room: room, owner: session.owner, request: 1)
+            })
+        var jiggleStarts = 0
+        var canceledJiggles = 0
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            action == "list" ? FriendResponse(ok: true, rooms: [friend]) : FriendResponse(ok: false)
+        }, sendJiggle: { _, _ in
+            jiggleStarts += 1
+            do {
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+                return "Jiggle sent."
+            } catch {
+                canceledJiggles += 1
+                throw error
+            }
+        }, observeAccount: { OnboardingObservation($0) })
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+
+        onboarding.select(friend, startSharing: true)
+        await waitUntil { sharing.active && jiggleStarts == 1 }
+        identity = try makeIdentity(owner: secondOwner)
+        onboarding.synchronizeAccount()
+        await waitUntil { canceledJiggles == 1 && !onboarding.busy }
+        XCTAssertEqual(canceledJiggles, 1, "An account switch cancels the old account's notification")
+        XCTAssertFalse(sharing.active, "Changing accounts must stop the previous account's share")
+        XCTAssertNil(onboarding.selected)
+        XCTAssertNotEqual(onboarding.message, "Jiggle sent.", "The previous account's pending result must not replace the new account state")
+        XCTAssertEqual(jiggleStarts, 1, "Account synchronization must not resend a pending Jiggle")
+
+        onboarding.select(friend, startSharing: true)
+        await waitUntil { sharing.active && jiggleStarts == 2 }
+        identity = nil
+        onboarding.signOut()
+        await waitUntil { canceledJiggles == 2 }
+        XCTAssertEqual(canceledJiggles, 2, "Signing out cancels the current account's notification")
+        let signedOutMessage = onboarding.message
+        await settle()
+        XCTAssertEqual(onboarding.message, signedOutMessage, "A canceled notification must not overwrite the signed-out state")
+        XCTAssertEqual(onboarding.message, "Sign in above to add a friend.")
+        XCTAssertEqual(jiggleStarts, 2, "Signing out must not retry or resend the canceled Jiggle")
+        XCTAssertFalse(sharing.active)
+        onboarding.close()
+    }
+
+    func testDisablingExperimentalFeaturesCancelsPendingJiggleWithoutStaleMessage() async throws {
+        let preferences = BoundExperimentalFeaturesPreferences()
+        let previousExperimentalState = preferences.isEnabled
+        preferences.isEnabled = true
+        defer { preferences.isEnabled = previousExperimentalState }
+
+        let identity = try makeIdentity(owner: UUID())
+        let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+            experimentalFeaturesEnabled: { preferences.isEnabled }, tokenFetcher: { room, session in
+                self.makeLease(room: room, owner: session.owner, request: 1)
+            })
+        var jiggleStarts = 0
+        var canceledJiggles = 0
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            action == "list" ? FriendResponse(ok: true, rooms: [friend]) : FriendResponse(ok: false)
+        }, sendJiggle: { _, _ in
+            jiggleStarts += 1
+            do {
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+                return "Jiggle sent."
+            } catch {
+                canceledJiggles += 1
+                throw error
+            }
+        }, observeAccount: { OnboardingObservation($0) })
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+
+        onboarding.select(friend, startSharing: true)
+        await waitUntil { sharing.active && jiggleStarts == 1 }
+        preferences.isEnabled = false
+        onboarding.experimentalFeaturesChanged()
+        sharing.experimentalFeaturesChanged(false)
+        await waitUntil { canceledJiggles == 1 && !onboarding.busy }
+        XCTAssertEqual(canceledJiggles, 1, "Experimental opt-out cancels the in-flight notification")
+        let messageAfterOptOut = onboarding.message
+        onboarding.select(friend, startSharing: true)
+        await settle()
+        XCTAssertEqual(jiggleStarts, 1, "Opting out cancels the pending Jiggle and prevents another tap from sending one")
+        XCTAssertEqual(onboarding.message, "Ready to share with Fixture Friend.")
+        XCTAssertNotEqual(onboarding.message, "Jiggle sent.", "A canceled Jiggle must not publish a stale success")
+        XCTAssertNotEqual(messageAfterOptOut, "Jiggle sent.")
+        onboarding.close()
+        sharing.stop()
+    }
+
+    func testRefreshAndForegroundShareReconnectDoNotResendJiggle() async throws {
+        let preferences = BoundExperimentalFeaturesPreferences()
+        let previousExperimentalState = preferences.isEnabled
+        preferences.isEnabled = true
+        defer { preferences.isEnabled = previousExperimentalState }
+
+        let identity = try makeIdentity(owner: UUID())
+        let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
+        let transport = FriendTapSharingTransport()
+        var tokenRequests = 0
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+                tokenRequests += 1
+                return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
+            })
+        var jiggleRooms: [String] = []
+        var observation: OnboardingObservation?
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            action == "list" ? FriendResponse(ok: true, rooms: [friend]) : FriendResponse(ok: false)
+        }, sendJiggle: { room, _ in
+            jiggleRooms.append(room.roomID)
+            return "Jiggle sent."
+        }, observeAccount: { callback in
+            let value = OnboardingObservation(callback)
+            observation = value
+            return value
+        })
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+
+        onboarding.select(friend, startSharing: true)
+        await waitUntil { sharing.joined && jiggleRooms.count == 1 && tokenRequests == 1 }
+        onboarding.refresh()
+        await waitUntil { !onboarding.busy }
+        observation?.fire()
+        await settle()
+        sharing.background()
+        XCTAssertFalse(sharing.active)
+        sharing.foreground()
+        await waitUntil { sharing.active && transport.configurations.count == 2 && tokenRequests == 2 }
+        onboarding.refresh()
+        await waitUntil { !onboarding.busy }
+        XCTAssertEqual(jiggleRooms, [friend.roomID], "List refresh and automatic foreground reconnect must not notify the friend again")
+        XCTAssertTrue(sharing.active)
+        onboarding.close()
+        sharing.stop()
+    }
+
     func testJiggleFailureDoesNotStopOrDelaySharing() async throws {
         let preferences = BoundExperimentalFeaturesPreferences()
         let previousExperimentalState = preferences.isEnabled
