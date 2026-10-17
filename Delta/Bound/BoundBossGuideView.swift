@@ -31,7 +31,7 @@ struct BoundBossGuideView: View {
     private var anyPresentation: Bool {
         showingPicker || showingTeam || detailSheet != nil
     }
-    private var usesIslandActions: Bool { (layout == .layout3 || layout == .layout4 || layout == .layout5 || layout == .layout6 || layout == .layout7 || layout == .layout8) && !floating && portraitTopInset >= 51 }
+    private var usesIslandActions: Bool { (layout == .layout3 || layout == .layout4 || layout == .layout5 || layout == .layout6 || layout == .layout7 || layout == .layout8 || layout == .layout9) && !floating && portraitTopInset >= 51 }
 
     var body: some View {
         Group {
@@ -49,7 +49,7 @@ struct BoundBossGuideView: View {
                 .overlay(alignment: .top) {
                     if usesIslandActions {
                         Group {
-                            if layout == .layout8 { layout8Actions(team: team, onIsland: true) }
+                            if layout == .layout8 || layout == .layout9 { layout8Actions(team: team, onIsland: true) }
                             else if layout == .layout7 { layout7Actions(onIsland: true) }
                             else { islandActions(pokemon: pokemon, onIsland: true) }
                         }
@@ -94,16 +94,16 @@ struct BoundBossGuideView: View {
     private func sizedCard(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, size: CGSize) -> some View {
         if floating {
             floatingLayout(team: team, pokemon: pokemon, index: index, size: size)
-        } else if size.height < 140 || ((layout == .layout7 || layout == .layout8) && !usesIslandActions && size.height < 235) {
+        } else if size.height < 140 || ((layout == .layout7 || layout == .layout8 || layout == .layout9) && !usesIslandActions && size.height < 235) {
             // Very short strips scroll the entire card so pinned controls
             // cannot consume the space needed to read the content.
             ScrollView {
                 Group {
                     if layout == .layout1 {
                         card(team: team, pokemon: pokemon, index: index, scrollsDetails: false)
-                    } else if layout == .layout7 || layout == .layout8 {
+                    } else if layout == .layout7 || layout == .layout8 || layout == .layout9 {
                         layout7Card(team: team, pokemon: pokemon, index: index, scrollsDetails: false,
-                                    islandHeader: layout == .layout8)
+                                    islandHeader: layout == .layout8 || layout == .layout9)
                     } else if layout == .layout4 {
                         layout4Card(team: team, pokemon: pokemon, index: index,
                                     compact: true, scrollsDetails: false)
@@ -127,6 +127,8 @@ struct BoundBossGuideView: View {
                 case .layout7:
                     layout7Card(team: team, pokemon: pokemon, index: index)
                 case .layout8:
+                    layout7Card(team: team, pokemon: pokemon, index: index, islandHeader: true)
+                case .layout9:
                     layout7Card(team: team, pokemon: pokemon, index: index, islandHeader: true)
                 case .layout2:
                     enhancedCard(team: team, pokemon: pokemon, index: index,
@@ -165,6 +167,8 @@ struct BoundBossGuideView: View {
         case .layout7:
             floatingCard = AnyView(layout7Card(team: team, pokemon: pokemon, index: index))
         case .layout8:
+            floatingCard = AnyView(layout7Card(team: team, pokemon: pokemon, index: index, islandHeader: true))
+        case .layout9:
             floatingCard = AnyView(layout7Card(team: team, pokemon: pokemon, index: index, islandHeader: true))
         case .layout2:
             floatingCard = AnyView(enhancedCard(team: team, pokemon: pokemon, index: index, compact: true))

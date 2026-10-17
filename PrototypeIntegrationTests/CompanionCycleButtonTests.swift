@@ -65,10 +65,10 @@ final class CompanionCycleButtonTests: XCTestCase {
         for layout in BoundReferenceLayout.allCases {
             UserDefaults.standard.set(layout.rawValue, forKey: BoundReferenceLayoutPreferences.dexKey)
             var sizes = [("island-portrait", CGSize(width: 393, height: 263)), ("portrait", CGSize(width: 390, height: 195)), ("compact-portrait", CGSize(width: 375, height: 100)), ("landscape", CGSize(width: 330, height: 275))]
-            if layout == .layout6 || layout == .layout7 || layout == .layout8 { sizes.append(("narrow-portrait", CGSize(width: 320, height: 195))) }
+            if layout.rawValue >= 6 { sizes.append(("narrow-portrait", CGSize(width: 320, height: 195))) }
             for (name, size) in sizes {
                 let host = UIHostingController(rootView: BoundRRDexView(gameID: "RRDEX_RENDER_QA", floating: name == "landscape", portraitTopInset: name == "island-portrait" ? 59 : 0, presentationChanged: { _ in }))
-                if layout == .layout8 { host.overrideUserInterfaceStyle = .light }
+                if layout.rawValue >= 8 { host.overrideUserInterfaceStyle = .light }
                 host.safeAreaRegions = []
                 parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)
                 host.view.frame = CGRect(origin: CGPoint(x: 0, y: 60), size: size)
@@ -89,13 +89,13 @@ final class CompanionCycleButtonTests: XCTestCase {
                 XCTAssertGreaterThan(try XCTUnwrap(snapshot.pngData()).count, 5000)
                 let attachment = XCTAttachment(image: snapshot)
                 attachment.name = "RRDex-hosted-layout-\(layout.rawValue)-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
-                if layout == .layout8 {
+                if layout.rawValue >= 8 {
                     host.overrideUserInterfaceStyle = .dark
                     host.view.setNeedsLayout(); host.view.layoutIfNeeded()
                     RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
                     let darkSnapshot = renderer.image { _ in host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true) }
                     let darkAttachment = XCTAttachment(image: darkSnapshot)
-                    darkAttachment.name = "RRDex-hosted-layout-8-\(name)-dark"; darkAttachment.lifetime = .keepAlways; add(darkAttachment)
+                    darkAttachment.name = "RRDex-hosted-layout-\(layout.rawValue)-\(name)-dark"; darkAttachment.lifetime = .keepAlways; add(darkAttachment)
                 }
                 if name == "compact-portrait" { try checkCompactCardScrolls(in: host.view, size: size, name: "RRDex") }
                 host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent()
@@ -118,17 +118,17 @@ final class CompanionCycleButtonTests: XCTestCase {
         for layout in BoundReferenceLayout.bossLayouts {
             UserDefaults.standard.set(layout.rawValue, forKey: BoundReferenceLayoutPreferences.bossKey)
             var sizes = [("island-portrait", CGSize(width: 393, height: 263)), ("portrait", CGSize(width: 390, height: 195)), ("compact-portrait", CGSize(width: 375, height: 100)), ("landscape", CGSize(width: 330, height: 275))]
-            if layout == .layout6 || layout == .layout7 || layout == .layout8 { sizes.append(("narrow-portrait", CGSize(width: 320, height: 195))) }
+            if layout.rawValue >= 6 { sizes.append(("narrow-portrait", CGSize(width: 320, height: 195))) }
             for (name, size) in sizes {
                 let gameID = "BOSS_RENDER_QA_\(layout.rawValue)_\(name)"
-                if (layout == .layout7 || layout == .layout8), name == "narrow-portrait",
+                if (layout.rawValue == 7 || layout.rawValue == 8 || layout.rawValue == 9), name == "narrow-portrait",
                    let selection = try? JSONEncoder().encode(BoundBossGuideSelection(teamID: "johto-leaders-56", pokemonIndex: 0)) {
                     let key = "bound.boss-guide.selection.v1." + gameID
                     selectionKeys.append(key)
                     UserDefaults.standard.set(selection, forKey: key)
                 }
                 let host = UIHostingController(rootView: BoundBossGuideView(gameID: gameID, floating: name == "landscape", portraitTopInset: name == "island-portrait" ? 59 : 0, presentationChanged: { _ in }))
-                if layout == .layout8 { host.overrideUserInterfaceStyle = .light }
+                if layout.rawValue >= 8 { host.overrideUserInterfaceStyle = .light }
                 host.safeAreaRegions = []
                 parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)
                 host.view.frame = CGRect(origin: CGPoint(x: 0, y: 60), size: size)
@@ -141,18 +141,18 @@ final class CompanionCycleButtonTests: XCTestCase {
                 XCTAssertGreaterThan(try XCTUnwrap(snapshot.pngData()).count, 5000)
                 let attachment = XCTAttachment(image: snapshot)
                 attachment.name = "Boss-guide-hosted-layout-\(layout.rawValue)-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
-                if layout == .layout8 {
+                if layout.rawValue >= 8 {
                     host.overrideUserInterfaceStyle = .dark
                     host.view.setNeedsLayout(); host.view.layoutIfNeeded()
                     RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
                     let darkSnapshot = renderer.image { _ in host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true) }
                     let darkAttachment = XCTAttachment(image: darkSnapshot)
-                    darkAttachment.name = "Boss-guide-hosted-layout-8-\(name)-dark"; darkAttachment.lifetime = .keepAlways; add(darkAttachment)
+                    darkAttachment.name = "Boss-guide-hosted-layout-\(layout.rawValue)-\(name)-dark"; darkAttachment.lifetime = .keepAlways; add(darkAttachment)
                 }
                 if name == "compact-portrait" { try checkCompactCardScrolls(in: host.view, size: size, name: "Boss-guide") }
-                if (layout == .layout7 || layout == .layout8), name == "narrow-portrait" {
+                if (layout.rawValue == 7 || layout.rawValue == 8 || layout.rawValue == 9), name == "narrow-portrait" {
                     let team = try XCTUnwrap(BoundBossCatalog.bundled?.team(id: "johto-leaders-56"))
-                    XCTAssertEqual(team.pokemon.count, 6, "The narrow Layout 7 fixture should use a full six-member team.")
+                    XCTAssertEqual(team.pokemon.count, 6, "The narrow layout fixture should use a full six-member team.")
                     XCTAssertNil(team.levelCap, "Post-Surge Bugsy must retain its source data without an invented cap.")
                     try checkCompactCardScrolls(in: host.view, size: size, name: "Boss-guide-layout\(layout.rawValue)-narrow")
                 }

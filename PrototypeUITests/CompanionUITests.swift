@@ -1690,6 +1690,181 @@ final class CompanionUITests: XCTestCase {
         closeBoundSheet(in: app)
     }
 
+    func testLayout9InlineLearnsetSearchAndAutomaticRandomizedMoves() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+
+        let app = XCUIApplication()
+        XCUIDevice.shared.orientation = .portrait
+        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(game.waitForExistence(timeout: 20))
+        game.tap()
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+
+        openBoundSettings(in: app)
+        let bossLayout = app.segmentedControls["bound.boss-layout"]
+        scrollToSetting(bossLayout, in: app); bossLayout.buttons["9"].tap()
+        let dexLayout = app.segmentedControls["bound.rrdex-layout"]
+        scrollToSetting(dexLayout, in: app); dexLayout.buttons["9"].tap()
+        var originalEnabledStates: [String: Bool] = [:]
+        for content in ["bosses", "dex"] {
+            let toggle = app.switches["bound.companion-enabled.\(content)"]
+            scrollToSetting(toggle, in: app)
+            XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+            originalEnabledStates[content] = toggle.value as? String == "1"
+            if toggle.value as? String != "1" {
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+        }
+        closeBoundSheet(in: app)
+        app.terminate(); app.launch()
+        let relaunchedGame = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(relaunchedGame.waitForExistence(timeout: 20))
+        relaunchedGame.tap()
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+        defer {
+            app.terminate(); app.launch()
+            setExperimentalFeatures(false, in: app)
+            app.terminate()
+        }
+
+        selectCompanion("Bosses", in: app)
+        let bossCard = element("bound.boss-guide", in: app)
+        XCTAssertEqual(bossCard.value as? String, "Layout 9")
+        app.buttons["bound.boss-picker"].tap()
+        let bossSearch = app.searchFields.firstMatch
+        XCTAssertTrue(bossSearch.waitForExistence(timeout: 5)); bossSearch.tap(); bossSearch.typeText("Falkner")
+        let falkner = app.buttons["bound.boss-select-johto-leaders-4"]
+        XCTAssertTrue(falkner.waitForExistence(timeout: 5)); falkner.tap()
+        XCTAssertTrue(bossSearch.waitForNonExistence(timeout: 5))
+        let bossPicker = app.buttons["bound.boss-picker"]
+        let fullTeam = app.buttons["bound.boss-full-team"]
+        XCTAssertTrue(bossPicker.isHittable); XCTAssertTrue(fullTeam.isHittable)
+        XCTAssertLessThan(bossPicker.frame.midY, 70); XCTAssertLessThan(fullTeam.frame.midY, 70)
+        XCTAssertLessThan(bossPicker.frame.midX, app.frame.midX)
+        XCTAssertGreaterThan(fullTeam.frame.midX, app.frame.midX)
+        XCTAssertEqual(app.staticTexts["bound.boss-cap"].label, "Cap 15")
+
+        selectCompanion("Dex", in: app)
+        let card = element("bound.rrdex", in: app)
+        XCTAssertTrue(card.waitForExistence(timeout: 10))
+        XCTAssertEqual(card.value as? String, "Layout 9")
+        app.buttons["bound.rrdex-info"].tap()
+        XCTAssertEqual(app.staticTexts["bound.rrdex-layout9-info-rom"].label, "ROM: Radical Red Version 4.1")
+        XCTAssertEqual(app.staticTexts["bound.rrdex-layout9-info-difficulty"].label, "Difficulty: Normal")
+        XCTAssertEqual(app.staticTexts["bound.rrdex-layout9-info-save"].label, "Save Loaded")
+        app.buttons["bound.rrdex-close-detail"].tap()
+        let gameScreen = element("bound.game-screen", in: app)
+        XCTAssertTrue(gameScreen.waitForExistence(timeout: 10))
+        assertGamePixelsAnimate(gameScreen, in: app)
+
+        // Choose one known species so the move list and search are deterministic.
+        app.buttons["bound.rrdex-search-open"].tap()
+        let speciesSearch = app.textFields["bound.rrdex-search"]
+        XCTAssertTrue(speciesSearch.waitForExistence(timeout: 5))
+        speciesSearch.tap(); speciesSearch.typeText("bulbasaur")
+        let bulbasaur = app.buttons["bound.rrdex-suggestion-1"]
+        XCTAssertTrue(bulbasaur.waitForExistence(timeout: 5)); bulbasaur.tap()
+        XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Bulbasaur")
+
+        let details = app.scrollViews["bound.rrdex-layout9-details"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        let searchToggle = app.buttons["bound.rrdex-layout9-learnset-search-toggle"]
+        let learnset = app.descendants(matching: .any)["bound.rrdex-layout9-learnset"]
+        XCTAssertFalse(app.buttons["bound.rrdex-layout9-learnset"].exists,
+                       "Layout 9 should display moves inline instead of opening a Learnset sheet.")
+
+        func revealLearnset() {
+            for _ in 0..<10 where !searchToggle.isHittable || !details.frame.contains(searchToggle.frame) {
+                let below = searchToggle.frame.midY > details.frame.midY
+                details.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: below ? 0.8 : 0.4))
+                    .press(forDuration: 0.1, thenDragTo: details.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: below ? 0.4 : 0.8)),
+                           withVelocity: .slow, thenHoldForDuration: 0.2)
+                // Let scrolling settle before testing the heading's hit target.
+                Thread.sleep(forTimeInterval: 0.6)
+            }
+            if !searchToggle.isHittable {
+                let attachment = XCTAttachment(string: app.debugDescription)
+                attachment.name = "Layout9-Learnset-Hierarchy"; attachment.lifetime = .keepAlways; add(attachment)
+                screenshot("RRDex-Layout9-Learnset-Reveal-Failure")
+            }
+            XCTAssertTrue(searchToggle.isHittable)
+        }
+        revealLearnset()
+        XCTAssertTrue(learnset.exists)
+        let learnsetHeader = app.staticTexts.matching(NSPredicate(format: "label == %@", "Learnset")).firstMatch
+        XCTAssertTrue(learnsetHeader.exists)
+        let weaknesses = app.buttons["bound.rrdex-layout9-weaknesses"]
+        XCTAssertLessThan(weaknesses.frame.minY, learnsetHeader.frame.minY,
+                          "Weaknesses remains in the Evolution section above the inline Learnset.")
+        XCTAssertTrue(app.staticTexts["Level-up moves match your imported save. TM/HM, tutor and egg moves keep their standard moves."].exists,
+                      "Layout 9 should use the automatically loaded randomized learnset from the diagnostic save.")
+        XCTAssertTrue(app.staticTexts["bound.rrdex-layout9-learnset-method-Level up"].exists)
+        let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "bound.rrdex-layout9-learnset-move-"))
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5), "Auto-loaded randomized move data should appear in the inline list.")
+        screenshot("RRDex-Layout9-Inline-Learnset")
+
+        // Derive the term from a currently rendered randomized row; do not rely on a fixed move pool.
+        let firstMoveLabel = rows.firstMatch.label
+        let firstMoveName = firstMoveLabel.components(separatedBy: ",").first ?? firstMoveLabel
+        let firstSearchTerm = String(firstMoveName.split(separator: " ").first ?? "")
+        XCTAssertFalse(firstSearchTerm.isEmpty)
+
+        searchToggle.tap()
+        let search = app.textFields["bound.rrdex-layout9-learnset-search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap(); search.typeText(firstSearchTerm)
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5), "A partial name from the rendered move row should match.")
+        XCTAssertTrue(rows.firstMatch.label.localizedCaseInsensitiveContains(firstSearchTerm))
+        app.buttons["bound.rrdex-layout9-learnset-clear"].tap()
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5), "Clearing restores the randomized move rows.")
+
+        search.typeText("zzqvnonexistentmove")
+        XCTAssertTrue(app.staticTexts["bound.rrdex-layout9-learnset-empty"].waitForExistence(timeout: 5))
+        app.buttons["bound.rrdex-layout9-learnset-clear"].tap()
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
+        screenshot("RRDex-Layout9-Learnset-Search-Cleared")
+
+        searchToggle.tap()
+        XCTAssertTrue(search.waitForNonExistence(timeout: 5), "Closing inline search should hide the field.")
+        XCTAssertFalse(app.buttons["bound.rrdex-layout9-learnset-clear"].exists)
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5), "Closing search clears the filter.")
+
+        for _ in 0..<10 where !weaknesses.isHittable || !details.frame.contains(weaknesses.frame) {
+            let below = weaknesses.frame.midY > details.frame.midY
+            details.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: below ? 0.8 : 0.4))
+                .press(forDuration: 0.1, thenDragTo: details.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: below ? 0.4 : 0.8)),
+                       withVelocity: .slow, thenHoldForDuration: 0.2)
+            Thread.sleep(forTimeInterval: 0.6)
+        }
+        XCTAssertTrue(weaknesses.isHittable, "Weaknesses appears above the inline Learnset section.")
+        XCTAssertTrue(details.frame.contains(weaknesses.frame))
+        weaknesses.tap()
+        XCTAssertTrue(element("bound.rrdex-matchups", in: app).waitForExistence(timeout: 10))
+        app.buttons["bound.rrdex-close-detail"].tap()
+        XCTAssertTrue(app.buttons["bound.rrdex-close-detail"].waitForNonExistence(timeout: 5))
+        assertGamePixelsAnimate(gameScreen, in: app)
+
+        openBoundSettings(in: app)
+        for (content, wasEnabled) in originalEnabledStates {
+            let toggle = app.switches["bound.companion-enabled.\(content)"]
+            scrollToSetting(toggle, in: app)
+            if (toggle.value as? String == "1") != wasEnabled {
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+        }
+        closeBoundSheet(in: app)
+    }
+
     private func checkReferenceLayouts(_ layouts: [Int]) throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []

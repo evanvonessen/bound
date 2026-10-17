@@ -30,7 +30,7 @@ stay separate. Search opens matching groups while keeping their alternatives
 available; the currently selected encounter opens when the picker returns.
 Unlabeled source alternatives retain neutral Team 1/2/3 labels.
 
-**Bound Settings → Reference layouts → Boss View** chooses between eight saved
+**Bound Settings → Reference layouts → Boss View** chooses between nine saved
 presentations independently of RR Dex. Layout 1 preserves the original card and
 is the default. Layout 2 adds source-derived battle-condition badges, a tappable
 opposing-team strip, ability and item description buttons, a typing-matchup
@@ -74,6 +74,8 @@ old encounter row lifts the Pokémon and details. The cap appears on the right
 of the speed and conditional-level notes, and the selected Pokémon's nature
 appears below its moves and above the ability and held item. Displays without
 an Island keep both controls in a top toolbar.
+Layout 9 copies Layout 8 with the same Island controls, speed and cap placement,
+inline nature, team strip, and scroll behavior.
 
 Trainer icons are unchanged original game sprites from the
 [Pokémon Showdown trainer directory](https://play.pokemonshowdown.com/sprites/trainers/).
