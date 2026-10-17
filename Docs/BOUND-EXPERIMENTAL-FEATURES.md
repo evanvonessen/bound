@@ -74,7 +74,8 @@ With experiments off, the original account text and explicit Start sharing
 button remain.
 
 The same opt-in adds account usernames (Library Settings), Remove Friend and
-Jiggle actions, and restoration of sharing that was active before backgrounding.
+Jiggles sent when a friend is tapped to start sharing, and restoration of sharing
+that was active before backgrounding.
 Restoration fetches a fresh room token, checks account and room ownership, and
 retries temporary failures with backoff. Manual stop, account changes, removal,
 or disabling experiments cancel restoration. It does not start a previously

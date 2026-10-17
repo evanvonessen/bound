@@ -39,8 +39,12 @@ opt-out cancels this intent. A cold launch does not independently start sharing.
 
 ## Jiggles
 
-The Friends action sends **[Sender's username] wants to play.** to the friend's
-opted-in devices. Enable reception in Library Settings → Receive Jiggles.
+Tapping a friend's name to start sharing also sends **[Sender's username] wants
+to play.** to the friend's opted-in devices. There is no separate Jiggle button.
+Sharing starts immediately and continues if notification delivery fails. Tapping
+the already active friend again, adding a friend, refreshing the list and
+automatic sharing reconnection do not send another Jiggle. Enable reception in
+Library Settings → Receive Jiggles.
 Notifications use the default sound and normal iOS notification vibration;
 Focus, silent mode and the user's notification settings remain in control.
 Foreground delivery adds notification haptics and checks the current recipient.

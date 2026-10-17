@@ -876,14 +876,13 @@ private struct BoundFriendsSheet: View {
                                 if experimentalFeaturesEnabled {
                                     Button(room.displayName) { onboarding.select(room, startSharing: true) }
                                         .buttonStyle(.borderless)
-                                        .accessibilityHint("Starts sharing your game with this friend")
+                                        .accessibilityHint("Starts sharing your game and sends this friend a Jiggle notification")
                                 } else {
                                     Button(room.displayName) { onboarding.select(room) }
                                 }
                                 Spacer()
                                 Menu {
                                     if experimentalFeaturesEnabled {
-                                        Button("Jiggle", systemImage: "hand.wave") { onboarding.jiggle(room) }
                                         Button("Remove Friend", systemImage: "person.badge.minus", role: .destructive) { removingRoom = room }
                                     }
                                     Button("Report") { reportingRoom = room }

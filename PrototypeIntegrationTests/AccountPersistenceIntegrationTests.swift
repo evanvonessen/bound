@@ -146,6 +146,9 @@ final class FriendModerationIntegrationTests: XCTestCase {
             case "unblock": return .init(ok: true, blocks: [])
             default: throw BoundFriendError.unavailable
             }
+        }, sendJiggle: { _, _ in
+            XCTFail("Default selection must not send a Jiggle")
+            return ""
         }, observeAccount: { OnboardingObservation($0) })
         let sharing = FriendSharingSession(configuration: nil, authenticatedMode: true)
         model.open(sharing: sharing, existing: { identity })
@@ -168,6 +171,9 @@ final class FriendModerationIntegrationTests: XCTestCase {
             if action == "list" { return .init(ok: true, rooms: [room]) }
             XCTAssertEqual(action, "report"); XCTAssertEqual(payload, ["roomID": room.roomID, "reason": "harassment"])
             return denied ? .init(ok: false, error: "rate_limited") : .init(ok: true, reportID: UUID())
+        }, sendJiggle: { _, _ in
+            XCTFail("A default selection must not send a Jiggle")
+            return ""
         }, observeAccount: { OnboardingObservation($0) })
         model.open(sharing: FriendSharingSession(configuration: nil, authenticatedMode: true), existing: { identity })
         for _ in 0..<1000 { if !model.busy { break }; await Task.yield() }
@@ -191,6 +197,9 @@ final class FriendModerationIntegrationTests: XCTestCase {
             XCTAssertEqual(action, "remove")
             XCTAssertEqual(payload, ["roomID": room.roomID])
             return .init(ok: allowRemoval)
+        }, sendJiggle: { _, _ in
+            XCTFail("A default selection must not send a Jiggle")
+            return ""
         }, observeAccount: { OnboardingObservation($0) })
         let sharing = FriendSharingSession(configuration: nil, authenticatedMode: true)
         model.open(sharing: sharing, existing: { identity })
@@ -228,6 +237,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         let second = FriendRoom(roomID: UUID().uuidString, displayName: "Second Friend")
         let transport = FriendTapSharingTransport()
         var requestedRooms: [String] = []
+        var jiggleRooms: [String] = []
         let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
             experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
                 requestedRooms.append(room)
@@ -235,6 +245,9 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
             })
         let onboarding = FriendOnboarding(call: { _, action, _ in
             action == "list" ? FriendResponse(ok: true, rooms: [first, second]) : FriendResponse(ok: false)
+        }, sendJiggle: { room, _ in
+            jiggleRooms.append(room.roomID)
+            return "Jiggle sent."
         }, observeAccount: { OnboardingObservation($0) })
         onboarding.open(sharing: sharing, existing: { identity })
         await waitUntil { !onboarding.busy }
@@ -244,17 +257,22 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         XCTAssertEqual(requestedRooms, [first.roomID])
         XCTAssertEqual(transport.configurations.first?.channel, "friend-tap-1")
         XCTAssertTrue(sharing.active)
+        await waitUntil { jiggleRooms.count == 1 }
+        XCTAssertEqual(jiggleRooms, [first.roomID], "Starting a share from a friend tap sends one Jiggle")
 
         onboarding.select(first, startSharing: true)
         await settle()
         XCTAssertEqual(requestedRooms.count, 1, "Tapping the active selected friend must not restart sharing")
         XCTAssertEqual(transport.configurations.count, 1)
+        XCTAssertEqual(jiggleRooms, [first.roomID], "Repeated taps on the active friend must not send another Jiggle")
 
         onboarding.select(second, startSharing: true)
         await waitUntil { transport.configurations.count == 2 }
         XCTAssertEqual(requestedRooms, [first.roomID, second.roomID])
         XCTAssertEqual(transport.configurations.last?.channel, "friend-tap-2")
         XCTAssertEqual(onboarding.selected, second)
+        await waitUntil { jiggleRooms.count == 2 }
+        XCTAssertEqual(jiggleRooms, [first.roomID, second.roomID])
 
         sharing.stop()
         XCTAssertFalse(sharing.active)
@@ -262,6 +280,8 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         await waitUntil { transport.configurations.count == 3 }
         XCTAssertEqual(requestedRooms, [first.roomID, second.roomID, second.roomID], "A stopped session can be retried from the selected friend")
         XCTAssertTrue(sharing.active)
+        await waitUntil { jiggleRooms.count == 3 }
+        XCTAssertEqual(jiggleRooms, [first.roomID, second.roomID, second.roomID], "A new share after stopping sends one new Jiggle")
         onboarding.close()
         sharing.stop()
     }
@@ -284,6 +304,9 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
             })
         let onboarding = FriendOnboarding(call: { _, action, _ in
             action == "list" ? FriendResponse(ok: true, rooms: [friend]) : FriendResponse(ok: false)
+        }, sendJiggle: { _, _ in
+            XCTFail("Experimental-off selection must not send a Jiggle")
+            return ""
         }, observeAccount: { OnboardingObservation($0) })
         onboarding.open(sharing: sharing, existing: { identity })
         await waitUntil { !onboarding.busy }
@@ -326,6 +349,9 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
                 return FriendResponse(ok: true, reportID: UUID())
             default: return FriendResponse(ok: false)
             }
+        }, sendJiggle: { _, _ in
+            XCTFail("Invalid, busy, or signed-out selection must not send a Jiggle")
+            return ""
         }, observeAccount: { OnboardingObservation($0) })
         onboarding.open(sharing: sharing, existing: { identity })
         await waitUntil { !onboarding.busy }
@@ -362,6 +388,131 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         onboarding.close()
     }
 
+    func testPendingJiggleIsCanceledOnNewSelection() async throws {
+        let preferences = BoundExperimentalFeaturesPreferences()
+        let previousExperimentalState = preferences.isEnabled
+        preferences.isEnabled = true
+        defer { preferences.isEnabled = previousExperimentalState }
+
+        let identity = try makeIdentity(owner: UUID())
+        let first = FriendRoom(roomID: UUID().uuidString, displayName: "First Friend")
+        let second = FriendRoom(roomID: UUID().uuidString, displayName: "Second Friend")
+        let transport = FriendTapSharingTransport()
+        var tokenRequests = 0
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+                tokenRequests += 1
+                return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
+            })
+        var startedJiggles: [String] = []
+        var completedJiggles: [String] = []
+        var canceledJiggles: [String] = []
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            action == "list" ? FriendResponse(ok: true, rooms: [first, second]) : FriendResponse(ok: false)
+        }, sendJiggle: { room, _ in
+            startedJiggles.append(room.roomID)
+            if room == first {
+                do {
+                    try await Task.sleep(nanoseconds: 5_000_000_000)
+                    completedJiggles.append(room.roomID)
+                    return "Jiggle sent."
+                } catch {
+                    canceledJiggles.append(room.roomID)
+                    throw error
+                }
+            }
+            completedJiggles.append(room.roomID)
+            return "Jiggle sent."
+        }, observeAccount: { OnboardingObservation($0) })
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+
+        onboarding.select(first, startSharing: true)
+        await waitUntil { sharing.active && startedJiggles == [first.roomID] }
+        XCTAssertTrue(sharing.active, "Sharing begins without waiting for the notification to finish")
+        onboarding.select(second, startSharing: true)
+        await waitUntil { sharing.active && canceledJiggles == [first.roomID] && completedJiggles == [second.roomID] }
+        XCTAssertEqual(startedJiggles, [first.roomID, second.roomID])
+        XCTAssertEqual(canceledJiggles, [first.roomID], "Changing friends cancels the pending notification for the old selection")
+        XCTAssertEqual(completedJiggles, [second.roomID])
+        XCTAssertTrue(sharing.active, "A canceled notification must not interrupt the new share")
+        onboarding.close()
+        sharing.stop()
+    }
+
+    func testJiggleFailureDoesNotStopOrDelaySharing() async throws {
+        let preferences = BoundExperimentalFeaturesPreferences()
+        let previousExperimentalState = preferences.isEnabled
+        preferences.isEnabled = true
+        defer { preferences.isEnabled = previousExperimentalState }
+
+        let identity = try makeIdentity(owner: UUID())
+        let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
+        let transport = FriendTapSharingTransport()
+        var tokenRequests = 0
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+                tokenRequests += 1
+                return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
+            })
+        var jiggleAttempts = 0
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            action == "list" ? FriendResponse(ok: true, rooms: [friend]) : FriendResponse(ok: false)
+        }, sendJiggle: { _, _ in
+            jiggleAttempts += 1
+            throw BoundFriendError.unavailable
+        }, observeAccount: { OnboardingObservation($0) })
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+
+        onboarding.select(friend, startSharing: true)
+        await waitUntil { sharing.active && tokenRequests == 1 && jiggleAttempts == 1 }
+        XCTAssertTrue(sharing.active, "The share starts while notification delivery runs")
+        await settle()
+        XCTAssertTrue(sharing.active, "Notification failure must not stop sharing")
+        XCTAssertEqual(tokenRequests, 1)
+        XCTAssertEqual(transport.configurations.count, 1)
+        onboarding.close()
+        sharing.stop()
+    }
+
+    func testClosingFriendsKeepsPendingJiggleRunningWithActiveShare() async throws {
+        let preferences = BoundExperimentalFeaturesPreferences()
+        let previousExperimentalState = preferences.isEnabled
+        preferences.isEnabled = true
+        defer { preferences.isEnabled = previousExperimentalState }
+
+        let identity = try makeIdentity(owner: UUID())
+        let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
+        let transport = FriendTapSharingTransport()
+        var tokenRequests = 0
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+                tokenRequests += 1
+                return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
+            })
+        var started = false
+        var completed = false
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            action == "list" ? FriendResponse(ok: true, rooms: [friend]) : FriendResponse(ok: false)
+        }, sendJiggle: { _, _ in
+            started = true
+            try await Task.sleep(nanoseconds: 50_000_000)
+            completed = true
+            return "Jiggle sent."
+        }, observeAccount: { OnboardingObservation($0) })
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+
+        onboarding.select(friend, startSharing: true)
+        await waitUntil { sharing.active && started }
+        onboarding.close()
+        await waitUntil { completed }
+        XCTAssertTrue(sharing.active, "Closing Friends keeps the active share running")
+        XCTAssertTrue(completed, "Closing Friends does not cancel an in-flight Jiggle")
+        sharing.stop()
+    }
+
     func testUsernameAddUsesTrimmedNameKeepsOwnProfileAndDoesNotStartSharing() async throws {
         let preferences = BoundExperimentalFeaturesPreferences()
         let previous = preferences.isEnabled
@@ -375,6 +526,9 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
             XCTAssertEqual(action, "add")
             additions.append(payload)
             return .init(ok: true, room: room, username: "River")
+        }, sendJiggle: { _, _ in
+            XCTFail("Adding a friend must not send a Jiggle")
+            return ""
         }, observeAccount: { OnboardingObservation($0) })
         let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
             tokenFetcher: { _, _ in XCTFail("Adding a friend must not start sharing"); throw BoundFriendError.unavailable })
