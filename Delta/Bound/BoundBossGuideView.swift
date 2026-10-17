@@ -351,7 +351,13 @@ struct BoundBossGuideView: View {
             .accessibilityLabel("Choose boss, \(team.name)")
             .accessibilityIdentifier("bound.boss-picker")
             if onIsland { Color.clear.frame(width: 160, height: 1).accessibilityHidden(true) }
-            if layout != .layout9 && layout != .layout10 && layout != .layout11 {
+            if layout == .layout11, let catalog {
+                HStack(spacing: 0) {
+                    trainerNavigationButton(previous: true, team: team, catalog: catalog)
+                    trainerNavigationButton(previous: false, team: team, catalog: catalog)
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            } else if layout != .layout9 && layout != .layout10 && layout != .layout11 {
                 Button { showingTeam = true } label: {
                     Label("Full Team", systemImage: "arrow.up.left.and.arrow.down.right")
                         .font(.system(size: 11, weight: .medium)).lineLimit(1).minimumScaleFactor(0.75)
@@ -364,6 +370,23 @@ struct BoundBossGuideView: View {
             }
         }
         .buttonStyle(.plain).foregroundStyle(.primary)
+    }
+
+    private func trainerNavigationButton(previous: Bool, team: BoundBossTeam, catalog: BoundBossCatalog) -> some View {
+        let target = catalog.adjacentTrainer(to: team.id, offset: previous ? -1 : 1)
+        return Button {
+            guard let target else { return }
+            choose(BoundBossGuideSelection(teamID: target.id, pokemonIndex: 0), catalog: catalog)
+        } label: {
+            Image(systemName: previous ? "chevron.left" : "chevron.right")
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 44, height: 44).contentShape(Rectangle())
+        }
+        .disabled(target == nil || !experimentsEnabled)
+        .opacity(target == nil ? 0.35 : 1)
+        .accessibilityLabel(previous ? "Previous trainer" : "Next trainer")
+        .accessibilityHint(target.map { "\($0.name), \($0.location)" } ?? "No trainer listed in this direction")
+        .accessibilityIdentifier(previous ? "bound.boss-previous-trainer" : "bound.boss-next-trainer")
     }
 
     private func layout7Actions(onIsland: Bool) -> some View {

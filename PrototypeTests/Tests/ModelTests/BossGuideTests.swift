@@ -31,6 +31,56 @@ final class BossGuideTests: XCTestCase {
         XCTAssertEqual(champion.teams.map { champion.optionTitle(for: $0) }, ["Team 1", "Team 2", "Team 3"])
     }
 
+    func testAdjacentTrainerFollowsPublishedEarlyPlaythroughOrder() throws {
+        let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
+        let sequence = [
+            "rivals-6", "rivals-77", "mini-bosses-4", "mini-bosses-27",
+            "johto-leaders-4", "kanto-leaders-4", "mini-bosses-51", "team-rocket-4",
+            "rivals-102"
+        ]
+
+        for (index, teamID) in sequence.enumerated() where index + 1 < sequence.count {
+            XCTAssertEqual(catalog.adjacentTrainer(to: teamID, offset: 1)?.id, sequence[index + 1],
+                           "Unexpected next trainer after \(teamID)")
+        }
+        for (index, teamID) in sequence.enumerated() where index > 0 {
+            XCTAssertEqual(catalog.adjacentTrainer(to: teamID, offset: -1)?.id, sequence[index - 1],
+                           "Unexpected previous trainer before \(teamID)")
+        }
+    }
+
+    func testAdjacentTrainerMapsConditionalVariantsAndCorrectedRoute13Rows() throws {
+        let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
+
+        XCTAssertEqual(catalog.adjacentTrainer(to: "rivals-54", offset: 1)?.id, "rivals-77",
+                       "Route 22 starter variants navigate from their shared encounter")
+        XCTAssertEqual(catalog.adjacentTrainer(to: "rivals-150", offset: 1)?.id, "mini-bosses-75",
+                       "Cerulean Rival variants navigate from their shared encounter")
+        XCTAssertEqual(catalog.adjacentTrainer(to: "johto-leaders-199", offset: 1)?.id, "mini-bosses-790",
+                       "Unlisted Jasmine variants navigate from the listed Jasmine encounter")
+
+        XCTAssertEqual(catalog.adjacentTrainer(to: "mini-bosses-391", offset: 1)?.id, "mini-bosses-416",
+                       "The independently listed Picnicker Alma fight follows Susie")
+        XCTAssertEqual(catalog.adjacentTrainer(to: "mini-bosses-416", offset: 1)?.id, "mini-bosses-441")
+        XCTAssertEqual(catalog.adjacentTrainer(to: "mini-bosses-441", offset: -1)?.id, "mini-bosses-416")
+        XCTAssertEqual(catalog.adjacentTrainer(to: "mini-bosses-515", offset: 1)?.id, "optional-bosses-99",
+                       "Robert's repeated location-row link is not a separate fight")
+    }
+
+    func testAdjacentTrainerHasNoWraparoundAndRejectsUnlistedEncounters() throws {
+        let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
+        let first = try XCTUnwrap(catalog.trainerOrder.first?.teamID)
+        let last = try XCTUnwrap(catalog.trainerOrder.last?.teamID)
+
+        XCTAssertNil(catalog.adjacentTrainer(to: first, offset: -1))
+        XCTAssertNil(catalog.adjacentTrainer(to: last, offset: 1))
+        XCTAssertNil(catalog.adjacentTrainer(to: "postgame-6", offset: 1),
+                     "Postgame teams have no published linear position")
+        XCTAssertNil(catalog.adjacentTrainer(to: "unknown-team", offset: 1))
+        XCTAssertNil(catalog.adjacentTrainer(to: first, offset: 0))
+        XCTAssertNil(catalog.adjacentTrainer(to: first, offset: Int.max))
+    }
+
     func testTrainerIconsCoverAllBossTeamsOffline() throws {
         let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
         let data = try XCTUnwrap(BoundBossReferenceData.bundled)
@@ -61,7 +111,8 @@ final class BossGuideTests: XCTestCase {
         XCTAssertEqual(catalog.teams.count, 167)
         XCTAssertEqual(catalog.teams.reduce(0) { $0 + $1.pokemon.count }, 792)
         XCTAssertEqual(catalog.levelCaps.count, 18)
-        XCTAssertEqual(catalog.trainerOrder.count, 97)
+        XCTAssertEqual(catalog.trainerOrder.count, 96)
+        XCTAssertEqual(Set(catalog.trainerOrder.map(\.teamID)).count, catalog.trainerOrder.count)
         XCTAssertEqual(catalog.categoryCounts["Postgame"], 51)
         XCTAssertEqual(catalog.categoryCounts["Mini Bosses"], 42)
         XCTAssertEqual(Set(catalog.teams.map(\.id)).count, catalog.teams.count)

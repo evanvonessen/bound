@@ -1811,6 +1811,107 @@ final class CompanionUITests: XCTestCase {
         closeBoundSheet(in: app)
     }
 
+    func testLayout11BossHeaderNavigatesChronologicalTrainers() throws {
+        // Keep UI events deterministic while the game surface continues animating.
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+        openBoundSettings(in: app)
+        let bossLayout = app.segmentedControls["bound.boss-layout"]
+        scrollToSetting(bossLayout, in: app)
+        bossLayout.buttons["11"].tap()
+        let bossEnabled = app.switches["bound.companion-enabled.bosses"]
+        scrollToSetting(bossEnabled, in: app)
+        if bossEnabled.value as? String != "1" {
+            bossEnabled.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        closeBoundSheet(in: app)
+        defer {
+            app.terminate(); app.launch()
+            setExperimentalFeatures(false, in: app)
+            app.terminate()
+        }
+
+        selectCompanion("Bosses", in: app)
+        let picker = app.buttons["bound.boss-picker"]
+        func chooseBoss(id: String, search: String) {
+            picker.tap()
+            let field = app.searchFields.firstMatch
+            XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(search)
+            let row = app.buttons["bound.boss-select-\(id)"]
+            XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+            XCTAssertTrue(field.waitForNonExistence(timeout: 5))
+        }
+        chooseBoss(id: "johto-leaders-4", search: "Falkner")
+        XCTAssertEqual(element("bound.boss-guide", in: app).value as? String, "Layout 11")
+
+        let previous = app.buttons["bound.boss-previous-trainer"]
+        let next = app.buttons["bound.boss-next-trainer"]
+        XCTAssertTrue(previous.isHittable); XCTAssertTrue(next.isHittable)
+        for arrow in [previous, next] {
+            XCTAssertGreaterThanOrEqual(arrow.frame.width, 44)
+            XCTAssertGreaterThanOrEqual(arrow.frame.height, 44)
+        }
+        XCTAssertGreaterThan(previous.frame.minX, app.frame.midX,
+                             "Trainer navigation belongs on the right side of the Dynamic Island.")
+        XCTAssertGreaterThan(next.frame.minX, app.frame.midX)
+        XCTAssertLessThan(previous.frame.midY, 80); XCTAssertLessThan(next.frame.midY, 80)
+        XCTAssertLessThanOrEqual(abs(previous.frame.midY - next.frame.midY), 2,
+                                 "Previous and next controls share the top header row.")
+        XCTAssertTrue(picker.label.contains("Falkner"))
+
+        let pokemon = app.staticTexts["bound.boss-pokemon"]
+        let secondMember = app.buttons["bound.boss-team-member-2"]
+        XCTAssertTrue(secondMember.isHittable)
+        secondMember.tap()
+        XCTAssertEqual(pokemon.label, "Flittle")
+
+        // The published order places Ace Nelle immediately before Falkner,
+        // then Brock immediately after. Each trainer change selects member 0.
+        previous.tap()
+        XCTAssertTrue(picker.label.contains("Nelle"))
+        XCTAssertEqual(pokemon.label, "Charcadet")
+        next.tap()
+        XCTAssertTrue(picker.label.contains("Falkner"))
+        XCTAssertEqual(pokemon.label, "Rufflet")
+        next.tap()
+        XCTAssertTrue(picker.label.contains("Brock"))
+        XCTAssertEqual(pokemon.label, "Geodude-A")
+        previous.tap()
+        XCTAssertTrue(picker.label.contains("Falkner"))
+        XCTAssertEqual(pokemon.label, "Rufflet")
+
+        // Walk back to the first published trainer and verify the left arrow
+        // disables at the endpoint instead of wrapping around.
+        for (trainer, species) in [("Nelle", "Charcadet"), ("Anne", "Stufful"), ("Brendan", "Corphish"), ("Rival", "Starly")] {
+            previous.tap()
+            XCTAssertTrue(picker.label.contains(trainer), "Expected the previous published trainer: \(trainer)")
+            XCTAssertEqual(pokemon.label, species, "Changing trainers resets the selected Pokémon to slot 0.")
+        }
+        XCTAssertFalse(previous.isEnabled, "The first published trainer has no previous encounter.")
+        XCTAssertTrue(next.isEnabled)
+        next.tap()
+        XCTAssertTrue(picker.label.contains("Brendan"))
+        XCTAssertEqual(pokemon.label, "Corphish")
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Layout 11 trainer navigation beside Dynamic Island"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
     func testLayout11LearnsetAccordionAndSearch() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []

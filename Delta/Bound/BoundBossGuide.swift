@@ -50,6 +50,49 @@ struct BoundBossCatalog: Decodable, Sendable {
 
     var defaultTeam: BoundBossTeam { teams.first { $0.id == "kanto-leaders-4" } ?? teams[0] }
     func team(id: String) -> BoundBossTeam? { teams.first { $0.id == id } }
+
+    /// Returns the trainer `offset` entries away in the catalog's published
+    /// playthrough order. Conditional team variants resolve to their encounter's
+    /// listed representative, and unlisted encounters return nil. The array is
+    /// treated as an ordered list of fights, while repeated team IDs are kept at
+    /// their first occurrence so duplicate source references cannot reset or
+    /// trap navigation. There is no wraparound at either end.
+    func adjacentTrainer(to currentTeamID: String, offset: Int) -> BoundBossTeam? {
+        guard offset != 0,
+              let currentTeam = team(id: currentTeamID),
+              let currentOrderIndex = trainerOrderIndex(for: currentTeam) else { return nil }
+
+        // Keep navigation defensive if a future imported snapshot contains
+        // redundant links for the same team. The importer repairs the current
+        // source rows and emits a unique ordered team list.
+        var orderedTeamIDs: [String] = []
+        var seen = Set<String>()
+        for entry in trainerOrder where seen.insert(entry.teamID).inserted {
+            orderedTeamIDs.append(entry.teamID)
+        }
+        guard let index = orderedTeamIDs.firstIndex(of: trainerOrder[currentOrderIndex].teamID),
+              let targetIndex = safelyOffset(index, by: offset),
+              orderedTeamIDs.indices.contains(targetIndex) else { return nil }
+        return team(id: orderedTeamIDs[targetIndex])
+    }
+
+    private func trainerOrderIndex(for team: BoundBossTeam) -> Int? {
+        if let exactIndex = trainerOrder.firstIndex(where: { $0.teamID == team.id }) {
+            // Some source rows resolve to the same catalog team. Use its first
+            // published position rather than cycling through duplicate references.
+            return exactIndex
+        }
+        return trainerOrder.firstIndex { entry in
+            guard let representative = self.team(id: entry.teamID) else { return false }
+            return representative.category == team.category && representative.sourceLabel == team.sourceLabel
+        }
+    }
+
+    private func safelyOffset(_ index: Int, by offset: Int) -> Int? {
+        let (result, overflow) = index.addingReportingOverflow(offset)
+        return overflow ? nil : result
+    }
+
     func teams(matching query: String, category: String? = nil) -> [BoundBossTeam] {
         let words = query.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
         return teams.filter { team in

@@ -17,7 +17,7 @@ the scroll position. Both reference panels fill the full-width area above gamepl
 in Bound portrait, applying safe top clearance to their content.
 The boss selector searches names, locations, variants and Pokémon across every
 category. Full team includes nature, base stats, EVs, speed examples, conditions,
-and variant notes. Guide information contains all 18 level caps, the 97-entry
+and variant notes. Guide information contains all 18 level caps, the 96-entry
 trainer order, factual interpretation notes, and the original source link.
 Selection is local to each ROM. No ROM/save/progress inspection or live download
 is performed; players choose the upcoming fight themselves.
@@ -85,6 +85,14 @@ the bundled official species reference, independent of the player's save.
 Layout 11 copies Layout 10 with a slightly larger trainer portrait. The trainer
 picker sits farther inward, aligned toward the center within the left side of
 the Dynamic Island's reserved space; other displays use a small leading inset.
+Previous/next trainer arrows sit to the right of the Island, or in the top
+toolbar on other displays. They follow the published Trainer Order, select the
+new trainer's first Pokémon, and save that selection per ROM. Conditional team
+variants count as one encounter; navigation enters the destination's listed
+team, with alternatives available in Choose boss. The source links resolve to
+96 distinct listed trainers through Champion Rival. Arrows disable at either
+endpoint and for encounters without a published position, including postgame
+fights, which remain in Choose boss.
 
 Trainer icons are unchanged original game sprites from the
 [Pokémon Showdown trainer directory](https://play.pokemonshowdown.com/sprites/trainers/).
@@ -116,6 +124,15 @@ Postgame 51: **167 team variants and 792 Pokémon**. The source's Main and
 Trainer Order tabs provide caps and progression. Trainer-order links are resolved
 against the exported workbook's actual target rows; unsupported progression
 variants retain their scaling level rule without a guessed cap.
+
+Trainer navigation uses two audited corrections verified against an October 16,
+2026 workbook export. Trainer Order `D196` names Picnicker Alma but links to
+Susie's block; the importer resolves it to Alma's distinct Mini Bosses row 416.
+The repeated Robert link at `H213` duplicates `D212` on a location row and is
+omitted. `trainerOrderResolution` records the supplementary workbook hash and
+each correction; the baseline source hash and all Pokémon records remain intact.
+The ordering metadata is renumbered, and Alma inherits the documented Route 13
+location and level cap of 68.
 
 Reproduce the data using an XLSX export of that exact source workbook:
 

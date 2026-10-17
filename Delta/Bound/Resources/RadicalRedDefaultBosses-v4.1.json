@@ -423,7 +423,7 @@
       "name": "Picnicker Alma",
       "location": "Route 13",
       "levelCap": 68,
-      "teamID": "mini-bosses-391",
+      "teamID": "mini-bosses-416",
       "note": null
     },
     {
@@ -450,13 +450,6 @@
     {
       "name": "Bird Keeper Robert",
       "location": "Route 13",
-      "levelCap": 68,
-      "teamID": "mini-bosses-515",
-      "note": null
-    },
-    {
-      "name": "Route 13",
-      "location": "",
       "levelCap": 68,
       "teamID": "mini-bosses-515",
       "note": null
@@ -2093,7 +2086,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 68,
-      "order": 67,
+      "order": 66,
       "pokemon": [
         {
           "species": "Swellow",
@@ -2427,7 +2420,7 @@
         "BATTLE EFFECT: PERMANENT SUN"
       ],
       "levelCap": 76,
-      "order": 75,
+      "order": 74,
       "pokemon": [
         {
           "species": "Armarouge",
@@ -2751,7 +2744,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 81,
-      "order": 80,
+      "order": 79,
       "pokemon": [
         {
           "species": "Aerodactyl",
@@ -3078,7 +3071,7 @@
         "Can be fought as soon as you obtain the Mega Ring."
       ],
       "levelCap": 59,
-      "order": 63,
+      "order": 62,
       "pokemon": [
         {
           "species": "Great Tusk",
@@ -3406,7 +3399,7 @@
         "Can be fought as soon as you obtain the Mega Ring."
       ],
       "levelCap": 59,
-      "order": 64,
+      "order": 63,
       "pokemon": [
         {
           "species": "Palafin-Hero",
@@ -3734,7 +3727,7 @@
         "Can be fought as soon as you obtain the Mega Ring."
       ],
       "levelCap": 59,
-      "order": 65,
+      "order": 64,
       "pokemon": [
         {
           "species": "Iron Treads",
@@ -4061,7 +4054,7 @@
         "BATTLE EFFECT: PERMANENT GRASSY TERRAIN"
       ],
       "levelCap": 68,
-      "order": 66,
+      "order": 65,
       "pokemon": [
         {
           "species": "Ogerpon-C",
@@ -6019,7 +6012,7 @@
         "BATTLE EFFECT: PERMANENT SNOW"
       ],
       "levelCap": 73,
-      "order": 69,
+      "order": 68,
       "pokemon": [
         {
           "species": "Jynx",
@@ -6346,7 +6339,7 @@
         "TEAM ONE"
       ],
       "levelCap": 73,
-      "order": 71,
+      "order": 70,
       "pokemon": [
         {
           "species": "Steelix",
@@ -6669,7 +6662,7 @@
         "TEAM TWO"
       ],
       "levelCap": 73,
-      "order": 71,
+      "order": 70,
       "pokemon": [
         {
           "species": "Bronzong",
@@ -6992,7 +6985,7 @@
         "TEAM THREE"
       ],
       "levelCap": 73,
-      "order": 71,
+      "order": 70,
       "pokemon": [
         {
           "species": "Forretress",
@@ -9481,7 +9474,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 68,
-      "order": 62,
+      "order": 61,
       "pokemon": [
         {
           "species": "Metagross",
@@ -9806,7 +9799,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 73,
-      "order": 70,
+      "order": 69,
       "pokemon": [
         {
           "species": "Solrock",
@@ -10132,7 +10125,7 @@
         "IF RIVAL HAS SQUIRTLE"
       ],
       "levelCap": 82,
-      "order": 83,
+      "order": 82,
       "pokemon": [
         {
           "species": "Staraptor",
@@ -10459,7 +10452,7 @@
         "IF RIVAL HAS CHARMANDER"
       ],
       "levelCap": 82,
-      "order": 83,
+      "order": 82,
       "pokemon": [
         {
           "species": "Staraptor",
@@ -10786,7 +10779,7 @@
         "IF RIVAL HAS BULBASAUR"
       ],
       "levelCap": 82,
-      "order": 83,
+      "order": 82,
       "pokemon": [
         {
           "species": "Staraptor",
@@ -11115,7 +11108,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 82,
-      "order": 84,
+      "order": 83,
       "pokemon": [
         {
           "species": "Deoxys-A",
@@ -13840,7 +13833,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 79,
-      "order": 76,
+      "order": 75,
       "pokemon": [
         {
           "species": "Mamoswine",
@@ -14060,7 +14053,7 @@
         "BACK TO BACK"
       ],
       "levelCap": 79,
-      "order": 77,
+      "order": 76,
       "pokemon": [
         {
           "species": "Hatterene",
@@ -14280,7 +14273,7 @@
         "BATTLE EFFECT: DOUBLES WITH PARTNER LANCE, MEWTWO MEGA EVOLVES AFTER FAINTING FOR 1ST TIME"
       ],
       "levelCap": 80,
-      "order": 78,
+      "order": 77,
       "pokemon": [
         {
           "species": "Tapu Lele",
@@ -17753,7 +17746,7 @@
         "BATTLE EFFECT: PERMANENT SUN"
       ],
       "levelCap": 68,
-      "order": 45,
+      "order": 44,
       "pokemon": [
         {
           "species": "Shiftry",
@@ -18021,15 +18014,15 @@
       "id": "mini-bosses-416",
       "category": "Mini Bosses",
       "name": "Alma",
-      "location": "Route 13 · Picnicker",
+      "location": "Route 13",
       "sourceLabel": "ROUTE 13\nPICNICKER\nALMA",
       "sourceRow": 416,
       "variant": "",
       "notes": [
         "BATTLE EFFECT: PERMANENT SUN"
       ],
-      "levelCap": null,
-      "order": 1070,
+      "levelCap": 68,
+      "order": 45,
       "pokemon": [
         {
           "species": "Tangrowth",
@@ -18984,7 +18977,7 @@
         "BATTLE EFFECT: PERMANENT SUN"
       ],
       "levelCap": 68,
-      "order": 50,
+      "order": 49,
       "pokemon": [
         {
           "species": "Exeggutor",
@@ -19213,7 +19206,7 @@
         "BATTLE EFFECT: PERMANENT SANDSTORM"
       ],
       "levelCap": 68,
-      "order": 52,
+      "order": 51,
       "pokemon": [
         {
           "species": "Mienshao",
@@ -19384,7 +19377,7 @@
         "BATTLE EFFECT: PERMANENT SANDSTORM"
       ],
       "levelCap": 68,
-      "order": 53,
+      "order": 52,
       "pokemon": [
         {
           "species": "Dracozolt",
@@ -19457,7 +19450,7 @@
         "BATTLE EFFECT: PERMANENT SANDSTORM"
       ],
       "levelCap": 68,
-      "order": 54,
+      "order": 53,
       "pokemon": [
         {
           "species": "Dugtrio",
@@ -19576,7 +19569,7 @@
         "BATTLE EFFECT: PERMANENT SANDSTORM"
       ],
       "levelCap": 68,
-      "order": 55,
+      "order": 54,
       "pokemon": [
         {
           "species": "Accelgor",
@@ -19801,7 +19794,7 @@
         "BATTLE EFFECT: PERMANENT SANDSTORM"
       ],
       "levelCap": 68,
-      "order": 56,
+      "order": 55,
       "pokemon": [
         {
           "species": "Swampert",
@@ -20026,7 +20019,7 @@
         "BATTLE EFFECT: PERMANENT SANDSTORM"
       ],
       "levelCap": 68,
-      "order": 57,
+      "order": 56,
       "pokemon": [
         {
           "species": "Stunfisk",
@@ -20302,7 +20295,7 @@
         "BATTLE EFFECT: PERMANENT RAIN"
       ],
       "levelCap": 68,
-      "order": 58,
+      "order": 57,
       "pokemon": [
         {
           "species": "Magnezone",
@@ -20523,7 +20516,7 @@
         "BATTLE EFFECT: PERMANENT RAIN"
       ],
       "levelCap": 68,
-      "order": 59,
+      "order": 58,
       "pokemon": [
         {
           "species": "Cramorant",
@@ -20748,7 +20741,7 @@
         "BATTLE EFFECT: DOUBLES + PERMANENT RAIN"
       ],
       "levelCap": 68,
-      "order": 60,
+      "order": 59,
       "pokemon": [
         {
           "species": "Pikachu-Surfing",
@@ -20969,7 +20962,7 @@
         "BATTLE EFFECT: PERMANENT RAIN"
       ],
       "levelCap": 68,
-      "order": 61,
+      "order": 60,
       "pokemon": [
         {
           "species": "Dragapult",
@@ -21194,7 +21187,7 @@
         "BATTLE EFFECT: PERMANENT SUN"
       ],
       "levelCap": 76,
-      "order": 72,
+      "order": 71,
       "pokemon": [
         {
           "species": "Mienshao",
@@ -21470,7 +21463,7 @@
         "BATTLE EFFECT: PERMANENT SUN"
       ],
       "levelCap": 76,
-      "order": 73,
+      "order": 72,
       "pokemon": [
         {
           "species": "Lycanroc",
@@ -21742,7 +21735,7 @@
         "BATTLE EFFECT: DOUBLES + PERMANENT SUN"
       ],
       "levelCap": 76,
-      "order": 74,
+      "order": 73,
       "pokemon": [
         {
           "species": "Nidoking",
@@ -22012,7 +22005,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 85,
-      "order": 85,
+      "order": 84,
       "pokemon": [
         {
           "species": "Maushold",
@@ -22282,7 +22275,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 85,
-      "order": 86,
+      "order": 85,
       "pokemon": [
         {
           "species": "Cyclizar",
@@ -22552,7 +22545,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 85,
-      "order": 87,
+      "order": 86,
       "pokemon": [
         {
           "species": "Exeggutor-A",
@@ -22821,7 +22814,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 85,
-      "order": 88,
+      "order": 87,
       "pokemon": [
         {
           "species": "Bellossom",
@@ -23091,7 +23084,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 85,
-      "order": 89,
+      "order": 88,
       "pokemon": [
         {
           "species": "Feraligatr",
@@ -23365,7 +23358,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 85,
-      "order": 90,
+      "order": 89,
       "pokemon": [
         {
           "species": "Clefable",
@@ -23635,7 +23628,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 85,
-      "order": 91,
+      "order": 90,
       "pokemon": [
         {
           "species": "Gigalith",
@@ -24991,7 +24984,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 68,
-      "order": 51,
+      "order": 50,
       "pokemon": [
         {
           "species": "Magnezone",
@@ -25320,7 +25313,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 73,
-      "order": 68,
+      "order": 67,
       "pokemon": [
         {
           "species": "Hoopa-U",
@@ -25647,7 +25640,7 @@
         "FIRST BATTLE"
       ],
       "levelCap": 81,
-      "order": 79,
+      "order": 78,
       "pokemon": [
         {
           "species": "Azumarill",
@@ -25974,7 +25967,7 @@
         "REMATCH"
       ],
       "levelCap": 81,
-      "order": 79,
+      "order": 78,
       "pokemon": [
         {
           "species": "Cloyster",
@@ -26299,7 +26292,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 82,
-      "order": 81,
+      "order": 80,
       "pokemon": [
         {
           "species": "Qwilfish-H",
@@ -26569,7 +26562,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 82,
-      "order": 82,
+      "order": 81,
       "pokemon": [
         {
           "species": "Shiftry",
@@ -26842,7 +26835,7 @@
         "BATTLE EFFECT: DOUBLES"
       ],
       "levelCap": 85,
-      "order": 92,
+      "order": 91,
       "pokemon": [
         {
           "species": "Politoed",
@@ -27169,7 +27162,7 @@
         "BATTLE EFFECT: DOUBLES"
       ],
       "levelCap": 85,
-      "order": 92,
+      "order": 91,
       "pokemon": [
         {
           "species": "Ninetales-A",
@@ -27499,7 +27492,7 @@
         "TEAM ONE"
       ],
       "levelCap": 85,
-      "order": 93,
+      "order": 92,
       "pokemon": [
         {
           "species": "Great Tusk",
@@ -27825,7 +27818,7 @@
         "TEAM TWO"
       ],
       "levelCap": 85,
-      "order": 93,
+      "order": 92,
       "pokemon": [
         {
           "species": "Infernape",
@@ -28151,7 +28144,7 @@
         "TEAM ONE"
       ],
       "levelCap": 85,
-      "order": 94,
+      "order": 93,
       "pokemon": [
         {
           "species": "Zoroark-H",
@@ -28473,7 +28466,7 @@
         "TEAM TWO"
       ],
       "levelCap": 85,
-      "order": 94,
+      "order": 93,
       "pokemon": [
         {
           "species": "Zoroark",
@@ -28799,7 +28792,7 @@
         "TEAM ONE"
       ],
       "levelCap": 85,
-      "order": 95,
+      "order": 94,
       "pokemon": [
         {
           "species": "Aerodactyl",
@@ -29125,7 +29118,7 @@
         "TEAM TWO"
       ],
       "levelCap": 85,
-      "order": 95,
+      "order": 94,
       "pokemon": [
         {
           "species": "Garchomp",
@@ -29449,7 +29442,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 85,
-      "order": 96,
+      "order": 95,
       "pokemon": [
         {
           "species": "Pheromosa",
@@ -29777,7 +29770,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 85,
-      "order": 96,
+      "order": 95,
       "pokemon": [
         {
           "species": "Pheromosa",
@@ -30105,7 +30098,7 @@
       "variant": "",
       "notes": [],
       "levelCap": 85,
-      "order": 96,
+      "order": 95,
       "pokemon": [
         {
           "species": "Pheromosa",
@@ -44139,5 +44132,24 @@
         }
       ]
     }
-  ]
+  ],
+  "trainerOrderResolution": {
+    "sourceSHA256": "441ac51f95006bcd71275c8e26235c4c9c1256a963466adf50f2a92fd8cdc6e0",
+    "corrections": [
+      {
+        "sourceLink": "D196",
+        "display": "PICNICKER ALMA",
+        "originalTarget": "'Mini Bosses'!C390",
+        "originalTeamID": "mini-bosses-391",
+        "resolvedTeamID": "mini-bosses-416",
+        "reason": "Visible Trainer Order name matches Alma's distinct team block at Mini Bosses row 416."
+      },
+      {
+        "sourceLink": "H213",
+        "display": "BIRD KEEPER ROBERT",
+        "duplicateOf": "D212",
+        "reason": "The source repeats Bird Keeper Robert's link in the Route 13 location row."
+      }
+    ]
+  }
 }

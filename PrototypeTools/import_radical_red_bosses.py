@@ -20,6 +20,16 @@ NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 STATS = ["HP", "ATK", "DEF", "SPA", "SPD", "SPE"]
 SLOTS = [4, 9, 14, 19, 24, 29]
 
+# Audited repair for the source workbook's Trainer Order link at D196. The
+# visible row says Picnicker Alma, but its hyperlink targets Susie's C390 team;
+# Alma's separately listed source team is the block at row 416.
+TRAINER_ORDER_LINK_OVERRIDES = {
+    ("Mini Bosses", "PICNICKER ALMA"): ("mini-bosses-391", "mini-bosses-416"),
+}
+TRAINER_ORDER_DUPLICATE_LINKS = {
+    "H213": ("BIRD KEEPER ROBERT", "'Mini Bosses'!C514", "D212"),
+}
+
 
 def column_index(address):
     letters = re.match(r"[A-Z]+", address).group()
@@ -150,9 +160,26 @@ def import_workbook(path, modified_time=None):
     order_rows = sheets["Trainer Order"]
     trainer_order = []
     last_cap = None
-    for index, link in enumerate(links["Trainer Order"]):
+    seen_trainer_links = set()
+    trainer_order_corrections = []
+    for link in links["Trainer Order"]:
         r = int(re.search(r"\d+", link["ref"]).group()) - 1
-        label = order_rows.get(r, {}).get(3, "")
+        column = re.match(r"[A-Z]+", link["ref"]).group()
+        label_column = column_index(column)
+        label = order_rows.get(r, {}).get(label_column, "")
+        duplicate_key = (link.get("display", "").strip(), link.get("location", "").strip())
+        if link["ref"] in TRAINER_ORDER_DUPLICATE_LINKS:
+            display, target_link, original_ref = TRAINER_ORDER_DUPLICATE_LINKS[link["ref"]]
+            assert duplicate_key == (display, target_link), (link, duplicate_key)
+            assert duplicate_key in seen_trainer_links, (link, "expected original link was not imported first")
+            trainer_order_corrections.append({
+                "sourceLink": link["ref"], "display": link.get("display", ""),
+                "duplicateOf": original_ref,
+                "reason": "The source repeats Bird Keeper Robert's link in the Route 13 location row.",
+            })
+            continue
+        assert duplicate_key not in seen_trainer_links, (link, "unreviewed duplicate Trainer Order link")
+        seen_trainer_links.add(duplicate_key)
         raw_cap = order_rows.get(r, {}).get(5, "")
         if raw_cap:
             last_cap = whole_number(raw_cap)
@@ -162,15 +189,29 @@ def import_workbook(path, modified_time=None):
         candidates = [t for t in teams if t["category"] == tab and anchor <= t["sourceRow"] <= anchor + 2]
         assert len(candidates) == 1, (link, candidates)
         target = candidates[0]
-        target["levelCap"], target["order"] = last_cap, index
-        documented_location = order_rows.get(r + 1, {}).get(3, "")
+        override_key = (tab, label.strip().upper())
+        if override_key in TRAINER_ORDER_LINK_OVERRIDES:
+            expected_linked_id, corrected_id = TRAINER_ORDER_LINK_OVERRIDES[override_key]
+            corrected = next((team for team in teams if team["id"] == corrected_id), None)
+            assert corrected and corrected["category"] == tab and corrected["name"].upper() == "ALMA", corrected
+            if target["id"] != corrected_id:
+                assert target["id"] == expected_linked_id, (override_key, target["id"])
+                trainer_order_corrections.append({
+                    "sourceLink": link["ref"], "display": label.strip(),
+                    "originalTarget": link["location"], "originalTeamID": expected_linked_id,
+                    "resolvedTeamID": corrected_id,
+                    "reason": "Visible Trainer Order name matches Alma's distinct team block at Mini Bosses row 416.",
+                })
+                target = corrected
+        target["levelCap"], target["order"] = last_cap, len(trainer_order)
+        documented_location = order_rows.get(r + 1, {}).get(label_column, "")
         if documented_location:
             target["location"] = title_case(documented_location)
         note = comments.get(f"F{r + 1}")
         if note:
             target["notes"].append(note)
         trainer_order.append({"name": title_case(label),
-                              "location": title_case(order_rows.get(r + 1, {}).get(3, "")),
+                              "location": title_case(documented_location),
                               "levelCap": last_cap, "teamID": target["id"], "note": note})
     for team in teams:
         if team["order"] < 1000 or team["category"] == "Postgame":
@@ -199,7 +240,12 @@ def import_workbook(path, modified_time=None):
             "sourceURL": SOURCE_URL, "sourceModifiedTime": modified_time,
             "sourceSHA256": workbook_sha256, "speedContextSourceSHA256": workbook_sha256,
             "categories": TABS, "categoryCounts": counts, "levelCaps": caps,
-            "trainerOrder": trainer_order, "teams": teams}
+            "trainerOrder": trainer_order,
+            "trainerOrderResolution": {
+                "sourceSHA256": workbook_sha256,
+                "corrections": trainer_order_corrections,
+            },
+            "teams": teams}
 
 
 if __name__ == "__main__":
