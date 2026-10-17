@@ -30,7 +30,7 @@ stay separate. Search opens matching groups while keeping their alternatives
 available; the currently selected encounter opens when the picker returns.
 Unlabeled source alternatives retain neutral Team 1/2/3 labels.
 
-**Bound Settings → Reference layouts → Boss View** chooses between ten saved
+**Bound Settings → Reference layouts → Boss View** chooses between eleven saved
 presentations independently of RR Dex. Layout 1 preserves the original card and
 is the default. Layout 2 adds source-derived battle-condition badges, a tappable
 opposing-team strip, ability and item description buttons, a typing-matchup
@@ -82,6 +82,9 @@ line includes its standard stat effect (for example, `Nature · Adamant · +10%
 Attack, −10% Sp. Atk`); neutral natures say `no stat changes`. Unknown nature names are
 shown safely with an unavailable-effects note. Boss matchup types resolve from
 the bundled official species reference, independent of the player's save.
+Layout 11 copies Layout 10 with a slightly larger trainer portrait. The trainer
+picker sits farther inward, aligned toward the center within the left side of
+the Dynamic Island's reserved space; other displays use a small leading inset.
 
 Trainer icons are unchanged original game sprites from the
 [Pokémon Showdown trainer directory](https://play.pokemonshowdown.com/sprites/trainers/).

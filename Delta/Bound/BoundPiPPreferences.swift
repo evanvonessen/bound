@@ -15,7 +15,7 @@ enum BoundPiPContent: String, CaseIterable, Sendable {
 enum BoundPiPHiddenSide: String, Sendable { case left, right }
 
 enum BoundReferenceLayout: Int, CaseIterable, Sendable {
-    case layout1 = 1, layout2 = 2, layout3 = 3, layout4 = 4, layout5 = 5, layout6 = 6, layout7 = 7, layout8 = 8, layout9 = 9, layout10 = 10
+    case layout1 = 1, layout2 = 2, layout3 = 3, layout4 = 4, layout5 = 5, layout6 = 6, layout7 = 7, layout8 = 8, layout9 = 9, layout10 = 10, layout11 = 11
     static var bossLayouts: [Self] { allCases }
     var title: String { "Layout \(rawValue)" }
     var summary: String {
@@ -30,6 +30,7 @@ enum BoundReferenceLayout: Int, CaseIterable, Sendable {
         case .layout8: "More room for details, with Island controls and larger reference shortcuts."
         case .layout9: "Layout 8's design; RR Dex adds an inline, searchable learnset."
         case .layout10: "Layout 9 with compact matchup summaries and nature effects."
+        case .layout11: "Layout 10 with a larger Boss View trainer icon and an inset trainer picker."
         }
     }
 }
