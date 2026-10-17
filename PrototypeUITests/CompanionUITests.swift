@@ -1540,6 +1540,156 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(pokemonLevel.label, "Highest Lv -2")
     }
 
+    func testLayout8IslandControlsBossNatureAndDexInformation() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+
+        let app = XCUIApplication()
+        XCUIDevice.shared.orientation = .portrait
+        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        func playDiagnosticGame() {
+            let cell = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+            XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
+            XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+        }
+        defer {
+            app.terminate(); XCUIDevice.shared.orientation = .portrait
+            app.launch(); setExperimentalFeatures(false, in: app); playDiagnosticGame(); app.terminate()
+        }
+        playDiagnosticGame()
+        openBoundSettings(in: app)
+        let bossLayout = app.segmentedControls["bound.boss-layout"]
+        scrollToSetting(bossLayout, in: app); bossLayout.buttons["8"].tap()
+        let dexLayout = app.segmentedControls["bound.rrdex-layout"]
+        scrollToSetting(dexLayout, in: app); dexLayout.buttons["8"].tap()
+        var originalEnabledStates: [String: Bool] = [:]
+        for content in ["bosses", "dex"] {
+            let toggle = app.switches["bound.companion-enabled.\(content)"]
+            scrollToSetting(toggle, in: app)
+            XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+            originalEnabledStates[content] = toggle.value as? String == "1"
+            if toggle.value as? String != "1" {
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+        }
+        closeBoundSheet(in: app)
+
+        selectCompanion("Bosses", in: app)
+        func chooseBoss(_ id: String, search: String) {
+            app.buttons["bound.boss-picker"].tap()
+            let field = app.searchFields.firstMatch
+            XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(search)
+            let row = app.buttons["bound.boss-select-\(id)"]
+            XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+            XCTAssertTrue(field.waitForNonExistence(timeout: 5))
+        }
+        chooseBoss("johto-leaders-4", search: "Falkner")
+        let bossPicker = app.buttons["bound.boss-picker"]
+        let fullTeam = app.buttons["bound.boss-full-team"]
+        XCTAssertTrue(bossPicker.isHittable); XCTAssertTrue(fullTeam.isHittable)
+        XCTAssertLessThan(bossPicker.frame.midY, 70)
+        XCTAssertLessThan(fullTeam.frame.midY, 70)
+        XCTAssertLessThan(bossPicker.frame.midX, app.frame.midX)
+        XCTAssertGreaterThan(fullTeam.frame.midX, app.frame.midX)
+        XCTAssertGreaterThanOrEqual(fullTeam.frame.minX - bossPicker.frame.maxX, 160,
+                                    "Keep the Dynamic Island clear between the two 44-point actions.")
+        XCTAssertGreaterThanOrEqual(bossPicker.frame.height, 44)
+        XCTAssertGreaterThanOrEqual(fullTeam.frame.height, 44)
+        let cap = element("bound.boss-cap", in: app)
+        let speedRow = element("bound.boss-speed-row", in: app)
+        XCTAssertEqual(cap.label, "Cap 15")
+        XCTAssertTrue(speedRow.frame.insetBy(dx: 0, dy: -2).intersects(cap.frame),
+                      "The level cap should sit with the speed examples, not in the removed header.")
+        app.buttons["bound.boss-team-member-2"].tap()
+        XCTAssertEqual(app.staticTexts["bound.boss-pokemon"].label, "Flittle",
+                       "Layout 8 keeps the team strip interactive beside the selected Pokémon.")
+        app.buttons["bound.boss-team-member-0"].tap()
+        let nature = app.staticTexts["bound.boss-nature"]
+        XCTAssertTrue(nature.waitForExistence(timeout: 5))
+        XCTAssertEqual(nature.label, "Nature · Jolly")
+        let details = element("bound.boss-details", in: app)
+        for _ in 0..<3 where !nature.isHittable { details.swipeUp() }
+        let moves = element("bound.boss-move-0", in: app)
+        let ability = element("bound.boss-ability-description", in: app)
+        XCTAssertLessThan(moves.frame.midY, nature.frame.midY)
+        XCTAssertLessThan(nature.frame.midY, ability.frame.midY,
+                          "Nature should appear after moves and before the ability description.")
+        screenshot("Boss-Layout8-Nature-and-Speed-Cap")
+
+        fullTeam.tap()
+        let fullTeamSheet = element("bound.boss-full-team-list", in: app)
+        XCTAssertTrue(fullTeamSheet.waitForExistence(timeout: 5))
+        app.buttons["bound.boss-close-full-team"].tap()
+        XCTAssertTrue(fullTeamSheet.waitForNonExistence(timeout: 5))
+        assertGamePixelsAnimate(element("bound.game-screen", in: app), in: app)
+
+        selectCompanion("Dex", in: app)
+        let info = app.buttons["bound.rrdex-info"]
+        let search = app.buttons["bound.rrdex-search-open"]
+        XCTAssertTrue(info.isHittable); XCTAssertTrue(search.isHittable)
+        XCTAssertLessThan(info.frame.midY, 70); XCTAssertLessThan(search.frame.midY, 70)
+        XCTAssertLessThan(info.frame.midX, app.frame.midX)
+        XCTAssertGreaterThan(search.frame.midX, app.frame.midX)
+        XCTAssertGreaterThanOrEqual(search.frame.minX - info.frame.maxX, 160,
+                                    "Keep the Dynamic Island clear between the Dex actions.")
+        XCTAssertGreaterThanOrEqual(info.frame.width, 44); XCTAssertGreaterThanOrEqual(info.frame.height, 44)
+        XCTAssertGreaterThanOrEqual(search.frame.width, 44); XCTAssertGreaterThanOrEqual(search.frame.height, 44)
+        info.tap()
+        XCTAssertEqual(element("bound.rrdex-layout8-info-rom", in: app).label, "ROM: Radical Red Version 4.1")
+        XCTAssertEqual(element("bound.rrdex-layout8-info-difficulty", in: app).label, "Difficulty: Normal")
+        XCTAssertEqual(element("bound.rrdex-layout8-info-save", in: app).label, "Save Loaded")
+        let infoRows = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "bound.rrdex-layout8-info-")).count
+        XCTAssertEqual(infoRows, 3, "Layout 8 information should contain only its three compact status rows.")
+        XCTAssertFalse(app.staticTexts["Stats are base stats. Evolution methods and type matchups follow this version of Radical Red."].exists)
+        screenshot("RRDex-Layout8-Compact-Information")
+        app.buttons["bound.rrdex-close-detail"].tap()
+        search.tap()
+        XCTAssertTrue(app.textFields["bound.rrdex-search"].waitForExistence(timeout: 5))
+        search.tap()
+
+        let dexDetails = app.scrollViews["bound.rrdex-layout8-details"]
+        for _ in 0..<3 where !app.buttons["bound.rrdex-layout8-weaknesses"].isHittable { dexDetails.swipeUp() }
+        let evolutionTitle = app.staticTexts["EVOLUTION"].firstMatch
+        let bst = element("bound.rrdex-layout8-bst", in: app)
+        let learnset = app.buttons["bound.rrdex-layout8-learnset"]
+        let weaknesses = app.buttons["bound.rrdex-layout8-weaknesses"]
+        XCTAssertTrue(evolutionTitle.exists); XCTAssertTrue(bst.exists)
+        XCTAssertTrue(learnset.isHittable); XCTAssertTrue(weaknesses.isHittable)
+        XCTAssertGreaterThan(learnset.frame.midX, evolutionTitle.frame.midX,
+                             "Learnset and weaknesses should sit to the right of the evolution chain.")
+        XCTAssertLessThan(bst.frame.midY, learnset.frame.midY)
+        XCTAssertLessThan(learnset.frame.midY, weaknesses.frame.midY)
+        XCTAssertGreaterThanOrEqual(learnset.frame.height, 44)
+        XCTAssertGreaterThanOrEqual(weaknesses.frame.height, 44)
+        XCTAssertEqual(bst.frame.maxX, learnset.frame.maxX, accuracy: 3,
+                       "BST and both actions should share the right-hand column.")
+        screenshot("RRDex-Layout8-Evolution-BST-Actions")
+        weaknesses.tap()
+        XCTAssertTrue(element("bound.rrdex-matchups", in: app).waitForExistence(timeout: 10))
+        app.buttons["bound.rrdex-close-detail"].tap()
+        learnset.tap()
+        XCTAssertTrue(element("bound.rrdex-moves", in: app).waitForExistence(timeout: 10))
+        app.buttons["bound.rrdex-close-detail"].tap()
+        assertGamePixelsAnimate(element("bound.game-screen", in: app), in: app)
+        openBoundSettings(in: app)
+        for (content, wasEnabled) in originalEnabledStates {
+            let toggle = app.switches["bound.companion-enabled.\(content)"]
+            scrollToSetting(toggle, in: app)
+            if (toggle.value as? String == "1") != wasEnabled {
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+        }
+        closeBoundSheet(in: app)
+    }
+
     private func checkReferenceLayouts(_ layouts: [Int]) throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []

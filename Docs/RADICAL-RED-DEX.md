@@ -14,7 +14,7 @@ Weaknesses and learnsets open native sheets; editing and presentations use the
 existing input cancellation and emulation pause/resume coordinator.
 
 In **Bound Settings → Reference layouts**, RR Dex has its own saved choice of
-Layouts 1 through 7. Layout 1 remains the default and preserves the original card.
+Layouts 1 through 8. Layout 1 remains the default and preserves the original card.
 Layout 2 pins species and tappable ability names while matchup summaries, base
 stats and evolutions scroll below. Layout 3 places Weaknesses and Learnset beside
 the Dynamic Island, compacts the species and abilities, and anchors import/info
@@ -38,6 +38,14 @@ other screens). Info moves to the left. Each ability has its own exact RR Dex
 description, with the hidden ability marked, and stat numbers use the upstream
 rank colors. Compact Learnset and Weaknesses buttons sit beside the evolution
 line. Layout 7 has no import/save-loaded button or version banner.
+Layout 8 builds on Layout 7 with larger, adaptive info and search icons tucked
+beside the Dynamic Island, readable evolution Pokémon labels, and larger
+Learnset and Weaknesses buttons beneath the right-aligned BST. Its Info sheet
+contains only the ROM version, validated difficulty, and save status. It reports
+Normal difficulty for the bundled Normal dex and Save Loaded only when a
+validated save configuration is available; otherwise it reports No Save Loaded.
+Automatic save refresh continues when the Dex opens, after game saves or state
+loads, and when the app returns to the foreground.
 The selection changes presentation only, keeping the same RR 4.1 data and
 per-ROM imported save configuration. Ability names and descriptions come from
 the pinned local RR Dex catalog, including abilities selected by randomizer

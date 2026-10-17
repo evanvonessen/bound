@@ -30,7 +30,7 @@ stay separate. Search opens matching groups while keeping their alternatives
 available; the currently selected encounter opens when the picker returns.
 Unlabeled source alternatives retain neutral Team 1/2/3 labels.
 
-**Bound Settings → Reference layouts → Boss View** chooses between seven saved
+**Bound Settings → Reference layouts → Boss View** chooses between eight saved
 presentations independently of RR Dex. Layout 1 preserves the original card and
 is the default. Layout 2 adds source-derived battle-condition badges, a tappable
 opposing-team strip, ability and item description buttons, a typing-matchup
@@ -67,6 +67,13 @@ The source bar palette is red below 30, orange at 30–59, yellow at 60–89,
 lime at 90–119, green at 120–149 and cyan from 150. The supplied screenshots
 provide the higher bands; a live Kanto Leaders PDF export confirms the red
 Speed 20 bar beside Geodude-A's orange Special Attack 30 bar.
+Layout 8 moves the trainer portrait and encounter selector to the left of the
+Dynamic Island, opposite Full Team. Its diagonal expand icon and label follow
+the system text color: white in dark mode and black in light mode. Removing the
+old encounter row lifts the Pokémon and details. The cap appears on the right
+of the speed and conditional-level notes, and the selected Pokémon's nature
+appears below its moves and above the ability and held item. Displays without
+an Island keep both controls in a top toolbar.
 
 Trainer icons are unchanged original game sprites from the
 [Pokémon Showdown trainer directory](https://play.pokemonshowdown.com/sprites/trainers/).
