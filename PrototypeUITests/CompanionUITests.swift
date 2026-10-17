@@ -1811,6 +1811,121 @@ final class CompanionUITests: XCTestCase {
         closeBoundSheet(in: app)
     }
 
+    func testLayout11LearnsetAccordionAndSearch() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+        defer {
+            app.terminate(); app.launch()
+            setExperimentalFeatures(false, in: app)
+            app.terminate()
+        }
+
+        openBoundSettings(in: app)
+        let layout = app.segmentedControls["bound.rrdex-layout"]
+        scrollToSetting(layout, in: app); layout.buttons["11"].tap()
+        let enabled = app.switches["bound.companion-enabled.dex"]
+        scrollToSetting(enabled, in: app)
+        let wasEnabled = enabled.value as? String == "1"
+        if !wasEnabled { enabled.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap() }
+        closeBoundSheet(in: app)
+        selectCompanion("Dex", in: app)
+        app.buttons["bound.rrdex-search-open"].tap()
+        let speciesSearch = app.textFields["bound.rrdex-search"]
+        XCTAssertTrue(speciesSearch.waitForExistence(timeout: 5))
+        speciesSearch.tap(); speciesSearch.typeText("bulbasaur")
+        let bulbasaur = app.buttons["bound.rrdex-suggestion-1"]
+        XCTAssertTrue(bulbasaur.waitForExistence(timeout: 5)); bulbasaur.tap()
+
+        let details = app.scrollViews["bound.rrdex-layout11-details"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        func reveal(_ target: XCUIElement, downward: Bool = true) {
+            for _ in 0..<14 {
+                if target.isHittable && details.frame.contains(target.frame) { break }
+                let below = target.exists ? target.frame.midY > details.frame.midY : downward
+                details.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: below ? 0.8 : 0.4))
+                    .press(forDuration: 0.1, thenDragTo: details.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: below ? 0.4 : 0.8)),
+                           withVelocity: .slow, thenHoldForDuration: 0.2)
+                Thread.sleep(forTimeInterval: 0.5)
+            }
+            XCTAssertTrue(target.isHittable)
+            XCTAssertTrue(details.frame.contains(target.frame))
+        }
+        let levelUp = app.buttons["bound.rrdex-layout11-learnset-method-Level up"]
+        let machines = app.buttons["bound.rrdex-layout11-learnset-method-TM/HM"]
+        let tutor = app.buttons["bound.rrdex-layout11-learnset-method-Tutor"]
+        let rows = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "bound.rrdex-layout11-learnset-move-"))
+        reveal(tutor)
+        for header in [levelUp, machines, tutor] { XCTAssertEqual(header.value as? String, "Collapsed") }
+        XCTAssertFalse(rows.firstMatch.exists)
+        screenshot("RRDex-Layout11-Learnset-Collapsed")
+
+        // Work upward through the headers so switching does not require scrolling
+        // through an entire expanded move list to reach the following section.
+        tutor.tap()
+        XCTAssertEqual(tutor.value as? String, "Expanded")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
+        reveal(machines, downward: false); machines.tap()
+        XCTAssertEqual(machines.value as? String, "Expanded")
+        // The following headers are virtualized while a long section is open.
+        // Close the active section before checking the old section's state.
+        reveal(machines, downward: false); machines.tap()
+        reveal(tutor)
+        XCTAssertEqual(tutor.value as? String, "Collapsed")
+        reveal(machines, downward: false); machines.tap()
+        reveal(levelUp, downward: false); levelUp.tap()
+        XCTAssertEqual(levelUp.value as? String, "Expanded")
+        screenshot("RRDex-Layout11-Level-Up-Expanded")
+        reveal(levelUp, downward: false); levelUp.tap()
+        XCTAssertEqual(levelUp.value as? String, "Collapsed")
+        reveal(machines)
+        XCTAssertEqual(machines.value as? String, "Collapsed")
+        reveal(tutor)
+        XCTAssertEqual(tutor.value as? String, "Collapsed")
+        XCTAssertFalse(rows.firstMatch.exists)
+
+        let searchToggle = app.buttons["bound.rrdex-layout11-learnset-search-toggle"]
+        reveal(searchToggle, downward: false); searchToggle.tap()
+        let search = app.textFields["bound.rrdex-layout11-learnset-search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText("solar")
+        XCTAssertTrue(tutor.waitForExistence(timeout: 5))
+        XCTAssertEqual(tutor.value as? String, "Collapsed")
+        reveal(tutor); tutor.tap()
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(rows.firstMatch.label.localizedCaseInsensitiveContains("solar"))
+        screenshot("RRDex-Layout11-Filtered-Moves")
+
+        // A species change starts a fresh, fully collapsed accordion.
+        app.buttons["bound.rrdex-search-open"].tap()
+        XCTAssertTrue(speciesSearch.waitForExistence(timeout: 5))
+        speciesSearch.tap(); speciesSearch.typeText("charmander")
+        let charmander = app.buttons["bound.rrdex-suggestion-4"]
+        XCTAssertTrue(charmander.waitForExistence(timeout: 5)); charmander.tap()
+        reveal(levelUp)
+        XCTAssertEqual(levelUp.value as? String, "Collapsed")
+        XCTAssertFalse(rows.firstMatch.exists)
+
+        if !wasEnabled {
+            openBoundSettings(in: app)
+            scrollToSetting(enabled, in: app)
+            enabled.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            closeBoundSheet(in: app)
+        }
+    }
+
     func testLayout9InlineLearnsetSearchAndAutomaticRandomizedMoves() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []

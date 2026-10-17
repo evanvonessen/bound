@@ -19,6 +19,7 @@ struct BoundRRDexView: View {
     @State private var moveQuery = ""
     @State private var moveSearchVisible = false
     @State private var moveSearchFocused = false
+    @State private var expandedLearnsetMethod: String?
     @State private var importError: String?
     @State private var automaticSaveStatus: String?
     @State private var refreshingSave = false
@@ -101,6 +102,7 @@ struct BoundRRDexView: View {
                 .accessibilityValue(layout.title)
                 .onAppear {
                     choice = preferences.read(gameID: gameID)
+                    expandedLearnsetMethod = nil
                     refreshAutomaticSave()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: BoundRRDexSaveRefreshEvent.notificationName)
@@ -138,6 +140,7 @@ struct BoundRRDexView: View {
         .onChange(of: experimentsEnabled) { _, enabled in
             if !enabled { searching = false; moveSearchFocused = false; sheet = nil; importError = nil }
         }
+        .onChange(of: layout) { _, _ in expandedLearnsetMethod = nil }
         .onDisappear {
             searching = false; moveSearchFocused = false; sheet = nil
             textEditingChanged(false)
@@ -393,6 +396,9 @@ struct BoundRRDexView: View {
                     .onChange(of: moveSearchVisible) { _, visible in
                         if visible { proxy.scrollTo("learnset", anchor: .top) }
                     }
+                    .onChange(of: expandedLearnsetMethod) { _, method in
+                        if let method { proxy.scrollTo("learnset-method-\(method)", anchor: .top) }
+                    }
                 }
             }
         }
@@ -532,25 +538,53 @@ struct BoundRRDexView: View {
                 Text(BoundRRDexLearnset.randomizerNote).font(.caption).foregroundStyle(.secondary)
             }
             let filter = moveQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-            LazyVStack(alignment: .leading, spacing: 12) {
+            LazyVStack(alignment: .leading, spacing: layout == .layout11 ? 0 : 12) {
                 ForEach(BoundRRDexLearnset.methods, id: \.self) { method in
                     let entries = pokemon.learnset.enumerated().filter { _, entry in
                         entry.method == method && (filter.isEmpty || catalog.learnedMove(entry, pokemon: pokemon, save: choice.save)?.name.localizedCaseInsensitiveContains(filter) == true)
                     }
                     if !entries.isEmpty {
-                        Section {
-                            ForEach(entries, id: \.offset) { index, entry in
-                                if let move = catalog.learnedMove(entry, pokemon: pokemon, save: choice.save) {
-                                    BoundRRDexLearnsetMoveRow(move: move, level: entry.level, catalog: catalog)
-                                        .accessibilityElement(children: .combine)
-                                        .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-learnset-move-\(index)")
-                                    Divider()
-                                }
+                        let rows = ForEach(entries, id: \.offset) { index, entry in
+                            if let move = catalog.learnedMove(entry, pokemon: pokemon, save: choice.save) {
+                                BoundRRDexLearnsetMoveRow(move: move, level: entry.level, catalog: catalog)
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-learnset-move-\(index)")
+                                Divider()
                             }
-                        } header: {
-                            Text(method).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                                .accessibilityAddTraits(.isHeader)
-                                .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-learnset-method-\(method)")
+                        }
+                        if layout == .layout11 {
+                            let expanded = expandedLearnsetMethod == method
+                            let title = method == "Level up" ? "Level Up" : method
+                            VStack(alignment: .leading, spacing: 8) {
+                                Button {
+                                    guard experimentsEnabled else { return }
+                                    expandedLearnsetMethod = expanded ? nil : method
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        Text(title).font(.system(size: 12, weight: .semibold))
+                                        Spacer(minLength: 0)
+                                        Text(String(entries.count)).font(.caption2).foregroundStyle(.secondary)
+                                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                                            .font(.system(size: 11, weight: .semibold)).frame(width: 12)
+                                    }
+                                    .frame(minHeight: 44).contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain).foregroundStyle(.primary)
+                                .accessibilityLabel("\(title), \(entries.count) moves")
+                                .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                                .accessibilityIdentifier("bound.rrdex-layout11-learnset-method-\(method)")
+                                .id("learnset-method-\(method)")
+                                if expanded { rows }
+                                Divider()
+                            }
+                        } else {
+                            Section {
+                                rows
+                            } header: {
+                                Text(method).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                    .accessibilityAddTraits(.isHeader)
+                                    .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-learnset-method-\(method)")
+                            }
                         }
                     }
                 }
@@ -1326,6 +1360,7 @@ struct BoundRRDexView: View {
         guard experimentsEnabled else { return }
         choice.speciesID = pokemon.id; query = ""; searching = false
         moveQuery = ""; moveSearchVisible = false; moveSearchFocused = false
+        expandedLearnsetMethod = nil
         layout4EvolutionExpanded = false
         layout5EvolutionExpanded = false
         preferences.write(choice, gameID: gameID)

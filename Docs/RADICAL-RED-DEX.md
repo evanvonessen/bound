@@ -57,7 +57,11 @@ colored type pills between Evolution and Learnset. Weaknesses, Resistances and
 Immunities each occupy a wrapping row only when that group has entries; neutral
 types are omitted. The summary uses the same type chart as the matchup sheet,
 and the inline learnset and its independent move search remain below it.
-Layout 11 copies Layout 10's Dex presentation and controls.
+Layout 11 copies Layout 10's Dex presentation and controls, with an accordion
+learnset. Level Up, TM/HM, Tutor and the other available methods start collapsed;
+opening one closes the previously open method. Each header shows its move count,
+and search filters both the visible methods and their moves. Choosing another
+Pokémon or reopening the Dex resets every method to collapsed.
 Automatic save refresh continues when the Dex opens, after game saves or state
 loads, and when the app returns to the foreground.
 The selection changes presentation only, keeping the same RR 4.1 data and
