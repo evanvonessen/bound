@@ -68,7 +68,7 @@ final class BoundAccountSocialTests: XCTestCase {
         defer { account.signOut(); storage.clear() }
         let original = try XCTUnwrap(account.session)
         let oldRequest = try original.friendSocialRequest(action: "profile", payload: [:])
-        XCTAssertEqual(oldRequest.url?.absoluteString, BoundFriendAccount.origin + "/rest/v1/rpc/bound_social_v1")
+        XCTAssertEqual(oldRequest.url?.absoluteString, BoundFriendAccount.origin + "/rest/v1/rpc/bound_social_v2")
         XCTAssertEqual(oldRequest.httpMethod, "POST")
         XCTAssertEqual(oldRequest.value(forHTTPHeaderField: "Authorization"), "Bearer \(try accessToken(owner: firstOwner))")
         let oldBody = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(oldRequest.httpBody)) as? NSDictionary)
@@ -106,6 +106,184 @@ final class BoundAccountSocialTests: XCTestCase {
         XCTAssertFalse(BoundSocialAPI.validUsername("trailing "))
         XCTAssertFalse(BoundSocialAPI.validUsername("line\nbreak"))
         XCTAssertFalse(BoundSocialAPI.validUsername("hidden\u{200B}name"))
+    }
+
+    func testExperimentalSignupChecksUsernameAndSendsMetadata() async throws {
+        let owner = UUID()
+        let storage = SocialFixtureStorage()
+        var requests: [URLRequest] = []
+        let account = BoundFriendAccount(storage: storage, automaticRefresh: false,
+                                         experimentalFeaturesEnabled: { true },
+                                         configuration: { "fixture-publishable-key" }, transport: { request in
+            requests.append(request)
+            if request.url?.path == "/rest/v1/rpc/bound_username_available" {
+                return try self.jsonResponse(["ok": true, "available": true])
+            }
+            let token = try self.accessToken(owner: owner)
+            return try self.jsonResponse([
+                "access_token": token,
+                "refresh_token": "synthetic-refresh-token",
+                "user": ["id": owner.uuidString.lowercased()],
+            ])
+        })
+        defer { account.signOut(); storage.clear() }
+
+        let result = await account.createAccount(email: "friend@example.invalid", password: "secret-password", username: "  River  ")
+        XCTAssertEqual(requests.map { $0.url?.path }, ["/rest/v1/rpc/bound_username_available", "/auth/v1/signup"])
+        let availability = try XCTUnwrap(requests.first)
+        XCTAssertEqual(availability.httpMethod, "POST")
+        XCTAssertEqual(availability.value(forHTTPHeaderField: "apikey"), "fixture-publishable-key")
+        XCTAssertNil(availability.value(forHTTPHeaderField: "Authorization"), "Availability is public and uses only the publishable key")
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: XCTUnwrap(availability.httpBody)) as? [String: String], ["username": "River"])
+
+        let signup = try XCTUnwrap(requests.last)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(signup.httpBody)) as? [String: Any])
+        XCTAssertEqual(body["email"] as? String, "friend@example.invalid")
+        XCTAssertEqual(body["password"] as? String, "secret-password")
+        XCTAssertEqual(body["data"] as? [String: String], ["bound_username_v1": "River"])
+        XCTAssertEqual(Set(body.keys), ["email", "password", "data"])
+        XCTAssertEqual(result, .signedIn)
+        XCTAssertEqual(account.session?.owner, owner)
+    }
+
+    func testExperimentalSignupStopsBeforeAuthWhenUsernameIsUnavailable() async throws {
+        let storage = SocialFixtureStorage()
+        var paths: [String] = []
+        let account = BoundFriendAccount(storage: storage, automaticRefresh: false,
+                                         experimentalFeaturesEnabled: { true },
+                                         configuration: { "fixture-publishable-key" }, transport: { request in
+            paths.append(request.url?.path ?? "")
+            return try self.jsonResponse(["ok": true, "available": false])
+        })
+        defer { account.signOut(); storage.clear() }
+
+        let result = await account.createAccount(email: "friend@example.invalid", password: "secret-password", username: "River")
+        XCTAssertEqual(result, .usernameTaken)
+        XCTAssertEqual(paths, ["/rest/v1/rpc/bound_username_available"])
+        XCTAssertNil(account.session)
+        XCTAssertEqual(account.status, "That username is already taken. Choose another.")
+    }
+
+    func testBuild13SignupRequestRemainsEmailPasswordOnlyWhenExperimentsAreOff() async throws {
+        let storage = SocialFixtureStorage()
+        var requests: [URLRequest] = []
+        let account = BoundFriendAccount(storage: storage, automaticRefresh: false,
+                                         experimentalFeaturesEnabled: { false },
+                                         configuration: { "fixture-publishable-key" }, transport: { request in
+            requests.append(request)
+            return try self.jsonResponse(["id": UUID().uuidString.lowercased()])
+        })
+        defer { account.signOut(); storage.clear() }
+
+        let result = await account.createAccount(email: "friend@example.invalid", password: "secret-password", username: "IgnoredName")
+        XCTAssertEqual(result, .checkEmail)
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.url?.path, "/auth/v1/signup")
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: XCTUnwrap(requests.first?.httpBody)) as? [String: String],
+                       ["email": "friend@example.invalid", "password": "secret-password"])
+    }
+
+    func testExperimentalSignupRechecksUsernameAfterUniqueClaimRace() async throws {
+        let storage = SocialFixtureStorage()
+        var availabilityChecks = 0
+        var signupRequests = 0
+        let account = BoundFriendAccount(storage: storage, automaticRefresh: false,
+                                         experimentalFeaturesEnabled: { true },
+                                         configuration: { "fixture-publishable-key" }, transport: { request in
+            if request.url?.path == "/rest/v1/rpc/bound_username_available" {
+                availabilityChecks += 1
+                return try self.jsonResponse(["ok": true, "available": availabilityChecks == 1])
+            }
+            signupRequests += 1
+            return try self.jsonResponse(["code": "database_error"], status: 500)
+        })
+        defer { account.signOut(); storage.clear() }
+
+        let result = await account.createAccount(email: "friend@example.invalid", password: "secret-password", username: "River")
+        XCTAssertEqual(result, .usernameTaken)
+        XCTAssertEqual(availabilityChecks, 2)
+        XCTAssertEqual(signupRequests, 1)
+        XCTAssertNil(account.session, "A failed Auth signup must never be reported or stored as a created account")
+        XCTAssertNil(try storage.read())
+    }
+
+    func testExperimentalSignupCancellationDuringAvailabilityDoesNotSubmitSignup() async throws {
+        let storage = SocialFixtureStorage()
+        let started = expectation(description: "availability request started")
+        var continuation: CheckedContinuation<BoundAuthTransport.Response, Error>?
+        var signupRequests = 0
+        let account = BoundFriendAccount(storage: storage, automaticRefresh: false,
+                                         experimentalFeaturesEnabled: { true },
+                                         configuration: { "fixture-publishable-key" }, transport: { request in
+            if request.url?.path == "/rest/v1/rpc/bound_username_available" {
+                started.fulfill()
+                return try await withCheckedThrowingContinuation { continuation = $0 }
+            }
+            signupRequests += 1
+            return try self.jsonResponse(["id": UUID().uuidString.lowercased()])
+        })
+        defer { account.signOut(); storage.clear() }
+
+        let task = Task { await account.createAccount(email: "friend@example.invalid", password: "secret-password", username: "River") }
+        await fulfillment(of: [started], timeout: 2)
+        task.cancel()
+        continuation?.resume(returning: try jsonResponse(["ok": true, "available": true]))
+        let result = await task.value
+        XCTAssertEqual(result, .cancelled)
+        XCTAssertEqual(signupRequests, 0)
+        XCTAssertNil(account.session)
+    }
+
+    func testDisablingExperimentsDuringUsernamePreflightCancelsBeforeSignup() async throws {
+        let storage = SocialFixtureStorage()
+        let started = expectation(description: "availability request started")
+        var continuation: CheckedContinuation<BoundAuthTransport.Response, Error>?
+        var signupRequests = 0
+        var experimentalEnabled = true
+        let account = BoundFriendAccount(storage: storage, automaticRefresh: false,
+                                         experimentalFeaturesEnabled: { experimentalEnabled },
+                                         configuration: { "fixture-publishable-key" }, transport: { request in
+            if request.url?.path == "/rest/v1/rpc/bound_username_available" {
+                started.fulfill()
+                return try await withCheckedThrowingContinuation { continuation = $0 }
+            }
+            signupRequests += 1
+            return try self.jsonResponse(["id": UUID().uuidString.lowercased()])
+        })
+        defer { account.signOut(); storage.clear() }
+
+        let task = Task { await account.createAccount(email: "friend@example.invalid", password: "secret-password", username: "River") }
+        await fulfillment(of: [started], timeout: 2)
+        experimentalEnabled = false
+        continuation?.resume(returning: try jsonResponse(["ok": true, "available": true]))
+        let result = await task.value
+        XCTAssertEqual(result, .cancelled)
+        XCTAssertEqual(signupRequests, 0)
+        XCTAssertFalse(account.busy, "The in-flight signup must release its busy state after opt-out")
+        XCTAssertNil(account.session)
+    }
+
+    func testExperimentalSignupStillHandlesEmailConfirmationResponse() async throws {
+        let storage = SocialFixtureStorage()
+        let owner = UUID()
+        let account = BoundFriendAccount(storage: storage, automaticRefresh: false,
+                                         experimentalFeaturesEnabled: { true },
+                                         configuration: { "fixture-publishable-key" }, transport: { request in
+            if request.url?.path == "/rest/v1/rpc/bound_username_available" {
+                return try self.jsonResponse(["ok": true, "available": true])
+            }
+            return try self.jsonResponse(["id": owner.uuidString.lowercased(), "email": "friend@example.invalid"])
+        })
+        defer { account.signOut(); storage.clear() }
+
+        let result = await account.createAccount(email: "friend@example.invalid", password: "secret-password", username: "River")
+        XCTAssertEqual(result, .checkEmail)
+        XCTAssertNil(account.session)
+        XCTAssertTrue(account.status.contains("Check your email"))
+    }
+
+    private func jsonResponse(_ object: [String: Any], status: Int = 200) throws -> BoundAuthTransport.Response {
+        BoundAuthTransport.Response(data: try JSONSerialization.data(withJSONObject: object), status: status)
     }
 
     func testBoundSyncProviderConfigurationRequiresBoundOwnedValues() {

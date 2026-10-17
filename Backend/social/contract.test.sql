@@ -4,14 +4,22 @@ CREATE TEMP TABLE legacy_baseline AS SELECT md5(pg_get_functiondef('public.cup05
 \ir supabase/migrations/20261015210839_bound_friend_social_v1.sql
 \ir supabase/migrations/20261015212112_bound_device_registration_revision_fence.sql
 \ir supabase/migrations/20261015212554_bound_device_registration_owner_index.sql
+\ir supabase/migrations/20261017201648_bound_username_friends_v2.sql
 DO $$
 DECLARE a constant uuid:='11111111-1111-4111-8111-111111111111';
+        d constant uuid:='99999999-9999-4999-8999-999999999991';
+        e constant uuid:='99999999-9999-4999-8999-999999999992';
+        limit_user constant uuid:='99999999-9999-4999-8999-999999999998';
+        f constant uuid:='99999999-9999-4999-8999-999999999994';
+        g constant uuid:='99999999-9999-4999-8999-999999999995';
+        h constant uuid:='99999999-9999-4999-8999-999999999996';
         b constant uuid:='22222222-2222-4222-8222-222222222222';
         c constant uuid:='33333333-3333-4333-8333-333333333333';
         room_id uuid; response jsonb; i integer; token_a text:=repeat('a',64); token_b text:=repeat('b',64);
         install_a constant uuid:='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
         install_b constant uuid:='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
         job_id uuid; dispatch jsonb; request_id constant uuid:='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+        added_room uuid; caught text;
 BEGIN
   IF md5(pg_get_functiondef('public.cup050_friends(text,jsonb)'::regprocedure))<>(SELECT legacy_hash FROM legacy_baseline) THEN RAISE EXCEPTION 'legacy RPC definition changed'; END IF;
   PERFORM set_config('request.jwt.claims',jsonb_build_object('sub',a,'role','authenticated')::text,true);
@@ -40,6 +48,107 @@ BEGIN
   IF response->'rooms'->0->>'displayName'<>'Player_22222222' OR response->>'username'<>'Alice Invite Updated' THEN RAISE EXCEPTION 'list omitted peer/profile username: %',response; END IF;
   response:=public.bound_social_v1('username','{"username":"Alice Updated"}');
   IF response->>'username'<>'Alice Updated' OR (SELECT name_a FROM cup050_private.rooms WHERE id=room_id)<>'Alice Updated' THEN RAISE EXCEPTION 'rename did not update legacy room labels'; END IF;
+  response:=public.bound_username_available(' alice updated ');
+  IF response->>'ok'<>'true' OR response->>'available'<>'false' THEN RAISE EXCEPTION 'case-insensitive name availability failed: %',response; END IF;
+  PERFORM set_config('request.jwt.claims',jsonb_build_object('sub',b,'role','authenticated')::text,true);
+  response:=public.bound_social_v2('username','{"username":"ALICE UPDATED"}');
+  IF response->>'error'<>'username_taken' THEN RAISE EXCEPTION 'duplicate rename did not return stable error: %',response; END IF;
+  EXECUTE 'SET LOCAL ROLE authenticated';
+  response:=public.bound_social_v2('profile','{}');
+  EXECUTE 'RESET ROLE';
+  IF response->>'ok'<>'true' THEN RAISE EXCEPTION 'v2 did not delegate legacy profile action'; END IF;
+  INSERT INTO auth.users(id,email,email_confirmed_at,raw_user_meta_data)
+    VALUES(d,'username-owner@example.invalid',now(),'{"bound_username_v1":"Case Owner"}');
+  INSERT INTO auth.users(id,email,email_confirmed_at,raw_user_meta_data)
+    VALUES(e,'username-friend@example.invalid',now(),'{"bound_username_v1":"Case Friend"}');
+  INSERT INTO auth.users(id,email,email_confirmed_at,raw_user_meta_data)
+    VALUES(f,'legacy-alias@example.invalid',now(),'{"cupcake_username_v1":"Legacy Alias"}');
+  INSERT INTO auth.users(id,email,email_confirmed_at,raw_user_meta_data)
+    VALUES(g,'legacy-owner-alias@example.invalid',now(),'{"cupcake_username_v1":"Case Owner"}');
+  IF EXISTS(SELECT 1 FROM bound_social_private.profiles WHERE owner=f)
+    THEN RAISE EXCEPTION 'Build 13 signup metadata unexpectedly created a username profile'; END IF;
+  response:=public.bound_username_available('case owner');
+  IF response->>'available'<>'false' THEN RAISE EXCEPTION 'signup username reservation was not visible: %',response; END IF;
+  BEGIN
+    INSERT INTO auth.users(id,email,email_confirmed_at,raw_user_meta_data)
+      VALUES('99999999-9999-4999-8999-999999999993','username-duplicate@example.invalid',now(),'{"bound_username_v1":"cASE oWNER"}');
+    RAISE EXCEPTION 'case-insensitive duplicate signup was accepted';
+  EXCEPTION WHEN unique_violation THEN
+    GET STACKED DIAGNOSTICS caught=MESSAGE_TEXT;
+    IF caught<>'username_taken' THEN RAISE; END IF;
+  END;
+  IF EXISTS(SELECT 1 FROM auth.users WHERE id='99999999-9999-4999-8999-999999999993')
+     OR EXISTS(SELECT 1 FROM bound_social_private.profiles WHERE owner='99999999-9999-4999-8999-999999999993')
+    THEN RAISE EXCEPTION 'duplicate signup left partial account/profile data'; END IF;
+  INSERT INTO auth.users(id,email,email_confirmed_at,raw_user_meta_data)
+    VALUES(h,'unconfirmed-username@example.invalid',NULL,'{"bound_username_v1":"Pending Name"}');
+  IF NOT EXISTS(SELECT 1 FROM bound_social_private.profiles WHERE owner=h AND username='Pending Name')
+    THEN RAISE EXCEPTION 'unconfirmed signup did not reserve its username'; END IF;
+  BEGIN
+    INSERT INTO auth.users(id,email,email_confirmed_at,is_anonymous,raw_user_meta_data)
+      VALUES('99999999-9999-4999-8999-999999999997','anonymous-username@example.invalid',now(),true,'{"bound_username_v1":"Anonymous Name"}');
+    RAISE EXCEPTION 'anonymous user claimed a Bound username';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+  IF EXISTS(SELECT 1 FROM auth.users WHERE id='99999999-9999-4999-8999-999999999997')
+    THEN RAISE EXCEPTION 'anonymous signup rejection left auth row'; END IF;
+  PERFORM set_config('request.jwt.claims',jsonb_build_object('sub',d,'role','authenticated')::text,true);
+  response:=public.bound_social_v2('username','{"username":"cASE oWNER"}');
+  IF response->>'ok'<>'true' OR response->>'username'<>'cASE oWNER'
+    THEN RAISE EXCEPTION 'case-only username rename was blocked by a legacy alias: %',response; END IF;
+  EXECUTE 'SET LOCAL ROLE anon';
+  response:=public.bound_username_available('case owner');
+  EXECUTE 'RESET ROLE';
+  IF response->>'ok'<>'true' OR response->>'available'<>'false' OR (response-'ok'-'available')<>'{}'::jsonb
+    THEN RAISE EXCEPTION 'anon availability endpoint leaked data or failed: %',response; END IF;
+  response:=public.bound_social_v2('add','{"username":"case friend"}');
+  IF response->>'ok'<>'true' OR response->>'username'<>'cASE oWNER'
+     OR response->'room'->>'displayName'<>'Case Friend' THEN RAISE EXCEPTION 'username add response contract failed: %',response; END IF;
+  added_room:=(response->'room'->>'roomID')::uuid;
+  response:=public.bound_social_v2('add','{"username":"CASE FRIEND"}');
+  IF response->>'ok'<>'true' OR (response->'room'->>'roomID')::uuid<>added_room
+    OR (SELECT count(*) FROM cup050_private.rooms WHERE active AND ((owner_a=d AND owner_b=e) OR (owner_a=e AND owner_b=d)))<>1
+    THEN RAISE EXCEPTION 'repeated add was not idempotent: %',response; END IF;
+  INSERT INTO bound_moderation_private.blocks(owner,target,label) VALUES(d,e,'contract fixture block');
+  response:=public.bound_social_v2('add','{"username":"Case Friend"}');
+  IF response->>'error'<>'friend_not_found' THEN RAISE EXCEPTION 'blocked peer was discoverable: %',response; END IF;
+  DELETE FROM bound_moderation_private.blocks WHERE owner=d AND target=e;
+  response:=public.bound_social_v2('add','{"username":"case owner"}');
+  IF response->>'error'<>'cannot_add_self' THEN RAISE EXCEPTION 'self-add error changed: %',response; END IF;
+  response:=public.bound_social_v2('add','{"username":"Pending Name"}');
+  IF response->>'error'<>'friend_not_found' THEN RAISE EXCEPTION 'unconfirmed peer was discoverable: %',response; END IF;
+  response:=public.bound_social_v2('add','{"username":"legacy alias"}');
+  IF response->>'ok'<>'true' OR response->>'username'<>'cASE oWNER'
+     OR response->'room'->>'displayName'<>'Legacy Alias'
+     OR NOT EXISTS(SELECT 1 FROM bound_social_private.profiles WHERE owner=f AND username='Legacy Alias')
+    THEN RAISE EXCEPTION 'legacy username lazy resolution failed: %',response; END IF;
+  response:=public.bound_social_v2('add','{"username":"missing user"}');
+  IF response->>'error'<>'friend_not_found' THEN RAISE EXCEPTION 'unknown username response changed: %',response; END IF;
+  FOR i IN 1..3 LOOP
+    response:=public.bound_social_v2('add',jsonb_build_object('username','unknown '||i));
+    IF response->>'error'<>'friend_not_found' THEN RAISE EXCEPTION 'lookup quota charged too early: %',response; END IF;
+  END LOOP;
+  response:=public.bound_social_v2('add','{"username":"unknown final"}');
+  IF response->>'error'<>'rate_limited' THEN RAISE EXCEPTION 'name lookup quota was not enforced: %',response; END IF;
+  -- A separate actor with twenty active relationships receives the stable cap error.
+  INSERT INTO auth.users(id,email,email_confirmed_at,raw_user_meta_data)
+    VALUES(limit_user,'username-limit@example.invalid',now(),'{"bound_username_v1":"Limit Owner"}');
+  FOR i IN 1..20 LOOP
+    INSERT INTO cup050_private.rooms(owner_a,owner_b,name_a,name_b)
+      VALUES(limit_user,'99999999-9999-4999-8999-999999999999'::uuid,'Limit Owner','Fixture Peer');
+  END LOOP;
+  PERFORM set_config('request.jwt.claims',jsonb_build_object('sub',limit_user,'role','authenticated')::text,true);
+  response:=public.bound_social_v2('add','{"username":"Case Friend"}');
+  IF response->>'error'<>'friend_limit' THEN RAISE EXCEPTION 'friend cap error changed: %',response; END IF;
+  IF NOT has_function_privilege('anon','public.bound_username_available(text)','EXECUTE')
+     OR has_function_privilege('anon','public.bound_social_v2(text,jsonb)','EXECUTE')
+     OR has_function_privilege('anon','bound_username_private.social_add(jsonb)','EXECUTE')
+     OR has_function_privilege('authenticated','bound_social_private.claim_signup_username()','EXECUTE')
+     OR NOT has_function_privilege('authenticated','bound_username_private.social_add(jsonb)','EXECUTE')
+     OR NOT has_schema_privilege('authenticated','bound_username_private','USAGE')
+     OR has_schema_privilege('authenticated','bound_social_private','USAGE')
+    THEN RAISE EXCEPTION 'username endpoint/function grants are incorrect'; END IF;
+  PERFORM set_config('request.jwt.claims',jsonb_build_object('sub',a,'role','authenticated')::text,true);
   response:=public.cup050_friends('room',jsonb_build_object('roomID',room_id));
   IF response->>'ok'<>'true' THEN RAISE EXCEPTION 'legacy sharing passthrough failed'; END IF;
   response:=public.bound_social_v1('block',jsonb_build_object('roomID',room_id));

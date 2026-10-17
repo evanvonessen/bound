@@ -362,6 +362,68 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         onboarding.close()
     }
 
+    func testUsernameAddUsesTrimmedNameKeepsOwnProfileAndDoesNotStartSharing() async throws {
+        let preferences = BoundExperimentalFeaturesPreferences()
+        let previous = preferences.isEnabled
+        preferences.isEnabled = true
+        defer { preferences.isEnabled = previous }
+        let identity = try makeIdentity(owner: UUID())
+        let room = FriendRoom(roomID: UUID().uuidString, displayName: "Navi")
+        var additions: [[String: String]] = []
+        let onboarding = FriendOnboarding(call: { _, action, payload in
+            if action == "list" { return .init(ok: true, rooms: [], username: "River") }
+            XCTAssertEqual(action, "add")
+            additions.append(payload)
+            return .init(ok: true, room: room, username: "River")
+        }, observeAccount: { OnboardingObservation($0) })
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+            tokenFetcher: { _, _ in XCTFail("Adding a friend must not start sharing"); throw BoundFriendError.unavailable })
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+        onboarding.add(username: "  nAvI  ")
+        await waitUntil { !onboarding.busy }
+        XCTAssertEqual(additions, [["username": "nAvI"]])
+        XCTAssertEqual(onboarding.rooms, [room])
+        XCTAssertEqual(onboarding.selected, room)
+        XCTAssertEqual(onboarding.accountUsername, "River")
+        XCTAssertEqual(onboarding.message, "Friend added.")
+        XCTAssertFalse(sharing.active)
+        onboarding.add(username: "NAVI")
+        await waitUntil { !onboarding.busy }
+        XCTAssertEqual(onboarding.rooms, [room], "Repeated adds must not duplicate the friend row")
+        onboarding.close()
+    }
+
+    func testUsernameAddErrorsKeepFriendsAndExperimentalOptOutMakesNoRequest() async throws {
+        let preferences = BoundExperimentalFeaturesPreferences()
+        let previous = preferences.isEnabled
+        preferences.isEnabled = true
+        defer { preferences.isEnabled = previous }
+        let identity = try makeIdentity(owner: UUID())
+        var additions = 0
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            if action == "list" { return .init(ok: true, rooms: [], username: "River") }
+            additions += 1
+            return .init(ok: false, error: "friend_not_found")
+        }, observeAccount: { OnboardingObservation($0) })
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true)
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+        onboarding.add(username: "Missing")
+        await waitUntil { !onboarding.busy }
+        XCTAssertEqual(additions, 1)
+        XCTAssertEqual(onboarding.message, "No friend found with that username.")
+        XCTAssertTrue(onboarding.rooms.isEmpty)
+        XCTAssertNil(onboarding.selected)
+        onboarding.add(username: " ")
+        XCTAssertEqual(additions, 1)
+        preferences.isEnabled = false
+        onboarding.add(username: "Navi")
+        await settle()
+        XCTAssertEqual(additions, 1, "Build 13 must never invoke username pairing")
+        onboarding.close()
+    }
+
     private func makeIdentity(owner: UUID) throws -> AppCloudSession {
         let claims = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
         let payload = claims.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")

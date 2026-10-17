@@ -23,6 +23,7 @@ CREATE TEMP TABLE legacy_baseline AS
 \ir supabase/migrations/20261015210839_bound_friend_social_v1.sql
 \ir supabase/migrations/20261015212112_bound_device_registration_revision_fence.sql
 \ir supabase/migrations/20261015212554_bound_device_registration_owner_index.sql
+\ir supabase/migrations/20261017201648_bound_username_friends_v2.sql
 SELECT set_config('request.jwt.claims','{"role":"authenticated","sub":"11111111-1111-4111-8111-111111111111"}',false);
 SET ROLE authenticated;
 DO $$ DECLARE answer jsonb; BEGIN

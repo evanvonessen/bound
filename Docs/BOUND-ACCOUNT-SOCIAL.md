@@ -2,16 +2,33 @@
 
 These additions require **Enable Experimental Features**. Build 13 keeps its
 existing friend, moderation, sharing-token and deletion endpoints. The new
-`bound_social_v1` RPC delegates friend operations to that unchanged service.
-Account username changes update the account profile, existing friend labels and
-outstanding invitations, so the existing Build 13 list endpoint also sees them.
-There is one username per account; usernames are not a public friend directory.
-The existing invite-code flow remains the way to add a friend.
+`bound_social_v2` RPC adds friends by an exact, case-insensitive account username.
+It delegates existing actions to `bound_social_v1`; both the Build 13
+`cup050_friends` RPC and the sharing-token/deletion services keep their contracts.
+New friendships use the same rooms, so older clients can list and share with
+friends added by username. The original invite-code UI remains available with
+experimental features off, and its backend endpoints remain available.
+
+Account usernames are unique after trimming surrounding spaces and ignoring
+capitalization. Signup checks availability, and an opt-in Auth insert trigger
+claims the name in the same transaction as account creation. A unique database
+index enforces the rule for concurrent signup and rename attempts. The trigger
+only applies when signup sends `data.bound_username_v1`; Build 13's original
+email/password-only signup does not enter the new username path. Existing
+account usernames are preserved. Older display names can seed a profile, with a
+unique fallback if another account already owns that name.
+
+The availability endpoint returns only an exact-name availability result. There
+is no username directory or partial-name search. Adding a friend still checks
+account eligibility, blocks, suspensions, deletion state, quotas and both
+accounts' friend limits. Adding does not start sharing; tapping the saved friend
+starts sharing. Account username changes update the account profile, existing
+friend labels and outstanding invitations, so the Build 13 list also sees them.
 
 Change the username in Library Settings → Bound account → Username. An open
 Friends screen refreshes profile names every 30 seconds and on reopening.
 Remove Friend ends the relationship and stops selected sharing. Adding the
-friend again requires another invitation. Block and Report retain their existing
+friend again can be done by username, or by invitation in the original flow. Block and Report retain their existing
 backend validation and semantics.
 
 Sharing that was active before the app entered the background is restored when
@@ -63,6 +80,14 @@ the receiving device displayed a notification, played a sound or vibrated.
 Those checks require signed builds and two authorized test devices/accounts.
 
 ## Validation boundary
+
+On 2026-10-17, the username migration was deployed and passed the live rollback
+smoke for username adding and Build 13's original invite-code endpoints. Existing
+profile data, Auth account count, legacy service definitions and Edge Function
+versions/bundles were preserved. The 25 focused native integration checks, the
+signup UI check with experiments both on and off, and the Release iPhone build
+passed. These checks used synthetic native credentials and disposable SQL rows;
+email delivery and two-device gameplay sharing were not retested in this change.
 
 On 2026-10-15, `bound-jiggle` version 3 was deployed with separate production
 and sandbox APNs keys restricted to `com.evanvonessen.bound`. Both complete

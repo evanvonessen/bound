@@ -810,6 +810,7 @@ private struct BoundFriendsSheet: View {
     @State private var password = ""
     @State private var name = ""
     @State private var invite = ""
+    @State private var friendUsername = ""
     @State private var reportingRoom: FriendRoom?
     @State private var blockingRoom: FriendRoom?
     @State private var removingRoom: FriendRoom?
@@ -914,33 +915,27 @@ private struct BoundFriendsSheet: View {
                         }
                     }
                     Section("Add a friend") {
-                        if !experimentalFeaturesEnabled {
+                        if experimentalFeaturesEnabled {
+                            TextField("Friend's username", text: $friendUsername)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .submitLabel(.go)
+                                .onSubmit { onboarding.add(username: friendUsername) }
+                                .accessibilityIdentifier("bound.add-friend-username")
+                            Button("Add friend") { onboarding.add(username: friendUsername) }
+                                .disabled(onboarding.busy || !BoundSocialAPI.validUsername(friendUsername.trimmingCharacters(in: .whitespacesAndNewlines)))
+                                .accessibilityIdentifier("bound.add-friend")
+                            Text("Usernames aren't case sensitive.").font(.caption).foregroundStyle(.secondary)
+                        } else {
                             TextField("Your display name", text: $name)
-                        }
-                        Button("Create invite") { onboarding.create(name: name) }
-                            .disabled(onboarding.busy || (experimentalFeaturesEnabled ? onboarding.accountUsername == nil : name.isEmpty))
-                        if let code = onboarding.inviteCode {
-                            HStack {
+                            Button("Create invite") { onboarding.create(name: name) }
+                                .disabled(onboarding.busy || name.isEmpty)
+                            if let code = onboarding.inviteCode {
                                 Text(code).textSelection(.enabled)
-                                if experimentalFeaturesEnabled {
-                                    Spacer()
-                                    Button {
-                                        guard BoundFeatureVisibility.experimentalFeaturesEnabled else { return }
-                                        UIPasteboard.general.string = code
-                                        UIAccessibility.post(notification: .announcement, argument: "Friend code copied")
-                                    } label: {
-                                        Image(systemName: "doc.on.clipboard")
-                                            .frame(minWidth: 44, minHeight: 44)
-                                    }
-                                    .buttonStyle(.borderless)
-                                    .accessibilityLabel("Copy friend sharing code")
-                                    .accessibilityIdentifier("bound.copy-friend-code")
-                                }
                             }
+                            TextField("Friend's invite code", text: $invite).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                            Button("Accept invite") { onboarding.accept(code: invite, name: name); invite = "" }
+                                .disabled(onboarding.busy || invite.count != 16 || name.isEmpty)
                         }
-                        TextField("Friend's invite code", text: $invite).textInputAutocapitalization(.characters).autocorrectionDisabled()
-                        Button("Accept invite") { onboarding.accept(code: invite, name: name); invite = "" }
-                            .disabled(onboarding.busy || invite.count != 16 || (experimentalFeaturesEnabled ? onboarding.accountUsername == nil : name.isEmpty))
                     }
                     Section {
                         NavigationLink {
@@ -1016,7 +1011,9 @@ struct BoundCreateAccountView: View {
     @ObservedObject var account: BoundFriendAccount
     @Binding var signInEmail: String
     var signedIn: () -> Void = {}
+    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentalFeaturesEnabled = false
     @Environment(\.dismiss) private var dismiss
+    @State private var username = ""
     @State private var email = ""
     @State private var password = ""
     @State private var checkEmail = false
@@ -1030,6 +1027,13 @@ struct BoundCreateAccountView: View {
                 }
             } else {
                 Section {
+                    if experimentalFeaturesEnabled {
+                        TextField("Username", text: $username)
+                            .textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .accessibilityIdentifier("account.signup.username")
+                        Text("Choose a unique username. Capitalization doesn't make it different.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     TextField("Email", text: $email).textContentType(.username).keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("account.signup.email")
                     SecureField("Password", text: $password).textContentType(.newPassword)
@@ -1040,13 +1044,13 @@ struct BoundCreateAccountView: View {
                         let entered = password; password = ""
                         signInEmail = email
                         submission = Task { @MainActor in
-                            let result = await account.createAccount(email: email, password: entered)
+                            let result = await account.createAccount(email: email, password: entered, username: experimentalFeaturesEnabled ? username : nil)
                             guard !Task.isCancelled else { return }
                             if result == .signedIn { signedIn(); dismiss() }
                             else if result == .checkEmail { checkEmail = true }
                             submission = nil
                         }
-                    }.disabled(account.busy || BoundFriendAccount.normalizedEmail(email) == nil || password.isEmpty)
+                    }.disabled(account.busy || BoundFriendAccount.normalizedEmail(email) == nil || password.isEmpty || (experimentalFeaturesEnabled && !BoundSocialAPI.validUsername(username.trimmingCharacters(in: .whitespacesAndNewlines))))
                         .accessibilityIdentifier("account.signup.submit")
                     if account.busy { ProgressView("Creating account…") }
                     Text(account.status).font(.caption)
@@ -1054,6 +1058,7 @@ struct BoundCreateAccountView: View {
             }
         }.navigationTitle("Create Account")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { submission?.cancel(); password = ""; dismiss() } } }
+            .onChange(of: experimentalFeaturesEnabled) { _, _ in submission?.cancel(); submission = nil; password = "" }
             .onAppear { email = signInEmail }
             .onDisappear { submission?.cancel(); submission = nil; password = "" }
     }

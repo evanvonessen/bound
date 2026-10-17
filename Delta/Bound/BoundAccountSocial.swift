@@ -17,6 +17,7 @@ enum BoundSocialError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .rejected("name_not_allowed"): return "Choose a username with 1–40 characters. Links, email addresses and unsafe names aren't allowed."
+        case .rejected("username_taken"): return "That username is already taken. Choose another."
         case .rejected("rate_limited"): return "Please wait before trying again."
         case .rejected("friend_unavailable"): return "Your friend hasn't enabled Jiggles on an available device."
         case .rejected("not_configured"): return "Jiggles aren't available yet. Push notifications still need to be configured for Bound."

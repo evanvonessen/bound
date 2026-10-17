@@ -68,8 +68,13 @@ final class FriendOnboarding: ObservableObject {
 
     init(call: @escaping @MainActor (AppCloudSession, String, [String: String]) async throws -> FriendResponse = { session, action, payload in
         let request: URLRequest
-        if BoundFeatureVisibility.experimentalFeaturesEnabled, ["list", "create", "accept"].contains(action) {
-            let socialPayload = action == "accept" ? ["code": payload["code"] ?? ""] : [:]
+        if BoundFeatureVisibility.experimentalFeaturesEnabled, ["list", "create", "accept", "add"].contains(action) {
+            let socialPayload: [String: String]
+            switch action {
+            case "accept": socialPayload = ["code": payload["code"] ?? ""]
+            case "add": socialPayload = ["username": payload["username"] ?? ""]
+            default: socialPayload = [:]
+            }
             request = try session.friendSocialRequest(action: action, payload: socialPayload)
         } else {
             request = try session.friendOnboardingRequest(action: action, payload: payload)
@@ -197,6 +202,12 @@ final class FriendOnboarding: ObservableObject {
     }
     func create(name: String) { request("create", payload: ["displayName": name.trimmingCharacters(in: .whitespacesAndNewlines)]) }
     func accept(code: String, name: String) { request("accept", payload: ["code": code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(), "displayName": name.trimmingCharacters(in: .whitespacesAndNewlines)]) }
+    func add(username: String) {
+        guard BoundFeatureVisibility.experimentalFeaturesEnabled, !busy else { return }
+        let username = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard BoundSocialAPI.validUsername(username) else { message = "Enter your friend's username."; return }
+        request("add", payload: ["username": username])
+    }
     func remove(_ room: FriendRoom) {
         guard !busy, rooms.contains(where: { $0.roomID == room.roomID }) else { return }
         if selected?.roomID == room.roomID { selected = nil; sharing?.configureAuthenticatedRoom(nil, identity: { [weak self] in self?.sharingIdentity() }) }
@@ -253,6 +264,9 @@ final class FriendOnboarding: ObservableObject {
                     case "rate_limited": self.message = "Too many attempts. Try again later."
                     case "block_limit": self.message = "Your block list is full. Remove a block before adding another."
                     case "name_not_allowed": self.message = "Choose a different display name."
+                    case "friend_not_found": self.message = "No friend found with that username."
+                    case "cannot_add_self": self.message = "Enter a friend's username, not your own."
+                    case "friend_limit": self.message = "One of you has reached the 20-friend limit."
                     default: self.message = "Could not update friends. Try again."
                     }
                     return
@@ -277,7 +291,7 @@ final class FriendOnboarding: ObservableObject {
                 } else if action == "create" {
                     guard let code = response.code, code.range(of: "^[0-9A-F]{16}$", options: .regularExpression) != nil else { throw FriendSharingTokenError.unavailable }
                     self.inviteCode = code
-                } else if action == "accept" {
+                } else if action == "accept" || action == "add" {
                     guard let room = response.room, room.valid else { throw FriendSharingTokenError.unavailable }
                     self.rooms.removeAll { $0.roomID == room.roomID }; self.rooms.append(room); self.busy = false; self.select(room)
                 } else if action == "remove" || action == "block" {
@@ -292,7 +306,8 @@ final class FriendOnboarding: ObservableObject {
                     self.blocks = blocks
                 }
                 if action == "report" { guard response.reportID != nil else { throw FriendSharingTokenError.unavailable } }
-                self.busy = false; self.task = nil; self.message = action == "report" ? "Report sent." : ""
+                self.busy = false; self.task = nil
+                self.message = action == "report" ? "Report sent." : action == "add" ? "Friend added." : ""
             } catch {
                 guard let self, self.generation == run else { return }
                 self.busy = false; self.task = nil; self.message = "Could not update friends. Check the code or try again."

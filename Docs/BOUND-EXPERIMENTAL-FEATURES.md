@@ -61,8 +61,11 @@ a momentary Fast Forward input does not change the saved toggle. Turning
 experiments off stops an automatically restored fast-forward session without
 erasing the saved choice; ordinary manual fast forward remains available.
 
-The Friends sheet also shows a clipboard button beside a generated invite code
-when experiments are enabled. It copies just the code, ready to paste.
+With experiments enabled, Friends adds a friend by username without generating
+an invite code. Matching ignores capitalization. Signup requires an available,
+unique username; the backend atomically enforces uniqueness at account creation
+and when renaming. The original invite-code and email/password-only signup
+flows remain available with experiments off, including Build 13's endpoints.
 Its signed-in account header greets the user by username, with an information
 button that shows username-editing instructions for ten seconds. Tapping a
 friend starts sharing immediately; Stop sharing remains available while active.

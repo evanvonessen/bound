@@ -2027,6 +2027,54 @@ final class CompanionUITests: XCTestCase {
         }
     }
 
+    func testUsernameSignupFieldIsExperimentalAndRequired() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        for enabled in [false, true] {
+            app.launch()
+            setExperimentalFeatures(enabled, in: app)
+            let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+            XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
+            XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+            openNativePause(in: app)
+            XCTAssertTrue(app.buttons["Connect"].waitForExistence(timeout: 5), "Use the signed-out diagnostic Simulator; never change a real account")
+            app.buttons["Connect"].tap()
+            app.buttons["Create Account"].tap()
+            let email = app.textFields["account.signup.email"]
+            XCTAssertTrue(email.waitForExistence(timeout: 5))
+            let username = app.textFields["account.signup.username"]
+            XCTAssertEqual(username.exists, enabled)
+            let submit = app.buttons["account.signup.submit"]
+            XCTAssertFalse(submit.isEnabled)
+            email.tap(); email.typeText("fixture@example.invalid")
+            let password = app.secureTextFields["account.signup.password"]
+            password.tap(); password.typeText("offline-fixture-password")
+            if enabled {
+                XCTAssertFalse(submit.isEnabled, "A new experimental account requires a username")
+                username.tap(); username.typeText("Fixture River")
+                XCTAssertTrue(submit.isEnabled)
+                screenshot("Bound-username-signup")
+            } else {
+                XCTAssertTrue(submit.isEnabled, "Build 13 keeps email/password-only signup")
+            }
+            // No signup, friend request, or real authentication is sent by this UI check.
+            app.buttons["Cancel"].tap()
+            closeBoundSheet(in: app)
+            app.terminate()
+        }
+        app.launch()
+        setExperimentalFeatures(false, in: app)
+        app.terminate()
+    }
+
     func testBoundButtonTypesPersistAndPreserveGameplay() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
