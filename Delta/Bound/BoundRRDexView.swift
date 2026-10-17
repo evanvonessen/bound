@@ -57,7 +57,7 @@ struct BoundRRDexView: View {
                             compactCard(pokemon: pokemon, catalog: catalog)
                                 .frame(width: geometry.size.width)
                         }
-                        .id((layout == .layout4 || layout == .layout5 || layout == .layout6 || layout == .layout7 || layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11) && (searching || !query.isEmpty))
+                        .id((layout == .layout4 || layout == .layout5 || layout == .layout6 || layout == .layout7 || layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12) && (searching || !query.isEmpty))
                         .scrollDismissesKeyboard(.interactively)
                         .frame(width: geometry.size.width, height: geometry.size.height)
                     } else {
@@ -68,7 +68,7 @@ struct BoundRRDexView: View {
                 .padding(.top, portraitTopInset)
                 .overlay(alignment: .top) {
                     if hasIslandActions {
-                        if layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 {
+                        if layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12 {
                             HStack(spacing: 0) {
                                 Spacer(minLength: 0)
                                 layout8InformationButton
@@ -116,7 +116,7 @@ struct BoundRRDexView: View {
                         case .weaknesses: BoundRRDexMatchups(pokemon: pokemon, catalog: catalog)
                         case .learnset: BoundRRDexLearnset(pokemon: pokemon, catalog: catalog, save: choice.save)
                         case .information:
-                            if layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 { informationLayout8() }
+                            if layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12 { informationLayout8() }
                             else { information(catalog: catalog) }
                         case .evolution: evolutionDetail(pokemon: pokemon, catalog: catalog)
                         case let .ability(name, description):
@@ -182,7 +182,7 @@ struct BoundRRDexView: View {
         case .layout5: cardLayout5(pokemon: pokemon, catalog: catalog, compact: true, denseSizing: true)
         case .layout6: cardLayout6(pokemon: pokemon, catalog: catalog, compact: true, denseSizing: true)
         case .layout7: cardLayout7(pokemon: pokemon, catalog: catalog, compact: true)
-        case .layout8, .layout9, .layout10, .layout11: cardLayout8(pokemon: pokemon, catalog: catalog, compact: true)
+        case .layout8, .layout9, .layout10, .layout11, .layout12: cardLayout8(pokemon: pokemon, catalog: catalog, compact: true)
         }
     }
 
@@ -208,7 +208,7 @@ struct BoundRRDexView: View {
                         denseSizing: size.height < 250)
         case .layout7:
             cardLayout7(pokemon: pokemon, catalog: catalog)
-        case .layout8, .layout9, .layout10, .layout11:
+        case .layout8, .layout9, .layout10, .layout11, .layout12:
             cardLayout8(pokemon: pokemon, catalog: catalog)
         }
     }
@@ -376,8 +376,12 @@ struct BoundRRDexView: View {
             if searching || !query.isEmpty {
                 searchRow(catalog: catalog)
                 if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("Search Pokémon by name.").font(.system(size: 12)).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: compact ? nil : .infinity, alignment: .topLeading)
+                    if layout == .layout12 {
+                        if !compact { Spacer(minLength: 0) }
+                    } else {
+                        Text("Search Pokémon by name.").font(.system(size: 12)).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, maxHeight: compact ? nil : .infinity, alignment: .topLeading)
+                    }
                 } else if compact {
                     suggestionRows(catalog: catalog)
                 } else {
@@ -476,12 +480,12 @@ struct BoundRRDexView: View {
                     detailButton("Learnset", icon: "list.bullet.rectangle", detail: .learnset,
                                  comfortableTargets: true, identifier: "bound.rrdex-layout8-learnset")
                 }
-                if layout != .layout10 && layout != .layout11 {
+                if layout != .layout10 && layout != .layout11 && layout != .layout12 {
                     detailButton("Weaknesses", icon: "shield.lefthalf.filled", detail: .weaknesses,
                                  comfortableTargets: true, identifier: "bound.rrdex-layout\(layout.rawValue)-weaknesses")
                 }
             }
-            .frame(width: (layout == .layout10 || layout == .layout11) ? nil : 126, alignment: .trailing)
+            .frame(width: (layout == .layout10 || layout == .layout11 || layout == .layout12) ? nil : 126, alignment: .trailing)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-actions")
         }
@@ -538,7 +542,7 @@ struct BoundRRDexView: View {
                 Text(BoundRRDexLearnset.randomizerNote).font(.caption).foregroundStyle(.secondary)
             }
             let filter = moveQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-            LazyVStack(alignment: .leading, spacing: layout == .layout11 ? 0 : 12) {
+            LazyVStack(alignment: .leading, spacing: (layout == .layout11 || layout == .layout12) ? 0 : 12) {
                 ForEach(BoundRRDexLearnset.methods, id: \.self) { method in
                     let entries = pokemon.learnset.enumerated().filter { _, entry in
                         entry.method == method && (filter.isEmpty || catalog.learnedMove(entry, pokemon: pokemon, save: choice.save)?.name.localizedCaseInsensitiveContains(filter) == true)
@@ -552,7 +556,7 @@ struct BoundRRDexView: View {
                                 Divider()
                             }
                         }
-                        if layout == .layout11 {
+                        if layout == .layout11 || layout == .layout12 {
                             let expanded = expandedLearnsetMethod == method
                             let title = method == "Level up" ? "Level Up" : method
                             VStack(alignment: .leading, spacing: 8) {
@@ -572,7 +576,7 @@ struct BoundRRDexView: View {
                                 .buttonStyle(.plain).foregroundStyle(.primary)
                                 .accessibilityLabel("\(title), \(entries.count) moves")
                                 .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-                                .accessibilityIdentifier("bound.rrdex-layout11-learnset-method-\(method)")
+                                .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-learnset-method-\(method)")
                                 .id("learnset-method-\(method)")
                                 if expanded { rows }
                                 Divider()
@@ -1229,14 +1233,15 @@ struct BoundRRDexView: View {
                         .accessibilityElement(children: .ignore).accessibilityLabel("\(label), \(stat)")
                 }
             }.accessibilityIdentifier(layout.rawValue >= 8 ? "bound.rrdex-layout\(layout.rawValue)-stats" : "bound.rrdex-stats")
-            if expandedReference, layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 { layout8Evolution(pokemon: pokemon, catalog: catalog) }
+            if expandedReference, layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12 { layout8Evolution(pokemon: pokemon, catalog: catalog) }
             else if expandedReference { layout7Evolution(pokemon: pokemon, catalog: catalog) }
             else { evolutionLine(pokemon: pokemon, catalog: catalog) }
-            if layout == .layout10 || layout == .layout11 {
+            if layout == .layout10 || layout == .layout11 || layout == .layout12 {
                 BoundRRDexCompactMatchups(pokemon: pokemon, catalog: catalog,
-                                         identifier: "bound.rrdex-layout\(layout.rawValue)-matchups")
+                                         identifier: "bound.rrdex-layout\(layout.rawValue)-matchups",
+                                         usesFullTypeColors: layout == .layout12)
             }
-            if layout == .layout9 || layout == .layout10 || layout == .layout11 { inlineLearnset(pokemon: pokemon, catalog: catalog) }
+            if layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12 { inlineLearnset(pokemon: pokemon, catalog: catalog) }
         }
     }
 
@@ -1484,13 +1489,26 @@ private struct BoundRRDexSprite: View {
 }
 private struct BoundRRDexTypePill: View {
     let type: BoundRRDexType
+    var usesFullColor = false
+    private var hex: UInt32 { UInt32(type.color.dropFirst(), radix: 16) ?? 0x777777 }
     private var color: Color {
-        let hex = UInt32(type.color.dropFirst(), radix: 16) ?? 0x777777
         return Color(red: Double((hex >> 16) & 255) / 255, green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255)
     }
+    private var textColor: Color {
+        guard usesFullColor else { return .primary }
+        // Choose readable text without altering the source type's RGB color.
+        func linear(_ component: UInt32) -> Double {
+            let value = Double(component) / 255
+            return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        let luminance = 0.2126 * linear((hex >> 16) & 255)
+            + 0.7152 * linear((hex >> 8) & 255) + 0.0722 * linear(hex & 255)
+        return luminance > 0.179 ? .black : .white
+    }
     var body: some View {
-        Text(type.name).font(.system(size: 10, weight: .semibold)).foregroundStyle(.primary)
-            .padding(.horizontal, 7).padding(.vertical, 3).background(color.opacity(0.23), in: Capsule())
+        Text(type.name).font(.system(size: 10, weight: .semibold)).foregroundStyle(textColor)
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(color.opacity(usesFullColor ? 1 : 0.23), in: Capsule())
     }
 }
 private struct BoundRRDexDetail<Content: View>: View {
@@ -1537,11 +1555,12 @@ struct BoundRRDexMatchups: View {
     }
 }
 
-/// Compact type-only matchups shared by the Layout 10 and 11 reference cards.
+/// Compact type-only matchups shared by the Layout 10–12 reference cards.
 struct BoundRRDexCompactMatchups: View {
     let pokemon: BoundRRDexSpecies
     let catalog: BoundRRDexCatalog
     let identifier: String
+    var usesFullTypeColors = false
 
     var body: some View {
         let matchups = catalog.defensiveMatchups(for: pokemon)
@@ -1560,7 +1579,7 @@ struct BoundRRDexCompactMatchups: View {
                             .padding(.top, 3).frame(width: 76, alignment: .leading)
                         BoundRRDexTypeFlowLayout {
                             ForEach(entries) { entry in
-                                BoundRRDexTypePill(type: entry.type)
+                                BoundRRDexTypePill(type: entry.type, usesFullColor: usesFullTypeColors)
                                     .accessibilityLabel(entry.type.name)
                                     .accessibilityValue(entry.label)
                                     .accessibilityIdentifier("\(identifier)-\(group.lowercased())-type-\(entry.type.id)")

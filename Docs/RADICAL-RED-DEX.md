@@ -14,7 +14,7 @@ Weaknesses and learnsets open native sheets; editing and presentations use the
 existing input cancellation and emulation pause/resume coordinator.
 
 In **Bound Settings → Reference layouts**, RR Dex has its own saved choice of
-Layouts 1 through 11. Layout 1 remains the default and preserves the original card.
+Layouts 1 through 12. Layout 1 remains the default and preserves the original card.
 Layout 2 pins species and tappable ability names while matchup summaries, base
 stats and evolutions scroll below. Layout 3 places Weaknesses and Learnset beside
 the Dynamic Island, compacts the species and abilities, and anchors import/info
@@ -62,6 +62,9 @@ learnset. Level Up, TM/HM, Tutor and the other available methods start collapsed
 opening one closes the previously open method. Each header shows its move count,
 and search filters both the visible methods and their moves. Choosing another
 Pokémon or reopening the Dex resets every method to collapsed.
+Layout 12 copies Layout 11, removes the empty-search instructional sentence,
+and renders the compact matchup pills in the source type colors at full opacity
+in both light and dark mode. Pill text uses black or white for contrast.
 Automatic save refresh continues when the Dex opens, after game saves or state
 loads, and when the app returns to the foreground.
 The selection changes presentation only, keeping the same RR 4.1 data and

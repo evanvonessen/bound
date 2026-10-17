@@ -2027,6 +2027,182 @@ final class CompanionUITests: XCTestCase {
         }
     }
 
+    func testLayout12BossAndDexInteractions() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+
+        openBoundSettings(in: app)
+        let bossLayout = app.segmentedControls["bound.boss-layout"]
+        scrollToSetting(bossLayout, in: app); bossLayout.buttons["12"].tap()
+        let dexLayout = app.segmentedControls["bound.rrdex-layout"]
+        scrollToSetting(dexLayout, in: app); dexLayout.buttons["12"].tap()
+        var originalEnabledStates: [String: Bool] = [:]
+        for content in ["bosses", "dex"] {
+            let toggle = app.switches["bound.companion-enabled.\(content)"]
+            scrollToSetting(toggle, in: app)
+            XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+            originalEnabledStates[content] = toggle.value as? String == "1"
+            if toggle.value as? String != "1" {
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+        }
+        closeBoundSheet(in: app)
+        defer {
+            app.terminate(); app.launch()
+            setExperimentalFeatures(false, in: app)
+            app.terminate()
+        }
+
+        selectCompanion("Bosses", in: app)
+        let bossCard = element("bound.boss-guide", in: app)
+        XCTAssertEqual(bossCard.value as? String, "Layout 12")
+        let picker = app.buttons["bound.boss-picker"]
+        func chooseBoss(id: String, search: String) {
+            picker.tap()
+            let field = app.searchFields.firstMatch
+            XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(search)
+            let row = app.buttons["bound.boss-select-\(id)"]
+            XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+            XCTAssertTrue(field.waitForNonExistence(timeout: 5))
+        }
+        chooseBoss(id: "johto-leaders-4", search: "Falkner")
+        let previousTrainer = app.buttons["bound.boss-previous-trainer"]
+        let nextTrainer = app.buttons["bound.boss-next-trainer"]
+        XCTAssertTrue(previousTrainer.isHittable); XCTAssertTrue(nextTrainer.isHittable,
+                      "Layout 12 keeps the chronological trainer controls from Layout 11.")
+        nextTrainer.tap()
+        XCTAssertTrue(picker.label.contains("Brock"))
+        previousTrainer.tap()
+        XCTAssertTrue(picker.label.contains("Falkner"))
+
+        // Compare the team sprite target against Layout 11 for the same encounter.
+        let teamIcon = app.buttons["bound.boss-team-member-0"]
+        XCTAssertTrue(teamIcon.isHittable)
+        let layout12IconFrame = teamIcon.frame
+        XCTAssertGreaterThanOrEqual(layout12IconFrame.width, 44)
+        XCTAssertGreaterThanOrEqual(layout12IconFrame.height, 44)
+        openBoundSettings(in: app)
+        scrollToSetting(bossLayout, in: app); bossLayout.buttons["11"].tap()
+        closeBoundSheet(in: app)
+        XCTAssertEqual(bossCard.value as? String, "Layout 11")
+        let layout11Icon = app.buttons["bound.boss-team-member-0"]
+        XCTAssertTrue(layout11Icon.isHittable)
+        XCTAssertGreaterThan(layout12IconFrame.width, layout11Icon.frame.width,
+                             "Layout 12 gives the team sprites more room than Layout 11.")
+        openBoundSettings(in: app)
+        scrollToSetting(bossLayout, in: app); bossLayout.buttons["12"].tap()
+        closeBoundSheet(in: app)
+        XCTAssertEqual(bossCard.value as? String, "Layout 12")
+
+        // The existing row category identifiers expose Layout 12's clearer labels.
+        chooseBoss(id: "kanto-leaders-4", search: "Brock")
+        XCTAssertEqual(app.staticTexts["bound.boss-move-category-0"].label, "Atk")
+        chooseBoss(id: "kanto-leaders-27", search: "Misty")
+        XCTAssertEqual(app.staticTexts["bound.boss-move-3"].label, "Grass Knot")
+        XCTAssertEqual(app.staticTexts["bound.boss-move-category-3"].label, "SpAtk")
+
+        selectCompanion("Dex", in: app)
+        let dexCard = element("bound.rrdex", in: app)
+        XCTAssertEqual(dexCard.value as? String, "Layout 12")
+        app.buttons["bound.rrdex-search-open"].tap()
+        let speciesSearch = app.textFields["bound.rrdex-search"]
+        XCTAssertTrue(speciesSearch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Search Pokémon by name."].exists,
+                       "Layout 12 removes the empty-state search instruction.")
+        speciesSearch.tap(); speciesSearch.typeText("bulbasaur")
+        let bulbasaur = app.buttons["bound.rrdex-suggestion-1"]
+        XCTAssertTrue(bulbasaur.waitForExistence(timeout: 5)); bulbasaur.tap()
+        XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Bulbasaur")
+
+        let details = app.scrollViews["bound.rrdex-layout12-details"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        func reveal(_ target: XCUIElement, downward: Bool = true, scrollX: CGFloat = 0.8) {
+            for _ in 0..<14 {
+                if target.isHittable && details.frame.contains(target.frame) { break }
+                let below = target.exists ? target.frame.midY > details.frame.midY : downward
+                details.coordinate(withNormalizedOffset: CGVector(dx: scrollX, dy: below ? 0.8 : 0.4))
+                    .press(forDuration: 0.1, thenDragTo: details.coordinate(withNormalizedOffset: CGVector(dx: scrollX, dy: below ? 0.4 : 0.8)),
+                           withVelocity: .slow, thenHoldForDuration: 0.2)
+                Thread.sleep(forTimeInterval: 0.5)
+            }
+            XCTAssertTrue(target.isHittable)
+            XCTAssertTrue(details.frame.contains(target.frame))
+        }
+        let levelUp = app.buttons["bound.rrdex-layout12-learnset-method-Level up"]
+        let machines = app.buttons["bound.rrdex-layout12-learnset-method-TM/HM"]
+        let tutor = app.buttons["bound.rrdex-layout12-learnset-method-Tutor"]
+        let rows = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "bound.rrdex-layout12-learnset-move-")
+        )
+        for header in [levelUp, machines, tutor] {
+            reveal(header)
+            XCTAssertEqual(header.value as? String, "Collapsed")
+        }
+        XCTAssertFalse(rows.firstMatch.exists, "Layout 12 starts with its learnset sections collapsed.")
+        tutor.tap()
+        XCTAssertEqual(tutor.value as? String, "Expanded")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
+        reveal(machines, downward: false)
+        machines.tap()
+        XCTAssertEqual(machines.value as? String, "Expanded")
+        // Close the new section before scrolling back to verify the old one collapsed.
+        reveal(machines, downward: false); machines.tap()
+        reveal(tutor)
+        XCTAssertEqual(tutor.value as? String, "Collapsed")
+        reveal(machines, downward: false); machines.tap()
+        reveal(levelUp, downward: false); levelUp.tap()
+        XCTAssertEqual(levelUp.value as? String, "Expanded")
+        levelUp.tap()
+        reveal(machines)
+        XCTAssertEqual(machines.value as? String, "Collapsed")
+        reveal(tutor)
+        XCTAssertEqual(tutor.value as? String, "Collapsed")
+        XCTAssertFalse(rows.firstMatch.exists)
+        let searchToggle = app.buttons["bound.rrdex-layout12-learnset-search-toggle"]
+        reveal(searchToggle, downward: false); searchToggle.tap()
+        let moveSearch = app.textFields["bound.rrdex-layout12-learnset-search"]
+        XCTAssertTrue(moveSearch.waitForExistence(timeout: 5))
+        moveSearch.tap(); moveSearch.typeText("solar")
+        moveSearch.typeText("\n")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5),
+                      "Submitting the move query dismisses the keyboard before the learnset scrolls.")
+        reveal(tutor)
+        tutor.tap()
+        XCTAssertEqual(tutor.value as? String, "Expanded")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(rows.firstMatch.label.localizedCaseInsensitiveContains("solar"),
+                      "Layout 12 preserves searchable learnset results.")
+
+        // The open search field fills the scroll view horizontally. Start at the left
+        // gutter so this drag reaches the ScrollView instead of the text field.
+        reveal(searchToggle, downward: false, scrollX: 0.02); searchToggle.tap()
+        XCTAssertTrue(moveSearch.waitForNonExistence(timeout: 5), "Close move search before opening Settings.")
+
+        openBoundSettings(in: app)
+        for (content, wasEnabled) in originalEnabledStates {
+            let toggle = app.switches["bound.companion-enabled.\(content)"]
+            scrollToSetting(toggle, in: app)
+            if (toggle.value as? String == "1") != wasEnabled {
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+        }
+        closeBoundSheet(in: app)
+    }
+
     func testLayout9InlineLearnsetSearchAndAutomaticRandomizedMoves() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []

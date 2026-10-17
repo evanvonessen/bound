@@ -30,7 +30,7 @@ stay separate. Search opens matching groups while keeping their alternatives
 available; the currently selected encounter opens when the picker returns.
 Unlabeled source alternatives retain neutral Team 1/2/3 labels.
 
-**Bound Settings → Reference layouts → Boss View** chooses between eleven saved
+**Bound Settings → Reference layouts → Boss View** chooses between twelve saved
 presentations independently of RR Dex. Layout 1 preserves the original card and
 is the default. Layout 2 adds source-derived battle-condition badges, a tappable
 opposing-team strip, ability and item description buttons, a typing-matchup
@@ -93,6 +93,12 @@ team, with alternatives available in Choose boss. The source links resolve to
 96 distinct listed trainers through Champion Rival. Arrows disable at either
 endpoint and for encounters without a published position, including postgame
 fights, which remain in Choose boss.
+Layout 12 copies Layout 11, abbreviates move damage categories as `Atk`, `SpAtk`
+and `Status`, and gives the team-member buttons more of the available row width.
+Buttons have a minimum 44-point target; narrow panels put the team strip below
+the selected Pokémon, with horizontal scrolling available at the smallest widths.
+Its compact matchup pills use the source type colors at full opacity in both
+light and dark mode, with black or white text chosen for contrast.
 
 Trainer icons are unchanged original game sprites from the
 [Pokémon Showdown trainer directory](https://play.pokemonshowdown.com/sprites/trainers/).

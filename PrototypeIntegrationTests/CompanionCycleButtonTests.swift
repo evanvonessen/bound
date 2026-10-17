@@ -89,7 +89,7 @@ final class CompanionCycleButtonTests: XCTestCase {
                 XCTAssertGreaterThan(try XCTUnwrap(snapshot.pngData()).count, 5000)
                 let attachment = XCTAttachment(image: snapshot)
                 attachment.name = "RRDex-hosted-layout-\(layout.rawValue)-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
-                if layout == .layout10 || layout == .layout11, name == "island-portrait" {
+                if layout == .layout10 || layout == .layout11 || layout == .layout12, name == "island-portrait" {
                     try captureInlineMatchupScroll(in: host.view, size: size, layout: layout, name: "light")
                 }
                 if layout.rawValue >= 8 {
@@ -99,7 +99,7 @@ final class CompanionCycleButtonTests: XCTestCase {
                     let darkSnapshot = renderer.image { _ in host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true) }
                     let darkAttachment = XCTAttachment(image: darkSnapshot)
                     darkAttachment.name = "RRDex-hosted-layout-\(layout.rawValue)-\(name)-dark"; darkAttachment.lifetime = .keepAlways; add(darkAttachment)
-                    if layout == .layout10 || layout == .layout11, name == "island-portrait" {
+                    if layout == .layout10 || layout == .layout11 || layout == .layout12, name == "island-portrait" {
                         try captureInlineMatchupScroll(in: host.view, size: size, layout: layout, name: "dark")
                     }
                 }
@@ -147,6 +147,9 @@ final class CompanionCycleButtonTests: XCTestCase {
                 XCTAssertGreaterThan(try XCTUnwrap(snapshot.pngData()).count, 5000)
                 let attachment = XCTAttachment(image: snapshot)
                 attachment.name = "Boss-guide-hosted-layout-\(layout.rawValue)-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
+                if layout == .layout12, name == "island-portrait" {
+                    try captureBossMatchupScroll(in: host.view, size: size, layout: layout, name: "light")
+                }
                 if layout.rawValue >= 8 {
                     host.overrideUserInterfaceStyle = .dark
                     host.view.setNeedsLayout(); host.view.layoutIfNeeded()
@@ -154,6 +157,9 @@ final class CompanionCycleButtonTests: XCTestCase {
                     let darkSnapshot = renderer.image { _ in host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true) }
                     let darkAttachment = XCTAttachment(image: darkSnapshot)
                     darkAttachment.name = "Boss-guide-hosted-layout-\(layout.rawValue)-\(name)-dark"; darkAttachment.lifetime = .keepAlways; add(darkAttachment)
+                    if layout == .layout12, name == "island-portrait" {
+                        try captureBossMatchupScroll(in: host.view, size: size, layout: layout, name: "dark")
+                    }
                 }
                 if name == "compact-portrait" { try checkCompactCardScrolls(in: host.view, size: size, name: "Boss-guide") }
                 if layout.rawValue >= 7, name == "narrow-portrait" {
@@ -224,6 +230,25 @@ final class CompanionCycleButtonTests: XCTestCase {
         }
         let attachment = XCTAttachment(image: snapshot)
         attachment.name = "RRDex-layout\(layout.rawValue)-matchups-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
+    }
+
+    private func captureBossMatchupScroll(in view: UIView, size: CGSize, layout: BoundReferenceLayout, name: String) throws {
+        func scrollingContent(in view: UIView) -> UIScrollView? {
+            if let scroll = view as? UIScrollView, scroll.contentSize.height > scroll.bounds.height + 1 { return scroll }
+            return view.subviews.lazy.compactMap { scrollingContent(in: $0) }.first
+        }
+        let scroll = try XCTUnwrap(scrollingContent(in: view), "The Boss View matchup summary needs a scroll view.")
+        let originalOffset = scroll.contentOffset
+        defer { scroll.setContentOffset(originalOffset, animated: false) }
+        let targetOffset = min(250, max(0, scroll.contentSize.height - scroll.bounds.height))
+        scroll.setContentOffset(CGPoint(x: 0, y: targetOffset), animated: false)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        view.layoutIfNeeded()
+        let snapshot = UIGraphicsImageRenderer(size: size).image { _ in
+            view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: snapshot)
+        attachment.name = "Boss-guide-layout\(layout.rawValue)-matchups-\(name)"; attachment.lifetime = .keepAlways; add(attachment)
     }
 
     func testDexSearchDisablesCorrectionCapitalizationSpellingAndSmartEdits() {
