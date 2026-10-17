@@ -213,3 +213,193 @@ final class FriendModerationIntegrationTests: XCTestCase {
         model.close()
     }
 }
+
+@MainActor
+final class FriendTapToShareIntegrationTests: XCTestCase {
+    func testExperimentalFriendTapStartsOnceSwitchesRoomsAndCanRetryAfterStop() async throws {
+        let preferences = BoundExperimentalFeaturesPreferences()
+        let previousExperimentalState = preferences.isEnabled
+        preferences.isEnabled = true
+        defer { preferences.isEnabled = previousExperimentalState }
+
+        let owner = UUID()
+        let identity = try makeIdentity(owner: owner)
+        let first = FriendRoom(roomID: UUID().uuidString, displayName: "First Friend")
+        let second = FriendRoom(roomID: UUID().uuidString, displayName: "Second Friend")
+        let transport = FriendTapSharingTransport()
+        var requestedRooms: [String] = []
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+                requestedRooms.append(room)
+                return self.makeLease(room: room, owner: session.owner, request: requestedRooms.count)
+            })
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            action == "list" ? FriendResponse(ok: true, rooms: [first, second]) : FriendResponse(ok: false)
+        }, observeAccount: { OnboardingObservation($0) })
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+
+        onboarding.select(first, startSharing: true)
+        await waitUntil { transport.configurations.count == 1 }
+        XCTAssertEqual(requestedRooms, [first.roomID])
+        XCTAssertEqual(transport.configurations.first?.channel, "friend-tap-1")
+        XCTAssertTrue(sharing.active)
+
+        onboarding.select(first, startSharing: true)
+        await settle()
+        XCTAssertEqual(requestedRooms.count, 1, "Tapping the active selected friend must not restart sharing")
+        XCTAssertEqual(transport.configurations.count, 1)
+
+        onboarding.select(second, startSharing: true)
+        await waitUntil { transport.configurations.count == 2 }
+        XCTAssertEqual(requestedRooms, [first.roomID, second.roomID])
+        XCTAssertEqual(transport.configurations.last?.channel, "friend-tap-2")
+        XCTAssertEqual(onboarding.selected, second)
+
+        sharing.stop()
+        XCTAssertFalse(sharing.active)
+        onboarding.select(second, startSharing: true)
+        await waitUntil { transport.configurations.count == 3 }
+        XCTAssertEqual(requestedRooms, [first.roomID, second.roomID, second.roomID], "A stopped session can be retried from the selected friend")
+        XCTAssertTrue(sharing.active)
+        onboarding.close()
+        sharing.stop()
+    }
+
+    func testSelectionNeverAutostartsWhenExperimentalFeaturesAreOff() async throws {
+        let preferences = BoundExperimentalFeaturesPreferences()
+        let previousExperimentalState = preferences.isEnabled
+        preferences.isEnabled = false
+        defer { preferences.isEnabled = previousExperimentalState }
+
+        let owner = UUID()
+        let identity = try makeIdentity(owner: owner)
+        let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
+        let transport = FriendTapSharingTransport()
+        var tokenRequests = 0
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+                tokenRequests += 1
+                return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
+            })
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            action == "list" ? FriendResponse(ok: true, rooms: [friend]) : FriendResponse(ok: false)
+        }, observeAccount: { OnboardingObservation($0) })
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+
+        onboarding.select(friend, startSharing: true)
+        await settle()
+        XCTAssertEqual(onboarding.selected, friend, "Selection remains available while experimental sharing is disabled")
+        XCTAssertFalse(sharing.active)
+        XCTAssertEqual(tokenRequests, 0)
+        XCTAssertTrue(transport.configurations.isEmpty)
+        onboarding.close()
+    }
+
+    func testInvalidUnlistedBusyAndSignedOutSelectionCannotStartAndAcceptedInviteStaysIdle() async throws {
+        let preferences = BoundExperimentalFeaturesPreferences()
+        let previousExperimentalState = preferences.isEnabled
+        preferences.isEnabled = true
+        defer { preferences.isEnabled = previousExperimentalState }
+
+        let owner = UUID()
+        var identity: AppCloudSession? = try makeIdentity(owner: owner)
+        let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Listed Friend")
+        let accepted = FriendRoom(roomID: UUID().uuidString, displayName: "Invited Friend")
+        let unlisted = FriendRoom(roomID: UUID().uuidString, displayName: "Unlisted Friend")
+        let invalid = FriendRoom(roomID: "not-a-room", displayName: "Invalid Friend")
+        let transport = FriendTapSharingTransport()
+        var tokenRequests = 0
+        var holdReport = false
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+                tokenRequests += 1
+                return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
+            })
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            switch action {
+            case "list": return FriendResponse(ok: true, rooms: [friend])
+            case "accept": return FriendResponse(ok: true, room: accepted)
+            case "report":
+                if holdReport { try? await Task.sleep(nanoseconds: 150_000_000) }
+                return FriendResponse(ok: true, reportID: UUID())
+            default: return FriendResponse(ok: false)
+            }
+        }, observeAccount: { OnboardingObservation($0) })
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+
+        onboarding.select(invalid, startSharing: true)
+        onboarding.select(unlisted, startSharing: true)
+        XCTAssertNil(onboarding.selected)
+        XCTAssertEqual(tokenRequests, 0)
+        XCTAssertTrue(transport.configurations.isEmpty)
+
+        holdReport = true
+        onboarding.report(friend, reason: .other)
+        XCTAssertTrue(onboarding.busy)
+        onboarding.select(friend, startSharing: true)
+        XCTAssertNil(onboarding.selected)
+        XCTAssertEqual(tokenRequests, 0, "A busy onboarding action blocks tap-to-share")
+        await waitUntil { !onboarding.busy }
+
+        identity = nil
+        onboarding.synchronizeAccount()
+        onboarding.select(friend, startSharing: true)
+        XCTAssertNil(onboarding.selected)
+        XCTAssertEqual(tokenRequests, 0, "A signed-out account cannot start sharing")
+        identity = try makeIdentity(owner: owner)
+        onboarding.synchronizeAccount()
+        await waitUntil { !onboarding.busy }
+
+        onboarding.accept(code: "0123456789ABCDEF", name: "Invited Friend")
+        await waitUntil { !onboarding.busy && onboarding.selected == accepted }
+        XCTAssertEqual(onboarding.selected, accepted)
+        XCTAssertFalse(sharing.active)
+        XCTAssertEqual(tokenRequests, 0, "Accepting an invitation selects the room without starting a share")
+        XCTAssertTrue(transport.configurations.isEmpty)
+        onboarding.close()
+    }
+
+    private func makeIdentity(owner: UUID) throws -> AppCloudSession {
+        let claims = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
+        let payload = claims.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        return try AppCloudSession(owner: owner, key: "fixture-public-key", token: "fixture.\(payload).signature")
+    }
+
+    private func makeLease(room: String, owner: UUID, request: Int) -> FriendSharingTokenLease {
+        FriendSharingTokenLease(roomID: room, ownerID: owner,
+            appID: String(repeating: "0", count: 32), channel: "friend-tap-\(request)", uid: 1, remoteUID: 2,
+            token: "fixture-token-\(request)", issuedAt: Date().timeIntervalSince1970,
+            expiresAt: Date().timeIntervalSince1970 + 90)
+    }
+
+    private func waitUntil(_ condition: @MainActor () -> Bool) async {
+        for _ in 0..<2_000 {
+            if condition() { return }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+    }
+
+    private func settle() async { try? await Task.sleep(nanoseconds: 30_000_000) }
+}
+
+@MainActor
+private final class FriendTapSharingTransport: FriendSharingTransport {
+    private(set) var configurations: [FriendSharingConfiguration] = []
+    var publishedFrames: Int { 0 }
+    var receivedFrames: Int { 0 }
+    var diagnostics: [String: Any] { [:] }
+
+    func start(configuration: FriendSharingConfiguration, remoteView: UIView,
+               event: @escaping @MainActor (FriendSharingEvent) -> Void) {
+        configurations.append(configuration)
+        event(.joined)
+    }
+
+    func stop() {}
+    func send(_ frame: SharingFrame, completion: @escaping @MainActor (Result<Void, SharingFailure>) -> Void) -> any SharingCancellation {
+        OnboardingObservation({})
+    }
+}

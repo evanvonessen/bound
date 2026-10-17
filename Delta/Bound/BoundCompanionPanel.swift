@@ -813,11 +813,12 @@ private struct BoundFriendsSheet: View {
     @State private var reportingRoom: FriendRoom?
     @State private var blockingRoom: FriendRoom?
     @State private var removingRoom: FriendRoom?
+    @State private var showingUsernameHelp = false
     var closed: () -> Void = {}
     var body: some View {
         NavigationStack {
             Form {
-                Section("Bound account") {
+                Section {
                     if account.deletionPending {
                         Button("Retry account deletion", role: .destructive) {
                             Task { await account.resumeAccountDeletion(); onboarding.synchronizeAccount() }
@@ -835,14 +836,49 @@ private struct BoundFriendsSheet: View {
                     } else {
                         Button("Sign out") { BoundJiggleNotifications.shared.prepareForSignOut(); sharing.stop(); onboarding.signOut(); account.signOut() }.disabled(account.busy)
                     }
-                    Text(account.status).font(.caption)
+                    if !experimentalFeaturesEnabled || account.session == nil || account.status != "Signed in." {
+                        Text(account.status).font(.caption)
+                    }
+                } header: {
+                    if experimentalFeaturesEnabled && account.session != nil {
+                        HStack(spacing: 8) {
+                            Text(onboarding.accountUsername.map { "Hello \($0)" } ?? "Hello")
+                                .accessibilityIdentifier("bound.friends-greeting")
+                            if showingUsernameHelp {
+                                Text("Change your username in Library Settings.")
+                                    .font(.caption).fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityIdentifier("bound.username-help-message")
+                            } else {
+                                Button {
+                                    showingUsernameHelp = true
+                                } label: {
+                                    Image(systemName: "info.circle")
+                                        .font(.body)
+                                        .frame(minWidth: 44, minHeight: 44)
+                                }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("How to change your username")
+                                .accessibilityIdentifier("bound.username-help")
+                            }
+                        }.textCase(nil).frame(minHeight: 44)
+                    } else {
+                        Text("Bound account")
+                    }
                 }
                 if account.session != nil {
                     Section("Friends") {
-                        Text(onboarding.message).font(.caption)
+                        if !experimentalFeaturesEnabled || !onboarding.message.isEmpty {
+                            Text(onboarding.message).font(.caption)
+                        }
                         ForEach(onboarding.rooms) { room in
                             HStack {
-                                Button(room.displayName) { onboarding.select(room) }
+                                if experimentalFeaturesEnabled {
+                                    Button(room.displayName) { onboarding.select(room, startSharing: true) }
+                                        .buttonStyle(.borderless)
+                                        .accessibilityHint("Starts sharing your game with this friend")
+                                } else {
+                                    Button(room.displayName) { onboarding.select(room) }
+                                }
                                 Spacer()
                                 Menu {
                                     if experimentalFeaturesEnabled {
@@ -856,7 +892,11 @@ private struct BoundFriendsSheet: View {
                             }.disabled(onboarding.busy)
                         }
                         Button("Refresh") { onboarding.refresh() }.disabled(onboarding.busy)
-                        if onboarding.selected != nil {
+                        if experimentalFeaturesEnabled {
+                            if sharing.active {
+                                Button("Stop sharing") { sharing.stop() }
+                            }
+                        } else if onboarding.selected != nil {
                             Button(sharing.active ? "Stop sharing" : "Start sharing") {
                                 if sharing.active { sharing.stop() } else { sharing.start() }
                             }
@@ -874,10 +914,7 @@ private struct BoundFriendsSheet: View {
                         }
                     }
                     Section("Add a friend") {
-                        if experimentalFeaturesEnabled {
-                            LabeledContent("Your username", value: onboarding.accountUsername ?? "Loading…")
-                            Text("Change your username in Library Settings.").font(.caption).foregroundStyle(.secondary)
-                        } else {
+                        if !experimentalFeaturesEnabled {
                             TextField("Your display name", text: $name)
                         }
                         Button("Create invite") { onboarding.create(name: name) }
@@ -925,13 +962,21 @@ private struct BoundFriendsSheet: View {
         }
         .onChange(of: experimentalFeaturesEnabled) { _, _ in
             removingRoom = nil
+            showingUsernameHelp = false
             onboarding.experimentalFeaturesChanged()
+        }
+        .onChange(of: account.session?.owner) { _, _ in showingUsernameHelp = false }
+        .task(id: showingUsernameHelp) {
+            guard showingUsernameHelp else { return }
+            do { try await Task.sleep(for: .seconds(10)) }
+            catch { return }
+            showingUsernameHelp = false
         }
         .onChange(of: scenePhase) { phase in
             if phase == .active { onboarding.open(sharing: sharing, existing: { account.session }) }
-            else { onboarding.close() }
+            else { showingUsernameHelp = false; onboarding.close() }
         }
-        .onDisappear { password = ""; onboarding.close(); closed() }
+        .onDisappear { password = ""; showingUsernameHelp = false; onboarding.close(); closed() }
         .interactiveDismissDisabled(account.busy)
         .sheet(item: $reportingRoom) { room in BoundReportView(onboarding: onboarding, room: room) }
         .confirmationDialog("Remove this friend?", isPresented: Binding(get: { removingRoom != nil }, set: { if !$0 { removingRoom = nil } }), titleVisibility: .visible) {

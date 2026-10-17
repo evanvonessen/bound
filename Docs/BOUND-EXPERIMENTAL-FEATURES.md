@@ -63,6 +63,12 @@ erasing the saved choice; ordinary manual fast forward remains available.
 
 The Friends sheet also shows a clipboard button beside a generated invite code
 when experiments are enabled. It copies just the code, ready to paste.
+Its signed-in account header greets the user by username, with an information
+button that shows username-editing instructions for ten seconds. Tapping a
+friend starts sharing immediately; Stop sharing remains available while active.
+Accepting an invite only adds and selects the friend, without starting sharing.
+With experiments off, the original account text and explicit Start sharing
+button remain.
 
 The same opt-in adds account usernames (Library Settings), Remove Friend and
 Jiggle actions, and restoration of sharing that was active before backgrounding.

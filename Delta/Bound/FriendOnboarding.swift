@@ -173,11 +173,18 @@ final class FriendOnboarding: ObservableObject {
         rooms = []; blocks = []; selected = nil; accountUsername = nil; message = "Sign in above to add a friend."
         sharing?.configureAuthenticatedRoom(nil, identity: { nil })
     }
-    func select(_ room: FriendRoom) {
+    func select(_ room: FriendRoom, startSharing: Bool = false) {
         guard !busy, room.valid, rooms.contains(room), currentIdentity() != nil else { return }
+        let startsImmediately = startSharing && BoundFeatureVisibility.experimentalFeaturesEnabled
+        // Repeated taps on the current friend must not interrupt a live session.
+        if startsImmediately, selected?.roomID == room.roomID, sharing?.active == true {
+            message = ""
+            return
+        }
         selected = room
         sharing?.configureAuthenticatedRoom(room.roomID, identity: { [weak self] in self?.sharingIdentity() })
-        message = "Ready to share with \(room.displayName)."
+        message = startsImmediately ? "" : "Ready to share with \(room.displayName)."
+        if startsImmediately && permitsRTC { sharing?.start() }
     }
     func refresh() {
         guard !busy else { return }
