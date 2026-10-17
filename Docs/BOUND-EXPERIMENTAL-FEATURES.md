@@ -29,6 +29,13 @@ selects the first enabled view; turning every view off hides the companion while
 leaving the Bound button and pause-menu Settings available. Turning experiments
 off restores the Build 13 Friend/Notes/Types cycle without erasing these choices.
 
+The **Bound button** section offers four saved portrait button types. Option 1
+keeps the original round button and placement. Options 2, 3 and 4 use tall,
+slim and wider rounded rectangles, respectively, with the native controls'
+silver material, dark bezel and pressed feedback. The larger hit regions avoid
+native game inputs. Landscape keeps its existing button. Turning experiments
+off restores Option 1 without erasing the saved choice.
+
 The **Reference layouts** section in Bound Settings has independent six-way
 selectors for **RR Dex** and **Boss View**. Both default to **Layout 1**, preserving
 the original presentation. Choices persist on this device across app launches

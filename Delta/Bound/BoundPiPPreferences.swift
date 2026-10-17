@@ -42,6 +42,37 @@ enum BoundReferenceLayoutPreferences {
     static let dexKey = "bound.delta.pip.v1.dex.layout"
 }
 
+enum BoundCompanionButtonType: Int, CaseIterable, Sendable {
+    case option1 = 1, option2 = 2, option3 = 3, option4 = 4
+    var title: String { "Option \(rawValue)" }
+    var summary: String {
+        switch self {
+        case .option1: "The original round button and placement."
+        case .option2: "A tall rounded rectangle."
+        case .option3: "A slimmer, shorter rounded rectangle."
+        case .option4: "A wider rounded rectangle, set slightly inward."
+        }
+    }
+}
+
+final class BoundCompanionButtonPreferences {
+    static let key = "bound.delta.pip.v1.button-type"
+    static let didChangeNotification = Notification.Name("BoundCompanionButtonDidChange")
+    private let defaults: UserDefaults
+    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    var buttonType: BoundCompanionButtonType {
+        get { BoundCompanionButtonType(rawValue: defaults.integer(forKey: Self.key)) ?? .option1 }
+        set {
+            guard buttonType != newValue else { return }
+            defaults.set(newValue.rawValue, forKey: Self.key)
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
+        }
+    }
+    var effectiveButtonType: BoundCompanionButtonType {
+        BoundExperimentalFeaturesPreferences(defaults: defaults).isEnabled ? buttonType : .option1
+    }
+}
+
 @MainActor
 final class BoundPiPPreferences {
     private let defaults: UserDefaults

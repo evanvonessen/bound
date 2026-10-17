@@ -1,6 +1,7 @@
 import XCTest
 import UIKit
 import SwiftUI
+import DeltaCore
 @testable import Delta
 
 @MainActor
@@ -262,6 +263,32 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(field.inlinePredictionType, .no)
     }
 
+    func testCompanionButtonTypePersistsAndExperimentalGateKeepsOriginalEffectiveStyle() throws {
+        let suite = "BoundCompanionButtonType." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let preferences = BoundCompanionButtonPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.buttonType, .option1, "Existing installs keep the original round button by default.")
+        XCTAssertEqual(preferences.effectiveButtonType, .option1)
+
+        preferences.buttonType = .option4
+        XCTAssertEqual(preferences.buttonType, .option4)
+        XCTAssertEqual(BoundCompanionButtonPreferences(defaults: defaults).buttonType, .option4,
+                       "A newly created preferences object reads the saved choice.")
+        XCTAssertEqual(preferences.effectiveButtonType, .option1,
+                       "Experimental button styles remain inactive while experiments are off.")
+
+        BoundExperimentalFeaturesPreferences(defaults: defaults).isEnabled = true
+        XCTAssertEqual(preferences.effectiveButtonType, .option4)
+        BoundExperimentalFeaturesPreferences(defaults: defaults).isEnabled = false
+        XCTAssertEqual(preferences.buttonType, .option4, "Gating does not erase the user's saved preference.")
+        XCTAssertEqual(preferences.effectiveButtonType, .option1)
+
+        defaults.set(99, forKey: BoundCompanionButtonPreferences.key)
+        XCTAssertEqual(preferences.buttonType, .option1, "Unknown stored values safely fall back to Option 1.")
+    }
+
     func testBossLayout10NatureEffectsCoverBundledNaturesAndFallbacks() throws {
         let catalog = try XCTUnwrap(BoundBossCatalog.bundled)
         let natures = Set(catalog.teams.flatMap { $0.pokemon.map(\.nature) })
@@ -366,6 +393,72 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertFalse(button.isHidden); XCTAssertTrue(canvas.contains(button.frame))
         XCTAssertFalse(button.frame.intersects(blocked)); XCTAssertEqual(button.accessibilityValue, "Types")
     }
+    func testPortraitButtonTypesKeepNativeGBAInputsClearAtCommonWidths() throws {
+        let oldLayout = BoundAppearancePreferences().screenLayout
+        let oldFeedback = Settings.isButtonHapticFeedbackEnabled
+        defer {
+            BoundAppearancePreferences().screenLayout = oldLayout
+            Settings.isButtonHapticFeedbackEnabled = oldFeedback
+        }
+        BoundAppearancePreferences().screenLayout = .bound
+        Settings.isButtonHapticFeedbackEnabled = true
+        let base = try XCTUnwrap(DeltaCore.ControllerSkin.standardControllerSkin(for: System.gba.gameType))
+        let cases: [(CGSize, UIEdgeInsets)] = [
+            (CGSize(width: 320, height: 568), UIEdgeInsets(top: 20, left: 0, bottom: 0, right: 0)),
+            (CGSize(width: 390, height: 844), UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)),
+            (CGSize(width: 402, height: 874), UIEdgeInsets(top: 62, left: 0, bottom: 34, right: 0)),
+            (CGSize(width: 430, height: 932), UIEdgeInsets(top: 62, left: 0, bottom: 34, right: 0)),
+        ]
+        let traits = DeltaCore.ControllerSkin.Traits(device: .iphone, displayType: .edgeToEdge, orientation: .portrait)
+        for (screen, insets) in cases {
+            let aspect = try XCTUnwrap(base.aspectRatio(for: traits))
+            let size = CGSize(width: screen.width, height: screen.width * aspect.height / aspect.width)
+            let controller = CGRect(x: 0, y: screen.height - size.height, width: size.width, height: size.height)
+            let stock = BoundStockControllerSkin(base: base, canvasSize: size)
+            let items = try XCTUnwrap(stock.items(for: traits))
+            let menu = try XCTUnwrap(items.first { $0.inputs.allInputs.contains { $0.stringValue == "menu" } })
+            let select = try XCTUnwrap(items.first { $0.inputs.allInputs.contains { $0.stringValue == "select" } })
+            let selectArtwork = try XCTUnwrap(stock.image(for: select, traits: traits, preferredSize: .large)?.0)
+            let scale = CGAffineTransform(scaleX: size.width, y: size.height)
+            let menuFrame = menu.frame.applying(scale).offsetBy(dx: controller.minX, dy: controller.minY)
+            let menuHitSize = menu.extendedFrame.applying(scale).size
+            let occupied = items.map { $0.extendedFrame.applying(scale).offsetBy(dx: controller.minX, dy: controller.minY) }
+            let canvas = CGRect(origin: .zero, size: screen).inset(by: insets)
+            var silhouettes: Set<String> = []
+            for type in BoundCompanionButtonType.allCases {
+                let button = BoundCompanionCycleButton()
+                button.configure(menuFrame: menuFrame, controllerFrame: controller, landscape: false,
+                    minimal: false, content: .friend, canvas: canvas, occupied: occupied,
+                    menuHitSize: menuHitSize, boundPortrait: true, selectArtwork: selectArtwork,
+                    buttonType: type)
+                XCTAssertFalse(button.isHidden, "\(type.title) has a clear placement at width \(Int(screen.width)).")
+                XCTAssertTrue(canvas.contains(button.frame))
+                XCTAssertGreaterThanOrEqual(button.frame.width, 44)
+                XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+                XCTAssertGreaterThan(button.frame.midX, screen.width * 0.75,
+                                     "The button stays in the lower-right area shown in the reference.")
+                XCTAssertGreaterThanOrEqual(button.frame.maxY, menuFrame.maxY)
+                XCTAssertFalse(occupied.contains { $0.intersects(button.frame) },
+                               "\(type.title) cannot cover a native GBA input at width \(Int(screen.width)).")
+                silhouettes.insert(String(format: "%.1f×%.1f", button.artworkFrame.width, button.artworkFrame.height))
+
+                var feedback = 0, cycles = 0
+                button.buttonFeedback = { feedback += 1 }
+                button.cycle = { cycles += 1 }
+                button.sendActions(for: .touchDown)
+                button.sendActions(for: .touchCancel)
+                XCTAssertEqual(feedback, 0); XCTAssertEqual(cycles, 0,
+                    "Cancelling \(type.title) never advances a companion view.")
+                button.sendActions(for: .touchDown)
+                button.sendActions(for: .touchUpInside)
+                XCTAssertEqual(feedback, 1); XCTAssertEqual(cycles, 1,
+                    "A completed \(type.title) tap retains one feedback and cycle action.")
+            }
+            XCTAssertEqual(silhouettes.count, BoundCompanionButtonType.allCases.count,
+                           "All four styles render distinct shapes at width \(Int(screen.width)).")
+        }
+    }
+
     func testNoClearSpaceDoesNotStealNativeInputsAndRecoversAfterReset() {
         let canvas = CGRect(x: 0, y: 0, width: 200, height: 100)
         let button = BoundCompanionCycleButton()

@@ -2027,6 +2027,79 @@ final class CompanionUITests: XCTestCase {
         }
     }
 
+    func testBoundButtonTypesPersistAndPreserveGameplay() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        func play() {
+            let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+            XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
+            XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+        }
+        play()
+        let picker = app.segmentedControls["bound.companion-button-type"]
+        let cycle = app.buttons["bound.panel-cycle"]
+        let game = element("bound.game-screen", in: app)
+        let originalGameFrame = game.frame
+        func choose(_ option: Int) {
+            openBoundSettings(in: app)
+            scrollToSetting(picker, in: app)
+            picker.buttons[String(option)].tap()
+            XCTAssertTrue(picker.buttons[String(option)].isSelected)
+            if option == 2 { screenshot("Bound-button-type-settings") }
+            closeBoundSheet(in: app)
+            XCTAssertTrue(cycle.isHittable)
+            XCTAssertEqual(game.frame, originalGameFrame, "Changing the Bound button must preserve gameplay placement.")
+        }
+        choose(1)
+        let originalButtonFrame = cycle.frame
+        var frames: [Int: CGRect] = [1: originalButtonFrame]
+        screenshot("Bound-button-option-1")
+        for option in 2...4 {
+            choose(option)
+            frames[option] = cycle.frame
+            XCTAssertTrue(app.frame.contains(cycle.frame))
+            XCTAssertGreaterThanOrEqual(cycle.frame.width, 44)
+            XCTAssertGreaterThan(cycle.frame.height, originalButtonFrame.height * 2)
+            XCTAssertGreaterThan(cycle.frame.midX, app.frame.width * 0.75)
+            XCTAssertGreaterThanOrEqual(cycle.frame.maxY, originalButtonFrame.maxY)
+            XCTAssertFalse(cycle.frame.intersects(game.frame))
+            for id in ["bound.native-menu", "bound.native-l", "bound.native-r"] {
+                XCTAssertFalse(cycle.frame.intersects(element(id, in: app).frame))
+            }
+            screenshot("Bound-button-option-\(option)")
+        }
+        XCTAssertGreaterThan(try XCTUnwrap(frames[2]).height, try XCTUnwrap(frames[3]).height)
+        XCTAssertGreaterThan(try XCTUnwrap(frames[4]).width, try XCTUnwrap(frames[3]).width)
+
+        app.terminate(); app.launch(); play()
+        XCTAssertEqual(cycle.frame, frames[4], "The selected button survives an app relaunch.")
+        openBoundSettings(in: app)
+        scrollToSetting(picker, in: app)
+        XCTAssertTrue(picker.buttons["4"].isSelected)
+        closeBoundSheet(in: app)
+
+        app.terminate(); app.launch(); setExperimentalFeatures(false, in: app); play()
+        XCTAssertEqual(cycle.frame, originalButtonFrame, "Experiments off restores the original button.")
+        openBoundSettings(in: app)
+        XCTAssertFalse(picker.exists)
+        closeBoundSheet(in: app)
+        app.terminate(); app.launch(); setExperimentalFeatures(true, in: app); play()
+        XCTAssertEqual(cycle.frame, frames[4], "Disabling experiments retains the saved button choice.")
+        choose(1)
+        XCTAssertEqual(cycle.frame, originalButtonFrame)
+        app.terminate(); app.launch(); setExperimentalFeatures(false, in: app); app.terminate()
+    }
+
     func testLayout12BossAndDexInteractions() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []

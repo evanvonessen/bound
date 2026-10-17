@@ -154,6 +154,11 @@ final class BoundCompanionCoordinator {
             owner.view.setNeedsLayout()
         })
         observers.append(NotificationCenter.default.addObserver(forName: BoundAppearancePreferences.didChangeNotification, object: nil, queue: .main) { [weak self, weak owner] _ in self?.cancelInteractions(); owner?.view.setNeedsLayout() })
+        observers.append(NotificationCenter.default.addObserver(forName: BoundCompanionButtonPreferences.didChangeNotification, object: nil, queue: .main) { [weak self, weak owner] _ in
+            self?.cancelInteractions()
+            self?.controls?.isHighlighted = false
+            owner?.view.setNeedsLayout()
+        })
         observers.append(NotificationCenter.default.addObserver(forName: BoundExperimentalFeaturesPreferences.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             let enabled = BoundFeatureVisibility.experimentalFeaturesEnabled
             self?.state.updateExperimentalFeatures(enabled)
@@ -358,7 +363,8 @@ final class BoundCompanionCoordinator {
             minimal: BoundAppearancePreferences().effectiveTheme == .minimal, content: state.content,
             canvas: bounds.inset(by: safeArea), occupied: occupied, rightShoulderFrame: rightFrame, menuHitSize: menuHitSize, boundPortrait: boundPortrait, selectArtwork: selectArtwork,
             rightControlGutter: owner.boundLandscapeControlGutter(),
-            menuHitFrame: owner.controllerView.convert(menu.extendedFrame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height)), to: owner.view))
+            menuHitFrame: owner.controllerView.convert(menu.extendedFrame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height)), to: owner.view),
+            buttonType: BoundCompanionButtonPreferences().effectiveButtonType)
         if state.availableContents.isEmpty {
             controls.accessibilityValue = "No views enabled"
             controls.accessibilityHint = "Enable companion views in Bound Settings"
@@ -594,12 +600,29 @@ private struct BoundPiPSettings: View {
     @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     @AppStorage(BoundReferenceLayoutPreferences.dexKey) private var dexLayout = BoundReferenceLayout.layout1
     @AppStorage(BoundReferenceLayoutPreferences.bossKey) private var bossLayout = BoundReferenceLayout.layout1
+    @AppStorage(BoundCompanionButtonPreferences.key) private var buttonType = BoundCompanionButtonType.option1
     var closed: () -> Void = {}
     @Environment(\.dismiss) var dismiss
     var body: some View {
         NavigationStack {
             Form {
                 if experimentsEnabled {
+                    Section {
+                        Picker("Button type", selection: Binding(get: { buttonType }, set: {
+                            guard experimentsEnabled else { return }
+                            BoundCompanionButtonPreferences().buttonType = $0
+                        })) {
+                            ForEach(BoundCompanionButtonType.allCases, id: \.rawValue) { type in
+                                Text(String(type.rawValue)).tag(type)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityIdentifier("bound.companion-button-type")
+                        Text("\(buttonType.title): \(buttonType.summary)")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } header: { Text("Bound button") } footer: {
+                        Text("Choose the portrait Bound button's shape and size. Your choice is saved on this device.")
+                    }
                     Section {
                         ForEach(BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: true), id: \.rawValue) { content in
                             Toggle(content.title, isOn: Binding(get: { state.preferences.isEnabled(content) },
