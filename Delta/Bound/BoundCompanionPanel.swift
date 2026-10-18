@@ -71,6 +71,8 @@ final class BoundCompanionState: ObservableObject {
     @Published private(set) var configuration: BoundCompanionSettingsModel.Configuration
     let settings: BoundCompanionSettingsModel
     private var settingsObservation: AnyCancellable?
+    private var rememberedButtonViews: [BoundCompanionButtonType: [Int: BoundPiPContent]] = [:]
+    private var activeButtons: [BoundCompanionButtonType: Int] = [:]
     var uiVersion: BoundUIVersion { configuration.uiVersion }
     var buttonType: BoundCompanionButtonType { configuration.buttonType }
     @Published var landscape = false
@@ -96,11 +98,21 @@ final class BoundCompanionState: ObservableObject {
         self.preferences = preferences ?? BoundPiPPreferences()
         self.settings = BoundCompanionSettingsModel(preferences: self.preferences)
         self.configuration = settings.configuration
+        reconcileButtonSelections()
         settingsObservation = settings.$configuration.dropFirst().sink { [weak self] configuration in
             guard let self else { return }
-            let previous = self.content
+            var nextContent = self.content
+            let changesButtonStyle = self.buttonType != configuration.buttonType
             self.configuration = configuration
-            self.reconcileSelection(previousContent: previous)
+            // Returning to a split style restores that style's active button,
+            // without replacing its remembered icon with the other style's view.
+            if changesButtonStyle, let button = self.activeButtons[self.buttonType],
+               configuration.assignments.indices.contains(button),
+               let remembered = self.rememberedButtonViews[self.buttonType]?[button],
+               configuration.assignments[button].contains(remembered) {
+                nextContent = remembered
+            }
+            self.reconcileSelection(previousContent: nextContent)
             self.refresh()
         }
     }
@@ -112,6 +124,14 @@ final class BoundCompanionState: ObservableObject {
     var usesAssignedButtons: Bool { buttonType.splitButtonCount > 0 }
     var availableContents: [BoundPiPContent] { configuration.availableContents }
     var content: BoundPiPContent { availableContents.indices.contains(selected) ? availableContents[selected] : .friend }
+    var displayedButtonContents: [BoundPiPContent?] {
+        configuration.assignments.enumerated().map { button, choices in
+            if let remembered = rememberedButtonViews[buttonType]?[button], choices.contains(remembered) {
+                return remembered
+            }
+            return choices.first
+        }
+    }
     func updateButtonType() {
         settings.refresh()
     }
@@ -122,15 +142,17 @@ final class BoundCompanionState: ObservableObject {
         settings.setAssigned(enabled, content: content, for: button)
     }
     func advanceButton(_ button: Int) {
-        guard usesAssignedButtons else { return }
-        let contents = preferences.assignedContents(for: button, buttonType: buttonType)
-        guard let first = contents.first else { return }
+        guard usesAssignedButtons, configuration.assignments.indices.contains(button),
+              let remembered = displayedButtonContents[button] else { return }
+        let contents = configuration.assignments[button]
         let next: BoundPiPContent
-        if !hidden, let index = contents.firstIndex(of: content) {
+        if !hidden, activeButtons[buttonType] == button, let index = contents.firstIndex(of: content) {
             next = contents[(index + 1) % contents.count]
-        } else { next = first }
+        } else { next = remembered }
         guard let index = availableContents.firstIndex(of: next) else { return }
         selectionChanged?()
+        activeButtons[buttonType] = button
+        rememberedButtonViews[buttonType, default: [:]][button] = next
         selected = index
         hidden = false
         refresh()
@@ -150,10 +172,28 @@ final class BoundCompanionState: ObservableObject {
         } else {
             selectionChanged?(); selected = 0; hidden = false
         }
+        reconcileButtonSelections()
+    }
+    private func reconcileButtonSelections() {
+        guard usesAssignedButtons else { return }
+        var remembered = rememberedButtonViews[buttonType] ?? [:]
+        remembered = remembered.filter { configuration.assignments.indices.contains($0.key) }
+        for (button, choices) in configuration.assignments.enumerated() {
+            if let previous = remembered[button], choices.contains(previous) { continue }
+            remembered[button] = choices.first
+        }
+        let currentButton = activeButtons[buttonType]
+        let active = currentButton.flatMap { button in
+            configuration.assignments.indices.contains(button) && configuration.assignments[button].contains(content) ? button : nil
+        } ?? configuration.assignments.firstIndex(where: { $0.contains(content) })
+        activeButtons[buttonType] = active
+        if let active { remembered[active] = content }
+        rememberedButtonViews[buttonType] = remembered
     }
     func advancePanel() {
         guard !availableContents.isEmpty else { return }
         if !hidden { selected = (selected + 1) % availableContents.count }
+        reconcileButtonSelections()
         hidden = false
         refresh()
     }
@@ -468,9 +508,8 @@ final class BoundCompanionCoordinator {
             rightControlGutter: owner.boundLandscapeControlGutter(),
             menuHitFrame: owner.controllerView.convert(menu.extendedFrame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height)), to: owner.view),
             buttonType: BoundCompanionButtonPreferences().effectiveButtonType)
-        controls.configureSegments(contents: (0..<state.buttonType.splitButtonCount).map {
-            state.preferences.assignedContents(for: $0, buttonType: state.buttonType)
-        }, selected: state.content)
+        controls.configureSegments(contents: state.configuration.assignments,
+                                   displayedContents: state.displayedButtonContents)
         if state.availableContents.isEmpty {
             controls.accessibilityValue = "No views enabled"
             controls.accessibilityHint = "Enable companion views in Settings"

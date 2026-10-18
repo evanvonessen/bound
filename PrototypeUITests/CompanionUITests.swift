@@ -2379,11 +2379,16 @@ final class CompanionUITests: XCTestCase {
 
         // Each split control cycles through two assigned views here, so its
         // accessibility value proves that a hold activates exactly once.
-        for segment in segments {
+        for (activeIndex, segment) in segments.enumerated() {
+            let previousValues = segments.map { $0.value as? String }
             segment.tap(); let afterOneTap = segment.value as? String
             segment.tap(); let afterTwoTaps = segment.value as? String
             XCTAssertNotEqual(afterOneTap, afterTwoTaps, "Each split button cycles between its assigned views.")
             assertNoHoldMenu(segment, afterHold: afterOneTap ?? "", afterTap: afterTwoTaps ?? "")
+            for index in segments.indices where index != activeIndex {
+                XCTAssertEqual(segments[index].value as? String, previousValues[index],
+                               "An inactive button must retain its last selected view icon.")
+            }
         }
 
         // Restore the two assignments added for this hold-menu regression.
@@ -2399,6 +2404,7 @@ final class CompanionUITests: XCTestCase {
         closeBoundSheet(in: app)
 
         segments[0].tap()
+        if segments[0].value as? String != "Friend" { segments[0].tap() }
         XCTAssertTrue(element("bound.friend-screen", in: app).waitForExistence(timeout: 5))
         segments[0].tap()
         XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 5))
@@ -2442,10 +2448,23 @@ final class CompanionUITests: XCTestCase {
         screenshot("Bound-button-4-current-dex")
         assertNoHoldMenu(top, afterHold: "Friend", afterTap: "RR Dex")
         bottom.tap()
+        XCTAssertEqual(bottom.value as? String, "Bosses", "An inactive button restores its remembered view.")
+        XCTAssertEqual(top.value as? String, "RR Dex", "The inactive top button keeps its Dex icon.")
+        bottom.tap()
         XCTAssertEqual(bottom.value as? String, "Types")
         XCTAssertTrue(element("bound.type-chart", in: app).waitForExistence(timeout: 5))
-        screenshot("Bound-button-4-current-types")
+        screenshot("Bound-button-4-retained-dex-current-types")
         assertNoHoldMenu(bottom, afterHold: "Bosses", afterTap: "Types")
+        top.tap()
+        XCTAssertEqual(top.value as? String, "RR Dex")
+        XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 5))
+        XCTAssertEqual(bottom.value as? String, "Types", "The inactive bottom button keeps its Types icon.")
+        screenshot("Bound-button-4-current-dex-retained-types")
+        top.tap()
+        XCTAssertEqual(top.value as? String, "Friend", "Another tap cycles the active button.")
+        bottom.tap()
+        XCTAssertEqual(bottom.value as? String, "Types")
+        XCTAssertTrue(element("bound.type-chart", in: app).waitForExistence(timeout: 5))
 
         app.terminate(); app.launch(); play()
         XCTAssertFalse(app.buttons["bound.panel-cycle.3"].exists)
@@ -2655,33 +2674,51 @@ final class CompanionUITests: XCTestCase {
             let selectedPokemon = app.staticTexts["bound.boss-pokemon"]
             let members = species.indices.map { app.buttons["bound.boss-team-member-\($0)"] }
             XCTAssertEqual(members.count, species.count)
-            members.forEach { XCTAssertTrue($0.isHittable) }
+            members.forEach { XCTAssertTrue($0.exists) }
             XCTAssertEqual(selectedPokemon.label, species[0])
 
-            let initialFrames = members.map(\.frame)
-            for (index, frame) in initialFrames.enumerated() {
-                XCTAssertEqual(frame.width, initialFrames[0].width, accuracy: 0.5,
-                               "All member tiles must have equal widths for \(search), member \(index + 1).")
-                XCTAssertEqual(frame.height, 44, accuracy: 0.5,
-                               "Every member tile must keep a 44-point height.")
+            let strip = element("bound.boss-team-strip", in: app)
+            let picture = element("bound.boss-picture", in: app)
+            XCTAssertTrue(strip.exists)
+            let stripFrame = strip.frame
+            XCTAssertEqual(stripFrame.maxX, guide.frame.maxX - 10, accuracy: 1,
+                           "The inline team strip must use all remaining width to the guide's trailing inset.")
+            XCTAssertGreaterThan(stripFrame.minX, selectedPokemon.frame.maxX,
+                                 "The team strip remains beside the selected Pokémon's name.")
+            XCTAssertEqual(stripFrame.midY, picture.frame.midY, accuracy: 1,
+                           "The selected Pokémon sprite and team strip must share one row.")
+            for member in members {
+                XCTAssertEqual(member.frame.width, 44, accuracy: 0.5)
+                XCTAssertEqual(member.frame.height, 44, accuracy: 0.5)
             }
-            XCTAssertEqual(initialFrames[0].minX, guide.frame.minX + 10, accuracy: 1,
-                           "The tile row should start ten points inside the Boss guide.")
-            XCTAssertEqual(initialFrames[initialFrames.count - 1].maxX, guide.frame.maxX - 10, accuracy: 1,
-                           "The tile row should fill the available guide width with ten-point side insets.")
 
+            func reveal(_ member: XCUIElement) {
+                for _ in 0..<8 {
+                    let viewport = strip.frame
+                    let frame = member.frame
+                    if frame.minX >= viewport.minX - 1 && frame.maxX <= viewport.maxX + 1 { break }
+                    let movingLeft = frame.maxX > viewport.maxX
+                    let start = strip.coordinate(withNormalizedOffset: CGVector(dx: movingLeft ? 0.9 : 0.1, dy: 0.5))
+                    let end = strip.coordinate(withNormalizedOffset: CGVector(dx: movingLeft ? 0.1 : 0.9, dy: 0.5))
+                    start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+                }
+                XCTAssertTrue(member.isHittable, "Every fixed-size team tile must be reachable by horizontal scrolling.")
+            }
             for index in selectionOrder {
+                reveal(members[index])
+                let framesBeforeSelection = members.map(\.frame)
                 members[index].tap()
                 XCTAssertEqual(selectedPokemon.label, species[index])
                 XCTAssertTrue(members[index].isSelected)
                 XCTAssertEqual(members.filter(\.isSelected).count, 1)
+                XCTAssertEqual(strip.frame, stripFrame, "Selecting a different name must not move or resize the inline strip.")
                 for (memberIndex, member) in members.enumerated() {
                     let frame = member.frame
-                    XCTAssertEqual(frame.width, initialFrames[memberIndex].width, accuracy: 0.5,
+                    XCTAssertEqual(frame.width, 44, accuracy: 0.5,
                                    "Selecting \(species[index]) must not resize team tiles.")
-                    XCTAssertEqual(frame.height, initialFrames[memberIndex].height, accuracy: 0.5,
+                    XCTAssertEqual(frame.height, 44, accuracy: 0.5,
                                    "Selecting \(species[index]) must not resize team tiles.")
-                    XCTAssertEqual(frame.minX, initialFrames[memberIndex].minX, accuracy: 1,
+                    XCTAssertEqual(frame.minX, framesBeforeSelection[memberIndex].minX, accuracy: 1,
                                    "Selecting a Pokémon must not shift its sibling tiles.")
                 }
             }

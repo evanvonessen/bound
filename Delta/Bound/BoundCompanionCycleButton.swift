@@ -80,9 +80,9 @@ final class BoundCompanionCycleButton: UIButton {
         cycle?()
     }
     /// Divides the tall button frame into independently tappable controls.
-    /// `selected` is used by each segment
-    /// when its assigned list contains it; otherwise that segment shows its first view.
-    func configureSegments(contents: [[BoundPiPContent]], selected: BoundPiPContent) {
+    /// Each icon uses the view remembered for that button, independently of the
+    /// currently active button and any overlapping assignments.
+    func configureSegments(contents: [[BoundPiPContent]], displayedContents: [BoundPiPContent?]) {
         let count = companionButtonType.splitButtonCount
         guard count > 0, boundPortrait, !landscape, !minimal else {
             segmentButtons.forEach { $0.removeFromSuperview() }
@@ -112,7 +112,8 @@ final class BoundCompanionCycleButton: UIButton {
         for index in segmentButtons.indices {
             let child = segmentButtons[index]
             let choices = index < segmentContents.count ? segmentContents[index] : []
-            let shown = choices.contains(selected) ? selected : choices.first ?? selected
+            let remembered = displayedContents.indices.contains(index) ? displayedContents[index] : nil
+            let shown = remembered.flatMap { choices.contains($0) ? $0 : nil } ?? choices.first ?? .friend
             child.configureAsSegment(index: index, content: shown, enabled: !choices.isEmpty)
         }
         setNeedsLayout()
@@ -126,7 +127,7 @@ final class BoundCompanionCycleButton: UIButton {
         isEnabled = enabled
         accessibilityIdentifier = "bound.panel-cycle.\(index + 1)"
         accessibilityLabel = "Companion button \(index + 1): \(content.title)"
-        accessibilityHint = enabled ? "Opens the next assigned companion view" : "No views assigned"
+        accessibilityHint = enabled ? "Restores this view; tap again to cycle assigned views" : "No views assigned"
         accessibilityValue = enabled ? content.title : "No views assigned"
         isAccessibilityElement = true
         // Selection can change while the button's frame stays exactly the same.

@@ -108,6 +108,146 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(preferences.orderedContents, [.dex, .bosses, .friend, .types, .notes])
     }
 
+    func testSplitButtonsRememberTheirOwnViewWhenAssignmentsOverlap() throws {
+        let suite = "BoundSplitButtonMemory." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        preferences.buttonType = .option3
+        preferences.setAssignedContents([.friend, .dex], for: 0, buttonType: .option3)
+        preferences.setAssignedContents([.friend, .bosses], for: 1, buttonType: .option3)
+        preferences.setAssignedContents([.types], for: 2, buttonType: .option3)
+        let state = BoundCompanionState(preferences: preferences)
+
+        XCTAssertEqual(state.displayedButtonContents, [.friend, .friend, .types])
+        state.advanceButton(0)
+        XCTAssertEqual(state.content, .dex)
+        XCTAssertEqual(state.displayedButtonContents, [.dex, .friend, .types],
+                       "Selecting Dex on Button 1 must leave shared Friend on inactive Button 2.")
+
+        state.advanceButton(1)
+        XCTAssertEqual(state.content, .friend, "The first tap on an inactive button restores its remembered view.")
+        XCTAssertEqual(state.displayedButtonContents, [.dex, .friend, .types],
+                       "Selecting a view shared by two assignments must update only the active button.")
+
+        state.hidden = true
+        state.advanceButton(0)
+        XCTAssertEqual(state.content, .dex, "A hidden panel restores the pressed button's remembered view.")
+        XCTAssertFalse(state.hidden)
+        XCTAssertEqual(state.displayedButtonContents, [.dex, .friend, .types])
+    }
+
+    func testSplitButtonMemoryIsIndependentByStyleAndSanitizedWhenAssignmentChanges() throws {
+        let suite = "BoundSplitButtonStyleMemory." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        preferences.buttonType = .option3
+        preferences.setAssignedContents([.friend, .dex], for: 0, buttonType: .option3)
+        preferences.setAssignedContents([.bosses], for: 1, buttonType: .option3)
+        preferences.setAssignedContents([.types], for: 2, buttonType: .option3)
+        let state = BoundCompanionState(preferences: preferences)
+        state.advanceButton(0)
+        XCTAssertEqual(state.content, .dex)
+        XCTAssertEqual(state.displayedButtonContents.first!, .dex)
+
+        preferences.setAssignedContents([.notes, .types], for: 0, buttonType: .option4)
+        preferences.setAssignedContents([.friend], for: 1, buttonType: .option4)
+        state.setButtonType(.option4)
+        XCTAssertEqual(state.displayedButtonContents, [.notes, .friend],
+                       "Button 4 starts with its own assignments and does not inherit Button 3's selection.")
+        state.advanceButton(0) // Restore Button 4's remembered Notes view.
+        XCTAssertEqual(state.content, .notes)
+        state.advanceButton(0)
+        XCTAssertEqual(state.content, .types)
+        XCTAssertEqual(state.displayedButtonContents, [.types, .friend])
+
+        state.setButtonType(.option3)
+        XCTAssertEqual(state.displayedButtonContents.first!, .dex,
+                       "Returning to Button 3 preserves its independent last selected view.")
+        preferences.setAssignedContents([.friend], for: 0, buttonType: .option3)
+        state.settings.refresh()
+        XCTAssertEqual(state.displayedButtonContents.first, .friend,
+                       "Removing the remembered view falls back to the first remaining assignment.")
+        preferences.setAssignedContents([], for: 0, buttonType: .option3)
+        state.settings.refresh()
+        XCTAssertNil(state.displayedButtonContents.first!, "An empty assignment has no displayed view.")
+    }
+
+    func testReturningToButtonStylePreservesItsRememberedViewAcrossOverlappingAssignments() throws {
+        let suite = "BoundSplitButtonStyleOverlap." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        preferences.buttonType = .option3
+        preferences.setAssignedContents([.friend, .dex], for: 0, buttonType: .option3)
+        preferences.setAssignedContents([.friend], for: 1, buttonType: .option3)
+        preferences.setAssignedContents([.types], for: 2, buttonType: .option3)
+        preferences.setAssignedContents([.friend, .notes], for: 0, buttonType: .option4)
+        preferences.setAssignedContents([.bosses], for: 1, buttonType: .option4)
+        let state = BoundCompanionState(preferences: preferences)
+
+        state.advanceButton(0)
+        XCTAssertEqual(state.content, .dex)
+        XCTAssertEqual(state.displayedButtonContents[0], .dex)
+
+        state.setButtonType(.option4)
+        XCTAssertEqual(state.content, .friend, "A first-use style keeps the current view when it is assigned.")
+        state.advanceButton(1)
+        XCTAssertEqual(state.content, .bosses)
+        state.advanceButton(0)
+        XCTAssertEqual(state.content, .friend, "The inactive Button 4 control restores its own Friend view.")
+
+        state.setButtonType(.option3)
+        XCTAssertEqual(state.content, .dex,
+                       "Returning to Button 3 restores its active button's view even though Friend overlaps.")
+        XCTAssertEqual(state.displayedButtonContents[0], .dex,
+                       "Showing shared Friend in Button 4 must not overwrite Button 3's Dex icon.")
+    }
+
+    func testInactiveOverlappingSplitButtonKeepsItsRenderedIcon() throws {
+        let suite = "BoundSplitButtonRendererMemory." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        preferences.buttonType = .option3
+        preferences.setAssignedContents([.friend, .dex], for: 0, buttonType: .option3)
+        preferences.setAssignedContents([.friend, .bosses], for: 1, buttonType: .option3)
+        preferences.setAssignedContents([.types], for: 2, buttonType: .option3)
+        let state = BoundCompanionState(preferences: preferences)
+        let canvas = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let menuFrame = CGRect(x: 10, y: 700, width: 20, height: 20)
+        let button = BoundCompanionCycleButton()
+        button.configure(menuFrame: menuFrame, controllerFrame: canvas, landscape: false, minimal: false,
+                         content: state.content, canvas: canvas, occupied: [menuFrame], boundPortrait: true,
+                         buttonType: .option3)
+
+        func renderFirstSegment() throws -> Data {
+            let assignments = (0..<state.buttonType.splitButtonCount).map {
+                preferences.assignedContents(for: $0, buttonType: state.buttonType)
+            }
+            button.configureSegments(contents: assignments, displayedContents: state.displayedButtonContents)
+            let image = renderedButtonStrip(button)
+            let frame = button.segmentButtons[0].frame
+            let scale = image.scale
+            let cropRect = CGRect(x: frame.minX * scale, y: frame.minY * scale,
+                                  width: frame.width * scale, height: frame.height * scale).integral
+            return try XCTUnwrap(UIImage(cgImage: try XCTUnwrap(image.cgImage?.cropping(to: cropRect))).pngData())
+        }
+
+        state.advanceButton(0)
+        let selectedDexImage = try renderFirstSegment()
+        XCTAssertEqual(button.segmentButtons[0].accessibilityValue as? String, "RR Dex")
+
+        state.advanceButton(1)
+        XCTAssertEqual(state.content, .friend)
+        let retainedDexImage = try renderFirstSegment()
+        XCTAssertEqual(button.segmentButtons[0].accessibilityValue as? String, "RR Dex",
+                       "The inactive button continues to identify its remembered view.")
+        XCTAssertEqual(retainedDexImage, selectedDexImage,
+                       "The inactive button's rendered icon remains unchanged when another button selects a shared view.")
+    }
+
     func testPersistentSettingsModelUpdatesActiveSessionAndPreservesSelection() async throws {
         let suite = "BoundSettingsLive." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -178,7 +318,8 @@ final class CompanionCycleButtonTests: XCTestCase {
         split.configure(menuFrame: menuFrame, controllerFrame: canvas, landscape: false, minimal: false,
                         content: .friend, canvas: canvas, occupied: [menuFrame], boundPortrait: true,
                         buttonType: .option3)
-        split.configureSegments(contents: [[.friend], [.bosses, .dex], [.types]], selected: .friend)
+        split.configureSegments(contents: [[.friend], [.bosses, .dex], [.types]],
+                                displayedContents: [.friend, .bosses, .types])
         var activated: [Int] = []
         split.activateSegment = { activated.append($0) }
         XCTAssertNil(split.menu, "The split button host must not expose a hold menu.")
@@ -598,7 +739,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         state.advanceButton(1)
         XCTAssertEqual(state.content, .bosses)
         state.advanceButton(0)
-        XCTAssertEqual(state.content, .friend)
+        XCTAssertEqual(state.content, .notes, "Switching back to Button 1 restores its remembered Notes view.")
 
         state.hidden = true
         state.advanceButton(1)
@@ -611,7 +752,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertTrue(state.usesAssignedButtons)
         state.hidden = true
         state.advanceButton(1)
-        XCTAssertEqual(state.content, .types, "A hidden panel restores the first assigned view in normalized order.")
+        XCTAssertEqual(state.content, .bosses, "A hidden panel restores Button 2's remembered Bosses view.")
         XCTAssertFalse(state.hidden)
 
         let option4Preferences = BoundPiPPreferences(defaults: defaults)
@@ -705,7 +846,8 @@ final class CompanionCycleButtonTests: XCTestCase {
                     menuHitSize: menuHitSize, boundPortrait: true, selectArtwork: selectArtwork,
                     buttonType: type)
                 if type.splitButtonCount > 0 {
-                    button.configureSegments(contents: [[.friend], [.bosses], [.types]], selected: .friend)
+                    button.configureSegments(contents: [[.friend], [.bosses], [.types]],
+                                             displayedContents: [.friend, .bosses, .types])
                     button.layoutIfNeeded()
                 }
                 XCTAssertFalse(button.isHidden, "\(type.title) has a clear placement at width \(Int(screen.width)).")
@@ -851,7 +993,8 @@ final class CompanionCycleButtonTests: XCTestCase {
                             content: .friend, canvas: canvas, occupied: [menu], boundPortrait: true,
                             buttonType: type)
             XCTAssertEqual(split.frame, option2.frame)
-            split.configureSegments(contents: [[.friend], [.bosses, .dex], [.types]], selected: .friend)
+            split.configureSegments(contents: [[.friend], [.bosses, .dex], [.types]],
+                                    displayedContents: [.friend, .bosses, .types])
             split.layoutIfNeeded()
             let count = type.splitButtonCount
             XCTAssertFalse(split.isAccessibilityElement)
@@ -882,7 +1025,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         }
     }
 
-    func testSplitButtonIconsFollowCurrentlySelectedAssignedView() throws {
+    func testSplitButtonIconsFollowEachButtonsDisplayedView() throws {
         let canvas = CGRect(x: 0, y: 0, width: 390, height: 844)
         let menu = CGRect(x: 10, y: 700, width: 20, height: 20)
         for type in [BoundCompanionButtonType.option3, .option4] {
@@ -891,7 +1034,7 @@ final class CompanionCycleButtonTests: XCTestCase {
                              content: .friend, canvas: canvas, occupied: [menu], boundPortrait: true,
                              buttonType: type)
             let assignments: [[BoundPiPContent]] = [[.friend, .notes], [.bosses, .dex], [.types]]
-            button.configureSegments(contents: assignments, selected: .friend)
+            button.configureSegments(contents: assignments, displayedContents: [.friend, .bosses, .types])
             XCTAssertEqual(button.segmentButtons[0].accessibilityValue as? String, "Friend")
             XCTAssertEqual(button.segmentButtons[1].accessibilityValue as? String, "Bosses")
             let friendImage = renderedButtonStrip(button)
@@ -900,11 +1043,11 @@ final class CompanionCycleButtonTests: XCTestCase {
             friendAttachment.lifetime = .keepAlways
             add(friendAttachment)
 
-            button.configureSegments(contents: assignments, selected: .notes)
+            button.configureSegments(contents: assignments, displayedContents: [.notes, .bosses, .types])
             XCTAssertEqual(button.segmentButtons[0].accessibilityValue as? String, "Notes",
                            "\(type.title)'s first icon follows its currently displayed assigned view.")
             XCTAssertEqual(button.segmentButtons[1].accessibilityValue as? String, "Bosses",
-                           "A segment without the current view keeps its first assigned view.")
+                           "An inactive segment keeps its own displayed view.")
             let notesImage = renderedButtonStrip(button)
             XCTAssertNotEqual(try XCTUnwrap(friendImage.pngData()), try XCTUnwrap(notesImage.pngData()),
                               "The rendered icon must change when the selected assigned view changes.")
@@ -923,7 +1066,8 @@ final class CompanionCycleButtonTests: XCTestCase {
             button.configure(menuFrame: menu, controllerFrame: canvas, landscape: false, minimal: false,
                              content: .friend, canvas: canvas, occupied: [menu], boundPortrait: true,
                              buttonType: type)
-            button.configureSegments(contents: [[.friend], [.bosses], [.types]], selected: .friend)
+            button.configureSegments(contents: [[.friend], [.bosses], [.types]],
+                                     displayedContents: [.friend, .bosses, .types])
             XCTAssertTrue(button.segmentButtons.isEmpty)
             XCTAssertTrue(button.isAccessibilityElement)
             XCTAssertTrue(button.isUserInteractionEnabled)
@@ -935,7 +1079,8 @@ final class CompanionCycleButtonTests: XCTestCase {
                          controllerFrame: unavailable, landscape: false, minimal: false,
                          content: .friend, canvas: unavailable, occupied: [unavailable], boundPortrait: true,
                          buttonType: .option3)
-        button.configureSegments(contents: [[.friend], [.bosses], [.types]], selected: .friend)
+        button.configureSegments(contents: [[.friend], [.bosses], [.types]],
+                                 displayedContents: [.friend, .bosses, .types])
         XCTAssertTrue(button.isHidden)
         XCTAssertFalse(button.isUserInteractionEnabled)
         XCTAssertEqual(button.frame, .zero)
@@ -1032,7 +1177,7 @@ final class CompanionCycleButtonTests: XCTestCase {
             previewLayout: .layout12, presentationChanged: { _ in }))
         bossHost.safeAreaRegions = []
         parent.addChild(bossHost); parent.view.addSubview(bossHost.view); bossHost.didMove(toParent: parent)
-        for layout in [BoundReferenceLayout.layout1, .layout6, .layout12] {
+        for layout in [BoundReferenceLayout.layout1, .layout2, .layout3, .layout4, .layout5, .layout6, .layout12] {
             for height in [CGFloat(263), CGFloat(100)] {
                 let size = CGSize(width: 393, height: height)
                 bossHost.rootView = BoundBossGuideView(gameID: gameID, portraitTopInset: height > 100 ? 59 : 0,
