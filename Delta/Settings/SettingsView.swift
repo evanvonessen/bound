@@ -348,8 +348,6 @@ private struct DeltaSyncSettingsSection: View
 
         } header: {
             Text("Cloud Sync")
-        } footer: {
-            Text("Sync games, battery saves, save states, artwork and library data with Dropbox. Sync runs automatically while enabled.")
         }
         .onReceive(NotificationCenter.default.publisher(for: Settings.didChangeNotification)) { notification in
             guard let name = notification.userInfo?[Settings.NotificationUserInfoKey.name] as? Settings.Name,

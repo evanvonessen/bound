@@ -201,7 +201,7 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
                 _ = try await BoundSocialAPI.call(identity, action: "device", payload: ["installationID": installation, "revision": revision, "token": tokenString, "environment": environment])
                 guard let self, !Task.isCancelled, self.generation == run, identity.isSameSession(as: self.account.session),
                       self.enabled else { return }
-                self.status = "Jiggles are on for this device."
+                self.status = ""
             } catch {
                 guard let self, !Task.isCancelled, self.generation == run else { return }
                 self.status = "Couldn't register this device for Jiggles. Try again when connected."
