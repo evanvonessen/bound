@@ -47,6 +47,7 @@ struct SettingsView: View
                     Text("Enable new features under development. Turn off to use the build 13 feature set.")
                 }
                 if experimentalFeaturesEnabled {
+                    BoundUIVersionSettings()
                     DeltaSyncSettingsSection()
                 }
                 if experimentalFeaturesEnabled { BoundAccountSocialSettings() }

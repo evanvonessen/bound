@@ -260,12 +260,20 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
 }
 
 struct BoundAccountSocialSettings: View {
+    static let stopSharingNotification = Notification.Name("BoundAccountSocialSettingsStopSharing")
     @ObservedObject private var account = BoundFriendAccount.shared
     @ObservedObject private var profile = BoundAccountProfile.shared
     @ObservedObject private var notifications = BoundJiggleNotifications.shared
+    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentalFeaturesEnabled = false
+    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
+    private var usesUpdatedUI: Bool { experimentalFeaturesEnabled && uiVersion == .option2 }
     var body: some View {
         Section("Bound account") {
-            if account.session != nil {
+            if account.deletionPending && usesUpdatedUI {
+                Button("Retry account deletion", role: .destructive) { retryAccountDeletion() }
+                .disabled(account.busy)
+                .accessibilityIdentifier("bound.account-delete-retry")
+            } else if account.session != nil {
                 NavigationLink {
                     BoundUsernameSettings()
                 } label: {
@@ -275,10 +283,44 @@ struct BoundAccountSocialSettings: View {
                     Task { await notifications.setEnabled(value) }
                 })).disabled(notifications.busy).accessibilityIdentifier("bound.jiggles-enabled")
                 if !notifications.status.isEmpty { Text(notifications.status).font(.caption) }
+                if usesUpdatedUI {
+                    Button("Sign out", role: .destructive) { signOut() }
+                        .disabled(account.busy || account.deletionPending)
+                        .accessibilityIdentifier("bound.account-sign-out")
+                    NavigationLink {
+                        BoundDeleteAccountView(account: account) { prepareForAccountRemoval() }
+                    } label: {
+                        Text("Delete account").foregroundStyle(.red)
+                    }
+                    .disabled(account.busy)
+                    .accessibilityIdentifier("bound.account-delete")
+                }
             } else {
                 Text("Sign in from Friends to set your account username and receive Jiggles.").font(.subheadline)
             }
-        }.task(id: account.session?.owner) { await profile.refresh() }
+        }
+        .task(id: account.session?.owner) { await profile.refresh() }
+    }
+
+    private func signOut() {
+        guard usesUpdatedUI, account.session != nil, !account.busy, !account.deletionPending else { return }
+        prepareForAccountRemoval()
+        account.signOut()
+    }
+
+    private func retryAccountDeletion() {
+        guard usesUpdatedUI, account.deletionPending, !account.busy else { return }
+        prepareForAccountRemoval()
+        Task { await account.resumeAccountDeletion() }
+    }
+
+    private func prepareForAccountRemoval() {
+        postStopSharing()
+        BoundJiggleNotifications.shared.prepareForSignOut()
+    }
+
+    private func postStopSharing() {
+        NotificationCenter.default.post(name: Self.stopSharingNotification, object: nil)
     }
 }
 

@@ -14,10 +14,62 @@ enum BoundPiPContent: String, CaseIterable, Sendable {
 }
 enum BoundPiPHiddenSide: String, Sendable { case left, right }
 
+enum BoundUIVersion: Int, CaseIterable, Sendable {
+    case option1 = 1, option2 = 2
+    var title: String { "Option \(rawValue)" }
+}
+
+final class BoundUIVersionPreferences {
+    static let key = "bound.ui.version.v1"
+    static let didChangeNotification = Notification.Name("BoundUIVersionDidChange")
+    private let defaults: UserDefaults
+    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    var version: BoundUIVersion {
+        get { BoundUIVersion(rawValue: defaults.integer(forKey: Self.key)) ?? .option1 }
+        set {
+            guard version != newValue else { return }
+            defaults.set(newValue.rawValue, forKey: Self.key)
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
+        }
+    }
+    var effectiveVersion: BoundUIVersion {
+        BoundExperimentalFeaturesPreferences(defaults: defaults).isEnabled ? version : .option1
+    }
+}
+
 enum BoundReferenceLayout: Int, CaseIterable, Sendable {
     case layout1 = 1, layout2 = 2, layout3 = 3, layout4 = 4, layout5 = 5, layout6 = 6, layout7 = 7, layout8 = 8, layout9 = 9, layout10 = 10, layout11 = 11, layout12 = 12
     static var bossLayouts: [Self] { allCases }
     var title: String { "Layout \(rawValue)" }
+    var descriptiveName: String {
+        switch self {
+        case .layout1: "Original"
+        case .layout2: "Quick reference"
+        case .layout3: "Full portrait"
+        case .layout4: "Expandable details"
+        case .layout5: "At a glance"
+        case .layout6: "Priority stats"
+        case .layout7: "Detailed classic"
+        case .layout8: "Island controls"
+        case .layout9: "Inline learnset"
+        case .layout10: "Compact matchups"
+        case .layout11: "Trainer navigation"
+        case .layout12: "Expanded reference"
+        }
+    }
+    func descriptiveName(isBoss: Bool) -> String {
+        if isBoss {
+            return switch self {
+            case .layout5: "Moves or stats"
+            case .layout6: "Moves and stats"
+            case .layout7: "Speed reference"
+            case .layout9: "Team focus"
+            case .layout12: "Expanded team"
+            default: descriptiveName
+            }
+        }
+        return self == .layout11 ? "Collapsible learnset" : descriptiveName
+    }
     var summary: String {
         switch self {
         case .layout1: "The original reference view."
@@ -87,8 +139,24 @@ final class BoundPiPPreferences {
     func setEnabled(_ enabled: Bool, for content: BoundPiPContent) {
         defaults.set(enabled, forKey: key(content.rawValue + ".enabled"))
     }
-    func enabledContents(experimentalFeaturesEnabled: Bool) -> [BoundPiPContent] {
-        let contents = BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: experimentalFeaturesEnabled)
+    var uiVersion: BoundUIVersion { BoundUIVersionPreferences(defaults: defaults).version }
+    var orderedContents: [BoundPiPContent] {
+        let saved = defaults.stringArray(forKey: key("view-order")) ?? []
+        return Self.normalizedOrder(saved.compactMap(BoundPiPContent.init(rawValue:)))
+    }
+    private static func normalizedOrder(_ contents: [BoundPiPContent]) -> [BoundPiPContent] {
+        var result: [BoundPiPContent] = []
+        for content in contents + BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: true) where !result.contains(content) {
+            result.append(content)
+        }
+        return result
+    }
+    func setContentOrder(_ contents: [BoundPiPContent]) {
+        defaults.set(Self.normalizedOrder(contents).map(\.rawValue), forKey: key("view-order"))
+    }
+    func enabledContents(experimentalFeaturesEnabled: Bool, uiVersion: BoundUIVersion = .option1) -> [BoundPiPContent] {
+        let contents = experimentalFeaturesEnabled && uiVersion == .option2 ? orderedContents
+            : BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: experimentalFeaturesEnabled)
         return experimentalFeaturesEnabled ? contents.filter { isEnabled($0) } : contents
     }
     var corner: BoundPiPCorner {

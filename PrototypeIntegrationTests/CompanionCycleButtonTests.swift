@@ -6,6 +6,87 @@ import DeltaCore
 
 @MainActor
 final class CompanionCycleButtonTests: XCTestCase {
+    func testUIVersionAndViewOrderPersistWithoutChangingOptionOneOrBaseline() throws {
+        let suite = "BoundUIVersion." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let version = BoundUIVersionPreferences(defaults: defaults)
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        XCTAssertEqual(version.version, .option1)
+        let original = BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: true)
+        preferences.setContentOrder([.dex, .bosses, .dex])
+        XCTAssertEqual(preferences.orderedContents, [.dex, .bosses, .friend, .notes, .types])
+        XCTAssertEqual(preferences.enabledContents(experimentalFeaturesEnabled: true), original)
+        version.version = .option2
+        XCTAssertEqual(version.effectiveVersion, .option1)
+        BoundExperimentalFeaturesPreferences(defaults: defaults).isEnabled = true
+        XCTAssertEqual(version.effectiveVersion, .option2)
+        preferences.setEnabled(false, for: .bosses)
+        let restarted = BoundPiPPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
+        XCTAssertEqual(restarted.uiVersion, .option2)
+        XCTAssertEqual(restarted.enabledContents(experimentalFeaturesEnabled: true, uiVersion: restarted.uiVersion), [.dex, .friend, .notes, .types])
+        XCTAssertEqual(restarted.enabledContents(experimentalFeaturesEnabled: false, uiVersion: .option2), [.friend, .notes, .types])
+        BoundExperimentalFeaturesPreferences(defaults: defaults).isEnabled = false
+        XCTAssertEqual(version.effectiveVersion, .option1)
+        XCTAssertEqual(version.version, .option2)
+        defaults.set(99, forKey: BoundUIVersionPreferences.key)
+        XCTAssertEqual(version.version, .option1)
+        defaults.set(["unknown", "notes", "notes"], forKey: "bound.delta.pip.v1.view-order")
+        XCTAssertEqual(restarted.orderedContents, [.notes, .friend, .types, .bosses, .dex])
+    }
+    func testUIVersionSwitchingAndReorderingPreserveVisiblePanelAndGateShortcuts() throws {
+        let suite = "BoundUIVersionState." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let version = BoundUIVersionPreferences(defaults: defaults)
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        let state = BoundCompanionState(preferences: preferences, experimentalFeaturesEnabled: true)
+        state.selected = 3
+        XCTAssertEqual(state.content, .bosses)
+        state.selectPanel(.dex)
+        XCTAssertEqual(state.content, .bosses, "Option 1 does not expose the direct-selection action")
+        version.version = .option2
+        state.updateUIVersion()
+        state.setContentOrder([.dex, .bosses, .friend, .types, .notes])
+        XCTAssertEqual(state.content, .bosses)
+        XCTAssertEqual(state.selected, 1)
+        state.hidden = true
+        state.selectPanel(.dex)
+        XCTAssertEqual(state.content, .dex)
+        XCTAssertFalse(state.hidden)
+        state.setContentEnabled(false, for: .notes)
+        state.selectPanel(.notes)
+        XCTAssertEqual(state.content, .dex, "Disabled views cannot be selected through a stale menu")
+        version.version = .option1
+        state.updateUIVersion()
+        XCTAssertEqual(state.content, .dex)
+        XCTAssertEqual(state.availableContents, [.friend, .types, .bosses, .dex])
+        state.updateExperimentalFeatures(false)
+        XCTAssertEqual(state.availableContents, [.friend, .notes, .types])
+        state.selectPanel(.dex)
+        state.setContentOrder([.types, .friend])
+        XCTAssertEqual(state.content, .friend)
+        XCTAssertEqual(preferences.orderedContents, [.dex, .bosses, .friend, .types, .notes])
+    }
+
+    func testUIVersionTwoMenuKeepsTapCycleAndOnlyEnabledChoices() throws {
+        let button = BoundCompanionCycleButton()
+        var cycles = 0
+        button.cycle = { cycles += 1 }
+        button.configureViewMenu(contents: [.bosses, .friend], selected: .bosses, enabled: true)
+        let menu = try XCTUnwrap(button.menu)
+        let actions = menu.children.compactMap { $0 as? UIAction }
+        XCTAssertEqual(actions.map(\.title), ["Bosses", "Friend"])
+        XCTAssertEqual(actions.map(\.state), [.on, .off])
+        XCTAssertFalse(button.showsMenuAsPrimaryAction)
+        button.sendActions(for: .touchUpInside)
+        XCTAssertEqual(cycles, 1, "Adding a long-press menu must preserve normal tap cycling")
+        button.configureViewMenu(contents: [.friend, .notes, .types], selected: .friend, enabled: false)
+        XCTAssertNil(button.menu)
+        button.configureViewMenu(contents: [], selected: .friend, enabled: true)
+        XCTAssertNil(button.menu)
+    }
+
     func testDexAutomaticallyRefreshesMatchingSaveEventsOnMain() throws {
         let preferences = BoundExperimentalFeaturesPreferences()
         let wasEnabled = preferences.isEnabled
@@ -578,6 +659,89 @@ final class CompanionCycleButtonTests: XCTestCase {
             XCTAssertTrue(editor.adjustsFontForContentSizeCategory)
             window.isHidden = true
         }
+    }
+
+    func testUIVersion2ReferencePreviewsAreReadOnlyAndRenderSelectedLayouts() throws {
+        let featurePreferences = BoundExperimentalFeaturesPreferences()
+        let oldFeatures = featurePreferences.isEnabled
+        let oldVersion = UserDefaults.standard.object(forKey: BoundUIVersionPreferences.key)
+        let oldDexLayout = UserDefaults.standard.object(forKey: BoundReferenceLayoutPreferences.dexKey)
+        let oldBossLayout = UserDefaults.standard.object(forKey: BoundReferenceLayoutPreferences.bossKey)
+        let gameID = "BOUND_UIV2_PREVIEW_" + UUID().uuidString
+        let dexPreferences = BoundRRDexPreferences()
+        let dexChoice = BoundRRDexPreferences.Choice(speciesID: 25, save: nil)
+        dexPreferences.write(dexChoice, gameID: gameID)
+        let bossPreferences = BoundBossGuidePreferences()
+        let bossCatalog = try XCTUnwrap(BoundBossCatalog.bundled)
+        let bossSelection = BoundBossGuideSelection(teamID: bossCatalog.defaultTeam.id, pokemonIndex: 0)
+        bossPreferences.write(bossSelection, gameID: gameID, catalog: bossCatalog)
+        defer {
+            featurePreferences.isEnabled = oldFeatures
+            if let oldVersion { UserDefaults.standard.set(oldVersion, forKey: BoundUIVersionPreferences.key) }
+            else { UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key) }
+            if let oldDexLayout { UserDefaults.standard.set(oldDexLayout, forKey: BoundReferenceLayoutPreferences.dexKey) }
+            else { UserDefaults.standard.removeObject(forKey: BoundReferenceLayoutPreferences.dexKey) }
+            if let oldBossLayout { UserDefaults.standard.set(oldBossLayout, forKey: BoundReferenceLayoutPreferences.bossKey) }
+            else { UserDefaults.standard.removeObject(forKey: BoundReferenceLayoutPreferences.bossKey) }
+            UserDefaults.standard.removeObject(forKey: "bound.rrdex.choice.v1." + gameID)
+            UserDefaults.standard.removeObject(forKey: "bound.boss-guide.selection.v1." + gameID)
+        }
+        featurePreferences.isEnabled = true
+        UserDefaults.standard.set(BoundUIVersion.option2.rawValue, forKey: BoundUIVersionPreferences.key)
+        UserDefaults.standard.set(BoundReferenceLayout.layout1.rawValue, forKey: BoundReferenceLayoutPreferences.dexKey)
+        UserDefaults.standard.set(BoundReferenceLayout.layout1.rawValue, forKey: BoundReferenceLayoutPreferences.bossKey)
+        let parent = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.windows.first?.rootViewController)
+
+        var saveReads = 0
+        let dexHost = UIHostingController(rootView: BoundRRDexView(gameID: gameID, previewLayout: .layout12,
+            presentationChanged: { _ in }, currentSave: {
+                saveReads += 1
+                throw BoundRRDexSave.ImportError.currentGameUnavailable
+            }))
+        parent.addChild(dexHost); parent.view.addSubview(dexHost.view); dexHost.didMove(toParent: parent)
+        dexHost.view.frame = CGRect(x: 0, y: 60, width: 393, height: 263)
+        dexHost.view.layoutIfNeeded()
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        let dexImage = UIGraphicsImageRenderer(size: CGSize(width: 393, height: 263)).image { _ in
+            dexHost.view.drawHierarchy(in: CGRect(x: 0, y: 0, width: 393, height: 263), afterScreenUpdates: true)
+        }
+        XCTAssertGreaterThan(try XCTUnwrap(dexImage.pngData()).count, 5_000)
+        let dexAttachment = XCTAttachment(image: dexImage)
+        dexAttachment.name = "UI-Version-2-RRDex-preview"; dexAttachment.lifetime = .keepAlways; add(dexAttachment)
+        XCTAssertEqual(saveReads, 0, "Layout previews must not inspect or refresh the active ROM save")
+        XCTAssertEqual(dexPreferences.read(gameID: gameID), dexChoice)
+        XCTAssertEqual(UserDefaults.standard.integer(forKey: BoundReferenceLayoutPreferences.dexKey), BoundReferenceLayout.layout1.rawValue,
+                       "Preview overrides must not persist layout selection")
+        dexHost.willMove(toParent: nil); dexHost.view.removeFromSuperview(); dexHost.removeFromParent()
+
+        let bossHost = UIHostingController(rootView: BoundBossGuideView(gameID: gameID, portraitTopInset: 59,
+            previewLayout: .layout12, presentationChanged: { _ in }))
+        bossHost.safeAreaRegions = []
+        parent.addChild(bossHost); parent.view.addSubview(bossHost.view); bossHost.didMove(toParent: parent)
+        for layout in [BoundReferenceLayout.layout1, .layout6, .layout12] {
+            for height in [CGFloat(263), CGFloat(100)] {
+                let size = CGSize(width: 393, height: height)
+                bossHost.rootView = BoundBossGuideView(gameID: gameID, portraitTopInset: height > 100 ? 59 : 0,
+                    previewLayout: layout, presentationChanged: { _ in })
+                bossHost.view.frame = CGRect(x: 0, y: 60, width: size.width, height: size.height)
+                bossHost.view.setNeedsLayout(); bossHost.view.layoutIfNeeded()
+                RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+                let bossImage = UIGraphicsImageRenderer(size: size).image { _ in
+                    bossHost.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true)
+                }
+                XCTAssertGreaterThan(try XCTUnwrap(bossImage.pngData()).count, 5_000)
+                let bossAttachment = XCTAttachment(image: bossImage)
+                bossAttachment.name = "UI-Version-2-Boss-layout-\(layout.rawValue)-height-\(Int(height))"
+                bossAttachment.lifetime = .keepAlways; add(bossAttachment)
+                if height == 100 {
+                    try checkCompactCardScrolls(in: bossHost.view, size: size, name: "Boss-v2-layout-\(layout.rawValue)")
+                }
+            }
+        }
+        XCTAssertEqual(bossPreferences.read(gameID: gameID, catalog: bossCatalog), bossSelection)
+        XCTAssertEqual(UserDefaults.standard.integer(forKey: BoundReferenceLayoutPreferences.bossKey), BoundReferenceLayout.layout1.rawValue,
+                       "Boss preview must not overwrite the saved layout")
+        bossHost.willMove(toParent: nil); bossHost.view.removeFromSuperview(); bossHost.removeFromParent()
     }
 
 }

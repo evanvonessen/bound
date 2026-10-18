@@ -5,11 +5,13 @@ struct BoundBossGuideView: View {
     let gameID: String
     var floating = false
     var portraitTopInset: CGFloat = 0
+    var previewLayout: BoundReferenceLayout? = nil
     let presentationChanged: (Bool) -> Void
     private let catalog = BoundBossCatalog.bundled
     private let preferences = BoundBossGuidePreferences()
     @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
-    @AppStorage(BoundReferenceLayoutPreferences.bossKey) private var layout = BoundReferenceLayout.layout1
+    @AppStorage(BoundReferenceLayoutPreferences.bossKey) private var savedLayout = BoundReferenceLayout.layout1
+    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
     @State private var selection = BoundBossGuideSelection(teamID: "kanto-leaders-4", pokemonIndex: 0)
     @State private var showingPicker = false
     @State private var showingTeam = false
@@ -31,6 +33,8 @@ struct BoundBossGuideView: View {
     private var anyPresentation: Bool {
         showingPicker || showingTeam || detailSheet != nil
     }
+    private var layout: BoundReferenceLayout { previewLayout ?? savedLayout }
+    private var usesUIVersion2: Bool { experimentsEnabled && uiVersion == .option2 }
     private var isLayout11Or12: Bool { layout == .layout11 || layout == .layout12 }
     private var usesIslandActions: Bool { (layout == .layout3 || layout == .layout4 || layout == .layout5 || layout == .layout6 || layout == .layout7 || layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12) && !floating && portraitTopInset >= 51 }
 
@@ -58,7 +62,9 @@ struct BoundBossGuideView: View {
                             .frame(height: max(44, portraitTopInset))
                     }
                 }
-                .onAppear { selection = preferences.read(gameID: gameID, catalog: catalog) }
+                .onAppear {
+                    if previewLayout == nil { selection = preferences.read(gameID: gameID, catalog: catalog) }
+                }
                 .sheet(isPresented: $showingPicker, onDismiss: presentationDismissed) {
                     BoundBossPicker(catalog: catalog, selectedID: selected.teamID) { id in
                         choose(BoundBossGuideSelection(teamID: id, pokemonIndex: 0), catalog: catalog)
@@ -89,11 +95,22 @@ struct BoundBossGuideView: View {
         .onChange(of: anyPresentation) { _, presented in
             if presented { presentationChanged(true) }
         }
+        .allowsHitTesting(previewLayout == nil)
     }
 
     @ViewBuilder
     private func sizedCard(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, size: CGSize) -> some View {
-        if floating {
+        if usesUIVersion2 {
+            if size.height < 140 {
+                ScrollView {
+                    version2Card(team: team, pokemon: pokemon, index: index,
+                                 size: CGSize(width: size.width, height: max(220, size.height)))
+                }
+                .frame(width: size.width, height: size.height)
+            } else {
+                version2Card(team: team, pokemon: pokemon, index: index, size: size)
+            }
+        } else if floating {
             floatingLayout(team: team, pokemon: pokemon, index: index, size: size)
         } else if size.height < 140 || ((layout == .layout7 || layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12) && !usesIslandActions && size.height < 235) {
             // Very short strips scroll the entire card so pinned controls
@@ -161,6 +178,79 @@ struct BoundBossGuideView: View {
         }
     }
 
+    /// Version 2 layers the reference changes onto the selected saved layout.
+    @ViewBuilder
+    private func version2Card(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, size: CGSize) -> some View {
+        switch layout {
+        case .layout1:
+            version2OriginalCard(team: team, pokemon: pokemon, index: index, size: size)
+        case .layout2:
+            enhancedCard(team: team, pokemon: pokemon, index: index, compact: size.height < 330)
+                .frame(width: size.width, height: size.height)
+        case .layout3:
+            if !usesIslandActions && size.height < 240 {
+                enhancedCard(team: team, pokemon: pokemon, index: index, compact: true)
+                    .frame(width: size.width, height: size.height)
+            } else {
+                fullHeightCard(team: team, pokemon: pokemon, index: index, width: size.width, height: size.height)
+            }
+        case .layout4:
+            layout4Card(team: team, pokemon: pokemon, index: index, compact: size.height < 235,
+                        scrollsDetails: true, scrollsOverview: size.height < 235 && !usesIslandActions)
+                .frame(width: size.width, height: size.height)
+        case .layout5:
+            layout5Card(team: team, pokemon: pokemon, index: index, compact: size.height < 235,
+                        scrollsDetails: true, scrollsOverview: size.height < 235 && !usesIslandActions)
+                .frame(width: size.width, height: size.height)
+        case .layout6:
+            layout6Card(team: team, pokemon: pokemon, index: index, compact: size.height < 235,
+                        scrollsDetails: true, scrollsOverview: size.height < 235 && !usesIslandActions)
+                .frame(width: size.width, height: size.height)
+        case .layout7:
+            layout7Card(team: team, pokemon: pokemon, index: index,
+                        expandedReference: false, version2: true)
+                .frame(width: size.width, height: size.height)
+        case .layout8, .layout9, .layout10, .layout11, .layout12:
+            layout7Card(team: team, pokemon: pokemon, index: index, islandHeader: true,
+                        expandedReference: layout == .layout10 || layout == .layout11 || layout == .layout12,
+                        version2: true)
+                .frame(width: size.width, height: size.height)
+        }
+    }
+
+    private func version2OriginalCard(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, size: CGSize) -> some View {
+        let reference = BoundBossReference.bundled
+        let detail = reference?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                BoundBossTrainerIcon(team: team, size: 32)
+                Button { showingPicker = true } label: {
+                    HStack(spacing: 5) {
+                        Text(team.name).font(.system(size: 16, weight: .bold)).lineLimit(1)
+                        Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
+                        Spacer(minLength: 0)
+                    }.frame(minHeight: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).accessibilityLabel("Choose boss, \(team.name)")
+                .accessibilityIdentifier("bound.boss-picker")
+            }
+            conditionBadges(team, compact: true)
+            layout12PokemonRow(team: team, pokemon: pokemon, index: index, detail: detail, reference: reference)
+            let details = VStack(alignment: .leading, spacing: 7) {
+                BoundBossStats(stats: pokemon.stats, usesSourceColors: true)
+                HStack(alignment: .top, spacing: 8) { layout7Speed(team: team, pokemon: pokemon); capBadge(team) }
+                    .accessibilityIdentifier("bound.boss-speed-row")
+                moveGrid(pokemon: pokemon, detail: detail, compact: size.height < 180, usesLayout12Categories: true)
+                version2ExtraReference(pokemon: pokemon, detail: detail)
+            }
+            .accessibilityElement(children: .contain).accessibilityIdentifier("bound.boss-details")
+            ScrollView { details }.frame(maxHeight: .infinity)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .frame(width: size.width, height: size.height, alignment: .top)
+        .background(Color(uiColor: .systemBackground))
+    }
+
     private func floatingLayout(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, size: CGSize) -> some View {
         let scale = min(size.width / 360, size.height / 260)
         let floatingCard: AnyView
@@ -205,11 +295,11 @@ struct BoundBossGuideView: View {
         let detail = BoundBossReference.bundled?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
         let details = VStack(alignment: .leading, spacing: 8) {
             BoundBossPokemonIdentity(pokemon: pokemon, species: detail?.species, types: detail?.types ?? [])
-            BoundBossStats(stats: pokemon.stats)
+            BoundBossStats(stats: pokemon.stats, usesSourceColors: usesUIVersion2)
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 5) {
                 ForEach(Array(pokemon.moves.enumerated()), id: \.offset) { index, move in
                     BoundBossMoveRow(name: move, type: detail?.moves[index].type,
-                                     category: detail?.moves[index].categoryLabel ?? "—", index: index)
+                                     category: layout12MoveCategory(detail?.moves[index].categoryLabel ?? "—", enabled: usesUIVersion2), index: index)
                 }
             }
             BoundBossDescription(title: "Ability", name: pokemon.ability, description: detail?.abilityDescription,
@@ -270,7 +360,8 @@ struct BoundBossGuideView: View {
     /// The original reference card with direct team selection and the sheet's
     /// speed examples beside the selected opponent's base stats.
     private func layout7Card(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int,
-                             scrollsDetails: Bool = true, islandHeader: Bool = false, expandedReference: Bool = false) -> some View {
+                             scrollsDetails: Bool = true, islandHeader: Bool = false,
+                             expandedReference: Bool = false, version2: Bool = false) -> some View {
         let reference = BoundBossReference.bundled
         let detail = reference?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
         let details = VStack(alignment: .leading, spacing: 8) {
@@ -280,8 +371,8 @@ struct BoundBossGuideView: View {
                 if islandHeader { capBadge(team) }
             }
             .accessibilityElement(children: .contain).accessibilityIdentifier("bound.boss-speed-row")
-            moveGrid(pokemon: pokemon, detail: detail, compact: false, usesLayout12Categories: layout == .layout12)
-            if islandHeader {
+            moveGrid(pokemon: pokemon, detail: detail, compact: false, usesLayout12Categories: layout == .layout12 || version2)
+            if islandHeader || version2 {
                 Text(expandedReference ? BoundBossNatureDescription.label(for: pokemon.nature) : "Nature · \(pokemon.nature)")
                     .font(.system(size: 12, weight: .medium))
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -291,10 +382,11 @@ struct BoundBossGuideView: View {
                                  identifier: "bound.boss-ability-description")
             BoundBossDescription(title: "Item", name: pokemon.item, description: detail?.itemDescription,
                                  identifier: "bound.boss-item-description")
-            if expandedReference, let species = detail?.species, let dex = BoundRRDexCatalog.bundled {
+            if (expandedReference || version2), let species = detail?.species, let dex = BoundRRDexCatalog.bundled {
                 BoundRRDexCompactMatchups(pokemon: species, catalog: dex,
                                           identifier: "bound.boss-layout\(layout.rawValue)-matchups",
-                                          usesFullTypeColors: layout == .layout12)
+                                          usesFullTypeColors: layout == .layout12 || version2,
+                                          showsExceptionalMultipliers: version2)
             }
         }
         return VStack(alignment: .leading, spacing: 6) {
@@ -322,7 +414,7 @@ struct BoundBossGuideView: View {
                 Text(team.variant).font(.system(size: 10)).foregroundStyle(.secondary)
                     .lineLimit(1).accessibilityIdentifier("bound.boss-variant")
             }
-            if layout == .layout12 {
+            if layout == .layout12 || version2 {
                 layout12PokemonRow(team: team, pokemon: pokemon, index: index, detail: detail, reference: reference)
             } else {
                 layout7PokemonRow(team: team, pokemon: pokemon, index: index, detail: detail, reference: reference)
@@ -556,6 +648,38 @@ struct BoundBossGuideView: View {
         .fixedSize(horizontal: buttonWidth != nil, vertical: false)
     }
 
+    private func layout12PinnedTeamStrip(team: BoundBossTeam, selectedIndex: Int,
+                                         reference: BoundBossReference?) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            layout12TeamMemberStrip(team: team, selectedIndex: selectedIndex,
+                                    reference: reference, buttonWidth: 44)
+        }
+        .frame(height: 46)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Opponent team")
+    }
+
+    @ViewBuilder
+    private func version2ExtraReference(pokemon: BoundBossPokemon,
+                                        detail: BoundBossReference.Detail?) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(BoundBossNatureDescription.label(for: pokemon.nature))
+                .font(.system(size: 12, weight: .medium))
+                .accessibilityIdentifier("bound.boss-nature")
+            BoundBossDescription(title: "Ability", name: pokemon.ability, description: detail?.abilityDescription,
+                                 identifier: "bound.boss-ability-description")
+            BoundBossDescription(title: "Item", name: pokemon.item, description: detail?.itemDescription,
+                                 identifier: "bound.boss-item-description")
+            if let species = detail?.species, let dex = BoundRRDexCatalog.bundled {
+                BoundRRDexCompactMatchups(pokemon: species, catalog: dex,
+                                          identifier: "bound.boss-v2-matchups",
+                                          usesFullTypeColors: true,
+                                          showsExceptionalMultipliers: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func layout7PokemonName(_ pokemon: BoundBossPokemon) -> some View {
         Text(pokemon.species).font(.system(size: 15, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.65)
             .accessibilityIdentifier("bound.boss-pokemon")
@@ -610,11 +734,16 @@ struct BoundBossGuideView: View {
                 capBadge(team)
             }
             conditionBadges(team, compact: compact)
-            teamStrip(team: team, selectedIndex: index, reference: reference, compact: compact)
+            if usesUIVersion2 {
+                layout12PinnedTeamStrip(team: team, selectedIndex: index, reference: reference)
+            } else {
+                teamStrip(team: team, selectedIndex: index, reference: reference, compact: compact)
+            }
             selectedPokemonSummary(pokemon: pokemon, detail: detail)
             let details = VStack(alignment: .leading, spacing: compact ? 3 : 6) {
                 moveGrid(pokemon: pokemon, detail: detail, compact: compact)
-                BoundBossStats(stats: pokemon.stats)
+                BoundBossStats(stats: pokemon.stats, usesSourceColors: usesUIVersion2)
+                if usesUIVersion2 { version2ExtraReference(pokemon: pokemon, detail: detail) }
             }
             Group {
                 if scrollsDetails { ScrollView { details }.frame(maxHeight: .infinity) }
@@ -622,7 +751,7 @@ struct BoundBossGuideView: View {
             }
             .accessibilityIdentifier("bound.boss-details")
             .id("\(team.id)-\(index)")
-            navigationControls(team: team, index: index, compact: compact, includesFullTeam: !usesIslandActions)
+            if !usesUIVersion2 { navigationControls(team: team, index: index, compact: compact, includesFullTeam: !usesIslandActions) }
         }
         .padding(compact ? 4 : 12)
         .background(Color(uiColor: .systemBackground))
@@ -648,18 +777,23 @@ struct BoundBossGuideView: View {
                     capBadge(team)
                 }
                 conditionBadges(team, compact: true)
-                teamStrip(team: team, selectedIndex: index, reference: reference, compact: true)
+                if usesUIVersion2 {
+                    layout12PinnedTeamStrip(team: team, selectedIndex: index, reference: reference)
+                } else {
+                    teamStrip(team: team, selectedIndex: index, reference: reference, compact: true)
+                }
                 selectedPokemonSummary(pokemon: pokemon, detail: detail)
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 3) {
                         moveGrid(pokemon: pokemon, detail: detail, compact: true)
-                        BoundBossStats(stats: pokemon.stats)
+                        BoundBossStats(stats: pokemon.stats, usesSourceColors: usesUIVersion2)
+                        if usesUIVersion2 { version2ExtraReference(pokemon: pokemon, detail: detail) }
                     }
                 }
                 .accessibilityIdentifier("bound.boss-details")
                 .id("\(team.id)-\(index)")
                 .frame(maxHeight: .infinity)
-                navigationControls(team: team, index: index, compact: true, includesFullTeam: false)
+                if !usesUIVersion2 { navigationControls(team: team, index: index, compact: true, includesFullTeam: false) }
         }
         .padding(.horizontal, 8).padding(.vertical, 2)
         .frame(width: width, height: height, alignment: .top)
@@ -689,6 +823,9 @@ struct BoundBossGuideView: View {
             }
             conditionBadges(team, compact: true)
             layout4SelectedSummary(pokemon: pokemon, detail: detail, index: index, count: team.pokemon.count)
+            if usesUIVersion2 {
+                layout12PinnedTeamStrip(team: team, selectedIndex: index, reference: reference)
+            }
         }
         let details = VStack(alignment: .leading, spacing: 3) {
             moveGrid(pokemon: pokemon, detail: detail, compact: true)
@@ -712,9 +849,10 @@ struct BoundBossGuideView: View {
             .accessibilityIdentifier("bound.boss-layout4-stats-toggle")
             .accessibilityValue(showsLayout4Stats ? "Expanded" : "Collapsed")
             if showsLayout4Stats {
-                BoundBossStats(stats: pokemon.stats)
+                BoundBossStats(stats: pokemon.stats, usesSourceColors: usesUIVersion2)
                     .accessibilityIdentifier("bound.boss-layout4-stats")
             }
+            if usesUIVersion2 { version2ExtraReference(pokemon: pokemon, detail: detail) }
         }
         return VStack(alignment: .leading, spacing: compact ? 1 : 3) {
             if !usesIslandActions {
@@ -740,7 +878,7 @@ struct BoundBossGuideView: View {
                 .accessibilityIdentifier("bound.boss-details")
                 .id("layout4-\(team.id)-\(index)")
             }
-            layout4Navigation(team: team, index: index, reference: reference)
+            if !usesUIVersion2 { layout4Navigation(team: team, index: index, reference: reference) }
         }
         .padding(.horizontal, compact ? 6 : 9).padding(.vertical, 2)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -757,6 +895,9 @@ struct BoundBossGuideView: View {
             layout5Header(team: team, compact: compact)
             conditionBadges(team, compact: true)
             layout5SelectedSummary(pokemon: pokemon, detail: detail, index: index, count: team.pokemon.count)
+            if usesUIVersion2 {
+                layout12PinnedTeamStrip(team: team, selectedIndex: index, reference: reference)
+            }
         }
         let detailContent = layout5DetailContent(pokemon: pokemon, detail: detail)
 
@@ -791,7 +932,7 @@ struct BoundBossGuideView: View {
                 .accessibilityIdentifier("bound.boss-details")
                 .id("layout5-\(team.id)-\(index)")
             }
-            layout4Navigation(team: team, index: index, reference: reference)
+            if !usesUIVersion2 { layout4Navigation(team: team, index: index, reference: reference) }
         }
         .padding(.horizontal, compact ? 6 : 9)
         .padding(.vertical, 0)
@@ -848,7 +989,7 @@ struct BoundBossGuideView: View {
     @ViewBuilder
     private func layout5DetailContent(pokemon: BoundBossPokemon, detail: BoundBossReference.Detail?) -> some View {
         if layout5ShowsStats {
-            BoundBossStats(stats: pokemon.stats)
+            BoundBossStats(stats: pokemon.stats, usesSourceColors: usesUIVersion2)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("bound.boss-layout5-stats")
         } else {
@@ -856,6 +997,7 @@ struct BoundBossGuideView: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("bound.boss-layout5-moves")
         }
+        if usesUIVersion2 { version2ExtraReference(pokemon: pokemon, detail: detail) }
     }
 
     private func layout5SelectedSummary(pokemon: BoundBossPokemon, detail: BoundBossReference.Detail?,
@@ -915,13 +1057,14 @@ struct BoundBossGuideView: View {
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 2) {
                 ForEach(Array(pokemon.moves.enumerated()), id: \.offset) { moveIndex, move in
                     BoundBossMoveRow(name: move, type: detail?.moves[moveIndex].type,
-                                     category: detail?.moves[moveIndex].categoryLabel ?? "—",
+                                     category: layout12MoveCategory(detail?.moves[moveIndex].categoryLabel ?? "—", enabled: usesUIVersion2),
                                      index: moveIndex, compact: true, dense: true)
                 }
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("bound.boss-layout6-moves")
             layout6Stats(pokemon.stats)
+            if usesUIVersion2 { version2ExtraReference(pokemon: pokemon, detail: detail) }
         }
         return VStack(alignment: .leading, spacing: 0) {
             if scrollsOverview {
@@ -932,6 +1075,9 @@ struct BoundBossGuideView: View {
                         }
                         layout6Header(team: team, compact: compact)
                         layout5SelectedSummary(pokemon: pokemon, detail: detail, index: index, count: team.pokemon.count)
+                        if usesUIVersion2 {
+                            layout12PinnedTeamStrip(team: team, selectedIndex: index, reference: reference)
+                        }
                         details
                     }
                 }
@@ -944,6 +1090,9 @@ struct BoundBossGuideView: View {
                 }
                 layout6Header(team: team, compact: compact)
                 layout5SelectedSummary(pokemon: pokemon, detail: detail, index: index, count: team.pokemon.count)
+                if usesUIVersion2 {
+                    layout12PinnedTeamStrip(team: team, selectedIndex: index, reference: reference)
+                }
                 Group {
                     if scrollsDetails {
                         ScrollView(.vertical, showsIndicators: false) { details }
@@ -956,7 +1105,7 @@ struct BoundBossGuideView: View {
                 .accessibilityIdentifier("bound.boss-details")
                 .id("layout6-\(team.id)-\(index)")
             }
-            layout6Navigation(team: team, index: index, reference: reference)
+            if !usesUIVersion2 { layout6Navigation(team: team, index: index, reference: reference) }
         }
         .padding(.horizontal, compact ? 6 : 9)
         .padding(.vertical, 0)
@@ -1020,7 +1169,9 @@ struct BoundBossGuideView: View {
     private func layout6Stats(_ stats: [BoundBossPokemon.Stat]) -> some View {
         let labels: [String: (short: String, full: String)] = [
             "HP": ("HP", "HP"), "ATK": ("Atk", "Attack"), "DEF": ("Def", "Defense"),
-            "SPA": ("SpA", "Special Attack"), "SPD": ("SpD", "Special Defense"), "SPE": ("Spe", "Speed")
+            "SPA": (usesUIVersion2 ? "SpAtk" : "SpA", "Special Attack"),
+            "SPD": (usesUIVersion2 ? "SpDef" : "SpD", "Special Defense"),
+            "SPE": (usesUIVersion2 ? "Speed" : "Spe", "Speed")
         ]
         return HStack(spacing: 2) {
             Text("Base\nstats")
@@ -1034,6 +1185,7 @@ struct BoundBossGuideView: View {
                 VStack(spacing: 1) {
                     Text(label.short).font(.system(size: 8, weight: .medium)).foregroundStyle(.secondary)
                     Text(stat.base.map(String.init) ?? "—").font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                        .foregroundStyle(BoundBossStats.sourceColor(stat, enabled: usesUIVersion2))
                 }
                 .frame(maxWidth: .infinity, minHeight: 22)
                 .accessibilityElement(children: .ignore)
@@ -1326,7 +1478,7 @@ struct BoundBossGuideView: View {
             ForEach(Array(pokemon.moves.enumerated()), id: \.offset) { index, move in
                 let category = detail?.moves[index].categoryLabel ?? "—"
                 BoundBossMoveRow(name: move, type: detail?.moves[index].type,
-                                 category: layout12MoveCategory(category, enabled: usesLayout12Categories),
+                                 category: layout12MoveCategory(category, enabled: usesLayout12Categories || usesUIVersion2),
                                  index: index, compact: compact)
             }
         }
@@ -1503,7 +1655,7 @@ private struct BoundBossStats: View {
                     Text(label.short).font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
                     Text(stat.base.map(String.init) ?? "—")
                         .font(.system(size: 11, weight: .semibold)).monospacedDigit()
-                        .foregroundStyle(statColor(stat))
+                        .foregroundStyle(Self.sourceColor(stat, enabled: usesSourceColors))
                 }
                 .lineLimit(1)
                 .fixedSize()
@@ -1515,8 +1667,8 @@ private struct BoundBossStats: View {
         }
     }
 
-    private func statColor(_ stat: BoundBossPokemon.Stat) -> Color {
-        guard usesSourceColors, let colorHex = stat.colorHex,
+    static func sourceColor(_ stat: BoundBossPokemon.Stat, enabled: Bool) -> Color {
+        guard enabled, let colorHex = stat.colorHex,
               let hex = UInt32(colorHex.dropFirst(), radix: 16) else { return .primary }
         return Color(red: Double((hex >> 16) & 255) / 255, green: Double((hex >> 8) & 255) / 255,
                      blue: Double(hex & 255) / 255)

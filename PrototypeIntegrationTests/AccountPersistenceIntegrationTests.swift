@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import SwiftUI
 import Security
 @testable import Delta
 
@@ -42,6 +43,90 @@ final class AccountPersistenceIntegrationTests: XCTestCase {
         observations[1].fire()
         XCTAssertEqual(reads, closedReads)
         XCTAssertTrue(observations[1].cancelled)
+    }
+
+    func testFriendsSheetRendersOption2AndPreservesOption1WithLongUsername() async throws {
+        let previousExperimentalValue = BoundExperimentalFeaturesPreferences().isEnabled
+        let previousVersion = UserDefaults.standard.object(forKey: BoundUIVersionPreferences.key)
+        let preferences = BoundExperimentalFeaturesPreferences()
+        preferences.isEnabled = true
+        BoundUIVersionPreferences().version = .option2
+
+        let namespace = "Bound.FriendsSheetRenderTest." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+        let storage = BoundKeychainSessionStorage(defaults: defaults, service: namespace + ".session")
+        let deletionStorage = BoundKeychainSessionStorage(defaults: defaults, service: namespace + ".deletion")
+        let owner = UUID()
+        let token = try token(owner: owner)
+        try storage.write(JSONEncoder().encode(BoundSavedSession(origin: BoundFriendAccount.origin,
+            owner: owner, accessToken: token, refreshToken: "synthetic-friends-render-refresh")))
+        let account = BoundFriendAccount(storage: storage, deletionStorage: deletionStorage,
+            automaticRefresh: false, configuration: { "fixture-key" }, transport: { _ in
+                XCTFail("Rendering the Friends sheet must not contact the backend")
+                throw BoundFriendError.unavailable
+            })
+        let room = FriendRoom(roomID: UUID().uuidString, displayName: "A Long Friend Display Name")
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            XCTAssertEqual(action, "list")
+            return FriendResponse(ok: true, rooms: [room], username: "LongUsernameForLayoutTestingABCDE")
+        }, sendJiggle: { _, _ in
+            XCTFail("Rendering the Friends sheet must not send a Jiggle")
+            return ""
+        }, observeAccount: { OnboardingObservation($0) })
+        let sharing = FriendSharingSession(configuration: nil, authenticatedMode: true)
+        let host = UIHostingController(rootView: BoundFriendsSheet(sharing: sharing,
+            onboarding: onboarding, account: account))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 393, height: 852)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.layoutIfNeeded()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousWindow?.makeKeyAndVisible()
+            onboarding.close()
+            sharing.stop()
+            account.signOut()
+            try? storage.remove()
+            try? deletionStorage.remove()
+            defaults.removePersistentDomain(forName: namespace)
+            preferences.isEnabled = previousExperimentalValue
+            if let previousVersion {
+                UserDefaults.standard.set(previousVersion, forKey: BoundUIVersionPreferences.key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
+            }
+        }
+
+        for _ in 0..<100 {
+            if onboarding.accountUsername != nil && onboarding.rooms == [room] { break }
+            await Task.yield()
+        }
+        XCTAssertEqual(onboarding.rooms, [room])
+        XCTAssertEqual(onboarding.accountUsername, "LongUsernameForLayoutTestingABCDE")
+
+        func attach(_ name: String) throws {
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.6))
+            let renderer = UIGraphicsImageRenderer(size: CGSize(width: 393, height: 852))
+            let image = renderer.image { _ in
+                host.view.drawHierarchy(in: CGRect(x: 0, y: 0, width: 393, height: 852), afterScreenUpdates: true)
+            }
+            XCTAssertGreaterThan(try XCTUnwrap(image.pngData()).count, 5000)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
+        try attach("Friends-option2-long-username")
+        BoundUIVersionPreferences().version = .option1
+        host.rootView = BoundFriendsSheet(sharing: sharing, onboarding: onboarding, account: account)
+        try attach("Friends-option1-preservation")
     }
 
     private func token(owner: UUID, expires: TimeInterval = 3600) throws -> String {

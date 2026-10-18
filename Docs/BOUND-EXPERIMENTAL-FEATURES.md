@@ -36,7 +36,20 @@ silver material, dark bezel and pressed feedback. The larger hit regions avoid
 native game inputs. Landscape keeps its existing button. Turning experiments
 off restores Option 1 without erasing the saved choice.
 
-The **Reference layouts** section in Bound Settings has independent six-way
+**UI Version** appears in Library Settings and Bound Settings while experiments
+are enabled. **Option 1** is the default and retains the existing interface.
+**Option 2** puts Add friend beside the greeting, highlights the selected friend
+with the actual sharing state and Stop action, and moves Sign out and Delete
+account into Library Settings. It adds live, read-only layout previews, a
+touch-and-hold view menu on the Bound button, and a saved view order. Tapping
+the Bound button still cycles enabled views. The reference panels add clearer
+stat labels, exceptional matchup multipliers, larger touch targets, and pinned
+Boss team selection where the panel has enough height. Very short panels remain
+scrollable. Switching versions preserves the selected reference layouts and
+enabled views. Disabling experiments ignores Option 2 and the custom order
+without erasing either preference. This UI setting changes no backend endpoint.
+
+The **Reference layouts** section in Bound Settings has independent twelve-way
 selectors for **RR Dex** and **Boss View**. Both default to **Layout 1**, preserving
 the original presentation. Choices persist on this device across app launches
 and remain saved when experiments are disabled. Layout 2 surfaces more reference
@@ -46,11 +59,14 @@ touch targets, clearer content groups and expandable secondary details.
 Layout 5 adds a compact, glanceable Dex stats row with the total base-stat score
 in the footer and an expandable evolution section. Boss Layout 5 switches moves
 and stats with one button while keeping team navigation and Dynamic Island
-shortcuts within reach. Numbered layout buttons keep all six choices readable;
-each selector shows the selected layout's full name and description below it.
+shortcuts within reach. Option 1 uses numbered layout buttons and descriptions;
+Option 2 uses named previews with a separate Use layout action.
 Layout 6 shows boss moves and base stats together and fits six team buttons in
 the standard portrait footer. Its Dex puts evolution methods in a dedicated
 sheet reached from the labeled footer, keeping the main stat row visible.
+Layouts 7–12 add the subsequent Island controls, inline learnset and matchup
+summaries, trainer navigation, and full-color type pills. Previewing a layout
+does not import a save or overwrite the game’s saved reference selections.
 Layout choices do not change the ROM, guide data
 version, selected encounter, selected species, or imported randomizer settings.
 

@@ -2148,6 +2148,91 @@ final class CompanionUITests: XCTestCase {
         app.terminate(); app.launch(); setExperimentalFeatures(false, in: app); app.terminate()
     }
 
+    func testUIVersionTwoPreviewsDirectSelectionAndPersistence() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+        let app = XCUIApplication()
+        let arguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        app.launchArguments = arguments + ["--bound-ui-reset-layout"]
+        app.launch()
+        setExperimentalFeatures(true, in: app)
+        func play() {
+            let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+            XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
+            XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+        }
+        defer {
+            app.terminate()
+            app.launchArguments = arguments + ["--bound-ui-reset-layout"]
+            app.launch(); setExperimentalFeatures(false, in: app); play(); app.terminate()
+        }
+        play()
+        let gameScreen = element("bound.game-screen", in: app)
+        let originalFrame = gameScreen.frame
+        openBoundSettings(in: app)
+        let version = element("bound.ui-version", in: app)
+        scrollToSetting(version, in: app)
+        version.tap()
+        app.buttons["Option 2"].tap()
+        let dex = app.buttons["bound.rrdex-layout"]
+        scrollToSetting(dex, in: app); dex.tap()
+        let choice = app.buttons["bound.layout-preview.12"]
+        scrollToSetting(choice, in: app, fullyVisible: true); choice.tap()
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in choice.isSelected }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
+        screenshot("UI-Version2-layout-gallery")
+        app.buttons["bound.use-layout"].tap()
+        let boss = app.buttons["bound.boss-layout"]
+        scrollToSetting(boss, in: app); boss.tap()
+        scrollToSetting(choice, in: app, fullyVisible: true); choice.tap()
+        app.buttons["bound.use-layout"].tap()
+        let reorder = app.buttons["bound.reorder-views"]
+        scrollToSetting(reorder, in: app); reorder.tap()
+        XCTAssertTrue(app.navigationBars["View order"].waitForExistence(timeout: 5))
+        screenshot("UI-Version2-view-order")
+        app.navigationBars.buttons.firstMatch.tap()
+        closeBoundSheet(in: app)
+        XCTAssertEqual(gameScreen.frame, originalFrame)
+        let cycle = app.buttons["bound.panel-cycle"]
+        cycle.press(forDuration: 0.7)
+        XCTAssertTrue(app.buttons["RR Dex"].waitForExistence(timeout: 5))
+        app.buttons["RR Dex"].tap()
+        XCTAssertEqual(cycle.value as? String, "Dex")
+        XCTAssertEqual(element("bound.rrdex", in: app).value as? String, "Layout 12")
+        screenshot("UI-Version2-dex")
+        cycle.press(forDuration: 0.7)
+        app.buttons["Bosses"].tap()
+        XCTAssertEqual(cycle.value as? String, "Bosses")
+        XCTAssertEqual(element("bound.boss-guide", in: app).value as? String, "Layout 12")
+        let teamMember = app.buttons["bound.boss-team-member-1"]
+        XCTAssertTrue(teamMember.waitForExistence(timeout: 5))
+        XCTAssertTrue(teamMember.isHittable)
+        teamMember.tap()
+        let memberSelected = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in teamMember.isSelected }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [memberSelected], timeout: 5), .completed)
+        XCTAssertEqual(gameScreen.frame, originalFrame)
+        screenshot("UI-Version2-boss")
+        app.terminate()
+        app.launchArguments = arguments
+        app.launch(); play()
+        cycle.press(forDuration: 0.7)
+        XCTAssertTrue(app.buttons["RR Dex"].waitForExistence(timeout: 5), "UI Version 2 survives relaunch")
+        app.buttons["RR Dex"].tap()
+        openBoundSettings(in: app)
+        scrollToSetting(version, in: app); version.tap(); app.buttons["Option 1"].tap()
+        let originalDex = app.segmentedControls["bound.rrdex-layout"]
+        scrollToSetting(originalDex, in: app)
+        XCTAssertTrue(originalDex.buttons["12"].isSelected, "Switching UI versions preserves the independent reference layout")
+        screenshot("UI-Version1-original-settings")
+        closeBoundSheet(in: app)
+    }
+
     func testLayout12BossAndDexInteractions() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
@@ -2948,10 +3033,11 @@ final class CompanionUITests: XCTestCase {
     }
 
     // Short Form drags avoid jumping past a lazily materialized row in landscape.
-    private func scrollToSetting(_ target: XCUIElement, in app: XCUIApplication) {
+    private func scrollToSetting(_ target: XCUIElement, in app: XCUIApplication, fullyVisible: Bool = false) {
         let form = app.collectionViews.firstMatch
         for _ in 0..<40 {
-            if target.exists && target.isHittable { return }
+            if target.exists && target.isHittable && (!fullyVisible ||
+                target.frame.minY >= form.frame.minY + 8 && target.frame.maxY <= form.frame.maxY - 24) { return }
             let scrollDown = target.exists && target.frame.midY < form.frame.midY
             let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: scrollDown ? 0.35 : 0.80))
             let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: scrollDown ? 0.65 : 0.50))

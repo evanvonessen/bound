@@ -5,13 +5,15 @@ struct BoundRRDexView: View {
     let gameID: String
     var floating = false
     var portraitTopInset: CGFloat = 0
+    var previewLayout: BoundReferenceLayout? = nil
     let presentationChanged: (Bool) -> Void
     var textEditingChanged: (Bool) -> Void = { _ in }
     var currentSave: () throws -> BoundRRDexSave = { throw BoundRRDexSave.ImportError.currentGameUnavailable }
     private let catalog = BoundRRDexCatalog.bundled
     private let preferences = BoundRRDexPreferences()
     @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
-    @AppStorage(BoundReferenceLayoutPreferences.dexKey) private var layout = BoundReferenceLayout.layout1
+    @AppStorage(BoundReferenceLayoutPreferences.dexKey) private var savedLayout = BoundReferenceLayout.layout1
+    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
     @State private var choice = BoundRRDexPreferences.Choice()
     @State private var query = ""
     // UIKit owns focus; a SwiftUI FocusState without a .focused view resets it.
@@ -43,6 +45,11 @@ struct BoundRRDexView: View {
     private var editingText: Bool { searching || moveSearchFocused }
     private var interacting: Bool { editingText || sheet != nil || importError != nil }
     private var hasIslandActions: Bool { !floating && portraitTopInset >= 51 }
+    private var layout: BoundReferenceLayout { previewLayout ?? savedLayout }
+    private var usesUIVersion2: Bool { experimentsEnabled && uiVersion == .option2 }
+    private var statLabels: [String] {
+        usesUIVersion2 ? ["HP", "Atk", "Def", "SpAtk", "SpDef", "Speed"] : ["HP", "Atk", "Def", "SpA", "SpD", "Spe"]
+    }
 
     var body: some View {
         Group {
@@ -101,13 +108,14 @@ struct BoundRRDexView: View {
                 .accessibilityElement(children: .contain).accessibilityIdentifier("bound.rrdex")
                 .accessibilityValue(layout.title)
                 .onAppear {
-                    choice = preferences.read(gameID: gameID)
+                    if previewLayout == nil { choice = preferences.read(gameID: gameID) }
                     expandedLearnsetMethod = nil
-                    refreshAutomaticSave()
+                    if previewLayout == nil { refreshAutomaticSave() }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: BoundRRDexSaveRefreshEvent.notificationName)
                     .receive(on: DispatchQueue.main)) { notification in
-                    guard notification.userInfo?[BoundRRDexSaveRefreshEvent.gameIDKey] as? String == gameID else { return }
+                    guard previewLayout == nil,
+                          notification.userInfo?[BoundRRDexSaveRefreshEvent.gameIDKey] as? String == gameID else { return }
                     refreshAutomaticSave()
                 }
                 .sheet(item: $sheet, onDismiss: detailDismissed) { detail in
@@ -146,6 +154,7 @@ struct BoundRRDexView: View {
             textEditingChanged(false)
             if !awaitingDetailDismissal { presentationChanged(false) }
         }
+        .allowsHitTesting(previewLayout == nil)
     }
 
     private func detailTitle(_ detail: Detail) -> String {
@@ -945,10 +954,11 @@ struct BoundRRDexView: View {
     private func layout5StatsLine(pokemon: BoundRRDexSpecies,
                                   identifier: String = "bound.rrdex-layout5-stats") -> some View {
         HStack(spacing: 5) {
-            ForEach(Array(zip(["HP", "Atk", "Def", "SpA", "SpD", "Spe"], pokemon.stats)), id: \.0) { label, stat in
+            ForEach(Array(zip(statLabels, pokemon.stats)), id: \.0) { label, stat in
                 VStack(spacing: 2) {
                     Text(label).font(.system(size: 8)).foregroundStyle(.secondary)
                     Text(String(stat)).font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(usesUIVersion2 ? statColor(stat) : .primary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 3)
@@ -1098,11 +1108,12 @@ struct BoundRRDexView: View {
     }
 
     private func statsLine(pokemon: BoundRRDexSpecies, compact: Bool) -> some View {
-        HStack(spacing: 5) {
-            ForEach(Array(zip(["HP", "Atk", "Def", "SpA", "SpD", "Spe"], pokemon.stats)), id: \.0) { label, stat in
+        return HStack(spacing: 5) {
+            ForEach(Array(zip(statLabels, pokemon.stats)), id: \.0) { label, stat in
                 VStack(spacing: 2) {
                     Text(label).font(.system(size: compact ? 8 : 9)).foregroundStyle(.secondary)
                     Text(String(stat)).font(.system(size: compact ? 11 : 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(usesUIVersion2 ? statColor(stat) : .primary)
                 }.frame(maxWidth: .infinity).padding(.vertical, compact ? 3 : 5)
                     .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 5))
                     .accessibilityElement(children: .ignore).accessibilityLabel("\(label), \(stat)")
@@ -1113,14 +1124,15 @@ struct BoundRRDexView: View {
     private func pinnedAbilities(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog,
                                 compact: Bool = false, showTitle: Bool = true,
                                 comfortableTargets: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        let comfortable = comfortableTargets || usesUIVersion2
+        return VStack(alignment: .leading, spacing: 3) {
             if showTitle { Text("ABILITIES").font(.system(size: 8, weight: .medium, design: .monospaced)).foregroundStyle(.secondary) }
             HStack(spacing: 5) {
                 ForEach(Array(catalog.abilityDetails(for: pokemon, save: choice.save).enumerated()), id: \.offset) { index, ability in
                     let name = ability.name + (ability.isHidden ? " (Hidden)" : "")
                     Button { showDetail(.ability(name, ability.description)) } label: {
                         Group {
-                            if comfortableTargets {
+                            if comfortable {
                                 HStack(spacing: 4) {
                                     Text(name).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                                     Image(systemName: "info.circle").font(.system(size: 10))
@@ -1132,8 +1144,8 @@ struct BoundRRDexView: View {
                             }
                         }
                         .padding(.horizontal, 7).padding(.vertical, compact ? 3 : 4)
-                        .frame(maxWidth: comfortableTargets ? .infinity : nil,
-                               minHeight: comfortableTargets ? 44 : nil)
+                        .frame(maxWidth: comfortable ? .infinity : nil,
+                               minHeight: comfortable ? 44 : nil)
                         .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
                     }
                     .buttonStyle(.plain)
@@ -1199,7 +1211,7 @@ struct BoundRRDexView: View {
     }
 
     private func details(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog, expandedReference: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        return VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 10) {
                 BoundRRDexSprite(pokemon: pokemon).frame(width: 58, height: 58)
                 VStack(alignment: .leading, spacing: 4) {
@@ -1223,11 +1235,11 @@ struct BoundRRDexView: View {
                 .accessibilityIdentifier("bound.rrdex-abilities")
             }
             HStack(spacing: 5) {
-                ForEach(Array(zip(["HP", "Atk", "Def", "SpA", "SpD", "Spe"], pokemon.stats)), id: \.0) { label, stat in
+                ForEach(Array(zip(statLabels, pokemon.stats)), id: \.0) { label, stat in
                     VStack(spacing: 2) {
                         Text(label).font(.system(size: 9)).foregroundStyle(.secondary)
                         Text(String(stat)).font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(expandedReference ? statColor(stat) : .primary)
+                            .foregroundStyle(expandedReference || usesUIVersion2 ? statColor(stat) : .primary)
                     }.frame(maxWidth: .infinity).padding(.vertical, 5)
                         .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 5))
                         .accessibilityElement(children: .ignore).accessibilityLabel("\(label), \(stat)")
@@ -1236,10 +1248,11 @@ struct BoundRRDexView: View {
             if expandedReference, layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12 { layout8Evolution(pokemon: pokemon, catalog: catalog) }
             else if expandedReference { layout7Evolution(pokemon: pokemon, catalog: catalog) }
             else { evolutionLine(pokemon: pokemon, catalog: catalog) }
-            if layout == .layout10 || layout == .layout11 || layout == .layout12 {
+            if usesUIVersion2 || layout == .layout10 || layout == .layout11 || layout == .layout12 {
                 BoundRRDexCompactMatchups(pokemon: pokemon, catalog: catalog,
                                          identifier: "bound.rrdex-layout\(layout.rawValue)-matchups",
-                                         usesFullTypeColors: layout == .layout12)
+                                         usesFullTypeColors: layout == .layout12 || usesUIVersion2,
+                                         showsExceptionalMultipliers: usesUIVersion2)
             }
             if layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12 { inlineLearnset(pokemon: pokemon, catalog: catalog) }
         }
@@ -1249,14 +1262,15 @@ struct BoundRRDexView: View {
                               besideIsland: Bool = false, dense: Bool = false,
                               comfortableTargets: Bool = false,
                               identifier: String? = nil) -> some View {
-        Button {
+        let comfortable = comfortableTargets || usesUIVersion2
+        return Button {
             showDetail(detail)
         } label: {
             Label(title, systemImage: icon).font(.system(size: besideIsland ? 11 : dense ? 10 : 12, weight: .medium))
                 .lineLimit(1).minimumScaleFactor(0.8)
-                .frame(maxWidth: .infinity).frame(height: besideIsland ? 44 : nil)
-                .frame(minHeight: comfortableTargets ? 44 : nil)
-                .padding(.vertical, besideIsland || comfortableTargets ? 0 : dense ? 4 : 8)
+                .frame(maxWidth: .infinity).frame(height: besideIsland || usesUIVersion2 ? 44 : nil)
+                .frame(minHeight: comfortable ? 44 : nil)
+                .padding(.vertical, besideIsland || comfortable ? 0 : dense ? 4 : 8)
                 .background(Color(uiColor: .deltaPurple).opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
         }.accessibilityIdentifier(identifier ?? "bound.rrdex-\(detail.id)")
     }
@@ -1279,7 +1293,7 @@ struct BoundRRDexView: View {
                         Spacer()
                         Text(pokemon.types.compactMap { catalog.type(id: $0)?.name }.joined(separator: " / "))
                             .font(.system(size: 10)).foregroundStyle(.secondary)
-                    }.padding(.vertical, 10).contentShape(Rectangle())
+                    }.padding(.vertical, 10).frame(minHeight: usesUIVersion2 ? 44 : nil).contentShape(Rectangle())
                 }.buttonStyle(.plain).accessibilityIdentifier("bound.rrdex-suggestion-\(pokemon.id)")
                 Divider()
             }
@@ -1561,6 +1575,7 @@ struct BoundRRDexCompactMatchups: View {
     let catalog: BoundRRDexCatalog
     let identifier: String
     var usesFullTypeColors = false
+    var showsExceptionalMultipliers = false
 
     var body: some View {
         let matchups = catalog.defensiveMatchups(for: pokemon)
@@ -1579,7 +1594,15 @@ struct BoundRRDexCompactMatchups: View {
                             .padding(.top, 3).frame(width: 76, alignment: .leading)
                         BoundRRDexTypeFlowLayout {
                             ForEach(entries) { entry in
-                                BoundRRDexTypePill(type: entry.type, usesFullColor: usesFullTypeColors)
+                                HStack(spacing: 3) {
+                                    BoundRRDexTypePill(type: entry.type, usesFullColor: usesFullTypeColors)
+                                    if showsExceptionalMultipliers, entry.multiplier >= 4 || entry.multiplier > 0 && entry.multiplier <= 0.25 {
+                                        Text(exceptionalMultiplierLabel(entry.multiplier))
+                                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                                            .foregroundStyle(entry.multiplier >= 4 ? Color.red : Color.green)
+                                            .accessibilityHidden(true)
+                                    }
+                                }
                                     .accessibilityLabel(entry.type.name)
                                     .accessibilityValue(entry.label)
                                     .accessibilityIdentifier("\(identifier)-\(group.lowercased())-type-\(entry.type.id)")
@@ -1594,6 +1617,13 @@ struct BoundRRDexCompactMatchups: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(identifier)
+    }
+
+    private func exceptionalMultiplierLabel(_ multiplier: Double) -> String {
+        if multiplier >= 4 { return "×\(multiplier.formatted(.number.precision(.fractionLength(0))))" }
+        if abs(multiplier - 0.25) < 0.001 { return "¼×" }
+        if abs(multiplier - 0.5) < 0.001 { return "½×" }
+        return "×\(multiplier.formatted(.number.precision(.fractionLength(0...2))))"
     }
 }
 
