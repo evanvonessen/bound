@@ -33,12 +33,15 @@ final class BoundCompanionSettingsModel: ObservableObject {
         }
     }
     private static func read(_ preferences: BoundPiPPreferences) -> Configuration {
-        let assignments = (0..<3).map { preferences.assignedContents(for: $0) }
+        let buttonType = preferences.buttonType
+        let assignments = (0..<buttonType.splitButtonCount).map {
+            preferences.assignedContents(for: $0, buttonType: buttonType)
+        }
         let assigned = Set(assignments.flatMap { $0 })
-        let available = preferences.buttonType == .option3
+        let available = buttonType.splitButtonCount > 0
             ? preferences.orderedContents.filter(assigned.contains)
             : preferences.enabledContents(uiVersion: preferences.uiVersion)
-        return Configuration(uiVersion: preferences.uiVersion, buttonType: preferences.buttonType,
+        return Configuration(uiVersion: preferences.uiVersion, buttonType: buttonType,
             availableContents: available, orderedContents: preferences.orderedContents,
             assignments: assignments, enabled: BoundPiPContent.allCases.map(preferences.isEnabled),
             opacities: BoundPiPContent.allCases.map(preferences.opacity))
@@ -49,9 +52,9 @@ final class BoundCompanionSettingsModel: ObservableObject {
     }
     func setButtonType(_ type: BoundCompanionButtonType) { preferences.buttonType = type; refresh() }
     func setAssigned(_ enabled: Bool, content: BoundPiPContent, for button: Int) {
-        var contents = preferences.assignedContents(for: button).filter { $0 != content }
+        var contents = preferences.assignedContents(for: button, buttonType: buttonType).filter { $0 != content }
         if enabled { contents.append(content) }
-        preferences.setAssignedContents(contents, for: button); refresh()
+        preferences.setAssignedContents(contents, for: button, buttonType: buttonType); refresh()
     }
     func setContentOrder(_ contents: [BoundPiPContent]) {
         guard uiVersion == .option2 else { return }
@@ -106,7 +109,7 @@ final class BoundCompanionState: ObservableObject {
     var editControls: (() -> Void)?
     var sharingChanged: ((Bool) -> Void)?
     var selectionChanged: (() -> Void)?
-    var usesAssignedButtons: Bool { buttonType == .option3 }
+    var usesAssignedButtons: Bool { buttonType.splitButtonCount > 0 }
     var availableContents: [BoundPiPContent] { configuration.availableContents }
     var content: BoundPiPContent { availableContents.indices.contains(selected) ? availableContents[selected] : .friend }
     func updateButtonType() {
@@ -120,7 +123,7 @@ final class BoundCompanionState: ObservableObject {
     }
     func advanceButton(_ button: Int) {
         guard usesAssignedButtons else { return }
-        let contents = preferences.assignedContents(for: button)
+        let contents = preferences.assignedContents(for: button, buttonType: buttonType)
         guard let first = contents.first else { return }
         let next: BoundPiPContent
         if !hidden, let index = contents.firstIndex(of: content) {
@@ -226,7 +229,7 @@ final class BoundCompanionCoordinator {
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-reset-layout") {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
-            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.controls.v1.") { UserDefaults.standard.removeObject(forKey: key) }
+            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") { UserDefaults.standard.removeObject(forKey: key) }
         }
         #endif
         #if DEBUG
@@ -465,7 +468,9 @@ final class BoundCompanionCoordinator {
             rightControlGutter: owner.boundLandscapeControlGutter(),
             menuHitFrame: owner.controllerView.convert(menu.extendedFrame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height)), to: owner.view),
             buttonType: BoundCompanionButtonPreferences().effectiveButtonType)
-        controls.configureSegments(contents: (0..<3).map { state.preferences.assignedContents(for: $0) }, selected: state.content)
+        controls.configureSegments(contents: (0..<state.buttonType.splitButtonCount).map {
+            state.preferences.assignedContents(for: $0, buttonType: state.buttonType)
+        }, selected: state.content)
         if state.availableContents.isEmpty {
             controls.accessibilityValue = "No views enabled"
             controls.accessibilityHint = "Enable companion views in Settings"
@@ -742,17 +747,18 @@ struct BoundInterfaceSettings: View {
                     } header: { Text("Bound button") } footer: {
                         Text("Choose the portrait Bound button's shape and size. Your choice is saved on this device.")
                     }
-                    if model.buttonType == .option3 {
-                        ForEach(0..<3, id: \.self) { button in
+                    if model.buttonType.splitButtonCount > 0 {
+                        ForEach(0..<model.buttonType.splitButtonCount, id: \.self) { button in
                             Section {
                                 ForEach(model.preferences.orderedContents, id: \.rawValue) { content in
                                     Toggle(content.title, isOn: Binding(
-                                        get: { model.preferences.assignedContents(for: button).contains(content) },
+                                        get: { model.preferences.assignedContents(for: button, buttonType: model.buttonType).contains(content) },
                                         set: { model.setAssigned($0, content: content, for: button) }))
                                     .accessibilityIdentifier("bound.button-\(button + 1)-view.\(content.rawValue)")
                                 }
                             } header: {
-                                Text("Button \(button + 1) · \(["Top", "Middle", "Bottom"][button])")
+                                let positions = model.buttonType == .option4 ? ["Top", "Bottom"] : ["Top", "Middle", "Bottom"]
+                                Text("Button \(button + 1) · \(positions[button])")
                             } footer: {
                                 Text("Touch to cycle through this button's selected views. Select none to leave it inactive.")
                             }

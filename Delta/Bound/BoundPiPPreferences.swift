@@ -93,26 +93,40 @@ enum BoundReferenceLayoutPreferences {
 }
 
 enum BoundCompanionButtonType: Int, CaseIterable, Sendable {
-    case option1 = 1, option2 = 2, option3 = 3
+    case option1 = 1, option2 = 2, option3 = 3, option4 = 4
     var title: String { "Option \(rawValue)" }
+    var splitButtonCount: Int {
+        switch self {
+        case .option1, .option2: 0
+        case .option3: 3
+        case .option4: 2
+        }
+    }
     var summary: String {
         switch self {
         case .option1: "The original round button and placement."
         case .option2: "A tall rounded rectangle."
         case .option3: "Three separate buttons in the tall button's space."
+        case .option4: "Two separate buttons in the tall button's space."
         }
     }
 }
 
 final class BoundCompanionButtonPreferences {
-    static let key = "bound.delta.pip.v1.button-type"
+    // v2 separates the newly usable Option 4 value from legacy rawValue 4,
+    // which older builds treated as an alias for Option 3.
+    static let key = "bound.delta.pip.v2.button-type"
+    static let legacyKey = "bound.delta.pip.v1.button-type"
     static let didChangeNotification = Notification.Name("BoundCompanionButtonDidChange")
     private let defaults: UserDefaults
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
     var buttonType: BoundCompanionButtonType {
         get {
-            let saved = defaults.integer(forKey: Self.key)
-            return saved == 4 ? .option3 : BoundCompanionButtonType(rawValue: saved) ?? .option1
+            if let saved = defaults.object(forKey: Self.key) as? Int {
+                return BoundCompanionButtonType(rawValue: saved) ?? .option1
+            }
+            let legacy = defaults.integer(forKey: Self.legacyKey)
+            return legacy == 4 ? .option3 : BoundCompanionButtonType(rawValue: legacy) ?? .option1
         }
         set {
             guard buttonType != newValue else { return }
@@ -148,18 +162,23 @@ final class BoundPiPPreferences {
         set { BoundCompanionButtonPreferences(defaults: defaults).buttonType = newValue }
     }
     /// Each segment keeps its own choices, including an intentionally empty set.
-    func assignedContents(for button: Int) -> [BoundPiPContent] {
-        guard (0..<3).contains(button) else { return [] }
-        let fallback: [[BoundPiPContent]] = [[.friend], [.bosses], [.types]]
-        guard let saved = defaults.stringArray(forKey: key("button.\(button + 1).views")) else { return fallback[button] }
+    /// Option 3 keeps its original storage and defaults; Option 4 has an independent namespace.
+    func assignedContents(for button: Int, buttonType: BoundCompanionButtonType? = nil) -> [BoundPiPContent] {
+        let type = buttonType ?? self.buttonType
+        guard (0..<type.splitButtonCount).contains(button) else { return [] }
+        let fallback: [[BoundPiPContent]] = type == .option4 ? [[.friend], [.bosses]] : [[.friend], [.bosses], [.types]]
+        let suffix = type == .option3 ? "button.\(button + 1).views" : "button.option4.\(button + 1).views"
+        guard let saved = defaults.stringArray(forKey: key(suffix)) else { return fallback[button] }
         let selected = Set(saved.compactMap(BoundPiPContent.init(rawValue:)))
         return orderedContents.filter { selected.contains($0) }
     }
-    func setAssignedContents(_ contents: [BoundPiPContent], for button: Int) {
-        guard (0..<3).contains(button) else { return }
+    func setAssignedContents(_ contents: [BoundPiPContent], for button: Int, buttonType: BoundCompanionButtonType? = nil) {
+        let type = buttonType ?? self.buttonType
+        guard (0..<type.splitButtonCount).contains(button) else { return }
         let selected = Set(contents)
         let normalized = orderedContents.filter { selected.contains($0) }.map(\.rawValue)
-        let preferenceKey = key("button.\(button + 1).views")
+        let suffix = type == .option3 ? "button.\(button + 1).views" : "button.option4.\(button + 1).views"
+        let preferenceKey = key(suffix)
         guard defaults.stringArray(forKey: preferenceKey) != normalized else { return }
         defaults.set(normalized, forKey: preferenceKey)
         notifyChange()

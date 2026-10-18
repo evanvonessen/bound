@@ -51,6 +51,7 @@ final class PiPTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = BoundPiPPreferences(defaults: defaults)
+        preferences.buttonType = .option3
         let notification = XCTNSNotificationExpectation(name: BoundPiPPreferences.didChangeNotification,
                                                         object: preferences)
         notification.expectedFulfillmentCount = 3

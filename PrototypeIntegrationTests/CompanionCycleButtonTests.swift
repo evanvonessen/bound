@@ -7,6 +7,15 @@ import DeltaCore
 
 @MainActor
 final class CompanionCycleButtonTests: XCTestCase {
+    private func renderedButtonStrip(_ button: BoundCompanionCycleButton) -> UIImage {
+        button.setNeedsLayout()
+        button.layoutIfNeeded()
+        button.setNeedsDisplay()
+        return UIGraphicsImageRenderer(size: button.bounds.size).image { context in
+            button.layer.render(in: context.cgContext)
+        }
+    }
+
     func testReferenceCatalogStoreSharesConcurrentLoadAndPublishesOnce() async {
         let loadCounter = LockedCounter()
         let loaderThreads = LockedValues<Bool>()
@@ -432,6 +441,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = BoundPiPPreferences(defaults: defaults)
+        preferences.buttonType = .option3
 
         XCTAssertEqual(preferences.assignedContents(for: 0), [.friend])
         XCTAssertEqual(preferences.assignedContents(for: 1), [.bosses])
@@ -445,14 +455,29 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(relaunched.assignedContents(for: 0), [.friend, .notes, .dex])
         XCTAssertEqual(relaunched.assignedContents(for: 1), [])
         XCTAssertEqual(relaunched.assignedContents(for: 2), [.types, .bosses])
+
+        XCTAssertEqual(preferences.assignedContents(for: 0, buttonType: .option4), [.friend])
+        XCTAssertEqual(preferences.assignedContents(for: 1, buttonType: .option4), [.bosses])
+        preferences.setAssignedContents([.dex, .notes], for: 0, buttonType: .option4)
+        preferences.setAssignedContents([], for: 1, buttonType: .option4)
+        XCTAssertEqual(relaunched.assignedContents(for: 0, buttonType: .option4), [.notes, .dex])
+        XCTAssertEqual(relaunched.assignedContents(for: 1, buttonType: .option4), [])
+        XCTAssertEqual(relaunched.assignedContents(for: 0, buttonType: .option3), [.friend, .notes, .dex],
+                       "Option 4 assignments remain separate from the existing three-button layout.")
     }
-    func testRemovedButtonOptionFourMigratesToSplitButtonOptionThree() throws {
+    func testLegacyButtonOptionFourMigratesToSplitButtonThreeAndNewOptionFourPersists() throws {
         let suite = "BoundButtonTypeMigration." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set(4, forKey: BoundCompanionButtonPreferences.key)
+        defaults.set(4, forKey: BoundCompanionButtonPreferences.legacyKey)
 
         XCTAssertEqual(BoundCompanionButtonPreferences(defaults: defaults).buttonType, .option3)
+        let preferences = BoundCompanionButtonPreferences(defaults: defaults)
+        preferences.buttonType = .option4
+        XCTAssertEqual(preferences.buttonType, .option4)
+        XCTAssertEqual(defaults.integer(forKey: BoundCompanionButtonPreferences.key), 4)
+        XCTAssertEqual(BoundCompanionButtonPreferences(defaults: defaults).buttonType, .option4,
+                       "The new settings key distinguishes Option 4 from a legacy raw 4.")
     }
 
     func testCompanionButtonTypePersistsAsTheEffectiveStyle() throws {
@@ -588,6 +613,32 @@ final class CompanionCycleButtonTests: XCTestCase {
         state.advanceButton(1)
         XCTAssertEqual(state.content, .types, "A hidden panel restores the first assigned view in normalized order.")
         XCTAssertFalse(state.hidden)
+
+        let option4Preferences = BoundPiPPreferences(defaults: defaults)
+        option4Preferences.buttonType = .option4
+        XCTAssertEqual(option4Preferences.assignedContents(for: 0), [.friend])
+        XCTAssertEqual(option4Preferences.assignedContents(for: 1), [.bosses])
+        let option4State = BoundCompanionState(preferences: option4Preferences)
+        XCTAssertTrue(option4State.usesAssignedButtons)
+        option4State.setAssigned(true, content: .notes, for: 0)
+        option4State.setAssigned(true, content: .dex, for: 1)
+        XCTAssertEqual(option4Preferences.assignedContents(for: 0), [.friend, .notes])
+        XCTAssertEqual(option4Preferences.assignedContents(for: 1), [.bosses, .dex])
+        option4State.advanceButton(0)
+        XCTAssertEqual(option4State.content, .notes)
+        option4State.advanceButton(1)
+        XCTAssertEqual(option4State.content, .bosses)
+        option4State.hidden = true
+        option4State.advanceButton(1)
+        XCTAssertEqual(option4State.content, .bosses, "An Option 4 button restores its first selected view when hidden.")
+        XCTAssertFalse(option4State.hidden)
+        option4State.setAssigned(false, content: .bosses, for: 1)
+        option4State.setAssigned(false, content: .dex, for: 1)
+        let remainingContent = option4State.content
+        option4State.hidden = true
+        option4State.advanceButton(1)
+        XCTAssertTrue(option4State.hidden, "An unassigned Option 4 button remains inactive.")
+        XCTAssertEqual(option4State.content, remainingContent)
     }
 
     func testPortraitMirrorKeepsDefaultAndAvoidsMovedInput() throws {
@@ -653,7 +704,7 @@ final class CompanionCycleButtonTests: XCTestCase {
                     minimal: false, content: .friend, canvas: canvas, occupied: occupied,
                     menuHitSize: menuHitSize, boundPortrait: true, selectArtwork: selectArtwork,
                     buttonType: type)
-                if type == .option3 {
+                if type.splitButtonCount > 0 {
                     button.configureSegments(contents: [[.friend], [.bosses], [.types]], selected: .friend)
                     button.layoutIfNeeded()
                 }
@@ -666,30 +717,32 @@ final class CompanionCycleButtonTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(button.frame.maxY, menuFrame.maxY)
                 XCTAssertFalse(occupied.contains { $0.intersects(button.frame) },
                                "\(type.title) cannot cover a native GBA input at width \(Int(screen.width)).")
-                let splitMarker = type == .option3 ? "/split3" : ""
+                let splitMarker = type.splitButtonCount > 0 ? "/split\(type.splitButtonCount)" : ""
                 silhouettes.insert(String(format: "%.1f×%.1f", button.artworkFrame.width, button.artworkFrame.height) + splitMarker)
 
                 var feedback = 0, cycles = 0, segmentActivations = 0
                 button.buttonFeedback = { feedback += 1 }
                 button.cycle = { cycles += 1 }
                 button.activateSegment = { _ in segmentActivations += 1 }
-                let actionButton = type == .option3 ? try XCTUnwrap(button.segmentButtons.first) : button
+                let isSplit = type.splitButtonCount > 0
+                XCTAssertEqual(button.segmentButtons.count, type.splitButtonCount)
+                let actionButton = isSplit ? try XCTUnwrap(button.segmentButtons.first) : button
                 actionButton.buttonFeedback = { feedback += 1 }
                 actionButton.sendActions(for: .touchDown)
                 XCTAssertEqual(feedback, 1)
-                XCTAssertEqual(cycles, type == .option3 ? 0 : 1)
-                XCTAssertEqual(segmentActivations, type == .option3 ? 1 : 0,
+                XCTAssertEqual(cycles, isSplit ? 0 : 1)
+                XCTAssertEqual(segmentActivations, isSplit ? 1 : 0,
                     "A \(type.title) press activates on first contact.")
                 actionButton.sendActions(for: .touchCancel)
                 XCTAssertEqual(feedback, 1)
-                XCTAssertEqual(cycles, type == .option3 ? 0 : 1)
-                XCTAssertEqual(segmentActivations, type == .option3 ? 1 : 0,
+                XCTAssertEqual(cycles, isSplit ? 0 : 1)
+                XCTAssertEqual(segmentActivations, isSplit ? 1 : 0,
                     "Cancelling \(type.title) never advances a companion view.")
                 actionButton.sendActions(for: .touchDown)
                 actionButton.sendActions(for: .touchUpInside)
                 XCTAssertEqual(feedback, 2)
-                XCTAssertEqual(cycles, type == .option3 ? 0 : 2)
-                XCTAssertEqual(segmentActivations, type == .option3 ? 2 : 0,
+                XCTAssertEqual(cycles, isSplit ? 0 : 2)
+                XCTAssertEqual(segmentActivations, isSplit ? 2 : 0,
                     "A completed \(type.title) tap retains one feedback and cycle action.")
             }
             XCTAssertEqual(silhouettes.count, BoundCompanionButtonType.allCases.count,
@@ -785,43 +838,80 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(feedback, 2); XCTAssertEqual(cycles, 2)
     }
 
-    func testSplitOptionThreeUsesOptionTwoFootprintAndActivatesIndependentSegmentsOnTouchDown() {
+    func testSplitOptionsUseOptionTwoFootprintAndActivateIndependentSegmentsOnTouchDown() {
         let canvas = CGRect(x: 0, y: 0, width: 390, height: 844)
         let menu = CGRect(x: 10, y: 700, width: 20, height: 20)
         let option2 = BoundCompanionCycleButton()
         option2.configure(menuFrame: menu, controllerFrame: canvas, landscape: false, minimal: false,
                           content: .friend, canvas: canvas, occupied: [menu], boundPortrait: true,
                           buttonType: .option2)
-        let option3 = BoundCompanionCycleButton()
-        option3.configure(menuFrame: menu, controllerFrame: canvas, landscape: false, minimal: false,
-                          content: .friend, canvas: canvas, occupied: [menu], boundPortrait: true,
-                          buttonType: .option3)
-        XCTAssertEqual(option3.frame, option2.frame)
-        option3.configureSegments(contents: [[.friend], [.bosses, .dex], [.types]], selected: .friend)
-        option3.layoutIfNeeded()
-        XCTAssertFalse(option3.isAccessibilityElement)
-        XCTAssertEqual(option3.segmentButtons.count, 3)
-        XCTAssertEqual(option3.segmentButtons.map(\.accessibilityIdentifier), [
-            "bound.panel-cycle.1", "bound.panel-cycle.2", "bound.panel-cycle.3"
-        ])
-        XCTAssertEqual(option3.accessibilityElements?.count, 3,
-                       "A split host explicitly exposes its three child buttons to accessibility.")
-        XCTAssertEqual(option3.segmentButtons[0].frame.minY, 0, accuracy: 0.001)
-        XCTAssertEqual(option3.segmentButtons[0].frame.height, option3.bounds.height / 3, accuracy: 0.001)
-        XCTAssertEqual(option3.segmentButtons[1].frame.minY, option3.segmentButtons[0].frame.maxY, accuracy: 0.001)
-        XCTAssertEqual(option3.segmentButtons[2].frame.maxY, option3.bounds.maxY, accuracy: 0.001)
-        for segment in option3.segmentButtons {
-            XCTAssertTrue(option3.hitTest(segment.center, with: nil) === segment,
-                          "The host routes touches to each child button.")
+        for type in [BoundCompanionButtonType.option3, .option4] {
+            let split = BoundCompanionCycleButton()
+            split.configure(menuFrame: menu, controllerFrame: canvas, landscape: false, minimal: false,
+                            content: .friend, canvas: canvas, occupied: [menu], boundPortrait: true,
+                            buttonType: type)
+            XCTAssertEqual(split.frame, option2.frame)
+            split.configureSegments(contents: [[.friend], [.bosses, .dex], [.types]], selected: .friend)
+            split.layoutIfNeeded()
+            let count = type.splitButtonCount
+            XCTAssertFalse(split.isAccessibilityElement)
+            XCTAssertEqual(split.segmentButtons.count, count)
+            XCTAssertEqual(split.segmentButtons.map(\.accessibilityIdentifier), (1...count).map {
+                "bound.panel-cycle.\($0)"
+            })
+            XCTAssertEqual(split.accessibilityElements?.count, count,
+                           "\(type.title) exposes each child button to accessibility.")
+            let rowHeight = split.bounds.height / CGFloat(count)
+            for index in split.segmentButtons.indices {
+                let segment = split.segmentButtons[index]
+                XCTAssertEqual(segment.frame.minY, CGFloat(index) * rowHeight, accuracy: 0.001)
+                XCTAssertEqual(segment.frame.height, rowHeight, accuracy: 0.001)
+                XCTAssertTrue(split.hitTest(segment.center, with: nil) === segment,
+                              "The host routes touches to each child button.")
+            }
+            XCTAssertEqual(split.segmentButtons.last?.frame.maxY ?? 0, split.bounds.maxY, accuracy: 0.001)
+            var activated: [Int] = []
+            split.activateSegment = { activated.append($0) }
+            for index in split.segmentButtons.indices {
+                let segment = split.segmentButtons[index]
+                segment.sendActions(for: .touchDown)
+                XCTAssertEqual(activated, Array(0...index), "\(type.title) segment \(index + 1) acts on touch-down.")
+                segment.sendActions(for: .touchUpInside)
+                XCTAssertEqual(activated, Array(0...index), "Release does not activate a segment twice.")
+            }
         }
-        var activated: [Int] = []
-        option3.activateSegment = { activated.append($0) }
-        for index in option3.segmentButtons.indices {
-            let segment = option3.segmentButtons[index]
-            segment.sendActions(for: .touchDown)
-            XCTAssertEqual(activated, Array(0...index), "Segment \(index + 1) acts on touch-down.")
-            segment.sendActions(for: .touchUpInside)
-            XCTAssertEqual(activated, Array(0...index), "Release does not activate a segment twice.")
+    }
+
+    func testSplitButtonIconsFollowCurrentlySelectedAssignedView() throws {
+        let canvas = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let menu = CGRect(x: 10, y: 700, width: 20, height: 20)
+        for type in [BoundCompanionButtonType.option3, .option4] {
+            let button = BoundCompanionCycleButton()
+            button.configure(menuFrame: menu, controllerFrame: canvas, landscape: false, minimal: false,
+                             content: .friend, canvas: canvas, occupied: [menu], boundPortrait: true,
+                             buttonType: type)
+            let assignments: [[BoundPiPContent]] = [[.friend, .notes], [.bosses, .dex], [.types]]
+            button.configureSegments(contents: assignments, selected: .friend)
+            XCTAssertEqual(button.segmentButtons[0].accessibilityValue as? String, "Friend")
+            XCTAssertEqual(button.segmentButtons[1].accessibilityValue as? String, "Bosses")
+            let friendImage = renderedButtonStrip(button)
+            let friendAttachment = XCTAttachment(image: friendImage)
+            friendAttachment.name = "Bound-Option-\(type.rawValue)-strip-Friend"
+            friendAttachment.lifetime = .keepAlways
+            add(friendAttachment)
+
+            button.configureSegments(contents: assignments, selected: .notes)
+            XCTAssertEqual(button.segmentButtons[0].accessibilityValue as? String, "Notes",
+                           "\(type.title)'s first icon follows its currently displayed assigned view.")
+            XCTAssertEqual(button.segmentButtons[1].accessibilityValue as? String, "Bosses",
+                           "A segment without the current view keeps its first assigned view.")
+            let notesImage = renderedButtonStrip(button)
+            XCTAssertNotEqual(try XCTUnwrap(friendImage.pngData()), try XCTUnwrap(notesImage.pngData()),
+                              "The rendered icon must change when the selected assigned view changes.")
+            let notesAttachment = XCTAttachment(image: notesImage)
+            notesAttachment.name = "Bound-Option-\(type.rawValue)-strip-Notes"
+            notesAttachment.lifetime = .keepAlways
+            add(notesAttachment)
         }
     }
 

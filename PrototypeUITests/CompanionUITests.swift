@@ -2293,11 +2293,11 @@ final class CompanionUITests: XCTestCase {
             scrollToSetting(picker, in: app)
             picker.buttons[String(option)].tap()
             XCTAssertTrue(picker.buttons[String(option)].isSelected)
-            XCTAssertFalse(picker.buttons["4"].exists)
+            XCTAssertTrue(picker.buttons["4"].exists)
             if option == 2 { screenshot("Bound-button-type-settings") }
             closeBoundSheet(in: app)
-            if option == 3 { screenshot("Bound-button-option-3-controls") }
-            XCTAssertTrue(option == 3 ? app.buttons["bound.panel-cycle.1"].isHittable : cycle.isHittable)
+            if option >= 3 { screenshot("Bound-button-option-\(option)-controls") }
+            XCTAssertTrue(option >= 3 ? app.buttons["bound.panel-cycle.1"].isHittable : cycle.isHittable)
             XCTAssertEqual(game.frame, originalGameFrame, "Changing the Bound button must preserve gameplay placement.")
         }
         func assertNoHoldMenu(_ button: XCUIElement, afterHold: String, afterTap: String) {
@@ -2326,7 +2326,7 @@ final class CompanionUITests: XCTestCase {
         let originalButtonFrame = cycle.frame
         var frames: [Int: CGRect] = [1: originalButtonFrame]
         screenshot("Bound-button-option-1")
-        for option in 2...3 {
+        for option in 2...4 {
             choose(option)
             if option == 2 { assertCycleHold() }
             frames[option] = cycle.frame
@@ -2342,6 +2342,14 @@ final class CompanionUITests: XCTestCase {
             screenshot("Bound-button-option-\(option)")
         }
         XCTAssertEqual(frames[2], frames[3], "Three separate buttons fit in exactly option 2's footprint.")
+        XCTAssertEqual(frames[2], frames[4], "Two separate buttons use the same overall footprint.")
+        let top = app.buttons["bound.panel-cycle.1"], bottom = app.buttons["bound.panel-cycle.2"]
+        XCTAssertTrue(top.isHittable); XCTAssertTrue(bottom.isHittable)
+        XCTAssertFalse(app.buttons["bound.panel-cycle.3"].exists)
+        XCTAssertEqual(top.frame.height, bottom.frame.height, accuracy: 0.5)
+        XCTAssertEqual(top.frame.maxY, bottom.frame.minY, accuracy: 0.5)
+        XCTAssertEqual(top.frame.height + bottom.frame.height, cycle.frame.height, accuracy: 0.5)
+        choose(3)
         let segments = (1...3).map { app.buttons["bound.panel-cycle.\($0)"] }
         for segment in segments { XCTAssertTrue(segment.isHittable) }
         XCTAssertLessThanOrEqual(segments[0].frame.maxY, segments[1].frame.minY)
@@ -2416,6 +2424,46 @@ final class CompanionUITests: XCTestCase {
             topDex.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         }
         scrollToSetting(picker, in: app)
+        picker.buttons["4"].tap()
+        scrollToSetting(topDex, in: app)
+        XCTAssertEqual(topDex.value as? String, "0", "Button 4 keeps independent assignments.")
+        topDex.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(topDex.value as? String, "1")
+        scrollToSetting(middleTypes, in: app) // Button 2 is Bottom for the two-button style.
+        XCTAssertEqual(middleTypes.value as? String, "0")
+        middleTypes.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(middleTypes.value as? String, "1")
+        screenshot("Bound-button-4-assignments")
+        closeBoundSheet(in: app)
+        XCTAssertFalse(app.buttons["bound.panel-cycle.3"].exists)
+        top.tap()
+        XCTAssertEqual(top.value as? String, "RR Dex")
+        XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 5))
+        screenshot("Bound-button-4-current-dex")
+        assertNoHoldMenu(top, afterHold: "Friend", afterTap: "RR Dex")
+        bottom.tap()
+        XCTAssertEqual(bottom.value as? String, "Types")
+        XCTAssertTrue(element("bound.type-chart", in: app).waitForExistence(timeout: 5))
+        screenshot("Bound-button-4-current-types")
+        assertNoHoldMenu(bottom, afterHold: "Bosses", afterTap: "Types")
+
+        app.terminate(); app.launch(); play()
+        XCTAssertFalse(app.buttons["bound.panel-cycle.3"].exists)
+        XCTAssertEqual(cycle.frame, frames[4])
+        openBoundSettings(in: app)
+        XCTAssertTrue(picker.buttons["4"].isSelected)
+        scrollToSetting(topDex, in: app)
+        XCTAssertEqual(topDex.value as? String, "1")
+        scrollToSetting(middleTypes, in: app)
+        XCTAssertEqual(middleTypes.value as? String, "1")
+        closeBoundSheet(in: app); openBoundSettings(in: app)
+        picker.buttons["3"].tap()
+        scrollToSetting(topDex, in: app)
+        XCTAssertEqual(topDex.value as? String, originallyTopDex ? "1" : "0")
+        scrollToSetting(middleTypes, in: app)
+        XCTAssertEqual(middleTypes.value as? String, originallyMiddleTypes ? "1" : "0",
+                       "Editing Button 4 must preserve Button 3's assignments.")
+        closeBoundSheet(in: app); openBoundSettings(in: app)
         picker.buttons["1"].tap()
         if originalVersion == "Option 1" {
             closeBoundSheet(in: app)
