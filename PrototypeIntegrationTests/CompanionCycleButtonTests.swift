@@ -79,6 +79,8 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(actions.map(\.title), ["Bosses", "Friend"])
         XCTAssertEqual(actions.map(\.state), [.on, .off])
         XCTAssertFalse(button.showsMenuAsPrimaryAction)
+        button.sendActions(for: .touchDown)
+        XCTAssertEqual(cycles, 1, "The tap activates as soon as the finger touches the button.")
         button.sendActions(for: .touchUpInside)
         XCTAssertEqual(cycles, 1, "Adding a long-press menu must preserve normal tap cycling")
         button.configureViewMenu(contents: [.friend, .notes, .types], selected: .friend, enabled: false)
@@ -344,6 +346,34 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(field.inlinePredictionType, .no)
     }
 
+    func testSplitButtonAssignmentsDefaultIndependentlyAndPersistEmptySets() throws {
+        let suite = "BoundSplitButtonAssignments." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.assignedContents(for: 0), [.friend])
+        XCTAssertEqual(preferences.assignedContents(for: 1), [.bosses])
+        XCTAssertEqual(preferences.assignedContents(for: 2), [.types])
+
+        preferences.setAssignedContents([.dex, .friend, .notes], for: 0)
+        preferences.setAssignedContents([], for: 1)
+        preferences.setAssignedContents([.types, .bosses], for: 2)
+
+        let relaunched = BoundPiPPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
+        XCTAssertEqual(relaunched.assignedContents(for: 0), [.friend, .notes, .dex])
+        XCTAssertEqual(relaunched.assignedContents(for: 1), [])
+        XCTAssertEqual(relaunched.assignedContents(for: 2), [.types, .bosses])
+    }
+    func testRemovedButtonOptionFourMigratesToSplitButtonOptionThree() throws {
+        let suite = "BoundButtonTypeMigration." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(4, forKey: BoundCompanionButtonPreferences.key)
+
+        XCTAssertEqual(BoundCompanionButtonPreferences(defaults: defaults).buttonType, .option3)
+    }
+
     func testCompanionButtonTypePersistsAndExperimentalGateKeepsOriginalEffectiveStyle() throws {
         let suite = "BoundCompanionButtonType." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -353,17 +383,17 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(preferences.buttonType, .option1, "Existing installs keep the original round button by default.")
         XCTAssertEqual(preferences.effectiveButtonType, .option1)
 
-        preferences.buttonType = .option4
-        XCTAssertEqual(preferences.buttonType, .option4)
-        XCTAssertEqual(BoundCompanionButtonPreferences(defaults: defaults).buttonType, .option4,
+        preferences.buttonType = .option3
+        XCTAssertEqual(preferences.buttonType, .option3)
+        XCTAssertEqual(BoundCompanionButtonPreferences(defaults: defaults).buttonType, .option3,
                        "A newly created preferences object reads the saved choice.")
         XCTAssertEqual(preferences.effectiveButtonType, .option1,
                        "Experimental button styles remain inactive while experiments are off.")
 
         BoundExperimentalFeaturesPreferences(defaults: defaults).isEnabled = true
-        XCTAssertEqual(preferences.effectiveButtonType, .option4)
+        XCTAssertEqual(preferences.effectiveButtonType, .option3)
         BoundExperimentalFeaturesPreferences(defaults: defaults).isEnabled = false
-        XCTAssertEqual(preferences.buttonType, .option4, "Gating does not erase the user's saved preference.")
+        XCTAssertEqual(preferences.buttonType, .option3, "Gating does not erase the user's saved preference.")
         XCTAssertEqual(preferences.effectiveButtonType, .option1)
 
         defaults.set(99, forKey: BoundCompanionButtonPreferences.key)
@@ -387,8 +417,11 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(BoundBossNatureDescription.label(for: "Unlisted"), "Nature · Unlisted · nature effects unavailable")
         XCTAssertEqual(BoundBossNatureDescription.label(for: ""), "Nature · Unknown · nature effects unavailable")
     }
-    func testExperimentalBossCycleFallsBackImmediatelyWhenDisabled() {
-        let state = BoundCompanionState(experimentalFeaturesEnabled: false)
+    func testExperimentalBossCycleFallsBackImmediatelyWhenDisabled() throws {
+        let suite = "BoundBaselineCycle." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let state = BoundCompanionState(preferences: BoundPiPPreferences(defaults: defaults), experimentalFeaturesEnabled: false)
         for expected in [BoundPiPContent.notes, .types, .friend, .notes, .types, .friend] {
             state.advancePanel()
             XCTAssertEqual(state.content, expected)
@@ -449,6 +482,51 @@ final class CompanionCycleButtonTests: XCTestCase {
         restarted.advancePanel()
         XCTAssertEqual(restarted.content, .bosses, "One enabled view stays selected")
     }
+    func testAssignedButtonsCycleIndependentlyRestoreWhenHiddenAndRespectExperimentGate() throws {
+        let suite = "BoundAssignedButtons." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        preferences.buttonType = .option3
+        XCTAssertEqual(preferences.assignedContents(for: 0), [.friend])
+        XCTAssertEqual(preferences.assignedContents(for: 1), [.bosses])
+        XCTAssertEqual(preferences.assignedContents(for: 2), [.types])
+
+        let state = BoundCompanionState(preferences: preferences, experimentalFeaturesEnabled: true)
+        XCTAssertTrue(state.usesAssignedButtons)
+        state.setAssigned(true, content: .notes, for: 0)
+        state.setAssigned(true, content: .dex, for: 1)
+        XCTAssertEqual(preferences.assignedContents(for: 0), [.friend, .notes])
+        XCTAssertEqual(preferences.assignedContents(for: 1), [.bosses, .dex])
+        state.advanceButton(0)
+        XCTAssertEqual(state.content, .notes)
+        state.advanceButton(1)
+        XCTAssertEqual(state.content, .bosses)
+        state.advanceButton(0)
+        XCTAssertEqual(state.content, .friend)
+
+        state.hidden = true
+        state.advanceButton(1)
+        XCTAssertEqual(state.content, .bosses, "A button press restores the view assigned to that button.")
+        XCTAssertFalse(state.hidden)
+
+        state.updateExperimentalFeatures(false)
+        XCTAssertFalse(state.usesAssignedButtons)
+        let gatedContent = state.content
+        state.advanceButton(1)
+        XCTAssertEqual(state.content, gatedContent, "Assigned-button actions stay gated when experiments are off.")
+        state.setAssigned(true, content: .types, for: 1)
+        XCTAssertEqual(preferences.assignedContents(for: 1), [.bosses, .dex],
+                       "The settings action cannot change assignments while experiments are off.")
+
+        state.updateExperimentalFeatures(true)
+        XCTAssertTrue(state.usesAssignedButtons)
+        state.hidden = true
+        state.advanceButton(1)
+        XCTAssertEqual(state.content, .bosses)
+        XCTAssertFalse(state.hidden)
+    }
+
     func testPortraitMirrorKeepsDefaultAndAvoidsMovedInput() throws {
         let canvas = CGRect(x: 0, y: 0, width: 390, height: 800)
         let menu = CGRect(x: 20, y: 740, width: 20, height: 20)
@@ -512,6 +590,10 @@ final class CompanionCycleButtonTests: XCTestCase {
                     minimal: false, content: .friend, canvas: canvas, occupied: occupied,
                     menuHitSize: menuHitSize, boundPortrait: true, selectArtwork: selectArtwork,
                     buttonType: type)
+                if type == .option3 {
+                    button.configureSegments(contents: [[.friend], [.bosses], [.types]], selected: .friend)
+                    button.layoutIfNeeded()
+                }
                 XCTAssertFalse(button.isHidden, "\(type.title) has a clear placement at width \(Int(screen.width)).")
                 XCTAssertTrue(canvas.contains(button.frame))
                 XCTAssertGreaterThanOrEqual(button.frame.width, 44)
@@ -521,22 +603,34 @@ final class CompanionCycleButtonTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(button.frame.maxY, menuFrame.maxY)
                 XCTAssertFalse(occupied.contains { $0.intersects(button.frame) },
                                "\(type.title) cannot cover a native GBA input at width \(Int(screen.width)).")
-                silhouettes.insert(String(format: "%.1f×%.1f", button.artworkFrame.width, button.artworkFrame.height))
+                let splitMarker = type == .option3 ? "/split3" : ""
+                silhouettes.insert(String(format: "%.1f×%.1f", button.artworkFrame.width, button.artworkFrame.height) + splitMarker)
 
-                var feedback = 0, cycles = 0
+                var feedback = 0, cycles = 0, segmentActivations = 0
                 button.buttonFeedback = { feedback += 1 }
                 button.cycle = { cycles += 1 }
-                button.sendActions(for: .touchDown)
-                button.sendActions(for: .touchCancel)
-                XCTAssertEqual(feedback, 0); XCTAssertEqual(cycles, 0,
+                button.activateSegment = { _ in segmentActivations += 1 }
+                let actionButton = type == .option3 ? try XCTUnwrap(button.segmentButtons.first) : button
+                actionButton.buttonFeedback = { feedback += 1 }
+                actionButton.sendActions(for: .touchDown)
+                XCTAssertEqual(feedback, 1)
+                XCTAssertEqual(cycles, type == .option3 ? 0 : 1)
+                XCTAssertEqual(segmentActivations, type == .option3 ? 1 : 0,
+                    "A \(type.title) press activates on first contact.")
+                actionButton.sendActions(for: .touchCancel)
+                XCTAssertEqual(feedback, 1)
+                XCTAssertEqual(cycles, type == .option3 ? 0 : 1)
+                XCTAssertEqual(segmentActivations, type == .option3 ? 1 : 0,
                     "Cancelling \(type.title) never advances a companion view.")
-                button.sendActions(for: .touchDown)
-                button.sendActions(for: .touchUpInside)
-                XCTAssertEqual(feedback, 1); XCTAssertEqual(cycles, 1,
+                actionButton.sendActions(for: .touchDown)
+                actionButton.sendActions(for: .touchUpInside)
+                XCTAssertEqual(feedback, 2)
+                XCTAssertEqual(cycles, type == .option3 ? 0 : 2)
+                XCTAssertEqual(segmentActivations, type == .option3 ? 2 : 0,
                     "A completed \(type.title) tap retains one feedback and cycle action.")
             }
             XCTAssertEqual(silhouettes.count, BoundCompanionButtonType.allCases.count,
-                           "All four styles render distinct shapes at width \(Int(screen.width)).")
+                           "All available styles render distinct shapes at width \(Int(screen.width)).")
         }
     }
 
@@ -566,6 +660,8 @@ final class CompanionCycleButtonTests: XCTestCase {
             BoundAppearancePreferences().screenLayout = .bound
             Settings.isButtonHapticFeedbackEnabled = true
             button.sendActions(for: .touchDown)
+            XCTAssertEqual(feedback, 1)
+            XCTAssertEqual(cycles, 1)
             button.sendActions(for: .touchUpInside)
             XCTAssertEqual(feedback, 1)
             XCTAssertEqual(cycles, 1)
@@ -574,6 +670,7 @@ final class CompanionCycleButtonTests: XCTestCase {
             XCTAssertEqual(feedback, 1)
             XCTAssertEqual(cycles, 1)
             Settings.isButtonHapticFeedbackEnabled = false
+            button.sendActions(for: .touchDown)
             button.sendActions(for: .touchUpInside)
             XCTAssertEqual(feedback, 1)
             XCTAssertEqual(cycles, 2)
@@ -582,11 +679,13 @@ final class CompanionCycleButtonTests: XCTestCase {
             // still uses Bound, including its existing native button feedback.
             XCTAssertEqual(BoundAppearancePreferences().effectiveScreenLayout, .bound)
             Settings.isButtonHapticFeedbackEnabled = true
+            button.sendActions(for: .touchDown)
             button.sendActions(for: .touchUpInside)
             XCTAssertEqual(feedback, 2)
             XCTAssertEqual(cycles, 3)
             BoundAppearancePreferences().screenLayout = .bound
             button.isEnabled = false
+            button.sendActions(for: .touchDown)
             button.sendActions(for: .touchUpInside)
             XCTAssertEqual(feedback, 2)
             XCTAssertEqual(cycles, 3)
@@ -614,13 +713,79 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(button.materialFrame.width, normal.width-4, accuracy: 0.001)
         XCTAssertEqual(button.materialFrame.height, normal.height-4, accuracy: 0.001)
         XCTAssertEqual(button.frame, hit)
-        XCTAssertEqual(feedback, 0); XCTAssertEqual(cycles, 0)
+        XCTAssertEqual(feedback, 1); XCTAssertEqual(cycles, 1)
         button.sendActions(for: .touchCancel)
         XCTAssertFalse(button.isHighlighted); XCTAssertEqual(button.materialFrame, normal)
-        XCTAssertEqual(feedback, 0); XCTAssertEqual(cycles, 0)
+        XCTAssertEqual(feedback, 1); XCTAssertEqual(cycles, 1)
         button.sendActions(for: .touchDown); button.sendActions(for: .touchUpInside)
         XCTAssertFalse(button.isHighlighted); XCTAssertEqual(button.materialFrame, normal)
-        XCTAssertEqual(feedback, 1); XCTAssertEqual(cycles, 1)
+        XCTAssertEqual(feedback, 2); XCTAssertEqual(cycles, 2)
+    }
+
+    func testSplitOptionThreeUsesOptionTwoFootprintAndActivatesIndependentSegmentsOnTouchDown() {
+        let canvas = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let menu = CGRect(x: 10, y: 700, width: 20, height: 20)
+        let option2 = BoundCompanionCycleButton()
+        option2.configure(menuFrame: menu, controllerFrame: canvas, landscape: false, minimal: false,
+                          content: .friend, canvas: canvas, occupied: [menu], boundPortrait: true,
+                          buttonType: .option2)
+        let option3 = BoundCompanionCycleButton()
+        option3.configure(menuFrame: menu, controllerFrame: canvas, landscape: false, minimal: false,
+                          content: .friend, canvas: canvas, occupied: [menu], boundPortrait: true,
+                          buttonType: .option3)
+        XCTAssertEqual(option3.frame, option2.frame)
+        option3.configureSegments(contents: [[.friend], [.bosses, .dex], [.types]], selected: .friend)
+        option3.layoutIfNeeded()
+        XCTAssertFalse(option3.isAccessibilityElement)
+        XCTAssertEqual(option3.segmentButtons.count, 3)
+        XCTAssertEqual(option3.segmentButtons.map(\.accessibilityIdentifier), [
+            "bound.panel-cycle.1", "bound.panel-cycle.2", "bound.panel-cycle.3"
+        ])
+        XCTAssertEqual(option3.accessibilityElements?.count, 3,
+                       "A split host explicitly exposes its three child buttons to accessibility.")
+        XCTAssertEqual(option3.segmentButtons[0].frame.minY, 0, accuracy: 0.001)
+        XCTAssertEqual(option3.segmentButtons[0].frame.height, option3.bounds.height / 3, accuracy: 0.001)
+        XCTAssertEqual(option3.segmentButtons[1].frame.minY, option3.segmentButtons[0].frame.maxY, accuracy: 0.001)
+        XCTAssertEqual(option3.segmentButtons[2].frame.maxY, option3.bounds.maxY, accuracy: 0.001)
+        for segment in option3.segmentButtons {
+            XCTAssertTrue(option3.hitTest(segment.center, with: nil) === segment,
+                          "The host routes touches to each child button.")
+        }
+        var activated: [Int] = []
+        option3.activateSegment = { activated.append($0) }
+        for index in option3.segmentButtons.indices {
+            let segment = option3.segmentButtons[index]
+            segment.sendActions(for: .touchDown)
+            XCTAssertEqual(activated, Array(0...index), "Segment \(index + 1) acts on touch-down.")
+            segment.sendActions(for: .touchUpInside)
+            XCTAssertEqual(activated, Array(0...index), "Release does not activate a segment twice.")
+        }
+    }
+
+    func testSegmentConfigurationLeavesOtherStylesAndFailedGeometryIntact() {
+        let canvas = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let menu = CGRect(x: 10, y: 700, width: 20, height: 20)
+        for type in [BoundCompanionButtonType.option1, .option2] {
+            let button = BoundCompanionCycleButton()
+            button.configure(menuFrame: menu, controllerFrame: canvas, landscape: false, minimal: false,
+                             content: .friend, canvas: canvas, occupied: [menu], boundPortrait: true,
+                             buttonType: type)
+            button.configureSegments(contents: [[.friend], [.bosses], [.types]], selected: .friend)
+            XCTAssertTrue(button.segmentButtons.isEmpty)
+            XCTAssertTrue(button.isAccessibilityElement)
+            XCTAssertTrue(button.isUserInteractionEnabled)
+        }
+
+        let unavailable = CGRect(x: 0, y: 0, width: 200, height: 100)
+        let button = BoundCompanionCycleButton()
+        button.configure(menuFrame: CGRect(x: 10, y: 10, width: 20, height: 20),
+                         controllerFrame: unavailable, landscape: false, minimal: false,
+                         content: .friend, canvas: unavailable, occupied: [unavailable], boundPortrait: true,
+                         buttonType: .option3)
+        button.configureSegments(contents: [[.friend], [.bosses], [.types]], selected: .friend)
+        XCTAssertTrue(button.isHidden)
+        XCTAssertFalse(button.isUserInteractionEnabled)
+        XCTAssertEqual(button.frame, .zero)
     }
 
     func testMinimalCompanionArtworkFitsNarrowRightGutters() {

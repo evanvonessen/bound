@@ -562,6 +562,9 @@ final class CompanionUITests: XCTestCase {
             selectCompanion("Dex", in: app)
             XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 10))
             XCTAssertEqual(element("bound.rrdex", in: app).value as? String, "Layout 7")
+            XCTAssertEqual(app.buttons["bound.rrdex-info"].label,
+                           "Rad Red version 4.1, Normal difficulty, save loaded",
+                           "The header confirms a save only after the current save is read successfully.")
         }
         func assertAutomaticSave() {
             XCTAssertFalse(app.buttons["bound.rrdex-import"].exists, "Layout 7 has no manual save control")
@@ -2091,11 +2094,11 @@ final class CompanionUITests: XCTestCase {
         func play() {
             let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
             XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
-            XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+            XCTAssertTrue(element("bound.panel-cycle", in: app).waitForExistence(timeout: 15))
         }
         play()
         let picker = app.segmentedControls["bound.companion-button-type"]
-        let cycle = app.buttons["bound.panel-cycle"]
+        let cycle = element("bound.panel-cycle", in: app)
         let game = element("bound.game-screen", in: app)
         let originalGameFrame = game.frame
         func choose(_ option: Int) {
@@ -2103,16 +2106,18 @@ final class CompanionUITests: XCTestCase {
             scrollToSetting(picker, in: app)
             picker.buttons[String(option)].tap()
             XCTAssertTrue(picker.buttons[String(option)].isSelected)
+            XCTAssertFalse(picker.buttons["4"].exists)
             if option == 2 { screenshot("Bound-button-type-settings") }
             closeBoundSheet(in: app)
-            XCTAssertTrue(cycle.isHittable)
+            if option == 3 { screenshot("Bound-button-option-3-controls") }
+            XCTAssertTrue(option == 3 ? app.buttons["bound.panel-cycle.1"].isHittable : cycle.isHittable)
             XCTAssertEqual(game.frame, originalGameFrame, "Changing the Bound button must preserve gameplay placement.")
         }
         choose(1)
         let originalButtonFrame = cycle.frame
         var frames: [Int: CGRect] = [1: originalButtonFrame]
         screenshot("Bound-button-option-1")
-        for option in 2...4 {
+        for option in 2...3 {
             choose(option)
             frames[option] = cycle.frame
             XCTAssertTrue(app.frame.contains(cycle.frame))
@@ -2126,14 +2131,35 @@ final class CompanionUITests: XCTestCase {
             }
             screenshot("Bound-button-option-\(option)")
         }
-        XCTAssertGreaterThan(try XCTUnwrap(frames[2]).height, try XCTUnwrap(frames[3]).height)
-        XCTAssertGreaterThan(try XCTUnwrap(frames[4]).width, try XCTUnwrap(frames[3]).width)
+        XCTAssertEqual(frames[2], frames[3], "Three separate buttons fit in exactly option 2's footprint.")
+        let segments = (1...3).map { app.buttons["bound.panel-cycle.\($0)"] }
+        for segment in segments { XCTAssertTrue(segment.isHittable) }
+        XCTAssertLessThanOrEqual(segments[0].frame.maxY, segments[1].frame.minY)
+        XCTAssertLessThanOrEqual(segments[1].frame.maxY, segments[2].frame.minY)
+        for (index, identifier) in ["bound.friend-screen", "bound.boss-guide", "bound.type-chart"].enumerated() {
+            segments[index].tap()
+            XCTAssertTrue(element(identifier, in: app).waitForExistence(timeout: 5))
+        }
+
+        openBoundSettings(in: app)
+        let topDex = app.switches["bound.button-1-view.dex"]
+        scrollToSetting(topDex, in: app)
+        topDex.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        closeBoundSheet(in: app)
+        segments[0].tap()
+        XCTAssertTrue(element("bound.friend-screen", in: app).waitForExistence(timeout: 5))
+        segments[0].tap()
+        XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 5))
+        segments[0].tap()
+        XCTAssertTrue(element("bound.friend-screen", in: app).waitForExistence(timeout: 5))
 
         app.terminate(); app.launch(); play()
-        XCTAssertEqual(cycle.frame, frames[4], "The selected button survives an app relaunch.")
+        XCTAssertEqual(cycle.frame, frames[3], "The selected button survives an app relaunch.")
         openBoundSettings(in: app)
         scrollToSetting(picker, in: app)
-        XCTAssertTrue(picker.buttons["4"].isSelected)
+        XCTAssertTrue(picker.buttons["3"].isSelected)
+        scrollToSetting(topDex, in: app)
+        XCTAssertEqual(topDex.value as? String, "1")
         closeBoundSheet(in: app)
 
         app.terminate(); app.launch(); setExperimentalFeatures(false, in: app); play()
@@ -2142,7 +2168,11 @@ final class CompanionUITests: XCTestCase {
         XCTAssertFalse(picker.exists)
         closeBoundSheet(in: app)
         app.terminate(); app.launch(); setExperimentalFeatures(true, in: app); play()
-        XCTAssertEqual(cycle.frame, frames[4], "Disabling experiments retains the saved button choice.")
+        XCTAssertEqual(cycle.frame, frames[3], "Disabling experiments retains the saved button choice.")
+        openBoundSettings(in: app)
+        scrollToSetting(topDex, in: app)
+        topDex.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        closeBoundSheet(in: app)
         choose(1)
         XCTAssertEqual(cycle.frame, originalButtonFrame)
         app.terminate(); app.launch(); setExperimentalFeatures(false, in: app); app.terminate()

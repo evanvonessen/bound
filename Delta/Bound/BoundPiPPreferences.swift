@@ -95,14 +95,13 @@ enum BoundReferenceLayoutPreferences {
 }
 
 enum BoundCompanionButtonType: Int, CaseIterable, Sendable {
-    case option1 = 1, option2 = 2, option3 = 3, option4 = 4
+    case option1 = 1, option2 = 2, option3 = 3
     var title: String { "Option \(rawValue)" }
     var summary: String {
         switch self {
         case .option1: "The original round button and placement."
         case .option2: "A tall rounded rectangle."
-        case .option3: "A slimmer, shorter rounded rectangle."
-        case .option4: "A wider rounded rectangle, set slightly inward."
+        case .option3: "Three separate buttons in the tall button's space."
         }
     }
 }
@@ -113,7 +112,10 @@ final class BoundCompanionButtonPreferences {
     private let defaults: UserDefaults
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
     var buttonType: BoundCompanionButtonType {
-        get { BoundCompanionButtonType(rawValue: defaults.integer(forKey: Self.key)) ?? .option1 }
+        get {
+            let saved = defaults.integer(forKey: Self.key)
+            return saved == 4 ? .option3 : BoundCompanionButtonType(rawValue: saved) ?? .option1
+        }
         set {
             guard buttonType != newValue else { return }
             defaults.set(newValue.rawValue, forKey: Self.key)
@@ -140,6 +142,24 @@ final class BoundPiPPreferences {
         defaults.set(enabled, forKey: key(content.rawValue + ".enabled"))
     }
     var uiVersion: BoundUIVersion { BoundUIVersionPreferences(defaults: defaults).version }
+    var buttonType: BoundCompanionButtonType {
+        get { BoundCompanionButtonPreferences(defaults: defaults).buttonType }
+        set { BoundCompanionButtonPreferences(defaults: defaults).buttonType = newValue }
+    }
+    /// Each segment keeps its own choices, including an intentionally empty set.
+    func assignedContents(for button: Int) -> [BoundPiPContent] {
+        guard (0..<3).contains(button) else { return [] }
+        let fallback: [[BoundPiPContent]] = [[.friend], [.bosses], [.types]]
+        guard let saved = defaults.stringArray(forKey: key("button.\(button + 1).views")) else { return fallback[button] }
+        let selected = Set(saved.compactMap(BoundPiPContent.init(rawValue:)))
+        return orderedContents.filter { selected.contains($0) }
+    }
+    func setAssignedContents(_ contents: [BoundPiPContent], for button: Int) {
+        guard (0..<3).contains(button) else { return }
+        let selected = Set(contents)
+        defaults.set(orderedContents.filter { selected.contains($0) }.map(\.rawValue),
+                     forKey: key("button.\(button + 1).views"))
+    }
     var orderedContents: [BoundPiPContent] {
         let saved = defaults.stringArray(forKey: key("view-order")) ?? []
         return Self.normalizedOrder(saved.compactMap(BoundPiPContent.init(rawValue:)))

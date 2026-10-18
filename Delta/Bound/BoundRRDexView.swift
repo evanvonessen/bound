@@ -47,6 +47,15 @@ struct BoundRRDexView: View {
     private var hasIslandActions: Bool { !floating && portraitTopInset >= 51 }
     private var layout: BoundReferenceLayout { previewLayout ?? savedLayout }
     private var usesUIVersion2: Bool { experimentsEnabled && uiVersion == .option2 }
+    /// A save is present only after a successful read or restoration of a
+    /// previously successful read for this ROM.
+    private var hasLoadedSave: Bool { choice.save != nil }
+    private var referenceMode: String {
+        if automaticSaveStatus == BoundRRDexSave.ImportError.difficulty.localizedDescription {
+            return "Hardcore / Restricted"
+        }
+        return "Normal"
+    }
     private var statLabels: [String] {
         usesUIVersion2 ? ["HP", "Atk", "Def", "SpAtk", "SpDef", "Speed"] : ["HP", "Atk", "Def", "SpA", "SpD", "Spe"]
     }
@@ -77,11 +86,9 @@ struct BoundRRDexView: View {
                     if hasIslandActions {
                         if layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12 {
                             HStack(spacing: 0) {
-                                Spacer(minLength: 0)
-                                layout8InformationButton
+                                layout8InformationButton.frame(maxWidth: .infinity, alignment: .leading)
                                 Color.clear.frame(width: 160, height: 1)
-                                layout8SearchButton
-                                Spacer(minLength: 0)
+                                layout8SearchButton.frame(maxWidth: .infinity, alignment: .trailing)
                             }
                             .padding(.horizontal, 12)
                             .frame(height: portraitTopInset)
@@ -290,11 +297,7 @@ struct BoundRRDexView: View {
     }
 
     private var layout7InformationButton: some View {
-        Button { showDetail(.information) } label: {
-            Image(systemName: "info.circle").font(.system(size: 16))
-                .frame(width: 44, height: 44).contentShape(Rectangle())
-        }
-        .accessibilityLabel("Dex information").accessibilityIdentifier("bound.rrdex-info")
+        referenceHeaderButton
     }
 
     private var layout7SearchButton: some View {
@@ -310,13 +313,31 @@ struct BoundRRDexView: View {
     }
 
     private var layout8InformationButton: some View {
+        referenceHeaderButton
+    }
+
+    private var referenceHeaderButton: some View {
         Button { showDetail(.information) } label: {
-            Image(systemName: "info.circle")
-                .font(.system(size: 22, weight: .regular))
-                .foregroundStyle(Color.primary)
-                .frame(width: 44, height: 44).contentShape(Rectangle())
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Rad Red v4.1 *")
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                HStack(spacing: 3) {
+                    Text(referenceMode)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    if hasLoadedSave {
+                        Image(systemName: "checkmark.circle.fill").accessibilityHidden(true)
+                    }
+                }
+            }
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(Color.primary)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .accessibilityLabel("Dex information")
+        .buttonStyle(.plain)
+        .accessibilityLabel("Rad Red version 4.1, \(referenceMode) difficulty" + (hasLoadedSave ? ", save loaded" : ", no save loaded"))
         .accessibilityIdentifier("bound.rrdex-info")
     }
 
@@ -1095,7 +1116,7 @@ struct BoundRRDexView: View {
         }
         let types = HStack(spacing: 5) {
             ForEach(pokemon.types, id: \.self) { id in
-                if let type = catalog.type(id: id) { BoundRRDexTypePill(type: type) }
+                if let type = catalog.type(id: id) { BoundRRDexTypePill(type: type, usesFullColor: true) }
             }
         }
         return Group {
@@ -1219,7 +1240,7 @@ struct BoundRRDexView: View {
                         .accessibilityIdentifier("bound.rrdex-pokemon")
                     HStack(spacing: 5) {
                         ForEach(pokemon.types, id: \.self) { id in
-                            if let type = catalog.type(id: id) { BoundRRDexTypePill(type: type) }
+                            if let type = catalog.type(id: id) { BoundRRDexTypePill(type: type, usesFullColor: true) }
                         }
                         Text("#\(pokemon.dexNumber)").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
                     }
@@ -1392,7 +1413,10 @@ struct BoundRRDexView: View {
             choice.save = save
             automaticSaveStatus = nil
             preferences.write(choice, gameID: gameID)
-        } catch { importError = error.localizedDescription }
+        } catch {
+            recordSaveReadFailure(error)
+            importError = error.localizedDescription
+        }
     }
     private func refreshAutomaticSave() {
         guard experimentsEnabled, !refreshingSave else { return }
@@ -1402,17 +1426,26 @@ struct BoundRRDexView: View {
             choice = try preferences.refreshCurrentSave(gameID: gameID, capture: currentSave)
             automaticSaveStatus = nil
         } catch {
-            // Unsupported or incomplete saves must not show old randomizer data.
-            // Transient capture failures retain the last successfully read settings.
-            choice = preferences.read(gameID: gameID)
-            automaticSaveStatus = error.localizedDescription
+            recordSaveReadFailure(error)
         }
+    }
+
+    private func recordSaveReadFailure(_ error: Error) {
+        // Unsupported or incomplete saves must not keep a stale loaded check.
+        // Transient capture failures retain the last successfully read settings.
+        if BoundRRDexSave.shouldDiscardCachedConfiguration(after: error) {
+            choice.save = nil
+            preferences.write(choice, gameID: gameID)
+        } else {
+            choice = preferences.read(gameID: gameID)
+        }
+        automaticSaveStatus = error.localizedDescription
     }
     private func informationLayout8() -> some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("ROM: Radical Red Version 4.1")
                 .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-info-rom")
-            Text("Difficulty: Normal")
+            Text("Difficulty: \(referenceMode)")
                 .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-info-difficulty")
             Text(choice.save == nil ? "No Save Loaded" : "Save Loaded")
                 .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-info-save")
@@ -1431,7 +1464,7 @@ struct BoundRRDexView: View {
                 if let automaticSaveStatus { Text(automaticSaveStatus).foregroundStyle(.secondary) }
             }
             Section("Reference") {
-                Text("Radical Red 4.1 · Normal difficulty")
+                Text("Radical Red 4.1 · \(referenceMode) difficulty")
                 Text("\(catalog.species.count) Pokémon and forms · \(catalog.moves.count) moves")
                 Text("Stats are base stats. Evolution methods and type matchups follow this version of Radical Red.")
                 Text("Pokémon characters and artwork belong to their respective owners. Radical Red is a community project.").font(.caption).foregroundStyle(.secondary)
@@ -1714,7 +1747,7 @@ private struct BoundRRDexLearnsetMoveRow: View {
                 if let level { Text(level == 0 ? "Evolution" : "Lv. \(level)").font(.caption).foregroundStyle(.secondary) }
             }
             HStack {
-                if let type = catalog.type(id: move.type) { BoundRRDexTypePill(type: type) }
+                if let type = catalog.type(id: move.type) { BoundRRDexTypePill(type: type, usesFullColor: true) }
                 Text(move.category).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Text("Pwr \(move.power == 0 ? "—" : String(move.power)) · Acc \(move.accuracy == 0 ? "—" : String(move.accuracy)) · PP \(move.pp)")

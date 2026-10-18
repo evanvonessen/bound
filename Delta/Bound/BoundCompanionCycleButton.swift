@@ -6,6 +6,9 @@ import DeltaCore
 final class BoundCompanionCycleButton: UIButton {
     var cycle: (() -> Void)?
     var selectContent: ((BoundPiPContent) -> Void)?
+    /// Called with a zero-based segment index when one of the three split controls is touched.
+    var activateSegment: ((Int) -> Void)?
+    private(set) var segmentButtons: [BoundCompanionCycleButton] = []
     private var menuContents: [BoundPiPContent] = []
     private var menuSelection: BoundPiPContent?
     /// Tests can replace the output without touching device feedback or emulator inputs.
@@ -18,14 +21,17 @@ final class BoundCompanionCycleButton: UIButton {
     private var companionButtonType: BoundCompanionButtonType = .option1
     private var selectArtwork: UIImage?
     private var content: BoundPiPContent = .friend
+    private var segmentContents: [[BoundPiPContent]] = []
+    private var segmentIndex: Int?
+    private var pressActivated = false
     override init(frame: CGRect) {
         super.init(frame: frame)
         accessibilityIdentifier = "bound.panel-cycle"
         accessibilityLabel = "Bound companion panel"
         accessibilityHint = "Cycles Friend, Notes, and Types"
-        addTarget(self, action: #selector(advance), for: .touchUpInside)
-        addTarget(self, action: #selector(pressVisual), for: [.touchDown, .touchDragEnter])
-        addTarget(self, action: #selector(releaseVisual), for: [.touchCancel, .touchUpOutside, .touchDragExit])
+        addTarget(self, action: #selector(beginPress), for: .touchDown)
+        addTarget(self, action: #selector(pressVisual), for: .touchDragEnter)
+        addTarget(self, action: #selector(releaseVisual), for: [.touchCancel, .touchUpInside, .touchUpOutside, .touchDragExit])
         backgroundColor = .clear
         isExclusiveTouch = false
         feedbackGenerator.prepare()
@@ -33,6 +39,13 @@ final class BoundCompanionCycleButton: UIButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     /// UIButton's standard secondary menu opens on a hold; a normal tap still cycles.
     func configureViewMenu(contents: [BoundPiPContent], selected: BoundPiPContent, enabled: Bool) {
+        for index in segmentButtons.indices {
+            let child = segmentButtons[index]
+            child.selectContent = { [weak self] content in self?.selectContent?(content) }
+            let assigned = index < segmentContents.count ? segmentContents[index] : []
+            let childSelected = assigned.contains(selected) ? selected : assigned.first ?? selected
+            child.configureViewMenu(contents: assigned, selected: childSelected, enabled: enabled && assigned.count > 1)
+        }
         guard enabled, !contents.isEmpty else {
             menu = nil; menuContents = []; menuSelection = nil
             return
@@ -52,10 +65,17 @@ final class BoundCompanionCycleButton: UIButton {
         guard isEnabled, isUserInteractionEnabled, !isHidden else { return }
         isHighlighted = true
     }
-    @objc private func releaseVisual() { isHighlighted = false }
-    @objc private func advance() {
-        isHighlighted = false
+    @objc private func releaseVisual() { isHighlighted = false; pressActivated = false }
+    @objc private func beginPress() {
         guard isEnabled, isUserInteractionEnabled, !isHidden else { return }
+        isHighlighted = true
+        guard !pressActivated else { return }
+        pressActivated = true
+        advance()
+    }
+    @objc private func advance() {
+        guard isEnabled, isUserInteractionEnabled, !isHidden else { return }
+        guard segmentIndex != nil || segmentButtons.isEmpty else { return }
         if BoundAppearancePreferences().effectiveScreenLayout == .bound && Settings.isButtonHapticFeedbackEnabled {
             if let buttonFeedback { buttonFeedback() }
             else {
@@ -66,7 +86,73 @@ final class BoundCompanionCycleButton: UIButton {
                 }
             }
         }
+        if let segmentIndex { activateSegment?(segmentIndex); return }
         cycle?()
+    }
+    /// Turns this control into the option 3 host and divides its option 2 frame into
+    /// three independently tappable controls. `selected` is used by each segment
+    /// when its assigned list contains it; otherwise that segment shows its first view.
+    func configureSegments(contents: [[BoundPiPContent]], selected: BoundPiPContent) {
+        guard companionButtonType == .option3, boundPortrait, !landscape, !minimal else {
+            segmentButtons.forEach { $0.removeFromSuperview() }
+            segmentButtons.removeAll()
+            segmentContents = []
+            accessibilityElementsHidden = false
+            accessibilityElements = nil
+            isAccessibilityElement = true
+            accessibilityIdentifier = "bound.panel-cycle"
+            accessibilityLabel = "Bound companion panel"
+            isUserInteractionEnabled = !isHidden && !frame.isEmpty
+            return
+        }
+        segmentContents = Array(contents.prefix(3))
+        while segmentButtons.count < 3 {
+            let child = BoundCompanionCycleButton(frame: .zero)
+            child.segmentIndex = segmentButtons.count
+            child.activateSegment = { [weak self] index in self?.activateSegment?(index) }
+            segmentButtons.append(child)
+            addSubview(child)
+        }
+        accessibilityElementsHidden = false
+        isAccessibilityElement = false
+        accessibilityElements = segmentButtons
+        isUserInteractionEnabled = !isHidden && !frame.isEmpty
+        for index in segmentButtons.indices {
+            let child = segmentButtons[index]
+            let choices = index < segmentContents.count ? segmentContents[index] : []
+            let shown = choices.contains(selected) ? selected : choices.first ?? selected
+            child.configureAsSegment(index: index, content: shown, enabled: !choices.isEmpty)
+        }
+        setNeedsLayout()
+        layoutIfNeeded()
+    }
+    private func configureAsSegment(index: Int, content: BoundPiPContent, enabled: Bool) {
+        segmentIndex = index
+        self.content = content
+        companionButtonType = .option2
+        boundPortrait = true
+        isEnabled = enabled
+        accessibilityIdentifier = "bound.panel-cycle.\(index + 1)"
+        accessibilityLabel = "Companion button \(index + 1): \(content.title)"
+        accessibilityHint = enabled ? "Opens the next assigned companion view" : "No views assigned"
+        accessibilityValue = content.title
+        isAccessibilityElement = true
+    }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard !segmentButtons.isEmpty else { return }
+        let rowHeight = bounds.height / 3
+        for (index, child) in segmentButtons.enumerated() {
+            child.frame = CGRect(x: 0, y: CGFloat(index) * rowHeight,
+                                 width: bounds.width,
+                                 height: index == 2 ? bounds.height - CGFloat(index) * rowHeight : rowHeight)
+            child.visualSize = child.bounds.insetBy(dx: 1, dy: 1).size
+            child.setNeedsDisplay()
+        }
+    }
+    override func accessibilityActivate() -> Bool {
+        guard isEnabled, isUserInteractionEnabled, !isHidden else { return false }
+        advance(); return true
     }
     var artworkFrame: CGRect {
         CGRect(x: bounds.midX-visualSize.width/2, y: bounds.midY-visualSize.height/2,
@@ -92,8 +178,7 @@ final class BoundCompanionCycleButton: UIButton {
             return switch buttonType {
             case .option1: nil
             case .option2: (CGSize(width: 52 * scale, height: 136 * scale), CGPoint(x: -3 * scale, y: -15 * scale))
-            case .option3: (CGSize(width: 41 * scale, height: 111 * scale), CGPoint(x: -4 * scale, y: -15 * scale))
-            case .option4: (CGSize(width: 63 * scale, height: 110 * scale), CGPoint(x: -13 * scale, y: -25 * scale))
+            case .option3: (CGSize(width: 52 * scale, height: 136 * scale), CGPoint(x: -3 * scale, y: -15 * scale))
             }
         }()
         visualSize = fixedPair ? CGSize(width: 44, height: 44)
@@ -140,7 +225,7 @@ final class BoundCompanionCycleButton: UIButton {
             isHidden = true; isUserInteractionEnabled = false; frame = .zero
             return
         }
-        isHidden = false; isUserInteractionEnabled = true; frame = available
+        isHidden = false; isUserInteractionEnabled = segmentIndex == nil || !segmentButtons.isEmpty; frame = available
         accessibilityValue = content.rawValue.capitalized
         setNeedsDisplay()
     }
@@ -230,6 +315,7 @@ final class BoundCompanionCycleButton: UIButton {
         return nil
     }
     override func draw(_ rect: CGRect) {
+        guard segmentButtons.isEmpty else { return }
         let box = artworkFrame
         if boundPortrait && !landscape && !minimal && companionButtonType != .option1 {
             drawAlternateBeveledButton(in: box)
@@ -259,7 +345,7 @@ final class BoundCompanionCycleButton: UIButton {
     /// alternate rounded-rectangle shapes do not distort circular artwork.
     private func drawAlternateBeveledButton(in box: CGRect) {
         let scale = min(box.width, box.height) / 44
-        let radiusRatio: CGFloat = companionButtonType == .option4 ? 0.33 : 0.46
+        let radiusRatio: CGFloat = 0.46
         let radius = min(box.width * radiusRatio, box.height / 2)
         let bezel = UIBezierPath(roundedRect: box, cornerRadius: radius)
         let inset = max(1.5, 2 * scale)
@@ -302,6 +388,25 @@ final class BoundCompanionCycleButton: UIButton {
         drawMark(in: material, ink: UIColor(white: 0.28, alpha: 1), etched: true)
     }
     private func drawMark(in box: CGRect, ink: UIColor, etched: Bool) {
+        if segmentIndex != nil {
+            let symbol: String = switch content {
+            case .friend: "person.2.fill"
+            case .bosses: "shield.fill"
+            case .types: "circle.grid.3x3.fill"
+            case .notes: "note.text"
+            case .dex: "book.closed.fill"
+            }
+            if let image = UIImage(systemName: symbol) {
+                let side = min(box.width, box.height) * 0.48
+                let target = CGRect(x: box.midX-side/2, y: box.midY-side/2, width: side, height: side)
+                if etched {
+                    image.withTintColor(.white.withAlphaComponent(0.5), renderingMode: .alwaysOriginal)
+                        .draw(in: target.offsetBy(dx: 0, dy: 0.5))
+                }
+                image.withTintColor(ink, renderingMode: .alwaysOriginal).draw(in: target)
+                return
+            }
+        }
         guard let mark = UIImage(named: "DeltaBoundMark") else { return }
         let side = min(box.width, box.height) * 0.72
         let target = CGRect(x: box.midX-side/2, y: box.midY-side/2, width: side, height: side)

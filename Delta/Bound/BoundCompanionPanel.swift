@@ -9,6 +9,7 @@ final class BoundCompanionState: ObservableObject {
     @Published var selected = 0
     @Published private(set) var experimentalFeaturesEnabled: Bool
     @Published private(set) var uiVersion: BoundUIVersion
+    @Published private(set) var buttonType: BoundCompanionButtonType
     @Published var landscape = false
     @Published var chartTopInset: CGFloat = 0
     @Published var referenceTopInset: CGFloat = 0
@@ -32,14 +33,57 @@ final class BoundCompanionState: ObservableObject {
         self.preferences = preferences ?? BoundPiPPreferences()
         self.experimentalFeaturesEnabled = experimentalFeaturesEnabled ?? BoundFeatureVisibility.experimentalFeaturesEnabled
         self.uiVersion = self.preferences.uiVersion
+        self.buttonType = self.preferences.buttonType
     }
     var changed: (() -> Void)?
     var pendingControlEditor = false
     var editControls: (() -> Void)?
     var sharingChanged: ((Bool) -> Void)?
     var selectionChanged: (() -> Void)?
-    var availableContents: [BoundPiPContent] { preferences.enabledContents(experimentalFeaturesEnabled: experimentalFeaturesEnabled, uiVersion: uiVersion) }
+    var usesAssignedButtons: Bool { experimentalFeaturesEnabled && buttonType == .option3 }
+    var availableContents: [BoundPiPContent] {
+        if usesAssignedButtons {
+            let assigned = Set((0..<3).flatMap { preferences.assignedContents(for: $0) })
+            return preferences.orderedContents.filter { assigned.contains($0) }
+        }
+        return preferences.enabledContents(experimentalFeaturesEnabled: experimentalFeaturesEnabled, uiVersion: uiVersion)
+    }
     var content: BoundPiPContent { availableContents.indices.contains(selected) ? availableContents[selected] : .friend }
+    func updateButtonType() {
+        let previousContent = content
+        buttonType = preferences.buttonType
+        reconcileSelection(previousContent: previousContent)
+        refresh()
+    }
+    func setButtonType(_ type: BoundCompanionButtonType) {
+        guard experimentalFeaturesEnabled else { return }
+        preferences.buttonType = type
+        updateButtonType()
+    }
+    func setAssigned(_ enabled: Bool, content: BoundPiPContent, for button: Int) {
+        guard experimentalFeaturesEnabled else { return }
+        let previousContent = self.content
+        var contents = preferences.assignedContents(for: button)
+        contents.removeAll { $0 == content }
+        if enabled { contents.append(content) }
+        preferences.setAssignedContents(contents, for: button)
+        reconcileSelection(previousContent: previousContent)
+        refresh()
+    }
+    func advanceButton(_ button: Int) {
+        guard usesAssignedButtons else { return }
+        let contents = preferences.assignedContents(for: button)
+        guard let first = contents.first else { return }
+        let next: BoundPiPContent
+        if !hidden, let index = contents.firstIndex(of: content) {
+            next = contents[(index + 1) % contents.count]
+        } else { next = first }
+        guard let index = availableContents.firstIndex(of: next) else { return }
+        selectionChanged?()
+        selected = index
+        hidden = false
+        refresh()
+    }
     func updateUIVersion() {
         let previousContent = content
         uiVersion = preferences.uiVersion
@@ -181,6 +225,7 @@ final class BoundCompanionCoordinator {
         observers.append(NotificationCenter.default.addObserver(forName: BoundCompanionButtonPreferences.didChangeNotification, object: nil, queue: .main) { [weak self, weak owner] _ in
             self?.cancelInteractions()
             self?.controls?.isHighlighted = false
+            self?.state.updateButtonType()
             owner?.view.setNeedsLayout()
         })
         observers.append(NotificationCenter.default.addObserver(forName: BoundUIVersionPreferences.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -221,6 +266,12 @@ final class BoundCompanionCoordinator {
         let controls = BoundCompanionCycleButton()
         controls.cycle = { [weak self] in
             self?.cyclePanels()
+        }
+        controls.activateSegment = { [weak self] button in
+            guard let self, self.state.usesAssignedButtons else { return }
+            self.owner?.view.endEditing(true)
+            self.cancelInteractions()
+            self.state.advanceButton(button)
         }
         controls.selectContent = { [weak self] content in
             guard let self, BoundUIVersionPreferences().effectiveVersion == .option2 else { return }
@@ -404,6 +455,7 @@ final class BoundCompanionCoordinator {
             menuHitFrame: owner.controllerView.convert(menu.extendedFrame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height)), to: owner.view),
             buttonType: BoundCompanionButtonPreferences().effectiveButtonType)
         let usesUpdatedUI = state.experimentalFeaturesEnabled && state.uiVersion == .option2
+        controls.configureSegments(contents: (0..<3).map { state.preferences.assignedContents(for: $0) }, selected: state.content)
         controls.configureViewMenu(contents: state.availableContents, selected: state.content, enabled: usesUpdatedUI)
         if state.availableContents.isEmpty {
             controls.accessibilityValue = "No views enabled"
@@ -663,7 +715,6 @@ struct BoundPiPSettings: View {
     @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
     @AppStorage(BoundReferenceLayoutPreferences.dexKey) private var dexLayout = BoundReferenceLayout.layout1
     @AppStorage(BoundReferenceLayoutPreferences.bossKey) private var bossLayout = BoundReferenceLayout.layout1
-    @AppStorage(BoundCompanionButtonPreferences.key) private var buttonType = BoundCompanionButtonType.option1
     var closed: () -> Void = {}
     @Environment(\.dismiss) var dismiss
     var body: some View {
@@ -672,21 +723,40 @@ struct BoundPiPSettings: View {
                 if experimentsEnabled {
                     BoundUIVersionSettings()
                     Section {
-                        Picker("Button type", selection: Binding(get: { buttonType }, set: {
-                            guard experimentsEnabled else { return }
-                            BoundCompanionButtonPreferences().buttonType = $0
-                        })) {
+                        Picker("Button type", selection: Binding(get: { state.buttonType }, set: { state.setButtonType($0) })) {
                             ForEach(BoundCompanionButtonType.allCases, id: \.rawValue) { type in
                                 Text(String(type.rawValue)).tag(type)
                             }
                         }
                         .pickerStyle(.segmented)
                         .accessibilityIdentifier("bound.companion-button-type")
-                        Text("\(buttonType.title): \(buttonType.summary)")
+                        Text("\(state.buttonType.title): \(state.buttonType.summary)")
                             .font(.footnote).foregroundStyle(.secondary)
                     } header: { Text("Bound button") } footer: {
                         Text("Choose the portrait Bound button's shape and size. Your choice is saved on this device.")
                     }
+                    if state.buttonType == .option3 {
+                        ForEach(0..<3, id: \.self) { button in
+                            Section {
+                                ForEach(state.preferences.orderedContents, id: \.rawValue) { content in
+                                    Toggle(content.title, isOn: Binding(
+                                        get: { state.preferences.assignedContents(for: button).contains(content) },
+                                        set: { state.setAssigned($0, content: content, for: button) }))
+                                    .accessibilityIdentifier("bound.button-\(button + 1)-view.\(content.rawValue)")
+                                }
+                            } header: {
+                                Text("Button \(button + 1) · \(["Top", "Middle", "Bottom"][button])")
+                            } footer: {
+                                Text("Touch to cycle through this button's selected views. Select none to leave it inactive.")
+                            }
+                        }
+                        if uiVersion == .option2 {
+                            Section {
+                                NavigationLink("Reorder views") { BoundViewOrderSettings(state: state) }
+                                    .accessibilityIdentifier("bound.reorder-views")
+                            }
+                        }
+                    } else {
                     Section {
                         ForEach(uiVersion == .option2 ? state.preferences.orderedContents : BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: true), id: \.rawValue) { content in
                             Toggle(content.title, isOn: Binding(get: { state.preferences.isEnabled(content) },
@@ -699,6 +769,7 @@ struct BoundPiPSettings: View {
                         }
                     } header: { Text("Companion views") } footer: {
                         Text("Choose which views the Bound button cycles through. All are on by default. Turn all off to hide the companion panel.")
+                    }
                     }
                     Section {
                         layoutPicker("RR Dex", selection: $dexLayout, identifier: "bound.rrdex-layout")
@@ -775,7 +846,7 @@ private struct BoundViewOrderSettings: View {
                     HStack {
                         Text(content.title)
                         Spacer()
-                        if !state.preferences.isEnabled(content) { Text("Off").foregroundStyle(.secondary) }
+                        if !state.availableContents.contains(content) { Text("Off").foregroundStyle(.secondary) }
                     }
                 }
                 .onMove { source, destination in
@@ -783,7 +854,7 @@ private struct BoundViewOrderSettings: View {
                     order.move(fromOffsets: source, toOffset: destination)
                     state.setContentOrder(order)
                 }
-            } footer: { Text("Drag to change the order used by the Bound button. Views that are off are skipped.") }
+            } footer: { Text("Drag to change the order used by the Bound buttons. Each button skips views that aren't selected for it.") }
         }
         .environment(\.editMode, .constant(.active))
         .navigationTitle("View order")
