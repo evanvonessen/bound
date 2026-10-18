@@ -6,10 +6,13 @@ but it has no authority over app behavior. Fresh installs and upgrades behave
 the same. The historical Build 13 branch remains available in Git history.
 
 The Library settings button and pause-menu Settings tile open the same grouped
-home: Interface & Companion, Controls, Audio & Emulation, Account & Sync,
-General, and About. The shared screen has one navigation stack and one Done
+home: Interface & Companion, Controls, Audio, Account & Sync,
+General, and About. Audio opens its controls directly; About includes the Game
+Boy Advance core information. The shared screen has one navigation stack and one Done
 action. Done and swipe dismissal run cleanup and close-time sync once; opening
 a detail page does neither. In-game Settings returns to the paused menu.
+The navigation area ends above the Done bar so long forms and embedded UIKit
+menus can scroll their last content fully into view in either orientation.
 
 `BoundCompanionSettingsModel` observes the existing preference stores without
 creating an emulator or sharing session. Library edits update an existing
@@ -57,3 +60,18 @@ The live Dropbox OAuth test was skipped because disposable QA credentials were
 not supplied. These checks establish model, Simulator, and build evidence; they
 do not establish physical-device behavior, live network/account operations,
 notification delivery, or Release UI runtime validation.
+
+## Settings categories and scrolling follow-up — October 17, 2026
+
+Audio now opens directly from the settings home, and About includes the Game Boy
+Advance core information. The previous layout reproduced a last license-notice
+row extending 12 points beneath the Done bar. The navigation area now reserves
+space above that bar, and embedded UIKit destinations retain their bottom safe
+area.
+
+Focused Simulator checks passed for both settings entry points and for small-screen
+portrait and landscape on iPhone SE (3rd generation, iOS 26.3). The latter checks
+verify Audio, the About core destination, the last source notice, the final line
+of the embedded license text, the Interface footer, and the layout gallery footer
+are reachable above Done. An unsigned Release iPhone build passed. Physical-device
+and live network/service behavior were not exercised by this follow-up.

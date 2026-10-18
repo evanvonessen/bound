@@ -33,6 +33,12 @@ class LicensesViewController: UIViewController
     private var _didAppear = false
     
     @IBOutlet private var textView: UITextView!
+
+    override func viewDidLoad()
+    {
+        super.viewDidLoad()
+        self.textView.accessibilityIdentifier = "bound.software-licenses-text"
+    }
     
     override func viewWillAppear(_ animated: Bool)
     {

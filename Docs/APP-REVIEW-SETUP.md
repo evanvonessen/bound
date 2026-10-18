@@ -56,8 +56,10 @@ by this work.
   An authenticated successful deletion needs the deployed endpoint and disposable
   QA; interrupted deletion can be retried by its saved operation capability.
 - Settings: Library → Settings and Menu → Settings open the same settings home.
-  Interface & Companion contains controller opacity, companion and layout choices;
-  Audio & Emulation contains core settings. About contains Source and licenses.
+  Controls contains controller opacity; Interface & Companion contains companion
+  and layout choices.
+  Audio opens the sound settings directly. About contains Game Boy Advance core
+  information and Source and licenses.
 
 ## Reply draft — use only after the preceding checks
 

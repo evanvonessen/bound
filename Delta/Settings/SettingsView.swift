@@ -85,66 +85,76 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    NavigationLink {
-                        BoundInterfaceSettings(model: model, gameplay: gameplay)
-                    } label: {
-                        SettingsRow(label: Text("Interface & Companion"), systemImage: "rectangle.3.group", color: .purple)
-                    }.accessibilityIdentifier("bound.settings-interface")
-                    NavigationLink {
-                        Form {
-                            ControlsSection()
-                            if !BoundFeatureVisibility.simplifiedSettings, let edit = gameplay?.editControls {
-                                Section { Button("Button placement") { edit(); close() } }
-                            }
-                        }.navigationTitle("Controls").navigationBarTitleDisplayMode(.inline)
-                    } label: {
-                        SettingsRow(label: Text("Controls"), systemImage: "gamecontroller", color: .pink)
-                    }.accessibilityIdentifier("bound.settings-controls")
-                    NavigationLink {
-                        Form {
-                            EmulationSection()
-                            if !BoundFeatureVisibility.simplifiedSettings { OnlineMultiplayerSection() }
-                        }.navigationTitle("Audio & Emulation").navigationBarTitleDisplayMode(.inline)
-                    } label: {
-                        SettingsRow(label: Text("Audio & Emulation"), systemImage: "speaker.wave.2", color: .green)
-                    }.accessibilityIdentifier("bound.settings-emulation")
-                    NavigationLink {
-                        Form { BoundAccountSocialSettings(); DeltaSyncSettingsSection() }
-                            .navigationTitle("Account & Sync").navigationBarTitleDisplayMode(.inline)
-                    } label: {
-                        SettingsRow(label: Text("Account & Sync"), systemImage: "person.crop.circle", color: .indigo)
-                    }.accessibilityIdentifier("bound.settings-account")
-                    NavigationLink {
-                        MinorSettingsView()
-                    } label: {
-                        SettingsRow(label: Text("General"), systemImage: "slider.horizontal.3", color: .gray)
-                    }.accessibilityIdentifier("bound.settings-general")
-                    NavigationLink {
-                        Form {
-                            BoundAppearanceSettings(emulationDetails: gameplay?.emulationDetails, includeAppearance: false)
-                            if !BoundFeatureVisibility.simplifiedSettings { CreditsSection() }
-                            #if DEBUG
-                            Section("Developer") {
-                                NavigationLink("Advanced") { AdvancedSettingsView() }
-                                NavigationLink("Experimental") { ExperimentalFeaturesView() }
-                            }
-                            #endif
-                        }.navigationTitle("About").navigationBarTitleDisplayMode(.inline)
-                    } label: {
-                        SettingsRow(label: Text("About"), systemImage: "info.circle", color: .cyan)
-                    }.accessibilityIdentifier("bound.settings-about")
+        VStack(spacing: 0) {
+            NavigationStack {
+                Form {
+                    Section {
+                        NavigationLink {
+                            BoundInterfaceSettings(model: model, gameplay: gameplay)
+                        } label: {
+                            SettingsRow(label: Text("Interface & Companion"), systemImage: "rectangle.3.group", color: .purple)
+                        }.accessibilityIdentifier("bound.settings-interface")
+                        NavigationLink {
+                            Form {
+                                ControlsSection()
+                                if !BoundFeatureVisibility.simplifiedSettings, let edit = gameplay?.editControls {
+                                    Section { Button("Button placement") { edit(); close() } }
+                                }
+                            }.navigationTitle("Controls").navigationBarTitleDisplayMode(.inline)
+                        } label: {
+                            SettingsRow(label: Text("Controls"), systemImage: "gamecontroller", color: .pink)
+                        }.accessibilityIdentifier("bound.settings-controls")
+                        NavigationLink {
+                            AudioSettingsView()
+                        } label: {
+                            SettingsRow(label: Text("Audio"), systemImage: "speaker.wave.2", color: .green)
+                        }.accessibilityIdentifier("bound.settings-audio")
+                        NavigationLink {
+                            Form { BoundAccountSocialSettings(); DeltaSyncSettingsSection() }
+                                .navigationTitle("Account & Sync").navigationBarTitleDisplayMode(.inline)
+                        } label: {
+                            SettingsRow(label: Text("Account & Sync"), systemImage: "person.crop.circle", color: .indigo)
+                        }.accessibilityIdentifier("bound.settings-account")
+                        NavigationLink {
+                            MinorSettingsView()
+                        } label: {
+                            SettingsRow(label: Text("General"), systemImage: "slider.horizontal.3", color: .gray)
+                        }.accessibilityIdentifier("bound.settings-general")
+                        NavigationLink {
+                            Form {
+                                BoundAppearanceSettings(emulationDetails: gameplay?.emulationDetails, includeAppearance: false)
+                                Section("Cores") { CoreSettingsLinks() }
+                                if !BoundFeatureVisibility.simplifiedSettings {
+                                    Section("Emulation") {
+                                        NavigationLink {
+                                            VideoSettingsView()
+                                        } label: {
+                                            SettingsRow(label: Text("Video"), systemImage: "display", color: .teal)
+                                        }
+                                    }
+                                    OnlineMultiplayerSection()
+                                }
+                                if !BoundFeatureVisibility.simplifiedSettings { CreditsSection() }
+                                #if DEBUG
+                                Section("Developer") {
+                                    NavigationLink("Advanced") { AdvancedSettingsView() }
+                                    NavigationLink("Experimental") { ExperimentalFeaturesView() }
+                                }
+                                #endif
+                            }.navigationTitle("About").navigationBarTitleDisplayMode(.inline)
+                        } label: {
+                            SettingsRow(label: Text("About"), systemImage: "info.circle", color: .cyan)
+                        }.accessibilityIdentifier("bound.settings-about")
+                    }
                 }
+                .safeAreaPadding(.top, 8)
+                .navigationTitle("Settings")
+                .accessibilityIdentifier("bound.settings-root")
             }
-            .safeAreaPadding(.top, 8)
-            .navigationTitle("Settings")
-            .accessibilityIdentifier("bound.settings-root")
-        }
-        // Keep the single presentation action outside the navigation destinations.
-        // A destination's toolbar (such as Use layout) must not replace Done.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            // Reserve real layout space for Done. UIKit destinations that ignore
+            // safe areas must still end above the footer, including after rotation.
             HStack {
                 Spacer()
                 Button("Done", action: close)
@@ -200,35 +210,6 @@ private struct ControlsSection: View
                     Slider(value: $opacity, in: 0...1, step: 0.05)
                         .onChange(of: opacity) { _, value in Settings.translucentControllerSkinOpacity = value }
                 }
-            }
-        }
-    }
-}
-
-// MARK: - Emulation
-
-private struct EmulationSection: View
-{
-    var body: some View {
-        Section("Emulation") {
-            NavigationLink {
-                AudioSettingsView()
-            } label: {
-                SettingsRow(label: Text("Audio"), systemImage: "speaker.wave.2", color: .green)
-            }
-
-            if !BoundFeatureVisibility.simplifiedSettings {
-            NavigationLink {
-                VideoSettingsView()
-            } label: {
-                SettingsRow(label: Text("Video"), systemImage: "display", color: .teal)
-            }
-            }
-
-            NavigationLink {
-                CoresListView()
-            } label: {
-                SettingsRow(label: Text("Cores"), systemImage: "cpu", color: .cyan)
             }
         }
     }
@@ -336,7 +317,7 @@ private struct DeltaSyncSettingsSection: View
         Section {
             NavigationLink {
                 SyncingServicesViewController.ViewRepresentable()
-                    .ignoresSafeArea()
+                    .ignoresSafeArea(.container, edges: .top)
             } label: {
                 SettingsRow(label: Text("Delta Sync"), systemImage: "arrow.triangle.2.circlepath", color: .indigo) {
                     if let name = syncingServiceName {
@@ -350,7 +331,7 @@ private struct DeltaSyncSettingsSection: View
             {
                 NavigationLink {
                     SyncStatusViewController.ViewRepresentable()
-                        .ignoresSafeArea()
+                        .ignoresSafeArea(.container, edges: .top)
                 } label: {
                     SettingsRow(label: Text("Sync Status"), systemImage: "checkmark.icloud", color: .indigo) {
                         if syncConflictsCount > 0
@@ -408,7 +389,7 @@ private struct PatreonSection: View
             Section {
                 NavigationLink {
                     PatreonViewController.ViewRepresentable()
-                        .ignoresSafeArea()
+                        .ignoresSafeArea(.container, edges: .top)
                 } label: {
                     SettingsRow(
                         label: Text(PurchaseManager.shared.isActivePatron
@@ -433,7 +414,7 @@ private struct DisplaySection: View
             NavigationLink {
                 AltAppIconsViewController.ViewRepresentable()
                     .navigationBarTitleDisplayMode(.large)
-                    .ignoresSafeArea()
+                    .ignoresSafeArea(.container, edges: .top)
             } label: {
                 SettingsRow(label: Text("App Icon"), systemImage: "square.grid.2x2", color: .blue)
             }
@@ -486,7 +467,7 @@ private struct CreditsSection: View
 
             NavigationLink {
                 LicensesViewController.ViewRepresentable()
-                    .ignoresSafeArea()
+                    .ignoresSafeArea(.container, edges: .top)
             } label: {
                 Text("Software Licenses")
             }

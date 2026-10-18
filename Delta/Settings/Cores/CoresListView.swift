@@ -12,19 +12,24 @@ import DeltaCore
 struct CoresListView: View
 {
     var body: some View {
-        Form {
-            ForEach(System.registeredSystems.filter { !BoundFeatureVisibility.simplifiedSettings || $0 == .gba }, id: \.self) { system in
-                NavigationLink(destination: coreSettingsDestination(for: system)) {
-                    LabeledContent(system.localizedName) {
-                        Text(coreName(for: system))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
+        Form { CoreSettingsLinks() }
         .tint(.accentColor)
         .navigationTitle("Cores")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// The same core destinations can appear in About without another one-row page.
+struct CoreSettingsLinks: View {
+    var body: some View {
+        ForEach(System.registeredSystems.filter { !BoundFeatureVisibility.simplifiedSettings || $0 == .gba }, id: \.self) { system in
+            NavigationLink(destination: coreSettingsDestination(for: system)) {
+                LabeledContent(system.localizedName) {
+                    Text(coreName(for: system))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 
     private func coreName(for system: System) -> String
@@ -45,7 +50,7 @@ struct CoresListView: View
         case .gbc: GBCCoreSettingsView()
         case .gba: GBACoreSettingsView()
         case .ds: MelonDSCoreSettingsView()
-            .ignoresSafeArea()
+            .ignoresSafeArea(.container, edges: .top)
         }
     }
 }
