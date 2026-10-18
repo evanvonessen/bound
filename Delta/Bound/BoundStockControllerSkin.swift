@@ -15,7 +15,7 @@ final class BoundStockControllerSkin: ControllerSkinProtocol {
     }
     private var stock: Bool { ["gba", "gbc", "nes", "snes", "n64", "genesis", "ds"].contains { base.identifier == "com.delta." + $0 + ".standard" } }
     var name: String { base.name }
-    var identifier: String { base.identifier + ".bound-stock.v4." + String(describing: canvasSize) + String(describing: contentInsets) + String(describing: boundLandscapeGutter) }
+    var identifier: String { base.identifier + ".bound-stock.v5." + String(describing: canvasSize) + String(describing: contentInsets) + String(describing: boundLandscapeGutter) }
     var gameType: GameType { base.gameType }
     var isDebugModeEnabled: Bool { base.isDebugModeEnabled }
     func supports(_ traits: DeltaCore.ControllerSkin.Traits) -> Bool { base.supports(traits) }
@@ -284,7 +284,10 @@ final class BoundStockControllerSkin: ControllerSkinProtocol {
     func drawPortraitWordmark(in context: CGContext, size: CGSize,
                               traits: DeltaCore.ControllerSkin.Traits, color: UIColor? = nil) {
         guard let frame = portraitWordmarkFrame(size: size, traits: traits) else { return }
-        drawWordmark(in: context, frame: CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: 10 * size.width / 320),
+        // Inset the ink inside the existing casing slot instead of starting it
+        // flush with the controller's top edge. Native artwork and inputs stay put.
+        let scale = size.width / 320
+        drawWordmark(in: context, frame: frame.insetBy(dx: 6 * scale, dy: 2 * scale),
                      color: color ?? (base.identifier == "com.delta.nes.standard" ? .black : .white))
     }
     private func drawWordmark(in context: CGContext, frame: CGRect, color: UIColor) {
