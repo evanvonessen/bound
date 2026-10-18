@@ -569,8 +569,8 @@ final class CompanionUITests: XCTestCase {
             XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 10))
             XCTAssertEqual(element("bound.rrdex", in: app).value as? String, "Layout 7")
             XCTAssertEqual(app.buttons["bound.rrdex-info"].label,
-                           "Rad Red version 4.1, Normal difficulty, save loaded",
-                           "The header confirms a save only after the current save is read successfully.")
+                           "Dex information",
+                           "The information icon opens the current-save details.")
         }
         func assertAutomaticSave() {
             XCTAssertFalse(app.buttons["bound.rrdex-import"].exists, "Layout 7 has no manual save control")
@@ -2850,7 +2850,26 @@ final class CompanionUITests: XCTestCase {
                        "Retained Boss controls must not receive taps while Dex is active.")
         let dexCard = element("bound.rrdex", in: app)
         XCTAssertEqual(dexCard.value as? String, "Layout 12")
-        app.buttons["bound.rrdex-search-open"].tap()
+        let info = app.buttons["bound.rrdex-info"]
+        let search = app.buttons["bound.rrdex-search-open"]
+        XCTAssertTrue(info.isHittable); XCTAssertTrue(search.isHittable)
+        XCTAssertEqual(info.label, "Dex information")
+        XCTAssertEqual(info.frame.width, 44, accuracy: 1)
+        XCTAssertEqual(search.frame.width, 44, accuracy: 1)
+        XCTAssertEqual(info.frame.height, 44, accuracy: 1)
+        XCTAssertEqual(search.frame.height, 44, accuracy: 1)
+        XCTAssertLessThan(info.frame.midY, 70); XCTAssertLessThan(search.frame.midY, 70)
+        XCTAssertEqual(search.frame.minX - info.frame.maxX, 160, accuracy: 1,
+                       "The original inward placement reserves 160 points for the Dynamic Island.")
+        XCTAssertEqual((info.frame.midX + search.frame.midX) / 2, app.frame.midX, accuracy: 1)
+        screenshot("RRDex-Layout12-Restored-Island-Controls")
+        info.tap()
+        XCTAssertEqual(element("bound.rrdex-layout12-info-rom", in: app).label, "ROM: Radical Red Version 4.1")
+        XCTAssertEqual(element("bound.rrdex-layout12-info-difficulty", in: app).label, "Difficulty: Normal")
+        XCTAssertEqual(element("bound.rrdex-layout12-info-save", in: app).label, "Save Loaded")
+        screenshot("RRDex-Layout12-Information")
+        app.buttons["bound.rrdex-close-detail"].tap()
+        search.tap()
         let speciesSearch = app.textFields["bound.rrdex-search"]
         XCTAssertTrue(speciesSearch.waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Search Pokémon by name."].exists,

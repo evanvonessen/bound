@@ -49,9 +49,6 @@ struct BoundRRDexView: View {
     private var hasIslandActions: Bool { !floating && portraitTopInset >= 51 }
     private var layout: BoundReferenceLayout { previewLayout ?? savedLayout }
     private var usesUIVersion2: Bool { uiVersion == .option2 }
-    /// A save is present only after a successful read or restoration of a
-    /// previously successful read for this ROM.
-    private var hasLoadedSave: Bool { choice.save != nil }
     private var referenceMode: String {
         if automaticSaveStatus == BoundRRDexSave.ImportError.difficulty.localizedDescription {
             return "Hardcore / Restricted"
@@ -100,9 +97,11 @@ struct BoundRRDexView: View {
                             .frame(height: portraitTopInset)
                         } else if layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12 {
                             HStack(spacing: 0) {
-                                layout8InformationButton.frame(maxWidth: .infinity, alignment: .leading)
+                                Spacer(minLength: 0)
+                                layout8InformationButton
                                 Color.clear.frame(width: 160, height: 1)
-                                layout8SearchButton.frame(maxWidth: .infinity, alignment: .trailing)
+                                layout8SearchButton
+                                Spacer(minLength: 0)
                             }
                             .padding(.horizontal, 12)
                             .frame(height: portraitTopInset)
@@ -337,7 +336,11 @@ struct BoundRRDexView: View {
     }
 
     private var layout7InformationButton: some View {
-        referenceHeaderButton
+        Button { showDetail(.information) } label: {
+            Image(systemName: "info.circle").font(.system(size: 16))
+                .frame(width: 44, height: 44).contentShape(Rectangle())
+        }
+        .accessibilityLabel("Dex information").accessibilityIdentifier("bound.rrdex-info")
     }
 
     private var layout7SearchButton: some View {
@@ -353,31 +356,13 @@ struct BoundRRDexView: View {
     }
 
     private var layout8InformationButton: some View {
-        referenceHeaderButton
-    }
-
-    private var referenceHeaderButton: some View {
         Button { showDetail(.information) } label: {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Rad Red v4.1 *")
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                HStack(spacing: 3) {
-                    Text(referenceMode)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                    if hasLoadedSave {
-                        Image(systemName: "checkmark.circle.fill").accessibilityHidden(true)
-                    }
-                }
-            }
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(Color.primary)
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .contentShape(Rectangle())
+            Image(systemName: "info.circle")
+                .font(.system(size: 22, weight: .regular))
+                .foregroundStyle(Color.primary)
+                .frame(width: 44, height: 44).contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Rad Red version 4.1, \(referenceMode) difficulty" + (hasLoadedSave ? ", save loaded" : ", no save loaded"))
+        .accessibilityLabel("Dex information")
         .accessibilityIdentifier("bound.rrdex-info")
     }
 
