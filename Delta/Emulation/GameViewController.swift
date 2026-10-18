@@ -1693,6 +1693,7 @@ extension GameViewController: GameViewControllerDelegate
     func gameViewController(_ gameViewController: DeltaCore.GameViewController, handleMenuInputFrom gameController: GameController)
     {
         guard gameViewController == self else { return }
+        if self.boundCompanion.finishLandscapeArrangementIfNeeded() { return }
         
         if let pausingGameController = self.pausingGameController
         {

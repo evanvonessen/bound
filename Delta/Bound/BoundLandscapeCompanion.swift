@@ -195,28 +195,34 @@ struct BoundCompanionPresentation: View {
     @ObservedObject var sharing: FriendSharingSession
     @ObservedObject var state: BoundCompanionState
     @ObservedObject var landscape: BoundLandscapeCompanionModel
+    @ObservedObject var arrangement: BoundLandscapeArrangementModel
     var gameID: String
     let editingChanged: (Bool) -> Void
     var textEditingChanged: (Bool) -> Void = { _ in }
     var currentSave: (String) throws -> BoundRRDexSave
 
     private var legacyFriend: Bool { !state.availableContents.isEmpty && state.content == .friend }
-    private var showsFriend: Bool { landscape.active ? landscape.friendVisible : legacyFriend }
+    private var showsFriend: Bool {
+        arrangement.active ? (arrangement.friendVisible || arrangement.editing) : landscape.active ? landscape.friendVisible : legacyFriend
+    }
+    private var showsArrangementReference: Bool {
+        (arrangement.referenceVisible || arrangement.editing) && !arrangement.contents.isEmpty && !arrangement.layout.reference.isEmpty
+    }
     private var showsReference: Bool {
         landscape.referenceVisible && !landscape.referenceContents.isEmpty && !landscape.layout.reference.isEmpty
     }
     var body: some View {
         GeometryReader { geometry in
             let legacyFrame = CGRect(origin: .zero, size: geometry.size)
-            let friendFrame = landscape.active ? landscape.layout.friend : legacyFrame
-            let reference = landscape.active ? landscape.layout.reference : legacyFrame
+            let friendFrame = arrangement.active ? arrangement.layout.friend : landscape.active ? landscape.layout.friend : legacyFrame
+            let reference = arrangement.active ? arrangement.layout.reference : landscape.active ? landscape.layout.reference : legacyFrame
             let headerHeight: CGFloat = landscape.active ? 32 : 0
             ZStack(alignment: .topLeading) {
                 friendVideo
                     .frame(width: max(0, friendFrame.width), height: max(0, friendFrame.height))
                     .clipShape(RoundedRectangle(cornerRadius: state.landscape ? 8 : 4))
-                    .opacity(showsFriend ? (landscape.active ? Double(landscape.draft.opacity) : 1) : 0)
-                    .allowsHitTesting(!landscape.active && showsFriend)
+                    .opacity(showsFriend ? (arrangement.active ? arrangement.opacity(for: .friend) : landscape.active ? Double(landscape.draft.opacity) : 1) : 0)
+                    .allowsHitTesting(!arrangement.active && !landscape.active && showsFriend)
                     .accessibilityHidden(true)
                     .offset(x: friendFrame.minX, y: friendFrame.minY)
 
@@ -227,25 +233,26 @@ struct BoundCompanionPresentation: View {
                     Color.clear
                         .frame(width: friendFrame.width, height: friendFrame.height)
                         .accessibilityElement()
-                        .accessibilityIdentifier(landscape.active ? "bound.landscape-friend" : "bound.friend-screen")
+                        .accessibilityIdentifier(arrangement.active ? "bound.landscape3-friend" : landscape.active ? "bound.landscape-friend" : "bound.friend-screen")
                         .accessibilityLabel("Friend screen")
-                        .accessibilityValue(landscape.active ? (landscape.editing ? "Moving" : "Locked, touches pass through") : "")
+                        .accessibilityValue(arrangement.active ? (arrangement.editing ? "Arranging" : "Locked, touches pass through") : landscape.active ? (landscape.editing ? "Moving" : "Locked, touches pass through") : "")
                         .allowsHitTesting(false)
                         .offset(x: friendFrame.minX, y: friendFrame.minY)
                 }
 
                 BoundCompanionPanel(sharing: sharing, state: state, gameID: gameID,
                     editingChanged: editingChanged, textEditingChanged: textEditingChanged, currentSave: currentSave,
-                    contentOverride: landscape.active ? landscape.referenceContent : nil,
-                    presentationEnabled: !landscape.active || showsReference, rendersFriend: false)
+                    contentOverride: arrangement.active ? arrangement.referenceContent : landscape.active ? landscape.referenceContent : nil,
+                    presentationEnabled: arrangement.active ? showsArrangementReference : !landscape.active || showsReference, rendersFriend: false)
                     .frame(width: max(0, reference.width), height: max(0, reference.height - headerHeight))
-                    .opacity(landscape.active ? (showsReference ? (landscape.editing ? 0.35 : 1) : 0) : (legacyFriend ? 0 : 1))
-                    .allowsHitTesting(landscape.active ? showsReference && !landscape.editing : !legacyFriend)
+                    .opacity(arrangement.active ? (showsArrangementReference ? arrangement.opacity(for: arrangement.referenceContent) : 0) : landscape.active ? (showsReference ? (landscape.editing ? 0.35 : 1) : 0) : (legacyFriend ? 0 : 1))
+                    .allowsHitTesting(arrangement.active ? showsArrangementReference && !arrangement.editing : landscape.active ? showsReference && !landscape.editing : !legacyFriend)
                     .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier(landscape.active ? "bound.landscape-reference-content" : "bound.companion-content")
-                    .accessibilityHidden(landscape.active ? !showsReference || landscape.editing : legacyFriend)
+                    .accessibilityIdentifier(arrangement.active ? (showsArrangementReference && !arrangement.editing ? "bound.landscape3-reference-content" : "") : landscape.active ? "bound.landscape-reference-content" : "bound.companion-content")
+                    .accessibilityHidden(arrangement.active ? !showsArrangementReference || arrangement.editing : landscape.active ? !showsReference || landscape.editing : legacyFriend)
                     .offset(x: reference.minX, y: reference.minY + headerHeight)
 
+                if arrangement.active { BoundLandscapeArrangementOverlay(model: arrangement) }
                 if landscape.active {
                     if showsReference { referenceHeader.frame(width: reference.width, height: headerHeight).offset(x: reference.minX, y: reference.minY) }
                     if landscape.editing {
@@ -395,6 +402,7 @@ struct BoundLandscapeOptionsSettings: View {
             .accessibilityIdentifier("bound.landscape-options")
         } header: { Text("Landscape Options") } footer: {
             Text(option == .option1 ? "The existing landscape controls and companion panel. Portrait stays unchanged."
+                 : option == .option3 ? "Friend and the selected reference appear independently. Friend toggles video, X toggles references, and Bound cycles the views selected in Companion settings. In landscape Settings, use Arrange Views to move, resize, or change each view’s opacity. Done locks the layout; references stay interactive."
                  : "Separate Friend and Views buttons. Hold Friend to position, resize, and lock it. Locked friend video lets touches reach the controls underneath. Portrait stays unchanged.")
         }
         if option == .option2 {

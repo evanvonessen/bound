@@ -237,6 +237,9 @@ final class BoundCompanionCoordinator {
     }
     private var host: UIHostingController<BoundCompanionPresentation>?
     private let landscapeCompanion = BoundLandscapeCompanionModel()
+    private lazy var landscapeArrangement = BoundLandscapeArrangementModel()
+    private var arrangementOpacityGesture: BoundLandscapeOpacityGesture?
+    private var pendingLandscapeArrangement = false
     private var macHost: UIHostingController<BoundMacWorkspaceView>?
     private var controls: BoundCompanionCycleButton?
     private var subscriptions = Set<AnyCancellable>()
@@ -275,7 +278,7 @@ final class BoundCompanionCoordinator {
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-reset-layout") {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
-            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") { UserDefaults.standard.removeObject(forKey: key) }
+            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") { UserDefaults.standard.removeObject(forKey: key) }
         }
         #endif
         #if DEBUG
@@ -327,8 +330,23 @@ final class BoundCompanionCoordinator {
                 return true
             }
             landscapeCompanion.endArrangement = { [weak self] resume in self?.notesEditing(false, allowResume: resume) }
-            let panel = BoundCompanionPresentation(sharing: sharing, state: state, landscape: landscapeCompanion, gameID: (owner.game as? Game)?.identifier ?? "", editingChanged: { [weak self] in
-                guard let self, !self.landscapeCompanion.editing else { return }
+            landscapeArrangement.needsLayout = { [weak owner] in owner?.view.setNeedsLayout() }
+            landscapeArrangement.beforeSwitch = { [weak self, weak owner] in
+                owner?.view.endEditing(true)
+                owner?.controllerView.cancelTouchInputs()
+                self?.gestures?.cancel()
+            }
+            landscapeArrangement.beginArrangement = { [weak self, weak owner] in
+                guard let self, let owner, self.landscapeArrangement.active,
+                      owner.presentedViewController == nil, !self.state.showingFriends, !self.state.showingSettings else { return false }
+                owner.view.endEditing(true)
+                self.notesEditing(true)
+                return true
+            }
+            landscapeArrangement.endArrangement = { [weak self] resume in self?.notesEditing(false, allowResume: resume) }
+            arrangementOpacityGesture = BoundLandscapeOpacityGesture(view: owner.view, model: landscapeArrangement)
+            let panel = BoundCompanionPresentation(sharing: sharing, state: state, landscape: landscapeCompanion, arrangement: landscapeArrangement, gameID: (owner.game as? Game)?.identifier ?? "", editingChanged: { [weak self] in
+                guard let self, !self.landscapeCompanion.editing, !self.landscapeArrangement.editing else { return }
                 self.notesEditing($0)
             }, textEditingChanged: { [weak self] in self?.textEditing($0) }, currentSave: { [weak self] gameID in
                 guard let self else { throw BoundRRDexSave.ImportError.currentGameUnavailable }
@@ -344,6 +362,7 @@ final class BoundCompanionCoordinator {
             overlay.accessibilityIdentifier = "bound.companion-container"
             overlay.yieldsTouch = { [weak self, weak overlay] point in
                 guard let self, let owner = self.owner, let overlay else { return false }
+                if self.landscapeArrangement.active { return !self.landscapeArrangement.receivesTouch(at: point) }
                 if self.landscapeCompanion.active { return !self.landscapeCompanion.receivesTouch(at: point) }
                 guard !self.isEditingNotes else { return false }
                 let local = owner.controllerView.convert(point, from: overlay)
@@ -474,14 +493,17 @@ final class BoundCompanionCoordinator {
         let landscape = bounds.width > bounds.height
         if state.landscape != landscape { state.landscape = landscape; cancelInteractions() }
         let usesLandscapeOption2 = landscape && landscapeCompanion.preferences.option == .option2
-        if usesLandscapeOption2 != landscapeCompanion.active {
+        let usesLandscapeOption3 = landscape && landscapeCompanion.preferences.option == .option3
+        if usesLandscapeOption2 != landscapeCompanion.active || usesLandscapeOption3 != landscapeArrangement.active {
             owner.view.endEditing(true)
             textEditing(false)
             notesEditing(false)
             keyboardHeight = 0
         }
         landscapeCompanion.setActive(usesLandscapeOption2)
-        gestures?.setEnabled(!landscapeCompanion.active)
+        landscapeArrangement.setActive(usesLandscapeOption3)
+        if usesLandscapeOption3 { landscapeArrangement.setContents(state.availableContents) }
+        gestures?.setEnabled(!landscapeCompanion.active && !landscapeArrangement.active)
         let referenceTopInset = screenLayout == .bound && !landscape ? safeArea.top : 0
         if state.referenceTopInset != referenceTopInset { state.referenceTopInset = referenceTopInset }
         if screenLayout == .delta {
@@ -524,6 +546,11 @@ final class BoundCompanionCoordinator {
             return
         }
         layoutCycleButton(bounds: owner.view.bounds, safeArea: owner.view.safeAreaInsets)
+        if landscapeArrangement.active {
+            layoutLandscapeArrangement()
+            sharing.setRemotePresentationEnabled(landscapeArrangement.friendVisible || landscapeArrangement.editing)
+            return
+        }
         if landscapeCompanion.active {
             layoutLandscapeCompanion()
             sharing.setRemotePresentationEnabled(landscapeCompanion.friendVisible)
@@ -534,6 +561,42 @@ final class BoundCompanionCoordinator {
         }
         sharing.setRemotePresentationEnabled(state.content == .friend && overlay?.isHidden == false)
         if let controls { owner.view.bringSubviewToFront(controls) }
+    }
+    private func layoutLandscapeArrangement() {
+        guard let owner, let overlay, let controls,
+              let skin = owner.controllerView.controllerSkin, let traits = owner.controllerView.controllerSkinTraits,
+              let menu = skin.items(for: traits)?.first(where: { $0.inputs.allInputs.contains(where: { $0.stringValue == "menu" }) }) else { return }
+        geometry = nil
+        let canvas = owner.view.bounds.inset(by: owner.view.safeAreaInsets)
+        let native = owner.controllerView.controlHitFrames.map { owner.controllerView.convert($0, to: owner.view) }
+        let menuFrame = owner.controllerView.convert(menu.frame.applying(.init(scaleX: owner.controllerView.bounds.width,
+                                                                              y: owner.controllerView.bounds.height)), to: owner.view)
+        let occupied = native + (controls.isHidden ? [] : [controls.frame])
+        let game = owner.gameView.convert(owner.gameView.bounds, to: owner.view).intersection(canvas)
+        var defaults: [BoundPiPContent: CGRect] = [:]
+        for content in BoundPiPContent.allCases {
+            let width = game.width * ([BoundPiPContent.bosses, .dex].contains(content) ? 0.42 : 0.36)
+            let pip = BoundPiPLayout(viewport: game, baseSize: companionBaseSize(width: width, content: content),
+                scale: CGFloat(state.preferences.scale(for: content)), occupied: occupied)
+            let center = pip.center(state.preferences.corner(for: content))
+            defaults[content] = CGRect(x: center.x - pip.size.width / 2, y: center.y - pip.size.height / 2,
+                                       width: pip.size.width, height: pip.size.height)
+        }
+        landscapeArrangement.updateLayout(canvas: canvas, occupied: occupied, menuFrame: menuFrame,
+            boundFrame: controls.isHidden ? .zero : controls.frame, defaults: defaults,
+            keyboardHeight: max(0, keyboardHeight - owner.view.safeAreaInsets.bottom))
+        overlay.frame = owner.view.bounds
+        overlay.isHidden = false; overlay.alpha = 1
+        host?.view.frame = overlay.bounds
+        owner.view.bringSubviewToFront(overlay)
+        owner.view.bringSubviewToFront(controls)
+        #if DEBUG && targetEnvironment(simulator)
+        let obstacles = occupied + [landscapeArrangement.layout.friendButton, landscapeArrangement.layout.viewsButton]
+        owner.gameView.accessibilityValue = "pip-hit-obstacles=" + obstacles.map { rect in
+            let screen = owner.view.convert(rect, to: nil)
+            return String(format: "%.2f,%.2f,%.2f,%.2f", screen.minX, screen.minY, screen.width, screen.height)
+        }.joined(separator: "|")
+        #endif
     }
     private func layoutLandscapeCompanion() {
         guard let owner, let overlay else { return }
@@ -607,7 +670,7 @@ final class BoundCompanionCoordinator {
         let frame = owner.controllerView.convert(local, to: owner.view)
         let menuAccessibility = nativeMenuAccessibility ?? BoundNativeMenuAccessibilityElement(accessibilityContainer: owner.controllerView)
         menuAccessibility.accessibilityIdentifier = "bound.native-menu"
-        menuAccessibility.accessibilityLabel = "Menu"
+        menuAccessibility.accessibilityLabel = landscapeArrangement.editing ? "Done arranging views" : "Menu"
         menuAccessibility.accessibilityTraits = .button
         menuAccessibility.accessibilityFrameInContainerSpace = local
         menuAccessibility.activate = { [weak owner] in
@@ -638,13 +701,20 @@ final class BoundCompanionCoordinator {
         let selectArtwork = boundPortrait && BoundAppearancePreferences().effectiveTheme != .minimal
             ? select.flatMap { skin.image(for: $0, traits: traits, preferredSize: .large)?.0 } : nil
         controls.configure(menuFrame: frame, controllerFrame: controller, landscape: state.landscape,
-            minimal: BoundAppearancePreferences().effectiveTheme == .minimal, content: state.content,
+            minimal: BoundAppearancePreferences().effectiveTheme == .minimal,
+            content: landscapeArrangement.active ? landscapeArrangement.referenceContent : state.content,
             canvas: bounds.inset(by: safeArea), occupied: occupied, rightShoulderFrame: rightFrame, menuHitSize: menuHitSize, boundPortrait: boundPortrait, selectArtwork: selectArtwork,
             rightControlGutter: owner.boundLandscapeControlGutter(),
             menuHitFrame: owner.controllerView.convert(menu.extendedFrame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height)), to: owner.view),
-            buttonType: BoundCompanionButtonPreferences().effectiveButtonType)
-        controls.configureSegments(contents: state.configuration.assignments,
-                                   displayedContents: state.displayedButtonContents)
+            buttonType: landscapeArrangement.active ? .option1 : BoundCompanionButtonPreferences().effectiveButtonType)
+        controls.configureSegments(contents: landscapeArrangement.active ? [] : state.configuration.assignments,
+                                   displayedContents: landscapeArrangement.active ? [] : state.displayedButtonContents)
+        if landscapeArrangement.active {
+            controls.accessibilityValue = landscapeArrangement.contents.isEmpty ? "No views enabled" : landscapeArrangement.referenceContent.title
+            controls.accessibilityHint = "Cycles selected views, excluding Friend"
+            owner.view.bringSubviewToFront(controls)
+            return
+        }
         if state.availableContents.isEmpty {
             controls.accessibilityValue = "No views enabled"
             controls.accessibilityHint = "Enable companion views in Settings"
@@ -667,13 +737,20 @@ final class BoundCompanionCoordinator {
         beginMacSheet(from: presenter)
         let context = BoundSettingsGameplayContext(emulationDetails: state.emulationDetails,
             editControls: { [weak self] in self?.state.pendingControlEditor = true },
-            showCompanion: { [weak self] in self?.state.hidden = false; self?.state.refresh() })
+            showCompanion: { [weak self] in self?.state.hidden = false; self?.state.refresh() },
+            landscapeArrangement: macHost == nil ? landscapeArrangement : nil,
+            arrangeViews: { [weak self] in self?.pendingLandscapeArrangement = true })
         let host = BoundSettingsHostingController(model: state.settings, gameplay: context, closed: { [weak self] in
             guard let self else { return }; self.state.showingSettings = false
             self.cancelInteractions()
             self.state.settings.refresh()
             self.state.refresh()
             self.finishMacSheet()
+            if self.pendingLandscapeArrangement {
+                self.pendingLandscapeArrangement = false
+                DispatchQueue.main.async { [weak self] in self?.beginLandscapeArrangementFromSettings() }
+                return
+            }
             if self.state.pendingControlEditor { self.state.pendingControlEditor = false
                 DispatchQueue.main.async { [weak self] in
                     guard let self, let presenter = self.settingsPresenter else { return }
@@ -686,6 +763,31 @@ final class BoundCompanionCoordinator {
             }
         })
         presenter.present(host, animated: true)
+    }
+    private func beginLandscapeArrangementFromSettings() {
+        guard let owner, owner.view.bounds.width > owner.view.bounds.height,
+              landscapeCompanion.preferences.option == .option3,
+              UIApplication.shared.applicationState == .active else { return }
+        owner.view.endEditing(true)
+        notesEditing(true)
+        // Closing the pause menu normally resumes gameplay. Hold that resume
+        // until Done, keeping the editor paused throughout both dismissals.
+        if owner.emulatorCore?.state == .paused { notesPaused = true }
+        owner.returnToGameViewController { [weak self, weak owner] in
+            guard let self, let owner else { return }
+            owner.view.setNeedsLayout(); owner.view.layoutIfNeeded()
+            guard self.landscapeArrangement.active, UIApplication.shared.applicationState == .active else {
+                self.notesEditing(false)
+                return
+            }
+            self.landscapeArrangement.arrange()
+            if !self.landscapeArrangement.editing { self.notesEditing(false) }
+        }
+    }
+    func finishLandscapeArrangementIfNeeded() -> Bool {
+        guard landscapeArrangement.active, landscapeArrangement.editing else { return false }
+        landscapeArrangement.finish(save: true)
+        return true
     }
     private func beginMacSheet(from presenter: UIViewController) {
         guard macHost != nil, let owner, presenter === owner, let core = owner.emulatorCore else { return }
@@ -712,12 +814,14 @@ final class BoundCompanionCoordinator {
         }
     }
     func cancelInteractions() {
+        landscapeArrangement.finish(save: false)
         landscapeCompanion.finishArrangement(save: false)
         gestures?.cancel(); translation = .zero; pinchScale = 1; liveOpacity = nil
         fadingContent = nil; resizingContent = nil
         owner?.controllerView.cancelTouchInputs()
     }
     func cyclePanels() {
+        if landscapeArrangement.active { landscapeArrangement.cycleReference(); return }
         if landscapeCompanion.active { landscapeCompanion.cycleViews(); return }
         owner?.view.endEditing(true)
         cancelInteractions()
@@ -730,10 +834,11 @@ final class BoundCompanionCoordinator {
         state.advancePanel()
     }
     var allowsOpacityGesture: Bool { !state.availableContents.isEmpty && state.landscape && state.content != .types && !isEditingNotes }
-    private func companionBaseSize(width: CGFloat) -> CGSize {
-        if state.content == .dex { return CGSize(width: width, height: width * 300 / 360) }
-        if state.content == .bosses { return CGSize(width: width, height: width * 260 / 360) }
-        let image = state.landscape && state.content == .types ? UIImage(named: "PokemonTypeChart")?.size : nil
+    private func companionBaseSize(width: CGFloat, content: BoundPiPContent? = nil) -> CGSize {
+        let content = content ?? state.content
+        if content == .dex { return CGSize(width: width, height: width * 300 / 360) }
+        if content == .bosses { return CGSize(width: width, height: width * 260 / 360) }
+        let image = state.landscape && content == .types ? UIImage(named: "PokemonTypeChart")?.size : nil
         let aspect = image.map { $0.width / max(1, $0.height) } ?? 1.5
         return CGSize(width: width, height: width / max(0.001, aspect))
     }
@@ -745,7 +850,7 @@ final class BoundCompanionCoordinator {
             && !overlay.frame.contains(point)
     }
     private func shouldReceive(_ touch: UITouch) -> Bool {
-        guard !landscapeCompanion.active, !state.availableContents.isEmpty, (state.landscape || (BoundAppearancePreferences().effectiveScreenLayout == .delta && state.content != .types)), !isEditingNotes, !state.showingFriends, !state.showingSettings,
+        guard !landscapeCompanion.active, !landscapeArrangement.active, !state.availableContents.isEmpty, (state.landscape || (BoundAppearancePreferences().effectiveScreenLayout == .delta && state.content != .types)), !isEditingNotes, !state.showingFriends, !state.showingSettings,
               let owner, let controls, !state.hidden else { return false }
         let p = touch.location(in: owner.view)
         guard !controls.frame.contains(p), owner.gameView.convert(owner.gameView.bounds, to: owner.view).contains(p) else { return false }
@@ -797,7 +902,8 @@ final class BoundCompanionCoordinator {
     func foreground() {
         foregroundTask?.cancel()
         if state.content == .dex || (macHost != nil && state.macReference == .dex)
-            || (landscapeCompanion.active && landscapeCompanion.referenceContent == .dex) {
+            || (landscapeCompanion.active && landscapeCompanion.referenceContent == .dex)
+            || (landscapeArrangement.active && landscapeArrangement.referenceContent == .dex) {
             BoundRRDexSaveRefreshEvent.post(gameID: gameID)
         }
         if sharing.authenticatedMode {
@@ -815,10 +921,12 @@ final class BoundCompanionCoordinator {
         if usesLocalPairedFixture { sharing.start() }
         #endif
     }
-    func background() { foregroundTask?.cancel(); foregroundTask = nil; landscapeCompanion.finishArrangement(save: false, resume: false); cancelInteractions(); tap.setEnabled(false); sharing.background(); onboarding.close() }
+    func background() { foregroundTask?.cancel(); foregroundTask = nil; pendingLandscapeArrangement = false; landscapeArrangement.finish(save: false, resume: false); landscapeCompanion.finishArrangement(save: false, resume: false); cancelInteractions(); tap.setEnabled(false); sharing.background(); onboarding.close() }
     func stop() {
         foregroundTask?.cancel(); foregroundTask = nil
         macSheetPaused = false; macSheetCore = nil
+        pendingLandscapeArrangement = false
+        landscapeArrangement.finish(save: false, resume: false)
         landscapeCompanion.finishArrangement(save: false, resume: false)
         cancelInteractions(); tap.setEnabled(false); sharing.stop(); onboarding.close()
         notesPaused = false; isEditingNotes = false; isEditingText = false; owner?.controllerView.isUserInteractionEnabled = true; host?.view.endEditing(true); macHost?.view.endEditing(true)

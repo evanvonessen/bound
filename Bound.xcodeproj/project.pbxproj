@@ -45,6 +45,7 @@
 		10C306F1A66146C8B168ECA1 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 74E4919A740A48EFAE101408 /* PrivacyInfo.xcprivacy */; };
 		47AF26DA565A4105BA138CAF /* AccountPersistenceIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2476C2B0032441E97FF3CD5 /* AccountPersistenceIntegrationTests.swift */; };
 		A8D4C721995E4F78A4E1C301 /* LandscapeCompanionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8D4C721995E4F78A4E1C302 /* LandscapeCompanionTests.swift */; };
+		8A8A6AC58A9848BE8520AE23 /* LandscapeArrangementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E27AFD9373134E56A58007B8 /* LandscapeArrangementTests.swift */; };
 		E638143CC17A4C2C89AAD42A /* DEPENDENCY-INVENTORY.md in Resources */ = {isa = PBXBuildFile; fileRef = 0058B1D4CAE94BCD8CADA177 /* DEPENDENCY-INVENTORY.md */; };
 		4B42F8FEAF5D49CE907FE459 /* BOUND2-MODIFICATIONS.md in Resources */ = {isa = PBXBuildFile; fileRef = 9A74828983EB415C965374E1 /* BOUND2-MODIFICATIONS.md */; };
 		29764E0164684F3CAA391DBD /* COPYING in Resources */ = {isa = PBXBuildFile; fileRef = 084DC89EF78044B6A582A1A2 /* COPYING */; };
@@ -108,6 +109,7 @@
 		9EE1E66A051751E201D09F44 /* BoundCompanionCycleButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F35BC570DB6B8BA023B9B53 /* BoundCompanionCycleButton.swift */; };
 		A5AAF6B64EA97D56F73A4A9D /* BoundFrameCaptureGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = E875C2DEF127D860254648FA /* BoundFrameCaptureGate.swift */; };
 		A653079E9FDFF997EBF3E0EC /* CompanionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D615F5838D061A694CE0824 /* CompanionUITests.swift */; };
+		5C64652725BF490BBDE05EE8 /* BoundUITestGestures.m in Sources */ = {isa = PBXBuildFile; fileRef = AEB342F149004958B589EA0A /* BoundUITestGestures.m */; };
 		A728B391ABE5D95387F60413 /* RtcBasic in Frameworks */ = {isa = PBXBuildFile; productRef = 655C47AAEA013CE930E24BBA /* RtcBasic */; };
 		A9D0C8D83FBEE28FB2158E9B /* BoundPiPGestures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8469AA17D6924083971A9ECF /* BoundPiPGestures.swift */; };
 		AC1C991029F8B8C30020E6E4 /* ToastNotificationOptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC1C990F29F8B8C30020E6E4 /* ToastNotificationOptions.swift */; };
@@ -436,6 +438,8 @@
 		B184A47C9063EDC18DBB4691 /* MacWorkspaceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF58B4C5653710C200F455B0 /* MacWorkspaceUITests.swift */; };
 		70E48E5D9D7B468A8A60DD61 /* BoundLandscapePreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E745195014845F0878192F6 /* BoundLandscapePreferences.swift */; };
 		4978387F9B9B4EDFB5172A2F /* BoundLandscapeCompanion.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD788325701142D5A8E31F99 /* BoundLandscapeCompanion.swift */; };
+		FEFF291B6B9D409DB743D71D /* BoundLandscapeArrangementOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3A45FC1148047228B8ECD77 /* BoundLandscapeArrangementOverlay.swift */; };
+		D231F1F9F6BA455790127F38 /* BoundLandscapeArrangement.swift in Sources */ = {isa = PBXBuildFile; fileRef = E981BE8844E54311AB9D967E /* BoundLandscapeArrangement.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -825,6 +829,7 @@
 		74E4919A740A48EFAE101408 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		B2476C2B0032441E97FF3CD5 /* AccountPersistenceIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountPersistenceIntegrationTests.swift; sourceTree = "<group>"; };
 		A8D4C721995E4F78A4E1C302 /* LandscapeCompanionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandscapeCompanionTests.swift; sourceTree = "<group>"; };
+		E27AFD9373134E56A58007B8 /* LandscapeArrangementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandscapeArrangementTests.swift; sourceTree = "<group>"; };
 		0058B1D4CAE94BCD8CADA177 /* DEPENDENCY-INVENTORY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = "DEPENDENCY-INVENTORY.md"; path = "LICENSES/DEPENDENCY-INVENTORY.md"; sourceTree = SOURCE_ROOT; };
 		9A74828983EB415C965374E1 /* BOUND2-MODIFICATIONS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = "BOUND2-MODIFICATIONS.md"; path = "LICENSES/BOUND2-MODIFICATIONS.md"; sourceTree = SOURCE_ROOT; };
 		084DC89EF78044B6A582A1A2 /* COPYING */ = {isa = PBXFileReference; lastKnownFileType = text; name = "COPYING"; path = "COPYING"; sourceTree = SOURCE_ROOT; };
@@ -859,6 +864,8 @@
 		796FA895EF62DF6A509DCA55 /* OperatorKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = OperatorKit.xcframework; sourceTree = "<group>"; };
 		7C31F852121CBEF08181BD23 /* OperatorStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OperatorStatusView.swift; sourceTree = "<group>"; };
 		7D615F5838D061A694CE0824 /* CompanionUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CompanionUITests.swift; sourceTree = "<group>"; };
+		AEB342F149004958B589EA0A /* BoundUITestGestures.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = BoundUITestGestures.m; sourceTree = "<group>"; };
+		0496545451424414A7232657 /* BoundUITestGestures.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = BoundUITestGestures.h; sourceTree = "<group>"; };
 		7E3E5A45AB20C8A87754453B /* libPods-DeltaPreviews.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-DeltaPreviews.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		823D998E2E566EE40025F4CD /* GBCColorPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GBCColorPalette.swift; sourceTree = "<group>"; };
 		8279ED032E53BA4F008995FA /* GBACoreSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GBACoreSettingsView.swift; sourceTree = "<group>"; };
@@ -1231,6 +1238,8 @@
 		FF58B4C5653710C200F455B0 /* MacWorkspaceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWorkspaceUITests.swift; sourceTree = "<group>"; };
 		6E745195014845F0878192F6 /* BoundLandscapePreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLandscapePreferences.swift; sourceTree = "<group>"; };
 		CD788325701142D5A8E31F99 /* BoundLandscapeCompanion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLandscapeCompanion.swift; sourceTree = "<group>"; };
+		C3A45FC1148047228B8ECD77 /* BoundLandscapeArrangementOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLandscapeArrangementOverlay.swift; sourceTree = "<group>"; };
+		E981BE8844E54311AB9D967E /* BoundLandscapeArrangement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLandscapeArrangement.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1355,6 +1364,7 @@
 				104D04088215A199CB56949A /* StockControlAndGestureTests.swift */,
 				B2476C2B0032441E97FF3CD5 /* AccountPersistenceIntegrationTests.swift */,
 				A8D4C721995E4F78A4E1C302 /* LandscapeCompanionTests.swift */,
+				E27AFD9373134E56A58007B8 /* LandscapeArrangementTests.swift */,
 			);
 			name = PrototypeIntegrationTests;
 			path = PrototypeIntegrationTests;
@@ -1364,6 +1374,8 @@
 			isa = PBXGroup;
 			children = (
 				7D615F5838D061A694CE0824 /* CompanionUITests.swift */,
+				AEB342F149004958B589EA0A /* BoundUITestGestures.m */,
+				0496545451424414A7232657 /* BoundUITestGestures.h */,
 				FF58B4C5653710C200F455B0 /* MacWorkspaceUITests.swift */,
 				1E6111EFD8DDDA68883CF9A3 /* PairedFriendUITests.swift */,
 			);
@@ -1410,6 +1422,8 @@
 				B8278DC39886200921A04024 /* cloud-configuration.json */,
 				6E745195014845F0878192F6 /* BoundLandscapePreferences.swift */,
 				CD788325701142D5A8E31F99 /* BoundLandscapeCompanion.swift */,
+				C3A45FC1148047228B8ECD77 /* BoundLandscapeArrangementOverlay.swift */,
+				E981BE8844E54311AB9D967E /* BoundLandscapeArrangement.swift */,
 				E0B9C64D60692EA8EAC11ACE /* BoundCompanionPanel.swift */,
 				3D638FE02F6B2876A1CB9CBB /* BoundMacWorkspaceView.swift */,
 				32118EFE887BC6DFF711A9BF /* BoundMacWorkspaceGeometry.swift */,
@@ -3119,6 +3133,7 @@
 				D1CCDE2C67C0DCD2A3EF9645 /* StockControlAndGestureTests.swift in Sources */,
 				47AF26DA565A4105BA138CAF /* AccountPersistenceIntegrationTests.swift in Sources */,
 				A8D4C721995E4F78A4E1C301 /* LandscapeCompanionTests.swift in Sources */,
+				8A8A6AC58A9848BE8520AE23 /* LandscapeArrangementTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -3378,6 +3393,8 @@
 				201B898B6F0A4893431BEB1C /* SharingSession.swift in Sources */,
 				70E48E5D9D7B468A8A60DD61 /* BoundLandscapePreferences.swift in Sources */,
 				4978387F9B9B4EDFB5172A2F /* BoundLandscapeCompanion.swift in Sources */,
+				FEFF291B6B9D409DB743D71D /* BoundLandscapeArrangementOverlay.swift in Sources */,
+				D231F1F9F6BA455790127F38 /* BoundLandscapeArrangement.swift in Sources */,
 				EE19B3FE32D45413CAB52F5A /* BoundCompanionPanel.swift in Sources */,
 				C9F98F6095050C500082B509 /* BoundMacWorkspaceView.swift in Sources */,
 				AF587D5409BC632CA606F011 /* BoundMacWorkspaceGeometry.swift in Sources */,
@@ -3412,6 +3429,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A653079E9FDFF997EBF3E0EC /* CompanionUITests.swift in Sources */,
+				5C64652725BF490BBDE05EE8 /* BoundUITestGestures.m in Sources */,
 				B184A47C9063EDC18DBB4691 /* MacWorkspaceUITests.swift in Sources */,
 				9B283F9811D6486EE48A70AE /* PairedFriendUITests.swift in Sources */,
 			);
@@ -3589,6 +3607,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.evanvonessen.bound.uitests;
 				PRODUCT_MODULE_NAME = BoundCompanionUITests;
+				SWIFT_OBJC_BRIDGING_HEADER = "PrototypeUITests/BoundUITestGestures.h";
 				PRODUCT_NAME = BoundCompanionUITests;
 				SDKROOT = iphoneos;
 				SWIFT_VERSION = 5.0;
@@ -3658,6 +3677,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.evanvonessen.bound.uitests;
 				PRODUCT_MODULE_NAME = BoundCompanionUITests;
+				SWIFT_OBJC_BRIDGING_HEADER = "PrototypeUITests/BoundUITestGestures.h";
 				PRODUCT_NAME = BoundCompanionUITests;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";

@@ -4,6 +4,7 @@ import CoreGraphics
 enum BoundLandscapeOption: Int, CaseIterable, Sendable {
     case option1 = 1
     case option2 = 2
+    case option3 = 3
 
     var title: String { "Option \(rawValue)" }
 }
