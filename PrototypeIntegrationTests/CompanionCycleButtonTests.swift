@@ -73,27 +73,29 @@ final class CompanionCycleButtonTests: XCTestCase {
         let state = BoundCompanionState(preferences: preferences)
         state.selected = 3
         XCTAssertEqual(state.content, .bosses)
-        state.selectPanel(.dex)
-        XCTAssertEqual(state.content, .bosses, "Option 1 does not expose the direct-selection action")
         version.version = .option2
         state.updateUIVersion()
         state.setContentOrder([.dex, .bosses, .friend, .types, .notes])
         XCTAssertEqual(state.content, .bosses)
         XCTAssertEqual(state.selected, 1)
+        for _ in 0..<4 { state.advancePanel() }
+        XCTAssertEqual(state.content, .dex, "Views remain reachable through ordinary cycling in either UI version")
         state.hidden = true
-        state.selectPanel(.dex)
+        state.advancePanel()
         XCTAssertEqual(state.content, .dex)
         XCTAssertFalse(state.hidden)
+        state.setContentEnabled(false, for: .dex)
+        XCTAssertEqual(state.content, .bosses, "Disabling the selected view restores the first enabled view")
         state.setContentEnabled(false, for: .notes)
-        state.selectPanel(.notes)
-        XCTAssertEqual(state.content, .dex, "Disabled views cannot be selected through a stale menu")
+        XCTAssertEqual(state.content, .bosses, "Disabling another view preserves the current selection")
         version.version = .option1
         state.updateUIVersion()
-        XCTAssertEqual(state.content, .dex)
-        XCTAssertEqual(state.availableContents, [.friend, .types, .bosses, .dex])
-        state.selectPanel(.dex)
+        XCTAssertEqual(state.content, .bosses)
+        XCTAssertEqual(state.availableContents, [.friend, .types, .bosses])
+        state.advancePanel()
+        XCTAssertEqual(state.content, .friend)
         state.setContentOrder([.types, .friend])
-        XCTAssertEqual(state.content, .dex, "Option 1 preserves cycle order and the selected panel")
+        XCTAssertEqual(state.content, .friend, "Changing cycle order preserves the selected panel")
         XCTAssertEqual(preferences.orderedContents, [.dex, .bosses, .friend, .types, .notes])
     }
 
@@ -114,15 +116,17 @@ final class CompanionCycleButtonTests: XCTestCase {
             if !configuration.availableContents.contains(.dex) { disabled.fulfill() }
         }
 
-        state.selectPanel(.bosses)
-        XCTAssertEqual(state.content, .friend, "Direct panel selection is enabled in UI version 2 only")
+        state.advancePanel()
+        XCTAssertEqual(state.content, .notes, "The panel advances through the ordinary button action")
         BoundUIVersionPreferences(defaults: defaults).version = .option2
         await fulfillment(of: [versionChanged], timeout: 2)
         model.setContentOrder([.dex, .bosses, .friend, .types, .notes])
         await fulfillment(of: [orderChanged], timeout: 2)
         XCTAssertEqual(state.uiVersion, .option2)
-        XCTAssertEqual(state.content, .friend, "A settings edit should preserve the active session's selected view")
-        state.selectPanel(.bosses)
+        XCTAssertEqual(state.content, .notes, "A settings edit should preserve the active session's selected view")
+        state.advancePanel()
+        XCTAssertEqual(state.content, .dex)
+        state.advancePanel()
         XCTAssertEqual(state.content, .bosses)
         model.setContentEnabled(false, for: .dex)
         await fulfillment(of: [disabled], timeout: 2)
@@ -144,24 +148,38 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(closes.value, 1, "Done and interactive-dismissal callbacks must not close more than once")
     }
 
-    func testUIVersionTwoMenuKeepsTapCycleAndOnlyEnabledChoices() throws {
+    func testCompanionButtonsActivateOnTouchAndAccessibilityWithoutMenus() {
+        let canvas = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let menuFrame = CGRect(x: 10, y: 700, width: 20, height: 20)
         let button = BoundCompanionCycleButton()
+        button.configure(menuFrame: menuFrame, controllerFrame: canvas, landscape: false, minimal: false,
+                         content: .friend, canvas: canvas, occupied: [menuFrame], boundPortrait: true,
+                         buttonType: .option2)
         var cycles = 0
         button.cycle = { cycles += 1 }
-        button.configureViewMenu(contents: [.bosses, .friend], selected: .bosses, enabled: true)
-        let menu = try XCTUnwrap(button.menu)
-        let actions = menu.children.compactMap { $0 as? UIAction }
-        XCTAssertEqual(actions.map(\.title), ["Bosses", "Friend"])
-        XCTAssertEqual(actions.map(\.state), [.on, .off])
-        XCTAssertFalse(button.showsMenuAsPrimaryAction)
+        XCTAssertNil(button.menu, "Companion cycle buttons no longer expose a hold menu.")
         button.sendActions(for: .touchDown)
-        XCTAssertEqual(cycles, 1, "The tap activates as soon as the finger touches the button.")
+        XCTAssertEqual(cycles, 1, "A normal press activates immediately on touch-down.")
         button.sendActions(for: .touchUpInside)
-        XCTAssertEqual(cycles, 1, "Adding a long-press menu must preserve normal tap cycling")
-        button.configureViewMenu(contents: [.friend, .notes, .types], selected: .friend, enabled: false)
-        XCTAssertNil(button.menu)
-        button.configureViewMenu(contents: [], selected: .friend, enabled: true)
-        XCTAssertNil(button.menu)
+        XCTAssertEqual(cycles, 1, "Release must not activate the button a second time.")
+        XCTAssertTrue(button.accessibilityActivate())
+        XCTAssertEqual(cycles, 2, "Accessibility activation keeps the ordinary cycle action.")
+
+        let split = BoundCompanionCycleButton()
+        split.configure(menuFrame: menuFrame, controllerFrame: canvas, landscape: false, minimal: false,
+                        content: .friend, canvas: canvas, occupied: [menuFrame], boundPortrait: true,
+                        buttonType: .option3)
+        split.configureSegments(contents: [[.friend], [.bosses, .dex], [.types]], selected: .friend)
+        var activated: [Int] = []
+        split.activateSegment = { activated.append($0) }
+        XCTAssertNil(split.menu, "The split button host must not expose a hold menu.")
+        for (index, segment) in split.segmentButtons.enumerated() {
+            XCTAssertNil(segment.menu, "Split button \(index + 1) must not expose a hold menu.")
+            segment.sendActions(for: .touchDown)
+            XCTAssertEqual(activated, Array(0...index), "Split button \(index + 1) activates on touch-down.")
+            segment.sendActions(for: .touchUpInside)
+            XCTAssertEqual(activated, Array(0...index), "Release must not activate split button \(index + 1) twice.")
+        }
     }
 
     func testDexAutomaticallyRefreshesMatchingSaveEventsOnMain() throws {

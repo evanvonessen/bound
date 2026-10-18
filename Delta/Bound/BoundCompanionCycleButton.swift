@@ -5,12 +5,9 @@ import DeltaCore
 @MainActor
 final class BoundCompanionCycleButton: UIButton {
     var cycle: (() -> Void)?
-    var selectContent: ((BoundPiPContent) -> Void)?
     /// Called with a zero-based segment index when one of the three split controls is touched.
     var activateSegment: ((Int) -> Void)?
     private(set) var segmentButtons: [BoundCompanionCycleButton] = []
-    private var menuContents: [BoundPiPContent] = []
-    private var menuSelection: BoundPiPContent?
     /// Tests can replace the output without touching device feedback or emulator inputs.
     var buttonFeedback: (() -> Void)?
     private let feedbackGenerator = UIImpactFeedbackGenerator(style: .medium)
@@ -37,29 +34,6 @@ final class BoundCompanionCycleButton: UIButton {
         feedbackGenerator.prepare()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    /// UIButton's standard secondary menu opens on a hold; a normal tap still cycles.
-    func configureViewMenu(contents: [BoundPiPContent], selected: BoundPiPContent, enabled: Bool) {
-        for index in segmentButtons.indices {
-            let child = segmentButtons[index]
-            child.selectContent = { [weak self] content in self?.selectContent?(content) }
-            let assigned = index < segmentContents.count ? segmentContents[index] : []
-            let childSelected = assigned.contains(selected) ? selected : assigned.first ?? selected
-            child.configureViewMenu(contents: assigned, selected: childSelected, enabled: enabled && assigned.count > 1)
-        }
-        guard enabled, !contents.isEmpty else {
-            menu = nil; menuContents = []; menuSelection = nil
-            return
-        }
-        guard menu == nil || menuContents != contents || menuSelection != selected else { return }
-        menuContents = contents; menuSelection = selected
-        menu = UIMenu(title: "Companion views", children: contents.map { content in
-            UIAction(title: content.title, state: content == selected ? .on : .off) { [weak self] _ in
-                self?.isHighlighted = false
-                self?.selectContent?(content)
-            }
-        })
-        showsMenuAsPrimaryAction = false
-    }
     override var isHighlighted: Bool { didSet { setNeedsDisplay() } }
     @objc private func pressVisual() {
         guard isEnabled, isUserInteractionEnabled, !isHidden else { return }

@@ -138,14 +138,6 @@ final class BoundCompanionState: ObservableObject {
     func setContentOrder(_ contents: [BoundPiPContent]) {
         settings.setContentOrder(contents)
     }
-    func selectPanel(_ content: BoundPiPContent) {
-        guard uiVersion == .option2,
-              let index = availableContents.firstIndex(of: content) else { return }
-        selectionChanged?()
-        selected = index
-        hidden = false
-        refresh()
-    }
     func setContentEnabled(_ enabled: Bool, for content: BoundPiPContent) {
         settings.setContentEnabled(enabled, for: content)
     }
@@ -297,12 +289,6 @@ final class BoundCompanionCoordinator {
             self.owner?.view.endEditing(true)
             self.cancelInteractions()
             self.state.advanceButton(button)
-        }
-        controls.selectContent = { [weak self] content in
-            guard let self, BoundUIVersionPreferences().effectiveVersion == .option2 else { return }
-            self.owner?.view.endEditing(true)
-            self.cancelInteractions()
-            self.state.selectPanel(content)
         }
         owner.view.addSubview(controls); self.controls = controls
         sharing.$joined.combineLatest(sharing.$active).sink { [weak self] joined, active in
@@ -479,15 +465,12 @@ final class BoundCompanionCoordinator {
             rightControlGutter: owner.boundLandscapeControlGutter(),
             menuHitFrame: owner.controllerView.convert(menu.extendedFrame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height)), to: owner.view),
             buttonType: BoundCompanionButtonPreferences().effectiveButtonType)
-        let usesUpdatedUI = state.uiVersion == .option2
         controls.configureSegments(contents: (0..<3).map { state.preferences.assignedContents(for: $0) }, selected: state.content)
-        controls.configureViewMenu(contents: state.availableContents, selected: state.content, enabled: usesUpdatedUI)
         if state.availableContents.isEmpty {
             controls.accessibilityValue = "No views enabled"
             controls.accessibilityHint = "Enable companion views in Settings"
         } else {
             controls.accessibilityHint = state.hidden ? "Restores the hidden panel" : "Cycles " + state.availableContents.map(\.title).joined(separator: ", ")
-            if usesUpdatedUI { controls.accessibilityHint = (controls.accessibilityHint ?? "") + ". Touch and hold to choose a view." }
         }
         owner.view.bringSubviewToFront(controls)
     }
@@ -732,7 +715,7 @@ struct BoundUIVersionSettings: View {
             }.accessibilityIdentifier("bound.ui-version")
         } header: { Text("UI Version") } footer: {
             Text(version == .option1 ? "The current Bound interface."
-                 : "Friend sharing status, layout previews, view shortcuts, and clearer reference panels. Touch and hold the Bound button to choose a view.")
+                 : "Friend sharing status, layout previews, customizable view order, and clearer reference panels.")
         }
     }
 }

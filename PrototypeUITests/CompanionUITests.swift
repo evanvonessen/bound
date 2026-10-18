@@ -2266,8 +2266,10 @@ final class CompanionUITests: XCTestCase {
         }
         defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
         let app = XCUIApplication()
-        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        let arguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        app.launchArguments = arguments + ["--bound-ui-reset-layout"]
         app.launch()
+        app.launchArguments = arguments
         assertPermanentFeatureBaseline(in: app)
         func play() {
             let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
@@ -2279,6 +2281,13 @@ final class CompanionUITests: XCTestCase {
         let cycle = element("bound.panel-cycle", in: app)
         let game = element("bound.game-screen", in: app)
         let originalGameFrame = game.frame
+        openBoundSettings(in: app)
+        let version = element("bound.ui-version", in: app)
+        let originalVersion = version.label.contains("Option 2") ? "Option 2" : "Option 1"
+        if originalVersion != "Option 2" {
+            version.tap(); app.buttons["Option 2"].tap()
+        }
+        closeBoundSheet(in: app)
         func choose(_ option: Int) {
             openBoundSettings(in: app)
             scrollToSetting(picker, in: app)
@@ -2291,12 +2300,35 @@ final class CompanionUITests: XCTestCase {
             XCTAssertTrue(option == 3 ? app.buttons["bound.panel-cycle.1"].isHittable : cycle.isHittable)
             XCTAssertEqual(game.frame, originalGameFrame, "Changing the Bound button must preserve gameplay placement.")
         }
+        func assertNoHoldMenu(_ button: XCUIElement, afterHold: String, afterTap: String) {
+            button.press(forDuration: 0.7)
+            XCTAssertEqual(button.value as? String, afterHold,
+                           "A hold should activate the assigned companion button once.")
+            for menuEntry in ["Friend", "Notes", "Types", "Bosses", "RR Dex"] {
+                XCTAssertFalse(app.buttons[menuEntry].exists,
+                               "Holding a Bound button must not open the \(menuEntry) view menu entry.")
+            }
+            button.tap()
+            XCTAssertEqual(button.value as? String, afterTap,
+                           "The button should still respond to a normal tap after holding.")
+        }
+        func assertCycleHold() {
+            selectCompanion("Friend", in: app)
+            cycle.tap()
+            let afterOneTap = cycle.value as? String
+            cycle.tap()
+            let afterTwoTaps = cycle.value as? String
+            selectCompanion("Friend", in: app)
+            assertNoHoldMenu(cycle, afterHold: afterOneTap ?? "", afterTap: afterTwoTaps ?? "")
+        }
         choose(1)
+        assertCycleHold()
         let originalButtonFrame = cycle.frame
         var frames: [Int: CGRect] = [1: originalButtonFrame]
         screenshot("Bound-button-option-1")
         for option in 2...3 {
             choose(option)
+            if option == 2 { assertCycleHold() }
             frames[option] = cycle.frame
             XCTAssertTrue(app.frame.contains(cycle.frame))
             XCTAssertGreaterThanOrEqual(cycle.frame.width, 44)
@@ -2321,9 +2353,43 @@ final class CompanionUITests: XCTestCase {
 
         openBoundSettings(in: app)
         let topDex = app.switches["bound.button-1-view.dex"]
+        let middleTypes = app.switches["bound.button-2-view.types"]
+        let bottomNotes = app.switches["bound.button-3-view.notes"]
         scrollToSetting(topDex, in: app)
-        topDex.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        let originallyTopDex = topDex.value as? String == "1"
+        if !originallyTopDex { topDex.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap() }
+        XCTAssertEqual(topDex.value as? String, "1")
+        scrollToSetting(middleTypes, in: app)
+        let originallyMiddleTypes = middleTypes.value as? String == "1"
+        if !originallyMiddleTypes { middleTypes.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap() }
+        XCTAssertEqual(middleTypes.value as? String, "1")
+        scrollToSetting(bottomNotes, in: app)
+        let originallyBottomNotes = bottomNotes.value as? String == "1"
+        if !originallyBottomNotes { bottomNotes.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap() }
+        XCTAssertEqual(bottomNotes.value as? String, "1")
         closeBoundSheet(in: app)
+
+        // Each split control cycles through two assigned views here, so its
+        // accessibility value proves that a hold activates exactly once.
+        for segment in segments {
+            segment.tap(); let afterOneTap = segment.value as? String
+            segment.tap(); let afterTwoTaps = segment.value as? String
+            XCTAssertNotEqual(afterOneTap, afterTwoTaps, "Each split button cycles between its assigned views.")
+            assertNoHoldMenu(segment, afterHold: afterOneTap ?? "", afterTap: afterTwoTaps ?? "")
+        }
+
+        // Restore the two assignments added for this hold-menu regression.
+        openBoundSettings(in: app)
+        scrollToSetting(middleTypes, in: app)
+        if (middleTypes.value as? String == "1") != originallyMiddleTypes {
+            middleTypes.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        scrollToSetting(bottomNotes, in: app)
+        if (bottomNotes.value as? String == "1") != originallyBottomNotes {
+            bottomNotes.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        closeBoundSheet(in: app)
+
         segments[0].tap()
         XCTAssertTrue(element("bound.friend-screen", in: app).waitForExistence(timeout: 5))
         segments[0].tap()
@@ -2346,16 +2412,24 @@ final class CompanionUITests: XCTestCase {
         scrollToSetting(picker, in: app)
         XCTAssertTrue(picker.buttons["3"].isSelected)
         scrollToSetting(topDex, in: app)
-        if topDex.value as? String == "1" {
+        if (topDex.value as? String == "1") != originallyTopDex {
             topDex.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         }
         scrollToSetting(picker, in: app)
         picker.buttons["1"].tap()
-        closeBoundSheet(in: app)
+        if originalVersion == "Option 1" {
+            closeBoundSheet(in: app)
+            openBoundSettings(in: app)
+            let currentVersion = element("bound.ui-version", in: app)
+            currentVersion.tap(); app.buttons[originalVersion].tap()
+            closeBoundSheet(in: app)
+        } else {
+            closeBoundSheet(in: app)
+        }
         app.terminate()
     }
 
-    func testUIVersionTwoPreviewsDirectSelectionAndPersistence() throws {
+    func testUIVersionTwoCyclesAndPersistsReferenceLayouts() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
         for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
@@ -2407,14 +2481,11 @@ final class CompanionUITests: XCTestCase {
         closeBoundSheet(in: app)
         XCTAssertEqual(gameScreen.frame, originalFrame)
         let cycle = app.buttons["bound.panel-cycle"]
-        cycle.press(forDuration: 0.7)
-        XCTAssertTrue(app.buttons["RR Dex"].waitForExistence(timeout: 5))
-        app.buttons["RR Dex"].tap()
+        selectCompanion("Dex", in: app)
         XCTAssertEqual(cycle.value as? String, "Dex")
         XCTAssertEqual(element("bound.rrdex", in: app).value as? String, "Layout 12")
         screenshot("UI-Version2-dex")
-        cycle.press(forDuration: 0.7)
-        app.buttons["Bosses"].tap()
+        selectCompanion("Bosses", in: app)
         XCTAssertEqual(cycle.value as? String, "Bosses")
         XCTAssertEqual(element("bound.boss-guide", in: app).value as? String, "Layout 12")
         let teamMember = app.buttons["bound.boss-team-member-1"]
@@ -2428,10 +2499,11 @@ final class CompanionUITests: XCTestCase {
         app.terminate()
         app.launchArguments = arguments
         app.launch(); play()
-        cycle.press(forDuration: 0.7)
-        XCTAssertTrue(app.buttons["RR Dex"].waitForExistence(timeout: 5), "UI Version 2 survives relaunch")
-        app.buttons["RR Dex"].tap()
+        selectCompanion("Dex", in: app)
+        XCTAssertEqual(cycle.value as? String, "Dex", "UI Version 2 remains usable after relaunch")
         openBoundSettings(in: app)
+        XCTAssertEqual(element("bound.ui-version", in: app).label, "UI Version, Option 2",
+                       "UI Version 2 survives relaunch independently of the selected panel.")
         scrollToSetting(version, in: app); version.tap(); app.buttons["Option 1"].tap()
         let originalDex = app.segmentedControls["bound.rrdex-layout"]
         scrollToSetting(originalDex, in: app)
@@ -3486,7 +3558,9 @@ final class CompanionUITests: XCTestCase {
             let scrollDown = target.exists && target.frame.midY < form.frame.midY
             let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: scrollDown ? 0.35 : 0.80))
             let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: scrollDown ? 0.65 : 0.50))
-            start.press(forDuration: 0.05, thenDragTo: end)
+            // Gameplay tests skip quiescence, so finish the scroll without a
+            // fling that could consume the next tap on a setting.
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
         }
         XCTAssertTrue(target.isHittable)
     }
