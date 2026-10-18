@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 struct BoundBossCatalog: Decodable, Sendable {
     let schemaVersion: Int
@@ -13,6 +14,29 @@ struct BoundBossCatalog: Decodable, Sendable {
     let levelCaps: [LevelCap]
     let trainerOrder: [TrainerOrderEntry]
     let teams: [BoundBossTeam]
+    private let teamsByID: [String: BoundBossTeam]
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, gameVersion, difficulty, sourceTitle, sourceURL, sourceModifiedTime, sourceSHA256
+        case categories, categoryCounts, levelCaps, trainerOrder, teams
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try values.decode(Int.self, forKey: .schemaVersion)
+        gameVersion = try values.decode(String.self, forKey: .gameVersion)
+        difficulty = try values.decode(String.self, forKey: .difficulty)
+        sourceTitle = try values.decode(String.self, forKey: .sourceTitle)
+        sourceURL = try values.decode(URL.self, forKey: .sourceURL)
+        sourceModifiedTime = try values.decodeIfPresent(String.self, forKey: .sourceModifiedTime)
+        sourceSHA256 = try values.decode(String.self, forKey: .sourceSHA256)
+        categories = try values.decode([String].self, forKey: .categories)
+        categoryCounts = try values.decode([String: Int].self, forKey: .categoryCounts)
+        levelCaps = try values.decode([LevelCap].self, forKey: .levelCaps)
+        trainerOrder = try values.decode([TrainerOrderEntry].self, forKey: .trainerOrder)
+        teams = try values.decode([BoundBossTeam].self, forKey: .teams)
+        teamsByID = Dictionary(teams.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
 
     struct LevelCap: Decodable, Sendable { let stage: String; let level: Int }
     struct TrainerOrderEntry: Decodable, Sendable {
@@ -49,7 +73,7 @@ struct BoundBossCatalog: Decodable, Sendable {
     }
 
     var defaultTeam: BoundBossTeam { teams.first { $0.id == "kanto-leaders-4" } ?? teams[0] }
-    func team(id: String) -> BoundBossTeam? { teams.first { $0.id == id } }
+    func team(id: String) -> BoundBossTeam? { teamsByID[id] }
 
     /// Returns the trainer `offset` entries away in the catalog's published
     /// playthrough order. Conditional team variants resolve to their encounter's
@@ -120,6 +144,56 @@ struct BoundBossCatalog: Decodable, Sendable {
             }
         }
         return encounters.filter { $0.teams.contains { matches.contains($0.id) } }
+    }
+}
+
+/// Shared, lazy catalog loading for companion panels. The first JSON reads and
+/// decodes run in a detached task, so opening either panel never performs them
+/// on the main thread. The legacy `bundled` accessors remain useful to model
+/// tests, while app views observe this single background-loaded result.
+@MainActor
+final class BoundReferenceCatalogStore: ObservableObject {
+    struct Loaded: Sendable {
+        let dex: BoundRRDexCatalog?
+        let bosses: BoundBossCatalog?
+        let reference: BoundBossReference?
+    }
+
+    static let shared = BoundReferenceCatalogStore()
+    @Published private(set) var dex: BoundRRDexCatalog?
+    @Published private(set) var bosses: BoundBossCatalog?
+    @Published private(set) var reference: BoundBossReference?
+    @Published private(set) var hasFinishedLoading = false
+    private var loading: Task<Loaded, Never>?
+    private let loader: @Sendable () -> Loaded
+
+    init(loader: @escaping @Sendable () -> Loaded = {
+        Loaded(dex: BoundRRDexCatalog.bundled,
+               bosses: BoundBossCatalog.bundled,
+               reference: BoundBossReference.bundled)
+    }) {
+        self.loader = loader
+    }
+
+    func loadIfNeeded() async {
+        guard !hasFinishedLoading else { return }
+        let task: Task<Loaded, Never>
+        if let loading {
+            task = loading
+        } else {
+            let loader = self.loader
+            task = Task.detached(priority: .userInitiated) { loader() }
+            loading = task
+        }
+        let loaded = await task.value
+        // Concurrent callers await the same decode, but only the first one
+        // publishes it. Later requests return above without extra updates.
+        guard !hasFinishedLoading else { return }
+        dex = loaded.dex
+        bosses = loaded.bosses
+        reference = loaded.reference
+        hasFinishedLoading = true
+        loading = nil
     }
 }
 
@@ -284,13 +358,17 @@ struct BoundBossReference: Sendable {
     }
 
     func typeIconData(for type: BoundRRDexType) -> Data? {
-        guard let encoded = data.typeIcons[type.name]?.pngBase64 else { return nil }
+        guard let encoded = typeIconBase64(for: type) else { return nil }
         return Data(base64Encoded: encoded)
     }
+    func typeIconBase64(for type: BoundRRDexType) -> String? { data.typeIcons[type.name]?.pngBase64 }
     func trainerIconData(for team: BoundBossTeam) -> [Data] {
         (data.trainerIconsByTeam?[team.id] ?? []).compactMap { key in
             data.trainerIcons?[key].flatMap { Data(base64Encoded: $0.pngBase64) }
         }
+    }
+    func trainerIconBase64(for team: BoundBossTeam) -> [String] {
+        (data.trainerIconsByTeam?[team.id] ?? []).compactMap { data.trainerIcons?[$0]?.pngBase64 }
     }
 
     private func species(for bossName: String) -> BoundRRDexSpecies? {

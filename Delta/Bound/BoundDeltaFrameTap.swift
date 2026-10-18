@@ -9,11 +9,30 @@ struct GameFrame: Sendable {
     let buttons: UInt32
 }
 
+/// Queue-confined reusable render target. Emitted frames retain a Data value;
+/// later writes trigger copy-on-write only while an earlier frame is still live.
+struct BoundFramePixelStorage {
+    private var data = Data(count: SharingFrame.byteCount)
+
+    mutating func withMutableBytes<Result>(_ body: (UnsafeMutableRawBufferPointer) throws -> Result) rethrows -> Result {
+        try data.withUnsafeMutableBytes(body)
+    }
+
+    func withBytes<Result>(_ body: (UnsafeRawBufferPointer) throws -> Result) rethrows -> Result {
+        try data.withUnsafeBytes(body)
+    }
+
+    func frame(number: UInt64) -> GameFrame {
+        GameFrame(rgba: data, number: number, buttons: 0)
+    }
+}
+
 /// Capture happens on Delta's existing owner callback; conversion/sharing never queues per frame.
 final class BoundDeltaFrameTap: @unchecked Sendable {
     private let gate = BoundFrameCaptureGate()
     private let queue = DispatchQueue(label: "Bound Delta frame conversion", qos: .utility)
     private let context = CIContext(options: [.workingColorSpace: NSNull()])
+    private var pixels = BoundFramePixelStorage() // Conversion queue only.
     private var sequence: UInt64 = 0 // Conversion queue only.
     private let deliver: @MainActor (GameFrame) -> Void
     init(deliver: @escaping @MainActor (GameFrame) -> Void) { self.deliver = deliver }
@@ -22,8 +41,7 @@ final class BoundDeltaFrameTap: @unchecked Sendable {
         guard let epoch = gate.begin(now: ProcessInfo.processInfo.systemUptime) else { return }
         guard let image = core.videoManager.detachedBitmapImage() else { _ = gate.finish(epoch: epoch); return }
         queue.async { [self] in
-            var pixels = [UInt8](repeating: 0, count: 240 * 160 * 4)
-            let success = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            let success = pixels.withMutableBytes { buffer -> Bool in
                 guard image.extent.width > 0, image.extent.height > 0,
                       let colorSpace = CGColorSpace(name: CGColorSpace.sRGB), let bytes = buffer.baseAddress else { return false }
                 let normalized = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
@@ -34,7 +52,9 @@ final class BoundDeltaFrameTap: @unchecked Sendable {
             }
             guard success else { _ = gate.finish(epoch: epoch); return }
             sequence &+= 1
-            let frame = GameFrame(rgba: Data(pixels), number: sequence, buttons: 0)
+            // Retain the rendered Data value directly. This avoids allocating an
+            // intermediate byte array and then copying it into a second Data.
+            let frame = pixels.frame(number: sequence)
             // Pending stays set through main delivery, bounding the entire bridge.
             DispatchQueue.main.async { [self] in
                 guard gate.finish(epoch: epoch) else { return }

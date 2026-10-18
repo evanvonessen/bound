@@ -331,6 +331,9 @@ extension GameCollectionViewController
                 do
                 {
                     try destinationViewController.emulatorCore?.load(saveState)
+                    if let core = destinationViewController.emulatorCore {
+                        destinationViewController.boundRRDexDidLoadSaveState(core: core)
+                    }
                 }
                 catch EmulatorCore.SaveStateError.doesNotExist
                 {

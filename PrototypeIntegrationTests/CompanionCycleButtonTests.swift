@@ -1,11 +1,44 @@
 import XCTest
 import UIKit
 import SwiftUI
+import Combine
 import DeltaCore
 @testable import Delta
 
 @MainActor
 final class CompanionCycleButtonTests: XCTestCase {
+    func testReferenceCatalogStoreSharesConcurrentLoadAndPublishesOnce() async {
+        let loadCounter = LockedCounter()
+        let loaderThreads = LockedValues<Bool>()
+        let completionRecorder = LockedValues<Bool>()
+        let store = BoundReferenceCatalogStore {
+            loadCounter.increment()
+            loaderThreads.append(Thread.isMainThread)
+            Thread.sleep(forTimeInterval: 0.05)
+            return .init(dex: nil, bosses: nil, reference: nil)
+        }
+        let subscription = store.$hasFinishedLoading.dropFirst().sink { completionRecorder.append($0) }
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<8 { group.addTask { await store.loadIfNeeded() } }
+        }
+        await store.loadIfNeeded()
+        XCTAssertEqual(loadCounter.value, 1)
+        XCTAssertEqual(loaderThreads.values, [false], "Catalog decoding must run outside the main thread.")
+        XCTAssertEqual(completionRecorder.values, [true], "Overlapping callers should publish the shared result only once.")
+        XCTAssertTrue(store.hasFinishedLoading)
+        withExtendedLifetime(subscription) {}
+    }
+
+    func testDecodedReferenceImageIsReusedFromBoundedCache() throws {
+        let source = try XCTUnwrap(UIImage(systemName: "star.fill")?.pngData()?.base64EncodedString())
+        let key = "cache-test-\(UUID().uuidString)"
+        let cache = BoundRRImageCache.shared
+        let first = try XCTUnwrap(cache.image(key: key, base64: source))
+        let reused = try XCTUnwrap(cache.image(key: key, base64: "invalid-base64"))
+        XCTAssertTrue(first === reused, "A cached image should be returned without decoding its source again.")
+        XCTAssertNotNil(reused.cgImage, "The cached display image should have its bitmap ready.")
+    }
+
     func testUIVersionAndViewOrderPersistWithoutChangingOptionOneOrBaseline() throws {
         let suite = "BoundUIVersion." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -909,4 +942,18 @@ final class CompanionCycleButtonTests: XCTestCase {
         bossHost.willMove(toParent: nil); bossHost.view.removeFromSuperview(); bossHost.removeFromParent()
     }
 
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = 0
+    var value: Int { lock.lock(); defer { lock.unlock() }; return stored }
+    func increment() { lock.lock(); defer { lock.unlock() }; stored += 1 }
+}
+
+private final class LockedValues<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [Value] = []
+    var values: [Value] { lock.lock(); defer { lock.unlock() }; return stored }
+    func append(_ value: Value) { lock.lock(); defer { lock.unlock() }; stored.append(value) }
 }

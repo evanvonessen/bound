@@ -596,7 +596,14 @@ final class BoundCompanionCoordinator {
               core.game.type == .gba, core.state == .running || core.state == .paused else {
             throw BoundRRDexSave.ImportError.currentGameUnavailable
         }
-        return try BoundRRDexSaveRefreshEvent.suppressWhileCapturing(gameID: gameID) {
+        return try owner.boundRRDexSaveCache.value(completedSave: {
+            try BoundRRDexCurrentSaveImport.readCompletedSave(at: game.gameSaveURL)
+        }, restoredSave: {
+            try self.captureRestoredRRDexSave(owner: owner, core: core, gameID: gameID)
+        })
+    }
+    private func captureRestoredRRDexSave(owner: GameViewController, core: EmulatorCore, gameID: String) throws -> BoundRRDexSave {
+        try BoundRRDexSaveRefreshEvent.suppressWhileCapturing(gameID: gameID) {
             let wasRunning = core.state == .running
             if wasRunning, !owner.pauseEmulation() { throw BoundRRDexSave.ImportError.cannotPause }
             defer {

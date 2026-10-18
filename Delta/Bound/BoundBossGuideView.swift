@@ -1,13 +1,39 @@
 import SwiftUI
 import UIKit
 
+/// Decoded reference images stay reusable across SwiftUI body refreshes while
+/// NSCache drops them automatically under memory pressure.
+final class BoundRRImageCache {
+    static let shared = BoundRRImageCache()
+    private let images = NSCache<NSString, UIImage>()
+
+    private init() {
+        images.totalCostLimit = 24 * 1024 * 1024
+        images.countLimit = 320
+    }
+
+    func image(key: String, base64: String) -> UIImage? {
+        let cacheKey = key as NSString
+        if let cached = images.object(forKey: cacheKey) { return cached }
+        guard let data = Data(base64Encoded: base64), let image = UIImage(data: data) else { return nil }
+        let prepared = image.preparingForDisplay() ?? image
+        images.setObject(prepared, forKey: cacheKey, cost: cost(of: prepared, data: data))
+        return prepared
+    }
+
+    private func cost(of image: UIImage, data: Data) -> Int {
+        let decoded = Int(image.size.width * image.scale) * Int(image.size.height * image.scale) * 4
+        return max(data.count, decoded)
+    }
+}
+
 struct BoundBossGuideView: View {
     let gameID: String
     var floating = false
     var portraitTopInset: CGFloat = 0
     var previewLayout: BoundReferenceLayout? = nil
     let presentationChanged: (Bool) -> Void
-    private let catalog = BoundBossCatalog.bundled
+    @StateObject private var catalogStore = BoundReferenceCatalogStore.shared
     private let preferences = BoundBossGuidePreferences()
     @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     @AppStorage(BoundReferenceLayoutPreferences.bossKey) private var savedLayout = BoundReferenceLayout.layout1
@@ -33,6 +59,7 @@ struct BoundBossGuideView: View {
     private var anyPresentation: Bool {
         showingPicker || showingTeam || detailSheet != nil
     }
+    private var catalog: BoundBossCatalog? { catalogStore.bosses }
     private var layout: BoundReferenceLayout { previewLayout ?? savedLayout }
     private var usesUIVersion2: Bool { experimentsEnabled && uiVersion == .option2 }
     private var isLayout11Or12: Bool { layout == .layout11 || layout == .layout12 }
@@ -40,7 +67,7 @@ struct BoundBossGuideView: View {
 
     var body: some View {
         Group {
-            if experimentsEnabled, let catalog {
+            if experimentsEnabled, let catalog = catalogStore.bosses {
                 let selected = selection.resolved(in: catalog)
                 let team = catalog.team(id: selected.teamID) ?? catalog.defaultTeam
                 let pokemon = team.pokemon[selected.pokemonIndex]
@@ -83,12 +110,17 @@ struct BoundBossGuideView: View {
                         BoundBossWeaknessDetail(pokemon: species, catalog: dex)
                     }
                 }
-            } else if experimentsEnabled {
+            } else if experimentsEnabled && catalogStore.hasFinishedLoading {
                 ContentUnavailableView("Boss guide unavailable", systemImage: "book.closed",
                                        description: Text("The bundled guide could not be loaded."))
+            } else if experimentsEnabled {
+                ProgressView("Loading boss guide…")
             }
         }
         .tint(Color(uiColor: .deltaPurple))
+        .task(id: experimentsEnabled) {
+            if experimentsEnabled { await catalogStore.loadIfNeeded() }
+        }
         .onChange(of: experimentsEnabled) { _, enabled in
             if !enabled { showingPicker = false; showingTeam = false; detailSheet = nil }
         }
@@ -219,7 +251,7 @@ struct BoundBossGuideView: View {
     }
 
     private func version2OriginalCard(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, size: CGSize) -> some View {
-        let reference = BoundBossReference.bundled
+        let reference = catalogStore.reference
         let detail = reference?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
         return VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
@@ -292,7 +324,7 @@ struct BoundBossGuideView: View {
     }
 
     private func card(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, scrollsDetails: Bool = true) -> some View {
-        let detail = BoundBossReference.bundled?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
+        let detail = catalogStore.reference?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
         let details = VStack(alignment: .leading, spacing: 8) {
             BoundBossPokemonIdentity(pokemon: pokemon, species: detail?.species, types: detail?.types ?? [])
             BoundBossStats(stats: pokemon.stats, usesSourceColors: usesUIVersion2)
@@ -362,7 +394,7 @@ struct BoundBossGuideView: View {
     private func layout7Card(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int,
                              scrollsDetails: Bool = true, islandHeader: Bool = false,
                              expandedReference: Bool = false, version2: Bool = false) -> some View {
-        let reference = BoundBossReference.bundled
+        let reference = catalogStore.reference
         let detail = reference?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
         let details = VStack(alignment: .leading, spacing: 8) {
             BoundBossStats(stats: pokemon.stats, usesSourceColors: true)
@@ -382,7 +414,7 @@ struct BoundBossGuideView: View {
                                  identifier: "bound.boss-ability-description")
             BoundBossDescription(title: "Item", name: pokemon.item, description: detail?.itemDescription,
                                  identifier: "bound.boss-item-description")
-            if (expandedReference || version2), let species = detail?.species, let dex = BoundRRDexCatalog.bundled {
+            if (expandedReference || version2), let species = detail?.species, let dex = catalogStore.dex {
                 BoundRRDexCompactMatchups(pokemon: species, catalog: dex,
                                           identifier: "bound.boss-layout\(layout.rawValue)-matchups",
                                           usesFullTypeColors: layout == .layout12 || version2,
@@ -670,7 +702,7 @@ struct BoundBossGuideView: View {
                                  identifier: "bound.boss-ability-description")
             BoundBossDescription(title: "Item", name: pokemon.item, description: detail?.itemDescription,
                                  identifier: "bound.boss-item-description")
-            if let species = detail?.species, let dex = BoundRRDexCatalog.bundled {
+            if let species = detail?.species, let dex = catalogStore.dex {
                 BoundRRDexCompactMatchups(pokemon: species, catalog: dex,
                                           identifier: "bound.boss-v2-matchups",
                                           usesFullTypeColors: true,
@@ -711,7 +743,7 @@ struct BoundBossGuideView: View {
 
     private func enhancedCard(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, compact: Bool,
                               scrollsDetails: Bool = true) -> some View {
-        let reference = BoundBossReference.bundled
+        let reference = catalogStore.reference
         let detail = reference?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
         return VStack(alignment: .leading, spacing: compact ? 1 : 7) {
             HStack(spacing: 5) {
@@ -726,7 +758,7 @@ struct BoundBossGuideView: View {
                 .buttonStyle(.plain).accessibilityLabel("Choose boss, \(team.name)")
                 .accessibilityIdentifier("bound.boss-picker")
                 if !usesIslandActions {
-                    Button { showWeaknesses(pokemon, reference: .bundled) } label: {
+                    Button { showWeaknesses(pokemon, reference: catalogStore.reference) } label: {
                         Image(systemName: "shield.lefthalf.filled").frame(width: compact ? 26 : 32, height: compact ? 26 : 32)
                     }.accessibilityLabel("Show typing matchups")
                         .accessibilityIdentifier("bound.boss-weaknesses")
@@ -759,7 +791,7 @@ struct BoundBossGuideView: View {
 
     private func fullHeightCard(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, width: CGFloat,
                                 height: CGFloat) -> some View {
-        let reference = BoundBossReference.bundled
+        let reference = catalogStore.reference
         let detail = reference?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
         return VStack(alignment: .leading, spacing: 2) {
                 if !usesIslandActions { islandActions(pokemon: pokemon, onIsland: false).frame(height: 44) }
@@ -805,7 +837,7 @@ struct BoundBossGuideView: View {
     /// Moves remain the first detail module, while stats can be opened on demand.
     private func layout4Card(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, compact: Bool,
                              scrollsDetails: Bool, scrollsOverview: Bool = false) -> some View {
-        let reference = BoundBossReference.bundled
+        let reference = catalogStore.reference
         let detail = reference?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
         let overview = VStack(alignment: .leading, spacing: compact ? 1 : 3) {
             HStack(spacing: 6) {
@@ -889,7 +921,7 @@ struct BoundBossGuideView: View {
     /// Moves/Stats choice obvious and placing the team strip on a dependable footer.
     private func layout5Card(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, compact: Bool,
                              scrollsDetails: Bool, scrollsOverview: Bool = false) -> some View {
-        let reference = BoundBossReference.bundled
+        let reference = catalogStore.reference
         let detail = reference?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
         let overview = VStack(alignment: .leading, spacing: 1) {
             layout5Header(team: team, compact: compact)
@@ -1051,7 +1083,7 @@ struct BoundBossGuideView: View {
     /// letting its combined moves and base stats scroll as one compact detail area.
     private func layout6Card(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int, compact: Bool,
                              scrollsDetails: Bool, scrollsOverview: Bool = false) -> some View {
-        let reference = BoundBossReference.bundled
+        let reference = catalogStore.reference
         let detail = reference?.detail(for: pokemon, teamID: team.id, pokemonIndex: index)
         let details = VStack(alignment: .leading, spacing: 2) {
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 2) {
@@ -1409,7 +1441,7 @@ struct BoundBossGuideView: View {
     }
 
     @ViewBuilder private func pokemonPicture(_ pokemon: BoundBossPokemon, species: BoundRRDexSpecies?, size: CGFloat) -> some View {
-        if let sprite = species?.sprite, let data = Data(base64Encoded: sprite), let picture = UIImage(data: data) {
+        if let species, let picture = BoundRRImageCache.shared.image(key: "pokemon-\(species.id)", base64: species.sprite) {
             Image(uiImage: picture).resizable().interpolation(.none).scaledToFit()
                 .frame(width: size, height: size).accessibilityLabel("\(pokemon.species) picture")
         } else {
@@ -1516,13 +1548,13 @@ struct BoundBossGuideView: View {
 
     private func showWeaknesses(_ pokemon: BoundBossPokemon, reference: BoundBossReference?) {
         guard experimentsEnabled, let species = reference?.detail(for: pokemon).species,
-              let dex = BoundRRDexCatalog.bundled else { return }
+              let dex = catalogStore.dex else { return }
         detailSheet = .weaknesses(species, dex)
     }
 
     private func islandActions(pokemon: BoundBossPokemon, onIsland: Bool) -> some View {
         HStack(spacing: 0) {
-            Button { showWeaknesses(pokemon, reference: .bundled) } label: {
+            Button { showWeaknesses(pokemon, reference: catalogStore.reference) } label: {
                 Label("Weaknesses", systemImage: "shield.lefthalf.filled")
                     .lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: .infinity).frame(height: 44)
             }
@@ -1546,7 +1578,7 @@ struct BoundBossGuideView: View {
         preferences.write(selection, gameID: gameID, catalog: catalog)
     }
     private func advance(_ direction: Int, team: BoundBossTeam) {
-        guard let catalog else { return }
+        guard let catalog = catalogStore.bosses else { return }
         choose(BoundBossGuideSelection(teamID: team.id, pokemonIndex: selection.pokemonIndex + direction), catalog: catalog)
     }
 }
@@ -1599,7 +1631,7 @@ private struct BoundBossPokemonIdentity: View {
     var body: some View {
         HStack(spacing: 8) {
             Group {
-                if let sprite = species?.sprite, let data = Data(base64Encoded: sprite), let picture = UIImage(data: data) {
+                if let species, let picture = BoundRRImageCache.shared.image(key: "pokemon-\(species.id)", base64: species.sprite) {
                     Image(uiImage: picture).resizable().interpolation(.none).scaledToFit()
                 } else { Image(systemName: "photo").foregroundStyle(.secondary) }
             }.frame(width: 46, height: 46)
@@ -1677,9 +1709,11 @@ private struct BoundBossStats: View {
 
 private struct BoundBossTypeIcon: View {
     let type: BoundRRDexType
+    @ObservedObject private var catalogStore = BoundReferenceCatalogStore.shared
     var body: some View {
         Group {
-            if let data = BoundBossReference.bundled?.typeIconData(for: type), let icon = UIImage(data: data) {
+            if let encoded = catalogStore.reference?.typeIconBase64(for: type),
+               let icon = BoundRRImageCache.shared.image(key: "type-\(type.name)", base64: encoded) {
                 Image(uiImage: icon).resizable().scaledToFit()
             } else {
                 Text(type.name).font(.system(size: 8, weight: .medium)).minimumScaleFactor(0.6)
@@ -1826,8 +1860,11 @@ private struct BoundBossPicker: View {
 private struct BoundBossTrainerIcon: View {
     let team: BoundBossTeam
     var size: CGFloat = 48
+    @ObservedObject private var catalogStore = BoundReferenceCatalogStore.shared
     var body: some View {
-        let pictures = BoundBossReference.bundled?.trainerIconData(for: team).compactMap { UIImage(data: $0) } ?? []
+        let pictures = catalogStore.reference?.trainerIconBase64(for: team).enumerated().compactMap { index, encoded in
+            BoundRRImageCache.shared.image(key: "trainer-\(team.id)-\(index)", base64: encoded)
+        } ?? []
         HStack(spacing: -size / 6) {
             if pictures.isEmpty {
                 Image(systemName: "person.crop.square.fill").font(.system(size: size * 0.625))

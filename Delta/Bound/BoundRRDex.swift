@@ -13,6 +13,36 @@ struct BoundRRDexCatalog: Decodable, Sendable {
     let moves: [BoundRRDexMove]
     let normalAbilities: [Int]
     let normalMoves: [Int]
+    private let speciesByID: [Int: BoundRRDexSpecies]
+    private let typesByID: [Int: BoundRRDexType]
+    private let movesByID: [Int: BoundRRDexMove]
+    private let abilitiesByID: [Int: BoundRRDexAbility]
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, gameVersion, difficulty, sourceURL, sourceRevision, sourceSHA256
+        case species, types, abilities, moves, normalAbilities, normalMoves
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try values.decode(Int.self, forKey: .schemaVersion)
+        gameVersion = try values.decode(String.self, forKey: .gameVersion)
+        difficulty = try values.decode(String.self, forKey: .difficulty)
+        sourceURL = try values.decode(URL.self, forKey: .sourceURL)
+        sourceRevision = try values.decode(String.self, forKey: .sourceRevision)
+        sourceSHA256 = try values.decode(String.self, forKey: .sourceSHA256)
+        species = try values.decode([BoundRRDexSpecies].self, forKey: .species)
+        types = try values.decode([BoundRRDexType].self, forKey: .types)
+        abilities = try values.decode([BoundRRDexAbility].self, forKey: .abilities)
+        moves = try values.decode([BoundRRDexMove].self, forKey: .moves)
+        normalAbilities = try values.decode([Int].self, forKey: .normalAbilities)
+        normalMoves = try values.decode([Int].self, forKey: .normalMoves)
+        // Preserve the previous first-match behavior if a future catalog has duplicate IDs.
+        speciesByID = Dictionary(species.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        typesByID = Dictionary(types.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        movesByID = Dictionary(moves.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        abilitiesByID = Dictionary(abilities.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
 
     static let bundled: Self? = {
         #if SWIFT_PACKAGE
@@ -41,9 +71,9 @@ struct BoundRRDexCatalog: Decodable, Sendable {
         return c
     }
 
-    func pokemon(id: Int) -> BoundRRDexSpecies? { species.first { $0.id == id } }
-    func type(id: Int) -> BoundRRDexType? { types.first { $0.id == id } }
-    func move(id: Int) -> BoundRRDexMove? { moves.first { $0.id == id } }
+    func pokemon(id: Int) -> BoundRRDexSpecies? { speciesByID[id] }
+    func type(id: Int) -> BoundRRDexType? { typesByID[id] }
+    func move(id: Int) -> BoundRRDexMove? { movesByID[id] }
     /// The upstream dex uses case-insensitive substring suggestions. Folding punctuation
     /// also allows convenient searches such as "mr mime" and "nidoran female".
     func suggestions(_ query: String) -> [BoundRRDexSpecies] {
@@ -66,7 +96,7 @@ struct BoundRRDexCatalog: Decodable, Sendable {
             let pair = pokemon.abilities[slot]
             guard pair[0] != 0 else { return nil }
             let id = save?.randomAbilities == true ? randomizedAbility(pair[0], speciesID: pokemon.id, trainerID: save!.trainerID) : pair[0]
-            guard let ability = abilities.first(where: { $0.id == id }) else { return nil }
+            guard let ability = abilitiesByID[id] else { return nil }
             let variant = save?.randomAbilities == true ? 0 : pair[1]
             guard ability.names.indices.contains(variant), ability.descriptions.indices.contains(variant) else { return nil }
             return AbilityDetail(name: ability.names[variant], description: ability.descriptions[variant], isHidden: slot == 0)
@@ -240,7 +270,7 @@ struct BoundRRDexSave: Codable, Equatable, Sendable {
         let flags = [randomAbilities ? "Random abilities" : nil, randomLearnset ? "Random learnset" : nil].compactMap { $0 }
         return flags.isEmpty ? "Standard abilities and moves" : flags.joined(separator: " · ")
     }
-    enum ImportError: LocalizedError {
+    enum ImportError: LocalizedError, Equatable {
         case cannotPause, currentGameUnavailable, format, incomplete, difficulty
         var errorDescription: String? {
             switch self {
@@ -304,6 +334,12 @@ enum BoundRRDexCurrentSaveImport {
         }
 
         let saveURL = directory.appendingPathComponent("current-game.sav")
+        return try readCompletedSave(at: saveURL)
+    }
+
+    /// Called after the core has finished writing its battery save. Unlike a live
+    /// export, reading this file does not need to pause or resume emulation.
+    static func readCompletedSave(at saveURL: URL) throws -> BoundRRDexSave {
         let fileSize: Int
         do {
             let attributes = try FileManager.default.attributesOfItem(atPath: saveURL.path)
@@ -329,6 +365,72 @@ enum BoundRRDexCurrentSaveImport {
     }
 }
 
+/// One cache per emulator session. Only the trainer ID and randomizer flags are
+/// retained; completed saves replace the cache only when those settings change.
+/// The lock never spans a core call, since pausing can invoke the save handler.
+final class BoundRRDexSaveCache: @unchecked Sendable {
+    private typealias Outcome = Result<BoundRRDexSave, BoundRRDexSave.ImportError>
+    private let lock = NSLock()
+    private var cached: Outcome?
+    private var needsLiveSave = false
+    private var revision: UInt64 = 0
+
+    func invalidate(restoredState: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        revision &+= 1
+        cached = nil
+        needsLiveSave = restoredState
+    }
+
+    func value(completedSave: () throws -> BoundRRDexSave,
+               restoredSave: () throws -> BoundRRDexSave) throws -> BoundRRDexSave {
+        lock.lock()
+        if let cached { lock.unlock(); return try cached.get() }
+        let version = revision
+        let useLiveSave = needsLiveSave
+        lock.unlock()
+        let outcome = Self.read(useLiveSave ? restoredSave : completedSave)
+        lock.lock()
+        defer { lock.unlock() }
+        guard version == revision else {
+            // A completed save or state load overtook this read.
+            guard let cached else { throw BoundRRDexSave.ImportError.currentGameUnavailable }
+            return try cached.get()
+        }
+        if case .failure(.currentGameUnavailable) = outcome { return try outcome.get() }
+        if case .failure(.cannotPause) = outcome { return try outcome.get() }
+        cached = outcome
+        needsLiveSave = false
+        return try outcome.get()
+    }
+
+    /// The callback runs after the disk write, before the emulation thread can
+    /// start another write. Snapshot and parse that small file here, with no
+    /// additional pause/export cycle. Unchanged saves produce no UI event.
+    @discardableResult
+    func completedSave(read: () throws -> BoundRRDexSave) -> Bool {
+        lock.lock()
+        revision &+= 1
+        let version = revision
+        lock.unlock()
+        let outcome = Self.read(read)
+        lock.lock(); defer { lock.unlock() }
+        guard version == revision else { return false }
+        // A transient disk error is retried at the next entry/save, and must not
+        // turn a restored-state invalidation into permission to read stale disk.
+        if case .failure(.currentGameUnavailable) = outcome { return false }
+        let changed = cached != outcome
+        cached = outcome
+        needsLiveSave = false
+        return changed
+    }
+
+    private static func read(_ read: () throws -> BoundRRDexSave) -> Outcome {
+        do { return .success(try read()) }
+        catch { return .failure(error as? BoundRRDexSave.ImportError ?? .currentGameUnavailable) }
+    }
+}
+
 final class BoundRRDexPreferences {
     private let defaults: UserDefaults
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
@@ -347,13 +449,14 @@ final class BoundRRDexPreferences {
     }
     func write(_ choice: Choice, gameID: String) {
         guard let key = key(gameID), let data = try? JSONEncoder().encode(choice) else { return }
+        guard read(gameID: gameID) != choice else { return }
         defaults.set(data, forKey: key)
     }
 
     /// Refreshes only the parsed randomizer configuration for this ROM. The
     /// selected species and prior configuration remain intact if capture fails.
-    /// The capture closure should export the active game's current battery save
-    /// into a temporary location; raw save bytes are never persisted here.
+    /// The closure normally returns the session's cached completed-save settings;
+    /// a state load can require a separate live read. Raw bytes are never stored.
     @discardableResult
     func refreshCurrentSave(gameID: String, capture: () throws -> BoundRRDexSave) throws -> Choice {
         guard key(gameID) != nil else { throw BoundRRDexSave.ImportError.currentGameUnavailable }
@@ -399,6 +502,8 @@ enum BoundRRDexSaveRefreshEvent {
         }
     }
     private static let suppressionRegistry = SuppressionRegistry()
+
+    static func isSuppressed(gameID: String) -> Bool { suppressionRegistry.contains(gameID) }
 
     /// Core pause writes invoke EmulatorCore.saveHandler inline. Suppressing the
     /// current ROM around the pause/export prevents that save from recursively

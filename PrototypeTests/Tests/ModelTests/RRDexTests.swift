@@ -341,3 +341,22 @@ final class RRDexTests: XCTestCase {
         }
     }
 }
+
+extension RRDexTests {
+    func testIndexedLookupsMatchEveryBundledCatalogEntry() throws {
+        let catalog = try XCTUnwrap(BoundRRDexCatalog.bundled)
+
+        for species in catalog.species {
+            XCTAssertEqual(catalog.pokemon(id: species.id)?.name, species.name, "Species ID \(species.id)")
+        }
+        for type in catalog.types {
+            XCTAssertEqual(catalog.type(id: type.id)?.name, type.name, "Type ID \(type.id)")
+        }
+        for move in catalog.moves {
+            XCTAssertEqual(catalog.move(id: move.id)?.name, move.name, "Move ID \(move.id)")
+        }
+        XCTAssertNil(catalog.pokemon(id: Int.min))
+        XCTAssertNil(catalog.type(id: Int.min))
+        XCTAssertNil(catalog.move(id: Int.min))
+    }
+}

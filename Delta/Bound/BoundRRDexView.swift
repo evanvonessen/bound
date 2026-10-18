@@ -9,7 +9,7 @@ struct BoundRRDexView: View {
     let presentationChanged: (Bool) -> Void
     var textEditingChanged: (Bool) -> Void = { _ in }
     var currentSave: () throws -> BoundRRDexSave = { throw BoundRRDexSave.ImportError.currentGameUnavailable }
-    private let catalog = BoundRRDexCatalog.bundled
+    @StateObject private var catalogStore = BoundReferenceCatalogStore.shared
     private let preferences = BoundRRDexPreferences()
     @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     @AppStorage(BoundReferenceLayoutPreferences.dexKey) private var savedLayout = BoundReferenceLayout.layout1
@@ -65,7 +65,8 @@ struct BoundRRDexView: View {
 
     var body: some View {
         Group {
-            if experimentsEnabled, let catalog, let pokemon = catalog.pokemon(id: choice.speciesID) ?? catalog.species.first {
+            if experimentsEnabled, let catalog = catalogStore.dex,
+               let pokemon = catalog.pokemon(id: choice.speciesID) ?? catalog.species.first {
                 GeometryReader { geometry in
                     if layout == .layout12 && layout12LearnsetPresented {
                         layout12Learnset(pokemon: pokemon, catalog: catalog, compact: geometry.size.height < 140)
@@ -160,11 +161,16 @@ struct BoundRRDexView: View {
                         }
                     }
                 }
-            } else if experimentsEnabled {
+            } else if experimentsEnabled && catalogStore.hasFinishedLoading {
                 ContentUnavailableView("RRDex unavailable", systemImage: "book.closed", description: Text("The bundled dex could not be loaded."))
+            } else if experimentsEnabled {
+                ProgressView("Loading RR Dex…")
             }
         }
         .tint(Color(uiColor: .deltaPurple))
+        .task(id: experimentsEnabled) {
+            if experimentsEnabled { await catalogStore.loadIfNeeded() }
+        }
         .alert("Save could not be imported", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("OK", role: .cancel) { importError = nil }
         } message: { Text(importError ?? "") }
@@ -1777,7 +1783,7 @@ private struct BoundRRDexSprite: View {
     let pokemon: BoundRRDexSpecies
     var body: some View {
         Group {
-            if let data = Data(base64Encoded: pokemon.sprite), let image = UIImage(data: data) {
+            if let image = BoundRRImageCache.shared.image(key: "pokemon-\(pokemon.id)", base64: pokemon.sprite) {
                 Image(uiImage: image).resizable().interpolation(.none).scaledToFit()
             } else { Image(systemName: "photo").foregroundStyle(.secondary) }
         }.accessibilityLabel("\(pokemon.name) picture").accessibilityIdentifier("bound.rrdex-picture")

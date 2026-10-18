@@ -74,6 +74,22 @@ private extension GameViewController
 class GameViewController: DeltaCore.GameViewController
 {
     private let boundCompanion = BoundCompanionCoordinator()
+    private(set) var boundRRDexSaveCache = BoundRRDexSaveCache()
+    func boundRRDexDidLoadSaveState(core: EmulatorCore) {
+        guard core === emulatorCore, core.game.type == .gba else { return }
+        boundRRDexSaveCache.invalidate(restoredState: true)
+        guard BoundFeatureVisibility.experimentalFeaturesEnabled, let game = game as? Game else { return }
+        // Save-state RAM can differ from the battery file. Read it while the
+        // caller already has the core paused, so there is no second pause cycle.
+        if core.state == .paused {
+            _ = try? boundRRDexSaveCache.value(completedSave: {
+                throw BoundRRDexSave.ImportError.currentGameUnavailable
+            }, restoredSave: {
+                try BoundRRDexCurrentSaveImport.capture { core.deltaCore.emulatorBridge.saveGameSave(to: $0) }
+            })
+        }
+        BoundRRDexSaveRefreshEvent.post(gameID: game.identifier)
+    }
     private var boundControllerModeActive = false
     private struct BoundControlConfiguration: Equatable {
         let skin: String
@@ -107,9 +123,19 @@ class GameViewController: DeltaCore.GameViewController
             NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.managedObjectContextDidChange(with:)), name: .NSManagedObjectContextObjectsDidChange, object: game?.managedObjectContext)
             
             let gameIdentifier = game?.identifier
-            self.emulatorCore?.saveHandler = { [weak self, gameIdentifier] _ in
+            let gameSaveURL = game?.gameSaveURL
+            let isGBA = game?.type == .gba
+            let dexSaveCache = BoundRRDexSaveCache()
+            self.boundRRDexSaveCache = dexSaveCache
+            self.emulatorCore?.saveHandler = { [weak self, gameIdentifier, gameSaveURL, dexSaveCache] _ in
                 self?.updateGameSave()
-                if BoundFeatureVisibility.experimentalFeaturesEnabled, let gameIdentifier {
+                guard isGBA, let gameIdentifier, let gameSaveURL,
+                      !BoundRRDexSaveRefreshEvent.isSuppressed(gameID: gameIdentifier) else { return }
+                guard BoundFeatureVisibility.experimentalFeaturesEnabled else {
+                    dexSaveCache.invalidate(restoredState: false)
+                    return
+                }
+                if dexSaveCache.completedSave(read: { try BoundRRDexCurrentSaveImport.readCompletedSave(at: gameSaveURL) }) {
                     BoundRRDexSaveRefreshEvent.post(gameID: gameIdentifier)
                 }
             }
@@ -720,6 +746,7 @@ extension GameViewController
             do
             {
                 try emulatorCore.load(saveState)
+                self.boundRRDexDidLoadSaveState(core: emulatorCore)
             }
             catch
             {
@@ -1262,12 +1289,18 @@ extension GameViewController: SaveStatesViewControllerDelegate
         {
             if let temporarySaveState = temporarySaveState
             {
-                try self.emulatorCore?.load(temporarySaveState)
+                if let core = self.emulatorCore {
+                    try core.load(temporarySaveState)
+                    self.boundRRDexDidLoadSaveState(core: core)
+                }
                 try FileManager.default.removeItem(at: temporarySaveState.fileURL)
             }
             else
             {
-                try self.emulatorCore?.load(saveState)
+                if let core = self.emulatorCore {
+                    try core.load(saveState)
+                    self.boundRRDexDidLoadSaveState(core: core)
+                }
             }
 
             didLoad = true
@@ -1316,10 +1349,7 @@ extension GameViewController: SaveStatesViewControllerDelegate
     {
         self._isLoadingSaveState = true
         
-        let didLoad = self.load(saveState)
-        if BoundFeatureVisibility.experimentalFeaturesEnabled, didLoad, let game = self.game as? Game {
-            BoundRRDexSaveRefreshEvent.post(gameID: game.identifier)
-        }
+        self.load(saveState)
         
         self.pauseViewController?.dismiss()
     }

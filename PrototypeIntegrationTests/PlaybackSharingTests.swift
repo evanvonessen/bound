@@ -149,6 +149,11 @@ private final class TransitionCount: @unchecked Sendable {
         XCTAssertTrue(core.start())
         XCTAssertTrue(core.pause())
         XCTAssertEqual(core.state, .paused)
+        let cache = BoundRRDexSaveCache()
+        let diskSettings = try cache.value(completedSave: {
+            try BoundRRDexCurrentSaveImport.readCompletedSave(at: staleBatteryURL)
+        }, restoredSave: { XCTFail("A completed battery save needs no live export"); throw BoundRRDexSave.ImportError.currentGameUnavailable })
+        XCTAssertEqual(diskSettings.trainerID, 42)
 
         // Change the GBA bridge's battery-backed RAM after startup so a copy of
         // the original on-disk .sav would be observably stale.
@@ -158,13 +163,31 @@ private final class TransitionCount: @unchecked Sendable {
         core.deltaCore.emulatorBridge.loadGameSave(from: liveBatteryURL)
         let sourceAfterPause = try Data(contentsOf: staleBatteryURL)
 
-        let captured = try BoundRRDexCurrentSaveImport.capture(temporaryDirectory: exportDirectory) { url in
-            core.deltaCore.emulatorBridge.saveGameSave(to: url)
-        }
+        cache.invalidate(restoredState: true)
+        let captured = try cache.value(completedSave: {
+            XCTFail("A restored state must not read the older battery file")
+            return diskSettings
+        }, restoredSave: {
+            try BoundRRDexCurrentSaveImport.capture(temporaryDirectory: exportDirectory) { url in
+                core.deltaCore.emulatorBridge.saveGameSave(to: url)
+            }
+        })
         XCTAssertEqual(captured, BoundRRDexSave(trainerID: 123456789, randomAbilities: true, randomLearnset: true))
         XCTAssertEqual(core.state, .paused, "Capturing the bridge battery must not change core playback state")
         XCTAssertEqual(try Data(contentsOf: staleBatteryURL), sourceAfterPause, "Export must not replace the ROM's managed battery file")
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: exportDirectory.path), [], "Successful capture must remove its temporary .sav and directory")
+        var completedCallbacks = 0
+        core.saveHandler = { _ in
+            completedCallbacks += 1
+            XCTAssertFalse(cache.completedSave { try BoundRRDexCurrentSaveImport.readCompletedSave(at: staleBatteryURL) },
+                           "The completed write has the same settings as the restored state")
+        }
+        core.save()
+        XCTAssertEqual(completedCallbacks, 1, "Inspecting a completed save must not schedule another core save")
+        XCTAssertEqual(try cache.value(completedSave: { XCTFail(); return diskSettings }, restoredSave: {
+            XCTFail("Reopening the Dex must reuse its configuration"); return diskSettings
+        }), captured)
+        core.saveHandler = nil
 
         XCTAssertThrowsError(try BoundRRDexCurrentSaveImport.capture(temporaryDirectory: exportDirectory) { url in
             try Data(repeating: 0, count: 123).write(to: url)
@@ -197,6 +220,32 @@ private final class TransitionCount: @unchecked Sendable {
         XCTAssertFalse(presenter.present(Data(count: 12), in: host))
         XCTAssertTrue((host.subviews.first as? UIImageView)?.image === image)
         presenter.clear(); XCTAssertTrue(host.subviews.isEmpty)
+    }
+    func testReusableFramePixelsKeepSnapshotsAndReuseUniqueStorage() {
+        var storage = BoundFramePixelStorage()
+        func fill(_ value: UInt8) {
+            storage.withMutableBytes { bytes in
+                for index in 0..<bytes.count { bytes[index] = value }
+            }
+        }
+        func address() -> Int {
+            storage.withBytes { Int(bitPattern: $0.baseAddress!) }
+        }
+        func allBytes(_ frame: GameFrame, equal value: UInt8) -> Bool {
+            frame.rgba.allSatisfy { $0 == value }
+        }
+
+        fill(0x11)
+        var first: GameFrame? = storage.frame(number: 1)
+        fill(0x22) // Must detach storage while the first frame remains retained.
+        XCTAssertTrue(allBytes(first!, equal: 0x11), "An emitted frame must not change during the next render")
+        var second: GameFrame? = storage.frame(number: 2)
+        XCTAssertTrue(allBytes(second!, equal: 0x22))
+
+        first = nil; second = nil
+        let before = address()
+        fill(0x33)
+        XCTAssertEqual(address(), before, "A unique same-sized scratch buffer should be reused in place")
     }
     func testActualI420ConversionAndStaleCallbackFence() async throws {
         let callbacks = AgoraSharingCallbacks(remoteUID: 2) { _, _ in }
