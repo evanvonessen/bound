@@ -865,6 +865,12 @@ private extension GameViewController
         self.view.setNeedsLayout()
         self.view.layoutIfNeeded()
         
+        if BoundMacWorkspacePlatform.isEnabled {
+            // Keep Delta's keyboard receiver and DS touchscreen available.
+            self.controllerView.isHidden = false
+            self.controllerView.playerIndex = Settings.localControllerPlayerIndex ?? firstActiveController?.playerIndex ?? 0
+        }
+
         // Roundabout way of combining arrays to prevent rare runtime crash in + operator :(
         var controllers = [GameController]()
         controllers.append(self.controllerView)
@@ -920,6 +926,19 @@ private extension GameViewController
     func updateControllerSkin()
     {
         guard let game = self.game as? Game, let window = self.view.window else { return }
+
+        if BoundMacWorkspacePlatform.isEnabled,
+           let base = DeltaCore.ControllerSkin.standardControllerSkin(for: game.type) {
+            if !(controllerView.controllerSkin is TouchControllerSkin) || controllerView.controllerSkin?.gameType != game.type {
+                controllerView.cancelTouchInputs()
+                controllerView.controllerSkin = TouchControllerSkin(controllerSkin: base)
+            }
+            controllerView.usesControlOnlyHitTesting = true
+            gameScreenOffset = .zero
+            updateExternalDisplay()
+            view.setNeedsLayout()
+            return
+        }
         
         let traits = DeltaCore.ControllerSkin.Traits.defaults(for: window)
         let isExternalControllerConnected = ExternalGameControllerManager.shared.connectedControllers.contains(where: { $0.playerIndex != nil })
@@ -1715,7 +1734,8 @@ extension GameViewController: GameViewControllerDelegate
         var result = false
         
         rst_dispatch_sync_on_main_thread {
-            result = !self.boundCompanion.isEditingNotes && (self.presentedViewController == nil || self.presentedViewController?.isDisappearing == true) && self.view.window != nil
+            let macSheet = BoundMacWorkspacePlatform.isEnabled && (self.boundCompanion.state.showingFriends || self.boundCompanion.state.showingSettings)
+            result = !self.boundCompanion.isEditingNotes && !macSheet && (self.presentedViewController == nil || self.presentedViewController?.isDisappearing == true) && self.view.window != nil
         }
         
         return result
@@ -1863,6 +1883,7 @@ private extension GameViewController
     // True when on-screen controls are hidden (for DS, via TouchControllerSkin).
     var canRepositionGameScreen: Bool
     {
+        if BoundMacWorkspacePlatform.isEnabled { return false }
         return self.controllerView.isHidden || self.controllerView.controllerSkin is TouchControllerSkin
     }
 
@@ -2667,7 +2688,16 @@ private extension UserDefaults
 
 // Bound's editing operates on native Delta artwork and item hit frames together.
 extension GameViewController {
+    func showBoundMacLibrary() {
+        guard BoundMacWorkspacePlatform.isEnabled, presentedViewController == nil else { return }
+        view.endEditing(true)
+        pauseEmulation()
+        controllerView.resignFirstResponder()
+        performSegue(withIdentifier: "showGamesViewController", sender: nil)
+    }
+
     func applyBoundControlPlacement() {
+        guard !BoundMacWorkspacePlatform.isEnabled else { return }
         guard let current = controllerView.controllerSkin else { return }
         let base = unwrappedBoundControllerSkin(current)
         let layout = BoundControlPlacementStore.shared.read(skin: base.identifier, landscape: view.bounds.width > view.bounds.height)
