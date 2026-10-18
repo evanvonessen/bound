@@ -374,6 +374,90 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(captureCount, 2)
     }
 
+    func testRetainedReferencePanelRefreshesDexOnlyWhenActiveAndResetsForNewROM() throws {
+        let suite = "BoundRetainedReference." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let gameIDs = ["RETAINED_DEX_" + UUID().uuidString, "RETAINED_DEX_" + UUID().uuidString]
+        defer { gameIDs.forEach { UserDefaults.standard.removeObject(forKey: "bound.rrdex.choice.v1." + $0) } }
+
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        let state = BoundCompanionState(preferences: preferences)
+        let sharing = FriendSharingSession(configuration: nil, authenticatedMode: true)
+        var captures = 0
+        var capturedGameIDs: [String] = []
+        var expectedCapture: XCTestExpectation?
+        var save = BoundRRDexSave(trainerID: 1, randomAbilities: false, randomLearnset: false)
+
+        func makePanel(gameID: String) -> BoundCompanionPanel {
+            BoundCompanionPanel(sharing: sharing, state: state, gameID: gameID, editingChanged: { _ in },
+                                currentSave: { requestedGameID in
+                XCTAssertTrue(Thread.isMainThread)
+                captures += 1
+                capturedGameIDs.append(requestedGameID)
+                expectedCapture?.fulfill()
+                expectedCapture = nil
+                return save
+            })
+        }
+
+        let host = UIHostingController(rootView: makePanel(gameID: gameIDs[0]))
+        let parent = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.windows.first?.rootViewController)
+        parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)
+        host.view.frame = CGRect(x: 0, y: 60, width: 393, height: 263)
+        defer {
+            host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent()
+            sharing.stop()
+        }
+
+        func settle() {
+            host.view.setNeedsLayout(); host.view.layoutIfNeeded()
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+            host.view.layoutIfNeeded()
+        }
+        func show(_ content: BoundPiPContent) throws {
+            state.selected = try XCTUnwrap(state.availableContents.firstIndex(of: content))
+            settle()
+        }
+
+        settle()
+        XCTAssertEqual(captures, 0, "A lazily unvisited Dex panel must not read the current game save.")
+        try show(.bosses)
+        XCTAssertEqual(captures, 0, "Opening Bosses must not initialize or capture the Dex save.")
+
+        let firstActivation = expectation(description: "First Dex visit reads the current game save")
+        expectedCapture = firstActivation
+        try show(.dex)
+        wait(for: [firstActivation], timeout: 10)
+        XCTAssertEqual(captures, 1)
+        XCTAssertEqual(capturedGameIDs, [gameIDs[0]])
+
+        try show(.friend)
+        save = BoundRRDexSave(trainerID: 42, randomAbilities: true, randomLearnset: true)
+        let hiddenRefresh = expectation(description: "Hidden Dex ignores save refresh")
+        hiddenRefresh.isInverted = true
+        expectedCapture = hiddenRefresh
+        BoundRRDexSaveRefreshEvent.post(gameID: gameIDs[0])
+        wait(for: [hiddenRefresh], timeout: 0.3)
+        XCTAssertEqual(captures, 1, "A retained but inactive Dex must not capture on save events.")
+
+        let reactivation = expectation(description: "Reopening Dex catches up to the latest save")
+        expectedCapture = reactivation
+        try show(.dex)
+        wait(for: [reactivation], timeout: 5)
+        XCTAssertEqual(captures, 2)
+        XCTAssertEqual(BoundRRDexPreferences().read(gameID: gameIDs[0]).save, save)
+
+        let newROM = expectation(description: "A new ROM gets a fresh Dex view and save refresh")
+        expectedCapture = newROM
+        host.rootView = makePanel(gameID: gameIDs[1])
+        settle()
+        wait(for: [newROM], timeout: 5)
+        XCTAssertEqual(captures, 3)
+        XCTAssertEqual(capturedGameIDs, [gameIDs[0], gameIDs[0], gameIDs[1]],
+                       "The retained Dex subtree resets its ROM-scoped identity when the game changes.")
+    }
+
     func testDexCardRendersAtPortraitAndLandscapePanelSizes() throws {
         let savedLayout = UserDefaults.standard.object(forKey: BoundReferenceLayoutPreferences.dexKey)
         defer {

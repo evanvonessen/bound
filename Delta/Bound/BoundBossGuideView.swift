@@ -32,6 +32,7 @@ struct BoundBossGuideView: View {
     var floating = false
     var portraitTopInset: CGFloat = 0
     var previewLayout: BoundReferenceLayout? = nil
+    var isActive = true
     let presentationChanged: (Bool) -> Void
     @StateObject private var catalogStore = BoundReferenceCatalogStore.shared
     private let preferences = BoundBossGuidePreferences()
@@ -119,9 +120,15 @@ struct BoundBossGuideView: View {
         .tint(Color(uiColor: .deltaPurple))
         .task { await catalogStore.loadIfNeeded() }
         .onChange(of: anyPresentation) { _, presented in
-            if presented { presentationChanged(true) }
+            if isActive && presented { presentationChanged(true) }
         }
-        .allowsHitTesting(previewLayout == nil)
+        .onChange(of: isActive) { _, active in
+            if !active {
+                showingPicker = false; showingTeam = false; detailSheet = nil
+            }
+        }
+        .allowsHitTesting(isActive && previewLayout == nil)
+        .accessibilityHidden(!isActive)
     }
 
     @ViewBuilder
@@ -313,7 +320,7 @@ struct BoundBossGuideView: View {
 
     private func presentationDismissed() {
         // The binding changes before UIKit finishes dismissing, while resuming is still blocked.
-        guard !anyPresentation else { return }
+        guard isActive, !anyPresentation else { return }
         presentationChanged(false)
     }
 

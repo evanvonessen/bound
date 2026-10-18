@@ -65,8 +65,12 @@ Pokémon or reopening the Dex resets every method to collapsed.
 Layout 12 copies Layout 11, removes the empty-search instructional sentence,
 and renders the compact matchup pills in the source type colors at full opacity
 in both light and dark mode. Pill text uses black or white for contrast.
-Automatic save refresh continues when the Dex opens, after game saves or state
-loads, and when the app returns to the foreground.
+Its learnset tabs use flat move rows with Accuracy/PP visible beside the move
+and Power in the rightmost column. During gameplay, switching companion views
+preserves the open Dex or Boss section, search, and scroll position for the
+current ROM. Hidden reference screens do not receive touches or accessibility
+focus. Automatic save refresh runs while the Dex is active and catches up when
+it reopens after game saves or state loads.
 The selection changes presentation only, keeping the same RR 4.1 data and
 per-ROM imported save configuration. Ability names and descriptions come from
 the pinned local RR Dex catalog, including abilities selected by randomizer

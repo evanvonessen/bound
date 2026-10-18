@@ -2835,7 +2835,19 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["bound.boss-move-3"].label, "Grass Knot")
         XCTAssertEqual(app.staticTexts["bound.boss-move-category-3"].label, "SpAtk")
 
+        let bossScroll = app.scrollViews["bound.boss-details"]
+        let bossMove = app.staticTexts["bound.boss-move-0"]
+        let bossName = app.staticTexts["bound.boss-pokemon"].label
+        let bossMoveAtTop = bossMove.frame
+        bossScroll.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.8))
+            .press(forDuration: 0.1, thenDragTo: bossScroll.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.35)),
+                   withVelocity: .slow, thenHoldForDuration: 0.2)
+        let bossMoveScrolled = bossMove.frame
+        XCTAssertLessThan(bossMoveScrolled.minY, bossMoveAtTop.minY - 5)
+
         selectCompanion("Dex", in: app)
+        XCTAssertFalse(app.buttons["bound.boss-picker"].isHittable,
+                       "Retained Boss controls must not receive taps while Dex is active.")
         let dexCard = element("bound.rrdex", in: app)
         XCTAssertEqual(dexCard.value as? String, "Layout 12")
         app.buttons["bound.rrdex-search-open"].tap()
@@ -2880,14 +2892,43 @@ final class CompanionUITests: XCTestCase {
         levelUp.tap()
         XCTAssertEqual(levelUp.value as? String, "Selected")
         XCTAssertTrue(list.waitForExistence(timeout: 5))
-        let compactMoveQuery = app.buttons.matching(
+        let compactMoveQuery = app.descendants(matching: .any).matching(
             NSPredicate(format: "identifier BEGINSWITH %@", "bound.rrdex-layout12-learnset-move-entry-")
         )
         XCTAssertTrue(compactMoveQuery.firstMatch.waitForExistence(timeout: 5))
         screenshot("RRDex-Layout12-Level-Up-Compact-List")
 
+        let powerHeader = app.staticTexts["Power"]
+        let statsHeader = app.staticTexts["Acc / PP"]
+        XCTAssertTrue(statsHeader.exists)
+        XCTAssertGreaterThan(powerHeader.frame.minX, statsHeader.frame.maxX,
+                             "Power remains the rightmost comparison column.")
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@",
+                       "bound.rrdex-layout12-learnset-move-entry-")).count, 0,
+                       "Move rows are static information, not collapsible buttons.")
+
         // Scrolling the move list leaves the category strip fixed and usable.
-        list.swipeUp()
+        list.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.8))
+            .press(forDuration: 0.1, thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.3)),
+                   withVelocity: .slow, thenHoldForDuration: 0.2)
+        let rememberedMove = try XCTUnwrap(compactMoveQuery.allElementsBoundByIndex.first { move in
+            list.frame.insetBy(dx: 0, dy: 1).contains(move.frame)
+        })
+        let rememberedMoveID = rememberedMove.identifier
+        let rememberedMoveFrame = rememberedMove.frame
+        selectCompanion("Bosses", in: app)
+        XCTAssertFalse(app.buttons["bound.rrdex-layout12-learnset-back"].isHittable,
+                       "Retained Dex controls must not receive taps while Bosses is active.")
+        XCTAssertEqual(app.staticTexts["bound.boss-pokemon"].label, bossName)
+        XCTAssertEqual(bossMove.frame.minY, bossMoveScrolled.minY, accuracy: 1,
+                       "Returning to Boss keeps its prior scroll position.")
+        selectCompanion("Dex", in: app)
+        XCTAssertTrue(list.waitForExistence(timeout: 5), "Returning to Dex reopens the learnset directly.")
+        XCTAssertEqual(levelUp.value as? String, "Selected")
+        let restoredMove = element(rememberedMoveID, in: app)
+        XCTAssertEqual(restoredMove.frame.minY, rememberedMoveFrame.minY, accuracy: 1,
+                       "Returning to the learnset preserves its exact scroll position.")
+        screenshot("RRDex-Layout12-Restored-Level-Up-Scroll")
         for name in categories {
             let category = app.buttons["bound.rrdex-layout12-learnset-method-\(name)"]
             XCTAssertTrue(category.isHittable, "The pinned \(name) selector remains reachable after scrolling the move list.")
@@ -2906,29 +2947,18 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(levelUp.value as? String, "Selected")
         XCTAssertTrue(compactMoveQuery.firstMatch.waitForExistence(timeout: 5))
         let listViewport = list.frame.insetBy(dx: 0, dy: 2)
-        let lastFullyVisibleMove = try XCTUnwrap(
-            compactMoveQuery.allElementsBoundByIndex.last(where: { move in
-                let frame = move.frame
-                return move.isHittable && frame.minY >= listViewport.minY && frame.maxY <= listViewport.maxY
-            }),
-            "A fully visible move row should be available to exercise expansion near the list's lower edge."
-        )
-        let rowPrefix = "bound.rrdex-layout12-learnset-move-"
-        let rowID = String(lastFullyVisibleMove.identifier.dropFirst(rowPrefix.count))
-        lastFullyVisibleMove.tap()
-        let detail = app.descendants(matching: .any)["bound.rrdex-layout12-learnset-detail-\(rowID)"]
-        XCTAssertTrue(detail.waitForExistence(timeout: 5), "Tapping a compact move reveals its details inline.")
-        XCTAssertTrue(detail.label.localizedCaseInsensitiveContains("Accuracy"))
-        XCTAssertTrue(detail.label.localizedCaseInsensitiveContains("PP"))
-        let detailIsVisible = expectation(for: NSPredicate { _, _ in
-            detail.frame.minY >= list.frame.minY - 2 && detail.frame.maxY <= list.frame.maxY + 2
-        }, evaluatedWith: detail)
-        wait(for: [detailIsVisible], timeout: 5)
-        XCTAssertGreaterThanOrEqual(detail.frame.minY, list.frame.minY - 2,
-                                    "The expanded details remain inside the visible move list.")
-        XCTAssertLessThanOrEqual(detail.frame.maxY, list.frame.maxY + 2,
-                                 "Expanding a bottom visible row scrolls its complete detail into the list viewport.")
-        screenshot("RRDex-Layout12-Move-Details-Expanded")
+        let visibleMove = try XCTUnwrap(compactMoveQuery.allElementsBoundByIndex.first { move in
+            listViewport.contains(move.frame)
+        })
+        XCTAssertTrue(visibleMove.label.localizedCaseInsensitiveContains("accuracy"))
+        XCTAssertTrue(visibleMove.label.localizedCaseInsensitiveContains("PP"))
+        XCTAssertTrue(visibleMove.label.localizedCaseInsensitiveContains("power"))
+        let frameBeforeTap = visibleMove.frame
+        visibleMove.tap()
+        XCTAssertEqual(visibleMove.frame, frameBeforeTap, "Tapping a move must not expand it or resize the row.")
+        XCTAssertEqual(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@",
+                       "bound.rrdex-layout12-learnset-detail-")).count, 0)
+        screenshot("RRDex-Layout12-Inline-Move-Stats")
 
         // Search crosses method boundaries and merges duplicate move sources into one result.
         app.buttons["bound.rrdex-layout12-learnset-back"].tap()
@@ -2940,15 +2970,22 @@ final class CompanionUITests: XCTestCase {
         moveSearch.tap(); moveSearch.typeText("Giga Drain")
         moveSearch.typeText("\n")
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
-        let searchResult = app.buttons["bound.rrdex-layout12-learnset-move-move-202"]
+        let searchResult = element("bound.rrdex-layout12-learnset-move-move-202", in: app)
         XCTAssertTrue(searchResult.waitForExistence(timeout: 5), "Search finds Giga Drain across learnset categories.")
-        let matchingResults = app.buttons.matching(
+        let matchingResults = app.descendants(matching: .any).matching(
             NSPredicate(format: "identifier == %@", "bound.rrdex-layout12-learnset-move-move-202")
         )
         XCTAssertEqual(matchingResults.count, 1, "A move learned through multiple methods appears once in search.")
         XCTAssertTrue(searchResult.label.localizedCaseInsensitiveContains("TM/HM"))
         XCTAssertTrue(searchResult.label.localizedCaseInsensitiveContains("Egg"),
                       "The single search result identifies both learning sources.")
+
+        selectCompanion("Bosses", in: app)
+        selectCompanion("Dex", in: app)
+        XCTAssertTrue(moveSearch.waitForExistence(timeout: 5))
+        XCTAssertEqual(moveSearch.value as? String, "Giga Drain", "Move search survives companion switching.")
+        XCTAssertTrue(searchResult.exists)
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
 
         app.buttons["bound.rrdex-layout12-learnset-back"].tap()
         XCTAssertTrue(details.waitForExistence(timeout: 5))

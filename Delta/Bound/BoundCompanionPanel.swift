@@ -714,39 +714,96 @@ struct BoundCompanionPanel: View {
     let editingChanged: (Bool) -> Void
     var textEditingChanged: (Bool) -> Void = { _ in }
     var currentSave: (String) throws -> BoundRRDexSave = { _ in throw BoundRRDexSave.ImportError.currentGameUnavailable }
+    private func shows(_ content: BoundPiPContent) -> Bool {
+        !state.availableContents.isEmpty && state.content == content
+    }
+
     var body: some View {
-        Group {
-            if state.availableContents.isEmpty {
-                Color.clear
-            } else if state.content == .friend {
-                ZStack {
-                    Color.black
-                    BoundRemoteCanvas(view: sharing.remoteView).opacity(sharing.remoteVisible || state.displaysFixtureVideo ? 1 : 0)
-                    if !sharing.remoteVisible && !state.displaysFixtureVideo { Text(sharing.active ? "Waiting for friend" : "Connect a friend").foregroundStyle(.white).font(.callout) }
-                }.accessibilityIdentifier("bound.friend-screen")
-            } else if state.content == .notes {
-                BoundNotesEditor(gameID: gameID, floating: state.landscape, editingChanged: { editing in
-                    textEditingChanged(editing)
-                    editingChanged(editing)
-                }).id(gameID)
-            } else if state.content == .bosses {
-                BoundBossGuideView(gameID: gameID, floating: state.landscape, portraitTopInset: state.referenceTopInset,
-                                   presentationChanged: editingChanged).id(gameID)
-            } else if state.content == .dex {
-                BoundRRDexView(gameID: gameID, floating: state.landscape, portraitTopInset: state.referenceTopInset, presentationChanged: editingChanged,
-                               textEditingChanged: textEditingChanged, currentSave: { try currentSave(gameID) })
-                    .id(gameID)
-            } else {
-                if state.landscape {
-                    Image("PokemonTypeChart").resizable().scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .accessibilityLabel("Pokémon type effectiveness chart")
-                        .accessibilityIdentifier("bound.type-chart")
-                } else { BoundTypeChartView(topInset: state.chartTopInset, constrainsPan: BoundAppearancePreferences().effectiveScreenLayout == .bound) }
+        ZStack(alignment: .topLeading) {
+            Group {
+                if shows(.friend) {
+                    ZStack {
+                        Color.black
+                        BoundRemoteCanvas(view: sharing.remoteView).opacity(sharing.remoteVisible || state.displaysFixtureVideo ? 1 : 0)
+                        if !sharing.remoteVisible && !state.displaysFixtureVideo { Text(sharing.active ? "Waiting for friend" : "Connect a friend").foregroundStyle(.white).font(.callout) }
+                    }.accessibilityIdentifier("bound.friend-screen")
+                } else if shows(.notes) {
+                    BoundNotesEditor(gameID: gameID, floating: state.landscape, editingChanged: { editing in
+                        textEditingChanged(editing)
+                        editingChanged(editing)
+                    }).id(gameID)
+                } else if shows(.types) {
+                    if state.landscape {
+                        Image("PokemonTypeChart").resizable().scaledToFit()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .accessibilityLabel("Pokémon type effectiveness chart")
+                            .accessibilityIdentifier("bound.type-chart")
+                    } else { BoundTypeChartView(topInset: state.chartTopInset, constrainsPan: BoundAppearancePreferences().effectiveScreenLayout == .bound) }
+                }
             }
-        }.background(state.content == .types ? Color.black : Color(uiColor: [.bosses, .dex].contains(state.content) ? .systemBackground : .secondarySystemBackground))
+            BoundRetainedReferenceView(isActive: shows(.bosses), floating: state.landscape,
+                                       portraitTopInset: state.referenceTopInset) { floating, topInset in
+                BoundBossGuideView(gameID: gameID, floating: floating, portraitTopInset: topInset,
+                                   isActive: shows(.bosses), presentationChanged: { active in
+                    if shows(.bosses) { editingChanged(active) }
+                })
+            }
+            .id("boss-" + gameID)
+            BoundRetainedReferenceView(isActive: shows(.dex), floating: state.landscape,
+                                       portraitTopInset: state.referenceTopInset) { floating, topInset in
+                BoundRRDexView(gameID: gameID, floating: floating, portraitTopInset: topInset,
+                               isActive: shows(.dex), presentationChanged: { active in
+                    if shows(.dex) { editingChanged(active) }
+                }, textEditingChanged: { active in
+                    if shows(.dex) { textEditingChanged(active) }
+                }, currentSave: { try currentSave(gameID) })
+            }
+            .id("dex-" + gameID)
+        }
+        .background(state.content == .types ? Color.black : Color(uiColor: [.bosses, .dex].contains(state.content) ? .systemBackground : .secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: state.landscape ? 8 : [.types, .bosses, .dex].contains(state.content) ? 0 : 4))
+        .onChange(of: state.content) { _, _ in
+            textEditingChanged(false)
+            editingChanged(false)
+        }
         .onChange(of: sharing.joined) { _ in state.refresh() }
+    }
+}
+
+/// Keep a visited reference screen and its native scroll views alive. Hidden
+/// screens retain their viewport too: the smaller Friend/Notes panel must not
+/// switch their layout branches or clamp their saved scroll position.
+private struct BoundRetainedReferenceView<Content: View>: View {
+    let isActive: Bool
+    let floating: Bool
+    let portraitTopInset: CGFloat
+    @ViewBuilder let content: (Bool, CGFloat) -> Content
+    @State private var retainedViewport: Viewport?
+
+    private struct Viewport: Equatable {
+        let size: CGSize
+        let floating: Bool
+        let topInset: CGFloat
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let current = Viewport(size: geometry.size, floating: floating, topInset: portraitTopInset)
+            let viewport = isActive ? current : retainedViewport ?? current
+            Group {
+                if isActive || retainedViewport != nil {
+                    content(viewport.floating, viewport.topInset)
+                        .frame(width: viewport.size.width, height: viewport.size.height)
+                }
+            }
+            .opacity(isActive ? 1 : 0)
+            .onChange(of: isActive ? current : nil, initial: true) { _, activeViewport in
+                if let activeViewport { retainedViewport = activeViewport }
+            }
+        }
+        .allowsHitTesting(isActive)
+        .accessibilityElement(children: isActive ? .contain : .ignore)
+        .accessibilityHidden(!isActive)
     }
 }
 

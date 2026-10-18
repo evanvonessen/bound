@@ -6,6 +6,7 @@ struct BoundRRDexView: View {
     var floating = false
     var portraitTopInset: CGFloat = 0
     var previewLayout: BoundReferenceLayout? = nil
+    var isActive = true
     let presentationChanged: (Bool) -> Void
     var textEditingChanged: (Bool) -> Void = { _ in }
     var currentSave: () throws -> BoundRRDexSave = { throw BoundRRDexSave.ImportError.currentGameUnavailable }
@@ -22,7 +23,6 @@ struct BoundRRDexView: View {
     @State private var moveSearchFocused = false
     @State private var expandedLearnsetMethod: String?
     @State private var layout12LearnsetPresented = false
-    @State private var expandedLearnsetMove: String?
     @State private var layout12ReturningToLearnset = false
     @State private var importError: String?
     @State private var automaticSaveStatus: String?
@@ -132,7 +132,6 @@ struct BoundRRDexView: View {
                     if previewLayout == nil { choice = preferences.read(gameID: gameID) }
                     expandedLearnsetMethod = nil
                     layout12LearnsetPresented = false
-                    expandedLearnsetMove = nil
                     if layout == .layout12 {
                         moveQuery = ""; moveSearchVisible = false; moveSearchFocused = false
                         layout12ReturningToLearnset = false
@@ -141,7 +140,7 @@ struct BoundRRDexView: View {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: BoundRRDexSaveRefreshEvent.notificationName)
                     .receive(on: DispatchQueue.main)) { notification in
-                    guard previewLayout == nil,
+                    guard isActive, previewLayout == nil,
                           notification.userInfo?[BoundRRDexSaveRefreshEvent.gameIDKey] as? String == gameID else { return }
                     refreshAutomaticSave()
                 }
@@ -171,21 +170,39 @@ struct BoundRRDexView: View {
         .alert("Save could not be imported", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("OK", role: .cancel) { importError = nil }
         } message: { Text(importError ?? "") }
-        .onChange(of: editingText) { _, active in textEditingChanged(active) }
+        .onChange(of: editingText) { _, active in
+            if isActive { textEditingChanged(active) }
+        }
         .onChange(of: interacting) { _, active in
-            if active || !awaitingDetailDismissal { presentationChanged(active) }
+            if isActive, active || !awaitingDetailDismissal { presentationChanged(active) }
+        }
+        .onChange(of: isActive) { wasActive, active in
+            guard wasActive != active else { return }
+            if active {
+                if previewLayout == nil { refreshAutomaticSave() }
+            } else {
+                searching = false
+                moveSearchFocused = false
+                sheet = nil
+                importError = nil
+                awaitingDetailDismissal = false
+                textEditingChanged(false)
+                presentationChanged(false)
+            }
         }
         .onChange(of: layout) { previous, current in
             expandedLearnsetMethod = nil
             if previous == .layout12 || current == .layout12 { closeLayout12Learnset() }
         }
-        .onChange(of: choice.save) { _, _ in expandedLearnsetMove = nil }
         .onDisappear {
             searching = false; moveSearchFocused = false; sheet = nil
-            textEditingChanged(false)
-            if !awaitingDetailDismissal { presentationChanged(false) }
+            if isActive {
+                textEditingChanged(false)
+                if !awaitingDetailDismissal { presentationChanged(false) }
+            }
         }
-        .allowsHitTesting(previewLayout == nil)
+        .allowsHitTesting(isActive && previewLayout == nil)
+        .accessibilityHidden(!isActive)
     }
 
     private func detailTitle(_ detail: Detail) -> String {
@@ -261,7 +278,7 @@ struct BoundRRDexView: View {
     private func detailDismissed() {
         // Keep the pause until UIKit clears the sheet, including a search-to-detail handoff.
         awaitingDetailDismissal = false
-        if !interacting { presentationChanged(false) }
+        if isActive, !interacting { presentationChanged(false) }
     }
 
     private func card(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog, compact: Bool = false) -> some View {
@@ -686,7 +703,6 @@ struct BoundRRDexView: View {
     private func openLayout12Learnset(method: String?, search: Bool = false) {
         layout12LearnsetPresented = true
         expandedLearnsetMethod = method
-        expandedLearnsetMove = nil
         moveQuery = ""
         moveSearchVisible = search
         moveSearchFocused = search
@@ -696,7 +712,6 @@ struct BoundRRDexView: View {
         layout12ReturningToLearnset = layout == .layout12 && layout12LearnsetPresented
         layout12LearnsetPresented = false
         expandedLearnsetMethod = nil
-        expandedLearnsetMove = nil
         moveQuery = ""
         moveSearchVisible = false
         moveSearchFocused = false
@@ -726,7 +741,6 @@ struct BoundRRDexView: View {
                 moveSearchVisible.toggle()
                 moveSearchFocused = moveSearchVisible
                 moveQuery = ""
-                expandedLearnsetMove = nil
             }
         } label: {
             Image(systemName: moveSearchVisible ? "xmark" : "magnifyingglass")
@@ -779,36 +793,30 @@ struct BoundRRDexView: View {
         let rows = catalog.learnsetRows(for: pokemon, save: choice.save, method: expandedLearnsetMethod, query: moveQuery)
         let filtering = !moveQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let showsLevels = !filtering && expandedLearnsetMethod == "Level up"
-        return ScrollViewReader { proxy in
-            VStack(spacing: 0) {
-                if compact {
-                    // On exceptionally short panels, keep every control reachable by
-                    // scrolling the whole learnset instead of leaving a zero-height list.
-                    ScrollView {
-                        layout12LearnsetControls(pokemon: pokemon, catalog: catalog)
-                        layout12LearnsetRows(rows, catalog: catalog, showsLevels: showsLevels, filtering: filtering)
-                    }
-                    .scrollDismissesKeyboard(.interactively)
-                    .accessibilityIdentifier("bound.rrdex-layout12-learnset-list")
-                } else {
+        return VStack(spacing: 0) {
+            if compact {
+                // On exceptionally short panels, keep every control reachable by
+                // scrolling the whole learnset instead of leaving a zero-height list.
+                ScrollView {
                     layout12LearnsetControls(pokemon: pokemon, catalog: catalog)
-                    ScrollView {
-                        layout12LearnsetRows(rows, catalog: catalog, showsLevels: showsLevels, filtering: filtering)
-                    }
-                    .scrollDismissesKeyboard(.interactively)
-                    .id("\(expandedLearnsetMethod ?? "none")-\(moveQuery)")
-                    .accessibilityIdentifier("bound.rrdex-layout12-learnset-list")
+                    layout12LearnsetRows(rows, catalog: catalog, showsLevels: showsLevels, filtering: filtering)
                 }
-            }
-            .padding(.horizontal, 12)
-            .background(Color(uiColor: .systemBackground))
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("bound.rrdex-layout12-learnset")
-            .onChange(of: moveQuery) { _, _ in expandedLearnsetMove = nil }
-            .onChange(of: expandedLearnsetMove) { _, move in
-                if let move { proxy.scrollTo(move, anchor: .top) }
+                .scrollDismissesKeyboard(.interactively)
+                .accessibilityIdentifier("bound.rrdex-layout12-learnset-list")
+            } else {
+                layout12LearnsetControls(pokemon: pokemon, catalog: catalog)
+                ScrollView {
+                    layout12LearnsetRows(rows, catalog: catalog, showsLevels: showsLevels, filtering: filtering)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .id("\(expandedLearnsetMethod ?? "none")-\(moveQuery)")
+                .accessibilityIdentifier("bound.rrdex-layout12-learnset-list")
             }
         }
+        .padding(.horizontal, 12)
+        .background(Color(uiColor: .systemBackground))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("bound.rrdex-layout12-learnset")
     }
 
     private func layout12LearnsetControls(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog) -> some View {
@@ -858,16 +866,14 @@ struct BoundRRDexView: View {
                 HStack(spacing: 7) {
                     if showsLevels { Text("Lv.").frame(width: 30, alignment: .leading) }
                     Text("Moves · \(rows.count)").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Acc / PP").frame(width: 68, alignment: .trailing)
                     Text("Power").frame(width: 38, alignment: .trailing)
-                    Color.clear.frame(width: 10, height: 1)
                 }
                 .font(.system(size: 11)).foregroundStyle(.secondary).padding(.vertical, 3)
                 Divider()
                 ForEach(rows) { row in
                     BoundRRDexCompactMoveRow(row: row, catalog: catalog, showsLevel: showsLevels,
-                                            showsSources: filtering, expanded: expandedLearnsetMove == row.id) {
-                        expandedLearnsetMove = expandedLearnsetMove == row.id ? nil : row.id
-                    }
+                                            showsSources: filtering)
                     .id(row.id)
                     Divider()
                 }
@@ -1657,7 +1663,7 @@ struct BoundRRDexView: View {
         }
     }
     private func refreshAutomaticSave() {
-        guard !refreshingSave else { return }
+        guard isActive, previewLayout == nil, !refreshingSave else { return }
         refreshingSave = true
         defer { refreshingSave = false }
         do {
@@ -1969,14 +1975,12 @@ private struct BoundRRDexLearnset: View {
     }
 }
 
-/// Layout 12 keeps comparison values in the list and expands one move's details inline.
+/// Layout 12 keeps move details and comparison values in the same compact row.
 private struct BoundRRDexCompactMoveRow: View {
     let row: BoundRRDexLearnsetRow
     let catalog: BoundRRDexCatalog
     let showsLevel: Bool
     let showsSources: Bool
-    let expanded: Bool
-    let toggle: () -> Void
     @ScaledMetric(relativeTo: .subheadline) private var nameSize = 14.0
     @ScaledMetric(relativeTo: .caption) private var metadataSize = 11.0
 
@@ -1990,56 +1994,39 @@ private struct BoundRRDexCompactMoveRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button(action: toggle) {
-                HStack(spacing: 7) {
-                    if showsLevel {
-                        Text(row.level.map { $0 == 0 ? "Evo" : String($0) } ?? "—")
-                            .font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary)
-                            .frame(width: 30, alignment: .leading)
-                    }
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(row.move.name).font(.system(size: nameSize, weight: .semibold)).lineLimit(1)
-                        HStack(spacing: 4) {
-                            if let type {
-                                Circle().fill(typeColor).frame(width: 6, height: 6)
-                                Text(type.name)
-                            }
-                            Text(row.move.category).foregroundStyle(.secondary)
-                        }
-                        .font(.system(size: metadataSize)).lineLimit(1)
-                        if showsSources {
-                            Text(row.sourceSummary).font(.system(size: metadataSize)).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    Text(power).font(.system(size: nameSize)).monospacedDigit().frame(width: 38, alignment: .trailing)
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).frame(width: 10)
-                }
-                .padding(.vertical, 5).frame(minHeight: 44).contentShape(Rectangle())
+        HStack(spacing: 7) {
+            if showsLevel {
+                Text(row.level.map { $0 == 0 ? "Evo" : String($0) } ?? "—")
+                    .font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary)
+                    .frame(width: 30, alignment: .leading)
             }
-            .buttonStyle(.plain).foregroundStyle(.primary)
-            .accessibilityElement(children: .ignore)
-            .accessibilityAddTraits(.isButton)
-            .accessibilityLabel("\(row.move.name), \(type?.name ?? ""), \(row.move.category), power \(power), \(row.sourceSummary)")
-            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-            .accessibilityHint("Show or hide accuracy and PP")
-            .accessibilityIdentifier("bound.rrdex-layout12-learnset-move-\(row.id)")
-            if expanded {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(row.move.name).font(.system(size: nameSize, weight: .semibold))
-                    Text("Accuracy \(accuracy) · PP \(row.move.pp)").font(.system(size: 12))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(row.move.name).font(.system(size: nameSize, weight: .semibold)).lineLimit(1)
+                HStack(spacing: 4) {
+                    if let type {
+                        Circle().fill(typeColor).frame(width: 6, height: 6)
+                        Text(type.name)
+                    }
+                    Text(row.move.category).foregroundStyle(.secondary)
+                }
+                .font(.system(size: metadataSize)).lineLimit(1)
+                if showsSources {
                     Text(row.sourceSummary).font(.system(size: metadataSize)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(10)
-                .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 7))
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("bound.rrdex-layout12-learnset-detail-\(row.id)")
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Text("\(accuracy) · \(row.move.pp)")
+                .font(.system(size: 12)).monospacedDigit().lineLimit(1)
+                .frame(width: 68, alignment: .trailing)
+                .accessibilityLabel("Accuracy \(accuracy), PP \(row.move.pp)")
+            Text(power).font(.system(size: nameSize)).monospacedDigit().frame(width: 38, alignment: .trailing)
         }
+        .foregroundStyle(.primary)
+        .padding(.vertical, 5).frame(minHeight: 44).contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(row.move.name), \(type?.name ?? ""), \(row.move.category), accuracy \(accuracy), PP \(row.move.pp), power \(power), \(row.sourceSummary)")
+        .accessibilityIdentifier("bound.rrdex-layout12-learnset-move-\(row.id)")
     }
 }
 
