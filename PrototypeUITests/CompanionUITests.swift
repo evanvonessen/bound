@@ -4916,6 +4916,15 @@ final class ReleaseSmokeUITests: XCTestCase {
 
 extension CompanionUITests {
     func testLandscapeOption3ArrangementGesturesAndIndependentViews() throws {
+        try verifyLandscapeArrangement(option: 3)
+    }
+
+    func testLandscapeOption4RefinedArrangementAndIndependentViews() throws {
+        try verifyLandscapeArrangement(option: 4)
+    }
+
+    private func verifyLandscapeArrangement(option: Int) throws {
+        let prefix = "bound.landscape\(option)"
         // Observe native menu transitions explicitly; the running emulator can
         // otherwise leave Xcode's idle detector waiting after opening Settings.
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
@@ -4937,18 +4946,18 @@ extension CompanionUITests {
         let options = element("bound.landscape-options", in: app)
         XCTAssertTrue(options.waitForExistence(timeout: 5))
         options.tap()
-        app.buttons["Option 3"].firstMatch.tap()
+        app.buttons["Option \(option)"].firstMatch.tap()
         closeBoundSheet(in: app)
 
-        // Arrange Views belongs to the landscape Option 3 settings surface only.
+        // Arrange Views belongs only to the active landscape arrangement surface.
         XCTAssertFalse(element("bound.settings-arrange-views", in: app).exists)
         XCUIDevice.shared.orientation = .landscapeLeft
-        let friendToggle = app.buttons["bound.landscape3-friend-button"]
-        let viewsToggle = app.buttons["bound.landscape3-views-button"]
+        let friendToggle = app.buttons[prefix + "-friend-button"]
+        let viewsToggle = app.buttons[prefix + "-views-button"]
         XCTAssertTrue(friendToggle.waitForExistence(timeout: 10))
         XCTAssertTrue(viewsToggle.waitForExistence(timeout: 5))
-        let friend = element("bound.landscape3-friend", in: app)
-        let reference = element("bound.landscape3-reference-content", in: app)
+        let friend = element(prefix + "-friend", in: app)
+        let reference = element(prefix + "-reference-content", in: app)
         XCTAssertTrue(friend.waitForExistence(timeout: 5))
         XCTAssertTrue(reference.waitForExistence(timeout: 5))
 
@@ -4958,7 +4967,9 @@ extension CompanionUITests {
         XCTAssertTrue(reference.exists)
         friendToggle.tap()
         XCTAssertTrue(friend.waitForExistence(timeout: 5))
+        if option == 4 { XCTAssertEqual(viewsToggle.label, "Hide views") }
         viewsToggle.tap()
+        if option == 4 { XCTAssertEqual(viewsToggle.label, "Show views") }
         XCTAssertEqual(viewsToggle.value as? String, "Hidden")
         XCTAssertTrue(reference.waitForNonExistence(timeout: 5))
         XCTAssertTrue(friend.exists)
@@ -4978,53 +4989,70 @@ extension CompanionUITests {
             XCTAssertFalse(overlap.width > 1 && overlap.height > 1)
         }
         XCTAssertFalse(friend.frame.intersects(reference.frame), "The default arrangement must show both distinct panels")
-        screenshot("Landscape-option3-independent-views")
+        screenshot("Landscape-option\(option)-independent-views")
 
         // Open the settings sheet again and enter the movable arrangement mode.
         openNativePause(in: app)
         settings.tap()
         XCTAssertTrue(element("bound.settings-arrange-views", in: app).waitForExistence(timeout: 5))
         element("bound.settings-arrange-views", in: app).tap()
-        XCTAssertTrue(app.buttons["bound.landscape3-done"].waitForExistence(timeout: 10),
+        XCTAssertTrue(app.buttons[prefix + "-done"].waitForExistence(timeout: 10),
                       "Starting arrangement should return to gameplay with Menu relabeled Done")
-        XCTAssertTrue(element("bound.landscape3-arrangement", in: app).exists)
-        XCTAssertTrue(app.sliders["bound.landscape3-opacity"].waitForExistence(timeout: 5),
+        XCTAssertTrue(element(prefix + "-arrangement", in: app).exists)
+        XCTAssertTrue(app.sliders[prefix + "-opacity"].waitForExistence(timeout: 5),
                       "The selected panel should expose an accessible opacity control")
 
         // A genuine three-finger swipe changes only the selected panel.
-        let opacity = app.sliders["bound.landscape3-opacity"]
-        app.buttons["bound.landscape3-select.friend"].tap()
+        let opacity = app.sliders[prefix + "-opacity"]
+        if option == 4 {
+            // Every enabled view is directly selectable; only the selected view
+            // has resize handles, keeping the other panel easy to distinguish.
+            let bosses = app.buttons[prefix + "-select.bosses"]
+            XCTAssertTrue(bosses.exists)
+            bosses.tap()
+            XCTAssertTrue(element(prefix + "-move.bosses", in: app).exists)
+            XCTAssertTrue(element(prefix + "-resize-width.bosses", in: app).exists)
+            XCTAssertFalse(element(prefix + "-resize-scale.friend", in: app).exists)
+            opacity.adjust(toNormalizedSliderPosition: 0.30)
+            app.buttons[prefix + "-reset"].tap()
+            XCTAssertEqual(opacity.value as? String, "100%")
+        }
+        app.buttons[prefix + "-select.friend"].tap()
+        if option == 4 {
+            XCTAssertTrue(element(prefix + "-resize-scale.friend", in: app).exists)
+            XCTAssertFalse(element(prefix + "-resize-width.bosses", in: app).exists)
+        }
         opacity.adjust(toNormalizedSliderPosition: 0.55)
         let friendOpacity = opacity.value as? String
-        app.buttons["bound.landscape3-select.dex"].tap()
+        app.buttons[prefix + "-select.dex"].tap()
         let originalReferenceOpacity = opacity.value as? String
         let screen = app.frame
         try BoundUITestGestures.swipe(withStart: CGPoint(x: screen.midX, y: screen.height * 0.30), deltaY: 65, orientation: UIInterfaceOrientation.landscapeRight.rawValue, screenSize: screen.size)
         XCTAssertNotEqual(opacity.value as? String, originalReferenceOpacity,
                           "Three fingers in the center should change the selected reference opacity")
-        app.buttons["bound.landscape3-select.friend"].tap()
+        app.buttons[prefix + "-select.friend"].tap()
         XCTAssertEqual(opacity.value as? String, friendOpacity)
-        let moveFriend = element("bound.landscape3-move.friend", in: app)
+        let moveFriend = element(prefix + "-move.friend", in: app)
         moveFriend.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.1, thenDragTo: menu.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
-        app.buttons["bound.landscape3-select.dex"].tap()
-        let moveDex = element("bound.landscape3-move.dex", in: app)
+        app.buttons[prefix + "-select.dex"].tap()
+        let moveDex = element(prefix + "-move.dex", in: app)
         XCTAssertTrue(moveDex.exists)
         let originalSize = moveDex.frame.size
-        let width = element("bound.landscape3-resize-width.dex", in: app)
-        let height = element("bound.landscape3-resize-height.dex", in: app)
+        let width = element(prefix + "-resize-width.dex", in: app)
+        let height = element(prefix + "-resize-height.dex", in: app)
         XCTAssertTrue(width.exists); XCTAssertTrue(height.exists)
         let from = width.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         from.press(forDuration: 0.1, thenDragTo: from.withOffset(CGVector(dx: -24, dy: 0)))
         XCTAssertLessThan(moveDex.frame.width, originalSize.width)
-        screenshot("Landscape-option3-arrange-views")
+        screenshot("Landscape-option\(option)-arrange-views")
 
-        app.buttons["bound.landscape3-done"].tap()
-        XCTAssertTrue(app.buttons["bound.landscape3-done"].waitForNonExistence(timeout: 5))
+        app.buttons[prefix + "-done"].tap()
+        XCTAssertTrue(app.buttons[prefix + "-done"].waitForNonExistence(timeout: 5))
         XCTAssertTrue(reference.waitForExistence(timeout: 5))
         XCTAssertTrue(friend.frame.contains(CGPoint(x: menu.frame.midX, y: menu.frame.midY)))
         let savedDex = reference.frame
-        screenshot("Landscape-option3-locked-friend-over-menu")
+        screenshot("Landscape-option\(option)-locked-friend-over-menu")
         assertGamePixelsAnimate(element("bound.game-screen", in: app), in: app)
         XCTAssertTrue(app.buttons["bound.native-menu"].exists,
                       "Done should restore the native Menu control and lock the views")

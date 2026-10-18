@@ -56,6 +56,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     }
 
     @Published private(set) var active = false
+    @Published private(set) var option: BoundLandscapeOption = .option3
     @Published private(set) var editing = false
     @Published private(set) var friendVisible: Bool
     @Published private(set) var referenceVisible: Bool
@@ -74,6 +75,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     private var saved: [BoundPiPContent: State] = [:]
     private var persistedContents = Set<BoundPiPContent>()
     private var initializedDefaults = Set<BoundPiPContent>()
+    private var defaultPlacements: [BoundPiPContent: State] = [:]
     private var draft: [BoundPiPContent: State]?
     private var gestureStart: (BoundPiPContent, State)?
     private var fadeStartOpacity: Double?
@@ -81,27 +83,65 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     private var selectionBeforeArrangement: BoundPiPContent?
     private var layoutInput: (canvas: CGRect, occupied: [CGRect], menu: CGRect, bound: CGRect, defaults: [BoundPiPContent: CGRect], keyboard: CGFloat)?
 
-    private func refreshLayout() {
+    private func refreshLayout(avoidFriend: Bool = false) {
         if let input = layoutInput {
             updateLayout(canvas: input.canvas, occupied: input.occupied, menuFrame: input.menu,
-                         boundFrame: input.bound, defaults: input.defaults, keyboardHeight: input.keyboard)
+                         boundFrame: input.bound, defaults: input.defaults, keyboardHeight: input.keyboard,
+                         avoidFriend: avoidFriend)
         }
         needsLayout?()
     }
 
-    init(defaults: UserDefaults? = nil, namespace: String = "bound.landscape.option3") {
+    var refined: Bool { option == .option4 }
+    var accessibilityPrefix: String { "bound.landscape\(option.rawValue)" }
+
+    init(defaults: UserDefaults? = nil, namespace: String = "bound.landscape") {
         self.defaults = defaults ?? .standard
         self.namespace = namespace
         let contents = Self.nonFriend(BoundPiPContent.cycleOrder)
         self.contents = contents
         self.selected = contents.first ?? .notes
         self.referenceContent = contents.first ?? .notes
-        self.friendVisible = self.defaults.object(forKey: namespace + ".friend-visible") as? Bool ?? true
-        self.referenceVisible = self.defaults.object(forKey: namespace + ".reference-visible") as? Bool ?? true
-        self.referenceContent = Self.readContent(self.defaults, key: namespace + ".reference-content", allowed: contents) ?? contents.first ?? .notes
+        self.friendVisible = self.defaults.object(forKey: namespace + ".option3.friend-visible") as? Bool ?? true
+        self.referenceVisible = self.defaults.object(forKey: namespace + ".option3.reference-visible") as? Bool ?? true
+        self.referenceContent = Self.readContent(self.defaults, key: namespace + ".option3.reference-content", allowed: contents) ?? contents.first ?? .notes
         self.selected = self.referenceContent
+        readPlacements()
+    }
+
+    /// Option 4 starts as a snapshot, then uses its own persisted layout. Keeping
+    /// one observable session also keeps the live video canvas and gestures mounted.
+    func useOption(_ value: BoundLandscapeOption) {
+        guard value.supportsArrangement, option != value else { return }
+        finish(save: false, resume: false)
+        if active { beforeSwitch?() }
+        if value == .option4, !defaults.bool(forKey: namespace + ".option4.initialized") {
+            let suffixes = ["friend-visible", "reference-visible", "reference-content"]
+                + BoundPiPContent.allCases.map { "placement." + $0.rawValue }
+            for suffix in suffixes {
+                if let saved = defaults.object(forKey: namespace + ".option3." + suffix) {
+                    defaults.set(saved, forKey: namespace + ".option4." + suffix)
+                }
+            }
+            defaults.set(true, forKey: namespace + ".option4.initialized")
+        }
+        option = value
+        friendVisible = defaults.object(forKey: key("friend-visible")) as? Bool ?? true
+        referenceVisible = defaults.object(forKey: key("reference-visible")) as? Bool ?? true
+        referenceContent = Self.readContent(defaults, key: key("reference-content"), allowed: contents) ?? contents.first ?? .notes
+        selected = referenceContent
+        readPlacements()
+        layoutInput = nil
+        needsLayout?()
+    }
+
+    private func readPlacements() {
+        saved.removeAll()
+        persistedContents.removeAll()
+        initializedDefaults.removeAll()
+        defaultPlacements.removeAll()
         for content in BoundPiPContent.allCases {
-            let placementKey = namespace + ".placement." + content.rawValue
+            let placementKey = key("placement." + content.rawValue)
             if let state = Self.readState(self.defaults, key: placementKey) {
                 saved[content] = state
                 persistedContents.insert(content)
@@ -131,22 +171,27 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     }
 
     func updateLayout(canvas: CGRect, occupied: [CGRect], menuFrame: CGRect, boundFrame: CGRect,
-                      defaults defaultFrames: [BoundPiPContent: CGRect], keyboardHeight: CGFloat) {
+                      defaults defaultFrames: [BoundPiPContent: CGRect], keyboardHeight: CGFloat,
+                      avoidFriend: Bool = false) {
         layoutInput = (canvas, occupied, menuFrame, boundFrame, defaultFrames, keyboardHeight)
         let insetCanvas = canvas.insetBy(dx: 4, dy: 4)
-        for content in BoundPiPContent.allCases where !persistedContents.contains(content) && !initializedDefaults.contains(content) {
+        for content in BoundPiPContent.allCases {
             if var frame = defaultFrames[content], insetCanvas.width > 0, insetCanvas.height > 0 {
                 if content == .friend, let reference = defaultFrames[referenceContent] {
                     // Start on the opposite side so the reference cannot hide Friend.
                     let x = insetCanvas.minX + insetCanvas.maxX - reference.midX
                     frame.origin.x = x - frame.width / 2
                 }
-                initializedDefaults.insert(content)
-                saved[content] = State(BoundLandscapeViewPlacement(
+                let initial = State(BoundLandscapeViewPlacement(
                     center: BoundLandscapeGeometry.normalizedCenter(frame: frame, canvas: insetCanvas),
                     widthFraction: frame.width / insetCanvas.width,
                     heightFraction: frame.height / insetCanvas.height,
                     opacity: 1))
+                defaultPlacements[content] = initial
+                if !persistedContents.contains(content) && !initializedDefaults.contains(content) {
+                    initializedDefaults.insert(content)
+                    saved[content] = initial
+                }
             }
         }
         var next = Layout()
@@ -186,7 +231,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         let base = defaultFrames[referenceContent] ?? CGRect(origin: .zero, size: defaultSize(for: referenceContent, canvas: referenceCanvas))
         let desired = CGSize(width: max(160, referenceCanvas.width * state.widthFraction),
                              height: max(110, referenceCanvas.height * state.heightFraction))
-        let initialSeparation = !persistedContents.contains(referenceContent) && !editing
+        let initialSeparation = (!persistedContents.contains(referenceContent) && !editing) || avoidFriend
         let obstacles = occupied + (initialSeparation ? [next.friend.insetBy(dx: -4, dy: -4)] : []) + [next.friendButton.insetBy(dx: -4, dy: -4),
                                     next.viewsButton.insetBy(dx: -4, dy: -4),
                                     menuFrame.insetBy(dx: -2, dy: -2), boundFrame.insetBy(dx: -2, dy: -2)]
@@ -194,7 +239,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
                         preferredCenter: state.center, preferredSize: desired,
                         occupied: obstacles, minimumSize: CGSize(width: 160, height: 110)) ??
                         fallbackReference(base: base, canvas: referenceCanvas, occupied: obstacles)
-        if initialSeparation, !next.reference.isEmpty {
+        if initialSeparation, !editing, !next.reference.isEmpty {
             var resolved = state
             resolved.center = BoundLandscapeGeometry.normalizedCenter(frame: next.reference, canvas: insetCanvas)
             resolved.widthFraction = next.reference.width / insetCanvas.width
@@ -326,6 +371,16 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         setDraft(state, for: content)
     }
 
+    /// Reset is part of the arrangement draft, so Cancel restores the saved view.
+    func resetSelectedView() {
+        guard refined, editing else { return }
+        gestureStart = nil
+        fadeStartOpacity = nil
+        setDraft(defaultPlacements[selected] ?? State(Self.defaultState(for: selected)), for: selected)
+        refreshLayout(avoidFriend: selected != .friend)
+        if selected != .friend { persistResolvedReferencePosition(selected) }
+    }
+
     func fade(phase: UIGestureRecognizer.State, dy: CGFloat) {
         guard editing, layout.opacityZone.contains(CGPoint(x: layout.opacityZone.midX, y: layout.opacityZone.midY)) else { return }
         switch phase {
@@ -424,7 +479,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         guard let data = try? JSONEncoder().encode(state) else { return }
         defaults.set(data, forKey: key("placement." + content.rawValue))
     }
-    private func key(_ suffix: String) -> String { namespace + "." + suffix }
+    private func key(_ suffix: String) -> String { namespace + ".option\(option.rawValue)." + suffix }
     private static func readState(_ defaults: UserDefaults, key: String) -> State? {
         guard let data = defaults.data(forKey: key), let state = try? JSONDecoder().decode(State.self, from: data) else { return nil }
         return State(state.placement)

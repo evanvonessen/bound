@@ -278,7 +278,7 @@ final class BoundCompanionCoordinator {
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-reset-layout") {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
-            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") { UserDefaults.standard.removeObject(forKey: key) }
+            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") { UserDefaults.standard.removeObject(forKey: key) }
         }
         #endif
         #if DEBUG
@@ -493,16 +493,19 @@ final class BoundCompanionCoordinator {
         let landscape = bounds.width > bounds.height
         if state.landscape != landscape { state.landscape = landscape; cancelInteractions() }
         let usesLandscapeOption2 = landscape && landscapeCompanion.preferences.option == .option2
-        let usesLandscapeOption3 = landscape && landscapeCompanion.preferences.option == .option3
-        if usesLandscapeOption2 != landscapeCompanion.active || usesLandscapeOption3 != landscapeArrangement.active {
+        let arrangementOption = landscapeCompanion.preferences.option
+        let usesLandscapeArrangement = landscape && arrangementOption.supportsArrangement
+        if usesLandscapeOption2 != landscapeCompanion.active || usesLandscapeArrangement != landscapeArrangement.active
+            || (usesLandscapeArrangement && landscapeArrangement.option != arrangementOption) {
             owner.view.endEditing(true)
             textEditing(false)
             notesEditing(false)
             keyboardHeight = 0
         }
         landscapeCompanion.setActive(usesLandscapeOption2)
-        landscapeArrangement.setActive(usesLandscapeOption3)
-        if usesLandscapeOption3 { landscapeArrangement.setContents(state.availableContents) }
+        if usesLandscapeArrangement { landscapeArrangement.useOption(arrangementOption) }
+        landscapeArrangement.setActive(usesLandscapeArrangement)
+        if usesLandscapeArrangement { landscapeArrangement.setContents(state.availableContents) }
         gestures?.setEnabled(!landscapeCompanion.active && !landscapeArrangement.active)
         let referenceTopInset = screenLayout == .bound && !landscape ? safeArea.top : 0
         if state.referenceTopInset != referenceTopInset { state.referenceTopInset = referenceTopInset }
@@ -766,7 +769,7 @@ final class BoundCompanionCoordinator {
     }
     private func beginLandscapeArrangementFromSettings() {
         guard let owner, owner.view.bounds.width > owner.view.bounds.height,
-              landscapeCompanion.preferences.option == .option3,
+              landscapeCompanion.preferences.option.supportsArrangement,
               UIApplication.shared.applicationState == .active else { return }
         owner.view.endEditing(true)
         notesEditing(true)

@@ -233,7 +233,7 @@ struct BoundCompanionPresentation: View {
                     Color.clear
                         .frame(width: friendFrame.width, height: friendFrame.height)
                         .accessibilityElement()
-                        .accessibilityIdentifier(arrangement.active ? "bound.landscape3-friend" : landscape.active ? "bound.landscape-friend" : "bound.friend-screen")
+                        .accessibilityIdentifier(arrangement.active ? arrangement.accessibilityPrefix + "-friend" : landscape.active ? "bound.landscape-friend" : "bound.friend-screen")
                         .accessibilityLabel("Friend screen")
                         .accessibilityValue(arrangement.active ? (arrangement.editing ? "Arranging" : "Locked, touches pass through") : landscape.active ? (landscape.editing ? "Moving" : "Locked, touches pass through") : "")
                         .allowsHitTesting(false)
@@ -248,7 +248,7 @@ struct BoundCompanionPresentation: View {
                     .opacity(arrangement.active ? (showsArrangementReference ? arrangement.opacity(for: arrangement.referenceContent) : 0) : landscape.active ? (showsReference ? (landscape.editing ? 0.35 : 1) : 0) : (legacyFriend ? 0 : 1))
                     .allowsHitTesting(arrangement.active ? showsArrangementReference && !arrangement.editing : landscape.active ? showsReference && !landscape.editing : !legacyFriend)
                     .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier(arrangement.active ? (showsArrangementReference && !arrangement.editing ? "bound.landscape3-reference-content" : "") : landscape.active ? "bound.landscape-reference-content" : "bound.companion-content")
+                    .accessibilityIdentifier(arrangement.active ? (showsArrangementReference && !arrangement.editing ? arrangement.accessibilityPrefix + "-reference-content" : "") : landscape.active ? "bound.landscape-reference-content" : "bound.companion-content")
                     .accessibilityHidden(arrangement.active ? !showsArrangementReference || arrangement.editing : landscape.active ? !showsReference || landscape.editing : legacyFriend)
                     .offset(x: reference.minX, y: reference.minY + headerHeight)
 
@@ -402,6 +402,7 @@ struct BoundLandscapeOptionsSettings: View {
             .accessibilityIdentifier("bound.landscape-options")
         } header: { Text("Landscape Options") } footer: {
             Text(option == .option1 ? "The existing landscape controls and companion panel. Portrait stays unchanged."
+                 : option == .option4 ? "A refined arrangement with direct view selection, larger handles for the selected view, and Reset. The eye button shows or hides references. Starts with a copy of Option 3, then saves its own layout. Portrait stays unchanged."
                  : option == .option3 ? "Friend and the selected reference appear independently. Friend toggles video, X toggles references, and Bound cycles the views selected in Companion settings. In landscape Settings, use Arrange Views to move, resize, or change each view’s opacity. Done locks the layout; references stay interactive."
                  : "Separate Friend and Views buttons. Hold Friend to position, resize, and lock it. Locked friend video lets touches reach the controls underneath. Portrait stays unchanged.")
         }

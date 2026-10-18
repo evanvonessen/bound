@@ -55,6 +55,145 @@ final class LandscapeArrangementTests: XCTestCase {
         XCTAssertEqual(preferences.friendPlacement, optionTwoPlacement)
     }
 
+    func testOptionFourCopiesOptionThreeOnceThenPersistsIndependently() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([.dex, .bosses])
+        model.setActive(true)
+        arrangeLayout(model)
+        model.toggleFriend()
+        model.toggleReference()
+        model.arrange()
+        model.select(.friend)
+        model.setOpacity(0.42, for: .friend)
+        model.move(content: .friend, translation: CGSize(width: -80, height: 45), ended: true)
+        model.select(.dex)
+        model.setOpacity(0.63, for: .dex)
+        model.move(content: .dex, translation: CGSize(width: -65, height: 35), ended: true)
+        model.finish(save: true)
+
+        let optionThreeFriend = model.placement(for: .friend)
+        let optionThreeDex = model.placement(for: .dex)
+        let optionThreeBosses = model.placement(for: .bosses)
+        XCTAssertFalse(model.friendVisible)
+        XCTAssertFalse(model.referenceVisible)
+        XCTAssertEqual(model.referenceContent, .dex)
+
+        model.useOption(.option4)
+        XCTAssertEqual(model.option, .option4)
+        XCTAssertFalse(model.friendVisible)
+        XCTAssertFalse(model.referenceVisible)
+        XCTAssertEqual(model.referenceContent, .dex)
+        XCTAssertEqual(model.placement(for: .friend), optionThreeFriend)
+        XCTAssertEqual(model.placement(for: .dex), optionThreeDex)
+        XCTAssertEqual(model.placement(for: .bosses), optionThreeBosses)
+
+        model.toggleFriend()
+        model.toggleReference()
+        model.arrange()
+        model.select(.friend)
+        model.setOpacity(0.81, for: .friend)
+        model.select(.bosses)
+        model.setOpacity(0.27, for: .bosses)
+        model.finish(save: true)
+        let optionFourFriend = model.placement(for: .friend)
+        let optionFourBosses = model.placement(for: .bosses)
+
+        model.useOption(.option3)
+        XCTAssertFalse(model.friendVisible)
+        XCTAssertFalse(model.referenceVisible)
+        XCTAssertEqual(model.placement(for: .friend), optionThreeFriend)
+        XCTAssertEqual(model.placement(for: .dex), optionThreeDex)
+        XCTAssertEqual(model.placement(for: .bosses), optionThreeBosses)
+
+        model.useOption(.option4)
+        XCTAssertTrue(model.friendVisible)
+        XCTAssertTrue(model.referenceVisible)
+        XCTAssertEqual(model.placement(for: .friend), optionFourFriend)
+        XCTAssertEqual(model.placement(for: .bosses), optionFourBosses)
+
+        let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        restored.useOption(.option4)
+        XCTAssertTrue(restored.friendVisible)
+        XCTAssertTrue(restored.referenceVisible)
+        XCTAssertEqual(restored.referenceContent, .bosses)
+        XCTAssertEqual(restored.placement(for: .friend), optionFourFriend)
+        XCTAssertEqual(restored.placement(for: .bosses), optionFourBosses)
+        restored.useOption(.option3)
+        XCTAssertFalse(restored.friendVisible)
+        XCTAssertFalse(restored.referenceVisible)
+        XCTAssertEqual(restored.placement(for: .friend), optionThreeFriend)
+        XCTAssertEqual(restored.placement(for: .dex), optionThreeDex)
+    }
+
+    func testOptionFourResetSelectedViewIsDraftableAndAffectsOnlySelection() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([.dex, .bosses])
+        model.useOption(.option4)
+        model.setActive(true)
+        arrangeLayout(model)
+        model.arrange()
+
+        model.select(.dex)
+        let dexDefault = model.placement(for: .dex)
+        model.move(content: .dex, translation: CGSize(width: -100, height: 50), ended: true)
+        model.setOpacity(0.35, for: .dex)
+        model.finish(save: true)
+        let savedDex = model.placement(for: .dex)
+        let savedBosses = model.placement(for: .bosses)
+        XCTAssertNotEqual(savedDex, dexDefault)
+
+        model.arrange()
+        model.select(.dex)
+        model.resetSelectedView()
+        XCTAssertEqual(model.placement(for: .dex), dexDefault)
+        XCTAssertEqual(model.placement(for: .bosses), savedBosses)
+        model.finish(save: false)
+        XCTAssertEqual(model.placement(for: .dex), savedDex, "Cancel restores the saved placement and opacity.")
+
+        model.arrange()
+        model.select(.dex)
+        model.resetSelectedView()
+        model.finish(save: true)
+        let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        restored.useOption(.option4)
+        XCTAssertEqual(restored.placement(for: .dex), dexDefault)
+        XCTAssertEqual(restored.placement(for: .bosses), savedBosses)
+    }
+
+    func testSwitchingOptionsDuringArrangementDiscardsDraftWithoutResuming() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([.dex, .bosses])
+        model.setActive(true)
+        arrangeLayout(model)
+        model.arrange()
+        model.select(.dex)
+        model.setOpacity(0.6, for: .dex)
+        model.finish(save: true)
+        let savedOptionThreeDex = model.placement(for: .dex)
+
+        var resumeValues: [Bool] = []
+        model.endArrangement = { resumeValues.append($0) }
+        model.arrange()
+        model.setOpacity(0.1, for: .dex)
+        model.useOption(.option4)
+        XCTAssertFalse(model.editing)
+        XCTAssertEqual(resumeValues, [false], "Switching variants must cancel without resuming gameplay.")
+        XCTAssertEqual(model.placement(for: .dex), savedOptionThreeDex)
+
+        model.arrange()
+        model.setOpacity(0.9, for: .dex)
+        model.useOption(.option3)
+        XCTAssertFalse(model.editing)
+        XCTAssertEqual(resumeValues, [false, false])
+        XCTAssertEqual(model.placement(for: .dex), savedOptionThreeDex)
+
+        model.useOption(.option4)
+        XCTAssertEqual(model.placement(for: .dex), savedOptionThreeDex)
+    }
+
     func testOptionThreeStateIsIndependentAndViewContentNeverContainsFriend() throws {
         let (model, defaults, namespace) = try makeModel()
         defer { defaults.removePersistentDomain(forName: namespace) }

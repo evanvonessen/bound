@@ -5,6 +5,9 @@ enum BoundLandscapeOption: Int, CaseIterable, Sendable {
     case option1 = 1
     case option2 = 2
     case option3 = 3
+    case option4 = 4
+
+    var supportsArrangement: Bool { self == .option3 || self == .option4 }
 
     var title: String { "Option \(rawValue)" }
 }
