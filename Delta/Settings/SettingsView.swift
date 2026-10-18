@@ -31,8 +31,6 @@ struct BoundSettingsGameplayContext {
     let emulationDetails: BoundEmulationDetails?
     var editControls: (() -> Void)? = nil
     var showCompanion: (() -> Void)? = nil
-    var landscapeArrangement: BoundLandscapeArrangementModel? = nil
-    var arrangeViews: (() -> Void)? = nil
 }
 
 /// Both entry points use this owner so closing and interactive dismissal share
@@ -96,9 +94,6 @@ struct SettingsView: View {
                         } label: {
                             SettingsRow(label: Text("Interface & Companion"), systemImage: "rectangle.3.group", color: .purple)
                         }.accessibilityIdentifier("bound.settings-interface")
-                        if let arrangement = gameplay?.landscapeArrangement, let arrange = gameplay?.arrangeViews {
-                            BoundArrangeViewsSettingsTile(model: arrangement) { arrange(); close() }
-                        }
                         NavigationLink {
                             Form {
                                 ControlsSection()

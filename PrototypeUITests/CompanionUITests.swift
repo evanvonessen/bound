@@ -4951,7 +4951,6 @@ extension CompanionUITests {
             XCTAssertTrue(choice.waitForExistence(timeout: 5))
             choice.tap()
         }
-        let settings = app.buttons["Settings"]
         openBoundSettings(in: app)
         let options = element("bound.landscape-options", in: app)
         XCTAssertTrue(options.waitForExistence(timeout: 5))
@@ -4959,9 +4958,37 @@ extension CompanionUITests {
         app.buttons["Option \(option)"].firstMatch.tap()
         closeBoundSheet(in: app)
 
-        // Arrange Views belongs only to the active landscape arrangement surface.
-        XCTAssertFalse(element("bound.settings-arrange-views", in: app).exists)
+        // Arrange Views is a native Menu tile that appears live when the game
+        // rotates into landscape, without requiring the Settings screen.
+        let arrangeTile = app.buttons["bound.menu-arrange-views"]
+        openNativePause(in: app)
+        XCTAssertFalse(arrangeTile.exists, "Arrange Views is absent while the Menu is in portrait")
         XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(arrangeTile.waitForExistence(timeout: 10),
+                      "The Menu tile should appear as soon as the game enters landscape")
+        if option == 5 {
+            XCUIDevice.shared.orientation = .portrait
+            XCTAssertTrue(arrangeTile.waitForNonExistence(timeout: 10))
+            XCUIDevice.shared.orientation = .landscapeLeft
+            XCTAssertTrue(arrangeTile.waitForExistence(timeout: 10))
+            // Returning from Settings updates this same paused menu, including
+            // removing the tile for the two options with no arrangement editor.
+            for selectedOption in [1, 2, 5] {
+                app.buttons["Settings"].tap()
+                XCTAssertTrue(app.buttons["bound.settings-interface"].waitForExistence(timeout: 5))
+                XCTAssertFalse(element("bound.settings-arrange-views", in: app).exists)
+                app.buttons["bound.settings-interface"].tap()
+                XCTAssertTrue(options.waitForExistence(timeout: 5))
+                options.tap()
+                app.buttons["Option \(selectedOption)"].firstMatch.tap()
+                app.buttons["bound.settings-close"].tap()
+                XCTAssertTrue(app.buttons["bound.settings-close"].waitForNonExistence(timeout: 5))
+                if selectedOption == 5 { XCTAssertTrue(arrangeTile.waitForExistence(timeout: 5)) }
+                else { XCTAssertTrue(arrangeTile.waitForNonExistence(timeout: 5)) }
+            }
+        }
+        screenshot("Landscape-option\(option)-menu-arrange-tile")
+        resumeNativePause(in: app)
         let friendToggle = app.buttons[prefix + "-friend-button"]
         let viewsToggle = app.buttons[prefix + "-views-button"]
         XCTAssertTrue(friendToggle.waitForExistence(timeout: 10))
@@ -5001,11 +5028,10 @@ extension CompanionUITests {
         XCTAssertFalse(friend.frame.intersects(reference.frame), "The default arrangement must show both distinct panels")
         screenshot("Landscape-option\(option)-independent-views")
 
-        // Open the settings sheet again and enter the movable arrangement mode.
+        // Reopen the native Menu and enter arrangement from its dedicated tile.
         openNativePause(in: app)
-        settings.tap()
-        XCTAssertTrue(element("bound.settings-arrange-views", in: app).waitForExistence(timeout: 5))
-        element("bound.settings-arrange-views", in: app).tap()
+        XCTAssertTrue(arrangeTile.waitForExistence(timeout: 5))
+        arrangeTile.tap()
         XCTAssertTrue(app.buttons[prefix + "-done"].waitForExistence(timeout: 10),
                       "Starting arrangement should return to gameplay with Menu relabeled Done")
         XCTAssertTrue(element(prefix + "-arrangement", in: app).exists)
@@ -5104,6 +5130,8 @@ extension CompanionUITests {
         XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 10))
         XCTAssertFalse(friendToggle.exists)
         openNativePause(in: app)
+        XCTAssertFalse(arrangeTile.exists,
+                       "Arrange Views should disappear from the Menu when returning to portrait")
         app.buttons["Settings"].tap()
         XCTAssertTrue(app.buttons["bound.settings-interface"].waitForExistence(timeout: 5))
         XCTAssertFalse(element("bound.settings-arrange-views", in: app).exists)

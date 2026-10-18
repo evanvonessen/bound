@@ -20,7 +20,14 @@ class PauseViewController: UIViewController, PauseInfoProviding
     }
     
     var pauseItems: [MenuItem] {
-        return [self.saveStateItem, self.loadStateItem, self.cheatCodesItem, self.fastForwardItem, self.friendsItem, self.screenshotItem, self.controllerModeItem, self.askLuItem].compactMap { $0 }
+        return [self.saveStateItem, self.loadStateItem, self.cheatCodesItem, self.fastForwardItem, self.friendsItem, self.screenshotItem, self.showsArrangeViews ? self.arrangeViewsItem : nil, self.controllerModeItem, self.askLuItem].compactMap { $0 }
+    }
+
+    var showsArrangeViews = false {
+        didSet {
+            guard showsArrangeViews != oldValue else { return }
+            refreshVisiblePauseItems()
+        }
     }
     
     var closeButtonTitle: String = NSLocalizedString("Main Menu", comment: "")
@@ -43,6 +50,7 @@ class PauseViewController: UIViewController, PauseInfoProviding
     var fastForwardItem: MenuItem?
     var friendsItem: MenuItem?
     var screenshotItem: MenuItem?
+    var arrangeViewsItem: MenuItem?
     var controllerModeItem: MenuItem?
     var askLuItem: MenuItem?
     
@@ -233,6 +241,16 @@ extension PauseViewController: UINavigationControllerDelegate
 
 private extension PauseViewController
 {
+    func refreshVisiblePauseItems() {
+        guard isViewLoaded, let root = pauseNavigationController?.viewControllers.first else { return }
+        if #available(iOS 26, *), let host = root as? PauseView.HostingController {
+            host.items = pauseItems
+        } else if let grid = root as? GridMenuViewController {
+            (grid.collectionViewLayout as? GridCollectionViewLayout)?.centersIncompleteRows = pauseItems.count == 7
+            grid.reloadItems(pauseItems)
+        }
+    }
+
     func updatePauseItems()
     {
         self.saveStateItem = nil

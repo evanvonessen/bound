@@ -239,7 +239,6 @@ final class BoundCompanionCoordinator {
     private let landscapeCompanion = BoundLandscapeCompanionModel()
     private lazy var landscapeArrangement = BoundLandscapeArrangementModel()
     private var arrangementOpacityGesture: BoundLandscapeOpacityGesture?
-    private var pendingLandscapeArrangement = false
     private var macHost: UIHostingController<BoundMacWorkspaceView>?
     private var controls: BoundCompanionCycleButton?
     private var subscriptions = Set<AnyCancellable>()
@@ -740,20 +739,13 @@ final class BoundCompanionCoordinator {
         beginMacSheet(from: presenter)
         let context = BoundSettingsGameplayContext(emulationDetails: state.emulationDetails,
             editControls: { [weak self] in self?.state.pendingControlEditor = true },
-            showCompanion: { [weak self] in self?.state.hidden = false; self?.state.refresh() },
-            landscapeArrangement: macHost == nil ? landscapeArrangement : nil,
-            arrangeViews: { [weak self] in self?.pendingLandscapeArrangement = true })
+            showCompanion: { [weak self] in self?.state.hidden = false; self?.state.refresh() })
         let host = BoundSettingsHostingController(model: state.settings, gameplay: context, closed: { [weak self] in
             guard let self else { return }; self.state.showingSettings = false
             self.cancelInteractions()
             self.state.settings.refresh()
             self.state.refresh()
             self.finishMacSheet()
-            if self.pendingLandscapeArrangement {
-                self.pendingLandscapeArrangement = false
-                DispatchQueue.main.async { [weak self] in self?.beginLandscapeArrangementFromSettings() }
-                return
-            }
             if self.state.pendingControlEditor { self.state.pendingControlEditor = false
                 DispatchQueue.main.async { [weak self] in
                     guard let self, let presenter = self.settingsPresenter else { return }
@@ -767,14 +759,19 @@ final class BoundCompanionCoordinator {
         })
         presenter.present(host, animated: true)
     }
-    private func beginLandscapeArrangementFromSettings() {
-        guard let owner, owner.view.bounds.width > owner.view.bounds.height,
-              landscapeCompanion.preferences.option.supportsArrangement,
+    var canArrangeLandscapeViews: Bool {
+        guard macHost == nil, let owner else { return false }
+        return owner.view.bounds.width > owner.view.bounds.height
+            && landscapeCompanion.preferences.option.supportsArrangement
+    }
+    func beginLandscapeArrangementFromMenu() {
+        guard canArrangeLandscapeViews, let owner,
+              !state.showingSettings, !state.showingFriends,
               UIApplication.shared.applicationState == .active else { return }
         owner.view.endEditing(true)
         notesEditing(true)
         // Closing the pause menu normally resumes gameplay. Hold that resume
-        // until Done, keeping the editor paused throughout both dismissals.
+        // until Done, keeping the editor paused while the menu dismisses.
         if owner.emulatorCore?.state == .paused { notesPaused = true }
         owner.returnToGameViewController { [weak self, weak owner] in
             guard let self, let owner else { return }
@@ -924,11 +921,10 @@ final class BoundCompanionCoordinator {
         if usesLocalPairedFixture { sharing.start() }
         #endif
     }
-    func background() { foregroundTask?.cancel(); foregroundTask = nil; pendingLandscapeArrangement = false; landscapeArrangement.finish(save: false, resume: false); landscapeCompanion.finishArrangement(save: false, resume: false); cancelInteractions(); tap.setEnabled(false); sharing.background(); onboarding.close() }
+    func background() { foregroundTask?.cancel(); foregroundTask = nil; landscapeArrangement.finish(save: false, resume: false); landscapeCompanion.finishArrangement(save: false, resume: false); cancelInteractions(); tap.setEnabled(false); sharing.background(); onboarding.close() }
     func stop() {
         foregroundTask?.cancel(); foregroundTask = nil
         macSheetPaused = false; macSheetCore = nil
-        pendingLandscapeArrangement = false
         landscapeArrangement.finish(save: false, resume: false)
         landscapeCompanion.finishArrangement(save: false, resume: false)
         cancelInteractions(); tap.setEnabled(false); sharing.stop(); onboarding.close()

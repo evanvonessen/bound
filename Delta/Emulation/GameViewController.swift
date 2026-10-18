@@ -530,6 +530,7 @@ extension GameViewController
         // Native layout can change the controller bounds after rotation or Reset.
         // Refresh companion/Menu geometry only after those real frames settle.
         boundCompanion.bringControlsToFront()
+        pauseViewController?.showsArrangeViews = boundCompanion.canArrangeLandscapeViews
         gameView.accessibilityIdentifier = "bound.game-screen"
         gameView.isAccessibilityElement = true
         gameView.accessibilityLabel = "Your gameplay screen"
@@ -604,6 +605,12 @@ extension GameViewController
                 guard let self, let presenter = pauseViewController else { return }
                 self.boundCompanion.presentSettings(from: presenter)
             }
+            pauseViewController.arrangeViewsItem = MenuItem(text: "Arrange Views", image: UIImage(systemName: "arrow.up.and.down.and.arrow.left.and.right")?.withRenderingMode(.alwaysTemplate)) { [weak self] item in
+                item.isSelected = false
+                self?.boundCompanion.beginLandscapeArrangementFromMenu()
+            }
+            pauseViewController.arrangeViewsItem?.accessibilityIdentifier = "bound.menu-arrange-views"
+            pauseViewController.showsArrangeViews = boundCompanion.canArrangeLandscapeViews
             pauseViewController.controllerModeItem?.isSelected = BoundControllerModePreferences().isEnabled
             pauseViewController.controllerModeItem?.action = { [weak self] item in
                 guard let self else { return }

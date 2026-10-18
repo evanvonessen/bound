@@ -74,6 +74,13 @@ class GridMenuViewController: UICollectionViewController
 
 extension GridMenuViewController
 {
+    /// A rotation can add or remove Arrange Views while this menu is open.
+    func reloadItems(_ items: [MenuItem]) {
+        previousIndexPath = nil
+        self.items = items
+        collectionView.reloadData()
+    }
+
     override func viewDidLoad()
     {
         super.viewDidLoad()

@@ -1,20 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// Only an active landscape arrangement option exposes this action in Settings.
-struct BoundArrangeViewsSettingsTile: View {
-    @ObservedObject var model: BoundLandscapeArrangementModel
-    let action: () -> Void
-    var body: some View {
-        if model.active {
-            Button(action: action) {
-                SettingsRow(label: Text("Arrange Views"), systemImage: "arrow.up.and.down.and.arrow.left.and.right", color: .purple)
-            }
-            .accessibilityIdentifier("bound.settings-arrange-views")
-        }
-    }
-}
-
 struct BoundLandscapeArrangementOverlay: View {
     @ObservedObject var model: BoundLandscapeArrangementModel
     var body: some View {

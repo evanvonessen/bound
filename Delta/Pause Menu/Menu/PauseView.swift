@@ -18,6 +18,7 @@ extension PauseView
     {
         var resumeHandler: () -> Void = {}
         var stopHandler: () -> Void = {}
+        var items: [MenuItem]
         
         fileprivate private(set) var isHidden: Bool = true
         fileprivate private(set) var isAnimated: Bool = true
@@ -36,10 +37,11 @@ extension PauseView
         {
             self.resumeHandler = resumeHandler
             self.stopHandler = stopHandler
+            self.items = items
             
             super.init(rootView: AnyView(EmptyView()))
             
-            let pauseView = PauseView(items: items, resumeHandler: resumeHandler, stopHandler: stopHandler).environment(self)
+            let pauseView = PauseView(resumeHandler: resumeHandler, stopHandler: stopHandler).environment(self)
             self.rootView = AnyView(pauseView)
         }
         
@@ -68,7 +70,7 @@ extension PauseView
 @available(iOS 26, *)
 struct PauseView: View
 {
-    var items: [MenuItem] = []
+    private var items: [MenuItem] { hostingViewController.items }
     
     var resumeHandler: () -> Void = {}
     var stopHandler: () -> Void = {}
