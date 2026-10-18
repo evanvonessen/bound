@@ -904,8 +904,11 @@ final class CompanionUITests: XCTestCase {
             screenshot("\(label)-About-GBA-Core-Info")
             back(from: "Game Boy Advance")
 
+            let rulesLink = element("bound.rules-and-contact-link", in: app)
+            assertSettingsBottomContent(rulesLink, in: app, name: "\(label)-About-Rules-and-Contact")
+
             let sourceLink = element("bound.source-and-licenses-link", in: app)
-            assertSettingsBottomContent(sourceLink, in: app, name: "\(label)-About-source-link")
+            assertSettingsBottomContent(sourceLink, in: app, name: "\(label)-About-source-link", searchTowardTop: true)
             sourceLink.tap()
             let lastNotice = element("bound.license-notesFont", in: app)
             assertSettingsBottomContent(lastNotice, in: app, name: "\(label)-Source-last-notice")
@@ -2815,6 +2818,11 @@ final class CompanionUITests: XCTestCase {
         let layout12IconFrame = teamIcon.frame
         XCTAssertGreaterThanOrEqual(layout12IconFrame.width, 44)
         XCTAssertGreaterThanOrEqual(layout12IconFrame.height, 44)
+        XCTAssertGreaterThanOrEqual(layout12IconFrame.minY, picker.frame.maxY + 2,
+                                    "The raised Boss body must stay below the Island actions.")
+        XCTAssertLessThanOrEqual(layout12IconFrame.minY, picker.frame.maxY + 8,
+                                 "Keep the team row close to the Island actions.")
+        screenshot("Boss-Layout12-Tighter-Top-Spacing")
         openBoundSettings(in: app)
         scrollToSetting(bossLayout, in: app); bossLayout.buttons["11"].tap()
         closeBoundSheet(in: app)
@@ -2862,6 +2870,10 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(search.frame.minX - info.frame.maxX, 160, accuracy: 1,
                        "The original inward placement reserves 160 points for the Dynamic Island.")
         XCTAssertEqual((info.frame.midX + search.frame.midX) / 2, app.frame.midX, accuracy: 1)
+        let dexBody = app.scrollViews["bound.rrdex-layout12-details"]
+        XCTAssertGreaterThanOrEqual(dexBody.frame.minY, info.frame.maxY + 2)
+        XCTAssertLessThanOrEqual(dexBody.frame.minY, info.frame.maxY + 8,
+                                 "The Dex body uses the space below the Island without the old extra padding.")
         screenshot("RRDex-Layout12-Restored-Island-Controls")
         info.tap()
         XCTAssertEqual(element("bound.rrdex-layout12-info-rom", in: app).label, "ROM: Radical Red Version 4.1")

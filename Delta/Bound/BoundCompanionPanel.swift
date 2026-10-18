@@ -1351,9 +1351,6 @@ struct BoundFriendsSheet: View {
                         }
                     }
                 }
-                Section {
-                    Link("Rules & contact", destination: URL(string: "https://evanvonessen.github.io/bound/moderation.html")!).font(.caption)
-                }
             }.navigationTitle("Friends")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(account.busy) } }
         }
@@ -1502,7 +1499,6 @@ private struct BoundReportView: View {
                     ForEach(FriendReportReason.allCases) { item in Text(item.title).tag(item) }
                 }.pickerStyle(.inline)
                 Button("Report") { onboarding.report(room, reason: reason); dismiss() }.disabled(onboarding.busy)
-                Link("Rules & contact", destination: URL(string: "https://evanvonessen.github.io/bound/moderation.html")!).font(.caption)
             }.navigationTitle("Report")
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }

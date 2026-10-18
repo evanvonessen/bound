@@ -63,6 +63,10 @@ struct BoundBossGuideView: View {
     private var layout: BoundReferenceLayout { previewLayout ?? savedLayout }
     private var usesUIVersion2: Bool { uiVersion == .option2 }
     private var isLayout11Or12: Bool { layout == .layout11 || layout == .layout12 }
+    private var contentTopInset: CGFloat {
+        // The Island actions keep their original row; only the body moves up.
+        usesIslandActions && layout.rawValue >= 8 ? max(51, portraitTopInset - 6) : portraitTopInset
+    }
     private var usesIslandActions: Bool { (layout == .layout3 || layout == .layout4 || layout == .layout5 || layout == .layout6 || layout == .layout7 || layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12) && !floating && portraitTopInset >= 51 }
 
     var body: some View {
@@ -77,7 +81,7 @@ struct BoundBossGuideView: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("bound.boss-guide")
                 .accessibilityValue(layout.title)
-                .padding(.top, floating ? 0 : portraitTopInset)
+                .padding(.top, floating ? 0 : contentTopInset)
                 .overlay(alignment: .top) {
                     if usesIslandActions {
                         Group {

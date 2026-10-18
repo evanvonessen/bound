@@ -47,6 +47,10 @@ struct BoundRRDexView: View {
     private var editingText: Bool { searching || moveSearchFocused }
     private var interacting: Bool { editingText || sheet != nil || importError != nil }
     private var hasIslandActions: Bool { !floating && portraitTopInset >= 51 }
+    private var contentTopInset: CGFloat {
+        // Use the spare clearance below the Island without moving its actions.
+        hasIslandActions && layout.rawValue >= 8 ? max(51, portraitTopInset - 6) : portraitTopInset
+    }
     private var layout: BoundReferenceLayout { previewLayout ?? savedLayout }
     private var usesUIVersion2: Bool { uiVersion == .option2 }
     private var referenceMode: String {
@@ -83,7 +87,7 @@ struct BoundRRDexView: View {
                             .frame(width: geometry.size.width, height: geometry.size.height)
                     }
                 }
-                .padding(.top, portraitTopInset)
+                .padding(.top, contentTopInset)
                 .overlay(alignment: .top) {
                     if hasIslandActions {
                         if layout == .layout12 && layout12LearnsetPresented {
@@ -467,7 +471,9 @@ struct BoundRRDexView: View {
                 }
             }
         }
-        .padding(compact ? 10 : 12)
+        .padding(.horizontal, compact ? 10 : 12)
+        .padding(.top, hasIslandActions ? 4 : compact ? 10 : 12)
+        .padding(.bottom, compact ? 10 : 12)
         .background(Color(uiColor: .systemBackground))
     }
 

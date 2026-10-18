@@ -124,6 +124,16 @@ struct SettingsView: View {
                             Form {
                                 BoundAppearanceSettings(emulationDetails: gameplay?.emulationDetails, includeAppearance: false)
                                 Section("Cores") { CoreSettingsLinks() }
+                                Section("Links") {
+                                    Link(destination: URL(string: "https://evanvonessen.github.io/bound/moderation.html")!) {
+                                        SettingsRow(label: Text("Rules & contact"), systemImage: "book.closed", color: .orange) {
+                                            Image(systemName: "arrow.up.right")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .accessibilityIdentifier("bound.rules-and-contact-link")
+                                }
                                 if !BoundFeatureVisibility.simplifiedSettings {
                                     Section("Emulation") {
                                         NavigationLink {
