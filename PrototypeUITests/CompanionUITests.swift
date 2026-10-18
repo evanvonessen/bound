@@ -2440,6 +2440,154 @@ final class CompanionUITests: XCTestCase {
         closeBoundSheet(in: app)
     }
 
+    func testBossTeamTilesKeepEqualDimensionsAcrossSelection() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+
+        let app = XCUIApplication()
+        XCUIDevice.shared.orientation = .portrait
+        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        app.launch()
+        assertPermanentFeatureBaseline(in: app)
+        let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+
+        openBoundSettings(in: app)
+        let uiVersion = element("bound.ui-version", in: app)
+        let originalVersion = uiVersion.label.contains("Option 2") ? "Option 2" : "Option 1"
+        if originalVersion == "Option 2" {
+            uiVersion.tap(); app.buttons["Option 1"].tap()
+        }
+        let bossLayout = app.segmentedControls["bound.boss-layout"]
+        scrollToSetting(bossLayout, in: app)
+        let originalLayout = bossLayout.buttons.allElementsBoundByIndex.first(where: \.isSelected)?.label ?? "1"
+        let bossesEnabled = app.switches["bound.companion-enabled.bosses"]
+        scrollToSetting(bossesEnabled, in: app)
+        let originallyEnabled = bossesEnabled.value as? String == "1"
+
+        func setVersion(_ title: String) {
+            // Reopen at the top rather than tapping an offscreen lazy Form row.
+            closeBoundSheet(in: app)
+            openBoundSettings(in: app)
+            let version = element("bound.ui-version", in: app)
+            if !version.label.contains(title) {
+                version.tap()
+                let option = app.buttons[title]
+                XCTAssertTrue(option.waitForExistence(timeout: 5)); option.tap()
+            }
+            XCTAssertTrue(element("bound.ui-version", in: app).label.contains(title))
+        }
+
+        func setBossLayout(_ number: String) {
+            let layout = app.segmentedControls["bound.boss-layout"]
+            scrollToSetting(layout, in: app)
+            if !layout.buttons[number].isSelected { layout.buttons[number].tap() }
+            XCTAssertTrue(layout.buttons[number].isSelected)
+        }
+
+        func restoreSettings() {
+            openBoundSettings(in: app)
+            setVersion("Option 1")
+            setBossLayout(originalLayout)
+            let toggle = app.switches["bound.companion-enabled.bosses"]
+            scrollToSetting(toggle, in: app)
+            if (toggle.value as? String == "1") != originallyEnabled {
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+            if originalVersion == "Option 2" { setVersion(originalVersion) }
+            closeBoundSheet(in: app)
+        }
+
+        defer {
+            if app.buttons["bound.panel-cycle"].exists { restoreSettings() }
+            app.terminate()
+        }
+
+        setVersion("Option 1")
+        setBossLayout("12")
+        let toggle = app.switches["bound.companion-enabled.bosses"]
+        scrollToSetting(toggle, in: app)
+        if toggle.value as? String != "1" {
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        closeBoundSheet(in: app)
+
+        func chooseBoss(_ id: String, search: String) {
+            app.buttons["bound.boss-picker"].tap()
+            let field = app.searchFields.firstMatch
+            XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(search)
+            let row = app.buttons["bound.boss-select-\(id)"]
+            XCTAssertTrue(row.waitForExistence(timeout: 5)); row.tap()
+            XCTAssertTrue(field.waitForNonExistence(timeout: 5))
+        }
+
+        func verifyTeam(_ id: String, search: String, species: [String], selectionOrder: [Int]) {
+            selectCompanion("Bosses", in: app)
+            chooseBoss(id, search: search)
+            let guide = element("bound.boss-guide", in: app)
+            let selectedPokemon = app.staticTexts["bound.boss-pokemon"]
+            let members = species.indices.map { app.buttons["bound.boss-team-member-\($0)"] }
+            XCTAssertEqual(members.count, species.count)
+            members.forEach { XCTAssertTrue($0.isHittable) }
+            XCTAssertEqual(selectedPokemon.label, species[0])
+
+            let initialFrames = members.map(\.frame)
+            for (index, frame) in initialFrames.enumerated() {
+                XCTAssertEqual(frame.width, initialFrames[0].width, accuracy: 0.5,
+                               "All member tiles must have equal widths for \(search), member \(index + 1).")
+                XCTAssertEqual(frame.height, 44, accuracy: 0.5,
+                               "Every member tile must keep a 44-point height.")
+            }
+            XCTAssertEqual(initialFrames[0].minX, guide.frame.minX + 10, accuracy: 1,
+                           "The tile row should start ten points inside the Boss guide.")
+            XCTAssertEqual(initialFrames[initialFrames.count - 1].maxX, guide.frame.maxX - 10, accuracy: 1,
+                           "The tile row should fill the available guide width with ten-point side insets.")
+
+            for index in selectionOrder {
+                members[index].tap()
+                XCTAssertEqual(selectedPokemon.label, species[index])
+                XCTAssertTrue(members[index].isSelected)
+                XCTAssertEqual(members.filter(\.isSelected).count, 1)
+                for (memberIndex, member) in members.enumerated() {
+                    let frame = member.frame
+                    XCTAssertEqual(frame.width, initialFrames[memberIndex].width, accuracy: 0.5,
+                                   "Selecting \(species[index]) must not resize team tiles.")
+                    XCTAssertEqual(frame.height, initialFrames[memberIndex].height, accuracy: 0.5,
+                                   "Selecting \(species[index]) must not resize team tiles.")
+                    XCTAssertEqual(frame.minX, initialFrames[memberIndex].minX, accuracy: 1,
+                                   "Selecting a Pokémon must not shift its sibling tiles.")
+                }
+            }
+            screenshot("Boss-tiles-\(search)-\(element("bound.boss-guide", in: app).value ?? "")")
+        }
+
+        verifyTeam("johto-leaders-4", search: "Falkner",
+                   species: ["Rufflet", "Wattrel", "Flittle"], selectionOrder: [1, 2, 0])
+        verifyTeam("kanto-leaders-4", search: "Brock",
+                   species: ["Geodude-A", "Varoom", "Onix", "Archen"], selectionOrder: [2, 3, 0])
+        verifyTeam("johto-leaders-56", search: "Bugsy Post Lt. Surge",
+                   species: ["Kleavor", "Scizor-Mega", "Scyther", "Lokix", "Araquanid", "Vikavolt"],
+                   selectionOrder: [3, 1, 5])
+
+        openBoundSettings(in: app)
+        setVersion("Option 2")
+        let version2Layout = app.buttons["bound.boss-layout"]
+        scrollToSetting(version2Layout, in: app)
+        XCTAssertTrue(version2Layout.label.contains("Layout 12"),
+                       "Changing UI version must retain the selected Boss layout.")
+        closeBoundSheet(in: app)
+        verifyTeam("johto-leaders-56", search: "Bugsy Post Lt. Surge",
+                   species: ["Kleavor", "Scizor-Mega", "Scyther", "Lokix", "Araquanid", "Vikavolt"],
+                   selectionOrder: [3, 1, 5])
+    }
+
     func testLayout12BossAndDexInteractions() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []

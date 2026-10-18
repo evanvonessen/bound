@@ -578,47 +578,19 @@ struct BoundBossGuideView: View {
         }
     }
 
-    /// Layout 12 gives every team member a 44-point hit target when the row
-    /// has room. Narrow panels move the team strip below the selected Pokémon;
-    /// very narrow panels can scroll the strip without shrinking its buttons.
+    /// Keep the team in its own full-width row so selecting a Pokémon cannot
+    /// resize its tiles or switch between inline and stacked arrangements.
     private func layout12PokemonRow(team: BoundBossTeam, pokemon: BoundBossPokemon, index: Int,
                                     detail: BoundBossReference.Detail?, reference: BoundBossReference?) -> some View {
-        ViewThatFits(in: .horizontal) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 pokemonPicture(pokemon, species: detail?.species, size: 36)
                     .accessibilityIdentifier("bound.boss-picture")
                 layout12PokemonIdentity(pokemon: pokemon, types: detail?.types ?? [])
-                    .frame(minWidth: 112, alignment: .leading)
-                layout12TeamMemberStrip(team: team, selectedIndex: index, reference: reference, buttonWidth: nil)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity)
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    pokemonPicture(pokemon, species: detail?.species, size: 36)
-                        .accessibilityIdentifier("bound.boss-picture")
-                    layout12PokemonIdentity(pokemon: pokemon, types: detail?.types ?? [])
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                HStack {
-                    Spacer(minLength: 0)
-                    layout12TeamMemberStrip(team: team, selectedIndex: index, reference: reference, buttonWidth: 44)
-                    Spacer(minLength: 0)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    pokemonPicture(pokemon, species: detail?.species, size: 36)
-                        .accessibilityIdentifier("bound.boss-picture")
-                    layout12PokemonIdentity(pokemon: pokemon, types: detail?.types ?? [])
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    layout12TeamMemberStrip(team: team, selectedIndex: index, reference: reference, buttonWidth: 44)
-                }
-                .frame(height: 44)
-            }
+            .frame(minHeight: 44)
+            layout12PinnedTeamStrip(team: team, selectedIndex: index, reference: reference)
         }
     }
 
@@ -647,7 +619,7 @@ struct BoundBossGuideView: View {
     }
 
     private func layout12TeamMemberStrip(team: BoundBossTeam, selectedIndex: Int,
-                                         reference: BoundBossReference?, buttonWidth: CGFloat?) -> some View {
+                                         reference: BoundBossReference?, buttonWidth: CGFloat) -> some View {
         HStack(spacing: 4) {
             ForEach(Array(team.pokemon.enumerated()), id: \.offset) { memberIndex, member in
                 let species = reference?.detail(for: member, teamID: team.id, pokemonIndex: memberIndex).species
@@ -656,12 +628,11 @@ struct BoundBossGuideView: View {
                         choose(BoundBossGuideSelection(teamID: team.id, pokemonIndex: memberIndex), catalog: catalog)
                     }
                 } label: {
-                    pokemonPicture(member, species: species, size: min(34, (buttonWidth ?? 44) - 8))
-                        .frame(minWidth: buttonWidth ?? 44, maxWidth: buttonWidth ?? .infinity)
-                        .frame(height: 44)
+                    pokemonPicture(member, species: species, size: 34)
+                        .frame(width: buttonWidth, height: 44)
                         .background(memberIndex == selectedIndex ? Color(uiColor: .deltaPurple).opacity(0.20) : Color(uiColor: .tertiarySystemFill),
                                     in: RoundedRectangle(cornerRadius: 6))
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(memberIndex == selectedIndex ? Color(uiColor: .deltaPurple) : .clear, lineWidth: 1.5))
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(memberIndex == selectedIndex ? Color(uiColor: .deltaPurple) : .clear, lineWidth: 1.5))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -670,15 +641,20 @@ struct BoundBossGuideView: View {
                 .accessibilityAddTraits(memberIndex == selectedIndex ? .isSelected : [])
             }
         }
-        .frame(maxWidth: buttonWidth == nil ? .infinity : nil)
-        .fixedSize(horizontal: buttonWidth != nil, vertical: false)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func layout12PinnedTeamStrip(team: BoundBossTeam, selectedIndex: Int,
                                          reference: BoundBossReference?) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            layout12TeamMemberStrip(team: team, selectedIndex: selectedIndex,
-                                    reference: reference, buttonWidth: 44)
+        GeometryReader { geometry in
+            let spacing = CGFloat(max(0, team.pokemon.count - 1)) * 4
+            let buttonWidth = max(44, (geometry.size.width - spacing) / CGFloat(max(1, team.pokemon.count)))
+            ScrollView(.horizontal, showsIndicators: false) {
+                layout12TeamMemberStrip(team: team, selectedIndex: selectedIndex,
+                                        reference: reference, buttonWidth: buttonWidth)
+                    .padding(.vertical, 1)
+            }
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         }
         .frame(height: 46)
         .accessibilityElement(children: .contain)

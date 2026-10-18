@@ -93,9 +93,12 @@ team, with alternatives available in Choose boss. The source links resolve to
 endpoint and for encounters without a published position, including postgame
 fights, which remain in Choose boss.
 Layout 12 copies Layout 11, abbreviates move damage categories as `Atk`, `SpAtk`
-and `Status`, and gives the team-member buttons more of the available row width.
-Buttons have a minimum 44-point target; narrow panels put the team strip below
-the selected Pokémon, with horizontal scrolling available at the smallest widths.
+and `Status`, and places the tappable team tiles in a dedicated full-width row
+below the selected Pokémon. Every tile has the same width and a fixed 44-point
+height; widths depend only on the panel width and team count, so selecting a
+member does not resize the tiles. At the smallest widths, the row scrolls
+horizontally instead of shrinking targets below 44 points. UI Version 2 uses the
+same sizing for its pinned team strips.
 Its compact matchup pills use the source type colors at full opacity in both
 light and dark mode, with black or white text chosen for contrast.
 
