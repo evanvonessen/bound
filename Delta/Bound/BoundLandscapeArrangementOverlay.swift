@@ -23,9 +23,11 @@ struct BoundLandscapeArrangementOverlay: View {
                 moveTarget(.friend, frame: model.layout.friend).zIndex(model.selected == .friend ? 1 : 0)
                 if !model.contents.isEmpty { moveTarget(model.referenceContent, frame: model.layout.reference).zIndex(model.selected == .friend ? 0 : 1) }
                 Group {
-                    if model.refined { refinedEditor } else { editor }
+                    if model.placementShortcuts { placementEditor }
+                    else if model.refined { refinedEditor }
+                    else { editor }
                 }
-                .placed(arrangementEditorFrame(in: model.layout.canvas, refined: model.refined)).zIndex(2)
+                .placed(arrangementEditorFrame(for: model)).zIndex(2)
                 Button { model.finish(save: true) } label: {
                     Text("DONE").font(.system(size: 11, weight: .heavy))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -47,10 +49,14 @@ struct BoundLandscapeArrangementOverlay: View {
                 .disabled(model.editing)
                 .placed(model.layout.friendButton).zIndex(3)
             Button(action: model.toggleReference) {
-                Image(systemName: model.refined ? (model.referenceVisible ? "eye" : "eye.slash") : "xmark")
+                if model.placementShortcuts {
+                    Text("VIEWS").font(.system(size: 10, weight: .heavy))
+                } else {
+                    Image(systemName: model.refined ? (model.referenceVisible ? "eye" : "eye.slash") : "xmark")
+                }
             }
                 .buttonStyle(ArrangementButtonStyle(selected: model.referenceVisible))
-                .accessibilityLabel(model.refined ? (model.referenceVisible ? "Hide views" : "Show views") : "Toggle views")
+                .accessibilityLabel(model.focusedHandles ? (model.referenceVisible ? "Hide views" : "Show views") : "Toggle views")
                 .accessibilityValue(model.referenceVisible ? "Visible" : "Hidden")
                 .accessibilityHint("Shows or hides the selected reference view. Bound changes the selection.")
                 .accessibilityIdentifier(model.accessibilityPrefix + "-views-button")
@@ -63,7 +69,7 @@ struct BoundLandscapeArrangementOverlay: View {
         let selected = model.selected == content
         return ZStack {
             RoundedRectangle(cornerRadius: 8)
-                .stroke(selected ? Color.purple : Color.white.opacity(model.refined ? 0.5 : 1), lineWidth: selected ? 3 : 1.5)
+                .stroke(selected ? Color.purple : Color.white.opacity(model.focusedHandles ? 0.5 : 1), lineWidth: selected ? 3 : 1.5)
                 .allowsHitTesting(false)
             ArrangementDragTarget(identifier: model.accessibilityPrefix + "-move.\(content.rawValue)", label: "Move \(content.title)",
                                   select: { model.select(content) }, cancelled: model.cancelManipulation) {
@@ -76,17 +82,17 @@ struct BoundLandscapeArrangementOverlay: View {
                     .background(.regularMaterial, in: Capsule()).padding(5).allowsHitTesting(false)
             }
             .overlay(alignment: .trailing) {
-                if (!model.refined || selected) && (content == .bosses || content == .dex) {
+                if (!model.focusedHandles || selected) && (content == .bosses || content == .dex) {
                     resizeHandle(content, axis: .width, symbol: "arrow.left.and.right", name: "width")
                 }
             }
             .overlay(alignment: .bottom) {
-                if (!model.refined || selected) && (content == .bosses || content == .dex) {
+                if (!model.focusedHandles || selected) && (content == .bosses || content == .dex) {
                     resizeHandle(content, axis: .height, symbol: "arrow.up.and.down", name: "height")
                 }
             }
             .overlay(alignment: .bottomTrailing) {
-                if !model.refined || selected {
+                if !model.focusedHandles || selected {
                     resizeHandle(content, axis: .scale, symbol: "arrow.up.left.and.arrow.down.right", name: "scale")
                 }
             }
@@ -95,8 +101,8 @@ struct BoundLandscapeArrangementOverlay: View {
     private func resizeHandle(_ content: BoundPiPContent, axis: BoundLandscapeArrangementModel.ResizeAxis,
                               symbol: String, name: String) -> some View {
         Image(systemName: symbol).font(.system(size: 14, weight: .bold))
-            .foregroundStyle(.white).frame(width: model.refined ? 44 : 36, height: model.refined ? 44 : 36)
-            .background(model.refined ? Color(uiColor: .deltaPurple).opacity(0.9) : Color.purple, in: RoundedRectangle(cornerRadius: 9))
+            .foregroundStyle(.white).frame(width: model.focusedHandles ? 44 : 36, height: model.focusedHandles ? 44 : 36)
+            .background(model.focusedHandles ? Color(uiColor: .deltaPurple).opacity(0.9) : Color.purple, in: RoundedRectangle(cornerRadius: 9))
             .overlay {
                 ArrangementDragTarget(identifier: model.accessibilityPrefix + "-resize-\(name).\(content.rawValue)",
                                       label: "Resize \(content.title) \(name)", select: { model.select(content) },
@@ -172,6 +178,70 @@ struct BoundLandscapeArrangementOverlay: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(model.accessibilityPrefix + "-arrangement")
     }
+    private var placementEditor: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Menu {
+                    ForEach([BoundPiPContent.friend] + model.contents, id: \.rawValue) { content in
+                        Button { model.select(content) } label: {
+                            if model.selected == content { Label(content.title, systemImage: "checkmark") }
+                            else { Text(content.title) }
+                        }
+                        .accessibilityIdentifier(model.accessibilityPrefix + "-select.\(content.rawValue)")
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(model.selected.title).fontWeight(.semibold)
+                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold))
+                    }
+                    .frame(width: 98, height: 40)
+                    .background(Color.purple.opacity(0.12), in: Capsule())
+                    .frame(height: 44)
+                }
+                .accessibilityLabel("Choose view")
+                .accessibilityValue(model.selected.title)
+                .accessibilityIdentifier(model.accessibilityPrefix + "-choose-view")
+                Text("Opacity").foregroundStyle(.secondary)
+                Slider(value: Binding(get: { model.opacity(for: model.selected) },
+                                      set: { model.setOpacity($0, for: model.selected) }), in: 0...1)
+                    .accessibilityLabel("\(model.selected.title) opacity")
+                    .accessibilityIdentifier(model.accessibilityPrefix + "-opacity")
+                Text("\(Int((model.opacity(for: model.selected) * 100).rounded()))%")
+                    .monospacedDigit().lineLimit(1).frame(width: 40, alignment: .trailing)
+                Button("Cancel") { model.finish(save: false) }
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier(model.accessibilityPrefix + "-cancel")
+            }
+            HStack(spacing: 6) {
+                Text("Place").foregroundStyle(.secondary)
+                ForEach(BoundLandscapeArrangementModel.Corner.allCases, id: \.rawValue) { corner in
+                    Button { model.placeSelectedView(at: corner) } label: {
+                        Image(systemName: corner.symbol).font(.system(size: 14, weight: .semibold))
+                            .frame(width: 44, height: 36)
+                            .background(Color.purple.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+                            .frame(height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Place \(model.selected.title) \(corner.title.lowercased())")
+                    .accessibilityHint("Moves this view to the corner. Drag it to fine-tune the position.")
+                    .accessibilityIdentifier(model.accessibilityPrefix + "-place.\(corner.rawValue)")
+                }
+                Spacer(minLength: 0)
+                Button("Reset", action: model.resetSelectedView)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityLabel("Reset \(model.selected.title)")
+                    .accessibilityIdentifier(model.accessibilityPrefix + "-reset")
+            }
+        }
+        .font(.caption).tint(Color(uiColor: .deltaPurple))
+        .padding(.horizontal, 12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.2), lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(model.accessibilityPrefix + "-arrangement")
+    }
+
     private func selection(_ content: BoundPiPContent) -> some View {
         Button { model.select(content) } label: {
             Text(content.title).fontWeight(model.selected == content ? .bold : .regular)
@@ -185,10 +255,13 @@ struct BoundLandscapeArrangementOverlay: View {
     }
 }
 
-private func arrangementEditorFrame(in canvas: CGRect, refined: Bool) -> CGRect {
-    let width = min(refined ? 560 : 490, canvas.width * (refined ? 0.74 : 0.66))
-    let height: CGFloat = refined ? 122 : 90
-    return CGRect(x: canvas.midX - width / 2, y: canvas.maxY - height - 4, width: width, height: height)
+@MainActor
+private func arrangementEditorFrame(for model: BoundLandscapeArrangementModel) -> CGRect {
+    let canvas = model.layout.canvas
+    let width = model.placementShortcuts ? min(520, canvas.width * 0.70) : min(model.refined ? 560 : 490, canvas.width * (model.refined ? 0.74 : 0.66))
+    let height: CGFloat = model.placementShortcuts ? 88 : model.refined ? 122 : 90
+    let y = model.placementShortcuts && model.editorAtTop ? canvas.minY + 4 : canvas.maxY - height - 4
+    return CGRect(x: canvas.midX - width / 2, y: y, width: width, height: height)
 }
 
 private struct ArrangementButtonStyle: ButtonStyle {
@@ -240,7 +313,7 @@ final class BoundLandscapeOpacityGesture: NSObject, UIGestureRecognizerDelegate 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         let point = touch.location(in: view)
         return model.active && model.editing && model.layout.opacityZone.contains(point)
-            && !arrangementEditorFrame(in: model.layout.canvas, refined: model.refined).contains(point)
+            && !arrangementEditorFrame(for: model).contains(point)
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {

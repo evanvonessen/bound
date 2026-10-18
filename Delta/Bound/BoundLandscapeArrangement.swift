@@ -29,6 +29,29 @@ struct BoundLandscapeViewPlacement: Codable, Equatable, Sendable {
 @MainActor
 final class BoundLandscapeArrangementModel: ObservableObject {
     enum ResizeAxis { case width, height, scale }
+    enum Corner: String, CaseIterable {
+        case topLeft, topRight, bottomLeft, bottomRight
+        var center: CGPoint {
+            CGPoint(x: self == .topLeft || self == .bottomLeft ? 0 : 1,
+                    y: self == .topLeft || self == .topRight ? 0 : 1)
+        }
+        var title: String {
+            switch self {
+            case .topLeft: "Top left"
+            case .topRight: "Top right"
+            case .bottomLeft: "Bottom left"
+            case .bottomRight: "Bottom right"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .topLeft: "arrow.up.left"
+            case .topRight: "arrow.up.right"
+            case .bottomLeft: "arrow.down.left"
+            case .bottomRight: "arrow.down.right"
+            }
+        }
+    }
 
     struct Layout: Equatable {
         var canvas: CGRect = .zero
@@ -58,6 +81,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     @Published private(set) var active = false
     @Published private(set) var option: BoundLandscapeOption = .option3
     @Published private(set) var editing = false
+    @Published private(set) var editorAtTop = false
     @Published private(set) var friendVisible: Bool
     @Published private(set) var referenceVisible: Bool
     @Published private(set) var referenceContent: BoundPiPContent
@@ -93,6 +117,8 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     }
 
     var refined: Bool { option == .option4 }
+    var placementShortcuts: Bool { option == .option5 }
+    var focusedHandles: Bool { refined || placementShortcuts }
     var accessibilityPrefix: String { "bound.landscape\(option.rawValue)" }
 
     init(defaults: UserDefaults? = nil, namespace: String = "bound.landscape") {
@@ -109,23 +135,25 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         readPlacements()
     }
 
-    /// Option 4 starts as a snapshot, then uses its own persisted layout. Keeping
+    /// New variants start as an Option 3 snapshot, then save independently. Keeping
     /// one observable session also keeps the live video canvas and gestures mounted.
     func useOption(_ value: BoundLandscapeOption) {
         guard value.supportsArrangement, option != value else { return }
         finish(save: false, resume: false)
         if active { beforeSwitch?() }
-        if value == .option4, !defaults.bool(forKey: namespace + ".option4.initialized") {
+        let destination = namespace + ".option\(value.rawValue)"
+        if value != .option3, !defaults.bool(forKey: destination + ".initialized") {
             let suffixes = ["friend-visible", "reference-visible", "reference-content"]
                 + BoundPiPContent.allCases.map { "placement." + $0.rawValue }
             for suffix in suffixes {
                 if let saved = defaults.object(forKey: namespace + ".option3." + suffix) {
-                    defaults.set(saved, forKey: namespace + ".option4." + suffix)
+                    defaults.set(saved, forKey: destination + "." + suffix)
                 }
             }
-            defaults.set(true, forKey: namespace + ".option4.initialized")
+            defaults.set(true, forKey: destination + ".initialized")
         }
         option = value
+        editorAtTop = false
         friendVisible = defaults.object(forKey: key("friend-visible")) as? Bool ?? true
         referenceVisible = defaults.object(forKey: key("reference-visible")) as? Bool ?? true
         referenceContent = Self.readContent(defaults, key: key("reference-content"), allowed: contents) ?? contents.first ?? .notes
@@ -265,6 +293,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         selected = contents.isEmpty ? .friend : referenceContent
         draft = saved
         editing = true
+        updateEditorAnchor()
         needsLayout?()
     }
 
@@ -294,6 +323,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
             selected = .friend
             gestureStart = nil
             refreshLayout()
+            updateEditorAnchor()
             return
         }
         guard contents.contains(content), referenceContent != content || selected != content else { return }
@@ -303,6 +333,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         referenceContent = content
         if !editing { defaults.set(content.rawValue, forKey: key("reference-content")) }
         refreshLayout()
+        updateEditorAnchor()
     }
 
     func move(content: BoundPiPContent, translation: CGSize, ended: Bool) {
@@ -320,6 +351,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         if ended {
             gestureStart = nil
             if content != .friend { persistResolvedReferencePosition(content) }
+            updateEditorAnchor()
         }
     }
 
@@ -359,10 +391,34 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         if ended {
             gestureStart = nil
             if content != .friend { persistResolvedReferencePosition(content) }
+            updateEditorAnchor()
         }
     }
 
-    func cancelManipulation() { gestureStart = nil }
+    func cancelManipulation() { gestureStart = nil; updateEditorAnchor() }
+
+    /// The same placement solver keeps interactive references clear of controls.
+    /// Friend can occupy those corners because its locked surface passes touches through.
+    func placeSelectedView(at corner: Corner) {
+        guard placementShortcuts, editing else { return }
+        gestureStart = nil
+        fadeStartOpacity = nil
+        var value = state(for: selected)
+        value.center = corner.center
+        setDraft(value, for: selected)
+        refreshLayout()
+        setDraft(displayedState(for: selected), for: selected)
+        updateEditorAnchor()
+    }
+
+    private func updateEditorAnchor() {
+        guard placementShortcuts, editing else { return }
+        let frame = selected == .friend ? layout.friend : layout.reference
+        // Move the toolbar only after selection or a completed manipulation,
+        // so it never jumps between edges while a finger is dragging a view.
+        let atTop = frame.midY > layout.canvas.midY
+        if editorAtTop != atTop { editorAtTop = atTop }
+    }
 
     func setOpacity(_ value: Double, for content: BoundPiPContent) {
         guard editing else { return }
@@ -373,12 +429,13 @@ final class BoundLandscapeArrangementModel: ObservableObject {
 
     /// Reset is part of the arrangement draft, so Cancel restores the saved view.
     func resetSelectedView() {
-        guard refined, editing else { return }
+        guard focusedHandles, editing else { return }
         gestureStart = nil
         fadeStartOpacity = nil
         setDraft(defaultPlacements[selected] ?? State(Self.defaultState(for: selected)), for: selected)
         refreshLayout(avoidFriend: selected != .friend)
         if selected != .friend { persistResolvedReferencePosition(selected) }
+        updateEditorAnchor()
     }
 
     func fade(phase: UIGestureRecognizer.State, dy: CGFloat) {

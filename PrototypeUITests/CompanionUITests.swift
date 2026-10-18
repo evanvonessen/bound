@@ -4923,6 +4923,10 @@ extension CompanionUITests {
         try verifyLandscapeArrangement(option: 4)
     }
 
+    func testLandscapeOption5CornerPlacementAndIndependentViews() throws {
+        try verifyLandscapeArrangement(option: 5)
+    }
+
     private func verifyLandscapeArrangement(option: Int) throws {
         let prefix = "bound.landscape\(option)"
         // Observe native menu transitions explicitly; the running emulator can
@@ -4941,6 +4945,12 @@ extension CompanionUITests {
         }
 
         let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture"])
+        func selectView(_ name: String) {
+            if option == 5 { app.buttons[prefix + "-choose-view"].tap() }
+            let choice = app.buttons[prefix + "-select." + name]
+            XCTAssertTrue(choice.waitForExistence(timeout: 5))
+            choice.tap()
+        }
         let settings = app.buttons["Settings"]
         openBoundSettings(in: app)
         let options = element("bound.landscape-options", in: app)
@@ -4967,9 +4977,9 @@ extension CompanionUITests {
         XCTAssertTrue(reference.exists)
         friendToggle.tap()
         XCTAssertTrue(friend.waitForExistence(timeout: 5))
-        if option == 4 { XCTAssertEqual(viewsToggle.label, "Hide views") }
+        if option >= 4 { XCTAssertEqual(viewsToggle.label, "Hide views") }
         viewsToggle.tap()
-        if option == 4 { XCTAssertEqual(viewsToggle.label, "Show views") }
+        if option >= 4 { XCTAssertEqual(viewsToggle.label, "Show views") }
         XCTAssertEqual(viewsToggle.value as? String, "Hidden")
         XCTAssertTrue(reference.waitForNonExistence(timeout: 5))
         XCTAssertTrue(friend.exists)
@@ -5004,12 +5014,10 @@ extension CompanionUITests {
 
         // A genuine three-finger swipe changes only the selected panel.
         let opacity = app.sliders[prefix + "-opacity"]
-        if option == 4 {
+        if option >= 4 {
             // Every enabled view is directly selectable; only the selected view
             // has resize handles, keeping the other panel easy to distinguish.
-            let bosses = app.buttons[prefix + "-select.bosses"]
-            XCTAssertTrue(bosses.exists)
-            bosses.tap()
+            selectView("bosses")
             XCTAssertTrue(element(prefix + "-move.bosses", in: app).exists)
             XCTAssertTrue(element(prefix + "-resize-width.bosses", in: app).exists)
             XCTAssertFalse(element(prefix + "-resize-scale.friend", in: app).exists)
@@ -5017,25 +5025,48 @@ extension CompanionUITests {
             app.buttons[prefix + "-reset"].tap()
             XCTAssertEqual(opacity.value as? String, "100%")
         }
-        app.buttons[prefix + "-select.friend"].tap()
-        if option == 4 {
+        if option == 5 {
+            let toolbar = element(prefix + "-arrangement", in: app)
+            selectView("friend")
+            let movableFriend = element(prefix + "-move.friend", in: app)
+            let friendSize = movableFriend.frame.size
+            app.buttons[prefix + "-place.bottomRight"].tap()
+            XCTAssertGreaterThan(movableFriend.frame.midY, app.frame.midY)
+            XCTAssertLessThan(toolbar.frame.midY, app.frame.midY)
+            XCTAssertEqual(movableFriend.frame.width, friendSize.width, accuracy: 1)
+            XCTAssertEqual(movableFriend.frame.height, friendSize.height, accuracy: 1)
+            app.buttons[prefix + "-place.topLeft"].tap()
+            XCTAssertLessThan(movableFriend.frame.midY, app.frame.midY)
+            XCTAssertGreaterThan(toolbar.frame.midY, app.frame.midY)
+            selectView("dex")
+            app.buttons[prefix + "-place.bottomRight"].tap()
+            let movableReference = element(prefix + "-move.dex", in: app)
+            for obstacle in try actualPiPHitObstacles(in: element("bound.game-screen", in: app)) {
+                let overlap = movableReference.frame.intersection(obstacle)
+                XCTAssertFalse(overlap.width > 1 && overlap.height > 1)
+            }
+            screenshot("Landscape-option5-corner-placement")
+            app.buttons[prefix + "-place.topRight"].tap()
+        }
+        selectView("friend")
+        if option >= 4 {
             XCTAssertTrue(element(prefix + "-resize-scale.friend", in: app).exists)
             XCTAssertFalse(element(prefix + "-resize-width.bosses", in: app).exists)
         }
         opacity.adjust(toNormalizedSliderPosition: 0.55)
         let friendOpacity = opacity.value as? String
-        app.buttons[prefix + "-select.dex"].tap()
+        selectView("dex")
         let originalReferenceOpacity = opacity.value as? String
         let screen = app.frame
         try BoundUITestGestures.swipe(withStart: CGPoint(x: screen.midX, y: screen.height * 0.30), deltaY: 65, orientation: UIInterfaceOrientation.landscapeRight.rawValue, screenSize: screen.size)
         XCTAssertNotEqual(opacity.value as? String, originalReferenceOpacity,
                           "Three fingers in the center should change the selected reference opacity")
-        app.buttons[prefix + "-select.friend"].tap()
+        selectView("friend")
         XCTAssertEqual(opacity.value as? String, friendOpacity)
         let moveFriend = element(prefix + "-move.friend", in: app)
         moveFriend.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.1, thenDragTo: menu.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
-        app.buttons[prefix + "-select.dex"].tap()
+        selectView("dex")
         let moveDex = element(prefix + "-move.dex", in: app)
         XCTAssertTrue(moveDex.exists)
         let originalSize = moveDex.frame.size

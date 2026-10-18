@@ -278,7 +278,7 @@ final class BoundCompanionCoordinator {
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-reset-layout") {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
-            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") { UserDefaults.standard.removeObject(forKey: key) }
+            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") || key.hasPrefix("bound.landscape.option5.") { UserDefaults.standard.removeObject(forKey: key) }
         }
         #endif
         #if DEBUG

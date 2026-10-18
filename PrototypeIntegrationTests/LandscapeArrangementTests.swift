@@ -162,6 +162,176 @@ final class LandscapeArrangementTests: XCTestCase {
         XCTAssertEqual(restored.placement(for: .bosses), savedBosses)
     }
 
+    func testOptionFiveCopiesOptionThreeAndPersistsIndependentlyAcrossRecreation() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([.dex, .bosses])
+        model.setActive(true)
+        arrangeLayout(model)
+
+        model.arrange()
+        model.select(.dex)
+        model.move(content: .dex, translation: CGSize(width: -70, height: 30), ended: true)
+        model.setOpacity(0.38, for: .dex)
+        model.finish(save: true)
+        let optionThreeDex = model.placement(for: .dex)
+        let optionThreeFriend = model.placement(for: .friend)
+
+        model.useOption(.option4)
+        arrangeLayout(model)
+        model.arrange()
+        model.select(.dex)
+        model.move(content: .dex, translation: CGSize(width: 90, height: -35), ended: true)
+        model.setOpacity(0.82, for: .dex)
+        model.finish(save: true)
+        let optionFourDex = model.placement(for: .dex)
+        XCTAssertNotEqual(optionFourDex, optionThreeDex)
+
+        model.useOption(.option5)
+        XCTAssertEqual(model.placement(for: .dex), optionThreeDex,
+                       "Option 5's first-use snapshot comes from Option 3, not the currently selected Option 4.")
+        XCTAssertEqual(model.placement(for: .friend), optionThreeFriend)
+        model.setActive(true)
+        arrangeLayout(model)
+        model.arrange()
+        model.select(.dex)
+        model.setOpacity(0.61, for: .dex)
+        model.finish(save: true)
+        let optionFiveDex = model.placement(for: .dex)
+        XCTAssertNotEqual(optionFiveDex, optionThreeDex)
+
+        model.useOption(.option3)
+        XCTAssertEqual(model.placement(for: .dex), optionThreeDex)
+        model.useOption(.option4)
+        XCTAssertEqual(model.placement(for: .dex), optionFourDex)
+        model.useOption(.option5)
+        XCTAssertEqual(model.placement(for: .dex), optionFiveDex)
+
+        let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        restored.useOption(.option5)
+        XCTAssertEqual(restored.placement(for: .dex), optionFiveDex)
+        restored.useOption(.option3)
+        XCTAssertEqual(restored.placement(for: .dex), optionThreeDex)
+        restored.useOption(.option4)
+        XCTAssertEqual(restored.placement(for: .dex), optionFourDex)
+    }
+
+    func testOptionFiveCornerPlacementKeepsSizeAndOpacityAndRespectsReferenceControls() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([.dex])
+        model.useOption(.option5)
+        model.setActive(true)
+        let canvas = CGRect(x: 0, y: 0, width: 1000, height: 600)
+        let menu = CGRect(x: 900, y: 20, width: 80, height: 70)
+        let bound = CGRect(x: 900, y: 500, width: 80, height: 70)
+        let obstacle = CGRect(x: 445, y: 220, width: 110, height: 120)
+        let bases: [BoundPiPContent: CGRect] = [
+            .friend: CGRect(x: 650, y: 80, width: 240, height: 160),
+            .dex: CGRect(x: 380, y: 115, width: 300, height: 360),
+            .bosses: CGRect(x: 390, y: 130, width: 260, height: 360),
+            .types: CGRect(x: 390, y: 130, width: 260, height: 360),
+            .notes: CGRect(x: 390, y: 130, width: 260, height: 360)
+        ]
+        model.updateLayout(canvas: canvas, occupied: [obstacle, menu, bound], menuFrame: menu,
+                           boundFrame: bound, defaults: bases, keyboardHeight: 0)
+        model.arrange()
+        model.select(.dex)
+        model.resize(content: .dex, translation: CGSize(width: 35, height: -10), axis: .scale, ended: true)
+        model.setOpacity(0.47, for: .dex)
+        let referenceSize = model.layout.reference.size
+        let referenceOpacity = model.opacity(for: .dex)
+        for corner in BoundLandscapeArrangementModel.Corner.allCases {
+            model.placeSelectedView(at: corner)
+            let frame = model.layout.reference
+            XCTAssertFalse(frame.isEmpty, "\(corner.title) should resolve to a visible reference position.")
+            XCTAssertFalse(frame.intersects(obstacle), "Reference must avoid the play-area obstacle at \(corner.title).")
+            XCTAssertFalse(frame.intersects(menu), "Reference must remain clear of the MENU hit region.")
+            XCTAssertFalse(frame.intersects(bound), "Reference must remain clear of the BOUND hit region.")
+            XCTAssertEqual(frame.size.width, referenceSize.width, accuracy: 1)
+            XCTAssertEqual(frame.size.height, referenceSize.height, accuracy: 1)
+            XCTAssertEqual(model.opacity(for: .dex), referenceOpacity, accuracy: 0.0001)
+        }
+
+        model.select(.friend)
+        model.setOpacity(0.29, for: .friend)
+        let friendSize = model.layout.friend.size
+        model.placeSelectedView(at: .topRight)
+        XCTAssertTrue(model.layout.friend.intersects(menu),
+                      "Friend corner shortcuts may use the touch-through MENU area.")
+        XCTAssertEqual(model.layout.friend.size.width, friendSize.width, accuracy: 1)
+        XCTAssertEqual(model.layout.friend.size.height, friendSize.height, accuracy: 1)
+        XCTAssertEqual(model.opacity(for: .friend), 0.29, accuracy: 0.0001)
+    }
+
+    func testOptionFiveCornerPlacementDraftCancelAndDonePersistence() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([.dex])
+        model.useOption(.option5)
+        model.setActive(true)
+        arrangeLayout(model)
+        model.arrange()
+        model.select(.dex)
+        let original = model.placement(for: .dex)
+        model.placeSelectedView(at: .topLeft)
+        let draft = model.placement(for: .dex)
+        XCTAssertNotEqual(draft.center, original.center)
+        model.finish(save: false)
+        XCTAssertEqual(model.placement(for: .dex), original, "Cancel discards a corner shortcut draft.")
+
+        model.arrange()
+        model.select(.dex)
+        model.placeSelectedView(at: .bottomRight)
+        let saved = model.placement(for: .dex)
+        model.finish(save: true)
+        let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        restored.useOption(.option5)
+        XCTAssertEqual(restored.placement(for: .dex), saved, "Done persists the selected corner position.")
+    }
+
+    func testOptionFiveToolbarAnchorWaitsForManipulationEndAndShortcutsAreOptionScoped() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([.dex])
+        model.useOption(.option5)
+        model.setActive(true)
+        arrangeLayout(model)
+        model.arrange()
+        model.select(.dex)
+        let anchorBeforeDrag = model.editorAtTop
+        model.move(content: .dex, translation: CGSize(width: 0, height: 180), ended: false)
+        XCTAssertEqual(model.editorAtTop, anchorBeforeDrag,
+                       "The toolbar remains steady while the panel is moving under a finger.")
+        model.move(content: .dex, translation: CGSize(width: 0, height: 180), ended: true)
+        XCTAssertTrue(model.editorAtTop, "After the move ends, the toolbar moves opposite the panel's lower-half position.")
+
+        model.finish(save: false)
+        model.useOption(.option3)
+        arrangeLayout(model)
+        model.arrange()
+        XCTAssertFalse(model.placementShortcuts)
+        XCTAssertFalse(model.focusedHandles)
+        let optionThreePlacement = model.placement(for: .dex)
+        model.placeSelectedView(at: .topLeft)
+        XCTAssertEqual(model.placement(for: .dex), optionThreePlacement)
+        model.finish(save: false)
+
+        model.useOption(.option4)
+        arrangeLayout(model)
+        model.arrange()
+        XCTAssertFalse(model.placementShortcuts)
+        XCTAssertTrue(model.focusedHandles)
+        let optionFourPlacement = model.placement(for: .dex)
+        model.placeSelectedView(at: .topLeft)
+        XCTAssertEqual(model.placement(for: .dex), optionFourPlacement)
+        let optionFourAnchor = model.editorAtTop
+        model.move(content: .dex, translation: CGSize(width: 0, height: 180), ended: true)
+        XCTAssertEqual(model.editorAtTop, optionFourAnchor,
+                       "Automatic toolbar repositioning is specific to Option 5.")
+        model.finish(save: false)
+    }
+
     func testSwitchingOptionsDuringArrangementDiscardsDraftWithoutResuming() throws {
         let (model, defaults, namespace) = try makeModel()
         defer { defaults.removePersistentDomain(forName: namespace) }
