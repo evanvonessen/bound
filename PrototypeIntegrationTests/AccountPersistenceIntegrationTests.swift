@@ -46,10 +46,7 @@ final class AccountPersistenceIntegrationTests: XCTestCase {
     }
 
     func testFriendsSheetRendersOption2AndPreservesOption1WithLongUsername() async throws {
-        let previousExperimentalValue = BoundExperimentalFeaturesPreferences().isEnabled
         let previousVersion = UserDefaults.standard.object(forKey: BoundUIVersionPreferences.key)
-        let preferences = BoundExperimentalFeaturesPreferences()
-        preferences.isEnabled = true
         BoundUIVersionPreferences().version = .option2
 
         let namespace = "Bound.FriendsSheetRenderTest." + UUID().uuidString
@@ -93,7 +90,6 @@ final class AccountPersistenceIntegrationTests: XCTestCase {
             try? storage.remove()
             try? deletionStorage.remove()
             defaults.removePersistentDomain(forName: namespace)
-            preferences.isEnabled = previousExperimentalValue
             if let previousVersion {
                 UserDefaults.standard.set(previousVersion, forKey: BoundUIVersionPreferences.key)
             } else {
@@ -310,12 +306,7 @@ final class FriendModerationIntegrationTests: XCTestCase {
 
 @MainActor
 final class FriendTapToShareIntegrationTests: XCTestCase {
-    func testExperimentalFriendTapStartsOnceSwitchesRoomsAndCanRetryAfterStop() async throws {
-        let preferences = BoundExperimentalFeaturesPreferences()
-        let previousExperimentalState = preferences.isEnabled
-        preferences.isEnabled = true
-        defer { preferences.isEnabled = previousExperimentalState }
-
+    func testFriendTapStartsOnceSwitchesRoomsAndCanRetryAfterStop() async throws {
         let owner = UUID()
         let identity = try makeIdentity(owner: owner)
         let first = FriendRoom(roomID: UUID().uuidString, displayName: "First Friend")
@@ -324,7 +315,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         var requestedRooms: [String] = []
         var jiggleRooms: [String] = []
         let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
-            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+            tokenFetcher: { room, session in
                 requestedRooms.append(room)
                 return self.makeLease(room: room, owner: session.owner, request: requestedRooms.count)
             })
@@ -371,34 +362,29 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         sharing.stop()
     }
 
-    func testSelectionNeverAutostartsWhenExperimentalFeaturesAreOff() async throws {
-        let preferences = BoundExperimentalFeaturesPreferences()
-        let previousExperimentalState = preferences.isEnabled
-        preferences.isEnabled = false
-        defer { preferences.isEnabled = previousExperimentalState }
-
+    func testSelectionWithoutExplicitShareTapNeverAutostarts() async throws {
         let owner = UUID()
         let identity = try makeIdentity(owner: owner)
         let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
         let transport = FriendTapSharingTransport()
         var tokenRequests = 0
         let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
-            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+            tokenFetcher: { room, session in
                 tokenRequests += 1
                 return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
             })
         let onboarding = FriendOnboarding(call: { _, action, _ in
             action == "list" ? FriendResponse(ok: true, rooms: [friend]) : FriendResponse(ok: false)
         }, sendJiggle: { _, _ in
-            XCTFail("Experimental-off selection must not send a Jiggle")
+            XCTFail("Selection without the explicit share action must not send a Jiggle")
             return ""
         }, observeAccount: { OnboardingObservation($0) })
         onboarding.open(sharing: sharing, existing: { identity })
         await waitUntil { !onboarding.busy }
 
-        onboarding.select(friend, startSharing: true)
+        onboarding.select(friend)
         await settle()
-        XCTAssertEqual(onboarding.selected, friend, "Selection remains available while experimental sharing is disabled")
+        XCTAssertEqual(onboarding.selected, friend, "Selection remains available without starting sharing")
         XCTAssertFalse(sharing.active)
         XCTAssertEqual(tokenRequests, 0)
         XCTAssertTrue(transport.configurations.isEmpty)
@@ -406,11 +392,6 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
     }
 
     func testInvalidUnlistedBusyAndSignedOutSelectionCannotStartAndAcceptedInviteStaysIdle() async throws {
-        let preferences = BoundExperimentalFeaturesPreferences()
-        let previousExperimentalState = preferences.isEnabled
-        preferences.isEnabled = true
-        defer { preferences.isEnabled = previousExperimentalState }
-
         let owner = UUID()
         var identity: AppCloudSession? = try makeIdentity(owner: owner)
         let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Listed Friend")
@@ -421,7 +402,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         var tokenRequests = 0
         var holdReport = false
         let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
-            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+            tokenFetcher: { room, session in
                 tokenRequests += 1
                 return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
             })
@@ -474,18 +455,13 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
     }
 
     func testPendingJiggleIsCanceledOnNewSelection() async throws {
-        let preferences = BoundExperimentalFeaturesPreferences()
-        let previousExperimentalState = preferences.isEnabled
-        preferences.isEnabled = true
-        defer { preferences.isEnabled = previousExperimentalState }
-
         let identity = try makeIdentity(owner: UUID())
         let first = FriendRoom(roomID: UUID().uuidString, displayName: "First Friend")
         let second = FriendRoom(roomID: UUID().uuidString, displayName: "Second Friend")
         let transport = FriendTapSharingTransport()
         var tokenRequests = 0
         let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
-            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+            tokenFetcher: { room, session in
                 tokenRequests += 1
                 return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
             })
@@ -526,16 +502,11 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
     }
 
     func testPendingJiggleIsCanceledAcrossAccountSwitchAndSignOut() async throws {
-        let preferences = BoundExperimentalFeaturesPreferences()
-        let previousExperimentalState = preferences.isEnabled
-        preferences.isEnabled = true
-        defer { preferences.isEnabled = previousExperimentalState }
-
         let firstOwner = UUID(), secondOwner = UUID()
         var identity: AppCloudSession? = try makeIdentity(owner: firstOwner)
         let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
         let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
-            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+            tokenFetcher: { room, session in
                 self.makeLease(room: room, owner: session.owner, request: 1)
             })
         var jiggleStarts = 0
@@ -581,16 +552,11 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         onboarding.close()
     }
 
-    func testDisablingExperimentalFeaturesCancelsPendingJiggleWithoutStaleMessage() async throws {
-        let preferences = BoundExperimentalFeaturesPreferences()
-        let previousExperimentalState = preferences.isEnabled
-        preferences.isEnabled = true
-        defer { preferences.isEnabled = previousExperimentalState }
-
+    func testStoppingShareCancelsPendingJiggleWithoutStaleMessage() async throws {
         let identity = try makeIdentity(owner: UUID())
         let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
         let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
-            experimentalFeaturesEnabled: { preferences.isEnabled }, tokenFetcher: { room, session in
+            tokenFetcher: { room, session in
                 self.makeLease(room: room, owner: session.owner, request: 1)
             })
         var jiggleStarts = 0
@@ -612,34 +578,22 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
 
         onboarding.select(friend, startSharing: true)
         await waitUntil { sharing.active && jiggleStarts == 1 }
-        preferences.isEnabled = false
-        onboarding.experimentalFeaturesChanged()
-        sharing.experimentalFeaturesChanged(false)
-        await waitUntil { canceledJiggles == 1 && !onboarding.busy }
-        XCTAssertEqual(canceledJiggles, 1, "Experimental opt-out cancels the in-flight notification")
-        let messageAfterOptOut = onboarding.message
-        onboarding.select(friend, startSharing: true)
-        await settle()
-        XCTAssertEqual(jiggleStarts, 1, "Opting out cancels the pending Jiggle and prevents another tap from sending one")
-        XCTAssertEqual(onboarding.message, "Ready to share with Fixture Friend.")
-        XCTAssertNotEqual(onboarding.message, "Jiggle sent.", "A canceled Jiggle must not publish a stale success")
-        XCTAssertNotEqual(messageAfterOptOut, "Jiggle sent.")
         onboarding.close()
+        sharing.stop()
+        await waitUntil { canceledJiggles == 1 && !onboarding.busy }
+        XCTAssertEqual(canceledJiggles, 1, "Stopping a share cancels the in-flight notification")
+        XCTAssertEqual(jiggleStarts, 1)
+        XCTAssertNotEqual(onboarding.message, "Jiggle sent.", "A canceled Jiggle must not publish a stale success")
         sharing.stop()
     }
 
     func testRefreshAndForegroundShareReconnectDoNotResendJiggle() async throws {
-        let preferences = BoundExperimentalFeaturesPreferences()
-        let previousExperimentalState = preferences.isEnabled
-        preferences.isEnabled = true
-        defer { preferences.isEnabled = previousExperimentalState }
-
         let identity = try makeIdentity(owner: UUID())
         let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
         let transport = FriendTapSharingTransport()
         var tokenRequests = 0
         let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
-            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+            tokenFetcher: { room, session in
                 tokenRequests += 1
                 return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
             })
@@ -677,17 +631,12 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
     }
 
     func testJiggleFailureDoesNotStopOrDelaySharing() async throws {
-        let preferences = BoundExperimentalFeaturesPreferences()
-        let previousExperimentalState = preferences.isEnabled
-        preferences.isEnabled = true
-        defer { preferences.isEnabled = previousExperimentalState }
-
         let identity = try makeIdentity(owner: UUID())
         let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
         let transport = FriendTapSharingTransport()
         var tokenRequests = 0
         let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
-            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+            tokenFetcher: { room, session in
                 tokenRequests += 1
                 return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
             })
@@ -713,17 +662,12 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
     }
 
     func testClosingFriendsKeepsPendingJiggleRunningWithActiveShare() async throws {
-        let preferences = BoundExperimentalFeaturesPreferences()
-        let previousExperimentalState = preferences.isEnabled
-        preferences.isEnabled = true
-        defer { preferences.isEnabled = previousExperimentalState }
-
         let identity = try makeIdentity(owner: UUID())
         let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
         let transport = FriendTapSharingTransport()
         var tokenRequests = 0
         let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
-            experimentalFeaturesEnabled: { true }, tokenFetcher: { room, session in
+            tokenFetcher: { room, session in
                 tokenRequests += 1
                 return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
             })
@@ -750,10 +694,6 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
     }
 
     func testUsernameAddUsesTrimmedNameKeepsOwnProfileAndDoesNotStartSharing() async throws {
-        let preferences = BoundExperimentalFeaturesPreferences()
-        let previous = preferences.isEnabled
-        preferences.isEnabled = true
-        defer { preferences.isEnabled = previous }
         let identity = try makeIdentity(owner: UUID())
         let room = FriendRoom(roomID: UUID().uuidString, displayName: "Navi")
         var additions: [[String: String]] = []
@@ -784,11 +724,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         onboarding.close()
     }
 
-    func testUsernameAddErrorsKeepFriendsAndExperimentalOptOutMakesNoRequest() async throws {
-        let preferences = BoundExperimentalFeaturesPreferences()
-        let previous = preferences.isEnabled
-        preferences.isEnabled = true
-        defer { preferences.isEnabled = previous }
+    func testUsernameAddErrorsKeepFriendsAndLegacyFalseDoesNotDisablePairing() async throws {
         let identity = try makeIdentity(owner: UUID())
         var additions = 0
         let onboarding = FriendOnboarding(call: { _, action, _ in
@@ -807,10 +743,16 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         XCTAssertNil(onboarding.selected)
         onboarding.add(username: " ")
         XCTAssertEqual(additions, 1)
-        preferences.isEnabled = false
+        let legacyKey = BoundLegacyPreferences.experimentalFeaturesKey
+        let previousLegacy = UserDefaults.standard.object(forKey: legacyKey)
+        UserDefaults.standard.set(false, forKey: legacyKey)
+        defer {
+            if let previousLegacy { UserDefaults.standard.set(previousLegacy, forKey: legacyKey) }
+            else { UserDefaults.standard.removeObject(forKey: legacyKey) }
+        }
         onboarding.add(username: "Navi")
-        await settle()
-        XCTAssertEqual(additions, 1, "Build 13 must never invoke username pairing")
+        await waitUntil { !onboarding.busy }
+        XCTAssertEqual(additions, 2, "The retired preference cannot disable username pairing")
         onboarding.close()
     }
 

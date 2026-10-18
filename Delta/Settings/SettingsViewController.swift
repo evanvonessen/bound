@@ -297,7 +297,6 @@ private extension SettingsViewController
         {
         // Patreon and app-icon management are not part of Bound's settings surface.
         case .patreon, .display: return true
-        case .syncing: return !BoundFeatureVisibility.experimentalFeaturesEnabled
         #if !DEBUG
         case .advanced: return true
         #endif

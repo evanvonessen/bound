@@ -226,7 +226,6 @@ final class BoundFriendAccount: ObservableObject {
     private let configuration: () throws -> String
     private let transport: @MainActor (URLRequest) async throws -> BoundAuthTransport.Response
     private let automaticRefresh: Bool
-    private let experimentalFeaturesEnabled: () -> Bool
     private var saved: BoundSavedSession?
     private var generation = UUID()
     private var refreshTask: Task<Void, Never>?
@@ -240,13 +239,11 @@ final class BoundFriendAccount: ObservableObject {
     private var deletionIdentityOwner: UUID?
 
     init(storage: (any BoundSessionStorage)? = nil, deletionStorage: (any BoundSessionStorage)? = nil, automaticRefresh: Bool = true,
-         experimentalFeaturesEnabled: @escaping () -> Bool = { BoundFeatureVisibility.experimentalFeaturesEnabled },
          configuration: @escaping () throws -> String = BoundFriendAccount.bundledKey,
          transport: @escaping @MainActor (URLRequest) async throws -> BoundAuthTransport.Response = BoundAuthTransport.perform) {
         self.storage = storage ?? BoundKeychainSessionStorage()
         self.deletionStorage = deletionStorage ?? BoundKeychainSessionStorage(service: (Bundle.main.bundleIdentifier ?? "Bound") + ".friend-account-deletion")
         self.configuration = configuration; self.transport = transport; self.automaticRefresh = automaticRefresh
-        self.experimentalFeaturesEnabled = experimentalFeaturesEnabled
         restore()
         restoreDeletion()
         #if canImport(UIKit)
@@ -394,20 +391,15 @@ final class BoundFriendAccount: ObservableObject {
     }
 
     enum SignupResult: Equatable { case signedIn, checkEmail, usernameTaken, failed, cancelled }
-    func createAccount(email: String, password: String, username: String? = nil) async -> SignupResult {
+    func createAccount(email: String, password: String, username: String) async -> SignupResult {
         guard !busy, session == nil, !deletionPending else { return .failed }
         guard let email = Self.normalizedEmail(email), !password.isEmpty else {
             status = "Enter a valid email and a password."; return .failed
         }
-        // Snapshot the gate once so changing Settings during an in-flight request
-        // cannot silently switch the signup contract halfway through.
-        let requiresUsername = experimentalFeaturesEnabled()
-        let normalizedUsername = username?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if requiresUsername {
-            guard let normalizedUsername, BoundSocialAPI.validUsername(normalizedUsername) else {
-                status = "Choose a username with 1–40 characters. Links, email addresses and unsafe names aren't allowed."
-                return .failed
-            }
+        let normalizedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard BoundSocialAPI.validUsername(normalizedUsername) else {
+            status = "Choose a username with 1–40 characters. Links, email addresses and unsafe names aren't allowed."
+            return .failed
         }
         signOut()
         guard !removalPending else { return .failed }
@@ -416,30 +408,23 @@ final class BoundFriendAccount: ObservableObject {
         var receivedSession = false
         do {
             let key = try configuration()
-            if requiresUsername, let normalizedUsername {
-                let available = try await checkUsernameAvailability(normalizedUsername, key: key)
-                guard generation == run, !Task.isCancelled,
-                      !requiresUsername || experimentalFeaturesEnabled() else { return .cancelled }
-                guard available else {
-                    status = Self.usernameTakenMessage
-                    return .usernameTaken
-                }
+            let available = try await checkUsernameAvailability(normalizedUsername, key: key)
+            guard generation == run, !Task.isCancelled else { return .cancelled }
+            guard available else {
+                status = Self.usernameTakenMessage
+                return .usernameTaken
             }
             let request = try Self.signupRequest(email: email, password: password,
-                                                 username: requiresUsername ? normalizedUsername : nil, key: key)
+                                                 username: normalizedUsername, key: key)
             let response = try await transport(request)
-            guard generation == run, !Task.isCancelled,
-                  !requiresUsername || experimentalFeaturesEnabled() else { return .cancelled }
+            guard generation == run, !Task.isCancelled else { return .cancelled }
             guard (200..<300).contains(response.status) else {
-                if requiresUsername, let normalizedUsername,
-                   (try? await checkUsernameAvailability(normalizedUsername, key: key)) == false {
-                    guard generation == run, !Task.isCancelled,
-                          !requiresUsername || experimentalFeaturesEnabled() else { return .cancelled }
+                if (try? await checkUsernameAvailability(normalizedUsername, key: key)) == false {
+                    guard generation == run, !Task.isCancelled else { return .cancelled }
                     status = Self.usernameTakenMessage
                     return .usernameTaken
                 }
-                guard generation == run, !Task.isCancelled,
-                      !requiresUsername || experimentalFeaturesEnabled() else { return .cancelled }
+                guard generation == run, !Task.isCancelled else { return .cancelled }
                 status = Self.signupError(response); return .failed
             }
             guard let object = try JSONSerialization.jsonObject(with: response.data) as? [String: Any] else { throw BoundFriendError.unavailable }
@@ -459,8 +444,7 @@ final class BoundFriendAccount: ObservableObject {
             status = "Check your email for a confirmation link, then return here to sign in. If you already have an account, sign in."
             return .checkEmail
         } catch {
-            guard generation == run, !Task.isCancelled,
-                  !requiresUsername || experimentalFeaturesEnabled() else { return .cancelled }
+            guard generation == run, !Task.isCancelled else { return .cancelled }
             if let socialError = error as? BoundSocialError {
                 status = socialError.localizedDescription
             } else {
@@ -471,15 +455,14 @@ final class BoundFriendAccount: ObservableObject {
     }
     private static let usernameTakenMessage = "That username is already taken. Choose another."
 
-    /// Builds a request using only the configured publishable key. The optional
-    /// metadata field is omitted entirely for the Build 13 signup contract.
-    static func signupRequest(email: String, password: String, username: String?, key: String) throws -> URLRequest {
+    /// Builds a username-based request using only the configured publishable key.
+    static func signupRequest(email: String, password: String, username: String, key: String) throws -> URLRequest {
         var request = URLRequest(url: URL(string: origin + "/auth/v1/signup")!)
         request.httpMethod = "POST"; request.timeoutInterval = 10
         request.setValue(key, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String: Any] = ["email": email, "password": password]
-        if let username { body["data"] = ["bound_username_v1": username] }
+        body["data"] = ["bound_username_v1": username]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
     }

@@ -26,62 +26,134 @@ private struct SettingsBadge: View
     }
 }
 
-struct SettingsView: View
-{
-    @Environment(\.dismiss)
-    private var dismiss
+/// Optional actions and information that belong to an already-running game.
+struct BoundSettingsGameplayContext {
+    let emulationDetails: BoundEmulationDetails?
+    var editControls: (() -> Void)? = nil
+    var showCompanion: (() -> Void)? = nil
+}
 
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey)
-    private var experimentalFeaturesEnabled = false
+/// Both entry points use this owner so closing and interactive dismissal share
+/// one completion. Navigating to a detail page never runs presentation cleanup.
+final class BoundSettingsHostingController: UIHostingController<SettingsView>, UIAdaptivePresentationControllerDelegate {
+    private let closed: () -> Void
+    private let syncOnClose: () -> Void
+    private var finished = false
+    private var closing = false
+
+    init(model: BoundCompanionSettingsModel? = nil, gameplay: BoundSettingsGameplayContext? = nil,
+         syncOnClose: @escaping () -> Void = { SyncManager.shared.sync() },
+         closed: @escaping () -> Void = {}) {
+        self.closed = closed
+        self.syncOnClose = syncOnClose
+        super.init(rootView: SettingsView(model: model, gameplay: gameplay))
+        rootView.close = { [weak self] in self?.closeSettings() }
+    }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("Use the shared Settings initializer") }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        presentationController?.delegate = self
+    }
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if isBeingDismissed || presentingViewController == nil { finishPresentation() }
+    }
+    func closeSettings() {
+        guard !closing, !finished else { return }
+        closing = true
+        dismiss(animated: true) { [weak self] in self?.finishPresentation() }
+    }
+    func presentationControllerDidDismiss(_ presentationController: UIPresentationController) { finishPresentation() }
+    func finishPresentation() {
+        guard !finished else { return }
+        finished = true
+        syncOnClose()
+        closed()
+    }
+}
+
+struct SettingsView: View {
+    @StateObject private var model: BoundCompanionSettingsModel
+    var gameplay: BoundSettingsGameplayContext?
+    var close: () -> Void = {}
+
+    init(model: BoundCompanionSettingsModel? = nil, gameplay: BoundSettingsGameplayContext? = nil) {
+        _model = StateObject(wrappedValue: model ?? BoundCompanionSettingsModel())
+        self.gameplay = gameplay
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    Toggle("Enable Experimental Features", isOn: Binding(
-                        get: { experimentalFeaturesEnabled },
-                        set: { BoundExperimentalFeaturesPreferences().isEnabled = $0 }
-                    ))
-                    .accessibilityIdentifier("bound.enable-experimental-features")
-                } footer: {
-                    Text("Enable new features under development. Turn off to use the build 13 feature set.")
+                    NavigationLink {
+                        BoundInterfaceSettings(model: model, gameplay: gameplay)
+                    } label: {
+                        SettingsRow(label: Text("Interface & Companion"), systemImage: "rectangle.3.group", color: .purple)
+                    }.accessibilityIdentifier("bound.settings-interface")
+                    NavigationLink {
+                        Form {
+                            ControlsSection()
+                            if !BoundFeatureVisibility.simplifiedSettings, let edit = gameplay?.editControls {
+                                Section { Button("Button placement") { edit(); close() } }
+                            }
+                        }.navigationTitle("Controls").navigationBarTitleDisplayMode(.inline)
+                    } label: {
+                        SettingsRow(label: Text("Controls"), systemImage: "gamecontroller", color: .pink)
+                    }.accessibilityIdentifier("bound.settings-controls")
+                    NavigationLink {
+                        Form {
+                            EmulationSection()
+                            if !BoundFeatureVisibility.simplifiedSettings { OnlineMultiplayerSection() }
+                        }.navigationTitle("Audio & Emulation").navigationBarTitleDisplayMode(.inline)
+                    } label: {
+                        SettingsRow(label: Text("Audio & Emulation"), systemImage: "speaker.wave.2", color: .green)
+                    }.accessibilityIdentifier("bound.settings-emulation")
+                    NavigationLink {
+                        Form { BoundAccountSocialSettings(); DeltaSyncSettingsSection() }
+                            .navigationTitle("Account & Sync").navigationBarTitleDisplayMode(.inline)
+                    } label: {
+                        SettingsRow(label: Text("Account & Sync"), systemImage: "person.crop.circle", color: .indigo)
+                    }.accessibilityIdentifier("bound.settings-account")
+                    NavigationLink {
+                        MinorSettingsView()
+                    } label: {
+                        SettingsRow(label: Text("General"), systemImage: "slider.horizontal.3", color: .gray)
+                    }.accessibilityIdentifier("bound.settings-general")
+                    NavigationLink {
+                        Form {
+                            BoundAppearanceSettings(emulationDetails: gameplay?.emulationDetails, includeAppearance: false)
+                            if !BoundFeatureVisibility.simplifiedSettings { CreditsSection() }
+                            #if DEBUG
+                            Section("Developer") {
+                                NavigationLink("Advanced") { AdvancedSettingsView() }
+                                NavigationLink("Experimental") { ExperimentalFeaturesView() }
+                            }
+                            #endif
+                        }.navigationTitle("About").navigationBarTitleDisplayMode(.inline)
+                    } label: {
+                        SettingsRow(label: Text("About"), systemImage: "info.circle", color: .cyan)
+                    }.accessibilityIdentifier("bound.settings-about")
                 }
-                if experimentalFeaturesEnabled {
-                    BoundUIVersionSettings()
-                    DeltaSyncSettingsSection()
-                }
-                if experimentalFeaturesEnabled { BoundAccountSocialSettings() }
-                ControlsSection()
-                EmulationSection()
-                if !BoundFeatureVisibility.simplifiedSettings { OnlineMultiplayerSection() }
-                MiscellaneousSection()
-                if !BoundFeatureVisibility.simplifiedSettings { CreditsSection() }
-                Section { NavigationLink("Source and licenses") { BoundSourceAndLicenses() } }
             }
             .safeAreaPadding(.top, 8)
             .navigationTitle("Settings")
-            .toolbar {
-                if #available(iOS 26, *)
-                {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button(role: .close) {
-                            // dismiss() skips presentationControllerDidDismiss, so explicitly sync on close.
-                            SyncManager.shared.sync()
-                            dismiss()
-                        }
-                    }
-                }
-                else
-                {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") {
-                            // dismiss() skips presentationControllerDidDismiss, so explicitly sync on close.
-                            SyncManager.shared.sync()
-                            dismiss()
-                        }
-                    }
-                }
+            .accessibilityIdentifier("bound.settings-root")
+        }
+        // Keep the single presentation action outside the navigation destinations.
+        // A destination's toolbar (such as Use layout) must not replace Done.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            HStack {
+                Spacer()
+                Button("Done", action: close)
+                    .font(.body.weight(.semibold))
+                    .frame(minWidth: 64, minHeight: 44)
+                    .accessibilityIdentifier("bound.settings-close")
             }
+            .padding(.horizontal, 16)
+            .background(.bar)
         }
     }
 }
@@ -252,7 +324,7 @@ struct OnlineMultiplayerView: View
 private struct DeltaSyncSettingsSection: View
 {
     @SwiftUI.State
-    private var syncingServiceName: String? = SyncManager.experimentalSettingsService?.localizedName
+    private var syncingServiceName: String? = SyncManager.currentBoundService?.localizedName
     
     @SwiftUI.State
     private var syncConflictsCount: Int = 0
@@ -314,7 +386,7 @@ private struct DeltaSyncSettingsSection: View
 
     private func refreshSyncStatus()
     {
-        syncingServiceName = SyncManager.experimentalSettingsService?.localizedName
+        syncingServiceName = SyncManager.currentBoundService?.localizedName
         isAccountConnected = SyncManager.shared.coordinator?.account != nil
 
         do {

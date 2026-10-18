@@ -61,15 +61,15 @@ extension SyncManager
         }
     }
 
-    static var experimentalSettingsServices: [Service] { [.dropbox] }
+    static var availableBoundServices: [Service] { [.dropbox] }
 
-    static var experimentalSettingsService: Service? {
+    static var currentBoundService: Service? {
         guard Settings.syncingService == .dropbox else { return nil }
         return .dropbox
     }
 
-    static func serviceForExperimentalSync(_ service: Service?) -> Service? {
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled, service == .dropbox else { return nil }
+    static func serviceForBoundSync(_ service: Service?) -> Service? {
+        guard service == .dropbox else { return nil }
         return .dropbox
     }
     
@@ -126,7 +126,6 @@ final class SyncManager
     private var startGeneration = UUID()
     private var startingCoordinator: SyncCoordinator?
     private var coordinatorWaitingToStop: SyncCoordinator?
-    private var optOutStopPending = false
     
     private init()
     {
@@ -137,7 +136,6 @@ final class SyncManager
         NotificationCenter.default.addObserver(self, selector: #selector(SyncManager.syncingDidFinish(_:)), name: SyncCoordinator.didFinishSyncingNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(SyncManager.didEnterBackground(_:)), name: UIApplication.didEnterBackgroundNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(SyncManager.willEnterForeground(_:)), name: UIApplication.willEnterForegroundNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(SyncManager.experimentalFeaturesDidChange(_:)), name: BoundExperimentalFeaturesPreferences.didChangeNotification, object: nil)
     }
 }
 
@@ -145,7 +143,6 @@ extension SyncManager
 {
     static func isServiceConfigured(_ service: Service) -> Bool
     {
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled else { return true }
         return Self.isBoundProviderConfigured(service, info: Bundle.main.infoDictionary ?? [:])
     }
 
@@ -176,11 +173,6 @@ extension SyncManager
 
     private func configureProvider(_ service: Service) -> Bool
     {
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled else {
-            DriveService.shared.clientID = Self.legacyGoogleDriveClientID
-            return true
-        }
-
         let info = Bundle.main.infoDictionary ?? [:]
         guard Self.isBoundProviderConfigured(service, info: info) else { return false }
         switch service {
@@ -189,7 +181,7 @@ extension SyncManager
         case .dropbox:
             let appKey = info["BOUND_DROPBOX_APP_KEY"] as? String
             // SwiftyDropbox traps if setupWithAppKey is called twice, even with
-            // the same key. Retain the SDK and authorization across opt-out.
+            // the same key. Keep the configured SDK instance for the app lifetime.
             if let existingKey = DropboxService.shared.clientID {
                 guard existingKey == appKey else { return false }
             } else {
@@ -215,11 +207,7 @@ extension SyncManager
     func reset(for service: Service?, completionHandler: @escaping (Result<Void, Swift.Error>) -> Void)
     {
         self.enqueueControlOperation { finish in
-            guard BoundFeatureVisibility.experimentalFeaturesEnabled else {
-                completionHandler(.success); finish(); return
-            }
-
-            if let service, !SyncManager.experimentalSettingsServices.contains(service) {
+            if let service, !SyncManager.availableBoundServices.contains(service) {
                 completionHandler(.success); finish(); return
             }
 
@@ -245,7 +233,7 @@ extension SyncManager
     
     func authenticate(presentingViewController: UIViewController? = nil, completionHandler: @escaping (Result<Account, AuthenticationError>) -> Void)
     {
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled, let coordinator = self.coordinator else { return completionHandler(.failure(AuthenticationError(Error.nilService))) }
+        guard let coordinator = self.coordinator else { return completionHandler(.failure(AuthenticationError(Error.nilService))) }
         
         coordinator.authenticate(presentingViewController: presentingViewController, completionHandler: completionHandler)
     }
@@ -259,8 +247,6 @@ extension SyncManager
     
     func sync()
     {
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled else { return }
-
         // Don't sync until we've repaired database.
         guard !UserDefaults.standard.shouldRepairDatabase else { return }
         
@@ -292,10 +278,6 @@ private extension SyncManager
         operation {
             DispatchQueue.main.async {
                 self.isRunningControlOperation = false
-                if self.optOutStopPending {
-                    self.optOutStopPending = false
-                    self.stopActiveCoordinatorForOptOut()
-                }
                 self.runNextControlOperation()
             }
         }
@@ -303,10 +285,7 @@ private extension SyncManager
 
     func start(service: Service?, completionHandler: @escaping (Result<Void, Swift.Error>) -> Void, finish: @escaping () -> Void)
     {
-        guard !BoundFeatureVisibility.experimentalFeaturesEnabled || service != .googleDrive else {
-            completionHandler(.success); finish(); return
-        }
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled else {
+        guard service != .googleDrive else {
             completionHandler(.success); finish(); return
         }
         guard let service else {
@@ -324,7 +303,7 @@ private extension SyncManager
         if !UserDefaults.standard.didValidateHarmonyBetaDatabase {
             candidate.deauthenticate { _ in
                 DispatchQueue.main.async {
-                    guard self.startGeneration == generation, BoundFeatureVisibility.experimentalFeaturesEnabled else {
+                    guard self.startGeneration == generation else {
                         self.startingCoordinator = nil
                         self.stopCoordinator(candidate)
                         completionHandler(.success); finish(); return
@@ -343,7 +322,7 @@ private extension SyncManager
 
         candidate.start { result in
             DispatchQueue.main.async {
-                guard self.startGeneration == generation, BoundFeatureVisibility.experimentalFeaturesEnabled else {
+                guard self.startGeneration == generation else {
                     self.startingCoordinator = nil
                     self.stopCoordinator(candidate)
                     completionHandler(.success); finish(); return
@@ -412,51 +391,6 @@ private extension SyncManager
         guard coordinator.isStarted else { return }
         do { try coordinator.stop() }
         catch { Logger.sync.error("Failed to stop SyncManager. \(error.localizedDescription, privacy: .public)") }
-    }
-
-    func stopForExperimentalOptOut()
-    {
-        BoundDropboxOAuth.shared.cancelPendingAuthorization()
-        DropboxService.shared.cancelPendingAuthenticationValidation()
-        self.startGeneration = UUID()
-        guard !self.isRunningControlOperation else {
-            self.optOutStopPending = true
-            return
-        }
-        self.stopActiveCoordinatorForOptOut()
-    }
-
-    func stopActiveCoordinatorForOptOut()
-    {
-        self.syncProgress = nil
-        DriveService.shared.clientID = Self.legacyGoogleDriveClientID
-        guard let coordinator = self.coordinator else { return }
-        self.coordinator = nil
-        self.stopCoordinator(coordinator)
-    }
-
-    @objc func experimentalFeaturesDidChange(_ notification: Notification)
-    {
-        guard Thread.isMainThread else {
-            DispatchQueue.main.async { self.experimentalFeaturesDidChange(notification) }
-            return
-        }
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled else {
-            self.stopForExperimentalOptOut()
-            return
-        }
-
-        self.start(service: SyncManager.serviceForExperimentalSync(Settings.syncingService)) { result in
-            switch result
-            {
-            case .success:
-                guard BoundFeatureVisibility.experimentalFeaturesEnabled else { return }
-                self.sync()
-
-            case let .failure(error):
-                Logger.sync.error("Failed to start sync after enabling Experimental Features. \(error.localizedDescription, privacy: .public)")
-            }
-        }
     }
 
     @objc func syncingDidFinish(_ notification: Notification)

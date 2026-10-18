@@ -7,17 +7,19 @@ No preferences are erased. Saved arrangement/theme values remain in storage;
 effective presentation uses Bound arrangement and Classic appearance while the
 flag is true. Emulator registration and core/dependency identities are intact.
 
-- Library Settings: Controller Skins hidden; controller opacity slider remains
-  directly accessible. Touch & Haptics, Video, Online Multiplayer and Credits
-  hidden. Cores remains, with GBA as its sole visible entry; other supported
-  systems still import/play through their existing cores.
-- In-game Bound Settings: arrangement, appearance, Touch Feedback and both
-  feedback toggles, Picture in Picture, Controls, Reset Appearance/Feedback,
-  and the top-left Buttons settings action hidden. The presentation-only engine
-  helper is removed. Gameplay buttons and stored PiP/control preferences remain.
+- Library → Settings and the in-game pause menu → Settings share one settings
+  home. Controls retains the controller opacity slider and hides Skins and Touch
+  & Haptics. Audio & Emulation hides Video and online multiplayer settings;
+  Cores remains there with GBA as its sole visible entry. Other supported
+  systems still import and play through their existing cores. Credits remains
+  hidden. Interface & Companion hides legacy screen-arrangement, appearance,
+  feedback and Picture in Picture controls.
+- In-game presentation-only engine helpers and the top-left Buttons settings
+  action remain hidden. Gameplay buttons and stored PiP/control preferences
+  remain.
 - ROM long-press: Game Settings hidden; other existing actions remain.
 
-About is now "About Bound" with the requested Delta attribution. Emulation
-backend is grouped under it. Duplicate Delta source/license link removed;
-actual Source and licenses remains accessible, including from Library Settings.
-All bundled copyright and license terms are retained unchanged.
+The shared home groups Interface & Companion, Controls, Audio & Emulation,
+Account & Sync, General, and About. About Bound keeps the requested Delta
+attribution; Source and licenses remains accessible there. All bundled
+copyright and license terms are retained unchanged.

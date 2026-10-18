@@ -57,7 +57,7 @@ enum BoundDropboxOAuthProtocol {
     }
 }
 
-/// Bound-owned Dropbox OAuth for the experimental sync provider. The pinned
+/// Bound-owned Dropbox OAuth for Bound's configured sync provider. The pinned
 /// SwiftyDropbox flow only returns implicit access tokens, so Bound exchanges
 /// PKCE authorization codes and keeps the offline refresh token in Keychain.
 final class BoundDropboxOAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
@@ -116,8 +116,7 @@ final class BoundDropboxOAuth: NSObject, ASWebAuthenticationPresentationContextP
 
     func provideAccessToken(presenting viewController: UIViewController?, completion: @escaping (Result<String, Harmony.AuthenticationError>) -> Void) {
         DispatchQueue.main.async {
-            guard BoundFeatureVisibility.experimentalFeaturesEnabled,
-                  let appKey = Self.configuredAppKey else {
+            guard let appKey = Self.configuredAppKey else {
                 completion(.failure(.invalidClientID))
                 return
             }
@@ -149,7 +148,7 @@ final class BoundDropboxOAuth: NSObject, ASWebAuthenticationPresentationContextP
     }
 
     /// Cancels pending OAuth callbacks but preserves the refresh credential.
-    /// Used when experimental sync is opted out.
+    /// Used to cancel authorization when its owning sync operation is cancelled.
     func cancelPendingAuthorization() {
         onMain {
             self.activeGeneration = UUID()
@@ -183,7 +182,6 @@ final class BoundDropboxOAuth: NSObject, ASWebAuthenticationPresentationContextP
     }
 
     private static var configuredAppKey: String? {
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled else { return nil }
         return rawAppKey
     }
 
@@ -218,8 +216,7 @@ final class BoundDropboxOAuth: NSObject, ASWebAuthenticationPresentationContextP
     }
 
     private func beginInteractiveAuthorization(appKey: String, presenter: UIViewController?, generation: UUID) {
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled,
-              generation == activeGeneration,
+        guard generation == activeGeneration,
               let presenter,
               let verifierData = Self.randomData(count: 32),
               let stateData = Self.randomData(count: 32) else {

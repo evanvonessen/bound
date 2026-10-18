@@ -51,16 +51,14 @@ final class BoundAccountProfile: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var status = ""
     private let account: BoundFriendAccount
-    private let enabled: () -> Bool
     private let perform: @MainActor (AppCloudSession, String, [String: String]) async throws -> BoundSocialResponse
     private var subscription: AnyCancellable?
     private var owner: UUID?
     private var generation = UUID()
 
     init(account: BoundFriendAccount = .shared,
-         enabled: @escaping () -> Bool = { BoundFeatureVisibility.experimentalFeaturesEnabled },
          perform: @escaping @MainActor (AppCloudSession, String, [String: String]) async throws -> BoundSocialResponse = BoundSocialAPI.call) {
-        self.account = account; self.enabled = enabled; self.perform = perform
+        self.account = account; self.perform = perform
         subscription = account.$session.sink { [weak self] session in
             guard let self, self.owner != session?.owner else { return }
             self.generation = UUID(); self.owner = session?.owner
@@ -74,16 +72,16 @@ final class BoundAccountProfile: ObservableObject {
         await update(action: "username", payload: ["username": value])
     }
     private func update(action: String, payload: [String: String]) async {
-        guard enabled(), !busy, let identity = account.session else { return }
+        guard !busy, let identity = account.session else { return }
         owner = identity.owner
         let run = generation
         busy = true; status = ""
         defer { if generation == run { busy = false } }
         do {
             await account.refreshIfNeeded()
-            guard enabled(), generation == run, identity.isSameSession(as: account.session) else { return }
+            guard generation == run, identity.isSameSession(as: account.session) else { return }
             let response = try await perform(identity, action, payload)
-            guard enabled(), generation == run, identity.isSameSession(as: account.session) else { return }
+            guard generation == run, identity.isSameSession(as: account.session) else { return }
             guard response.ok, let name = response.username, BoundSocialAPI.validUsername(name) else {
                 throw BoundSocialError.rejected(response.error)
             }
@@ -93,13 +91,13 @@ final class BoundAccountProfile: ObservableObject {
                 NotificationCenter.default.post(name: Self.didChangeNotification, object: identity.owner)
             }
         } catch {
-            guard generation == run, identity.isSameSession(as: account.session), enabled() else { return }
+            guard generation == run, identity.isSameSession(as: account.session) else { return }
             status = (error as? BoundSocialError)?.localizedDescription ?? "Couldn't load your username. Try again."
         }
     }
 }
 
-/// Device registration is opt-in. Account switches and experiment opt-out stop
+/// Device registration is opt-in. Account switches and disabling the preference stop
 /// local delivery immediately and revoke this installation's server registration.
 @MainActor
 final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
@@ -135,11 +133,9 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
         guard !started else { return }
         started = true; center.delegate = self
         subscription = account.$session.sink { [weak self] session in self?.accountChanged(session) }
-        for name in [UIApplication.didBecomeActiveNotification, BoundExperimentalFeaturesPreferences.didChangeNotification] {
-            observations.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor [weak self] in await self?.reconcile() }
-            })
-        }
+        observations.append(NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in await self?.reconcile() }
+        })
         observations.append(NotificationCenter.default.addObserver(forName: BoundFriendAccount.willSignOutNotification, object: account, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.revokeRegistration() }
         })
@@ -155,7 +151,7 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
         if started { Task { await reconcile() } }
     }
     func setEnabled(_ value: Bool) async {
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled, account.session != nil, !busy else { return }
+        guard account.session != nil, !busy else { return }
         if !value {
             revokeRegistration()
             enabled = false
@@ -167,7 +163,7 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
         defer { if generation == run { busy = false } }
         do {
             let granted = try await center.requestAuthorization(options: [.alert, .sound])
-            guard run == generation, BoundFeatureVisibility.experimentalFeaturesEnabled else { return }
+            guard run == generation else { return }
             guard granted else { status = BoundSocialError.rejected("notifications_disabled").localizedDescription; return }
             enabled = true
             if let preferenceKey { defaults.set(true, forKey: preferenceKey) }
@@ -175,18 +171,18 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
         } catch { if run == generation { status = "Couldn't enable notifications. Try again." } }
     }
     private func reconcile() async {
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled, enabled, let identity = account.session,
+        guard enabled, let identity = account.session,
               identity.owner == owner else { revokeRegistration(); return }
         let run = generation
         let settings = await center.notificationSettings()
-        guard generation == run, identity.isSameSession(as: account.session), enabled, BoundFeatureVisibility.experimentalFeaturesEnabled else { return }
+        guard generation == run, identity.isSameSession(as: account.session), enabled else { return }
         guard [.authorized, .provisional, .ephemeral].contains(settings.authorizationStatus) else {
             revokeRegistration(); status = BoundSocialError.rejected("notifications_disabled").localizedDescription; return
         }
         UIApplication.shared.registerForRemoteNotifications()
     }
     func registered(token: Data) {
-        guard token.count >= 16, token.count <= 256, BoundFeatureVisibility.experimentalFeaturesEnabled,
+        guard token.count >= 16, token.count <= 256,
               enabled, let identity = account.session, identity.owner == owner else { return }
         self.token = token
         upload?.cancel()
@@ -204,7 +200,7 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
             do {
                 _ = try await BoundSocialAPI.call(identity, action: "device", payload: ["installationID": installation, "revision": revision, "token": tokenString, "environment": environment])
                 guard let self, !Task.isCancelled, self.generation == run, identity.isSameSession(as: self.account.session),
-                      self.enabled, BoundFeatureVisibility.experimentalFeaturesEnabled else { return }
+                      self.enabled else { return }
                 self.status = "Jiggles are on for this device."
             } catch {
                 guard let self, !Task.isCancelled, self.generation == run else { return }
@@ -213,7 +209,7 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
         }
     }
     func registrationFailed() {
-        guard enabled, BoundFeatureVisibility.experimentalFeaturesEnabled else { return }
+        guard enabled else { return }
         status = "Push registration failed. Try again on a device with notifications enabled."
     }
     private func revokeRegistration() {
@@ -233,7 +229,6 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
     func prepareForSignOut() { revokeRegistration() }
 
     static func send(to room: FriendRoom, session: AppCloudSession) async throws -> String {
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled else { throw BoundSocialError.rejected(nil) }
         let request = try session.friendJiggleRequest(roomID: room.roomID, requestID: UUID().uuidString.lowercased())
         let raw = try await BoundAuthTransport.perform(request)
         let response = try JSONDecoder().decode(BoundSocialResponse.self, from: raw.data)
@@ -248,7 +243,7 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         Task { @MainActor in
             let info = notification.request.content.userInfo
-            guard BoundFeatureVisibility.experimentalFeaturesEnabled, self.enabled,
+            guard self.enabled,
                   info["kind"] as? String == "bound-jiggle",
                   info["recipientID"] as? String == self.account.session?.owner.uuidString.lowercased() else {
                 completionHandler([]); return
@@ -264,9 +259,8 @@ struct BoundAccountSocialSettings: View {
     @ObservedObject private var account = BoundFriendAccount.shared
     @ObservedObject private var profile = BoundAccountProfile.shared
     @ObservedObject private var notifications = BoundJiggleNotifications.shared
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentalFeaturesEnabled = false
     @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
-    private var usesUpdatedUI: Bool { experimentalFeaturesEnabled && uiVersion == .option2 }
+    private var usesUpdatedUI: Bool { uiVersion == .option2 }
     var body: some View {
         Section("Bound account") {
             if account.deletionPending && usesUpdatedUI {

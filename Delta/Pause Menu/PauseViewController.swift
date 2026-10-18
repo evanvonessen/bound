@@ -285,7 +285,7 @@ private extension PauseViewController
         
         self.fastForwardItem = MenuItem(text: NSLocalizedString("Fast Forward", comment: ""), image: #imageLiteral(resourceName: "FastForward"), action: { _ in })
         self.friendsItem = MenuItem(text: NSLocalizedString("Connect", comment: ""), image: UIImage(systemName: "person.2.fill"), action: { _ in })
-        self.screenshotItem = MenuItem(text: NSLocalizedString("Bound Settings", comment: ""), image: #imageLiteral(resourceName: "Screenshot"), action: { _ in })
+        self.screenshotItem = MenuItem(text: NSLocalizedString("Settings", comment: ""), image: #imageLiteral(resourceName: "Screenshot"), action: { _ in })
         
         self.controllerModeItem = MenuItem(text: "Controller Mode", image: UIImage(systemName: "gamecontroller.fill"), action: { item in
             let preferences = BoundControllerModePreferences()

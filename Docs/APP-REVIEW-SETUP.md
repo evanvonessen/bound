@@ -55,8 +55,9 @@ by this work.
   email. Cancel before submitting when demonstrating the UI with a real account.
   An authenticated successful deletion needs the deployed endpoint and disposable
   QA; interrupted deletion can be retried by its saved operation capability.
-- Settings: Library Settings exposes controller opacity and GBA core settings;
-  Menu → Bound Settings contains About Bound and Source and licenses.
+- Settings: Library → Settings and Menu → Settings open the same settings home.
+  Interface & Companion contains controller opacity, companion and layout choices;
+  Audio & Emulation contains core settings. About contains Source and licenses.
 
 ## Reply draft — use only after the preceding checks
 

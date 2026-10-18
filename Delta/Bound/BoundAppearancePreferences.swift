@@ -26,10 +26,9 @@ struct BoundEmulationDetails: Equatable {
     static let deltaUpstreamRevision = "c1d3d068e019e6493eed45654569db3cc5beb86a"
 }
 
-/// Restore this exact feature set by changing one flag; stored preferences remain intact.
+/// Bound keeps its compact settings visibility rules independent of UI Version.
 enum BoundFeatureVisibility {
     static let simplifiedSettings = true
-    static var experimentalFeaturesEnabled: Bool { BoundExperimentalFeaturesPreferences().isEnabled }
 }
 
 /// Appearance and screen arrangement are independent preferences. Touch feedback uses Delta's existing settings.

@@ -3,25 +3,25 @@ import CoreGraphics
 import XCTest
 @testable import Models
 final class PiPTests: XCTestCase {
-    @MainActor func testEnabledViewsDefaultToAllAndPersistWithoutChangingBaselineCycle() throws {
+    @MainActor func testEnabledViewsDefaultToAllAndPersistForBothUIVersions() throws {
         let suite = "BoundCompanionViews." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = BoundPiPPreferences(defaults: defaults)
-        let all = BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: true)
-        XCTAssertEqual(preferences.enabledContents(experimentalFeaturesEnabled: true), all)
+        let all = BoundPiPContent.cycleOrder
+        XCTAssertEqual(preferences.enabledContents(uiVersion: .option2), all)
         for content in all { XCTAssertTrue(preferences.isEnabled(content)) }
         for content in [BoundPiPContent.notes, .types, .dex] { preferences.setEnabled(false, for: content) }
 
         let restarted = BoundPiPPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
-        XCTAssertEqual(restarted.enabledContents(experimentalFeaturesEnabled: true), [.friend, .bosses])
-        XCTAssertEqual(restarted.enabledContents(experimentalFeaturesEnabled: false), [.friend, .notes, .types])
+        XCTAssertEqual(restarted.enabledContents(uiVersion: .option2), [.friend, .bosses])
+        XCTAssertEqual(restarted.enabledContents(uiVersion: .option1), [.friend, .bosses])
         restarted.setEnabled(false, for: .friend)
         restarted.setEnabled(false, for: .bosses)
-        XCTAssertTrue(restarted.enabledContents(experimentalFeaturesEnabled: true).isEmpty)
-        XCTAssertEqual(restarted.enabledContents(experimentalFeaturesEnabled: false), [.friend, .notes, .types])
+        XCTAssertTrue(restarted.enabledContents(uiVersion: .option2).isEmpty)
+        XCTAssertTrue(restarted.enabledContents(uiVersion: .option1).isEmpty)
         restarted.setEnabled(true, for: .bosses)
-        XCTAssertEqual(preferences.enabledContents(experimentalFeaturesEnabled: true), [.bosses])
+        XCTAssertEqual(preferences.enabledContents(uiVersion: .option2), [.bosses])
     }
     @MainActor func testLegacyCornerMigratesPerPanelAndTypesIgnoresLegacyTransparency() throws {
         let suite = "BoundPiPIndependent." + UUID().uuidString
@@ -45,6 +45,25 @@ final class PiPTests: XCTestCase {
         XCTAssertEqual(relaunched.opacity(for: .notes), 0.6)
         XCTAssertEqual(relaunched.opacity(for: .types), 1)
         XCTAssertEqual(relaunched.transparency(for: .types), 0)
+    }
+    @MainActor func testConfigurationChangesNotifyOnceWhenValuesChange() throws {
+        let suite = "BoundCompanionNotifications." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        let notification = XCTNSNotificationExpectation(name: BoundPiPPreferences.didChangeNotification,
+                                                        object: preferences)
+        notification.expectedFulfillmentCount = 3
+        notification.assertForOverFulfill = true
+
+        preferences.setEnabled(false, for: .notes)
+        preferences.setEnabled(false, for: .notes)
+        preferences.setContentOrder([.dex, .friend])
+        preferences.setContentOrder([.dex, .friend])
+        preferences.setAssignedContents([.dex], for: 0)
+        preferences.setAssignedContents([.dex], for: 0)
+
+        wait(for: [notification], timeout: 1)
     }
     @MainActor func testPreferencesPersistIndependentContentAndSharedCorner() throws {
         let suite = "BoundPiPTests." + UUID().uuidString

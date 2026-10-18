@@ -185,13 +185,13 @@ final class BossGuideTests: XCTestCase {
         XCTAssertEqual(invalid.resolved(in: catalog), BoundBossGuideSelection(teamID: catalog.defaultTeam.id, pokemonIndex: 0))
         let tooHigh = BoundBossGuideSelection(teamID: choice.teamID, pokemonIndex: 999)
         XCTAssertEqual(tooHigh.resolved(in: catalog).pokemonIndex, 3)
-        defaults.set(false, forKey: BoundExperimentalFeaturesPreferences.enabledKey)
+        defaults.set(false, forKey: BoundLegacyPreferences.experimentalFeaturesKey)
         XCTAssertEqual(store.read(gameID: "ROM_A", catalog: catalog), choice, "Turning experiments off must preserve the guide choice")
     }
 
-    func testExperimentGateKeepsTheBuild13CycleAndAddsReferencePanels() {
-        XCTAssertEqual(BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: false), [.friend, .notes, .types])
-        XCTAssertEqual(BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: true), [.friend, .notes, .types, .bosses, .dex])
+    func testPermanentCompanionCycleIncludesReferencePanels() {
+        XCTAssertEqual(BoundPiPContent.cycleOrder, [.friend, .notes, .types, .bosses, .dex])
+        XCTAssertEqual(BoundPiPContent.cycleOrder, [.friend, .notes, .types, .bosses, .dex])
     }
 
     func testBossReferenceResolvesEveryDefaultSpeciesMoveAndDescriptionOffline() throws {

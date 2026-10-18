@@ -225,7 +225,7 @@ extension AppDelegate
     
     @discardableResult private func openURL(_ url: URL) -> Bool
     {
-        if BoundFeatureVisibility.experimentalFeaturesEnabled, GIDSignIn.sharedInstance.handle(url) { return true }
+        if GIDSignIn.sharedInstance.handle(url) { return true }
         if url.isFileURL
         {
             if GameType(fileExtension: url.pathExtension) != nil || url.pathExtension.lowercased() == "zip"
@@ -239,7 +239,7 @@ extension AppDelegate
         }
         else if url.scheme?.hasPrefix("db-") == true
         {
-            guard BoundFeatureVisibility.experimentalFeaturesEnabled, DropboxService.shared.clientID != nil else { return false }
+            guard DropboxService.shared.clientID != nil else { return false }
             return DropboxService.shared.handleDropboxURL(url)
         }
         else if url.scheme?.lowercased() == "delta"

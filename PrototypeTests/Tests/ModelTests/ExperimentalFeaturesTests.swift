@@ -3,58 +3,54 @@ import XCTest
 @testable import Models
 
 final class ExperimentalFeaturesTests: XCTestCase {
-    func testFreshInstallIsOffWithoutSavingAnOptIn() throws {
-        let suite = "BoundExperimentalFeatures." + UUID().uuidString
+    @MainActor
+    func testLegacyPreferenceNeverChangesPermanentFeatureBaseline() throws {
+        let suite = "BoundFeatureBaseline." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
 
-        XCTAssertFalse(BoundExperimentalFeaturesPreferences(defaults: defaults).isEnabled)
-        XCTAssertNil(defaults.object(forKey: BoundExperimentalFeaturesPreferences.enabledKey))
-    }
+        let baseline = try XCTUnwrap(UserDefaults(suiteName: suite))
+        XCTAssertNil(baseline.object(forKey: BoundLegacyPreferences.experimentalFeaturesKey))
+        assertBaseline(defaults: baseline)
 
-    func testOptInAndOptOutPersistWithoutChangingBuild13Preferences() throws {
-        let suite = "BoundExperimentalFeatures." + UUID().uuidString
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let appearance = BoundAppearancePreferences(defaults: defaults)
-        appearance.theme = .minimal
-        appearance.screenLayout = .delta
-        defaults.set(0.4, forKey: "bound.delta.pip.v1.friend.opacity")
-        defaults.set(false, forKey: "isButtonHapticFeedbackEnabled")
-        let preferences = BoundExperimentalFeaturesPreferences(defaults: defaults)
+        let uiVersion = BoundUIVersionPreferences(defaults: defaults)
+        uiVersion.version = .option2
+        let button = BoundCompanionButtonPreferences(defaults: defaults)
+        button.buttonType = .option3
+        let companion = BoundPiPPreferences(defaults: defaults)
+        companion.setEnabled(false, for: .notes)
+        companion.setContentOrder([.dex, .friend, .types, .notes, .bosses])
+        defaults.set(BoundReferenceLayout.layout4.rawValue, forKey: BoundReferenceLayoutPreferences.dexKey)
+        defaults.set(BoundReferenceLayout.layout9.rawValue, forKey: BoundReferenceLayoutPreferences.bossKey)
 
-        for enabled in [true, false] {
-            preferences.isEnabled = enabled
-            let reopened = try XCTUnwrap(UserDefaults(suiteName: suite))
-            XCTAssertEqual(BoundExperimentalFeaturesPreferences(defaults: reopened).isEnabled, enabled)
-            XCTAssertTrue(BoundFeatureVisibility.simplifiedSettings)
-            XCTAssertEqual(appearance.effectiveTheme, .delta)
-            XCTAssertEqual(appearance.effectiveScreenLayout, .bound)
-            XCTAssertEqual(appearance.theme, .minimal)
-            XCTAssertEqual(appearance.screenLayout, .delta)
-            XCTAssertEqual(reopened.double(forKey: "bound.delta.pip.v1.friend.opacity"), 0.4)
-            XCTAssertFalse(reopened.bool(forKey: "isButtonHapticFeedbackEnabled"))
+        for legacyValue in [false, true] {
+            defaults.set(legacyValue, forKey: BoundLegacyPreferences.experimentalFeaturesKey)
+            let upgradedInstall = try XCTUnwrap(UserDefaults(suiteName: suite))
+            assertBaseline(defaults: upgradedInstall, option1: [.friend, .types, .bosses, .dex],
+                           option2: [.dex, .friend, .types, .bosses])
+            XCTAssertEqual(BoundUIVersionPreferences(defaults: upgradedInstall).version, .option2)
+            XCTAssertEqual(BoundCompanionButtonPreferences(defaults: upgradedInstall).buttonType, .option3)
+            XCTAssertEqual(BoundPiPPreferences(defaults: upgradedInstall).orderedContents,
+                           [.dex, .friend, .types, .notes, .bosses])
+            XCTAssertEqual(upgradedInstall.integer(forKey: BoundReferenceLayoutPreferences.dexKey), 4)
+            XCTAssertEqual(upgradedInstall.integer(forKey: BoundReferenceLayoutPreferences.bossKey), 9)
         }
+        XCTAssertTrue(BoundFeatureVisibility.simplifiedSettings)
     }
 
-    func testObserversAreNotifiedOnlyWhenTheGateChanges() throws {
-        let suite = "BoundExperimentalFeatures." + UUID().uuidString
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let preferences = BoundExperimentalFeaturesPreferences(defaults: defaults)
-        let notification = XCTNSNotificationExpectation(
-            name: BoundExperimentalFeaturesPreferences.didChangeNotification,
-            object: preferences
-        )
-        notification.expectedFulfillmentCount = 2
-        notification.assertForOverFulfill = true
+    @MainActor
+    private func assertBaseline(defaults: UserDefaults,
+                                option1: [BoundPiPContent] = [.friend, .notes, .types, .bosses, .dex],
+                                option2: [BoundPiPContent] = [.friend, .notes, .types, .bosses, .dex],
+                                file: StaticString = #filePath, line: UInt = #line) {
+        let uiVersion = BoundUIVersionPreferences(defaults: defaults)
+        let button = BoundCompanionButtonPreferences(defaults: defaults)
+        let companion = BoundPiPPreferences(defaults: defaults)
 
-        preferences.isEnabled = false
-        preferences.isEnabled = true
-        preferences.isEnabled = true
-        preferences.isEnabled = false
-        preferences.isEnabled = false
-
-        wait(for: [notification], timeout: 1)
+        XCTAssertEqual(uiVersion.effectiveVersion, uiVersion.version, file: file, line: line)
+        XCTAssertEqual(button.effectiveButtonType, button.buttonType, file: file, line: line)
+        XCTAssertEqual(BoundPiPContent.cycleOrder, [.friend, .notes, .types, .bosses, .dex], file: file, line: line)
+        XCTAssertEqual(companion.enabledContents(uiVersion: .option1), option1, file: file, line: line)
+        XCTAssertEqual(companion.enabledContents(uiVersion: .option2), option2, file: file, line: line)
     }
 }

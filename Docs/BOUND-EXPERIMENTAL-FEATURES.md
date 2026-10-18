@@ -1,129 +1,59 @@
-# Bound experimental features
+# Bound feature baseline
 
-Build 13 is preserved on the `build-13` branch at
-`27d90bceb4d4c49219378ba0ef88f710e19b8113`.
+Bound permanently provides the feature set that was previously available after
+enabling Experimental Features. The old preference may exist on upgraded devices,
+but it has no authority over app behavior. Fresh installs and upgrades behave
+the same. The historical Build 13 branch remains available in Git history.
 
-The ROM library's Settings screen contains **Enable Experimental Features**.
-It defaults to off and persists on this device. Off keeps the build 13 feature
-set, with the switch as the only new control. Enabling it adds the Radical Red
-4.1 Default boss guide as the fourth companion panel, after Friend, Notes and
-Types. It does not restore older hidden Delta controls. The guide is bundled
-for offline use, includes all nine boss tabs, and remembers the selected team
-and Pokémon per ROM. See `Docs/RADICAL-RED-BOSS-GUIDE.md` for source coverage.
+The Library settings button and pause-menu Settings tile open the same grouped
+home: Interface & Companion, Controls, Audio & Emulation, Account & Sync,
+General, and About. The shared screen has one navigation stack and one Done
+action. Done and swipe dismissal run cleanup and close-time sync once; opening
+a detail page does neither. In-game Settings returns to the paused menu.
 
-RRDex is the fifth panel, after Bosses. It includes the Radical Red 4.1 Normal
-dex, live Pokémon suggestions, sprites, base stats, abilities, evolution methods,
-type matchups and learnsets. Import save automatically exports the current GBA
-session's battery save, applies its ability and learnset randomizer configuration,
-and deletes the temporary export. See `Docs/RADICAL-RED-DEX.md` for provenance,
-save validation and coverage. Disabling experiments removes both reference panels
-and dismisses their keyboard, sheets and alerts without erasing preferences.
-Reference menus and import alerts keep the companion panel's position and size.
-Notes and Dex text editing can expand the panel to make room for the keyboard.
+`BoundCompanionSettingsModel` observes the existing preference stores without
+creating an emulator or sharing session. Library edits update an existing
+gameplay session, and in-game edits are available from the Library. Only active
+emulation details and gameplay actions require the optional gameplay context.
 
-Bound Settings includes **Companion views** when experiments are enabled. Friend,
-Notes, Types, Bosses and RR Dex each have a switch, all on by default. The Bound
-button and mapped cycle action skip disabled views in portrait and landscape.
-Choices persist on this device across app launches. Turning the current view off
-selects the first enabled view; turning every view off hides the companion while
-leaving the Bound button and pause-menu Settings available. Turning experiments
-off restores the Build 13 Friend/Notes/Types cycle without erasing these choices.
+The companion includes Friend, Notes, Types, Bosses and RR Dex. Users can disable
+individual views, reorder them where supported, and keep the Bound button and
+pause-menu Settings available even when every view is disabled. Button type,
+assignments and companion layout choices persist across launches. RR Dex and
+Boss View keep independent layout selections. Layout previews do not import a
+live save or change the selected per-ROM reference. See
+`Docs/RADICAL-RED-BOSS-GUIDE.md` and `Docs/RADICAL-RED-DEX.md` for details.
 
-The **Bound button** section offers four saved portrait button types. Option 1
-keeps the original round button and placement. Options 2, 3 and 4 use tall,
-slim and wider rounded rectangles, respectively, with the native controls'
-silver material, dark bezel and pressed feedback. The larger hit regions avoid
-native game inputs. Landscape keeps its existing button. Turning experiments
-off restores Option 1 without erasing the saved choice.
+UI Version remains a separate saved preference. Fresh installs use Option 1;
+upgraded installations keep their saved choice. Option 2 retains its saved view
+order, live read-only layout previews, and alternate companion behavior.
+The `simplifiedSettings` visibility rules remain in effect, and Release builds
+continue to hide unrelated upstream developer and experimental controls.
 
-**UI Version** appears in Library Settings and Bound Settings while experiments
-are enabled. **Option 1** is the default and retains the existing interface.
-**Option 2** puts Add friend beside the greeting, highlights the selected friend
-with the actual sharing state and Stop action, and moves Sign out and Delete
-account into Library Settings. It adds live, read-only layout previews, a
-touch-and-hold view menu on the Bound button, and a saved view order. Tapping
-the Bound button still cycles enabled views. The reference panels add clearer
-stat labels, exceptional matchup multipliers, larger touch targets, and pinned
-Boss team selection where the panel has enough height. Very short panels remain
-scrollable. Switching versions preserves the selected reference layouts and
-enabled views. Disabling experiments ignores Option 2 and the custom order
-without erasing either preference. This UI setting changes no backend endpoint.
+Account usernames, username-based friend operations, Jiggles, sharing restoration,
+per-ROM remembered fast-forward, source attribution and the supported Dropbox
+sync option are part of the normal Bound experience. Their existing safeguards
+remain active: account and emulator state checks, notification permission and
+per-account Jiggles choice, explicit sharing state, configured sync provider,
+and cancellation/error handling. Sync stays inactive until a supported provider
+is configured and selected. Existing unsupported provider selections remain
+saved without being started.
 
-The **Reference layouts** section in Bound Settings has independent twelve-way
-selectors for **RR Dex** and **Boss View**. Both default to **Layout 1**, preserving
-the original presentation. Choices persist on this device across app launches
-and remain saved when experiments are disabled. Layout 2 surfaces more reference
-information; Layout 3 rearranges the portrait area from either side of the Dynamic
-Island down to the game screen. Layout 4 refines that arrangement with larger
-touch targets, clearer content groups and expandable secondary details.
-Layout 5 adds a compact, glanceable Dex stats row with the total base-stat score
-in the footer and an expandable evolution section. Boss Layout 5 switches moves
-and stats with one button while keeping team navigation and Dynamic Island
-shortcuts within reach. Option 1 uses numbered layout buttons and descriptions;
-Option 2 uses named previews with a separate Use layout action.
-Layout 6 shows boss moves and base stats together and fits six team buttons in
-the standard portrait footer. Its Dex puts evolution methods in a dedicated
-sheet reached from the labeled footer, keeping the main stat row visible.
-Layouts 7–12 add the subsequent Island controls, inline learnset and matchup
-summaries, trainer navigation, and full-color type pills. Previewing a layout
-does not import a save or overwrite the game’s saved reference selections.
-Layout choices do not change the ROM, guide data
-version, selected encounter, selected species, or imported randomizer settings.
+Existing UI Version, button, view, ordering, Dex/Boss layout, per-ROM reference,
+fast-forward, controller, account, sync, notification, ROM, save, note and
+randomizer preferences remain intact when the old experimental preference is
+missing, false or true. The obsolete key can remain as inert legacy data.
 
-With experiments enabled, the pause-menu Fast Forward toggle (and mapped
-Toggle Fast Forward action) is remembered on this device for each ROM and
-restored when the game opens again, using its existing preferred speed. Holding
-a momentary Fast Forward input does not change the saved toggle. Turning
-experiments off stops an automatically restored fast-forward session without
-erasing the saved choice; ordinary manual fast forward remains available.
+## Unified Settings validation — October 17, 2026
 
-With experiments enabled, Friends adds a friend by username without generating
-an invite code. Matching ignores capitalization. Signup requires an available,
-unique username; the backend atomically enforces uniqueness at account creation
-and when renaming. The original invite-code and email/password-only signup
-flows remain available with experiments off, including Build 13's endpoints.
-Its signed-in account header greets the user by username, with an information
-button that shows username-editing instructions for ten seconds. Tapping a
-friend starts sharing immediately; Stop sharing remains available while active.
-Accepting an invite only adds and selects the friend, without starting sharing.
-With experiments off, the original account text and explicit Start sharing
-button remain.
+Focused validation passed 54 model tests, 72 integration tests, and four Simulator
+UI tests. Coverage includes legacy preference values, shared settings propagation,
+independent layouts, account/sharing cancellation, provider selection, per-ROM
+fast-forward, both Settings entry points, Done/swipe dismissal, pause/resume,
+rotation, background/foreground, relaunch persistence, and Layout 12 interactions.
+An unsigned Release iPhone build also passed.
 
-The same opt-in adds account usernames (Library Settings), Remove Friend and
-Jiggles sent when a friend is tapped to start sharing, and restoration of sharing
-that was active before backgrounding.
-Restoration fetches a fresh room token, checks account and room ownership, and
-retries temporary failures with backoff. Manual stop, account changes, removal,
-or disabling experiments cancel restoration. It does not start a previously
-inactive connection. Jiggle reception requires notification permission and a
-per-account device opt-in; sound and vibration follow the device's notification
-settings. Its new RPC and Edge Function are additive; Build 13's friend, token,
-moderation and account-deletion endpoints retain their existing definitions.
-
-Library Settings also exposes Delta Sync and Sync Status for Dropbox. Google
-Drive is not offered in Bound's sync settings; its pinned backend remains for
-compatibility. A previously saved Google selection is retained but ignored, so
-sync stays inactive until Dropbox is selected. Bound-owned OAuth configuration is required before sign-in can run. See
-`Docs/BOUND-CLOUD-SYNC.md` for setup and validation limits. Opting out cancels
-active sync operations and stops the coordinator after they drain, retaining the
-selected service and authentication for later use.
-
-Every new feature added after this switch must check
-`BoundFeatureVisibility.experimentalFeaturesEnabled` before making its UI or
-behavior accessible. Gate navigation destinations, actions and background work
-as well as visible controls. Turning the switch off must immediately return to
-the baseline behavior without erasing either baseline or experimental settings.
-
-SwiftUI views should use
-`@AppStorage(BoundExperimentalFeaturesPreferences.enabledKey)` with a false
-default so the gate responds to changes. Use
-`BoundExperimentalFeaturesPreferences().isEnabled` when changing the preference
-so UIKit listeners receive `BoundExperimentalFeaturesPreferences.didChangeNotification`.
-UIKit owners should observe that notification and re-evaluate the shared gate.
-The existing `BoundFeatureVisibility.simplifiedSettings` flag remains separate.
-
-For each experimental addition, verify access with the switch both on and off,
-including turning it off while the feature is active. The preference tests
-cover the off default, persistence, change notifications, and preservation of
-baseline preferences. The focused Library UI test covers the real switch,
-relaunch persistence, and retention of the existing settings presentation.
+The live Dropbox OAuth test was skipped because disposable QA credentials were
+not supplied. These checks establish model, Simulator, and build evidence; they
+do not establish physical-device behavior, live network/account operations,
+notification delivery, or Release UI runtime validation.

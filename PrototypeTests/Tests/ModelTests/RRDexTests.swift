@@ -222,7 +222,7 @@ final class RRDexTests: XCTestCase {
         store.write(choice, gameID: "ROM_A")
         XCTAssertEqual(store.read(gameID: "ROM_A"), choice)
         XCTAssertNil(store.read(gameID: "ROM_B").save)
-        defaults.set(false, forKey: BoundExperimentalFeaturesPreferences.enabledKey)
+        defaults.set(false, forKey: BoundLegacyPreferences.experimentalFeaturesKey)
         XCTAssertEqual(store.read(gameID: "ROM_A"), choice)
         let retained = try XCTUnwrap(defaults.data(forKey: "bound.rrdex.choice.v1.ROM_A"))
         XCTAssertLessThan(retained.count, 256)

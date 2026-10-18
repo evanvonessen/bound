@@ -8,9 +8,7 @@ enum BoundPiPCorner: String, CaseIterable, Sendable {
 enum BoundPiPContent: String, CaseIterable, Sendable {
     case friend, types, notes, bosses, dex
     var title: String { self == .dex ? "RR Dex" : rawValue.capitalized }
-    static func cycleOrder(experimentalFeaturesEnabled: Bool) -> [Self] {
-        experimentalFeaturesEnabled ? [.friend, .notes, .types, .bosses, .dex] : [.friend, .notes, .types]
-    }
+    static let cycleOrder: [Self] = [.friend, .notes, .types, .bosses, .dex]
 }
 enum BoundPiPHiddenSide: String, Sendable { case left, right }
 
@@ -33,7 +31,7 @@ final class BoundUIVersionPreferences {
         }
     }
     var effectiveVersion: BoundUIVersion {
-        BoundExperimentalFeaturesPreferences(defaults: defaults).isEnabled ? version : .option1
+        version
     }
 }
 
@@ -123,12 +121,13 @@ final class BoundCompanionButtonPreferences {
         }
     }
     var effectiveButtonType: BoundCompanionButtonType {
-        BoundExperimentalFeaturesPreferences(defaults: defaults).isEnabled ? buttonType : .option1
+        buttonType
     }
 }
 
 @MainActor
 final class BoundPiPPreferences {
+    static let didChangeNotification = Notification.Name("BoundPiPPreferencesDidChange")
     private let defaults: UserDefaults
     private let namespace: String
     init(defaults: UserDefaults = .standard, namespace: String = "bound.delta.pip.v1") {
@@ -139,7 +138,9 @@ final class BoundPiPPreferences {
         defaults.object(forKey: key(content.rawValue + ".enabled")) as? Bool ?? true
     }
     func setEnabled(_ enabled: Bool, for content: BoundPiPContent) {
+        guard isEnabled(content) != enabled else { return }
         defaults.set(enabled, forKey: key(content.rawValue + ".enabled"))
+        notifyChange()
     }
     var uiVersion: BoundUIVersion { BoundUIVersionPreferences(defaults: defaults).version }
     var buttonType: BoundCompanionButtonType {
@@ -157,8 +158,11 @@ final class BoundPiPPreferences {
     func setAssignedContents(_ contents: [BoundPiPContent], for button: Int) {
         guard (0..<3).contains(button) else { return }
         let selected = Set(contents)
-        defaults.set(orderedContents.filter { selected.contains($0) }.map(\.rawValue),
-                     forKey: key("button.\(button + 1).views"))
+        let normalized = orderedContents.filter { selected.contains($0) }.map(\.rawValue)
+        let preferenceKey = key("button.\(button + 1).views")
+        guard defaults.stringArray(forKey: preferenceKey) != normalized else { return }
+        defaults.set(normalized, forKey: preferenceKey)
+        notifyChange()
     }
     var orderedContents: [BoundPiPContent] {
         let saved = defaults.stringArray(forKey: key("view-order")) ?? []
@@ -166,22 +170,32 @@ final class BoundPiPPreferences {
     }
     private static func normalizedOrder(_ contents: [BoundPiPContent]) -> [BoundPiPContent] {
         var result: [BoundPiPContent] = []
-        for content in contents + BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: true) where !result.contains(content) {
+        for content in contents + BoundPiPContent.cycleOrder where !result.contains(content) {
             result.append(content)
         }
         return result
     }
     func setContentOrder(_ contents: [BoundPiPContent]) {
-        defaults.set(Self.normalizedOrder(contents).map(\.rawValue), forKey: key("view-order"))
+        let normalized = Self.normalizedOrder(contents).map(\.rawValue)
+        let preferenceKey = key("view-order")
+        guard defaults.stringArray(forKey: preferenceKey) != normalized else { return }
+        defaults.set(normalized, forKey: preferenceKey)
+        notifyChange()
     }
-    func enabledContents(experimentalFeaturesEnabled: Bool, uiVersion: BoundUIVersion = .option1) -> [BoundPiPContent] {
-        let contents = experimentalFeaturesEnabled && uiVersion == .option2 ? orderedContents
-            : BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: experimentalFeaturesEnabled)
-        return experimentalFeaturesEnabled ? contents.filter { isEnabled($0) } : contents
+    func enabledContents(uiVersion: BoundUIVersion = .option1) -> [BoundPiPContent] {
+        let contents = uiVersion == .option2 ? orderedContents : BoundPiPContent.cycleOrder
+        return contents.filter { isEnabled($0) }
+    }
+    private func notifyChange() {
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
     }
     var corner: BoundPiPCorner {
         get { BoundPiPCorner(rawValue: defaults.string(forKey: key("corner")) ?? "") ?? .topRight }
-        set { defaults.set(newValue.rawValue, forKey: key("corner")) }
+        set {
+            guard corner != newValue else { return }
+            defaults.set(newValue.rawValue, forKey: key("corner"))
+            notifyChange()
+        }
     }
     func corner(for content: BoundPiPContent) -> BoundPiPCorner {
         let name = key(content.rawValue + ".corner")
@@ -191,7 +205,10 @@ final class BoundPiPPreferences {
         return inherited
     }
     func setCorner(_ value: BoundPiPCorner, for content: BoundPiPContent) {
-        defaults.set(value.rawValue, forKey: key(content.rawValue + ".corner"))
+        let preferenceKey = key(content.rawValue + ".corner")
+        guard defaults.string(forKey: preferenceKey) != value.rawValue else { return }
+        defaults.set(value.rawValue, forKey: preferenceKey)
+        notifyChange()
     }
     func scale(for content: BoundPiPContent) -> Double {
         validNumber(key(content.rawValue + ".scale"), range: 0.65...1.4)
@@ -206,11 +223,17 @@ final class BoundPiPPreferences {
     }
     func setScale(_ value: Double, for content: BoundPiPContent) {
         guard value.isFinite else { return }
-        defaults.set(min(1.4, max(0.65, value)), forKey: key(content.rawValue + ".scale"))
+        let normalized = min(1.4, max(0.65, value))
+        guard scale(for: content) != normalized else { return }
+        defaults.set(normalized, forKey: key(content.rawValue + ".scale"))
+        notifyChange()
     }
     func setOpacity(_ value: Double, for content: BoundPiPContent) {
         guard content != .types, value.isFinite else { return }
-        defaults.set(min(1, max(0, value)), forKey: key(content.rawValue + ".opacity"))
+        let normalized = min(1, max(0, value))
+        guard opacity(for: content) != normalized else { return }
+        defaults.set(normalized, forKey: key(content.rawValue + ".opacity"))
+        notifyChange()
     }
     func transparency(for content: BoundPiPContent) -> Double { 1 - opacity(for: content) }
     func setTransparency(_ value: Double, for content: BoundPiPContent) { setOpacity(1 - value, for: content) }

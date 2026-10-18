@@ -1,8 +1,8 @@
 # Radical Red Pokédex
 
-The experimental companion cycle is Friend → Notes → Types → Bosses → Dex.
-With experiments off it remains Friend → Notes → Types. Native controller B
-input is unchanged; this uses the existing Bound companion button.
+RR Dex is part of Bound’s normal companion experience. The companion cycle is
+Friend → Notes → Types → Bosses → Dex. Native controller B input is unchanged;
+this uses the existing Bound companion button.
 
 The native card follows the boss guide's system backgrounds, purple tint,
 rounded cells and portrait/landscape PiP presentation. Pokémon search updates
@@ -13,7 +13,7 @@ keyboard. The content scrolls for larger evolution families and form branches.
 Weaknesses and learnsets open native sheets; editing and presentations use the
 existing input cancellation and emulation pause/resume coordinator.
 
-In **Bound Settings → Reference layouts**, RR Dex has its own saved choice of
+In **Settings → Interface & Companion**, RR Dex has its own saved choice of
 Layouts 1 through 12. Layout 1 remains the default and preserves the original card.
 Layout 2 pins species and tappable ability names while matchup summaries, base
 stats and evolutions scroll below. Layout 3 places Weaknesses and Learnset beside
@@ -93,7 +93,7 @@ site. Evolution descriptors cover every method present in the snapshot,
 including stone, friendship, time, gender, known move, party, weather, nature,
 mega and primal transformations. Data and pictures work offline.
 
-Source credit is available in **Bound Settings → Source and licenses**. The
+Source credit is available in **Settings → About → Source and licenses**. The
 upstream repository has no license file at this revision. Its publication does not
 establish redistribution rights to Pokémon artwork or other third-party
 content; this remains part of the repository's existing public-distribution

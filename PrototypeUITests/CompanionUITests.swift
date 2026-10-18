@@ -9,22 +9,25 @@ private func selectCompanion(_ name: String, in app: XCUIApplication) {
     for _ in 0..<5 {
         if cycle.value as? String == name { return }
         cycle.tap()
-        XCTAssertFalse(app.buttons["Bound Settings"].exists, "Cycling panels must not open Delta's pause menu")
+        XCTAssertFalse(app.buttons["Settings"].exists, "Cycling panels must not open the pause menu")
     }
     XCTAssertEqual(cycle.value as? String, name)
 }
 
 private func openNativePause(in app: XCUIApplication) {
-    if app.buttons["Bound Settings"].exists { return }
+    if app.buttons["Settings"].exists { return }
     let menu = app.descendants(matching: .any).matching(identifier: "bound.native-menu").firstMatch
     XCTAssertTrue(menu.waitForExistence(timeout: 5))
     menu.tap()
-    XCTAssertTrue(app.buttons["Bound Settings"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
 }
 
 private func openBoundSettings(in app: XCUIApplication) {
     openNativePause(in: app)
-    app.buttons["Bound Settings"].tap()
+    app.buttons["Settings"].tap()
+    XCTAssertTrue(app.buttons["bound.settings-interface"].waitForExistence(timeout: 5))
+    app.buttons["bound.settings-interface"].tap()
+    XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "bound.ui-version").firstMatch.waitForExistence(timeout: 5))
 }
 
 private func resumeNativePause(in app: XCUIApplication) {
@@ -33,8 +36,19 @@ private func resumeNativePause(in app: XCUIApplication) {
 }
 
 private func closeBoundSheet(in app: XCUIApplication) {
-    app.buttons["Done"].firstMatch.tap()
+    let close = app.buttons["bound.settings-close"]
+    if close.exists { close.tap() } else { app.buttons["Done"].firstMatch.tap() }
     resumeNativePause(in: app)
+}
+
+private func swipeDownSettings(in app: XCUIApplication) {
+    let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.10))
+    let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.90))
+    start.press(forDuration: 0.1, thenDragTo: end)
+    XCTAssertTrue(app.buttons["bound.settings-close"].waitForNonExistence(timeout: 10),
+                  "The settings sheet must dismiss after the downward swipe.")
+    XCTAssertTrue(app.buttons["Resume"].waitForExistence(timeout: 5),
+                  "A downward sheet swipe should return to the paused game's menu.")
 }
 
 private func gamePixelSample(_ game: XCUIElement, in app: XCUIApplication) -> Data? {
@@ -146,20 +160,12 @@ final class CompanionUITests: XCTestCase {
         add(attachment)
     }
 
-    private func setExperimentalFeatures(_ enabled: Bool, in app: XCUIApplication) {
-        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20))
-        app.buttons["Settings"].tap()
-        let toggle = app.switches["bound.enable-experimental-features"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 10))
-        if (toggle.value as? String == "1") != enabled {
-            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        }
-        XCTAssertEqual(toggle.value as? String, enabled ? "1" : "0")
-        let close = app.buttons["Close"].firstMatch
-        if close.exists { close.tap() } else { app.buttons["Done"].firstMatch.tap() }
+    private func assertPermanentFeatureBaseline(in app: XCUIApplication) {
+        XCTAssertFalse(app.switches["bound.enable-experimental-features"].exists,
+                       "Bound companion views are available without an opt-in switch.")
     }
 
-    func testFastForwardToggleSurvivesAppTerminationWhenExperimental() throws {
+    func testFastForwardToggleSurvivesAppTermination() throws {
         // Xcode 27 can miss the native menu's animation-idle notification.
         // Skip that runner-only wait; every transition below checks real UI.
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
@@ -179,11 +185,11 @@ final class CompanionUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--bound-ui-no-animations"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         defer {
             app.terminate()
             app.launch()
-            setExperimentalFeatures(false, in: app)
+            assertPermanentFeatureBaseline(in: app)
             app.terminate()
         }
 
@@ -484,7 +490,7 @@ final class CompanionUITests: XCTestCase {
 
     private func openRRDexPlayback(in app: XCUIApplication) {
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         let gameCell = app.collectionViews.cells.firstMatch
         XCTAssertTrue(gameCell.waitForExistence(timeout: 20)); gameCell.tap()
         selectCompanion("Dex", in: app)
@@ -548,10 +554,10 @@ final class CompanionUITests: XCTestCase {
         app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound",
                                "-bound.delta.pip.v1.dex.layout", "7"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         defer {
             app.terminate(); app.launch()
-            setExperimentalFeatures(false, in: app)
+            assertPermanentFeatureBaseline(in: app)
             app.terminate()
         }
         func openDex() {
@@ -640,99 +646,204 @@ final class CompanionUITests: XCTestCase {
         dragStart.press(forDuration: 0.1, thenDragTo: dragEnd)
     }
 
-    func testLibraryExperimentalFeaturesSwitchPersistsAndKeepsBuild13Settings() throws {
+    func testUnifiedSettingsHomeFromLibraryAndPauseMenu() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
         let app = XCUIApplication()
         #if DEBUG
         app.launchArguments.append("--bound-ui-no-animations")
         #endif
         app.launch()
 
-        func openLibrarySettings() {
-            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20))
-            app.buttons["Settings"].tap()
-            XCTAssertTrue(app.switches["bound.enable-experimental-features"].waitForExistence(timeout: 10))
+        func assertSharedSettingsHome() {
+            XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
+            for identifier in ["bound.settings-interface", "bound.settings-controls", "bound.settings-emulation",
+                               "bound.settings-account", "bound.settings-general", "bound.settings-about"] {
+                XCTAssertTrue(element(identifier, in: app).exists, "Shared settings home must contain \(identifier).")
+            }
+            XCTAssertFalse(app.switches["bound.enable-experimental-features"].exists)
         }
-        func assertBaseSettings() {
-            XCTAssertTrue(app.staticTexts["Controllers"].exists)
-            XCTAssertTrue(app.staticTexts["Controller opacity"].exists)
-            XCTAssertFalse(app.staticTexts["Touch & Haptics"].exists)
-            XCTAssertFalse(app.staticTexts["Online Multiplayer"].exists)
-            XCTAssertFalse(app.staticTexts["Patreon"].exists)
+        func closeSettings() {
+            let close = app.buttons["bound.settings-close"]
+            XCTAssertTrue(close.waitForExistence(timeout: 5))
+            close.tap()
         }
-        openLibrarySettings()
-        let toggle = app.switches["bound.enable-experimental-features"]
-        func tapToggle() {
-            XCTAssertTrue(toggle.isHittable)
-            // SwiftUI exposes the whole Form row as the switch; tap its native track.
-            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        }
-        if toggle.value as? String == "1" { tapToggle() }
-        XCTAssertEqual(toggle.value as? String, "0")
-        assertBaseSettings()
-        XCTAssertFalse(app.staticTexts["Delta Sync"].exists, "Cloud sync configuration stays hidden while experiments are off")
-        tapToggle()
-        XCTAssertEqual(toggle.value as? String, "1")
-        assertBaseSettings()
-        XCTAssertTrue(app.staticTexts["Delta Sync"].waitForExistence(timeout: 5), "Cloud sync configuration appears after opting in")
 
-        app.buttons["bound.delta-sync-settings"].tap()
-        XCTAssertTrue(app.navigationBars["Syncing Service"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Google Drive")).firstMatch.exists,
-                       "Google Drive must not be exposed in the provider options")
-        let dropboxUnconfigured = app.staticTexts["Dropbox — Not configured"]
-        let dropbox = app.staticTexts["Dropbox"]
-        XCTAssertTrue(dropbox.waitForExistence(timeout: 3), "Dropbox is the only available provider")
-        XCTAssertFalse(app.alerts["Cloud Sync Not Configured"].exists, "Opening provider options must not show a Google Drive alert")
-        if dropboxUnconfigured.waitForExistence(timeout: 3) {
-            dropboxUnconfigured.tap()
-            let providerAlert = app.alerts["Cloud Sync Not Configured"]
-            XCTAssertTrue(providerAlert.waitForExistence(timeout: 3))
-            XCTAssertTrue(providerAlert.staticTexts["Sign-in is not configured for Dropbox in this Bound app yet."].exists)
-            providerAlert.buttons["OK"].tap()
-            let syncingSwitch = app.switches.firstMatch
-            XCTAssertEqual(syncingSwitch.value as? String, "0")
-            syncingSwitch.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-            XCTAssertTrue(providerAlert.waitForExistence(timeout: 3), "Enabling sync without provider credentials should explain the missing setup")
-            XCTAssertEqual(syncingSwitch.value as? String, "0", "Sync must remain off when no provider is configured")
-            providerAlert.buttons["OK"].tap()
-        }
-        app.navigationBars.buttons.firstMatch.tap()
-        XCTAssertTrue(app.buttons["bound.delta-sync-settings"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 10))
+        app.buttons["Settings"].tap()
+        assertSharedSettingsHome()
+        screenshot("Unified-Settings-Home")
+        element("bound.settings-interface", in: app).tap()
+        XCTAssertTrue(element("bound.ui-version", in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(element("bound.companion-button-type", in: app).exists)
+        screenshot("Unified-Settings-Interface")
+        scrollToSetting(element("bound.rrdex-layout", in: app), in: app)
+        XCTAssertTrue(element("bound.rrdex-layout", in: app).exists)
+        scrollToSetting(element("bound.boss-layout", in: app), in: app)
+        XCTAssertTrue(element("bound.boss-layout", in: app).exists)
+        closeSettings()
 
-        app.terminate()
-        app.launch()
-        openLibrarySettings()
-        XCTAssertEqual(toggle.value as? String, "1")
-        XCTAssertTrue(app.staticTexts["Delta Sync"].exists, "Cloud sync availability follows the persisted opt-in")
-        tapToggle()
-        XCTAssertEqual(toggle.value as? String, "0")
-        XCTAssertFalse(app.staticTexts["Delta Sync"].exists)
-        app.terminate()
-        app.launch()
-        openLibrarySettings()
-        XCTAssertEqual(toggle.value as? String, "0")
-        assertBaseSettings()
-        screenshot("Library-experimental-features-off")
+        let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+        openNativePause(in: app)
+        app.buttons["Settings"].tap()
+        assertSharedSettingsHome()
+        element("bound.settings-interface", in: app).tap()
+        XCTAssertTrue(element("bound.ui-version", in: app).exists)
+        XCTAssertTrue(element("bound.companion-button-type", in: app).exists)
+        scrollToSetting(element("bound.rrdex-layout", in: app), in: app)
+        XCTAssertTrue(element("bound.rrdex-layout", in: app).exists)
+        scrollToSetting(element("bound.boss-layout", in: app), in: app)
+        XCTAssertTrue(element("bound.boss-layout", in: app).exists)
+        swipeDownSettings(in: app)
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5),
+                      "Swiping shared Settings away returns to the paused game's menu.")
+        XCTAssertTrue(app.buttons["Resume"].exists)
+        app.buttons["Settings"].tap()
+        assertSharedSettingsHome()
+        element("bound.settings-controls", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Controls"].waitForExistence(timeout: 5))
+        closeSettings()
+        XCTAssertTrue(app.buttons["Settings"].exists)
+        app.buttons["Resume"].tap()
+        let gameScreen = element("bound.game-screen", in: app)
+        XCTAssertTrue(gameScreen.waitForExistence(timeout: 5))
+        assertGamePixelsAnimate(gameScreen, in: app)
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        XCTAssertTrue(gameScreen.waitForExistence(timeout: 5))
+        assertGamePixelsAnimate(gameScreen, in: app)
+
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 10),
+                      "Returning from gameplay to Library should expose the same Settings entry point.")
+        XCTAssertTrue(app.searchFields["Search"].exists,
+                      "A fresh launch after gameplay returns to the Library.")
+        app.buttons["Settings"].tap()
+        assertSharedSettingsHome()
+        closeSettings()
     }
 
-    func testExperimentalBossGuidePortraitSelectionAndOffGate() throws {
+    func testUnifiedSettingsPreferencesPersistAcrossEntryPointsRelaunchAndRotation() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+        let app = XCUIApplication()
+        defer { XCUIDevice.shared.orientation = .portrait }
+        #if DEBUG
+        app.launchArguments.append("--bound-ui-no-animations")
+        #endif
+        app.launch()
+        func openInterfaceFromLibrary() {
+            app.buttons["Settings"].tap()
+            app.buttons["bound.settings-interface"].tap()
+            XCTAssertTrue(element("bound.ui-version", in: app).waitForExistence(timeout: 5))
+        }
+        func openInterfaceFromPause() {
+            openNativePause(in: app)
+            app.buttons["Settings"].tap()
+            XCTAssertTrue(app.buttons["bound.settings-interface"].waitForExistence(timeout: 5))
+            app.buttons["bound.settings-interface"].tap()
+            XCTAssertTrue(element("bound.ui-version", in: app).waitForExistence(timeout: 5))
+        }
+        func closeSettingsAndResume() {
+            app.buttons["bound.settings-close"].tap()
+            resumeNativePause(in: app)
+        }
+        let names = ["friend", "notes", "types", "bosses", "dex"]
+        func viewToggle(_ name: String) -> XCUIElement { app.switches["bound.companion-enabled.\(name)"] }
+
+        openInterfaceFromLibrary()
+        let buttonType = app.segmentedControls["bound.companion-button-type"]
+        buttonType.buttons["1"].tap()
+        let version = element("bound.ui-version", in: app)
+        version.tap()
+        app.buttons["Option 2"].tap()
+        for name in names {
+            let toggle = viewToggle(name)
+            scrollToSetting(toggle, in: app)
+            XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+            if toggle.value as? String != "0" {
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+            XCTAssertEqual(toggle.value as? String, "0")
+        }
+        app.buttons["bound.settings-close"].tap()
+
+        let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
+        let cycle = app.buttons["bound.panel-cycle"]
+        XCTAssertTrue(cycle.waitForExistence(timeout: 15))
+        XCTAssertEqual(cycle.value as? String, "No views enabled")
+        openInterfaceFromPause()
+        XCTAssertEqual(version.label, "UI Version, Option 2")
+        for name in names {
+            scrollToSetting(viewToggle(name), in: app)
+            XCTAssertEqual(viewToggle(name).value as? String, "0")
+        }
+        scrollToSetting(viewToggle("friend"), in: app)
+        viewToggle("friend").coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        closeSettingsAndResume()
+        XCTAssertEqual(cycle.value as? String, "Friend")
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        waitForFrame(element("bound.game-screen", in: app)) { _ in app.frame.width > app.frame.height }
+        openInterfaceFromPause()
+        XCTAssertEqual(version.label, "UI Version, Option 2")
+        closeSettingsAndResume()
+        XCUIDevice.shared.orientation = .portrait
+
+        app.terminate(); app.launch()
+        openInterfaceFromLibrary()
+        XCTAssertEqual(version.label, "UI Version, Option 2")
+        for name in names {
+            scrollToSetting(viewToggle(name), in: app)
+            XCTAssertEqual(viewToggle(name).value as? String, name == "friend" ? "1" : "0",
+                           "In-game settings must remain visible in Library after relaunch")
+        }
+        app.buttons["bound.settings-close"].tap()
+        let relaunchedGame = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(relaunchedGame.waitForExistence(timeout: 20)); relaunchedGame.tap()
+        XCTAssertTrue(cycle.waitForExistence(timeout: 15))
+        XCTAssertEqual(cycle.value as? String, "Friend")
+        openInterfaceFromPause()
+        XCTAssertEqual(version.label, "UI Version, Option 2")
+        for name in names {
+            scrollToSetting(viewToggle(name), in: app)
+            XCTAssertEqual(viewToggle(name).value as? String, name == "friend" ? "1" : "0")
+            if name != "friend" {
+                viewToggle(name).coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+        }
+        scrollToSetting(version, in: app)
+        version.tap()
+        app.buttons["Option 1"].tap()
+        closeSettingsAndResume()
+        for expected in ["Notes", "Types", "Bosses", "Dex", "Friend"] {
+            cycle.tap()
+            XCTAssertEqual(cycle.value as? String, expected)
+        }
+        app.terminate()
+    }
+
+    func testBossGuidePortraitSelectionPersistsWithPermanentAvailability() throws {
         let app = XCUIApplication()
         #if DEBUG
         app.launchArguments.append("--bound-ui-no-animations")
         #endif
         app.launch()
-        func setExperiments(_ enabled: Bool) {
-            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20))
-            app.buttons["Settings"].tap()
-            let toggle = app.switches["bound.enable-experimental-features"]
-            XCTAssertTrue(toggle.waitForExistence(timeout: 10))
-            if (toggle.value as? String == "1") != enabled {
-                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-            }
-            XCTAssertEqual(toggle.value as? String, enabled ? "1" : "0")
-            let close = app.buttons["Close"].firstMatch
-            if close.exists { close.tap() } else { app.buttons["Done"].firstMatch.tap() }
-        }
         func playAndCycle(to expected: String) {
             let cell = app.collectionViews.cells.firstMatch
             XCTAssertTrue(cell.waitForExistence(timeout: 20))
@@ -744,7 +855,7 @@ final class CompanionUITests: XCTestCase {
             cycle.tap(); XCTAssertEqual(cycle.value as? String, "Types")
             cycle.tap(); XCTAssertEqual(cycle.value as? String, expected)
         }
-        setExperiments(true)
+        assertPermanentFeatureBaseline(in: app)
         playAndCycle(to: "Bosses")
         let guide = element("bound.boss-guide", in: app)
         XCTAssertTrue(guide.waitForExistence(timeout: 10))
@@ -795,42 +906,27 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(species.label, "Floatzel")
 
         app.terminate(); XCUIDevice.shared.orientation = .portrait; app.launch()
-        setExperiments(false)
-        playAndCycle(to: "Friend")
-        XCTAssertFalse(element("bound.boss-guide", in: app).exists)
-        app.terminate(); app.launch()
-        setExperiments(true)
+        assertPermanentFeatureBaseline(in: app)
         playAndCycle(to: "Bosses")
-        XCTAssertEqual(species.label, "Floatzel", "Selection is kept while experiments are off and across relaunch")
-        app.terminate(); app.launch()
-        setExperiments(false)
+        XCTAssertEqual(species.label, "Floatzel", "The selected boss team and member persist across relaunch")
+        openBoundSettings(in: app)
+        XCTAssertTrue(app.switches["bound.companion-enabled.bosses"].exists)
+        closeBoundSheet(in: app)
     }
 
     func testBossFullTeamDismissalResumesGamePixels() throws {
         let app = XCUIApplication()
         app.launch()
 
-        func setExperiments(_ enabled: Bool) {
-            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20))
-            app.buttons["Settings"].tap()
-            let toggle = app.switches["bound.enable-experimental-features"]
-            XCTAssertTrue(toggle.waitForExistence(timeout: 10))
-            if (toggle.value as? String == "1") != enabled {
-                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-            }
-            XCTAssertEqual(toggle.value as? String, enabled ? "1" : "0")
-            let close = app.buttons["Close"].firstMatch
-            if close.exists { close.tap() } else { app.buttons["Done"].firstMatch.tap() }
-        }
 
-        // Leave the shared simulator's opt-in disabled even if a later assertion fails.
+        // Leave the shared simulator in the baseline app state after this test.
         defer {
             app.terminate()
             app.launch()
-            setExperiments(false)
+            assertPermanentFeatureBaseline(in: app)
         }
 
-        setExperiments(true)
+        assertPermanentFeatureBaseline(in: app)
         let cell = app.collectionViews.cells.firstMatch
         XCTAssertTrue(cell.waitForExistence(timeout: 20))
         cell.tap()
@@ -912,12 +1008,12 @@ final class CompanionUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound", "--bound-ui-reset-layout"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         defer {
             XCUIDevice.shared.orientation = .portrait
             app.terminate()
             app.launch()
-            setExperimentalFeatures(false, in: app)
+            assertPermanentFeatureBaseline(in: app)
             app.terminate()
         }
 
@@ -1005,7 +1101,7 @@ final class CompanionUITests: XCTestCase {
         defer {
             app.terminate()
             app.launch()
-            setExperimentalFeatures(false, in: app)
+            assertPermanentFeatureBaseline(in: app)
         }
         openRRDexPlayback(in: app)
         let game = element("bound.game-screen", in: app)
@@ -1081,11 +1177,11 @@ final class CompanionUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--bound-ui-no-animations"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         defer {
             app.terminate()
             app.launch()
-            setExperimentalFeatures(false, in: app)
+            assertPermanentFeatureBaseline(in: app)
         }
 
         let gameCell = libraryGame(named: "BoundPickerDiagnostic", in: app)
@@ -1119,20 +1215,9 @@ final class CompanionUITests: XCTestCase {
         assertGamePixelsAnimate(game, in: app)
     }
 
-    func testExperimentalRRDexSearchDetailsSaveImportPersistenceAndOffGate() throws {
+    func testRRDexSearchDetailsSaveImportPersistenceAndPermanentAvailability() throws {
         let app = XCUIApplication()
         app.launch()
-        func setExperiments(_ enabled: Bool) {
-            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20))
-            app.buttons["Settings"].tap()
-            let toggle = app.switches["bound.enable-experimental-features"]
-            XCTAssertTrue(toggle.waitForExistence(timeout: 10))
-            if (toggle.value as? String == "1") != enabled {
-                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-            }
-            XCTAssertEqual(toggle.value as? String, enabled ? "1" : "0")
-            app.buttons["Close"].firstMatch.tap()
-        }
         func play() {
             let cell = libraryGame(named: "BoundRRDexDiagnostic", in: app)
             XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
@@ -1144,7 +1229,7 @@ final class CompanionUITests: XCTestCase {
             XCTAssertTrue(value.contains("Limber"))
             XCTAssertTrue(value.contains("Friend Guard"))
         }
-        setExperiments(true); play(); selectCompanion("Dex", in: app)
+        assertPermanentFeatureBaseline(in: app); play(); selectCompanion("Dex", in: app)
         XCTAssertTrue(element("bound.rrdex", in: app).waitForExistence(timeout: 10))
         let game = element("bound.game-screen", in: app)
         let search = app.textFields["bound.rrdex-search"]
@@ -1219,29 +1304,23 @@ final class CompanionUITests: XCTestCase {
         search.tap(); search.typeText("bulbasaur")
         app.buttons["bound.rrdex-suggestion-1"].tap()
         assertImportedAbilities()
-        app.terminate(); app.launch(); setExperiments(false); play()
-        for name in ["Notes", "Types", "Friend", "Notes", "Types", "Friend"] {
+        app.terminate(); app.launch(); assertPermanentFeatureBaseline(in: app); play()
+        for name in ["Notes", "Types", "Bosses", "Dex", "Friend"] {
             app.buttons["bound.panel-cycle"].tap()
             XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, name)
-            XCTAssertFalse(element("bound.rrdex", in: app).exists)
+            XCTAssertEqual(element("bound.rrdex", in: app).exists, name == "Dex")
         }
+        openBoundSettings(in: app)
+        XCTAssertTrue(app.switches["bound.companion-enabled.dex"].exists)
+        closeBoundSheet(in: app)
     }
 
-    func testExperimentalRRDexLandscapeWhenRuntimeSupportsRotation() throws {
+    func testRRDexLandscapeWhenRuntimeSupportsRotation() throws {
         let app = XCUIApplication()
-        func experiments(_ enabled: Bool) {
-            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 20)); app.buttons["Settings"].tap()
-            let toggle = app.switches["bound.enable-experimental-features"]
-            XCTAssertTrue(toggle.waitForExistence(timeout: 10))
-            if (toggle.value as? String == "1") != enabled {
-                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-            }
-            app.buttons["Close"].firstMatch.tap()
-        }
-        app.launch(); experiments(true)
+        app.launch(); assertPermanentFeatureBaseline(in: app)
         defer {
             XCUIDevice.shared.orientation = .portrait
-            app.terminate(); app.launch(); experiments(false)
+            app.terminate(); app.launch(); assertPermanentFeatureBaseline(in: app)
         }
         let cell = app.collectionViews.cells.firstMatch
         XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
@@ -1263,10 +1342,10 @@ final class CompanionUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         defer {
             app.terminate(); app.launch()
-            setExperimentalFeatures(false, in: app)
+            assertPermanentFeatureBaseline(in: app)
             app.terminate()
         }
         let cell = app.collectionViews.cells.firstMatch
@@ -1343,7 +1422,7 @@ final class CompanionUITests: XCTestCase {
         let arguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
         app.launchArguments = arguments + ["--bound-ui-reset-layout"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         func openFirstGame() {
             let cell = app.collectionViews.cells.firstMatch
             XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
@@ -1353,7 +1432,7 @@ final class CompanionUITests: XCTestCase {
             app.terminate()
             app.launchArguments = arguments + ["--bound-ui-reset-layout"]
             app.launch()
-            setExperimentalFeatures(false, in: app)
+            assertPermanentFeatureBaseline(in: app)
             openFirstGame() // Reset only the dedicated QA simulator's test preferences.
             app.terminate()
         }
@@ -1412,13 +1491,17 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(cycle.value as? String, "Friend")
 
         app.terminate(); app.launch()
-        setExperimentalFeatures(false, in: app)
+        assertPermanentFeatureBaseline(in: app)
         openFirstGame()
         for expected in ["Notes", "Types", "Friend"] {
             cycle.tap(); XCTAssertEqual(cycle.value as? String, expected)
         }
         openBoundSettings(in: app)
-        XCTAssertFalse(toggle("friend").exists, "The new settings follow the experimental feature opt-in")
+        for content in contents {
+            XCTAssertTrue(toggle(content).exists, "Availability controls remain present after relaunch")
+            XCTAssertEqual(toggle(content).value as? String, ["friend", "bosses"].contains(content) ? "1" : "0")
+        }
+        for content in contents { setView(content, enabled: true) }
         closeBoundSheet(in: app)
     }
 
@@ -1452,7 +1535,7 @@ final class CompanionUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         func playDiagnosticGame() {
             let cell = libraryGame(named: "BoundRRDexDiagnostic", in: app)
             XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
@@ -1460,7 +1543,7 @@ final class CompanionUITests: XCTestCase {
         }
         defer {
             app.terminate(); XCUIDevice.shared.orientation = .portrait
-            app.launch(); setExperimentalFeatures(false, in: app); playDiagnosticGame(); app.terminate()
+            app.launch(); assertPermanentFeatureBaseline(in: app); playDiagnosticGame(); app.terminate()
         }
         playDiagnosticGame()
         openBoundSettings(in: app)
@@ -1557,7 +1640,7 @@ final class CompanionUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         func playDiagnosticGame() {
             let cell = libraryGame(named: "BoundRRDexDiagnostic", in: app)
             XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
@@ -1565,7 +1648,7 @@ final class CompanionUITests: XCTestCase {
         }
         defer {
             app.terminate(); XCUIDevice.shared.orientation = .portrait
-            app.launch(); setExperimentalFeatures(false, in: app); playDiagnosticGame(); app.terminate()
+            app.launch(); assertPermanentFeatureBaseline(in: app); playDiagnosticGame(); app.terminate()
         }
         playDiagnosticGame()
         openBoundSettings(in: app)
@@ -1706,7 +1789,7 @@ final class CompanionUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
         XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
         XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
@@ -1729,7 +1812,7 @@ final class CompanionUITests: XCTestCase {
         closeBoundSheet(in: app)
         defer {
             app.terminate(); app.launch()
-            setExperimentalFeatures(false, in: app)
+            assertPermanentFeatureBaseline(in: app)
             app.terminate()
         }
 
@@ -1828,7 +1911,7 @@ final class CompanionUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
         XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
         XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
@@ -1844,7 +1927,7 @@ final class CompanionUITests: XCTestCase {
         closeBoundSheet(in: app)
         defer {
             app.terminate(); app.launch()
-            setExperimentalFeatures(false, in: app)
+            assertPermanentFeatureBaseline(in: app)
             app.terminate()
         }
 
@@ -1928,13 +2011,13 @@ final class CompanionUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
         XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
         XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
         defer {
             app.terminate(); app.launch()
-            setExperimentalFeatures(false, in: app)
+            assertPermanentFeatureBaseline(in: app)
             app.terminate()
         }
 
@@ -2030,7 +2113,7 @@ final class CompanionUITests: XCTestCase {
         }
     }
 
-    func testUsernameSignupFieldIsExperimentalAndRequired() throws {
+    func testUsernameIsRequiredForSignup() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
         for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
@@ -2041,40 +2124,31 @@ final class CompanionUITests: XCTestCase {
         defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
         let app = XCUIApplication()
         app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
-        for enabled in [false, true] {
-            app.launch()
-            setExperimentalFeatures(enabled, in: app)
-            let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
-            XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
-            XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
-            openNativePause(in: app)
-            XCTAssertTrue(app.buttons["Connect"].waitForExistence(timeout: 5), "Use the signed-out diagnostic Simulator; never change a real account")
-            app.buttons["Connect"].tap()
-            app.buttons["Create Account"].tap()
-            let email = app.textFields["account.signup.email"]
-            XCTAssertTrue(email.waitForExistence(timeout: 5))
-            let username = app.textFields["account.signup.username"]
-            XCTAssertEqual(username.exists, enabled)
-            let submit = app.buttons["account.signup.submit"]
-            XCTAssertFalse(submit.isEnabled)
-            email.tap(); email.typeText("fixture@example.invalid")
-            let password = app.secureTextFields["account.signup.password"]
-            password.tap(); password.typeText("offline-fixture-password")
-            if enabled {
-                XCTAssertFalse(submit.isEnabled, "A new experimental account requires a username")
-                username.tap(); username.typeText("Fixture River")
-                XCTAssertTrue(submit.isEnabled)
-                screenshot("Bound-username-signup")
-            } else {
-                XCTAssertTrue(submit.isEnabled, "Build 13 keeps email/password-only signup")
-            }
-            // No signup, friend request, or real authentication is sent by this UI check.
-            app.buttons["Cancel"].tap()
-            closeBoundSheet(in: app)
-            app.terminate()
-        }
         app.launch()
-        setExperimentalFeatures(false, in: app)
+        assertPermanentFeatureBaseline(in: app)
+        let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+        openNativePause(in: app)
+        XCTAssertTrue(app.buttons["Connect"].waitForExistence(timeout: 5), "Use the signed-out diagnostic Simulator; never change a real account")
+        app.buttons["Connect"].tap()
+        app.buttons["Create Account"].tap()
+        let email = app.textFields["account.signup.email"]
+        XCTAssertTrue(email.waitForExistence(timeout: 5))
+        let username = app.textFields["account.signup.username"]
+        XCTAssertTrue(username.waitForExistence(timeout: 5))
+        let submit = app.buttons["account.signup.submit"]
+        XCTAssertFalse(submit.isEnabled)
+        email.tap(); email.typeText("fixture@example.invalid")
+        let password = app.secureTextFields["account.signup.password"]
+        password.tap(); password.typeText("offline-fixture-password")
+        XCTAssertFalse(submit.isEnabled, "A new account requires a username")
+        username.tap(); username.typeText("Fixture River")
+        XCTAssertTrue(submit.isEnabled)
+        screenshot("Bound-username-signup")
+        // No signup, friend request, or real authentication is sent by this UI check.
+        app.buttons["Cancel"].tap()
+        closeBoundSheet(in: app)
         app.terminate()
     }
 
@@ -2090,7 +2164,7 @@ final class CompanionUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         func play() {
             let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
             XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
@@ -2162,20 +2236,19 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(topDex.value as? String, "1")
         closeBoundSheet(in: app)
 
-        app.terminate(); app.launch(); setExperimentalFeatures(false, in: app); play()
-        XCTAssertEqual(cycle.frame, originalButtonFrame, "Experiments off restores the original button.")
+        app.terminate(); app.launch(); assertPermanentFeatureBaseline(in: app); play()
+        XCTAssertEqual(cycle.frame, frames[3], "The selected button style survives relaunch in the permanent settings baseline.")
         openBoundSettings(in: app)
-        XCTAssertFalse(picker.exists)
-        closeBoundSheet(in: app)
-        app.terminate(); app.launch(); setExperimentalFeatures(true, in: app); play()
-        XCTAssertEqual(cycle.frame, frames[3], "Disabling experiments retains the saved button choice.")
-        openBoundSettings(in: app)
+        scrollToSetting(picker, in: app)
+        XCTAssertTrue(picker.buttons["3"].isSelected)
         scrollToSetting(topDex, in: app)
-        topDex.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        if topDex.value as? String == "1" {
+            topDex.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        scrollToSetting(picker, in: app)
+        picker.buttons["1"].tap()
         closeBoundSheet(in: app)
-        choose(1)
-        XCTAssertEqual(cycle.frame, originalButtonFrame)
-        app.terminate(); app.launch(); setExperimentalFeatures(false, in: app); app.terminate()
+        app.terminate()
     }
 
     func testUIVersionTwoPreviewsDirectSelectionAndPersistence() throws {
@@ -2191,7 +2264,7 @@ final class CompanionUITests: XCTestCase {
         let arguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
         app.launchArguments = arguments + ["--bound-ui-reset-layout"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         func play() {
             let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
             XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
@@ -2200,7 +2273,7 @@ final class CompanionUITests: XCTestCase {
         defer {
             app.terminate()
             app.launchArguments = arguments + ["--bound-ui-reset-layout"]
-            app.launch(); setExperimentalFeatures(false, in: app); play(); app.terminate()
+            app.launch(); assertPermanentFeatureBaseline(in: app); play(); app.terminate()
         }
         play()
         let gameScreen = element("bound.game-screen", in: app)
@@ -2276,12 +2349,14 @@ final class CompanionUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
         XCTAssertTrue(game.waitForExistence(timeout: 20)); game.tap()
         XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
 
         openBoundSettings(in: app)
+        element("bound.ui-version", in: app).tap()
+        app.buttons["Option 1"].tap()
         let bossLayout = app.segmentedControls["bound.boss-layout"]
         scrollToSetting(bossLayout, in: app); bossLayout.buttons["12"].tap()
         let dexLayout = app.segmentedControls["bound.rrdex-layout"]
@@ -2299,7 +2374,7 @@ final class CompanionUITests: XCTestCase {
         closeBoundSheet(in: app)
         defer {
             app.terminate(); app.launch()
-            setExperimentalFeatures(false, in: app)
+            assertPermanentFeatureBaseline(in: app)
             app.terminate()
         }
 
@@ -2494,7 +2569,7 @@ final class CompanionUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
         XCTAssertTrue(game.waitForExistence(timeout: 20))
         game.tap()
@@ -2523,7 +2598,7 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
         defer {
             app.terminate(); app.launch()
-            setExperimentalFeatures(false, in: app)
+            assertPermanentFeatureBaseline(in: app)
             app.terminate()
         }
 
@@ -2667,7 +2742,7 @@ final class CompanionUITests: XCTestCase {
         let app = XCUIApplication()
         let arguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound", "--bound-ui-reset-layout"]
         app.launchArguments = arguments
-        app.launch(); setExperimentalFeatures(true, in: app)
+        app.launch(); assertPermanentFeatureBaseline(in: app)
         func play() {
             let cell = app.collectionViews.cells.firstMatch
             XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
@@ -2675,7 +2750,7 @@ final class CompanionUITests: XCTestCase {
         }
         defer {
             app.terminate(); XCUIDevice.shared.orientation = .portrait
-            app.launch(); setExperimentalFeatures(false, in: app); play(); app.terminate()
+            app.launch(); assertPermanentFeatureBaseline(in: app); play(); app.terminate()
         }
         play()
         let game = element("bound.game-screen", in: app)
@@ -2893,7 +2968,7 @@ final class CompanionUITests: XCTestCase {
         }
     }
 
-    func testReferenceLayoutChoicesPersistIndependentlyAndFollowExperimentGate() throws {
+    func testReferenceLayoutChoicesPersistIndependentlyInPermanentBaseline() throws {
         // Avoid Xcode 27's lost native pause-menu idle notifications; wait for real controls.
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
@@ -2907,7 +2982,7 @@ final class CompanionUITests: XCTestCase {
         let arguments = ["--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
         app.launchArguments = arguments + ["--bound-ui-reset-layout"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         func play() {
             let cell = app.collectionViews.cells.firstMatch
             XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
@@ -2915,7 +2990,7 @@ final class CompanionUITests: XCTestCase {
         }
         defer {
             app.terminate(); app.launchArguments = arguments + ["--bound-ui-reset-layout"]
-            app.launch(); setExperimentalFeatures(false, in: app); play(); app.terminate()
+            app.launch(); assertPermanentFeatureBaseline(in: app); play(); app.terminate()
         }
         play()
         app.launchArguments = arguments
@@ -2952,29 +3027,32 @@ final class CompanionUITests: XCTestCase {
         scrollToSetting(picker("rrdex"), in: app)
         picker("rrdex").buttons["6"].tap()
         closeBoundSheet(in: app)
-        app.terminate(); app.launch(); setExperimentalFeatures(false, in: app); play()
-        openBoundSettings(in: app)
-        XCTAssertFalse(picker("boss").exists); XCTAssertFalse(picker("rrdex").exists)
-        closeBoundSheet(in: app)
-        for expected in ["Notes", "Types", "Friend"] {
-            app.buttons["bound.panel-cycle"].tap()
-            XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, expected)
-        }
-        app.terminate(); app.launch(); setExperimentalFeatures(true, in: app); play()
+        app.terminate(); app.launch(); assertPermanentFeatureBaseline(in: app); play()
         openBoundSettings(in: app)
         assertChoice("boss", 3); assertChoice("rrdex", 6)
         closeBoundSheet(in: app)
+        selectCompanion("Friend", in: app)
+        for expected in ["Notes", "Types", "Bosses", "Dex", "Friend"] {
+            app.buttons["bound.panel-cycle"].tap()
+            XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, expected)
+        }
+        openBoundSettings(in: app)
+        scrollToSetting(picker("boss"), in: app)
+        picker("boss").buttons["1"].tap()
+        scrollToSetting(picker("rrdex"), in: app)
+        picker("rrdex").buttons["1"].tap()
+        closeBoundSheet(in: app)
     }
 
-    func testExperimentalPortraitBossAndRRDexCardsUseFullScreenWidthWithoutScalingSprites() throws {
+    func testPortraitBossAndRRDexCardsUseFullScreenWidthWithoutScalingSprites() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--bound-ui-screen-layout-bound", "--bound-ui-reset-layout", "--bound-ui-friend-fixture", "--bound-ui-no-animations"]
         app.launch()
-        setExperimentalFeatures(true, in: app)
+        assertPermanentFeatureBaseline(in: app)
         defer {
             app.terminate()
             app.launch()
-            setExperimentalFeatures(false, in: app)
+            assertPermanentFeatureBaseline(in: app)
         }
 
         let gameCell = app.collectionViews.cells.firstMatch
@@ -2990,7 +3068,7 @@ final class CompanionUITests: XCTestCase {
         XCTAssertGreaterThan(screenFrame.width, 100)
         let safeContentTop = friend.frame.minY
         let panel = element("bound.companion-container", in: app)
-        screenshot("Experimental-portrait-full-screen-width-reference")
+        screenshot("Portrait-full-screen-width-reference")
 
         cycle.tap() // Notes
         cycle.tap() // Types
@@ -3026,7 +3104,7 @@ final class CompanionUITests: XCTestCase {
         XCTAssertLessThanOrEqual(game.frame.minY - app.buttons["bound.boss-next"].frame.maxY, 12,
                                  "The arrow glyph should sit close to gameplay inside its lowered navigation row")
         XCTAssertLessThanOrEqual(game.frame.minY - app.buttons["bound.boss-full-team"].frame.maxY, 14)
-        screenshot("Experimental-portrait-boss-card-full-width")
+        screenshot("Portrait-boss-card-full-width")
         app.buttons["bound.boss-full-team"].tap()
         let fullTeam = element("bound.boss-full-team-list", in: app)
         XCTAssertTrue(fullTeam.waitForExistence(timeout: 10))
@@ -3084,7 +3162,7 @@ final class CompanionUITests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(control.frame.height, 44)
             }
         }
-        screenshot("Experimental-portrait-rrdex-card-full-width")
+        screenshot("Portrait-rrdex-card-full-width")
         app.buttons["bound.rrdex-weaknesses"].tap()
         let matchups = element("bound.rrdex-matchups", in: app)
         XCTAssertTrue(matchups.waitForExistence(timeout: 10))
@@ -3104,11 +3182,13 @@ final class CompanionUITests: XCTestCase {
     }
 
     // Short Form drags avoid jumping past a lazily materialized row in landscape.
-    private func scrollToSetting(_ target: XCUIElement, in app: XCUIApplication, fullyVisible: Bool = false) {
+    private func scrollToSetting(_ target: XCUIElement, in app: XCUIApplication, fullyVisible: Bool = true) {
         let form = app.collectionViews.firstMatch
         for _ in 0..<40 {
+            let close = app.buttons["bound.settings-close"]
+            let bottom = close.exists ? min(form.frame.maxY - 24, close.frame.minY - 8) : form.frame.maxY - 24
             if target.exists && target.isHittable && (!fullyVisible ||
-                target.frame.minY >= form.frame.minY + 8 && target.frame.maxY <= form.frame.maxY - 24) { return }
+                target.frame.minY >= form.frame.minY + 8 && target.frame.maxY <= bottom) { return }
             let scrollDown = target.exists && target.frame.midY < form.frame.midY
             let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: scrollDown ? 0.35 : 0.80))
             let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: scrollDown ? 0.65 : 0.50))
@@ -3230,7 +3310,7 @@ final class CompanionUITests: XCTestCase {
             XCTAssertEqual(panel.frame.width, resized.width, accuracy: 2)
         }
         openNativePause(in: app)
-        XCTAssertTrue(app.buttons["Bound Settings"].exists)
+        XCTAssertTrue(app.buttons["Settings"].exists)
         resumeNativePause(in: app)
         XCUIDevice.shared.orientation = .landscapeRight
         waitForFrame(menu) { abs($0.width - 44) < 0.5 }
@@ -3255,7 +3335,7 @@ final class CompanionUITests: XCTestCase {
         for name in ["Notes", "Types", "Friend"] {
             selectCompanion(name, in: app)
             XCTAssertEqual(cycle.value as? String, name)
-            XCTAssertFalse(app.buttons["Bound Settings"].exists)
+            XCTAssertFalse(app.buttons["Settings"].exists)
         }
         openNativePause(in: app)
         XCTAssertTrue(app.buttons["Connect"].exists)
@@ -3266,15 +3346,19 @@ final class CompanionUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Sign in"].isEnabled)
         screenshot("Bound-friend-login-over-native-pause")
         app.buttons["Done"].firstMatch.tap()
-        XCTAssertTrue(app.buttons["Bound Settings"].waitForExistence(timeout: 5))
-        app.buttons["Bound Settings"].tap()
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
+        app.buttons["Settings"].tap()
+        let about = element("bound.settings-about", in: app)
+        XCTAssertTrue(about.waitForExistence(timeout: 5))
+        about.tap()
+        XCTAssertTrue(app.staticTexts["About Bound"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["bound.source-and-licenses-link"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.switches["Menu Button Gestures"].exists)
         screenshot("Bound-settings-over-native-pause")
-        app.buttons["Done"].firstMatch.tap()
-        XCTAssertTrue(app.buttons["Bound Settings"].waitForExistence(timeout: 5))
+        app.buttons["bound.settings-close"].tap()
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
         resumeNativePause(in: app)
-        XCTAssertFalse(app.buttons["Bound Settings"].exists)
+        XCTAssertFalse(app.buttons["Settings"].exists)
         XCTAssertTrue(cycle.isHittable)
     }
 
@@ -3355,7 +3439,7 @@ final class CompanionUITests: XCTestCase {
                                "Friend PiP must clear actual extended native hit regions")
             }
             XCTAssertTrue(game.frame.insetBy(dx: -1, dy: -1).contains(friend.frame))
-            XCTAssertFalse(app.buttons["Bound Settings"].exists)
+            XCTAssertFalse(app.buttons["Settings"].exists)
             screenshot("Bound-landscape-pip-" + name)
         }
         let saved = friend.frame
@@ -3783,7 +3867,7 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(chart.frame.width, panelBeforeDrag.width, accuracy: 2)
         XCTAssertEqual(chart.frame.height, panelBeforeDrag.height, accuracy: 2)
         XCTAssertEqual(game.frame, landscapeGame)
-        XCTAssertFalse(app.buttons["Bound Settings"].exists)
+        XCTAssertFalse(app.buttons["Settings"].exists)
         screenshot("Bound-landscape-full-chart-whole-PiP-dragged")
         XCUIDevice.shared.orientation = .portrait
         XCTAssertTrue(image.waitForExistence(timeout: 5))
@@ -3883,7 +3967,7 @@ final class CompanionUITests: XCTestCase {
                                            "Chart must clear every actual extended native/cycle hit region")
                         }
                         XCTAssertEqual(game.frame, originalGame)
-                        XCTAssertFalse(app.buttons["Bound Settings"].exists)
+                        XCTAssertFalse(app.buttons["Settings"].exists)
                         screenshot("Bound-chart-clearance-\(layout)-\(orientationName)-\(scaleName)-\(cornerName)")
                     }
                 }
@@ -3955,7 +4039,7 @@ final class CompanionUITests: XCTestCase {
                     }
                     XCTAssertFalse(menu.frame.intersects(cycle.frame))
                     selectCompanion("Notes", in: app)
-                    XCTAssertFalse(app.buttons["Bound Settings"].exists)
+                    XCTAssertFalse(app.buttons["Settings"].exists)
                     screenshot("Bound-shoulders-\(layout)-\(theme)-\(name)")
                 }
             }
@@ -3978,7 +4062,7 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(mode.label, "Controller Mode")
         XCTAssertEqual(mode.value as? String, "Off")
         XCTAssertTrue(app.frame.contains(mode.frame))
-        for label in ["Save State", "Load State", "Cheat Codes", "Fast Forward", "Connect", "Bound Settings"] {
+        for label in ["Save State", "Load State", "Cheat Codes", "Fast Forward", "Connect", "Settings"] {
             XCTAssertTrue(app.buttons[label].exists)
         }
         screenshot("Bound-seven-tile-pause-menu")
@@ -4208,9 +4292,7 @@ final class ReleaseSmokeUITests: XCTestCase {
         XCTAssertTrue(game.waitForExistence(timeout: 10)); game.tap()
         XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
         openBoundSettings(in: app)
-        let layout = app.descendants(matching: .any).matching(identifier: "bound.screen-layout").firstMatch
-        XCTAssertTrue(layout.waitForExistence(timeout: 5)); layout.tap()
-        app.buttons["Bound"].firstMatch.tap()
+        XCTAssertTrue(element("bound.ui-version", in: app).exists)
         closeBoundSheet(in: app)
         selectCompanion("Notes", in: app)
         XCTAssertTrue(app.textViews["bound.notes-editor"].waitForExistence(timeout: 10))
@@ -4232,11 +4314,11 @@ final class ReleaseSmokeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["bound.panel-cycle"].isHittable)
         capture("Release-02-landscape-notes")
         openNativePause(in: app)
-        XCTAssertTrue(app.buttons["Bound Settings"].isHittable)
+        XCTAssertTrue(app.buttons["Settings"].isHittable)
         resumeNativePause(in: app)
         XCUIDevice.shared.orientation = .portrait
         openBoundSettings(in: app)
-        XCTAssertTrue(layout.waitForExistence(timeout: 10))
+        XCTAssertTrue(element("bound.ui-version", in: app).waitForExistence(timeout: 10))
         capture("Release-03-settings")
         #endif
     }
@@ -4253,32 +4335,23 @@ final class ReleaseSmokeUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["Add"].waitForExistence(timeout: 20))
         XCTAssertFalse(app.buttons["Close"].exists, "No upstream release-note onboarding")
-        app.buttons["Settings"].tap()
-        XCTAssertFalse(app.staticTexts["Experimental Features"].exists)
-        XCTAssertFalse(app.staticTexts["Delta Sync"].exists)
-        XCTAssertFalse(app.staticTexts["Patreon"].exists)
-        let close = app.buttons["Close"].firstMatch
-        let done = app.buttons["Done"].firstMatch
-        if close.waitForExistence(timeout: 5) { close.tap() }
-        else { XCTAssertTrue(done.waitForExistence(timeout: 10)); done.tap() }
-        // A generated game is imported by the fixture setup, never a personal ROM.
-        let cell = app.collectionViews.cells.firstMatch
-        XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
-        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
-        openBoundSettings(in: app)
-        let about = app.staticTexts["About Bound 2"].firstMatch
-        for _ in 0..<6 {
-            if about.exists && about.isHittable { break }
-            let form = app.collectionViews.firstMatch
-            XCTAssertTrue(form.exists)
-            let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.80))
-            let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.40))
-            start.press(forDuration: 0.05, thenDragTo: end)
+        let settings = app.buttons["Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10))
+        settings.tap()
+        XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
+        for identifier in ["bound.settings-interface", "bound.settings-controls", "bound.settings-emulation",
+                           "bound.settings-account", "bound.settings-general", "bound.settings-about"] {
+            XCTAssertTrue(element(identifier, in: app).exists, "Release settings should include \(identifier).")
         }
-        XCTAssertTrue(about.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Experimental Features"].exists)
+        XCTAssertFalse(app.staticTexts["Patreon"].exists)
+
+        element("bound.settings-about", in: app).tap()
+        XCTAssertTrue(app.staticTexts["About Bound"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Build entry"].exists)
         XCTAssertFalse(app.staticTexts["Engine source"].exists)
         XCTAssertFalse(app.staticTexts["Package identifier"].exists)
+        XCTAssertFalse(app.staticTexts["Experimental"].exists)
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "private testing prototype")).firstMatch.exists)
         let source = app.buttons["bound.source-and-licenses-link"].firstMatch
         XCTAssertTrue(source.waitForExistence(timeout: 10))
@@ -4290,7 +4363,25 @@ final class ReleaseSmokeUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["bound.license-content"].waitForExistence(timeout: 10))
         app.navigationBars.buttons.firstMatch.tap()
         app.navigationBars.buttons.firstMatch.tap()
-        closeBoundSheet(in: app)
+        app.buttons["bound.settings-close"].tap()
+
+        settings.tap()
+        element("bound.settings-account", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Account & Sync"].waitForExistence(timeout: 5))
+        let deltaSync = element("bound.delta-sync-settings", in: app)
+        XCTAssertTrue(deltaSync.waitForExistence(timeout: 5))
+        deltaSync.tap()
+        let dropbox = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Dropbox")).firstMatch
+        XCTAssertTrue(dropbox.waitForExistence(timeout: 10), "Release settings retain the configured Dropbox provider entry.")
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Google Drive")).firstMatch.exists,
+                       "Google Drive is not offered by Bound's sync settings.")
+        app.navigationBars.buttons.firstMatch.tap()
+        app.buttons["bound.settings-close"].tap()
+
+        // A generated game is imported by the fixture setup, never a personal ROM.
+        let cell = app.collectionViews.cells.firstMatch
+        XCTAssertTrue(cell.waitForExistence(timeout: 20)); cell.tap()
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
         XCUIDevice.shared.orientation = .landscapeLeft
         XCTAssertTrue(app.buttons["bound.panel-cycle"].exists)
         selectCompanion("Notes", in: app)

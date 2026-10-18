@@ -78,7 +78,7 @@ class GameViewController: DeltaCore.GameViewController
     func boundRRDexDidLoadSaveState(core: EmulatorCore) {
         guard core === emulatorCore, core.game.type == .gba else { return }
         boundRRDexSaveCache.invalidate(restoredState: true)
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled, let game = game as? Game else { return }
+        guard let game = game as? Game else { return }
         // Save-state RAM can differ from the battery file. Read it while the
         // caller already has the core paused, so there is no second pause cycle.
         if core.state == .paused {
@@ -107,7 +107,6 @@ class GameViewController: DeltaCore.GameViewController
     private var boundAppliedSkinIdentifier: String?
     private let boundPanelActions = BoundPanelActionRouter()
     var boundFastForwardPreferences = BoundFastForwardPreferences()
-    private var boundRestoredFastForward = false
     /// Assumed to be Delta.Game instance
     override var game: GameProtocol? {
         willSet {
@@ -131,10 +130,6 @@ class GameViewController: DeltaCore.GameViewController
                 self?.updateGameSave()
                 guard isGBA, let gameIdentifier, let gameSaveURL,
                       !BoundRRDexSaveRefreshEvent.isSuppressed(gameID: gameIdentifier) else { return }
-                guard BoundFeatureVisibility.experimentalFeaturesEnabled else {
-                    dexSaveCache.invalidate(restoredState: false)
-                    return
-                }
                 if dexSaveCache.completedSave(read: { try BoundRRDexCurrentSaveImport.readCompletedSave(at: gameSaveURL) }) {
                     BoundRRDexSaveRefreshEvent.post(gameID: gameIdentifier)
                 }
@@ -300,7 +295,6 @@ class GameViewController: DeltaCore.GameViewController
         NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.didEnterBackground(with:)), name: UIApplication.didEnterBackgroundNotification, object: UIApplication.shared)
         
         NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.settingsDidChange(with:)), name: Settings.didChangeNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.boundFastForwardExperimentsDidChange), name: BoundExperimentalFeaturesPreferences.didChangeNotification, object: nil)
         
         NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.deepLinkControllerWillLaunchGame(with:)), name: .deepLinkControllerWillLaunchGame, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.deepLinkControllerLaunchGame(with:)), name: .deepLinkControllerLaunchGame, object: nil)
@@ -605,7 +599,7 @@ extension GameViewController
                 guard let self, let presenter = pauseViewController else { return }
                 self.boundCompanion.presentFriends(from: presenter)
             }
-            pauseViewController.screenshotItem = MenuItem(text: "Bound Settings", image: UIImage(systemName: "gearshape.fill")) { [weak self, weak pauseViewController] item in
+            pauseViewController.screenshotItem = MenuItem(text: "Settings", image: UIImage(systemName: "gearshape.fill")) { [weak self, weak pauseViewController] item in
                 item.isSelected = false
                 guard let self, let presenter = pauseViewController else { return }
                 self.boundCompanion.presentSettings(from: presenter)
@@ -1451,22 +1445,8 @@ extension GameViewController
     }
 
     private func restoreBoundFastForward() {
-        boundRestoredFastForward = false
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled,
-              let gameID = boundFastForwardGameID else { return }
+        guard let gameID = boundFastForwardGameID else { return }
         performFastForwardAction(activate: boundFastForwardPreferences.isEnabled(for: gameID), remember: false, showToast: false)
-        if let core = emulatorCore {
-            boundRestoredFastForward = core.rate != core.deltaCore.supportedRates.lowerBound
-        }
-    }
-
-    @objc private func boundFastForwardExperimentsDidChange() {
-        if BoundFeatureVisibility.experimentalFeaturesEnabled {
-            restoreBoundFastForward()
-        } else if boundRestoredFastForward {
-            performFastForwardAction(activate: false, remember: false, showToast: false)
-            boundRestoredFastForward = false
-        }
     }
 
     func performFastForwardAction(activate: Bool, remember: Bool = true, showToast: Bool = true)
@@ -1474,8 +1454,7 @@ extension GameViewController
         guard let emulatorCore = self.emulatorCore, !emulatorCore.isWirelessMultiplayerActive else { return }
 
         if remember {
-            boundRestoredFastForward = false
-            if BoundFeatureVisibility.experimentalFeaturesEnabled, let gameID = boundFastForwardGameID {
+            if let gameID = boundFastForwardGameID {
                 boundFastForwardPreferences.setEnabled(activate, for: gameID)
             }
         }

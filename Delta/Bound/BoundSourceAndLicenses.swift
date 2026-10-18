@@ -42,7 +42,6 @@ enum BoundSourceNotices {
 }
 
 struct BoundSourceAndLicenses: View {
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     var body: some View {
         Form {
             Section("This build") {
@@ -57,15 +56,13 @@ struct BoundSourceAndLicenses: View {
                 Text("Built on Delta. Delta and its emulator dependencies retain their original copyright and license notices.")
                 Link("Delta upstream source", destination: URL(string: "https://github.com/rileytestut/Delta")!)
             }
-            if experimentsEnabled {
-                Section("Radical Red references") {
-                    Link("Pokémon and moves · Radical Red Pokédex", destination: BoundSourceNotices.radicalRedPokedex)
-                        .accessibilityIdentifier("bound.source-radical-red-pokedex")
-                    Link("Trainer data · Radical Red 4.1 documentation", destination: BoundSourceNotices.radicalRedBossDocumentation)
-                        .accessibilityIdentifier("bound.source-radical-red-docs")
-                    Text("The Pokédex is by JwowSquared. Radical Red is a community project; Pokémon characters and artwork belong to their respective owners.")
-                        .font(.footnote)
-                }
+            Section("Radical Red references") {
+                Link("Pokémon and moves · Radical Red Pokédex", destination: BoundSourceNotices.radicalRedPokedex)
+                    .accessibilityIdentifier("bound.source-radical-red-pokedex")
+                Link("Trainer data · Radical Red 4.1 documentation", destination: BoundSourceNotices.radicalRedBossDocumentation)
+                    .accessibilityIdentifier("bound.source-radical-red-docs")
+                Text("The Pokédex is by JwowSquared. Radical Red is a community project; Pokémon characters and artwork belong to their respective owners.")
+                    .font(.footnote)
             }
             Section("Bundled notices") {
                 NavigationLink("Software licenses") {

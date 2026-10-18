@@ -11,7 +11,6 @@ struct BoundRRDexView: View {
     var currentSave: () throws -> BoundRRDexSave = { throw BoundRRDexSave.ImportError.currentGameUnavailable }
     @StateObject private var catalogStore = BoundReferenceCatalogStore.shared
     private let preferences = BoundRRDexPreferences()
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     @AppStorage(BoundReferenceLayoutPreferences.dexKey) private var savedLayout = BoundReferenceLayout.layout1
     @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
     @State private var choice = BoundRRDexPreferences.Choice()
@@ -49,7 +48,7 @@ struct BoundRRDexView: View {
     private var interacting: Bool { editingText || sheet != nil || importError != nil }
     private var hasIslandActions: Bool { !floating && portraitTopInset >= 51 }
     private var layout: BoundReferenceLayout { previewLayout ?? savedLayout }
-    private var usesUIVersion2: Bool { experimentsEnabled && uiVersion == .option2 }
+    private var usesUIVersion2: Bool { uiVersion == .option2 }
     /// A save is present only after a successful read or restoration of a
     /// previously successful read for this ROM.
     private var hasLoadedSave: Bool { choice.save != nil }
@@ -65,7 +64,7 @@ struct BoundRRDexView: View {
 
     var body: some View {
         Group {
-            if experimentsEnabled, let catalog = catalogStore.dex,
+            if let catalog = catalogStore.dex,
                let pokemon = catalog.pokemon(id: choice.speciesID) ?? catalog.species.first {
                 GeometryReader { geometry in
                     if layout == .layout12 && layout12LearnsetPresented {
@@ -161,28 +160,20 @@ struct BoundRRDexView: View {
                         }
                     }
                 }
-            } else if experimentsEnabled && catalogStore.hasFinishedLoading {
+            } else if catalogStore.hasFinishedLoading {
                 ContentUnavailableView("RRDex unavailable", systemImage: "book.closed", description: Text("The bundled dex could not be loaded."))
-            } else if experimentsEnabled {
+            } else {
                 ProgressView("Loading RR Dex…")
             }
         }
         .tint(Color(uiColor: .deltaPurple))
-        .task(id: experimentsEnabled) {
-            if experimentsEnabled { await catalogStore.loadIfNeeded() }
-        }
+        .task { await catalogStore.loadIfNeeded() }
         .alert("Save could not be imported", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("OK", role: .cancel) { importError = nil }
         } message: { Text(importError ?? "") }
         .onChange(of: editingText) { _, active in textEditingChanged(active) }
         .onChange(of: interacting) { _, active in
             if active || !awaitingDetailDismissal { presentationChanged(active) }
-        }
-        .onChange(of: experimentsEnabled) { _, enabled in
-            if !enabled {
-                searching = false; moveSearchFocused = false; sheet = nil; importError = nil
-                closeLayout12Learnset()
-            }
         }
         .onChange(of: layout) { previous, current in
             expandedLearnsetMethod = nil
@@ -263,7 +254,6 @@ struct BoundRRDexView: View {
     }
 
     private func showDetail(_ detail: Detail) {
-        guard experimentsEnabled else { return }
         awaitingDetailDismissal = true
         searching = false; moveSearchFocused = false; sheet = detail
     }
@@ -595,7 +585,6 @@ struct BoundRRDexView: View {
                 Text("Learnset").font(.system(size: 12, weight: .semibold))
                     .accessibilityAddTraits(.isHeader)
                 Button {
-                    guard experimentsEnabled else { return }
                     moveSearchVisible.toggle()
                     moveSearchFocused = moveSearchVisible
                     if !moveSearchVisible { moveQuery = "" }
@@ -650,7 +639,6 @@ struct BoundRRDexView: View {
                             let title = method == "Level up" ? "Level Up" : method
                             VStack(alignment: .leading, spacing: 8) {
                                 Button {
-                                    guard experimentsEnabled else { return }
                                     expandedLearnsetMethod = expanded ? nil : method
                                 } label: {
                                     HStack(spacing: 8) {
@@ -696,7 +684,6 @@ struct BoundRRDexView: View {
     }
 
     private func openLayout12Learnset(method: String?, search: Bool = false) {
-        guard experimentsEnabled else { return }
         layout12LearnsetPresented = true
         expandedLearnsetMethod = method
         expandedLearnsetMove = nil
@@ -733,7 +720,6 @@ struct BoundRRDexView: View {
 
     private var layout12MoveSearchButton: some View {
         Button {
-            guard experimentsEnabled else { return }
             if !layout12LearnsetPresented {
                 openLayout12Learnset(method: nil, search: true)
             } else {
@@ -880,7 +866,6 @@ struct BoundRRDexView: View {
                 ForEach(rows) { row in
                     BoundRRDexCompactMoveRow(row: row, catalog: catalog, showsLevel: showsLevels,
                                             showsSources: filtering, expanded: expandedLearnsetMove == row.id) {
-                        guard experimentsEnabled else { return }
                         expandedLearnsetMove = expandedLearnsetMove == row.id ? nil : row.id
                     }
                     .id(row.id)
@@ -1651,7 +1636,6 @@ struct BoundRRDexView: View {
     }
 
     private func select(_ pokemon: BoundRRDexSpecies) {
-        guard experimentsEnabled else { return }
         choice.speciesID = pokemon.id; query = ""; searching = false
         moveQuery = ""; moveSearchVisible = false; moveSearchFocused = false
         expandedLearnsetMethod = nil
@@ -1661,7 +1645,6 @@ struct BoundRRDexView: View {
         preferences.write(choice, gameID: gameID)
     }
     private func importCurrentGameSave() {
-        guard experimentsEnabled else { return }
         searching = false
         do {
             let save = try currentSave()
@@ -1674,7 +1657,7 @@ struct BoundRRDexView: View {
         }
     }
     private func refreshAutomaticSave() {
-        guard experimentsEnabled, !refreshingSave else { return }
+        guard !refreshingSave else { return }
         refreshingSave = true
         defer { refreshingSave = false }
         do {
@@ -1817,13 +1800,11 @@ private struct BoundRRDexDetail<Content: View>: View {
     let title: String
     @ViewBuilder let content: () -> Content
     @Environment(\.dismiss) private var dismiss
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     var body: some View {
         NavigationStack {
             content().navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.accessibilityIdentifier("bound.rrdex-close-detail") } }
         }.tint(Color(uiColor: .deltaPurple))
-            .onChange(of: experimentsEnabled) { _, enabled in if !enabled { dismiss() } }
     }
 }
 struct BoundRRDexMatchups: View {

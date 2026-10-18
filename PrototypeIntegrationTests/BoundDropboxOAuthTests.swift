@@ -44,9 +44,6 @@ final class BoundDropboxOAuthTests: XCTestCase {
     }
 
     func testLiveDropboxPKCERefreshAndHarmonyFolderValidation() async throws {
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled else {
-            throw XCTSkip("Live Dropbox QA requires experimental features to already be enabled.")
-        }
         guard SyncManager.isBoundProviderConfigured(.dropbox, info: Bundle.main.infoDictionary ?? [:]),
               let appKey = Bundle.main.infoDictionary?["BOUND_DROPBOX_APP_KEY"] as? String else {
             throw XCTSkip("Live Dropbox QA requires the Bound Dropbox app key.")

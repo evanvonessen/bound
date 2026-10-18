@@ -207,7 +207,6 @@ final class FriendSharingSession: ObservableObject {
     private(set) var authenticatedMode: Bool
     private var roomProvider: () -> String?
     private let tokenFetcher: @MainActor (String, AppCloudSession) async throws -> FriendSharingTokenLease
-    private let experimentalFeaturesEnabled: () -> Bool
     var isConfigured: Bool { authenticatedMode || configuration != nil }
     var authenticatedSession: (() -> AppCloudSession?)?
     private var tokenTask: Task<Void, Never>?
@@ -251,10 +250,9 @@ final class FriendSharingSession: ObservableObject {
          scheduler: (any SharingScheduler)? = nil,
          authenticatedMode: Bool = FriendSharingConfiguration.authenticationRequested,
          roomProvider: @escaping () -> String? = { FriendSharingTokens.room() },
-         experimentalFeaturesEnabled: @escaping () -> Bool = { BoundFeatureVisibility.experimentalFeaturesEnabled },
          tokenFetcher: @escaping @MainActor (String, AppCloudSession) async throws -> FriendSharingTokenLease = { try await FriendSharingTokens.fetch(room: $0, session: $1) }) {
         self.authenticatedMode = authenticatedMode
-        self.roomProvider = roomProvider; self.experimentalFeaturesEnabled = experimentalFeaturesEnabled; self.tokenFetcher = tokenFetcher
+        self.roomProvider = roomProvider; self.tokenFetcher = tokenFetcher
         self.configuration = authenticatedMode ? nil : configuration
         let transport = transport ?? AgoraSharingTransport()
         self.transport = transport
@@ -509,7 +507,7 @@ final class FriendSharingSession: ObservableObject {
     }
 
     func background() {
-        if authenticatedMode && active && experimentalFeaturesEnabled(),
+        if authenticatedMode && active,
            let room = authRoom, let owner = tokenOwner {
             foregroundReconnectIntent = ForegroundReconnectIntent(room: room, owner: owner)
             foregroundReconnectAttempts = 0
@@ -530,14 +528,8 @@ final class FriendSharingSession: ObservableObject {
         attemptForegroundReconnect()
     }
 
-    /// The companion coordinator calls this when the experimental-features switch changes.
-    /// Opting out cancels experimental restoration while preserving manually started sharing.
-    func experimentalFeaturesChanged(_ enabled: Bool) {
-        if !enabled, foregroundReconnectIntent != nil { stop() }
-    }
-
     private var hasValidForegroundReconnectIntent: Bool {
-        guard experimentalFeaturesEnabled(), authenticatedMode,
+        guard authenticatedMode,
               let intent = foregroundReconnectIntent,
               roomProvider() == intent.room,
               authenticatedSession?()?.owner == intent.owner else { return false }

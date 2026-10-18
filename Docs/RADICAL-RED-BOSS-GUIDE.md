@@ -1,10 +1,9 @@
 # Radical Red 4.1 Default boss guide
 
-Enabled only by Library Settings → Enable Experimental Features. The existing
-Bound companion button cycles Friend → Notes → Types → Bosses → Dex in both portrait
-and landscape. With experiments off, the original three-panel cycle is retained.
-Disabling experiments while Bosses is selected returns to Friend and dismisses
-guide sheets; saved guide and baseline preferences remain intact.
+Boss View is part of Bound’s normal companion experience. The companion button
+cycles Friend → Notes → Types → Bosses → Dex in both portrait and landscape.
+Guide selections and companion preferences remain saved per device or ROM as
+applicable.
 
 The native card follows Bound's system backgrounds and purple accent. It shows
 the selected fight, earliest documented level cap when available, Pokémon,
@@ -30,7 +29,7 @@ stay separate. Search opens matching groups while keeping their alternatives
 available; the currently selected encounter opens when the picker returns.
 Unlabeled source alternatives retain neutral Team 1/2/3 labels.
 
-**Bound Settings → Reference layouts → Boss View** chooses between twelve saved
+**Settings → Interface & Companion → Boss View layout** chooses between twelve saved
 presentations independently of RR Dex. Layout 1 preserves the original card and
 is the default. Layout 2 adds source-derived battle-condition badges, a tappable
 opposing-team strip, ability and item description buttons, a typing-matchup

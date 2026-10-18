@@ -35,7 +35,6 @@ struct BoundBossGuideView: View {
     let presentationChanged: (Bool) -> Void
     @StateObject private var catalogStore = BoundReferenceCatalogStore.shared
     private let preferences = BoundBossGuidePreferences()
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     @AppStorage(BoundReferenceLayoutPreferences.bossKey) private var savedLayout = BoundReferenceLayout.layout1
     @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
     @State private var selection = BoundBossGuideSelection(teamID: "kanto-leaders-4", pokemonIndex: 0)
@@ -61,13 +60,13 @@ struct BoundBossGuideView: View {
     }
     private var catalog: BoundBossCatalog? { catalogStore.bosses }
     private var layout: BoundReferenceLayout { previewLayout ?? savedLayout }
-    private var usesUIVersion2: Bool { experimentsEnabled && uiVersion == .option2 }
+    private var usesUIVersion2: Bool { uiVersion == .option2 }
     private var isLayout11Or12: Bool { layout == .layout11 || layout == .layout12 }
     private var usesIslandActions: Bool { (layout == .layout3 || layout == .layout4 || layout == .layout5 || layout == .layout6 || layout == .layout7 || layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12) && !floating && portraitTopInset >= 51 }
 
     var body: some View {
         Group {
-            if experimentsEnabled, let catalog = catalogStore.bosses {
+            if let catalog = catalogStore.bosses {
                 let selected = selection.resolved(in: catalog)
                 let team = catalog.team(id: selected.teamID) ?? catalog.defaultTeam
                 let pokemon = team.pokemon[selected.pokemonIndex]
@@ -110,20 +109,15 @@ struct BoundBossGuideView: View {
                         BoundBossWeaknessDetail(pokemon: species, catalog: dex)
                     }
                 }
-            } else if experimentsEnabled && catalogStore.hasFinishedLoading {
+            } else if catalogStore.hasFinishedLoading {
                 ContentUnavailableView("Boss guide unavailable", systemImage: "book.closed",
                                        description: Text("The bundled guide could not be loaded."))
-            } else if experimentsEnabled {
+            } else {
                 ProgressView("Loading boss guide…")
             }
         }
         .tint(Color(uiColor: .deltaPurple))
-        .task(id: experimentsEnabled) {
-            if experimentsEnabled { await catalogStore.loadIfNeeded() }
-        }
-        .onChange(of: experimentsEnabled) { _, enabled in
-            if !enabled { showingPicker = false; showingTeam = false; detailSheet = nil }
-        }
+        .task { await catalogStore.loadIfNeeded() }
         .onChange(of: anyPresentation) { _, presented in
             if presented { presentationChanged(true) }
         }
@@ -512,7 +506,7 @@ struct BoundBossGuideView: View {
                 .font(.system(size: 17, weight: .semibold))
                 .frame(width: 44, height: 44).contentShape(Rectangle())
         }
-        .disabled(target == nil || !experimentsEnabled)
+        .disabled(target == nil)
         .opacity(target == nil ? 0.35 : 1)
         .accessibilityLabel(previous ? "Previous trainer" : "Next trainer")
         .accessibilityHint(target.map { "\($0.name), \($0.location)" } ?? "No trainer listed in this direction")
@@ -1050,12 +1044,10 @@ struct BoundBossGuideView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             layout5InfoTile(icon: "sparkles", title: "Ability", value: pokemon.ability) {
-                guard experimentsEnabled else { return }
                 detailSheet = .ability(pokemon.ability, detail?.abilityDescription)
             }
             .accessibilityIdentifier("bound.boss-ability")
             layout5InfoTile(icon: "shippingbox", title: "Held item", value: pokemon.item) {
-                guard experimentsEnabled else { return }
                 detailSheet = .item(pokemon.item, detail?.itemDescription)
             }
             .accessibilityIdentifier("bound.boss-item")
@@ -1298,13 +1290,11 @@ struct BoundBossGuideView: View {
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
             layout4TagButton(icon: "sparkles", name: pokemon.ability) {
-                guard experimentsEnabled else { return }
                 detailSheet = .ability(pokemon.ability, detail?.abilityDescription)
             }
             .accessibilityLabel("Ability: \(pokemon.ability). Show description")
             .accessibilityIdentifier("bound.boss-ability")
             layout4TagButton(icon: "shippingbox", name: pokemon.item) {
-                guard experimentsEnabled else { return }
                 detailSheet = .item(pokemon.item, detail?.itemDescription)
             }
             .accessibilityLabel("Held item: \(pokemon.item). Show description")
@@ -1471,7 +1461,6 @@ struct BoundBossGuideView: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 4) {
                 Button {
-                    guard experimentsEnabled else { return }
                     detailSheet = .ability(pokemon.ability, detail?.abilityDescription)
                 } label: {
                     VStack(spacing: 2) {
@@ -1484,7 +1473,6 @@ struct BoundBossGuideView: View {
                 .accessibilityLabel("Ability: \(pokemon.ability). Show description")
                 .accessibilityIdentifier("bound.boss-ability")
                 Button {
-                    guard experimentsEnabled else { return }
                     detailSheet = .item(pokemon.item, detail?.itemDescription)
                 } label: {
                     VStack(spacing: 2) {
@@ -1547,7 +1535,7 @@ struct BoundBossGuideView: View {
     }
 
     private func showWeaknesses(_ pokemon: BoundBossPokemon, reference: BoundBossReference?) {
-        guard experimentsEnabled, let species = reference?.detail(for: pokemon).species,
+        guard let species = reference?.detail(for: pokemon).species,
               let dex = catalogStore.dex else { return }
         detailSheet = .weaknesses(species, dex)
     }
@@ -1571,7 +1559,6 @@ struct BoundBossGuideView: View {
     }
 
     private func choose(_ next: BoundBossGuideSelection, catalog: BoundBossCatalog) {
-        guard experimentsEnabled else { return }
         showsLayout4Stats = false
         if selection.teamID != next.teamID { layout5ShowsStats = false }
         selection = next.resolved(in: catalog)
@@ -1588,7 +1575,6 @@ private struct BoundBossTextDetail: View {
     let name: String
     let description: String?
     @Environment(\.dismiss) private var dismiss
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -1601,7 +1587,6 @@ private struct BoundBossTextDetail: View {
             .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
-        .onChange(of: experimentsEnabled) { _, enabled in if !enabled { dismiss() } }
     }
 }
 
@@ -1609,7 +1594,6 @@ private struct BoundBossWeaknessDetail: View {
     let pokemon: BoundRRDexSpecies
     let catalog: BoundRRDexCatalog
     @Environment(\.dismiss) private var dismiss
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     var body: some View {
         NavigationStack {
             BoundRRDexMatchups(pokemon: pokemon, catalog: catalog, highlightsExtremes: true)
@@ -1619,7 +1603,6 @@ private struct BoundBossWeaknessDetail: View {
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                 }
         }
-        .onChange(of: experimentsEnabled) { _, enabled in if !enabled { dismiss() } }
     }
 }
 
@@ -1767,7 +1750,6 @@ private struct BoundBossPicker: View {
     let selectedID: String
     let choose: (String) -> Void
     @Environment(\.dismiss) private var dismiss
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     @State private var query = ""
     @State private var category: String?
     @State private var expandedEncounters: Set<String> = []
@@ -1830,11 +1812,9 @@ private struct BoundBossPicker: View {
                 expandedEncounters.formUnion(catalog.encounters(matching: text, category: category).filter { $0.teams.count > 1 }.map(\.id))
             }
         }
-        .onChange(of: experimentsEnabled) { _, enabled in if !enabled { dismiss() } }
     }
     private func selectionButton(_ team: BoundBossTeam, title: String, subtitle: String) -> some View {
         Button {
-            guard experimentsEnabled else { return }
             choose(team.id); dismiss()
         } label: {
             pickerRow(team, title: title, subtitle: subtitle, detail: "\(team.category) · \(team.pokemon.count) Pokémon", selected: team.id == selectedID)
@@ -1886,7 +1866,6 @@ private struct BoundBossTeamView: View {
     let catalog: BoundBossCatalog
     let team: BoundBossTeam
     @Environment(\.dismiss) private var dismiss
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     var body: some View {
         NavigationStack {
             List {
@@ -1923,7 +1902,7 @@ private struct BoundBossTeamView: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) {
                 Button("Done") { dismiss() }.accessibilityIdentifier("bound.boss-close-full-team")
             } }
-        }.onChange(of: experimentsEnabled) { _, enabled in if !enabled { dismiss() } }
+        }
     }
 }
 

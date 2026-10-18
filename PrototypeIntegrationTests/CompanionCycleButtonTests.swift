@@ -46,34 +46,31 @@ final class CompanionCycleButtonTests: XCTestCase {
         let version = BoundUIVersionPreferences(defaults: defaults)
         let preferences = BoundPiPPreferences(defaults: defaults)
         XCTAssertEqual(version.version, .option1)
-        let original = BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: true)
+        let original = BoundPiPContent.cycleOrder
         preferences.setContentOrder([.dex, .bosses, .dex])
         XCTAssertEqual(preferences.orderedContents, [.dex, .bosses, .friend, .notes, .types])
-        XCTAssertEqual(preferences.enabledContents(experimentalFeaturesEnabled: true), original)
+        XCTAssertEqual(preferences.enabledContents(uiVersion: .option1), original)
         version.version = .option2
-        XCTAssertEqual(version.effectiveVersion, .option1)
-        BoundExperimentalFeaturesPreferences(defaults: defaults).isEnabled = true
         XCTAssertEqual(version.effectiveVersion, .option2)
         preferences.setEnabled(false, for: .bosses)
         let restarted = BoundPiPPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
         XCTAssertEqual(restarted.uiVersion, .option2)
-        XCTAssertEqual(restarted.enabledContents(experimentalFeaturesEnabled: true, uiVersion: restarted.uiVersion), [.dex, .friend, .notes, .types])
-        XCTAssertEqual(restarted.enabledContents(experimentalFeaturesEnabled: false, uiVersion: .option2), [.friend, .notes, .types])
-        BoundExperimentalFeaturesPreferences(defaults: defaults).isEnabled = false
-        XCTAssertEqual(version.effectiveVersion, .option1)
+        XCTAssertEqual(restarted.enabledContents(uiVersion: restarted.uiVersion), [.dex, .friend, .notes, .types])
+        XCTAssertEqual(restarted.enabledContents(uiVersion: .option1), [.friend, .notes, .types, .dex])
+        XCTAssertEqual(version.effectiveVersion, .option2)
         XCTAssertEqual(version.version, .option2)
         defaults.set(99, forKey: BoundUIVersionPreferences.key)
         XCTAssertEqual(version.version, .option1)
         defaults.set(["unknown", "notes", "notes"], forKey: "bound.delta.pip.v1.view-order")
         XCTAssertEqual(restarted.orderedContents, [.notes, .friend, .types, .bosses, .dex])
     }
-    func testUIVersionSwitchingAndReorderingPreserveVisiblePanelAndGateShortcuts() throws {
+    func testUIVersionSwitchingAndReorderingPreserveVisiblePanel() throws {
         let suite = "BoundUIVersionState." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let version = BoundUIVersionPreferences(defaults: defaults)
         let preferences = BoundPiPPreferences(defaults: defaults)
-        let state = BoundCompanionState(preferences: preferences, experimentalFeaturesEnabled: true)
+        let state = BoundCompanionState(preferences: preferences)
         state.selected = 3
         XCTAssertEqual(state.content, .bosses)
         state.selectPanel(.dex)
@@ -94,12 +91,57 @@ final class CompanionCycleButtonTests: XCTestCase {
         state.updateUIVersion()
         XCTAssertEqual(state.content, .dex)
         XCTAssertEqual(state.availableContents, [.friend, .types, .bosses, .dex])
-        state.updateExperimentalFeatures(false)
-        XCTAssertEqual(state.availableContents, [.friend, .notes, .types])
         state.selectPanel(.dex)
         state.setContentOrder([.types, .friend])
-        XCTAssertEqual(state.content, .friend)
+        XCTAssertEqual(state.content, .dex, "Option 1 preserves cycle order and the selected panel")
         XCTAssertEqual(preferences.orderedContents, [.dex, .bosses, .friend, .types, .notes])
+    }
+
+    func testPersistentSettingsModelUpdatesActiveSessionAndPreservesSelection() async throws {
+        let suite = "BoundSettingsLive." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        let model = BoundCompanionSettingsModel(preferences: preferences)
+        let state = BoundCompanionState(preferences: preferences)
+        let versionChanged = expectation(description: "An active session observes the UI version")
+        versionChanged.assertForOverFulfill = false
+        let orderChanged = expectation(description: "An active session observes the new view order")
+        let disabled = expectation(description: "The active session observes a disabled view")
+        let cancellable = model.$configuration.dropFirst().sink { configuration in
+            if configuration.uiVersion == .option2 { versionChanged.fulfill() }
+            if configuration.availableContents == [.dex, .bosses, .friend, .types, .notes] { orderChanged.fulfill() }
+            if !configuration.availableContents.contains(.dex) { disabled.fulfill() }
+        }
+
+        state.selectPanel(.bosses)
+        XCTAssertEqual(state.content, .friend, "Direct panel selection is enabled in UI version 2 only")
+        BoundUIVersionPreferences(defaults: defaults).version = .option2
+        await fulfillment(of: [versionChanged], timeout: 2)
+        model.setContentOrder([.dex, .bosses, .friend, .types, .notes])
+        await fulfillment(of: [orderChanged], timeout: 2)
+        XCTAssertEqual(state.uiVersion, .option2)
+        XCTAssertEqual(state.content, .friend, "A settings edit should preserve the active session's selected view")
+        state.selectPanel(.bosses)
+        XCTAssertEqual(state.content, .bosses)
+        model.setContentEnabled(false, for: .dex)
+        await fulfillment(of: [disabled], timeout: 2)
+        XCTAssertEqual(state.content, .bosses)
+        XCTAssertFalse(state.availableContents.contains(.dex))
+        withExtendedLifetime(cancellable) {}
+    }
+
+    func testSharedSettingsPresentationRunsCleanupOnceAcrossDismissalCallbacks() throws {
+        let syncs = LockedCounter()
+        let closes = LockedCounter()
+        let host = BoundSettingsHostingController(syncOnClose: { syncs.increment() }, closed: { closes.increment() })
+        host.finishPresentation()
+        let parent = UIViewController()
+        let presentation = UIPresentationController(presentedViewController: host, presenting: parent)
+        host.presentationControllerDidDismiss(presentation)
+        host.finishPresentation()
+        XCTAssertEqual(syncs.value, 1, "Done and interactive-dismissal callbacks must not sync more than once")
+        XCTAssertEqual(closes.value, 1, "Done and interactive-dismissal callbacks must not close more than once")
     }
 
     func testUIVersionTwoMenuKeepsTapCycleAndOnlyEnabledChoices() throws {
@@ -123,18 +165,14 @@ final class CompanionCycleButtonTests: XCTestCase {
     }
 
     func testDexAutomaticallyRefreshesMatchingSaveEventsOnMain() throws {
-        let preferences = BoundExperimentalFeaturesPreferences()
-        let wasEnabled = preferences.isEnabled
         let savedLayout = UserDefaults.standard.object(forKey: BoundReferenceLayoutPreferences.dexKey)
         let gameID = "RRDEX_AUTO_QA_" + UUID().uuidString
         let dexPreferences = BoundRRDexPreferences()
         defer {
-            preferences.isEnabled = wasEnabled
             if let savedLayout { UserDefaults.standard.set(savedLayout, forKey: BoundReferenceLayoutPreferences.dexKey) }
             else { UserDefaults.standard.removeObject(forKey: BoundReferenceLayoutPreferences.dexKey) }
             UserDefaults.standard.removeObject(forKey: "bound.rrdex.choice.v1." + gameID)
         }
-        preferences.isEnabled = true
         UserDefaults.standard.set(7, forKey: BoundReferenceLayoutPreferences.dexKey)
         var captureCount = 0
         var save = BoundRRDexSave(trainerID: 1, randomAbilities: false, randomLearnset: false)
@@ -169,12 +207,8 @@ final class CompanionCycleButtonTests: XCTestCase {
     }
 
     func testDexCardRendersAtPortraitAndLandscapePanelSizes() throws {
-        let preferences = BoundExperimentalFeaturesPreferences()
-        let wasEnabled = preferences.isEnabled
-        preferences.isEnabled = true
         let savedLayout = UserDefaults.standard.object(forKey: BoundReferenceLayoutPreferences.dexKey)
         defer {
-            preferences.isEnabled = wasEnabled
             if let savedLayout { UserDefaults.standard.set(savedLayout, forKey: BoundReferenceLayoutPreferences.dexKey) }
             else { UserDefaults.standard.removeObject(forKey: BoundReferenceLayoutPreferences.dexKey) }
         }
@@ -226,12 +260,8 @@ final class CompanionCycleButtonTests: XCTestCase {
         }
     }
     func testBossCardRendersAtPortraitAndLandscapePanelSizes() throws {
-        let preferences = BoundExperimentalFeaturesPreferences()
-        let wasEnabled = preferences.isEnabled
-        preferences.isEnabled = true
         let savedLayout = UserDefaults.standard.object(forKey: BoundReferenceLayoutPreferences.bossKey)
         defer {
-            preferences.isEnabled = wasEnabled
             if let savedLayout { UserDefaults.standard.set(savedLayout, forKey: BoundReferenceLayoutPreferences.bossKey) }
             else { UserDefaults.standard.removeObject(forKey: BoundReferenceLayoutPreferences.bossKey) }
         }
@@ -407,7 +437,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(BoundCompanionButtonPreferences(defaults: defaults).buttonType, .option3)
     }
 
-    func testCompanionButtonTypePersistsAndExperimentalGateKeepsOriginalEffectiveStyle() throws {
+    func testCompanionButtonTypePersistsAsTheEffectiveStyle() throws {
         let suite = "BoundCompanionButtonType." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -420,14 +450,9 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(preferences.buttonType, .option3)
         XCTAssertEqual(BoundCompanionButtonPreferences(defaults: defaults).buttonType, .option3,
                        "A newly created preferences object reads the saved choice.")
-        XCTAssertEqual(preferences.effectiveButtonType, .option1,
-                       "Experimental button styles remain inactive while experiments are off.")
-
-        BoundExperimentalFeaturesPreferences(defaults: defaults).isEnabled = true
         XCTAssertEqual(preferences.effectiveButtonType, .option3)
-        BoundExperimentalFeaturesPreferences(defaults: defaults).isEnabled = false
-        XCTAssertEqual(preferences.buttonType, .option3, "Gating does not erase the user's saved preference.")
-        XCTAssertEqual(preferences.effectiveButtonType, .option1)
+        XCTAssertEqual(preferences.buttonType, .option3, "The user's saved selection remains intact.")
+        XCTAssertEqual(preferences.effectiveButtonType, .option3)
 
         defaults.set(99, forKey: BoundCompanionButtonPreferences.key)
         XCTAssertEqual(preferences.buttonType, .option1, "Unknown stored values safely fall back to Option 1.")
@@ -450,35 +475,35 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(BoundBossNatureDescription.label(for: "Unlisted"), "Nature · Unlisted · nature effects unavailable")
         XCTAssertEqual(BoundBossNatureDescription.label(for: ""), "Nature · Unknown · nature effects unavailable")
     }
-    func testExperimentalBossCycleFallsBackImmediatelyWhenDisabled() throws {
+    func testPermanentBossCycleIncludesReferenceViewsAndAllOffIsSafe() throws {
         let suite = "BoundBaselineCycle." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let state = BoundCompanionState(preferences: BoundPiPPreferences(defaults: defaults), experimentalFeaturesEnabled: false)
-        for expected in [BoundPiPContent.notes, .types, .friend, .notes, .types, .friend] {
-            state.advancePanel()
-            XCTAssertEqual(state.content, expected)
-        }
-        state.updateExperimentalFeatures(true)
-        for expected in [BoundPiPContent.notes, .types, .bosses, .dex] {
+        let state = BoundCompanionState(preferences: BoundPiPPreferences(defaults: defaults))
+        for expected in [BoundPiPContent.notes, .types, .bosses, .dex, .friend] {
             state.advancePanel()
             XCTAssertEqual(state.content, expected)
         }
         state.hidden = true
-        state.updateExperimentalFeatures(false)
+        state.advancePanel()
         XCTAssertEqual(state.content, .friend)
-        XCTAssertEqual(state.selected, 0)
         XCTAssertFalse(state.hidden)
-        XCTAssertEqual(state.availableContents, [.friend, .notes, .types])
-        state.selected = 3
-        XCTAssertEqual(state.content, .friend, "A stale experimental selection must not expose the guide")
+        XCTAssertEqual(state.availableContents, [.friend, .notes, .types, .bosses, .dex])
+        state.setContentEnabled(false, for: .friend)
+        state.setContentEnabled(false, for: .notes)
+        state.setContentEnabled(false, for: .types)
+        state.setContentEnabled(false, for: .bosses)
+        state.setContentEnabled(false, for: .dex)
+        XCTAssertTrue(state.availableContents.isEmpty)
+        state.advancePanel()
+        XCTAssertEqual(state.content, .friend)
     }
-    func testEnabledViewsPreserveSelectionAndHandleNoneAcrossRestartAndExperimentalGate() throws {
+    func testEnabledViewsPreserveSelectionAndHandleNoneAcrossRestart() throws {
         let suite = "BoundCompanionCycle." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = BoundPiPPreferences(defaults: defaults)
-        let state = BoundCompanionState(preferences: preferences, experimentalFeaturesEnabled: true)
+        let state = BoundCompanionState(preferences: preferences)
         state.selected = 3
         XCTAssertEqual(state.content, .bosses)
         var selectionChanges = 0
@@ -502,20 +527,14 @@ final class CompanionCycleButtonTests: XCTestCase {
         state.landscape = true
         XCTAssertFalse(BoundCompanionCoordinator(state: state).allowsOpacityGesture)
 
-        let restarted = BoundCompanionState(preferences: BoundPiPPreferences(defaults: defaults), experimentalFeaturesEnabled: true)
-        XCTAssertTrue(restarted.availableContents.isEmpty)
-        restarted.updateExperimentalFeatures(false)
-        XCTAssertEqual(restarted.availableContents, [.friend, .notes, .types])
-        restarted.setContentEnabled(true, for: .bosses)
-        XCTAssertFalse(preferences.isEnabled(.bosses), "The experimental settings action is gated too")
-        restarted.updateExperimentalFeatures(true)
+        let restarted = BoundCompanionState(preferences: BoundPiPPreferences(defaults: defaults))
         XCTAssertTrue(restarted.availableContents.isEmpty)
         restarted.setContentEnabled(true, for: .bosses)
         XCTAssertEqual(restarted.content, .bosses)
         restarted.advancePanel()
         XCTAssertEqual(restarted.content, .bosses, "One enabled view stays selected")
     }
-    func testAssignedButtonsCycleIndependentlyRestoreWhenHiddenAndRespectExperimentGate() throws {
+    func testAssignedButtonsCycleIndependentlyAndRestoreWhenHidden() throws {
         let suite = "BoundAssignedButtons." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -525,7 +544,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(preferences.assignedContents(for: 1), [.bosses])
         XCTAssertEqual(preferences.assignedContents(for: 2), [.types])
 
-        let state = BoundCompanionState(preferences: preferences, experimentalFeaturesEnabled: true)
+        let state = BoundCompanionState(preferences: preferences)
         XCTAssertTrue(state.usesAssignedButtons)
         state.setAssigned(true, content: .notes, for: 0)
         state.setAssigned(true, content: .dex, for: 1)
@@ -543,20 +562,13 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(state.content, .bosses, "A button press restores the view assigned to that button.")
         XCTAssertFalse(state.hidden)
 
-        state.updateExperimentalFeatures(false)
-        XCTAssertFalse(state.usesAssignedButtons)
-        let gatedContent = state.content
-        state.advanceButton(1)
-        XCTAssertEqual(state.content, gatedContent, "Assigned-button actions stay gated when experiments are off.")
         state.setAssigned(true, content: .types, for: 1)
-        XCTAssertEqual(preferences.assignedContents(for: 1), [.bosses, .dex],
-                       "The settings action cannot change assignments while experiments are off.")
-
-        state.updateExperimentalFeatures(true)
+        XCTAssertEqual(preferences.assignedContents(for: 1), [.types, .bosses, .dex],
+                       "Assignments follow the shared cycle order regardless of insertion order.")
         XCTAssertTrue(state.usesAssignedButtons)
         state.hidden = true
         state.advanceButton(1)
-        XCTAssertEqual(state.content, .bosses)
+        XCTAssertEqual(state.content, .types, "A hidden panel restores the first assigned view in normalized order.")
         XCTAssertFalse(state.hidden)
     }
 
@@ -860,8 +872,6 @@ final class CompanionCycleButtonTests: XCTestCase {
     }
 
     func testUIVersion2ReferencePreviewsAreReadOnlyAndRenderSelectedLayouts() throws {
-        let featurePreferences = BoundExperimentalFeaturesPreferences()
-        let oldFeatures = featurePreferences.isEnabled
         let oldVersion = UserDefaults.standard.object(forKey: BoundUIVersionPreferences.key)
         let oldDexLayout = UserDefaults.standard.object(forKey: BoundReferenceLayoutPreferences.dexKey)
         let oldBossLayout = UserDefaults.standard.object(forKey: BoundReferenceLayoutPreferences.bossKey)
@@ -874,7 +884,6 @@ final class CompanionCycleButtonTests: XCTestCase {
         let bossSelection = BoundBossGuideSelection(teamID: bossCatalog.defaultTeam.id, pokemonIndex: 0)
         bossPreferences.write(bossSelection, gameID: gameID, catalog: bossCatalog)
         defer {
-            featurePreferences.isEnabled = oldFeatures
             if let oldVersion { UserDefaults.standard.set(oldVersion, forKey: BoundUIVersionPreferences.key) }
             else { UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key) }
             if let oldDexLayout { UserDefaults.standard.set(oldDexLayout, forKey: BoundReferenceLayoutPreferences.dexKey) }
@@ -884,7 +893,6 @@ final class CompanionCycleButtonTests: XCTestCase {
             UserDefaults.standard.removeObject(forKey: "bound.rrdex.choice.v1." + gameID)
             UserDefaults.standard.removeObject(forKey: "bound.boss-guide.selection.v1." + gameID)
         }
-        featurePreferences.isEnabled = true
         UserDefaults.standard.set(BoundUIVersion.option2.rawValue, forKey: BoundUIVersionPreferences.key)
         UserDefaults.standard.set(BoundReferenceLayout.layout1.rawValue, forKey: BoundReferenceLayoutPreferences.dexKey)
         UserDefaults.standard.set(BoundReferenceLayout.layout1.rawValue, forKey: BoundReferenceLayoutPreferences.bossKey)

@@ -4,12 +4,72 @@ import AVFoundation
 import Combine
 import DeltaCore
 
+/// Persistent companion configuration, usable without an emulator or sharing session.
+@MainActor
+final class BoundCompanionSettingsModel: ObservableObject {
+    struct Configuration: Equatable {
+        let uiVersion: BoundUIVersion
+        let buttonType: BoundCompanionButtonType
+        let availableContents: [BoundPiPContent]
+        let orderedContents: [BoundPiPContent]
+        let assignments: [[BoundPiPContent]]
+        let enabled: [Bool]
+        let opacities: [Double]
+    }
+    let preferences: BoundPiPPreferences
+    @Published private(set) var configuration: Configuration
+    private var observations = Set<AnyCancellable>()
+    var uiVersion: BoundUIVersion { configuration.uiVersion }
+    var buttonType: BoundCompanionButtonType { configuration.buttonType }
+    var availableContents: [BoundPiPContent] { configuration.availableContents }
+
+    init(preferences: BoundPiPPreferences? = nil) {
+        self.preferences = preferences ?? BoundPiPPreferences()
+        self.configuration = Self.read(self.preferences)
+        for name in [BoundPiPPreferences.didChangeNotification, BoundUIVersionPreferences.didChangeNotification,
+                     BoundCompanionButtonPreferences.didChangeNotification] {
+            NotificationCenter.default.publisher(for: name).receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in self?.refresh() }.store(in: &observations)
+        }
+    }
+    private static func read(_ preferences: BoundPiPPreferences) -> Configuration {
+        let assignments = (0..<3).map { preferences.assignedContents(for: $0) }
+        let assigned = Set(assignments.flatMap { $0 })
+        let available = preferences.buttonType == .option3
+            ? preferences.orderedContents.filter(assigned.contains)
+            : preferences.enabledContents(uiVersion: preferences.uiVersion)
+        return Configuration(uiVersion: preferences.uiVersion, buttonType: preferences.buttonType,
+            availableContents: available, orderedContents: preferences.orderedContents,
+            assignments: assignments, enabled: BoundPiPContent.allCases.map(preferences.isEnabled),
+            opacities: BoundPiPContent.allCases.map(preferences.opacity))
+    }
+    func refresh() {
+        let next = Self.read(preferences)
+        if configuration != next { configuration = next }
+    }
+    func setButtonType(_ type: BoundCompanionButtonType) { preferences.buttonType = type; refresh() }
+    func setAssigned(_ enabled: Bool, content: BoundPiPContent, for button: Int) {
+        var contents = preferences.assignedContents(for: button).filter { $0 != content }
+        if enabled { contents.append(content) }
+        preferences.setAssignedContents(contents, for: button); refresh()
+    }
+    func setContentOrder(_ contents: [BoundPiPContent]) {
+        guard uiVersion == .option2 else { return }
+        preferences.setContentOrder(contents); refresh()
+    }
+    func setContentEnabled(_ enabled: Bool, for content: BoundPiPContent) {
+        preferences.setEnabled(enabled, for: content); refresh()
+    }
+}
+
 @MainActor
 final class BoundCompanionState: ObservableObject {
     @Published var selected = 0
-    @Published private(set) var experimentalFeaturesEnabled: Bool
-    @Published private(set) var uiVersion: BoundUIVersion
-    @Published private(set) var buttonType: BoundCompanionButtonType
+    @Published private(set) var configuration: BoundCompanionSettingsModel.Configuration
+    let settings: BoundCompanionSettingsModel
+    private var settingsObservation: AnyCancellable?
+    var uiVersion: BoundUIVersion { configuration.uiVersion }
+    var buttonType: BoundCompanionButtonType { configuration.buttonType }
     @Published var landscape = false
     @Published var chartTopInset: CGFloat = 0
     @Published var referenceTopInset: CGFloat = 0
@@ -29,46 +89,34 @@ final class BoundCompanionState: ObservableObject {
         #endif
     }
     let preferences: BoundPiPPreferences
-    init(preferences: BoundPiPPreferences? = nil, experimentalFeaturesEnabled: Bool? = nil) {
+    init(preferences: BoundPiPPreferences? = nil) {
         self.preferences = preferences ?? BoundPiPPreferences()
-        self.experimentalFeaturesEnabled = experimentalFeaturesEnabled ?? BoundFeatureVisibility.experimentalFeaturesEnabled
-        self.uiVersion = self.preferences.uiVersion
-        self.buttonType = self.preferences.buttonType
+        self.settings = BoundCompanionSettingsModel(preferences: self.preferences)
+        self.configuration = settings.configuration
+        settingsObservation = settings.$configuration.dropFirst().sink { [weak self] configuration in
+            guard let self else { return }
+            let previous = self.content
+            self.configuration = configuration
+            self.reconcileSelection(previousContent: previous)
+            self.refresh()
+        }
     }
     var changed: (() -> Void)?
     var pendingControlEditor = false
     var editControls: (() -> Void)?
     var sharingChanged: ((Bool) -> Void)?
     var selectionChanged: (() -> Void)?
-    var usesAssignedButtons: Bool { experimentalFeaturesEnabled && buttonType == .option3 }
-    var availableContents: [BoundPiPContent] {
-        if usesAssignedButtons {
-            let assigned = Set((0..<3).flatMap { preferences.assignedContents(for: $0) })
-            return preferences.orderedContents.filter { assigned.contains($0) }
-        }
-        return preferences.enabledContents(experimentalFeaturesEnabled: experimentalFeaturesEnabled, uiVersion: uiVersion)
-    }
+    var usesAssignedButtons: Bool { buttonType == .option3 }
+    var availableContents: [BoundPiPContent] { configuration.availableContents }
     var content: BoundPiPContent { availableContents.indices.contains(selected) ? availableContents[selected] : .friend }
     func updateButtonType() {
-        let previousContent = content
-        buttonType = preferences.buttonType
-        reconcileSelection(previousContent: previousContent)
-        refresh()
+        settings.refresh()
     }
     func setButtonType(_ type: BoundCompanionButtonType) {
-        guard experimentalFeaturesEnabled else { return }
-        preferences.buttonType = type
-        updateButtonType()
+        settings.setButtonType(type)
     }
     func setAssigned(_ enabled: Bool, content: BoundPiPContent, for button: Int) {
-        guard experimentalFeaturesEnabled else { return }
-        let previousContent = self.content
-        var contents = preferences.assignedContents(for: button)
-        contents.removeAll { $0 == content }
-        if enabled { contents.append(content) }
-        preferences.setAssignedContents(contents, for: button)
-        reconcileSelection(previousContent: previousContent)
-        refresh()
+        settings.setAssigned(enabled, content: content, for: button)
     }
     func advanceButton(_ button: Int) {
         guard usesAssignedButtons else { return }
@@ -85,39 +133,21 @@ final class BoundCompanionState: ObservableObject {
         refresh()
     }
     func updateUIVersion() {
-        let previousContent = content
-        uiVersion = preferences.uiVersion
-        reconcileSelection(previousContent: previousContent)
-        refresh()
+        settings.refresh()
     }
     func setContentOrder(_ contents: [BoundPiPContent]) {
-        guard experimentalFeaturesEnabled, uiVersion == .option2 else { return }
-        let previousContent = content
-        preferences.setContentOrder(contents)
-        reconcileSelection(previousContent: previousContent)
-        refresh()
+        settings.setContentOrder(contents)
     }
     func selectPanel(_ content: BoundPiPContent) {
-        guard experimentalFeaturesEnabled, uiVersion == .option2,
+        guard uiVersion == .option2,
               let index = availableContents.firstIndex(of: content) else { return }
         selectionChanged?()
         selected = index
         hidden = false
         refresh()
     }
-    func updateExperimentalFeatures(_ enabled: Bool) {
-        guard experimentalFeaturesEnabled != enabled else { return }
-        let previousContent = content
-        experimentalFeaturesEnabled = enabled
-        reconcileSelection(previousContent: previousContent)
-        refresh()
-    }
     func setContentEnabled(_ enabled: Bool, for content: BoundPiPContent) {
-        guard experimentalFeaturesEnabled, preferences.isEnabled(content) != enabled else { return }
-        let previousContent = self.content
-        preferences.setEnabled(enabled, for: content)
-        reconcileSelection(previousContent: previousContent)
-        refresh()
+        settings.setContentEnabled(enabled, for: content)
     }
     private func reconcileSelection(previousContent: BoundPiPContent) {
         if let index = availableContents.firstIndex(of: previousContent) {
@@ -236,13 +266,8 @@ final class BoundCompanionCoordinator {
             self?.sharing.stop()
             self?.onboarding.signOut()
         })
-        observers.append(NotificationCenter.default.addObserver(forName: BoundExperimentalFeaturesPreferences.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            let enabled = BoundFeatureVisibility.experimentalFeaturesEnabled
-            self?.state.updateExperimentalFeatures(enabled)
-            self?.sharing.experimentalFeaturesChanged(enabled)
-        })
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.background() })
-        // The sharing session restores a prior active connection when experiments allow it.
+        // The sharing session restores only a previously active connection.
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in self?.foreground() })
         let panel = BoundCompanionPanel(sharing: sharing, state: state, gameID: (owner.game as? Game)?.identifier ?? "", editingChanged: { [weak self] in self?.notesEditing($0) }, textEditingChanged: { [weak self] in self?.textEditing($0) }, currentSave: { [weak self] gameID in
             guard let self else { throw BoundRRDexSave.ImportError.currentGameUnavailable }
@@ -454,12 +479,12 @@ final class BoundCompanionCoordinator {
             rightControlGutter: owner.boundLandscapeControlGutter(),
             menuHitFrame: owner.controllerView.convert(menu.extendedFrame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height)), to: owner.view),
             buttonType: BoundCompanionButtonPreferences().effectiveButtonType)
-        let usesUpdatedUI = state.experimentalFeaturesEnabled && state.uiVersion == .option2
+        let usesUpdatedUI = state.uiVersion == .option2
         controls.configureSegments(contents: (0..<3).map { state.preferences.assignedContents(for: $0) }, selected: state.content)
         controls.configureViewMenu(contents: state.availableContents, selected: state.content, enabled: usesUpdatedUI)
         if state.availableContents.isEmpty {
             controls.accessibilityValue = "No views enabled"
-            controls.accessibilityHint = "Enable companion views in Bound Settings"
+            controls.accessibilityHint = "Enable companion views in Settings"
         } else {
             controls.accessibilityHint = state.hidden ? "Restores the hidden panel" : "Cycles " + state.availableContents.map(\.title).joined(separator: ", ")
             if usesUpdatedUI { controls.accessibilityHint = (controls.accessibilityHint ?? "") + ". Touch and hold to choose a view." }
@@ -473,8 +498,14 @@ final class BoundCompanionCoordinator {
     }
     func presentSettings(from presenter: UIViewController) {
         cancelInteractions(); state.showingSettings = true; settingsPresenter = presenter
-        let host = UIHostingController(rootView: BoundPiPSettings(state: state, closed: { [weak self] in
+        let context = BoundSettingsGameplayContext(emulationDetails: state.emulationDetails,
+            editControls: { [weak self] in self?.state.pendingControlEditor = true },
+            showCompanion: { [weak self] in self?.state.hidden = false; self?.state.refresh() })
+        let host = BoundSettingsHostingController(model: state.settings, gameplay: context, closed: { [weak self] in
             guard let self else { return }; self.state.showingSettings = false
+            self.cancelInteractions()
+            self.state.settings.refresh()
+            self.state.refresh()
             if self.state.pendingControlEditor { self.state.pendingControlEditor = false
                 DispatchQueue.main.async { [weak self] in
                     guard let self, let presenter = self.settingsPresenter else { return }
@@ -485,7 +516,7 @@ final class BoundCompanionCoordinator {
                     } else { self.owner?.showBoundControlPlacement(from: presenter) }
                 }
             }
-        }))
+        })
         presenter.present(host, animated: true)
     }
     func cancelInteractions() {
@@ -565,10 +596,10 @@ final class BoundCompanionCoordinator {
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
     func foreground() {
         foregroundTask?.cancel()
-        if BoundFeatureVisibility.experimentalFeaturesEnabled, state.content == .dex {
+        if state.content == .dex {
             BoundRRDexSaveRefreshEvent.post(gameID: gameID)
         }
-        if BoundFeatureVisibility.experimentalFeaturesEnabled, sharing.authenticatedMode {
+        if sharing.authenticatedMode {
             foregroundTask = Task { [weak self] in
                 guard let self else { return }
                 await self.account.refreshIfNeeded()
@@ -590,8 +621,7 @@ final class BoundCompanionCoordinator {
         notesPaused = false; isEditingNotes = false; isEditingText = false; owner?.controllerView.isUserInteractionEnabled = true; host?.view.endEditing(true)
     }
     func importCurrentRRDexSave(gameID: String) throws -> BoundRRDexSave {
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled,
-              let owner, let core = owner.emulatorCore, core === boundCore,
+        guard let owner, let core = owner.emulatorCore, core === boundCore,
               let game = owner.game as? Game, game.identifier == gameID, self.gameID == gameID,
               core.game.type == .gba, core.state == .running || core.state == .paused else {
             throw BoundRRDexSave.ImportError.currentGameUnavailable
@@ -657,7 +687,6 @@ struct BoundCompanionPanel: View {
     let editingChanged: (Bool) -> Void
     var textEditingChanged: (Bool) -> Void = { _ in }
     var currentSave: (String) throws -> BoundRRDexSave = { _ in throw BoundRRDexSave.ImportError.currentGameUnavailable }
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     var body: some View {
         Group {
             if state.availableContents.isEmpty {
@@ -673,10 +702,10 @@ struct BoundCompanionPanel: View {
                     textEditingChanged(editing)
                     editingChanged(editing)
                 }).id(gameID)
-            } else if state.content == .bosses && experimentsEnabled {
+            } else if state.content == .bosses {
                 BoundBossGuideView(gameID: gameID, floating: state.landscape, portraitTopInset: state.referenceTopInset,
                                    presentationChanged: editingChanged).id(gameID)
-            } else if state.content == .dex && experimentsEnabled {
+            } else if state.content == .dex {
                 BoundRRDexView(gameID: gameID, floating: state.landscape, portraitTopInset: state.referenceTopInset, presentationChanged: editingChanged,
                                textEditingChanged: textEditingChanged, currentSave: { try currentSave(gameID) })
                     .id(gameID)
@@ -691,64 +720,52 @@ struct BoundCompanionPanel: View {
         }.background(state.content == .types ? Color.black : Color(uiColor: [.bosses, .dex].contains(state.content) ? .systemBackground : .secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: state.landscape ? 8 : [.types, .bosses, .dex].contains(state.content) ? 0 : 4))
         .onChange(of: sharing.joined) { _ in state.refresh() }
-        .onChange(of: experimentsEnabled) { _, enabled in state.updateExperimentalFeatures(enabled) }
     }
 }
 
 struct BoundUIVersionSettings: View {
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     @AppStorage(BoundUIVersionPreferences.key) private var version = BoundUIVersion.option1
     var body: some View {
-        if experimentsEnabled {
-            Section {
-                Picker("UI Version", selection: Binding(get: { version }, set: {
-                    guard experimentsEnabled else { return }
-                    BoundUIVersionPreferences().version = $0
-                })) {
-                    ForEach(BoundUIVersion.allCases, id: \.rawValue) { Text($0.title).tag($0) }
-                }
-                .accessibilityIdentifier("bound.ui-version")
-            } header: { Text("UI Version") } footer: {
-                Text(version == .option1 ? "The current Bound interface."
-                     : "Friend sharing status, layout previews, view shortcuts, and clearer reference panels. Touch and hold the Bound button to choose a view.")
-            }
+        Section {
+            Picker("UI Version", selection: Binding(get: { version }, set: { BoundUIVersionPreferences().version = $0 })) {
+                ForEach(BoundUIVersion.allCases, id: \.rawValue) { Text($0.title).tag($0) }
+            }.accessibilityIdentifier("bound.ui-version")
+        } header: { Text("UI Version") } footer: {
+            Text(version == .option1 ? "The current Bound interface."
+                 : "Friend sharing status, layout previews, view shortcuts, and clearer reference panels. Touch and hold the Bound button to choose a view.")
         }
     }
 }
 
-struct BoundPiPSettings: View {
-    @ObservedObject var state: BoundCompanionState
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
+struct BoundInterfaceSettings: View {
+    @ObservedObject var model: BoundCompanionSettingsModel
+    var gameplay: BoundSettingsGameplayContext? = nil
     @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
     @AppStorage(BoundReferenceLayoutPreferences.dexKey) private var dexLayout = BoundReferenceLayout.layout1
     @AppStorage(BoundReferenceLayoutPreferences.bossKey) private var bossLayout = BoundReferenceLayout.layout1
-    var closed: () -> Void = {}
-    @Environment(\.dismiss) var dismiss
     var body: some View {
-        NavigationStack {
-            Form {
-                if experimentsEnabled {
+        Form {
                     BoundUIVersionSettings()
                     Section {
-                        Picker("Button type", selection: Binding(get: { state.buttonType }, set: { state.setButtonType($0) })) {
+                        Picker("Button type", selection: Binding(get: { model.buttonType }, set: { model.setButtonType($0) })) {
                             ForEach(BoundCompanionButtonType.allCases, id: \.rawValue) { type in
                                 Text(String(type.rawValue)).tag(type)
                             }
                         }
                         .pickerStyle(.segmented)
                         .accessibilityIdentifier("bound.companion-button-type")
-                        Text("\(state.buttonType.title): \(state.buttonType.summary)")
+                        Text("\(model.buttonType.title): \(model.buttonType.summary)")
                             .font(.footnote).foregroundStyle(.secondary)
                     } header: { Text("Bound button") } footer: {
                         Text("Choose the portrait Bound button's shape and size. Your choice is saved on this device.")
                     }
-                    if state.buttonType == .option3 {
+                    if model.buttonType == .option3 {
                         ForEach(0..<3, id: \.self) { button in
                             Section {
-                                ForEach(state.preferences.orderedContents, id: \.rawValue) { content in
+                                ForEach(model.preferences.orderedContents, id: \.rawValue) { content in
                                     Toggle(content.title, isOn: Binding(
-                                        get: { state.preferences.assignedContents(for: button).contains(content) },
-                                        set: { state.setAssigned($0, content: content, for: button) }))
+                                        get: { model.preferences.assignedContents(for: button).contains(content) },
+                                        set: { model.setAssigned($0, content: content, for: button) }))
                                     .accessibilityIdentifier("bound.button-\(button + 1)-view.\(content.rawValue)")
                                 }
                             } header: {
@@ -759,19 +776,19 @@ struct BoundPiPSettings: View {
                         }
                         if uiVersion == .option2 {
                             Section {
-                                NavigationLink("Reorder views") { BoundViewOrderSettings(state: state) }
+                                NavigationLink("Reorder views") { BoundViewOrderSettings(model: model) }
                                     .accessibilityIdentifier("bound.reorder-views")
                             }
                         }
                     } else {
                     Section {
-                        ForEach(uiVersion == .option2 ? state.preferences.orderedContents : BoundPiPContent.cycleOrder(experimentalFeaturesEnabled: true), id: \.rawValue) { content in
-                            Toggle(content.title, isOn: Binding(get: { state.preferences.isEnabled(content) },
-                                                               set: { state.setContentEnabled($0, for: content) }))
+                        ForEach(uiVersion == .option2 ? model.preferences.orderedContents : BoundPiPContent.cycleOrder, id: \.rawValue) { content in
+                            Toggle(content.title, isOn: Binding(get: { model.preferences.isEnabled(content) },
+                                                               set: { model.setContentEnabled($0, for: content) }))
                                 .accessibilityIdentifier("bound.companion-enabled.\(content.rawValue)")
                         }
                         if uiVersion == .option2 {
-                            NavigationLink("Reorder views") { BoundViewOrderSettings(state: state) }
+                            NavigationLink("Reorder views") { BoundViewOrderSettings(model: model) }
                                 .accessibilityIdentifier("bound.reorder-views")
                         }
                     } header: { Text("Companion views") } footer: {
@@ -784,29 +801,26 @@ struct BoundPiPSettings: View {
                     } header: { Text("Reference layouts") } footer: {
                         Text("Each choice is saved separately on this device. Layout 1 is the default.")
                     }
-                }
-                BoundAppearanceSettings(emulationDetails: state.emulationDetails)
-                if !BoundFeatureVisibility.simplifiedSettings {
+
+            BoundAppearanceSettings(includeAbout: false)
+            if !BoundFeatureVisibility.simplifiedSettings {
                 Section("Picture in picture") {
-                    Text("In landscape, drag a panel with one finger to move it, or pinch on it with two fingers to resize. Slide two fingers vertically in the center of the game to change Friend or Notes opacity. Types stays opaque. Swipe a panel to an edge to hide; tap the companion button to restore it. Portrait Types zooms and pans its chart content.")
+                    Text("In landscape, drag a panel to move it or pinch to resize. Swipe to an edge to hide it; tap the Bound button to restore it.")
                     ForEach([BoundPiPContent.friend, .notes], id: \.rawValue) { content in
                         VStack(alignment: .leading) {
-                            Text("\(content.rawValue.capitalized) transparency: \(Int(state.preferences.transparency(for: content) * 100))%")
-                            Slider(value: Binding(get: { state.preferences.transparency(for: content) }, set: { state.preferences.setTransparency($0, for: content); state.refresh() }), in: 0...1, step: 0.05).accessibilityIdentifier("bound.\(content.rawValue)-transparency")
+                            Text("\(content.title) transparency: \(Int(model.preferences.transparency(for: content) * 100))%")
+                            Slider(value: Binding(get: { model.preferences.transparency(for: content) }, set: {
+                                model.preferences.setTransparency($0, for: content); model.refresh()
+                            }), in: 0...1, step: 0.05)
                         }
                     }
-                    Button("Show PiP") { state.hidden = false; state.refresh() }
+                    if let show = gameplay?.showCompanion { Button("Show PiP", action: show) }
                 }
-                Section("Controls") {
-                    Text("Classic placement is the default. Customize positions separately for portrait and landscape, or reset to defaults.")
-                }
-                }
-            }.navigationTitle("Bound Settings").toolbar {
-                if !BoundFeatureVisibility.simplifiedSettings { ToolbarItem(placement: .navigationBarLeading) { Button("Buttons") { state.pendingControlEditor = true; dismiss() }.accessibilityLabel("Button placement").accessibilityIdentifier("bound.button-placement") } }
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
-        }.onDisappear(perform: closed)
-            .onChange(of: uiVersion) { _, _ in state.updateUIVersion() }
+        }
+        .navigationTitle("Interface & Companion")
+        .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: uiVersion) { _, _ in model.refresh() }
     }
 
     private func layoutPicker(_ title: String, selection: Binding<BoundReferenceLayout>, identifier: String,
@@ -844,30 +858,29 @@ struct BoundPiPSettings: View {
 }
 
 private struct BoundViewOrderSettings: View {
-    @ObservedObject var state: BoundCompanionState
+    @ObservedObject var model: BoundCompanionSettingsModel
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         List {
             Section {
-                ForEach(state.preferences.orderedContents, id: \.rawValue) { content in
+                ForEach(model.preferences.orderedContents, id: \.rawValue) { content in
                     HStack {
                         Text(content.title)
                         Spacer()
-                        if !state.availableContents.contains(content) { Text("Off").foregroundStyle(.secondary) }
+                        if !model.availableContents.contains(content) { Text("Off").foregroundStyle(.secondary) }
                     }
                 }
                 .onMove { source, destination in
-                    var order = state.preferences.orderedContents
+                    var order = model.preferences.orderedContents
                     order.move(fromOffsets: source, toOffset: destination)
-                    state.setContentOrder(order)
+                    model.setContentOrder(order)
                 }
             } footer: { Text("Drag to change the order used by the Bound buttons. Each button skips views that aren't selected for it.") }
         }
         .environment(\.editMode, .constant(.active))
         .navigationTitle("View order")
         .accessibilityIdentifier("bound.view-order")
-        .onChange(of: state.uiVersion) { _, version in if version != .option2 { dismiss() } }
-        .onChange(of: state.experimentalFeaturesEnabled) { _, enabled in if !enabled { dismiss() } }
+        .onChange(of: model.uiVersion) { _, version in if version != .option2 { dismiss() } }
     }
 }
 
@@ -878,7 +891,6 @@ private struct BoundReferenceLayoutGallery: View {
     let isBoss: Bool
     @State private var previewLayout = BoundReferenceLayout.layout1
     @Environment(\.dismiss) private var dismiss
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentsEnabled = false
     @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
 
     var body: some View {
@@ -930,14 +942,13 @@ private struct BoundReferenceLayoutGallery: View {
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Use layout") {
-                    guard experimentsEnabled, uiVersion == .option2 else { return }
+                    guard uiVersion == .option2 else { return }
                     selection = previewLayout
                     dismiss()
                 }.accessibilityIdentifier("bound.use-layout")
             }
         }
         .onAppear { previewLayout = selection }
-        .onChange(of: experimentsEnabled) { _, enabled in if !enabled { dismiss() } }
         .onChange(of: uiVersion) { _, version in if version != .option2 { dismiss() } }
     }
 
@@ -1072,14 +1083,11 @@ struct BoundFriendsSheet: View {
     @ObservedObject var sharing: FriendSharingSession
     @ObservedObject var onboarding: FriendOnboarding
     @ObservedObject var account: BoundFriendAccount
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentalFeaturesEnabled = false
     @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @State private var email = ""
     @State private var password = ""
-    @State private var name = ""
-    @State private var invite = ""
     @State private var friendUsername = ""
     @State private var reportingRoom: FriendRoom?
     @State private var blockingRoom: FriendRoom?
@@ -1088,7 +1096,7 @@ struct BoundFriendsSheet: View {
     @State private var showingAddFriend = false
     @State private var roomIDsBeforeAdding: Set<String> = []
     var closed: () -> Void = {}
-    private var usesUpdatedUI: Bool { experimentalFeaturesEnabled && uiVersion == .option2 }
+    private var usesUpdatedUI: Bool { uiVersion == .option2 }
 
     init(sharing: FriendSharingSession, onboarding: FriendOnboarding, account: BoundFriendAccount, closed: @escaping () -> Void = {}) {
         self.sharing = sharing
@@ -1118,11 +1126,11 @@ struct BoundFriendsSheet: View {
                     } else if !usesUpdatedUI {
                         Button("Sign out") { BoundJiggleNotifications.shared.prepareForSignOut(); sharing.stop(); onboarding.signOut(); account.signOut() }.disabled(account.busy)
                     }
-                    if !experimentalFeaturesEnabled || account.session == nil || account.status != "Signed in." {
+                    if account.session == nil || account.status != "Signed in." {
                         Text(account.status).font(.caption)
                     }
                 } header: {
-                    if experimentalFeaturesEnabled && account.session != nil {
+                    if account.session != nil {
                         Group {
                             if usesUpdatedUI {
                                 HStack(spacing: 6) {
@@ -1132,7 +1140,7 @@ struct BoundFriendsSheet: View {
                                         .fixedSize(horizontal: false, vertical: true)
                                         .accessibilityIdentifier("bound.friends-greeting")
                                     if showingUsernameHelp {
-                                        Text("Change your username in Library Settings.")
+                                        Text("Change your username in Settings → Account & Sync.")
                                             .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                                             .fixedSize(horizontal: false, vertical: true)
                                             .accessibilityIdentifier("bound.username-help-message")
@@ -1171,7 +1179,7 @@ struct BoundFriendsSheet: View {
                                 Text(onboarding.accountUsername.map { "Hello \($0)" } ?? "Hello")
                                     .accessibilityIdentifier("bound.friends-greeting")
                                 if showingUsernameHelp {
-                                    Text("Change your username in Library Settings.")
+                                    Text("Change your username in Settings → Account & Sync.")
                                         .font(.caption).fixedSize(horizontal: false, vertical: true)
                                         .accessibilityIdentifier("bound.username-help-message")
                                 } else {
@@ -1198,7 +1206,7 @@ struct BoundFriendsSheet: View {
                 .id(usesUpdatedUI)
                 if account.session != nil {
                     Section("Friends") {
-                        if !experimentalFeaturesEnabled || !onboarding.message.isEmpty {
+                        if !onboarding.message.isEmpty {
                             Text(onboarding.message).font(.caption)
                         }
                         ForEach(onboarding.rooms) { room in
@@ -1206,18 +1214,12 @@ struct BoundFriendsSheet: View {
                                 updatedFriendRow(room)
                             } else {
                                 HStack {
-                                    if experimentalFeaturesEnabled {
-                                        Button(room.displayName) { onboarding.select(room, startSharing: true) }
-                                            .buttonStyle(.borderless)
-                                            .accessibilityHint("Starts sharing your game and sends this friend a Jiggle notification")
-                                    } else {
-                                        Button(room.displayName) { onboarding.select(room) }
-                                    }
+                                    Button(room.displayName) { onboarding.select(room, startSharing: true) }
+                                        .buttonStyle(.borderless)
+                                        .accessibilityHint("Starts sharing your game and sends this friend a Jiggle notification")
                                     Spacer()
                                     Menu {
-                                        if experimentalFeaturesEnabled {
-                                            Button("Remove Friend", systemImage: "person.badge.minus", role: .destructive) { removingRoom = room }
-                                        }
+                                        Button("Remove Friend", systemImage: "person.badge.minus", role: .destructive) { removingRoom = room }
                                         Button("Report") { reportingRoom = room }
                                         Button("Block", role: .destructive) { blockingRoom = room }
                                     } label: { Image(systemName: "ellipsis.circle") }
@@ -1226,16 +1228,8 @@ struct BoundFriendsSheet: View {
                             }
                         }
                         Button("Refresh") { onboarding.refresh() }.disabled(onboarding.busy)
-                        if !usesUpdatedUI {
-                            if experimentalFeaturesEnabled {
-                                if sharing.active {
-                                    Button("Stop sharing") { sharing.stop() }
-                                }
-                            } else if onboarding.selected != nil {
-                                Button(sharing.active ? "Stop sharing" : "Start sharing") {
-                                    if sharing.active { sharing.stop() } else { sharing.start() }
-                                }
-                            }
+                        if !usesUpdatedUI && sharing.active {
+                            Button("Stop sharing") { sharing.stop() }
                         }
                     }
                     if !onboarding.blocks.isEmpty {
@@ -1251,27 +1245,15 @@ struct BoundFriendsSheet: View {
                     }
                     if !usesUpdatedUI {
                         Section("Add a friend") {
-                            if experimentalFeaturesEnabled {
-                                TextField("Friend's username", text: $friendUsername)
-                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                                    .submitLabel(.go)
-                                    .onSubmit { onboarding.add(username: friendUsername) }
-                                    .accessibilityIdentifier("bound.add-friend-username")
-                                Button("Add friend") { onboarding.add(username: friendUsername) }
-                                    .disabled(onboarding.busy || !BoundSocialAPI.validUsername(friendUsername.trimmingCharacters(in: .whitespacesAndNewlines)))
-                                    .accessibilityIdentifier("bound.add-friend")
-                                Text("Usernames aren't case sensitive.").font(.caption).foregroundStyle(.secondary)
-                            } else {
-                                TextField("Your display name", text: $name)
-                                Button("Create invite") { onboarding.create(name: name) }
-                                    .disabled(onboarding.busy || name.isEmpty)
-                                if let code = onboarding.inviteCode {
-                                    Text(code).textSelection(.enabled)
-                                }
-                                TextField("Friend's invite code", text: $invite).textInputAutocapitalization(.characters).autocorrectionDisabled()
-                                Button("Accept invite") { onboarding.accept(code: invite, name: name); invite = "" }
-                                    .disabled(onboarding.busy || invite.count != 16 || name.isEmpty)
-                            }
+                            TextField("Friend's username", text: $friendUsername)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .submitLabel(.go)
+                                .onSubmit { onboarding.add(username: friendUsername) }
+                                .accessibilityIdentifier("bound.add-friend-username")
+                            Button("Add friend") { onboarding.add(username: friendUsername) }
+                                .disabled(onboarding.busy || !BoundSocialAPI.validUsername(friendUsername.trimmingCharacters(in: .whitespacesAndNewlines)))
+                                .accessibilityIdentifier("bound.add-friend")
+                            Text("Usernames aren't case sensitive.").font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     if !usesUpdatedUI {
@@ -1292,13 +1274,7 @@ struct BoundFriendsSheet: View {
         }
         .onAppear { onboarding.open(sharing: sharing, existing: { account.session }) }
         .onReceive(NotificationCenter.default.publisher(for: BoundAccountProfile.didChangeNotification)) { _ in
-            if experimentalFeaturesEnabled { onboarding.refresh() }
-        }
-        .onChange(of: experimentalFeaturesEnabled) { _, _ in
-            removingRoom = nil
-            showingUsernameHelp = false
-            onboarding.experimentalFeaturesChanged()
-            if !usesUpdatedUI { showingAddFriend = false }
+            onboarding.refresh()
         }
         .onChange(of: uiVersion) { _, _ in
             if !usesUpdatedUI { showingAddFriend = false; showingUsernameHelp = false }
@@ -1346,7 +1322,7 @@ struct BoundFriendsSheet: View {
         }
         .confirmationDialog("Remove this friend?", isPresented: Binding(get: { removingRoom != nil }, set: { if !$0 { removingRoom = nil } }), titleVisibility: .visible) {
             Button("Remove Friend", role: .destructive) {
-                if experimentalFeaturesEnabled, let room = removingRoom { onboarding.remove(room) }
+                if let room = removingRoom { onboarding.remove(room) }
                 removingRoom = nil
             }
             Button("Cancel", role: .cancel) { removingRoom = nil }
@@ -1452,7 +1428,6 @@ struct BoundCreateAccountView: View {
     @ObservedObject var account: BoundFriendAccount
     @Binding var signInEmail: String
     var signedIn: () -> Void = {}
-    @AppStorage(BoundExperimentalFeaturesPreferences.enabledKey) private var experimentalFeaturesEnabled = false
     @Environment(\.dismiss) private var dismiss
     @State private var username = ""
     @State private var email = ""
@@ -1468,13 +1443,11 @@ struct BoundCreateAccountView: View {
                 }
             } else {
                 Section {
-                    if experimentalFeaturesEnabled {
-                        TextField("Username", text: $username)
-                            .textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled()
-                            .accessibilityIdentifier("account.signup.username")
-                        Text("Choose a unique username. Capitalization doesn't make it different.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                    TextField("Username", text: $username)
+                        .textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .accessibilityIdentifier("account.signup.username")
+                    Text("Choose a unique username. Capitalization doesn't make it different.")
+                        .font(.caption).foregroundStyle(.secondary)
                     TextField("Email", text: $email).textContentType(.username).keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("account.signup.email")
                     SecureField("Password", text: $password).textContentType(.newPassword)
@@ -1485,13 +1458,13 @@ struct BoundCreateAccountView: View {
                         let entered = password; password = ""
                         signInEmail = email
                         submission = Task { @MainActor in
-                            let result = await account.createAccount(email: email, password: entered, username: experimentalFeaturesEnabled ? username : nil)
+                            let result = await account.createAccount(email: email, password: entered, username: username)
                             guard !Task.isCancelled else { return }
                             if result == .signedIn { signedIn(); dismiss() }
                             else if result == .checkEmail { checkEmail = true }
                             submission = nil
                         }
-                    }.disabled(account.busy || BoundFriendAccount.normalizedEmail(email) == nil || password.isEmpty || (experimentalFeaturesEnabled && !BoundSocialAPI.validUsername(username.trimmingCharacters(in: .whitespacesAndNewlines))))
+                    }.disabled(account.busy || BoundFriendAccount.normalizedEmail(email) == nil || password.isEmpty || !BoundSocialAPI.validUsername(username.trimmingCharacters(in: .whitespacesAndNewlines)))
                         .accessibilityIdentifier("account.signup.submit")
                     if account.busy { ProgressView("Creating account…") }
                     Text(account.status).font(.caption)
@@ -1499,7 +1472,6 @@ struct BoundCreateAccountView: View {
             }
         }.navigationTitle("Create Account")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { submission?.cancel(); password = ""; dismiss() } } }
-            .onChange(of: experimentalFeaturesEnabled) { _, _ in submission?.cancel(); submission = nil; password = "" }
             .onAppear { email = signInEmail }
             .onDisappear { submission?.cancel(); submission = nil; password = "" }
     }

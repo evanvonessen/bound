@@ -7,8 +7,10 @@ struct BoundAppearanceSettings: View {
     @AppStorage(Settings.Name.isButtonHapticFeedbackEnabled.rawValue) private var buttons = true
     @AppStorage(Settings.Name.isThumbstickHapticFeedbackEnabled.rawValue) private var sticks = true
     var emulationDetails: BoundEmulationDetails? = nil
+    var includeAppearance = true
+    var includeAbout = true
     var body: some View {
-        if !BoundFeatureVisibility.simplifiedSettings {
+        if includeAppearance && !BoundFeatureVisibility.simplifiedSettings {
         Section("Screen layout") {
             Picker("Screen arrangement", selection: Binding(get: {
                 BoundScreenLayout(rawValue: screenLayoutRaw) ?? BoundAppearancePreferences.defaultScreenLayout
@@ -36,6 +38,7 @@ struct BoundAppearanceSettings: View {
             Text("Uses native touch feedback. Both are on by default. Physical controllers do not trigger touch feedback; this device may not support vibration.")
         }
         }
+        if includeAbout {
         Section("About Bound") {
             LabeledContent("Version", value: (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") + " (" + (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") + ")")
             Text("Bound is built on Delta. Delta and its emulator dependencies retain their original copyright and license notices.").font(.footnote).foregroundStyle(.secondary)
@@ -65,7 +68,8 @@ struct BoundAppearanceSettings: View {
             NavigationLink("Source and licenses") { BoundSourceAndLicenses() }
                 .accessibilityIdentifier("bound.source-and-licenses-link")
         }
-        if !BoundFeatureVisibility.simplifiedSettings {
+        }
+        if includeAppearance && !BoundFeatureVisibility.simplifiedSettings {
         Section {
             Button("Reset appearance and feedback to defaults") {
                 BoundAppearancePreferences().reset()

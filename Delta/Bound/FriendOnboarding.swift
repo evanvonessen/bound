@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Combine
 
 struct FriendRoom: Decodable, Equatable, Identifiable, Sendable {
     let roomID: String
@@ -57,6 +58,7 @@ final class FriendOnboarding: ObservableObject {
     private var permitsRTC = true
     private var ownerID: UUID?
     private var observation: (any SharingCancellation)?
+    private var sharingObservation: AnyCancellable?
     private var isOpen = false
     private var lastProfileRefresh = Date.distantPast
     private let observeAccount: @MainActor (@escaping @MainActor () -> Void) -> any SharingCancellation
@@ -71,7 +73,7 @@ final class FriendOnboarding: ObservableObject {
 
     init(call: @escaping @MainActor (AppCloudSession, String, [String: String]) async throws -> FriendResponse = { session, action, payload in
         let request: URLRequest
-        if BoundFeatureVisibility.experimentalFeaturesEnabled, ["list", "create", "accept", "add"].contains(action) {
+        if ["list", "create", "accept", "add"].contains(action) {
             let socialPayload: [String: String]
             switch action {
             case "accept": socialPayload = ["code": payload["code"] ?? ""]
@@ -123,7 +125,7 @@ final class FriendOnboarding: ObservableObject {
         guard current?.owner != ownerID else {
             // Names come from account profiles. Refresh an open Friends list so
             // a rename made on another device appears without reconnecting.
-            if BoundFeatureVisibility.experimentalFeaturesEnabled, current != nil, !busy,
+            if current != nil, !busy,
                Date().timeIntervalSince(lastProfileRefresh) >= 30 { refresh() }
             return
         }
@@ -149,6 +151,7 @@ final class FriendOnboarding: ObservableObject {
     }
     private func cancelPendingJiggle() {
         jiggleGeneration = UUID(); jiggleTask?.cancel(); jiggleTask = nil
+        sharingObservation?.cancel(); sharingObservation = nil
     }
     private func sharingIdentity() -> AppCloudSession? {
         // Keep account ownership available while an expired token is refreshing.
@@ -189,7 +192,7 @@ final class FriendOnboarding: ObservableObject {
     }
     func select(_ room: FriendRoom, startSharing: Bool = false) {
         guard !busy, room.valid, rooms.contains(room), let identity = currentIdentity() else { return }
-        let startsImmediately = startSharing && BoundFeatureVisibility.experimentalFeaturesEnabled
+        let startsImmediately = startSharing
         // Repeated taps on the current friend must not interrupt a live session.
         if startsImmediately, selected?.roomID == room.roomID, sharing?.active == true {
             message = ""
@@ -209,15 +212,10 @@ final class FriendOnboarding: ObservableObject {
         lastProfileRefresh = Date()
         request("list", payload: [:])
     }
-    func experimentalFeaturesChanged() {
-        cancelPendingRequest()
-        cancelPendingJiggle()
-        if isOpen { refresh() }
-    }
     func create(name: String) { request("create", payload: ["displayName": name.trimmingCharacters(in: .whitespacesAndNewlines)]) }
     func accept(code: String, name: String) { request("accept", payload: ["code": code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(), "displayName": name.trimmingCharacters(in: .whitespacesAndNewlines)]) }
     func add(username: String) {
-        guard BoundFeatureVisibility.experimentalFeaturesEnabled, !busy else { return }
+        guard !busy else { return }
         let username = username.trimmingCharacters(in: .whitespacesAndNewlines)
         guard BoundSocialAPI.validUsername(username) else { message = "Enter your friend's username."; return }
         request("add", payload: ["username": username])
@@ -247,13 +245,23 @@ final class FriendOnboarding: ObservableObject {
     private func notifyFriendOfSharing(_ room: FriendRoom, identity: AppCloudSession) {
         let run = jiggleGeneration
         let sendJiggle = sendJiggle
+        if let sharing {
+            sharingObservation?.cancel()
+            sharingObservation = sharing.$active.dropFirst().sink { [weak self] active in
+                guard !active, let self, self.jiggleGeneration == run else { return }
+                self.cancelPendingJiggle()
+            }
+        }
         // Only an explicit friend tap sends this notification. Sharing starts
         // immediately; a slow or failed notification never blocks its controls.
         jiggleTask = Task { [weak self] in
             defer {
-                if self?.jiggleGeneration == run { self?.jiggleTask = nil }
+                if self?.jiggleGeneration == run {
+                    self?.jiggleTask = nil
+                    self?.sharingObservation?.cancel(); self?.sharingObservation = nil
+                }
             }
-            guard !Task.isCancelled, BoundFeatureVisibility.experimentalFeaturesEnabled,
+            guard !Task.isCancelled,
                   self?.jiggleGeneration == run, self?.selected?.roomID == room.roomID,
                   self?.sharing?.active == true,
                   identity.isSameSession(as: self?.currentIdentity()) else { return }
@@ -264,7 +272,6 @@ final class FriendOnboarding: ObservableObject {
                 result = (error as? BoundSocialError)?.localizedDescription ?? "Couldn't notify your friend."
             }
             guard let self, !Task.isCancelled, self.jiggleGeneration == run,
-                  BoundFeatureVisibility.experimentalFeaturesEnabled,
                   identity.isSameSession(as: self.currentIdentity()),
                   self.selected?.roomID == room.roomID, self.sharing?.active == true,
                   !self.busy else { return }

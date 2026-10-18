@@ -642,12 +642,9 @@ extension PlaybackSharingTests {
     }
 
     func testFastForwardTogglePersistsPerFixtureAndRestoresOnGameRecreation() async throws {
-        let previousExperimentalState = BoundExperimentalFeaturesPreferences().isEnabled
-        BoundExperimentalFeaturesPreferences().isEnabled = true
         let (defaults, suite) = isolatedFastForwardDefaults()
         defer {
             defaults.removePersistentDomain(forName: suite)
-            BoundExperimentalFeaturesPreferences().isEnabled = previousExperimentalState
         }
 
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
@@ -705,13 +702,10 @@ extension PlaybackSharingTests {
                        "A different ROM filename must not inherit the first ROM's saved toggle")
     }
 
-    func testFastForwardMomentaryActionsAndExperimentalGateDoNotPersist() throws {
-        let previousExperimentalState = BoundExperimentalFeaturesPreferences().isEnabled
-        BoundExperimentalFeaturesPreferences().isEnabled = true
+    func testFastForwardMomentaryActionsAndWirelessRestrictionsDoNotPersist() throws {
         let (defaults, suite) = isolatedFastForwardDefaults()
         defer {
             defaults.removePersistentDomain(forName: suite)
-            BoundExperimentalFeaturesPreferences().isEnabled = previousExperimentalState
         }
 
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
@@ -726,45 +720,35 @@ extension PlaybackSharingTests {
         owner.performFastForwardAction(activate: false, remember: false, showToast: false)
         XCTAssertFalse(preferences.isEnabled(for: gameID))
 
-        BoundExperimentalFeaturesPreferences().isEnabled = false
-        owner.performFastForwardAction(activate: true, showToast: false)
-        XCTAssertFalse(preferences.isEnabled(for: gameID), "The build-13 fast-forward action must not write experimental state")
-        XCTAssertGreaterThan(core.rate, core.deltaCore.supportedRates.lowerBound,
-                             "The existing manual fast-forward action remains available with experiments off")
-        owner.performFastForwardAction(activate: false, remember: false, showToast: false)
-
-        BoundExperimentalFeaturesPreferences().isEnabled = true
         core.isWirelessMultiplayerActive = true
         owner.performFastForwardAction(activate: true, showToast: false)
         XCTAssertFalse(preferences.isEnabled(for: gameID), "Wireless multiplayer must reject and not remember fast-forward")
         XCTAssertEqual(core.rate, core.deltaCore.supportedRates.lowerBound)
     }
 
-    func testFastForwardExperimentalGateRetainsPreferenceAndAppliesChanges() throws {
-        let previousExperimentalState = BoundExperimentalFeaturesPreferences().isEnabled
-        BoundExperimentalFeaturesPreferences().isEnabled = false
-        let (defaults, suite) = isolatedFastForwardDefaults()
+    func testFastForwardRestoresForEveryLegacyExperimentalPreference() throws {
+        let legacyKey = BoundLegacyPreferences.experimentalFeaturesKey
+        let previous = UserDefaults.standard.object(forKey: legacyKey)
         defer {
-            defaults.removePersistentDomain(forName: suite)
-            BoundExperimentalFeaturesPreferences().isEnabled = previousExperimentalState
+            if let previous { UserDefaults.standard.set(previous, forKey: legacyKey) }
+            else { UserDefaults.standard.removeObject(forKey: legacyKey) }
         }
-
+        let (defaults, suite) = isolatedFastForwardDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
         let gameID = fixture.lastPathComponent
         let preferences = BoundFastForwardPreferences(defaults: defaults)
         preferences.setEnabled(true, for: gameID)
-        let owner = fastForwardOwner(for: fixture, defaults: defaults)
-        defer { owner.game = nil }
-        let core = try XCTUnwrap(owner.emulatorCore)
-
-        XCTAssertEqual(core.rate, core.deltaCore.supportedRates.lowerBound, "Saved fast-forward must not restore while experiments are off")
-        XCTAssertTrue(preferences.isEnabled(for: gameID), "The opt-in gate must retain the saved preference")
-
-        BoundExperimentalFeaturesPreferences().isEnabled = true
-        XCTAssertGreaterThan(core.rate, core.deltaCore.supportedRates.lowerBound, "Enabling experiments restores the current ROM's saved toggle")
-        BoundExperimentalFeaturesPreferences().isEnabled = false
-        XCTAssertEqual(core.rate, core.deltaCore.supportedRates.lowerBound, "Disabling experiments stops auto-restored fast-forward")
-        XCTAssertTrue(preferences.isEnabled(for: gameID), "Disabling experiments must preserve the saved preference")
+        for legacy: Bool? in [nil, false, true] {
+            if let legacy { UserDefaults.standard.set(legacy, forKey: legacyKey) }
+            else { UserDefaults.standard.removeObject(forKey: legacyKey) }
+            let owner = fastForwardOwner(for: fixture, defaults: defaults)
+            let core = try XCTUnwrap(owner.emulatorCore)
+            XCTAssertGreaterThan(core.rate, core.deltaCore.supportedRates.lowerBound,
+                                 "Saved fast-forward must restore independently of the retired opt-in")
+            XCTAssertTrue(preferences.isEnabled(for: gameID))
+            owner.game = nil
+        }
     }
 
     func testControllerModeCancellationPreservesActualNativeExternalHeldAndSustainedA() async throws {
@@ -915,7 +899,6 @@ extension PlaybackSharingTests {
 private final class ForegroundReconnectFixture {
     var owner = UUID()
     var room = "friend-room"
-    var featuresEnabled = true
     var tokenRequests = 0
     var failNextTokenRequest = false
 
@@ -937,7 +920,7 @@ extension PlaybackSharingTests {
     private func authenticatedReconnectSession(_ fixture: ForegroundReconnectFixture,
                                                transport: OfflineVideoTransport? = nil) -> FriendSharingSession {
         FriendSharingSession(configuration: nil, transport: transport ?? OfflineVideoTransport(), authenticatedMode: true,
-            roomProvider: { fixture.room }, experimentalFeaturesEnabled: { fixture.featuresEnabled },
+            roomProvider: { fixture.room },
             tokenFetcher: { room, identity in
                 fixture.tokenRequests += 1
                 if fixture.failNextTokenRequest {
@@ -977,8 +960,8 @@ extension PlaybackSharingTests {
         session.stop()
     }
 
-    func testForegroundReconnectRequiresSameRoomOwnerAndExperimentalOptIn() async throws {
-        for changed in ["room", "owner", "opt-out"] {
+    func testForegroundReconnectRequiresSameRoomAndOwner() async throws {
+        for changed in ["room", "owner"] {
             let fixture = ForegroundReconnectFixture()
             let transport = OfflineVideoTransport()
             let session = authenticatedReconnectSession(fixture, transport: transport)
@@ -991,7 +974,7 @@ extension PlaybackSharingTests {
                 fixture.room = "different-room"
                 session.configureAuthenticatedRoom(fixture.room, identity: { try? fixture.identity() })
             case "owner": fixture.owner = UUID()
-            default: fixture.featuresEnabled = false; session.experimentalFeaturesChanged(false)
+            default: break
             }
             session.foreground(); try await wait(0.05)
             XCTAssertEqual(fixture.tokenRequests, 1, "Reconnect must be fenced when \(changed) changes")
@@ -1023,18 +1006,26 @@ extension PlaybackSharingTests {
         session.stop()
     }
 
-    func testExperimentalOptOutPreservesManuallyStartedBaselineSharing() async throws {
+    func testFalseLegacyPreferenceDoesNotStartInactiveSharingOrBlockRestoration() async throws {
+        let key = BoundLegacyPreferences.experimentalFeaturesKey
+        let previous = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(false, forKey: key)
+        defer {
+            if let previous { UserDefaults.standard.set(previous, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
         let fixture = ForegroundReconnectFixture()
         let session = authenticatedReconnectSession(fixture)
         session.configureAuthenticatedRoom(fixture.room, identity: { try? fixture.identity() })
+        session.background(); session.foreground(); try await wait(0.05)
+        XCTAssertFalse(session.active, "A legacy preference cannot start an inactive share")
+        XCTAssertEqual(fixture.tokenRequests, 0)
+
         session.start(); try await wait(0.05)
         XCTAssertTrue(session.joined)
-        fixture.featuresEnabled = false
-        session.experimentalFeaturesChanged(false)
-        XCTAssertTrue(session.active, "The Build 13 manual sharing action remains available")
         session.background(); session.foreground(); try await wait(0.05)
-        XCTAssertFalse(session.active, "Automatic restoration is gated off")
-        XCTAssertEqual(fixture.tokenRequests, 1)
+        XCTAssertTrue(session.active, "A legacy false value cannot block reconnect after an explicit share")
+        XCTAssertEqual(fixture.tokenRequests, 2)
         session.stop()
     }
 }

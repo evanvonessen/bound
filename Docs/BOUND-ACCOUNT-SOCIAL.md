@@ -1,13 +1,14 @@
 # Bound account social features
 
-These additions require **Enable Experimental Features**. Build 13 keeps its
-existing friend, moderation, sharing-token and deletion endpoints. The new
+Username-based account and friend features are part of Bound’s normal experience.
+The existing friend, moderation, sharing-token and deletion endpoints remain in use. The new
 `bound_social_v2` RPC adds friends by an exact, case-insensitive account username.
 It delegates existing actions to `bound_social_v1`; both the Build 13
 `cup050_friends` RPC and the sharing-token/deletion services keep their contracts.
 New friendships use the same rooms, so older clients can list and share with
-friends added by username. The original invite-code UI remains available with
-experimental features off, and its backend endpoints remain available.
+friends added by username. The invite-code backend actions remain available to
+compatible clients, while the current Friends UI adds friends by username and
+does not expose invite-code creation or acceptance.
 
 Account usernames are unique after trimming surrounding spaces and ignoring
 capitalization. Signup checks availability, and an opt-in Auth insert trigger
@@ -25,10 +26,11 @@ accounts' friend limits. Adding does not start sharing; tapping the saved friend
 starts sharing. Account username changes update the account profile, existing
 friend labels and outstanding invitations, so the Build 13 list also sees them.
 
-Change the username in Library Settings → Bound account → Username. An open
+Change the username in Settings → Account & Sync → Username. An open
 Friends screen refreshes profile names every 30 seconds and on reopening.
-Remove Friend ends the relationship and stops selected sharing. Adding the
-friend again can be done by username, or by invitation in the original flow. Block and Report retain their existing
+Remove Friend ends the relationship and stops selected sharing. The current
+Friends UI can add the friend again by username. Invite-code backend actions
+remain available to compatible clients. Block and Report retain their existing
 backend validation and semantics.
 
 Sharing that was active before the app entered the background is restored when
@@ -44,7 +46,7 @@ to play.** to the friend's opted-in devices. There is no separate Jiggle button.
 Sharing starts immediately and continues if notification delivery fails. Tapping
 the already active friend again, adding a friend, refreshing the list and
 automatic sharing reconnection do not send another Jiggle. Enable reception in
-Library Settings → Receive Jiggles.
+Settings → Account & Sync → Receive Jiggles.
 Notifications use the default sound and normal iOS notification vibration;
 Focus, silent mode and the user's notification settings remain in control.
 Foreground delivery adds notification haptics and checks the current recipient.
