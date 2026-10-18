@@ -2366,67 +2366,108 @@ final class CompanionUITests: XCTestCase {
 
         let details = app.scrollViews["bound.rrdex-layout12-details"]
         XCTAssertTrue(details.waitForExistence(timeout: 5))
-        func reveal(_ target: XCUIElement, downward: Bool = true, scrollX: CGFloat = 0.8) {
+        let learnset = element("bound.rrdex-layout12-learnset", in: app)
+        XCTAssertTrue(learnset.waitForExistence(timeout: 5))
+        func revealLearnsetControl(_ target: XCUIElement) {
             for _ in 0..<14 {
                 if target.isHittable && details.frame.contains(target.frame) { break }
-                let below = target.exists ? target.frame.midY > details.frame.midY : downward
-                details.coordinate(withNormalizedOffset: CGVector(dx: scrollX, dy: below ? 0.8 : 0.4))
-                    .press(forDuration: 0.1, thenDragTo: details.coordinate(withNormalizedOffset: CGVector(dx: scrollX, dy: below ? 0.4 : 0.8)),
+                let below = target.exists ? target.frame.midY > details.frame.midY : true
+                details.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: below ? 0.8 : 0.4))
+                    .press(forDuration: 0.1, thenDragTo: details.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: below ? 0.4 : 0.8)),
                            withVelocity: .slow, thenHoldForDuration: 0.2)
                 Thread.sleep(forTimeInterval: 0.5)
             }
             XCTAssertTrue(target.isHittable)
             XCTAssertTrue(details.frame.contains(target.frame))
         }
-        let levelUp = app.buttons["bound.rrdex-layout12-learnset-method-Level up"]
-        let machines = app.buttons["bound.rrdex-layout12-learnset-method-TM/HM"]
-        let tutor = app.buttons["bound.rrdex-layout12-learnset-method-Tutor"]
-        let rows = app.descendants(matching: .any).matching(
-            NSPredicate(format: "identifier BEGINSWITH %@", "bound.rrdex-layout12-learnset-move-")
+        let methods = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "bound.rrdex-layout12-learnset-method-")
         )
-        for header in [levelUp, machines, tutor] {
-            reveal(header)
-            XCTAssertEqual(header.value as? String, "Collapsed")
+        let list = app.scrollViews["bound.rrdex-layout12-learnset-list"]
+        let categories = ["Level up", "TM/HM", "Tutor", "Egg"]
+        let levelUp = app.buttons["bound.rrdex-layout12-learnset-method-Level up"]
+        revealLearnsetControl(levelUp)
+        for name in categories {
+            let category = app.buttons["bound.rrdex-layout12-learnset-method-\(name)"]
+            XCTAssertTrue(category.waitForExistence(timeout: 5), "The \(name) category is available in the compact learnset summary.")
         }
-        XCTAssertFalse(rows.firstMatch.exists, "Layout 12 starts with its learnset sections collapsed.")
-        tutor.tap()
-        XCTAssertEqual(tutor.value as? String, "Expanded")
-        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
-        reveal(machines, downward: false)
-        machines.tap()
-        XCTAssertEqual(machines.value as? String, "Expanded")
-        // Close the new section before scrolling back to verify the old one collapsed.
-        reveal(machines, downward: false); machines.tap()
-        reveal(tutor)
-        XCTAssertEqual(tutor.value as? String, "Collapsed")
-        reveal(machines, downward: false); machines.tap()
-        reveal(levelUp, downward: false); levelUp.tap()
-        XCTAssertEqual(levelUp.value as? String, "Expanded")
+        XCTAssertGreaterThanOrEqual(methods.count, categories.count)
+
         levelUp.tap()
-        reveal(machines)
-        XCTAssertEqual(machines.value as? String, "Collapsed")
-        reveal(tutor)
-        XCTAssertEqual(tutor.value as? String, "Collapsed")
-        XCTAssertFalse(rows.firstMatch.exists)
+        XCTAssertEqual(levelUp.value as? String, "Selected")
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+        let compactMoveQuery = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "bound.rrdex-layout12-learnset-move-entry-")
+        )
+        XCTAssertTrue(compactMoveQuery.firstMatch.waitForExistence(timeout: 5))
+        screenshot("RRDex-Layout12-Level-Up-Compact-List")
+
+        // Scrolling the move list leaves the category strip fixed and usable.
+        list.swipeUp()
+        for name in categories {
+            let category = app.buttons["bound.rrdex-layout12-learnset-method-\(name)"]
+            XCTAssertTrue(category.isHittable, "The pinned \(name) selector remains reachable after scrolling the move list.")
+        }
+        XCTAssertTrue(app.buttons["bound.rrdex-layout12-learnset-back"].isHittable)
+
+        // Switch categories directly while the focused list stays open.
+        for name in categories.dropFirst() {
+            let category = app.buttons["bound.rrdex-layout12-learnset-method-\(name)"]
+            category.tap()
+            XCTAssertEqual(category.value as? String, "Selected")
+            XCTAssertTrue(compactMoveQuery.firstMatch.waitForExistence(timeout: 5),
+                          "Selecting \(name) switches the compact list without returning to the summary.")
+        }
+        levelUp.tap()
+        XCTAssertEqual(levelUp.value as? String, "Selected")
+        XCTAssertTrue(compactMoveQuery.firstMatch.waitForExistence(timeout: 5))
+        let listViewport = list.frame.insetBy(dx: 0, dy: 2)
+        let lastFullyVisibleMove = try XCTUnwrap(
+            compactMoveQuery.allElementsBoundByIndex.last(where: { move in
+                let frame = move.frame
+                return move.isHittable && frame.minY >= listViewport.minY && frame.maxY <= listViewport.maxY
+            }),
+            "A fully visible move row should be available to exercise expansion near the list's lower edge."
+        )
+        let rowPrefix = "bound.rrdex-layout12-learnset-move-"
+        let rowID = String(lastFullyVisibleMove.identifier.dropFirst(rowPrefix.count))
+        lastFullyVisibleMove.tap()
+        let detail = app.descendants(matching: .any)["bound.rrdex-layout12-learnset-detail-\(rowID)"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 5), "Tapping a compact move reveals its details inline.")
+        XCTAssertTrue(detail.label.localizedCaseInsensitiveContains("Accuracy"))
+        XCTAssertTrue(detail.label.localizedCaseInsensitiveContains("PP"))
+        let detailIsVisible = expectation(for: NSPredicate { _, _ in
+            detail.frame.minY >= list.frame.minY - 2 && detail.frame.maxY <= list.frame.maxY + 2
+        }, evaluatedWith: detail)
+        wait(for: [detailIsVisible], timeout: 5)
+        XCTAssertGreaterThanOrEqual(detail.frame.minY, list.frame.minY - 2,
+                                    "The expanded details remain inside the visible move list.")
+        XCTAssertLessThanOrEqual(detail.frame.maxY, list.frame.maxY + 2,
+                                 "Expanding a bottom visible row scrolls its complete detail into the list viewport.")
+        screenshot("RRDex-Layout12-Move-Details-Expanded")
+
+        // Search crosses method boundaries and merges duplicate move sources into one result.
+        app.buttons["bound.rrdex-layout12-learnset-back"].tap()
+        revealLearnsetControl(app.buttons["bound.rrdex-layout12-learnset-search-toggle"])
         let searchToggle = app.buttons["bound.rrdex-layout12-learnset-search-toggle"]
-        reveal(searchToggle, downward: false); searchToggle.tap()
+        XCTAssertTrue(searchToggle.waitForExistence(timeout: 5)); searchToggle.tap()
         let moveSearch = app.textFields["bound.rrdex-layout12-learnset-search"]
         XCTAssertTrue(moveSearch.waitForExistence(timeout: 5))
-        moveSearch.tap(); moveSearch.typeText("solar")
+        moveSearch.tap(); moveSearch.typeText("Giga Drain")
         moveSearch.typeText("\n")
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5),
-                      "Submitting the move query dismisses the keyboard before the learnset scrolls.")
-        reveal(tutor)
-        tutor.tap()
-        XCTAssertEqual(tutor.value as? String, "Expanded")
-        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(rows.firstMatch.label.localizedCaseInsensitiveContains("solar"),
-                      "Layout 12 preserves searchable learnset results.")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        let searchResult = app.buttons["bound.rrdex-layout12-learnset-move-move-202"]
+        XCTAssertTrue(searchResult.waitForExistence(timeout: 5), "Search finds Giga Drain across learnset categories.")
+        let matchingResults = app.buttons.matching(
+            NSPredicate(format: "identifier == %@", "bound.rrdex-layout12-learnset-move-move-202")
+        )
+        XCTAssertEqual(matchingResults.count, 1, "A move learned through multiple methods appears once in search.")
+        XCTAssertTrue(searchResult.label.localizedCaseInsensitiveContains("TM/HM"))
+        XCTAssertTrue(searchResult.label.localizedCaseInsensitiveContains("Egg"),
+                      "The single search result identifies both learning sources.")
 
-        // The open search field fills the scroll view horizontally. Start at the left
-        // gutter so this drag reaches the ScrollView instead of the text field.
-        reveal(searchToggle, downward: false, scrollX: 0.02); searchToggle.tap()
-        XCTAssertTrue(moveSearch.waitForNonExistence(timeout: 5), "Close move search before opening Settings.")
+        app.buttons["bound.rrdex-layout12-learnset-back"].tap()
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
 
         openBoundSettings(in: app)
         for (content, wasEnabled) in originalEnabledStates {

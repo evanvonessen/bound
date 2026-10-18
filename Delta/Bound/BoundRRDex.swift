@@ -107,6 +107,48 @@ struct BoundRRDexCatalog: Decodable, Sendable {
         let random = save?.randomLearnset == true && ["Level up", "Pre-evolution"].contains(entry.method)
         return move(id: random ? randomizedMove(entry.moveID, speciesID: pokemon.id, trainerID: save!.trainerID) : entry.moveID)
     }
+    /// Learnset categories present for this species, in the order used by the compact Dex UI.
+    func learnsetMethods(for pokemon: BoundRRDexSpecies) -> [String] {
+        let order = ["Level up", "TM/HM", "Tutor", "Egg", "Pre-evolution", "Event"]
+        let present = Set(pokemon.learnset.map(\.method))
+        return order.filter(present.contains) + present.subtracting(order).sorted()
+    }
+    /// Compact learnset rows. Browsing one method retains its source entries; searching
+    /// spans every method and folds resolved duplicate moves into a single result.
+    func learnsetRows(for pokemon: BoundRRDexSpecies, save: BoundRRDexSave?, method: String?, query: String) -> [BoundRRDexLearnsetRow] {
+        let isBrowsing = query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let search = Self.searchKey(query)
+        if isBrowsing {
+            guard let method else { return [] }
+            return pokemon.learnset.enumerated().compactMap { index, entry in
+                guard entry.method == method, let move = learnedMove(entry, pokemon: pokemon, save: save) else { return nil }
+                return BoundRRDexLearnsetRow(id: "entry-\(index)", move: move, sources: [entry])
+            }.sorted { lhs, rhs in
+                if method == "Level up", lhs.level != rhs.level {
+                    return (lhs.level ?? Int.max) < (rhs.level ?? Int.max)
+                }
+                let nameOrder = lhs.move.name.localizedCaseInsensitiveCompare(rhs.move.name)
+                return nameOrder == .orderedSame ? lhs.id < rhs.id : nameOrder == .orderedAscending
+            }
+        }
+        guard !search.isEmpty else { return [] }
+
+        var grouped: [Int: (move: BoundRRDexMove, sources: [BoundRRDexSpecies.LearnedMove])] = [:]
+        for entry in pokemon.learnset {
+            guard let move = learnedMove(entry, pokemon: pokemon, save: save), Self.searchKey(move.name).contains(search) else { continue }
+            var group = grouped[move.id] ?? (move, [])
+            if !group.sources.contains(where: { $0.method == entry.method && $0.level == entry.level }) {
+                group.sources.append(entry)
+            }
+            grouped[move.id] = group
+        }
+        return grouped.values.map { group in
+            BoundRRDexLearnsetRow(id: "move-\(group.move.id)", move: group.move, sources: group.sources)
+        }.sorted {
+            let nameOrder = $0.move.name.localizedCaseInsensitiveCompare($1.move.name)
+            return nameOrder == .orderedSame ? $0.id < $1.id : nameOrder == .orderedAscending
+        }
+    }
     struct EvolutionLink: Identifiable, Sendable {
         let from: BoundRRDexSpecies
         let to: BoundRRDexSpecies
@@ -139,6 +181,25 @@ struct BoundRRDexCatalog: Decodable, Sendable {
             }
             return Matchup(type: attack, multiplier: multiplier)
         }
+    }
+}
+
+struct BoundRRDexLearnsetRow: Identifiable, Sendable {
+    let id: String
+    let move: BoundRRDexMove
+    let sources: [BoundRRDexSpecies.LearnedMove]
+    var level: Int? {
+        let levels = Set(sources.filter { $0.method == "Level up" }.compactMap(\.level))
+        return levels.count == 1 ? levels.first : nil
+    }
+    var sourceSummary: String {
+        let labels = sources.map { entry -> String in
+            if entry.method == "Level up", let level = entry.level { return level == 0 ? "Evolution" : "Level \(level)" }
+            if entry.method == "Pre-evolution", let level = entry.level { return "Pre-evolution · Level \(level)" }
+            return entry.method
+        }
+        var seen = Set<String>()
+        return labels.filter { seen.insert($0).inserted }.joined(separator: " · ")
     }
 }
 

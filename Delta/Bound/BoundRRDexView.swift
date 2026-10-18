@@ -22,6 +22,9 @@ struct BoundRRDexView: View {
     @State private var moveSearchVisible = false
     @State private var moveSearchFocused = false
     @State private var expandedLearnsetMethod: String?
+    @State private var layout12LearnsetPresented = false
+    @State private var expandedLearnsetMove: String?
+    @State private var layout12ReturningToLearnset = false
     @State private var importError: String?
     @State private var automaticSaveStatus: String?
     @State private var refreshingSave = false
@@ -64,7 +67,9 @@ struct BoundRRDexView: View {
         Group {
             if experimentsEnabled, let catalog, let pokemon = catalog.pokemon(id: choice.speciesID) ?? catalog.species.first {
                 GeometryReader { geometry in
-                    if floating {
+                    if layout == .layout12 && layout12LearnsetPresented {
+                        layout12Learnset(pokemon: pokemon, catalog: catalog, compact: geometry.size.height < 140)
+                    } else if floating {
                         floatingCard(pokemon: pokemon, catalog: catalog, size: geometry.size)
                     } else if geometry.size.height < 140 {
                         // Keep fixed controls reachable when the portrait strip
@@ -84,7 +89,16 @@ struct BoundRRDexView: View {
                 .padding(.top, portraitTopInset)
                 .overlay(alignment: .top) {
                     if hasIslandActions {
-                        if layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12 {
+                        if layout == .layout12 && layout12LearnsetPresented {
+                            HStack(spacing: 0) {
+                                layout12LearnsetBack(pokemon: pokemon)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Color.clear.frame(width: 160, height: 1)
+                                layout12MoveSearchButton.frame(maxWidth: .infinity, alignment: .trailing)
+                            }
+                            .padding(.horizontal, 12)
+                            .frame(height: portraitTopInset)
+                        } else if layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12 {
                             HStack(spacing: 0) {
                                 layout8InformationButton.frame(maxWidth: .infinity, alignment: .leading)
                                 Color.clear.frame(width: 160, height: 1)
@@ -117,6 +131,12 @@ struct BoundRRDexView: View {
                 .onAppear {
                     if previewLayout == nil { choice = preferences.read(gameID: gameID) }
                     expandedLearnsetMethod = nil
+                    layout12LearnsetPresented = false
+                    expandedLearnsetMove = nil
+                    if layout == .layout12 {
+                        moveQuery = ""; moveSearchVisible = false; moveSearchFocused = false
+                        layout12ReturningToLearnset = false
+                    }
                     if previewLayout == nil { refreshAutomaticSave() }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: BoundRRDexSaveRefreshEvent.notificationName)
@@ -153,9 +173,16 @@ struct BoundRRDexView: View {
             if active || !awaitingDetailDismissal { presentationChanged(active) }
         }
         .onChange(of: experimentsEnabled) { _, enabled in
-            if !enabled { searching = false; moveSearchFocused = false; sheet = nil; importError = nil }
+            if !enabled {
+                searching = false; moveSearchFocused = false; sheet = nil; importError = nil
+                closeLayout12Learnset()
+            }
         }
-        .onChange(of: layout) { _, _ in expandedLearnsetMethod = nil }
+        .onChange(of: layout) { previous, current in
+            expandedLearnsetMethod = nil
+            if previous == .layout12 || current == .layout12 { closeLayout12Learnset() }
+        }
+        .onChange(of: choice.save) { _, _ in expandedLearnsetMove = nil }
         .onDisappear {
             searching = false; moveSearchFocused = false; sheet = nil
             textEditingChanged(false)
@@ -427,6 +454,12 @@ struct BoundRRDexView: View {
                     .scrollDismissesKeyboard(.interactively)
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-details")
+                    .onAppear {
+                        if layout == .layout12 && layout12ReturningToLearnset {
+                            proxy.scrollTo("learnset", anchor: .bottom)
+                            layout12ReturningToLearnset = false
+                        }
+                    }
                     .onChange(of: moveSearchVisible) { _, visible in
                         if visible { proxy.scrollTo("learnset", anchor: .top) }
                     }
@@ -530,7 +563,27 @@ struct BoundRRDexView: View {
                      blue: Double(hex & 255) / 255)
     }
 
+    @ViewBuilder
     private func inlineLearnset(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog) -> some View {
+        if layout == .layout12 {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Learnset").font(.system(size: 12, weight: .semibold))
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer(minLength: 0)
+                    layout12MoveSearchButton
+                }
+                layout12LearnsetMethods(pokemon: pokemon, catalog: catalog)
+            }
+            .id("learnset")
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("bound.rrdex-layout12-learnset")
+        } else {
+            legacyInlineLearnset(pokemon: pokemon, catalog: catalog)
+        }
+    }
+
+    private func legacyInlineLearnset(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 2) {
                 Text("Learnset").font(.system(size: 12, weight: .semibold))
@@ -572,7 +625,7 @@ struct BoundRRDexView: View {
                 Text(BoundRRDexLearnset.randomizerNote).font(.caption).foregroundStyle(.secondary)
             }
             let filter = moveQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-            LazyVStack(alignment: .leading, spacing: (layout == .layout11 || layout == .layout12) ? 0 : 12) {
+            LazyVStack(alignment: .leading, spacing: layout == .layout11 ? 0 : 12) {
                 ForEach(BoundRRDexLearnset.methods, id: \.self) { method in
                     let entries = pokemon.learnset.enumerated().filter { _, entry in
                         entry.method == method && (filter.isEmpty || catalog.learnedMove(entry, pokemon: pokemon, save: choice.save)?.name.localizedCaseInsensitiveContains(filter) == true)
@@ -586,7 +639,7 @@ struct BoundRRDexView: View {
                                 Divider()
                             }
                         }
-                        if layout == .layout11 || layout == .layout12 {
+                        if layout == .layout11 {
                             let expanded = expandedLearnsetMethod == method
                             let title = method == "Level up" ? "Level Up" : method
                             VStack(alignment: .leading, spacing: 8) {
@@ -634,6 +687,201 @@ struct BoundRRDexView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-learnset")
+    }
+
+    private func openLayout12Learnset(method: String?, search: Bool = false) {
+        guard experimentsEnabled else { return }
+        layout12LearnsetPresented = true
+        expandedLearnsetMethod = method
+        expandedLearnsetMove = nil
+        moveQuery = ""
+        moveSearchVisible = search
+        moveSearchFocused = search
+    }
+
+    private func closeLayout12Learnset() {
+        layout12ReturningToLearnset = layout == .layout12 && layout12LearnsetPresented
+        layout12LearnsetPresented = false
+        expandedLearnsetMethod = nil
+        expandedLearnsetMove = nil
+        moveQuery = ""
+        moveSearchVisible = false
+        moveSearchFocused = false
+    }
+
+    private func layout12LearnsetBack(pokemon: BoundRRDexSpecies) -> some View {
+        Button { closeLayout12Learnset() } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "chevron.left").font(.system(size: 10, weight: .semibold))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(pokemon.name).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                    Text("Learnset").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
+            .frame(minHeight: 44).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).foregroundStyle(.primary)
+        .accessibilityLabel("Back to \(pokemon.name)")
+        .accessibilityIdentifier("bound.rrdex-layout12-learnset-back")
+    }
+
+    private var layout12MoveSearchButton: some View {
+        Button {
+            guard experimentsEnabled else { return }
+            if !layout12LearnsetPresented {
+                openLayout12Learnset(method: nil, search: true)
+            } else {
+                moveSearchVisible.toggle()
+                moveSearchFocused = moveSearchVisible
+                moveQuery = ""
+                expandedLearnsetMove = nil
+            }
+        } label: {
+            Image(systemName: moveSearchVisible ? "xmark" : "magnifyingglass")
+                .font(.system(size: 17, weight: .medium))
+                .frame(width: 44, height: 44).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(moveSearchVisible ? "Close move search" : "Search all moves")
+        .accessibilityIdentifier("bound.rrdex-layout12-learnset-search-toggle")
+    }
+
+    private func layout12LearnsetMethods(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog) -> some View {
+        let methods = catalog.learnsetMethods(for: pokemon)
+        return ViewThatFits(in: .horizontal) {
+            layout12MethodButtons(methods, pokemon: pokemon, fillsWidth: true)
+            ScrollView(.horizontal) {
+                layout12MethodButtons(methods, pokemon: pokemon, fillsWidth: false)
+            }.scrollIndicators(.hidden)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("bound.rrdex-layout12-learnset-methods")
+    }
+
+    private func layout12MethodButtons(_ methods: [String], pokemon: BoundRRDexSpecies, fillsWidth: Bool) -> some View {
+        HStack(spacing: 2) {
+            ForEach(methods, id: \.self) { method in
+                let selected = layout12LearnsetPresented && expandedLearnsetMethod == method
+                Button {
+                    openLayout12Learnset(method: method)
+                } label: {
+                    Text(method == "Level up" ? "Level Up" : method)
+                        .font(.system(size: 12, weight: .semibold))
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 7)
+                        .frame(minWidth: 44, maxWidth: fillsWidth ? .infinity : nil, minHeight: 44)
+                        .background(selected ? Color(uiColor: .deltaPurple).opacity(0.16) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 7))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(selected ? Color(uiColor: .deltaPurple) : .primary)
+                .accessibilityLabel("\(method == "Level up" ? "Level Up" : method), \(pokemon.learnset.filter { $0.method == method }.count) moves")
+                .accessibilityValue(selected ? "Selected" : "Not selected")
+                .accessibilityIdentifier("bound.rrdex-layout12-learnset-method-\(method)")
+            }
+        }
+    }
+
+    private func layout12Learnset(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog, compact: Bool) -> some View {
+        let rows = catalog.learnsetRows(for: pokemon, save: choice.save, method: expandedLearnsetMethod, query: moveQuery)
+        let filtering = !moveQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let showsLevels = !filtering && expandedLearnsetMethod == "Level up"
+        return ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                if compact {
+                    // On exceptionally short panels, keep every control reachable by
+                    // scrolling the whole learnset instead of leaving a zero-height list.
+                    ScrollView {
+                        layout12LearnsetControls(pokemon: pokemon, catalog: catalog)
+                        layout12LearnsetRows(rows, catalog: catalog, showsLevels: showsLevels, filtering: filtering)
+                    }
+                    .scrollDismissesKeyboard(.interactively)
+                    .accessibilityIdentifier("bound.rrdex-layout12-learnset-list")
+                } else {
+                    layout12LearnsetControls(pokemon: pokemon, catalog: catalog)
+                    ScrollView {
+                        layout12LearnsetRows(rows, catalog: catalog, showsLevels: showsLevels, filtering: filtering)
+                    }
+                    .scrollDismissesKeyboard(.interactively)
+                    .id("\(expandedLearnsetMethod ?? "none")-\(moveQuery)")
+                    .accessibilityIdentifier("bound.rrdex-layout12-learnset-list")
+                }
+            }
+            .padding(.horizontal, 12)
+            .background(Color(uiColor: .systemBackground))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("bound.rrdex-layout12-learnset")
+            .onChange(of: moveQuery) { _, _ in expandedLearnsetMove = nil }
+            .onChange(of: expandedLearnsetMove) { _, move in
+                if let move { proxy.scrollTo(move, anchor: .top) }
+            }
+        }
+    }
+
+    private func layout12LearnsetControls(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog) -> some View {
+        VStack(spacing: 0) {
+            if !hasIslandActions {
+                HStack {
+                    layout12LearnsetBack(pokemon: pokemon)
+                    Spacer(minLength: 0)
+                    layout12MoveSearchButton
+                }
+            }
+            if moveSearchVisible {
+                HStack(spacing: 4) {
+                    BoundRRDexSearchField(text: $moveQuery, focused: $moveSearchFocused,
+                                         placeholder: "Search all moves", identifier: "bound.rrdex-layout12-learnset-search") {
+                        moveSearchFocused = false
+                    }
+                    if !moveQuery.isEmpty {
+                        Button { moveQuery = "" } label: {
+                            Image(systemName: "xmark.circle.fill").frame(width: 44, height: 44)
+                        }
+                        .accessibilityLabel("Clear move search")
+                        .accessibilityIdentifier("bound.rrdex-layout12-learnset-clear")
+                    }
+                }
+                .padding(.leading, 9).frame(height: 44)
+                .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 7))
+            } else {
+                layout12LearnsetMethods(pokemon: pokemon, catalog: catalog)
+            }
+            Divider()
+        }
+    }
+
+    private func layout12LearnsetRows(_ rows: [BoundRRDexLearnsetRow], catalog: BoundRRDexCatalog,
+                                     showsLevels: Bool, filtering: Bool) -> some View {
+        LazyVStack(alignment: .leading, spacing: 0) {
+            if choice.save?.randomLearnset == true {
+                Text(BoundRRDexLearnset.randomizerNote).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true).padding(.vertical, 5)
+            }
+            if rows.isEmpty {
+                Text(filtering ? "No moves found" : moveSearchVisible ? "Search across all learn methods" : "Choose a learn method")
+                    .font(.system(size: 12)).foregroundStyle(.secondary).padding(.vertical, 12)
+                    .accessibilityIdentifier("bound.rrdex-layout12-learnset-empty")
+            } else {
+                HStack(spacing: 7) {
+                    if showsLevels { Text("Lv.").frame(width: 30, alignment: .leading) }
+                    Text("Moves · \(rows.count)").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Power").frame(width: 38, alignment: .trailing)
+                    Color.clear.frame(width: 10, height: 1)
+                }
+                .font(.system(size: 11)).foregroundStyle(.secondary).padding(.vertical, 3)
+                Divider()
+                ForEach(rows) { row in
+                    BoundRRDexCompactMoveRow(row: row, catalog: catalog, showsLevel: showsLevels,
+                                            showsSources: filtering, expanded: expandedLearnsetMove == row.id) {
+                        guard experimentsEnabled else { return }
+                        expandedLearnsetMove = expandedLearnsetMove == row.id ? nil : row.id
+                    }
+                    .id(row.id)
+                    Divider()
+                }
+            }
+        }
     }
 
     private func cardLayout2(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog,
@@ -1401,6 +1649,7 @@ struct BoundRRDexView: View {
         choice.speciesID = pokemon.id; query = ""; searching = false
         moveQuery = ""; moveSearchVisible = false; moveSearchFocused = false
         expandedLearnsetMethod = nil
+        closeLayout12Learnset()
         layout4EvolutionExpanded = false
         layout5EvolutionExpanded = false
         preferences.write(choice, gameID: gameID)
@@ -1730,6 +1979,80 @@ private struct BoundRRDexLearnset: View {
         }.accessibilityIdentifier("bound.rrdex-moves")
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Find a move")
             .textInputAutocapitalization(.never).autocorrectionDisabled()
+    }
+}
+
+/// Layout 12 keeps comparison values in the list and expands one move's details inline.
+private struct BoundRRDexCompactMoveRow: View {
+    let row: BoundRRDexLearnsetRow
+    let catalog: BoundRRDexCatalog
+    let showsLevel: Bool
+    let showsSources: Bool
+    let expanded: Bool
+    let toggle: () -> Void
+    @ScaledMetric(relativeTo: .subheadline) private var nameSize = 14.0
+    @ScaledMetric(relativeTo: .caption) private var metadataSize = 11.0
+
+    private var power: String { row.move.power == 0 ? "—" : String(row.move.power) }
+    private var accuracy: String { row.move.accuracy == 0 ? "—" : String(row.move.accuracy) }
+    private var type: BoundRRDexType? { catalog.type(id: row.move.type) }
+    private var typeColor: Color {
+        let hex = UInt32(type?.color.dropFirst() ?? "777777", radix: 16) ?? 0x777777
+        return Color(red: Double((hex >> 16) & 255) / 255,
+                     green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: toggle) {
+                HStack(spacing: 7) {
+                    if showsLevel {
+                        Text(row.level.map { $0 == 0 ? "Evo" : String($0) } ?? "—")
+                            .font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary)
+                            .frame(width: 30, alignment: .leading)
+                    }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(row.move.name).font(.system(size: nameSize, weight: .semibold)).lineLimit(1)
+                        HStack(spacing: 4) {
+                            if let type {
+                                Circle().fill(typeColor).frame(width: 6, height: 6)
+                                Text(type.name)
+                            }
+                            Text(row.move.category).foregroundStyle(.secondary)
+                        }
+                        .font(.system(size: metadataSize)).lineLimit(1)
+                        if showsSources {
+                            Text(row.sourceSummary).font(.system(size: metadataSize)).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(power).font(.system(size: nameSize)).monospacedDigit().frame(width: 38, alignment: .trailing)
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).frame(width: 10)
+                }
+                .padding(.vertical, 5).frame(minHeight: 44).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).foregroundStyle(.primary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel("\(row.move.name), \(type?.name ?? ""), \(row.move.category), power \(power), \(row.sourceSummary)")
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .accessibilityHint("Show or hide accuracy and PP")
+            .accessibilityIdentifier("bound.rrdex-layout12-learnset-move-\(row.id)")
+            if expanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(row.move.name).font(.system(size: nameSize, weight: .semibold))
+                    Text("Accuracy \(accuracy) · PP \(row.move.pp)").font(.system(size: 12))
+                    Text(row.sourceSummary).font(.system(size: metadataSize)).foregroundStyle(.secondary)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 7))
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("bound.rrdex-layout12-learnset-detail-\(row.id)")
+            }
+        }
     }
 }
 

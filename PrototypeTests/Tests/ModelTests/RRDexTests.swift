@@ -60,6 +60,63 @@ final class RRDexTests: XCTestCase {
             XCTAssertEqual(c.learnedMove(entry, pokemon: b, save: save)?.id, entry.moveID)
         }
     }
+    func testLearnsetMethodsAndCompactCategoryRows() throws {
+        let catalog = try XCTUnwrap(BoundRRDexCatalog.bundled)
+        let bulbasaur = try XCTUnwrap(catalog.pokemon(id: 1))
+        XCTAssertEqual(catalog.learnsetMethods(for: bulbasaur), ["Level up", "TM/HM", "Tutor", "Egg"])
+        XCTAssertTrue(catalog.learnsetRows(for: bulbasaur, save: nil, method: nil, query: "").isEmpty)
+        XCTAssertTrue(catalog.learnsetRows(for: bulbasaur, save: nil, method: "Level up", query: "!!!").isEmpty,
+                      "A nonempty query that normalizes to no search terms must not become browse mode")
+        XCTAssertTrue(catalog.learnsetRows(for: bulbasaur, save: nil, method: "Level up", query: "   ").map(\.id)
+            .allSatisfy { $0.hasPrefix("entry-") })
+
+        let levelEntries = bulbasaur.learnset.filter { $0.method == "Level up" }
+        let levelRows = catalog.learnsetRows(for: bulbasaur, save: nil, method: "Level up", query: "")
+        XCTAssertEqual(levelRows.count, levelEntries.count)
+        XCTAssertEqual(Set(levelRows.map(\.id)).count, levelRows.count)
+        XCTAssertEqual(levelRows.map(\.level), levelRows.map(\.level).sorted { ($0 ?? Int.max) < ($1 ?? Int.max) })
+        XCTAssertEqual(levelRows.first?.level, levelEntries.compactMap(\.level).min())
+        XCTAssertEqual(levelRows.map(\.id), catalog.learnsetRows(for: bulbasaur, save: nil, method: "Level up", query: "").map(\.id),
+                       "Equal-level rows must retain deterministic ordering")
+
+        let venusaur = try XCTUnwrap(catalog.pokemon(id: 3))
+        let evolution = try XCTUnwrap(catalog.learnsetRows(for: venusaur, save: nil, method: "Level up", query: "").first { $0.level == 0 })
+        XCTAssertEqual(evolution.sourceSummary, "Evolution")
+
+        let tmRows = catalog.learnsetRows(for: bulbasaur, save: nil, method: "TM/HM", query: "")
+        XCTAssertEqual(tmRows.count, bulbasaur.learnset.filter { $0.method == "TM/HM" }.count)
+        XCTAssertEqual(tmRows.map { $0.move.name }, tmRows.map { $0.move.name }.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending })
+    }
+    func testLearnsetSearchCombinesSourcesAcrossMethodsAndResolvesRandomizedMoves() throws {
+        let catalog = try XCTUnwrap(BoundRRDexCatalog.bundled)
+        let bulbasaur = try XCTUnwrap(catalog.pokemon(id: 1))
+        let magicalLeaf = catalog.learnsetRows(for: bulbasaur, save: nil, method: "Egg", query: " magical leaf ")
+        XCTAssertEqual(magicalLeaf.count, 1)
+        XCTAssertEqual(magicalLeaf[0].sources.map(\.method), ["Level up", "Egg"])
+        XCTAssertEqual(magicalLeaf[0].level, 9, "A grouped result retains its single distinct level-up level")
+        XCTAssertEqual(magicalLeaf[0].sourceSummary, "Level 9 · Egg")
+        let preEvolutionRow = BoundRRDexLearnsetRow(
+            id: "fixture",
+            move: magicalLeaf[0].move,
+            sources: [
+                .init(moveID: magicalLeaf[0].move.id, method: "Pre-evolution", level: 12),
+                .init(moveID: magicalLeaf[0].move.id, method: "Level up", level: 9),
+                .init(moveID: magicalLeaf[0].move.id, method: "TM/HM", level: nil),
+                .init(moveID: magicalLeaf[0].move.id, method: "TM/HM", level: nil)
+            ]
+        )
+        XCTAssertEqual(preEvolutionRow.sourceSummary, "Pre-evolution · Level 12 · Level 9 · TM/HM")
+        XCTAssertEqual(preEvolutionRow.level, 9)
+
+        let randomSave = BoundRRDexSave(trainerID: 123456789, randomAbilities: false, randomLearnset: true)
+        let originalLevelEntry = try XCTUnwrap(bulbasaur.learnset.first { $0.method == "Level up" })
+        let randomizedMove = try XCTUnwrap(catalog.learnedMove(originalLevelEntry, pokemon: bulbasaur, save: randomSave))
+        let randomizedRows = catalog.learnsetRows(for: bulbasaur, save: randomSave, method: "Egg", query: randomizedMove.name)
+        XCTAssertTrue(randomizedRows.contains { row in
+            row.id == "move-\(randomizedMove.id)" && row.sources.contains { $0.method == "Level up" }
+        }, "Search must resolve randomizer moves and search across methods regardless of selected category")
+        XCTAssertEqual(randomizedRows.map(\.move.name), randomizedRows.map(\.move.name).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending })
+    }
     func testSaveImportUsesLatestCompleteRotatedSlotAndRejectsWrongFormats() throws {
         var data = Self.saveFixture()
         XCTAssertEqual(try BoundRRDexSave.parse(data), BoundRRDexSave(trainerID: 123456789, randomAbilities: true, randomLearnset: true))
