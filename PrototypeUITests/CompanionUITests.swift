@@ -4913,3 +4913,101 @@ final class ReleaseSmokeUITests: XCTestCase {
         #endif
     }
 }
+
+extension CompanionUITests {
+    func testLandscapeOption2IndependentViewsLockAndPortraitRestoration() throws {
+        // The animated game can keep Xcode 27's idle detector waiting after
+        // opening the native pause menu. Observe each UI transition explicitly.
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originalImplementations: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            let replacement = imp_implementationWithBlock(skip)
+            originalImplementations.append((method, method_setImplementation(method, replacement)))
+        }
+        defer {
+            for (method, original) in originalImplementations {
+                let replacement = method_setImplementation(method, original)
+                imp_removeBlock(replacement)
+            }
+        }
+        let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture"])
+        let originalPortrait = element("bound.companion-container", in: app).frame
+        openBoundSettings(in: app)
+        let options = element("bound.landscape-options", in: app)
+        XCTAssertTrue(options.waitForExistence(timeout: 5))
+        XCTAssertTrue(options.label.contains("Option 1") || (options.value as? String) == "Option 1")
+        options.tap()
+        app.buttons["Option 2"].firstMatch.tap()
+        closeBoundSheet(in: app)
+        XCTAssertFalse(app.buttons["bound.landscape-friend-button"].exists)
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].exists)
+        XCTAssertEqual(element("bound.companion-container", in: app).frame, originalPortrait)
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let friendButton = app.buttons["bound.landscape-friend-button"]
+        let viewsButton = app.buttons["bound.landscape-views-button"]
+        XCTAssertTrue(friendButton.waitForExistence(timeout: 10))
+        XCTAssertTrue(viewsButton.exists)
+        XCTAssertFalse(app.buttons["bound.panel-cycle"].exists)
+        viewsButton.tap()
+        XCTAssertEqual(viewsButton.value as? String, "Notes")
+        let game = element("bound.game-screen", in: app)
+        let reference = element("bound.landscape-reference-content", in: app)
+        XCTAssertTrue(reference.waitForExistence(timeout: 5))
+        for name in ["Notes", "Types", "Bosses", "RR Dex"] {
+            XCTAssertEqual(viewsButton.value as? String, name)
+            let header = element("bound.landscape-reference-handle", in: app)
+            let frame = reference.frame.union(header.frame)
+            for obstacle in try actualPiPHitObstacles(in: game) {
+                let overlap = frame.intersection(obstacle)
+                XCTAssertFalse(overlap.width > 1 && overlap.height > 1, "\(name) overlaps a control: \(frame) / \(obstacle)")
+            }
+            XCTAssertTrue(element("bound.landscape-friend", in: app).exists)
+            viewsButton.tap()
+        }
+        XCTAssertEqual(viewsButton.value as? String, "Notes")
+        element("bound.notes-preview", in: app).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Done"].firstMatch.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        friendButton.tap()
+        XCTAssertTrue(element("bound.landscape-friend", in: app).waitForNonExistence(timeout: 5))
+        XCTAssertTrue(reference.exists)
+        friendButton.tap()
+        XCTAssertTrue(element("bound.landscape-friend", in: app).waitForExistence(timeout: 5))
+        friendButton.press(forDuration: 1)
+        let save = app.buttons["bound.landscape-save-lock"]
+        XCTAssertTrue(save.waitForExistence(timeout: 5))
+        let menu = element("bound.native-menu", in: app)
+        let move = element("bound.landscape-friend-move", in: app)
+        move.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: menu.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
+        save.tap()
+        XCTAssertTrue(save.waitForNonExistence(timeout: 5))
+        let locked = element("bound.landscape-friend", in: app)
+        XCTAssertTrue(locked.frame.contains(CGPoint(x: menu.frame.midX, y: menu.frame.midY)))
+        XCTAssertEqual(locked.value as? String, "Locked, touches pass through")
+        screenshot("Landscape-option2-locked-friend-over-menu")
+        menu.tap()
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5), "A native control under locked Friend must receive the tap")
+        resumeNativePause(in: app)
+
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 10))
+        XCTAssertFalse(friendButton.exists)
+        XCTAssertEqual(app.buttons["bound.panel-cycle"].value as? String, "Friend")
+        XCTAssertEqual(element("bound.companion-container", in: app).frame, originalPortrait)
+        screenshot("Landscape-option2-portrait-unchanged")
+        openBoundSettings(in: app)
+        element("bound.landscape-options", in: app).tap()
+        app.buttons["Option 1"].firstMatch.tap()
+        closeBoundSheet(in: app)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 10))
+        XCTAssertFalse(friendButton.exists)
+        XCTAssertFalse(viewsButton.exists)
+        screenshot("Landscape-option1-restored")
+    }
+}

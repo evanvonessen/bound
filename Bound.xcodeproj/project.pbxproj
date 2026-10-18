@@ -44,6 +44,7 @@
 		EB82D09672944343A7156C01 /* SDWebImage_Privacy.bundle in Resources */ = {isa = PBXBuildFile; fileRef = EB82D09672944343A7156C02 /* SDWebImage_Privacy.bundle */; };
 		10C306F1A66146C8B168ECA1 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 74E4919A740A48EFAE101408 /* PrivacyInfo.xcprivacy */; };
 		47AF26DA565A4105BA138CAF /* AccountPersistenceIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2476C2B0032441E97FF3CD5 /* AccountPersistenceIntegrationTests.swift */; };
+		A8D4C721995E4F78A4E1C301 /* LandscapeCompanionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8D4C721995E4F78A4E1C302 /* LandscapeCompanionTests.swift */; };
 		E638143CC17A4C2C89AAD42A /* DEPENDENCY-INVENTORY.md in Resources */ = {isa = PBXBuildFile; fileRef = 0058B1D4CAE94BCD8CADA177 /* DEPENDENCY-INVENTORY.md */; };
 		4B42F8FEAF5D49CE907FE459 /* BOUND2-MODIFICATIONS.md in Resources */ = {isa = PBXBuildFile; fileRef = 9A74828983EB415C965374E1 /* BOUND2-MODIFICATIONS.md */; };
 		29764E0164684F3CAA391DBD /* COPYING in Resources */ = {isa = PBXBuildFile; fileRef = 084DC89EF78044B6A582A1A2 /* COPYING */; };
@@ -433,6 +434,8 @@
 		C9F98F6095050C500082B509 /* BoundMacWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D638FE02F6B2876A1CB9CBB /* BoundMacWorkspaceView.swift */; };
 		CF8D391A7DCA20ABDE574139 /* MacWorkspaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13B6FBE642F317EBFF2FEB7F /* MacWorkspaceTests.swift */; };
 		B184A47C9063EDC18DBB4691 /* MacWorkspaceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF58B4C5653710C200F455B0 /* MacWorkspaceUITests.swift */; };
+		70E48E5D9D7B468A8A60DD61 /* BoundLandscapePreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E745195014845F0878192F6 /* BoundLandscapePreferences.swift */; };
+		4978387F9B9B4EDFB5172A2F /* BoundLandscapeCompanion.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD788325701142D5A8E31F99 /* BoundLandscapeCompanion.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -821,6 +824,7 @@
 		EB82D09672944343A7156C02 /* SDWebImage_Privacy.bundle */ = {isa = PBXFileReference; lastKnownFileType = wrapper.cfbundle; path = PrivacyManifests/SDWebImage_Privacy.bundle; sourceTree = SOURCE_ROOT; };
 		74E4919A740A48EFAE101408 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		B2476C2B0032441E97FF3CD5 /* AccountPersistenceIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountPersistenceIntegrationTests.swift; sourceTree = "<group>"; };
+		A8D4C721995E4F78A4E1C302 /* LandscapeCompanionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandscapeCompanionTests.swift; sourceTree = "<group>"; };
 		0058B1D4CAE94BCD8CADA177 /* DEPENDENCY-INVENTORY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = "DEPENDENCY-INVENTORY.md"; path = "LICENSES/DEPENDENCY-INVENTORY.md"; sourceTree = SOURCE_ROOT; };
 		9A74828983EB415C965374E1 /* BOUND2-MODIFICATIONS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = "BOUND2-MODIFICATIONS.md"; path = "LICENSES/BOUND2-MODIFICATIONS.md"; sourceTree = SOURCE_ROOT; };
 		084DC89EF78044B6A582A1A2 /* COPYING */ = {isa = PBXFileReference; lastKnownFileType = text; name = "COPYING"; path = "COPYING"; sourceTree = SOURCE_ROOT; };
@@ -1225,6 +1229,8 @@
 		3D638FE02F6B2876A1CB9CBB /* BoundMacWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundMacWorkspaceView.swift; sourceTree = "<group>"; };
 		13B6FBE642F317EBFF2FEB7F /* MacWorkspaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWorkspaceTests.swift; sourceTree = "<group>"; };
 		FF58B4C5653710C200F455B0 /* MacWorkspaceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWorkspaceUITests.swift; sourceTree = "<group>"; };
+		6E745195014845F0878192F6 /* BoundLandscapePreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLandscapePreferences.swift; sourceTree = "<group>"; };
+		CD788325701142D5A8E31F99 /* BoundLandscapeCompanion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLandscapeCompanion.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1348,6 +1354,7 @@
 				EF068D284BCE47409FBF25C2 /* BoundDropboxOAuthTests.swift */,
 				104D04088215A199CB56949A /* StockControlAndGestureTests.swift */,
 				B2476C2B0032441E97FF3CD5 /* AccountPersistenceIntegrationTests.swift */,
+				A8D4C721995E4F78A4E1C302 /* LandscapeCompanionTests.swift */,
 			);
 			name = PrototypeIntegrationTests;
 			path = PrototypeIntegrationTests;
@@ -1401,6 +1408,8 @@
 				D96152E9343BCC1B73A10C62 /* SharingInterfaces.swift */,
 				6C567BEA206FA4CDEEE564A0 /* SharingSession.swift */,
 				B8278DC39886200921A04024 /* cloud-configuration.json */,
+				6E745195014845F0878192F6 /* BoundLandscapePreferences.swift */,
+				CD788325701142D5A8E31F99 /* BoundLandscapeCompanion.swift */,
 				E0B9C64D60692EA8EAC11ACE /* BoundCompanionPanel.swift */,
 				3D638FE02F6B2876A1CB9CBB /* BoundMacWorkspaceView.swift */,
 				32118EFE887BC6DFF711A9BF /* BoundMacWorkspaceGeometry.swift */,
@@ -3109,6 +3118,7 @@
 				DC44859A7C07464BBE63B016 /* BoundDropboxOAuthTests.swift in Sources */,
 				D1CCDE2C67C0DCD2A3EF9645 /* StockControlAndGestureTests.swift in Sources */,
 				47AF26DA565A4105BA138CAF /* AccountPersistenceIntegrationTests.swift in Sources */,
+				A8D4C721995E4F78A4E1C301 /* LandscapeCompanionTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -3366,6 +3376,8 @@
 				6775DA71ADC1948B36D0A009 /* SharingFrame.swift in Sources */,
 				6C5D344C353DE653833A32A3 /* SharingInterfaces.swift in Sources */,
 				201B898B6F0A4893431BEB1C /* SharingSession.swift in Sources */,
+				70E48E5D9D7B468A8A60DD61 /* BoundLandscapePreferences.swift in Sources */,
+				4978387F9B9B4EDFB5172A2F /* BoundLandscapeCompanion.swift in Sources */,
 				EE19B3FE32D45413CAB52F5A /* BoundCompanionPanel.swift in Sources */,
 				C9F98F6095050C500082B509 /* BoundMacWorkspaceView.swift in Sources */,
 				AF587D5409BC632CA606F011 /* BoundMacWorkspaceGeometry.swift in Sources */,

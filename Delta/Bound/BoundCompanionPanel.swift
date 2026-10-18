@@ -203,7 +203,7 @@ final class BoundCompanionState: ObservableObject {
 }
 
 /// The overlay yields native button touches even if a moved PiP crosses a button.
-private final class BoundOverlayView: UIView {
+final class BoundOverlayView: UIView {
     var yieldsTouch: ((CGPoint) -> Bool)?
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         if yieldsTouch?(point) == true { return nil }
@@ -235,7 +235,8 @@ final class BoundCompanionCoordinator {
         sharing = FriendSharingSession(authenticatedMode: true)
         #endif
     }
-    private var host: UIHostingController<BoundCompanionPanel>?
+    private var host: UIHostingController<BoundCompanionPresentation>?
+    private let landscapeCompanion = BoundLandscapeCompanionModel()
     private var macHost: UIHostingController<BoundMacWorkspaceView>?
     private var controls: BoundCompanionCycleButton?
     private var subscriptions = Set<AnyCancellable>()
@@ -274,7 +275,7 @@ final class BoundCompanionCoordinator {
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-reset-layout") {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
-            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") { UserDefaults.standard.removeObject(forKey: key) }
+            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") { UserDefaults.standard.removeObject(forKey: key) }
         }
         #endif
         #if DEBUG
@@ -312,7 +313,24 @@ final class BoundCompanionCoordinator {
         if BoundMacWorkspacePlatform.isEnabled {
             installMacWorkspace(in: owner)
         } else {
-            let panel = BoundCompanionPanel(sharing: sharing, state: state, gameID: (owner.game as? Game)?.identifier ?? "", editingChanged: { [weak self] in self?.notesEditing($0) }, textEditingChanged: { [weak self] in self?.textEditing($0) }, currentSave: { [weak self] gameID in
+            landscapeCompanion.reload()
+            landscapeCompanion.needsLayout = { [weak owner] in owner?.view.setNeedsLayout() }
+            landscapeCompanion.beforeSwitch = { [weak self, weak owner] in
+                owner?.view.endEditing(true)
+                self?.gestures?.cancel()
+                owner?.controllerView.cancelTouchInputs()
+            }
+            landscapeCompanion.beginArrangement = { [weak self, weak owner] in
+                guard let self, let owner, !self.isEditingNotes, owner.presentedViewController == nil,
+                      !self.state.showingFriends, !self.state.showingSettings else { return false }
+                self.notesEditing(true)
+                return true
+            }
+            landscapeCompanion.endArrangement = { [weak self] resume in self?.notesEditing(false, allowResume: resume) }
+            let panel = BoundCompanionPresentation(sharing: sharing, state: state, landscape: landscapeCompanion, gameID: (owner.game as? Game)?.identifier ?? "", editingChanged: { [weak self] in
+                guard let self, !self.landscapeCompanion.editing else { return }
+                self.notesEditing($0)
+            }, textEditingChanged: { [weak self] in self?.textEditing($0) }, currentSave: { [weak self] gameID in
                 guard let self else { throw BoundRRDexSave.ImportError.currentGameUnavailable }
                 return try self.importCurrentRRDexSave(gameID: gameID)
             })
@@ -325,7 +343,9 @@ final class BoundCompanionCoordinator {
             let overlay = BoundOverlayView()
             overlay.accessibilityIdentifier = "bound.companion-container"
             overlay.yieldsTouch = { [weak self, weak overlay] point in
-                guard let self, let owner = self.owner, let overlay, !self.isEditingNotes else { return false }
+                guard let self, let owner = self.owner, let overlay else { return false }
+                if self.landscapeCompanion.active { return !self.landscapeCompanion.receivesTouch(at: point) }
+                guard !self.isEditingNotes else { return false }
                 let local = owner.controllerView.convert(point, from: overlay)
                 return owner.controllerView.controlHitFrames.contains { $0.contains(local) }
             }
@@ -453,6 +473,15 @@ final class BoundCompanionCoordinator {
         if previousScreenLayout != screenLayout { previousScreenLayout = screenLayout; cancelInteractions() }
         let landscape = bounds.width > bounds.height
         if state.landscape != landscape { state.landscape = landscape; cancelInteractions() }
+        let usesLandscapeOption2 = landscape && landscapeCompanion.preferences.option == .option2
+        if usesLandscapeOption2 != landscapeCompanion.active {
+            owner.view.endEditing(true)
+            textEditing(false)
+            notesEditing(false)
+            keyboardHeight = 0
+        }
+        landscapeCompanion.setActive(usesLandscapeOption2)
+        gestures?.setEnabled(!landscapeCompanion.active)
         let referenceTopInset = screenLayout == .bound && !landscape ? safeArea.top : 0
         if state.referenceTopInset != referenceTopInset { state.referenceTopInset = referenceTopInset }
         if screenLayout == .delta {
@@ -495,11 +524,42 @@ final class BoundCompanionCoordinator {
             return
         }
         layoutCycleButton(bounds: owner.view.bounds, safeArea: owner.view.safeAreaInsets)
+        if landscapeCompanion.active {
+            layoutLandscapeCompanion()
+            sharing.setRemotePresentationEnabled(landscapeCompanion.friendVisible)
+            return
+        }
         if state.landscape || BoundAppearancePreferences().effectiveScreenLayout == .delta {
             layoutFloatingPanel()
         }
         sharing.setRemotePresentationEnabled(state.content == .friend && overlay?.isHidden == false)
         if let controls { owner.view.bringSubviewToFront(controls) }
+    }
+    private func layoutLandscapeCompanion() {
+        guard let owner, let overlay else { return }
+        controls?.isHidden = true
+        geometry = nil
+        let canvas = owner.view.bounds.inset(by: owner.view.safeAreaInsets)
+        let occupied = owner.controllerView.controlHitFrames.map { owner.controllerView.convert($0, to: owner.view) }
+        var shoulder: CGRect?
+        if let skin = owner.controllerView.controllerSkin, let traits = owner.controllerView.controllerSkinTraits,
+           let item = skin.items(for: traits)?.first(where: { $0.inputs.allInputs.contains(where: { $0.stringValue == "l" }) }) {
+            shoulder = owner.controllerView.convert(item.extendedFrame.applying(.init(scaleX: owner.controllerView.bounds.width,
+                                                                                     y: owner.controllerView.bounds.height)), to: owner.view)
+        }
+        landscapeCompanion.updateLayout(canvas: canvas, occupied: occupied, leftShoulder: shoulder,
+            keyboardHeight: max(0, keyboardHeight - owner.view.safeAreaInsets.bottom))
+        overlay.frame = owner.view.bounds
+        overlay.isHidden = false; overlay.alpha = 1
+        host?.view.frame = overlay.bounds
+        owner.view.bringSubviewToFront(overlay)
+        #if DEBUG && targetEnvironment(simulator)
+        let obstacles = occupied + [landscapeCompanion.layout.friendButton, landscapeCompanion.layout.viewsButton]
+        owner.gameView.accessibilityValue = "pip-hit-obstacles=" + obstacles.map { rect in
+            let screen = owner.view.convert(rect, to: nil)
+            return String(format: "%.2f,%.2f,%.2f,%.2f", screen.minX, screen.minY, screen.width, screen.height)
+        }.joined(separator: "|")
+        #endif
     }
     /// One final placement, using the settled native viewport and actual hit regions.
     private func layoutFloatingPanel() {
@@ -652,11 +712,13 @@ final class BoundCompanionCoordinator {
         }
     }
     func cancelInteractions() {
+        landscapeCompanion.finishArrangement(save: false)
         gestures?.cancel(); translation = .zero; pinchScale = 1; liveOpacity = nil
         fadingContent = nil; resizingContent = nil
         owner?.controllerView.cancelTouchInputs()
     }
     func cyclePanels() {
+        if landscapeCompanion.active { landscapeCompanion.cycleViews(); return }
         owner?.view.endEditing(true)
         cancelInteractions()
         if macHost != nil {
@@ -683,7 +745,7 @@ final class BoundCompanionCoordinator {
             && !overlay.frame.contains(point)
     }
     private func shouldReceive(_ touch: UITouch) -> Bool {
-        guard !state.availableContents.isEmpty, (state.landscape || (BoundAppearancePreferences().effectiveScreenLayout == .delta && state.content != .types)), !isEditingNotes, !state.showingFriends, !state.showingSettings,
+        guard !landscapeCompanion.active, !state.availableContents.isEmpty, (state.landscape || (BoundAppearancePreferences().effectiveScreenLayout == .delta && state.content != .types)), !isEditingNotes, !state.showingFriends, !state.showingSettings,
               let owner, let controls, !state.hidden else { return false }
         let p = touch.location(in: owner.view)
         guard !controls.frame.contains(p), owner.gameView.convert(owner.gameView.bounds, to: owner.view).contains(p) else { return false }
@@ -734,7 +796,8 @@ final class BoundCompanionCoordinator {
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
     func foreground() {
         foregroundTask?.cancel()
-        if state.content == .dex || (macHost != nil && state.macReference == .dex) {
+        if state.content == .dex || (macHost != nil && state.macReference == .dex)
+            || (landscapeCompanion.active && landscapeCompanion.referenceContent == .dex) {
             BoundRRDexSaveRefreshEvent.post(gameID: gameID)
         }
         if sharing.authenticatedMode {
@@ -752,10 +815,11 @@ final class BoundCompanionCoordinator {
         if usesLocalPairedFixture { sharing.start() }
         #endif
     }
-    func background() { foregroundTask?.cancel(); foregroundTask = nil; cancelInteractions(); tap.setEnabled(false); sharing.background(); onboarding.close() }
+    func background() { foregroundTask?.cancel(); foregroundTask = nil; landscapeCompanion.finishArrangement(save: false, resume: false); cancelInteractions(); tap.setEnabled(false); sharing.background(); onboarding.close() }
     func stop() {
         foregroundTask?.cancel(); foregroundTask = nil
         macSheetPaused = false; macSheetCore = nil
+        landscapeCompanion.finishArrangement(save: false, resume: false)
         cancelInteractions(); tap.setEnabled(false); sharing.stop(); onboarding.close()
         notesPaused = false; isEditingNotes = false; isEditingText = false; owner?.controllerView.isUserInteractionEnabled = true; host?.view.endEditing(true); macHost?.view.endEditing(true)
     }
@@ -797,7 +861,7 @@ final class BoundCompanionCoordinator {
         isEditingText = editing
         owner?.view.setNeedsLayout()
     }
-    private func notesEditing(_ editing: Bool) {
+    private func notesEditing(_ editing: Bool, allowResume: Bool = true) {
         guard isEditingNotes != editing else { return }
         isEditingNotes = editing; owner?.controllerView.cancelTouchInputs()
         owner?.controllerView.isUserInteractionEnabled = !editing
@@ -808,7 +872,7 @@ final class BoundCompanionCoordinator {
             if notesPaused { core.pause() }
         } else {
             let resume = notesPaused; notesPaused = false
-            if resume, core.state == .paused, owner.view.window != nil,
+            if resume, allowResume, core.state == .paused, owner.view.window != nil,
                UIApplication.shared.applicationState == .active,
                owner.gameViewControllerShouldResumeEmulation(owner) { core.resume() }
         }
@@ -826,19 +890,25 @@ struct BoundCompanionPanel: View {
     let editingChanged: (Bool) -> Void
     var textEditingChanged: (Bool) -> Void = { _ in }
     var currentSave: (String) throws -> BoundRRDexSave = { _ in throw BoundRRDexSave.ImportError.currentGameUnavailable }
+    var contentOverride: BoundPiPContent? = nil
+    var presentationEnabled = true
+    var rendersFriend = true
+    private var displayedContent: BoundPiPContent { contentOverride ?? state.content }
     private func shows(_ content: BoundPiPContent) -> Bool {
-        !state.availableContents.isEmpty && state.content == content
+        presentationEnabled && (contentOverride != nil || !state.availableContents.isEmpty) && displayedContent == content
     }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             Group {
                 if shows(.friend) {
+                    if rendersFriend {
                     ZStack {
                         Color.black
                         BoundRemoteCanvas(view: sharing.remoteView).opacity(sharing.remoteVisible || state.displaysFixtureVideo ? 1 : 0)
                         if !sharing.remoteVisible && !state.displaysFixtureVideo { Text(sharing.active ? "Waiting for friend" : "Connect a friend").foregroundStyle(.white).font(.callout) }
                     }.accessibilityIdentifier("bound.friend-screen")
+                    }
                 } else if shows(.notes) {
                     BoundNotesEditor(gameID: gameID, floating: state.landscape, editingChanged: { editing in
                         textEditingChanged(editing)
@@ -872,11 +942,14 @@ struct BoundCompanionPanel: View {
             }
             .id("dex-" + gameID)
         }
-        .background(state.content == .types ? Color.black : Color(uiColor: [.bosses, .dex].contains(state.content) ? .systemBackground : .secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: state.landscape ? 8 : [.types, .bosses, .dex].contains(state.content) ? 0 : 4))
-        .onChange(of: state.content) { _, _ in
+        .background(displayedContent == .types ? Color.black : Color(uiColor: [.bosses, .dex].contains(displayedContent) ? .systemBackground : .secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: state.landscape ? 8 : [.types, .bosses, .dex].contains(displayedContent) ? 0 : 4))
+        .onChange(of: displayedContent) { _, _ in
             textEditingChanged(false)
             editingChanged(false)
+        }
+        .onChange(of: presentationEnabled) { _, enabled in
+            if !enabled { textEditingChanged(false); editingChanged(false) }
         }
         .onChange(of: sharing.joined) { _ in state.refresh() }
     }
@@ -942,6 +1015,7 @@ struct BoundInterfaceSettings: View {
     var body: some View {
         Form {
                     BoundUIVersionSettings()
+                    BoundLandscapeOptionsSettings()
                     Section {
                         Picker("Button type", selection: Binding(get: { model.buttonType }, set: { model.setButtonType($0) })) {
                             ForEach(BoundCompanionButtonType.allCases, id: \.rawValue) { type in
@@ -1160,8 +1234,9 @@ private struct BoundReferenceLayoutGallery: View {
 
 struct BoundRemoteCanvas: UIViewRepresentable {
     let view: UIView
+    var hidesAccessibilityChildren = false
     func makeUIView(context: Context) -> UIView { view }
-    func updateUIView(_ uiView: UIView, context: Context) {}
+    func updateUIView(_ uiView: UIView, context: Context) { uiView.accessibilityElementsHidden = hidesAccessibilityChildren }
 }
 
 struct BoundNotesEditor: View {
