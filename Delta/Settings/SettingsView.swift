@@ -76,6 +76,9 @@ final class BoundSettingsHostingController: UIHostingController<SettingsView>, U
 
 struct SettingsView: View {
     @StateObject private var model: BoundCompanionSettingsModel
+    @State private var resetting = false
+    @State private var resetFailed = false
+    @State private var resetRevision = 0
     var gameplay: BoundSettingsGameplayContext?
     var close: () -> Void = {}
 
@@ -156,10 +159,31 @@ struct SettingsView: View {
                             SettingsRow(label: Text("About"), systemImage: "info.circle", color: .cyan)
                         }.accessibilityIdentifier("bound.settings-about")
                     }
+                    Section {
+                        Button("Reset Settings to Default") {
+                            resetting = true
+                            Task { @MainActor in
+                                do {
+                                    try await Settings.resetToDefaults()
+                                    model.refresh()
+                                    resetRevision += 1
+                                } catch {
+                                    resetFailed = true
+                                }
+                                resetting = false
+                            }
+                        }
+                        .disabled(resetting)
+                        .accessibilityIdentifier("bound.settings-reset-defaults")
+                    }
                 }
                 .safeAreaPadding(.top, 8)
                 .navigationTitle("Settings")
                 .accessibilityIdentifier("bound.settings-root")
+            }
+            .id(resetRevision)
+            .alert("Unable to Reset Settings", isPresented: $resetFailed) {
+                Button("OK", role: .cancel) {}
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()

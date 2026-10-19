@@ -69,9 +69,8 @@ struct Settings
 {
     static let features = Features.shared
     
-    static func registerDefaults()
-    {
-        var defaults = [#keyPath(UserDefaults.translucentControllerSkinOpacity): 0.7,
+    static var defaultPreferences: [String: Any] {
+        [#keyPath(UserDefaults.translucentControllerSkinOpacity): 0.7,
                         #keyPath(UserDefaults.gameShortcutsMode): GameShortcutsMode.recent.rawValue,
                         #keyPath(UserDefaults.isButtonHapticFeedbackEnabled): true,
                         #keyPath(UserDefaults.isThumbstickHapticFeedbackEnabled): true,
@@ -88,8 +87,12 @@ struct Settings
                         #keyPath(UserDefaults.opensGamesInNewWindow): false,
                         #keyPath(UserDefaults.cheatSorting): "name",
                         #keyPath(UserDefaults.cheatSortDescending): false,
-                        Settings.preferredCoreSettingsKey(for: .ds): MelonDS.core.identifier] as [String : Any]
-        
+                        Settings.preferredCoreSettingsKey(for: .ds): MelonDS.core.identifier]
+    }
+
+    static func registerDefaults()
+    {
+        var defaults = defaultPreferences
         #if BETA
         defaults[ExperimentalFeatures.shared.showWhatsNew.settingsKey.rawValue] = true // Re-show What's New even if user previously saw it in 1.7b5
         #else

@@ -1,11 +1,108 @@
 import XCTest
 import UIKit
 import CoreText
+import CoreData
 import DeltaCore
 import ZIPFoundation
 @testable import Delta
+@testable import class Delta.Game
+@testable import class Delta.ControllerSkin
+@testable import class Delta.SaveState
 
 @MainActor final class AppearanceIntegrationTests: XCTestCase {
+    func testDatabasePreferenceResetPreservesLibraryAndSaveRecords() throws {
+        let modelURL = try XCTUnwrap(Bundle(for: DatabaseManager.self).url(forResource: "Delta", withExtension: "momd"))
+        let model = try XCTUnwrap(NSManagedObjectModel(contentsOf: modelURL))
+        let context = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
+        let coordinator = NSPersistentStoreCoordinator(managedObjectModel: model)
+        try coordinator.addPersistentStore(ofType: NSInMemoryStoreType, configurationName: nil, at: nil)
+        context.persistentStoreCoordinator = coordinator
+        defer { context.reset() }
+
+        var gameObjectID: NSManagedObjectID!
+        var skinObjectID: NSManagedObjectID!
+        var saveObjectID: NSManagedObjectID!
+        var stateObjectID: NSManagedObjectID!
+
+        context.performAndWait {
+            let game = Game(context: context)
+            game.identifier = UUID().uuidString
+            game.name = "Reset fixture"
+            game.filename = "reset-fixture.gba"
+            game.type = .gba
+            game.settings = [
+                .noExternalControllerSkin: true,
+                .openGLES2: true,
+                .fastForwardSpeed: 4,
+                Game.Setting(rawValue: "futureSetting"): "keep"
+            ]
+
+            let skin = ControllerSkin(context: context)
+            skin.identifier = UUID().uuidString
+            skin.filename = "imported.deltaskin"
+            skin.gameType = .gba
+            skin.name = "Imported fixture skin"
+            skin.isStandard = false
+            skin.supportedConfigurations = .iphoneStandardPortrait
+            game.preferredPortraitSkin = skin
+
+            let save = GameSave(context: context)
+            save.identifier = game.identifier
+            save.game = game
+
+            let state = SaveState(context: context)
+            state.game = game
+
+            let mapping = GameControllerInputMapping(inputMapping: DeltaCore.GameControllerInputMapping(gameControllerInputType: .mfi), context: context)
+            mapping.gameType = .gba
+            mapping.gameControllerInputType = .mfi
+            mapping.playerIndex = 0
+        }
+
+        try context.performAndWait { try context.save() }
+        try context.performAndWait {
+            let game = try XCTUnwrap(context.fetch(Game.fetchRequest()).first)
+            let skin = try XCTUnwrap(context.fetch(ControllerSkin.fetchRequest()).first)
+            let save = try XCTUnwrap(context.fetch(GameSave.fetchRequest()).first)
+            let state = try XCTUnwrap(context.fetch(SaveState.fetchRequest()).first)
+            gameObjectID = game.objectID
+            skinObjectID = skin.objectID
+            saveObjectID = save.objectID
+            stateObjectID = state.objectID
+        }
+
+        try context.performAndWait {
+            try Settings.resetDatabasePreferences(in: context)
+            try context.save()
+        }
+
+        context.reset()
+        context.performAndWait {
+            let game = context.object(with: gameObjectID) as! Game
+            XCTAssertNil(game.preferredPortraitSkin)
+            XCTAssertNil(game.settings[.noExternalControllerSkin])
+            XCTAssertNil(game.settings[.openGLES2])
+            XCTAssertNil(game.settings[.fastForwardSpeed])
+            XCTAssertEqual(game.settings[Game.Setting(rawValue: "futureSetting")] as? String, "keep")
+            let skin = context.object(with: skinObjectID) as? ControllerSkin
+            let save = context.object(with: saveObjectID) as? GameSave
+            let state = context.object(with: stateObjectID) as? SaveState
+            XCTAssertEqual(skin?.name, "Imported fixture skin")
+            XCTAssertEqual(save?.identifier, game.identifier)
+            XCTAssertEqual(save?.game?.objectID, game.objectID)
+            XCTAssertEqual(state?.game?.objectID, game.objectID)
+            do {
+                XCTAssertEqual(try context.count(for: GameControllerInputMapping.fetchRequest()), 0)
+                XCTAssertEqual(try context.count(for: Game.fetchRequest()), 1)
+                XCTAssertEqual(try context.count(for: ControllerSkin.fetchRequest()), 1)
+                XCTAssertEqual(try context.count(for: GameSave.fetchRequest()), 1)
+                XCTAssertEqual(try context.count(for: SaveState.fetchRequest()), 1)
+            } catch {
+                XCTFail("Unable to count records after resetting database preferences: \(error)")
+            }
+        }
+    }
+
     func testIPadAndLandscapeBrandingPreservesNativeControlPixelsAndGeometry() throws {
         for system in [System.gba, .gbc, .snes, .nes, .n64, .genesis, .ds] {
             // Genesis is bundled but not registered by the Release app. Inspect

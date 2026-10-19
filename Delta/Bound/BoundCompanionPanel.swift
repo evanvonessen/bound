@@ -199,6 +199,15 @@ final class BoundCompanionState: ObservableObject {
         hidden = false
         refresh()
     }
+    func resetPresentation() {
+        settings.refresh()
+        rememberedButtonViews.removeAll()
+        activeButtons.removeAll()
+        selected = 0
+        hidden = false
+        reconcileButtonSelections()
+        refresh()
+    }
     func refresh() { revision += 1; changed?() }
 }
 
@@ -304,6 +313,15 @@ final class BoundCompanionCoordinator {
             owner.view.setNeedsLayout()
         })
         observers.append(NotificationCenter.default.addObserver(forName: BoundAppearancePreferences.didChangeNotification, object: nil, queue: .main) { [weak self, weak owner] _ in self?.cancelInteractions(); owner?.view.setNeedsLayout() })
+        observers.append(NotificationCenter.default.addObserver(forName: Settings.didResetNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.cancelInteractions()
+            let controllerMode = BoundControllerModePreferences()
+            self.landscapeArrangement.reload(option: self.landscapeCompanion.preferences.option,
+                controllerModeEnabled: controllerMode.isEnabled, controllerModeLayout: controllerMode.layout)
+            self.landscapeCompanion.reload()
+            self.state.resetPresentation()
+        })
         observers.append(NotificationCenter.default.addObserver(forName: BoundCompanionButtonPreferences.didChangeNotification, object: nil, queue: .main) { [weak self, weak owner] _ in
             self?.cancelInteractions()
             self?.controls?.isHighlighted = false

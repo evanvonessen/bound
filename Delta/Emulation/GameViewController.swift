@@ -2278,6 +2278,12 @@ private extension GameViewController
         
         switch settingsName
         {
+        case .resetToDefaults:
+            self.restoreBoundFastForward()
+            self.updateControllers()
+            self.controllerView.translucentControllerSkinOpacity = Settings.translucentControllerSkinOpacity
+            self.view.setNeedsLayout()
+
         case .localControllerPlayerIndex, .isButtonHapticFeedbackEnabled, .isThumbstickHapticFeedbackEnabled:
             self.updateControllers()
 

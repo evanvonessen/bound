@@ -184,10 +184,10 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     /// New variants start as an Option 3 snapshot, then save independently. Keeping
     /// one observable session also keeps the live video canvas and gestures mounted.
     func useOption(_ value: BoundLandscapeOption, controllerModeEnabled: Bool = false,
-                   controllerModeLayout: BoundControllerModeLayout = .mode1) {
+                   controllerModeLayout: BoundControllerModeLayout = .mode1, forceReload: Bool = false) {
         let effectiveControllerLayout = controllerModeEnabled ? controllerModeLayout : .mode1
         guard value.supportsArrangement,
-              option != value || self.controllerModeEnabled != controllerModeEnabled
+              forceReload || option != value || self.controllerModeEnabled != controllerModeEnabled
                 || self.controllerModeLayout != effectiveControllerLayout else { return }
         finish(save: false, resume: false)
         if active { beforeSwitch?() }
@@ -306,6 +306,22 @@ final class BoundLandscapeArrangementModel: ObservableObject {
             defaults.set(data, forKey: destination + ".placement.reference")
         }
         defaults.set(true, forKey: destination + ".initialized")
+    }
+
+    /// Re-read persisted settings even when Option 7 and Controller Mode are
+    /// unchanged. A global reset must not retain the current session's geometry.
+    func reload(option value: BoundLandscapeOption, controllerModeEnabled: Bool,
+                controllerModeLayout: BoundControllerModeLayout = .mode1) {
+        finish(save: false, resume: false)
+        self.controllerModeEnabled = controllerModeEnabled
+        self.controllerModeLayout = controllerModeEnabled ? controllerModeLayout : .mode1
+        // Recreate the same Option 3 source snapshot used by a fresh session.
+        // Otherwise a reset of Option 6/7 skips their initialization and derives
+        // different geometry from the live frames.
+        option = .option3
+        readPlacements()
+        useOption(value.supportsArrangement ? value : .option3, controllerModeEnabled: controllerModeEnabled,
+                  controllerModeLayout: controllerModeLayout, forceReload: true)
     }
 
     private func readPlacements() {

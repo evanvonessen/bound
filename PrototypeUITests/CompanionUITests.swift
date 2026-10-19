@@ -866,6 +866,85 @@ final class CompanionUITests: XCTestCase {
         closeSettings()
     }
 
+    func testResetSettingsToDefaultFromLibraryAndGameSettings() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+
+        let app = XCUIApplication()
+        #if DEBUG
+        app.launchArguments.append("--bound-ui-no-animations")
+        #endif
+        app.launch()
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 15))
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
+
+        let reset = app.buttons["bound.settings-reset-defaults"]
+        XCTAssertTrue(reset.waitForExistence(timeout: 5))
+        XCTAssertEqual(reset.label, "Reset Settings to Default")
+
+        element("bound.settings-interface", in: app).tap()
+        let experimental = app.switches["bound.experimental-settings"]
+        XCTAssertTrue(experimental.waitForExistence(timeout: 5))
+        if experimental.value as? String != "1" {
+            experimental.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        let uiVersion = element("bound.ui-version", in: app)
+        XCTAssertTrue(uiVersion.waitForExistence(timeout: 5))
+        uiVersion.tap()
+        app.buttons["Option 1"].firstMatch.tap()
+        XCTAssertTrue(uiVersion.label.contains("Option 1"))
+        app.navigationBars["Interface & Companion"].buttons.firstMatch.tap()
+
+        element("bound.settings-audio", in: app).tap()
+        let mixAudio = app.switches["Mix with Other Audio"]
+        XCTAssertTrue(mixAudio.waitForExistence(timeout: 5))
+        if mixAudio.value as? String != "1" {
+            mixAudio.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        XCTAssertEqual(mixAudio.value as? String, "1")
+        app.navigationBars["Audio"].buttons.firstMatch.tap()
+
+        XCTAssertTrue(reset.isHittable)
+        reset.tap()
+        XCTAssertTrue(element("bound.settings-root", in: app).exists,
+                      "Reset should leave the user on the shared Settings home.")
+        XCTAssertTrue(reset.exists)
+
+        element("bound.settings-interface", in: app).tap()
+        XCTAssertTrue(experimental.waitForExistence(timeout: 5))
+        XCTAssertEqual(experimental.value as? String, "0")
+        XCTAssertFalse(element("bound.ui-version", in: app).exists,
+                        "Reset should restore the fresh-install customization visibility.")
+        app.navigationBars["Interface & Companion"].buttons.firstMatch.tap()
+        element("bound.settings-audio", in: app).tap()
+        XCTAssertEqual(mixAudio.value as? String, "0")
+        XCTAssertEqual(app.switches["Respect Silent Mode"].value as? String, "0")
+        app.navigationBars["Audio"].buttons.firstMatch.tap()
+        app.buttons["bound.settings-close"].tap()
+
+        let diagnostic = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(diagnostic.waitForExistence(timeout: 10),
+                      "Resetting preferences must leave the imported ROM in the library.")
+        diagnostic.tap()
+        XCTAssertTrue(element("bound.native-menu", in: app).waitForExistence(timeout: 15))
+        openNativePause(in: app)
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["bound.settings-reset-defaults"].exists,
+                      "The reset action should also be available from in-game Settings.")
+        app.buttons["bound.settings-reset-defaults"].tap()
+        XCTAssertTrue(app.buttons["bound.settings-interface"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.alerts["Unable to Reset Settings"].exists)
+        app.buttons["bound.settings-close"].tap()
+    }
+
     func testUnifiedSettingsPreferencesPersistAcrossEntryPointsRelaunchAndRotation() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
