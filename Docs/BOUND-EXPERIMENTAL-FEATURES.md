@@ -16,18 +16,17 @@ features themselves available. It uses a new key
 New installations use UI Option 2, Landscape Option 7, Bound button Option 4,
 and Layout 12 for both RR Dex and Boss View. Button 1 (top) contains only Friend;
 Button 2 (bottom) contains only Types, Bosses and RR Dex. Controller Mode remains
-off by default, with Mode 1 preselected when enabled. Controller Mode 3 lets users
-move the Friend, Multiview, and Menu buttons in landscape Arrange Views. Brief
-horizontal or vertical alignment snaps provide haptic feedback and release as the
-user continues dragging. Existing saved preferences take priority over these
-defaults.
+off by default, with Mode 1 preselected when enabled. Controller Mode 3 shows only
+the Menu button at the bottom-left of the landscape screen. It retains the
+landscape companion views and Arrange Views access through Menu. Existing saved
+preferences take priority over these defaults.
 
 Controller mapping includes **Toggle Friend** and **Toggle Multiview** as normal
 Game Actions, alongside the existing **Menu** mapping. These choices do not
 require the experimental customization checkbox. In landscape Controller Mode
-1 or 2, Toggle Friend shows/hides the friend screen; Toggle Multiview shows/hides
-the Option 6/7 panel without changing its selected view. The new toggles are
-inactive in portrait, with Controller Mode off, or while arranging views.
+1, 2 or 3, Toggle Friend shows/hides the friend screen; Toggle Multiview
+shows/hides the Option 6/7 panel without changing its selected view. The new
+toggles are inactive in portrait, with Controller Mode off, or while arranging views.
 Menu retains its existing pause/resume behavior. Bindings use the existing
 per-player, per-system controller mapping storage.
 

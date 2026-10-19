@@ -469,6 +469,36 @@ final class StockControlAndGestureTests: XCTestCase {
         XCTAssertNil(BoundControllerModeTwoGeometry(bounds: .zero, safeArea: .zero, gameAspect: CGSize(width: 3, height: 2)))
     }
 
+    func testControllerModeThreeMenuUsesBottomLeftSafeEdgeAndNativeHitTarget() throws {
+        let cases: [(CGRect, UIEdgeInsets)] = [
+            (CGRect(x: 0, y: 0, width: 852, height: 393), UIEdgeInsets(top: 0, left: 59, bottom: 21, right: 34)),
+            (CGRect(x: 0, y: 0, width: 852, height: 393), UIEdgeInsets(top: 0, left: 34, bottom: 21, right: 59)),
+            (CGRect(x: 0, y: 0, width: 1194, height: 834), UIEdgeInsets(top: 24, left: 0, bottom: 20, right: 0)),
+            (CGRect(x: 12, y: 8, width: 667, height: 375), .zero)
+        ]
+        let base = try XCTUnwrap(DeltaCore.ControllerSkin.standardControllerSkin(for: System.gba.gameType))
+        let traits = DeltaCore.ControllerSkin.Traits(device: .iphone, displayType: .edgeToEdge, orientation: .landscape)
+        for (bounds, insets) in cases {
+            let geometry = try XCTUnwrap(BoundControllerModeThreeGeometry(bounds: bounds, safeArea: insets))
+            let safe = bounds.inset(by: insets)
+            XCTAssertEqual(geometry.menu.minX, safe.minX)
+            XCTAssertEqual(geometry.menu.maxY, safe.maxY)
+            XCTAssertEqual(geometry.menu.size, CGSize(width: 44, height: 44))
+            XCTAssertTrue(safe.contains(geometry.menu))
+            let normalized = geometry.menu.offsetBy(dx: -bounds.minX, dy: -bounds.minY)
+                .applying(.init(scaleX: 1 / bounds.width, y: 1 / bounds.height))
+            let skin = BoundControllerModeSkin(base: base, menuFrame: normalized)
+            let items = try XCTUnwrap(skin.items(for: traits))
+            XCTAssertEqual(items.count, 1)
+            let menu = try XCTUnwrap(items.first)
+            XCTAssertTrue(menu.inputs.allInputs.contains { $0.stringValue == "menu" })
+            XCTAssertEqual(menu.frame, normalized)
+            XCTAssertEqual(menu.extendedFrame, normalized)
+        }
+        XCTAssertNil(BoundControllerModeThreeGeometry(bounds: CGRect(x: 0, y: 0, width: 393, height: 852), safeArea: .zero))
+        XCTAssertNil(BoundControllerModeThreeGeometry(bounds: .zero, safeArea: .zero))
+    }
+
     func testControllerModeTwoMovesOnlyNativeMenuAndUsesNormalizedFortyFourPointFrame() throws {
         let base = try XCTUnwrap(DeltaCore.ControllerSkin.standardControllerSkin(for: System.gba.gameType))
         let traits = DeltaCore.ControllerSkin.Traits(device: .iphone, displayType: .edgeToEdge, orientation: .landscape)

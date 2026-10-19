@@ -2581,7 +2581,7 @@ final class CompanionUITests: XCTestCase {
         app.terminate()
     }
 
-    func testControllerModeThreeButtonArrangementIsAvailableWithoutExperimentalSettings() throws {
+    func testControllerModeThreeShowsOnlyBottomLeftMenuWithoutExperimentalSettings() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
         for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
@@ -2596,16 +2596,20 @@ final class CompanionUITests: XCTestCase {
 
         let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture",
                                        "--bound-ui-no-animations", "--bound-ui-screen-layout-bound"])
-        openBoundSettings(in: app)
+        openNativePause(in: app)
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(app.buttons["bound.settings-interface"].waitForExistence(timeout: 5))
+        app.buttons["bound.settings-interface"].tap()
         let modePicker = element("bound.controller-mode-layout", in: app)
         XCTAssertTrue(modePicker.waitForExistence(timeout: 5))
+        let experimental = app.switches["bound.experimental-settings"]
+        XCTAssertTrue(experimental.waitForExistence(timeout: 5))
+        XCTAssertEqual(experimental.value as? String, "0",
+                       "Controller Mode selection is available while experimental settings are off.")
         modePicker.tap()
         let modeThree = app.buttons["Controller Mode 3"].firstMatch
         XCTAssertTrue(modeThree.waitForExistence(timeout: 5))
         modeThree.tap()
-        let experimental = app.switches["bound.experimental-settings"]
-        XCTAssertEqual(experimental.value as? String, "1")
-        experimental.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         XCTAssertEqual(experimental.value as? String, "0")
         XCTAssertTrue(modePicker.label.contains("Controller Mode 3")
                       || (modePicker.value as? String)?.contains("Controller Mode 3") == true,
@@ -2613,41 +2617,54 @@ final class CompanionUITests: XCTestCase {
         closeBoundSheet(in: app)
 
         XCUIDevice.shared.orientation = .landscapeLeft
-        XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 10))
-        func beginArrangement() {
-            openNativePause(in: app)
-            let arrange = app.buttons["bound.menu-arrange-views"]
-            XCTAssertTrue(arrange.waitForExistence(timeout: 5))
-            arrange.tap()
-            XCTAssertTrue(app.buttons["bound.landscape7-done"].waitForExistence(timeout: 8))
+        let menu = element("bound.native-menu", in: app)
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 10),
+                       "Mode 3 keeps the landscape companion views available.")
+        XCTAssertFalse(app.buttons["bound.landscape7-friend-button"].exists,
+                       "Mode 3 hides the Friend toggle.")
+        XCTAssertFalse(app.buttons["bound.landscape7-views-button"].exists,
+                       "Mode 3 hides the Multiview toggle.")
+        for identifier in ["bound.native-l", "bound.native-r",
+                           "bound.controller-button-move.friend", "bound.controller-button-move.multiview",
+                           "bound.controller-button-move.menu"] {
+            XCTAssertFalse(element(identifier, in: app).exists,
+                           "Only the native Menu control is shown: \(identifier)")
         }
-        func moveButton(_ identifier: String, by offset: CGVector) -> CGRect {
-            let button = element(identifier, in: app)
-            XCTAssertTrue(button.waitForExistence(timeout: 5), "Missing arrangement handle: \(identifier)")
-            let initialFrame = button.frame
-            let start = button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            start.press(forDuration: 0.1, thenDragTo: start.withOffset(offset))
-            XCTAssertNotEqual(button.frame, initialFrame, "Dragging \(identifier) should move its button.")
-            return button.frame
-        }
-        beginArrangement()
-        let movedFrames = [
-            "bound.controller-button-move.friend": moveButton("bound.controller-button-move.friend", by: CGVector(dx: 28, dy: 0)),
-            "bound.controller-button-move.multiview": moveButton("bound.controller-button-move.multiview", by: CGVector(dx: 0, dy: 28)),
-            "bound.controller-button-move.menu": moveButton("bound.controller-button-move.menu", by: CGVector(dx: -28, dy: 0))
-        ]
-        screenshot("Controller-Mode-3-Buttons-Moved")
-        app.buttons["bound.landscape7-done"].tap()
-        XCTAssertTrue(app.buttons["bound.landscape7-done"].waitForNonExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(menu.frame.minX, app.frame.minX + 70,
+                                 "The Menu should sit at the far left of the screen.")
+        XCTAssertGreaterThanOrEqual(menu.frame.maxY, app.frame.maxY - 55,
+                                    "The Menu should sit at the bottom of the screen.")
+        screenshot("Controller-Mode-3-Only-Bottom-Left-Menu")
 
-        beginArrangement()
-        for (identifier, expectedFrame) in movedFrames {
-            let button = element(identifier, in: app)
-            XCTAssertTrue(button.waitForExistence(timeout: 5))
-            XCTAssertEqual(button.frame.minX, expectedFrame.minX, accuracy: 2, "Saved position for \(identifier)")
-            XCTAssertEqual(button.frame.minY, expectedFrame.minY, accuracy: 2, "Saved position for \(identifier)")
-        }
-        app.buttons["bound.landscape7-done"].tap()
+        menu.tap()
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5),
+                      "The bottom-left Menu still opens the pause menu.")
+        let arrange = app.buttons["bound.menu-arrange-views"]
+        XCTAssertTrue(arrange.waitForExistence(timeout: 5))
+        arrange.tap()
+        let done = app.buttons["bound.landscape7-done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 8))
+        XCTAssertLessThanOrEqual(done.frame.minX, app.frame.minX + 70,
+                                 "The arrangement Done control stays with Menu at bottom left.")
+        XCTAssertGreaterThanOrEqual(done.frame.maxY, app.frame.maxY - 55)
+        XCTAssertTrue(element("bound.landscape7-move.dex", in: app).waitForExistence(timeout: 5),
+                       "The panels remain available while arranging in Mode 3.")
+        done.tap()
+        XCTAssertTrue(done.waitForNonExistence(timeout: 5))
+
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(element("bound.native-r", in: app).waitForExistence(timeout: 10),
+                       "Portrait restores the normal touch controls while Mode 3 remains selected.")
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 5))
+        XCUIDevice.shared.orientation = .landscapeRight
+        XCTAssertTrue(element("bound.native-r", in: app).waitForNonExistence(timeout: 10))
+        XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 10))
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        XCTAssertLessThanOrEqual(menu.frame.minX, app.frame.minX + 70)
+        XCTAssertGreaterThanOrEqual(menu.frame.maxY, app.frame.maxY - 55)
+        XCTAssertFalse(app.buttons["bound.landscape7-friend-button"].exists)
+        XCTAssertFalse(app.buttons["bound.landscape7-views-button"].exists)
     }
 
     func testLibraryAccountSettingsProvidesBoundSignInAndAccountCreation() throws {

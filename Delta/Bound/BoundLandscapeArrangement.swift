@@ -126,10 +126,6 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     @Published private(set) var selected: BoundPiPContent
     @Published private(set) var layout = Layout()
 
-    @Published private(set) var buttonAlignmentX: CGFloat?
-    @Published private(set) var buttonAlignmentY: CGFloat?
-    var buttonDidAlign: (() -> Void)?
-
     var needsLayout: (() -> Void)?
     var beforeSwitch: (() -> Void)?
     var beginArrangement: (() -> Bool)?
@@ -144,9 +140,6 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     private var defaultPlacements: [BoundPiPContent: State] = [:]
     private var draft: [BoundPiPContent: State]?
     private var gestureStart: (BoundPiPContent, State)?
-    private var savedButtons = BoundControllerButtonPlacement()
-    private var draftButtons: BoundControllerButtonPlacement?
-    private var buttonDrag: (button: BoundControllerButton, drag: BoundControllerButtonDrag, start: BoundControllerButtonPlacement)?
     private var fadeStartOpacity: Double?
     private var boundButtonFrame: CGRect = .zero
     private var selectionBeforeArrangement: BoundPiPContent?
@@ -167,7 +160,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     var placementShortcuts: Bool { option == .option5 }
     var focusedHandles: Bool { refined || placementShortcuts }
     var multiview: Bool { option == .option6 || option == .option7 }
-    var movableControllerButtons: Bool { controllerModeEnabled && controllerModeLayout == .mode3 && multiview }
+    var menuOnlyControllerMode: Bool { controllerModeEnabled && controllerModeLayout == .mode3 }
     var tabbedMultiview: Bool { option == .option7 }
     var accessibilityPrefix: String { "bound.landscape\(option.rawValue)" }
 
@@ -234,7 +227,6 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         referenceContent = Self.readContent(defaults, key: key("reference-content"), allowed: contents) ?? contents.first ?? .notes
         selected = referenceContent
         readPlacements()
-        savedButtons = defaults.data(forKey: buttonPlacementKey).flatMap { try? JSONDecoder().decode(BoundControllerButtonPlacement.self, from: $0) } ?? .init()
         layoutInput = nil
         needsLayout?()
     }
@@ -454,10 +446,11 @@ final class BoundLandscapeArrangementModel: ObservableObject {
             next.viewsButton = CGRect(x: insetCanvas.minX + 8, y: insetCanvas.midY + 6, width: buttonSize, height: buttonSize)
         }
 
-        if movableControllerButtons {
-            next.friendButton = controllerButtonFrame(.friend, defaultFrame: next.friendButton, canvas: canvas)
-            next.viewsButton = controllerButtonFrame(.multiview, defaultFrame: next.viewsButton, canvas: canvas)
-            next.doneButton = controllerButtonFrame(.menu, defaultFrame: menuFrame, canvas: canvas)
+        if menuOnlyControllerMode {
+            // Controller Mode 3 keeps only the native Menu control. Its position
+            // comes from the controller layout and remains fixed while arranging.
+            next.friendButton = .zero
+            next.viewsButton = .zero
         }
 
         let opacityWidth = insetCanvas.width * 0.60
@@ -484,9 +477,11 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         let desired = CGSize(width: max(160, referenceCanvas.width * state.widthFraction),
                              height: max(minimumReferenceHeight, referenceCanvas.height * state.heightFraction))
         let initialSeparation = (!persistedContents.contains(referenceContent) && !editing) || avoidFriend
-        let obstacles = occupied + (initialSeparation ? [next.friend.insetBy(dx: -4, dy: -4)] : []) + [next.friendButton.insetBy(dx: -4, dy: -4),
-                                    next.viewsButton.insetBy(dx: -4, dy: -4),
-                                    next.doneButton.insetBy(dx: -2, dy: -2)] + (movableControllerButtons ? [] : [boundFrame.insetBy(dx: -2, dy: -2)])
+        let buttonObstacles = menuOnlyControllerMode ? [] : [next.friendButton.insetBy(dx: -4, dy: -4),
+                                                              next.viewsButton.insetBy(dx: -4, dy: -4)]
+        let obstacles = occupied + (initialSeparation ? [next.friend.insetBy(dx: -4, dy: -4)] : []) + buttonObstacles
+            + [next.doneButton.insetBy(dx: -2, dy: -2)]
+            + (menuOnlyControllerMode ? [] : [boundFrame.insetBy(dx: -2, dy: -2)])
         let referenceObstacles = multiview && state.allowsButtonOverlap ? [] : obstacles
         next.reference = BoundLandscapeGeometry.referenceFrame(canvas: referenceCanvas,
                         preferredCenter: state.center, preferredSize: desired,
@@ -544,7 +539,6 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         selectionBeforeArrangement = referenceContent
         selected = contents.isEmpty ? .friend : referenceContent
         draft = saved
-        draftButtons = savedButtons
         editing = true
         updateEditorAnchor()
         needsLayout?()
@@ -561,14 +555,6 @@ final class BoundLandscapeArrangementModel: ObservableObject {
             selected = selectionBeforeArrangement
             referenceContent = selectionBeforeArrangement
         }
-        if save, movableControllerButtons, let draftButtons, let data = try? JSONEncoder().encode(draftButtons) {
-            savedButtons = draftButtons
-            defaults.set(data, forKey: buttonPlacementKey)
-        }
-        draftButtons = nil
-        buttonDrag = nil
-        buttonAlignmentX = nil
-        buttonAlignmentY = nil
         draft = nil
         selectionBeforeArrangement = nil
         editing = false
@@ -576,47 +562,6 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         fadeStartOpacity = nil
         endArrangement?(resume)
         needsLayout?()
-    }
-
-    private var buttonPlacementKey: String { namespace + ".controller-mode3.buttons.v1" }
-
-    func controllerButtonFrame(_ button: BoundControllerButton, defaultFrame: CGRect, canvas: CGRect) -> CGRect {
-        guard movableControllerButtons else { return defaultFrame }
-        return (draftButtons ?? savedButtons).frame(for: button, defaultFrame: defaultFrame, canvas: canvas)
-    }
-
-    func buttonFrame(_ button: BoundControllerButton) -> CGRect {
-        switch button {
-        case .friend: layout.friendButton
-        case .multiview: layout.viewsButton
-        case .menu: layout.doneButton
-        }
-    }
-
-    func moveControllerButton(_ button: BoundControllerButton, translation: CGSize, ended: Bool) {
-        guard editing, movableControllerButtons, let canvas = layoutInput?.canvas else { return }
-        if buttonDrag?.button != button {
-            buttonDrag = (button, BoundControllerButtonDrag(startFrame: buttonFrame(button),
-                targets: BoundControllerButton.allCases.filter { $0 != button }.map { buttonFrame($0) }),
-                draftButtons ?? savedButtons)
-        }
-        guard var gesture = buttonDrag else { return }
-        let result = gesture.drag.update(translation: translation, canvas: canvas)
-        buttonDrag = gesture
-        draftButtons?.set(frame: result.frame, for: button, canvas: canvas)
-        buttonAlignmentX = ended ? nil : result.snappedX
-        buttonAlignmentY = ended ? nil : result.snappedY
-        if result.didSnap { buttonDidAlign?() }
-        if ended { buttonDrag = nil }
-        refreshLayout()
-    }
-
-    func cancelControllerButtonMove() {
-        if let buttonDrag { draftButtons = buttonDrag.start }
-        buttonDrag = nil
-        buttonAlignmentX = nil
-        buttonAlignmentY = nil
-        refreshLayout()
     }
 
     func select(_ content: BoundPiPContent) {
@@ -771,7 +716,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     func receivesTouch(at point: CGPoint) -> Bool {
         guard active else { return false }
         if editing { return layout.doneButton.contains(point) || !boundButtonFrame.contains(point) }
-        if layout.friendButton.contains(point) || layout.viewsButton.contains(point) { return true }
+        if !menuOnlyControllerMode && (layout.friendButton.contains(point) || layout.viewsButton.contains(point)) { return true }
         guard !contents.isEmpty else { return false }
         return referenceVisible && !layout.reference.isEmpty && layout.reference.contains(point)
     }

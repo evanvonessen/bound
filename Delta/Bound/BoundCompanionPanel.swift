@@ -356,12 +356,6 @@ final class BoundCompanionCoordinator {
                 return true
             }
             landscapeCompanion.endArrangement = { [weak self] resume in self?.notesEditing(false, allowResume: resume) }
-            let alignmentFeedback = UISelectionFeedbackGenerator()
-            landscapeArrangement.buttonDidAlign = {
-                guard Settings.isButtonHapticFeedbackEnabled else { return }
-                alignmentFeedback.selectionChanged()
-                alignmentFeedback.prepare()
-            }
             landscapeArrangement.needsLayout = { [weak owner] in owner?.view.setNeedsLayout() }
             landscapeArrangement.beforeSwitch = { [weak self, weak owner] in
                 owner?.view.endEditing(true)
@@ -639,10 +633,6 @@ final class BoundCompanionCoordinator {
         sharing.setRemotePresentationEnabled(state.content == .friend && overlay?.isHidden == false)
         if let controls { owner.view.bringSubviewToFront(controls) }
     }
-    func controllerMenuFrame(defaultFrame: CGRect, canvas: CGRect) -> CGRect {
-        landscapeArrangement.controllerButtonFrame(.menu, defaultFrame: defaultFrame, canvas: canvas)
-    }
-
     private func layoutLandscapeArrangement() {
         guard let owner, let overlay, let controls,
               let skin = owner.controllerView.controllerSkin, let traits = owner.controllerView.controllerSkinTraits,
@@ -650,8 +640,7 @@ final class BoundCompanionCoordinator {
         geometry = nil
         let canvas = owner.view.bounds.inset(by: owner.view.safeAreaInsets)
         let native = owner.controllerView.controlHitFrames.map { owner.controllerView.convert($0, to: owner.view) }
-        let buttonDefaults = owner.boundControllerModeThreeButtonDefaults()
-        let menuFrame = buttonDefaults?[.menu] ?? owner.controllerView.convert(menu.frame.applying(.init(scaleX: owner.controllerView.bounds.width,
+        let menuFrame = owner.controllerView.convert(menu.frame.applying(.init(scaleX: owner.controllerView.bounds.width,
                                                                               y: owner.controllerView.bounds.height)), to: owner.view)
         let occupied = native + (controls.isHidden ? [] : [controls.frame])
         let game = owner.gameView.convert(owner.gameView.bounds, to: owner.view).intersection(canvas)
@@ -667,9 +656,9 @@ final class BoundCompanionCoordinator {
         let modeTwo = owner.boundControllerModeTwoGeometry()
         if let modeTwo { defaults[.friend] = modeTwo.friend }
         landscapeArrangement.updateLayout(canvas: canvas, occupied: occupied, menuFrame: menuFrame,
-            boundFrame: buttonDefaults?[.multiview] ?? (!controls.isHidden || landscapeArrangement.multiview ? controls.frame : .zero), defaults: defaults,
+            boundFrame: landscapeArrangement.menuOnlyControllerMode ? .zero : (!controls.isHidden || landscapeArrangement.multiview ? controls.frame : .zero), defaults: defaults,
             keyboardHeight: max(0, keyboardHeight - owner.view.safeAreaInsets.bottom), screenBounds: owner.view.bounds,
-            friendButtonFrame: buttonDefaults?[.friend] ?? modeTwo?.friendButton, viewsButtonFrame: buttonDefaults?[.multiview] ?? modeTwo?.views)
+            friendButtonFrame: modeTwo?.friendButton, viewsButtonFrame: modeTwo?.views)
         overlay.frame = owner.view.bounds
         overlay.isHidden = false; overlay.alpha = 1
         host?.view.frame = overlay.bounds
@@ -677,10 +666,11 @@ final class BoundCompanionCoordinator {
         owner.view.bringSubviewToFront(controls)
         arrangementEditorOverlay?.frame = owner.view.bounds
         arrangementEditorHost?.view.frame = owner.view.bounds
-        arrangementLayers.buttonFrames = native + [landscapeArrangement.layout.friendButton, landscapeArrangement.layout.viewsButton]
+        let companionButtonFrames = [landscapeArrangement.layout.friendButton, landscapeArrangement.layout.viewsButton].filter { !$0.isEmpty }
+        arrangementLayers.buttonFrames = native + companionButtonFrames
         arrangementLayers.apply()
         #if DEBUG && targetEnvironment(simulator)
-        let obstacles = occupied + [landscapeArrangement.layout.friendButton, landscapeArrangement.layout.viewsButton]
+        let obstacles = occupied + companionButtonFrames
         owner.gameView.accessibilityValue = "pip-hit-obstacles=" + obstacles.map { rect in
             let screen = owner.view.convert(rect, to: nil)
             return String(format: "%.2f,%.2f,%.2f,%.2f", screen.minX, screen.minY, screen.width, screen.height)

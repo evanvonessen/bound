@@ -389,6 +389,18 @@ struct BoundControllerModeTwoGeometry {
     }
 }
 
+/// Mode 3 keeps its only touch control at the bottom-left safe edge.
+struct BoundControllerModeThreeGeometry {
+    let menu: CGRect
+
+    init?(bounds: CGRect, safeArea: UIEdgeInsets) {
+        let safe = bounds.inset(by: safeArea)
+        guard bounds.width > bounds.height, safe.minX.isFinite, safe.maxY.isFinite,
+              safe.width.isFinite, safe.height.isFinite, safe.width >= 44, safe.height >= 44 else { return nil }
+        menu = CGRect(x: safe.minX, y: safe.maxY - 44, width: 44, height: 44)
+    }
+}
+
 /// Leaves Delta's screens and external-controller pipeline intact. Only the
 /// touchscreen skin's gameplay controls disappear; its real Menu remains.
 final class BoundControllerModeSkin: ControllerSkinProtocol {

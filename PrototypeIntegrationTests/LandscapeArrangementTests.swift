@@ -1150,6 +1150,54 @@ final class LandscapeArrangementTests: XCTestCase {
         XCTAssertNotNil(defaults.data(forKey: namespace + ".controller-mode.option6.placement.friend"))
     }
 
+    func testControllerModeThreeKeepsOnlyTheFixedMenuButton() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+
+        // A previous Mode 3 build stored movable button positions. They must not
+        // move the new fixed Menu control or restore the Friend and Multiview buttons.
+        struct LegacyControllerButtonPlacement: Encodable {
+            let friend: CGPoint
+            let multiview: CGPoint
+            let menu: CGPoint
+        }
+        let legacyPlacement = LegacyControllerButtonPlacement(
+            friend: CGPoint(x: 0.6, y: 0.3), multiview: CGPoint(x: 0.7, y: 0.4),
+            menu: CGPoint(x: 0.8, y: 0.2))
+        defaults.set(try JSONEncoder().encode(legacyPlacement), forKey: namespace + ".controller-mode3.buttons.v1")
+        let optionPrefix = namespace + ".controller-mode3.option6."
+        defaults.set(true, forKey: optionPrefix + "initialized")
+        defaults.set("dex", forKey: optionPrefix + "reference-layout-content")
+        defaults.set("dex", forKey: optionPrefix + "reference-content")
+        defaults.set(false, forKey: optionPrefix + "reference-visible")
+        let referencePlacement = BoundLandscapeViewPlacement(
+            center: CGPoint(x: 0.9, y: 0.25), widthFraction: 0.18, heightFraction: 0.25)
+        defaults.set(try JSONEncoder().encode(referencePlacement), forKey: optionPrefix + "placement.reference")
+        model.useOption(.option6, controllerModeEnabled: true, controllerModeLayout: .mode3)
+        model.setContents([.dex, .bosses, .types])
+        model.setActive(true)
+
+        let canvas = CGRect(x: 0, y: 0, width: 1000, height: 600)
+        let menu = CGRect(x: 100, y: 100, width: 44, height: 44)
+        let bound = CGRect(x: 100, y: 500, width: 44, height: 44)
+        let legacyFriendButton = CGRect(x: 856, y: 100, width: 44, height: 44)
+        model.updateLayout(canvas: canvas, occupied: [], menuFrame: menu, boundFrame: bound,
+            defaults: [.friend: CGRect(x: 60, y: 80, width: 220, height: 146),
+                       .dex: CGRect(x: 820, y: 70, width: 160, height: 132),
+                       .bosses: CGRect(x: 820, y: 70, width: 160, height: 132),
+                       .types: CGRect(x: 820, y: 70, width: 160, height: 132)],
+            keyboardHeight: 0)
+
+        XCTAssertTrue(model.menuOnlyControllerMode)
+        XCTAssertTrue(model.layout.friendButton.isEmpty)
+        XCTAssertTrue(model.layout.viewsButton.isEmpty)
+        XCTAssertEqual(model.layout.doneButton, menu, "The Menu target stays at its supplied screen position.")
+        XCTAssertTrue(model.layout.reference.intersects(legacyFriendButton),
+                      "A hidden legacy Friend button must not remain a layout obstacle.")
+        XCTAssertFalse(model.receivesTouch(at: CGPoint(x: legacyFriendButton.midX, y: legacyFriendButton.midY)),
+                       "Hidden buttons must not leave touch targets behind.")
+    }
+
     func testControllerModeTwoDefaultFriendTracksSafeColumnRotationUntilManuallyMoved() throws {
         let (model, defaults, namespace) = try makeModel()
         defer { defaults.removePersistentDomain(forName: namespace) }

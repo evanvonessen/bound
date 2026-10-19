@@ -440,11 +440,9 @@
 		4978387F9B9B4EDFB5172A2F /* BoundLandscapeCompanion.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD788325701142D5A8E31F99 /* BoundLandscapeCompanion.swift */; };
 		FEFF291B6B9D409DB743D71D /* BoundLandscapeArrangementOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3A45FC1148047228B8ECD77 /* BoundLandscapeArrangementOverlay.swift */; };
 		D231F1F9F6BA455790127F38 /* BoundLandscapeArrangement.swift in Sources */ = {isa = PBXBuildFile; fileRef = E981BE8844E54311AB9D967E /* BoundLandscapeArrangement.swift */; };
-		716AF37EB62B45BD9BC15A0D /* BoundControllerButtonPlacement.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4D97890387E4772B7BCC199 /* BoundControllerButtonPlacement.swift */; };
 		85B085E7C66542AD94534BBB /* Settings+Reset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0770FF381321463BBF466885 /* Settings+Reset.swift */; };
 		C8F8552CB85D481C91BF1103 /* Settings+ResetDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F6D3292207341BB8F6581B9 /* Settings+ResetDatabase.swift */; };
 		5269C7C7055548F49212555B /* SettingsResetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EE41698681944B29CE0B89C /* SettingsResetTests.swift */; };
-		54F6C0C0B35A4D60AF6A63C3 /* ControllerButtonPlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6D6920D53544AE59F218B53 /* ControllerButtonPlacementTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1245,11 +1243,9 @@
 		CD788325701142D5A8E31F99 /* BoundLandscapeCompanion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLandscapeCompanion.swift; sourceTree = "<group>"; };
 		C3A45FC1148047228B8ECD77 /* BoundLandscapeArrangementOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLandscapeArrangementOverlay.swift; sourceTree = "<group>"; };
 		E981BE8844E54311AB9D967E /* BoundLandscapeArrangement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLandscapeArrangement.swift; sourceTree = "<group>"; };
-		A4D97890387E4772B7BCC199 /* BoundControllerButtonPlacement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundControllerButtonPlacement.swift; sourceTree = "<group>"; };
 		0770FF381321463BBF466885 /* Settings+Reset.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Settings+Reset.swift"; sourceTree = "<group>"; };
 		0F6D3292207341BB8F6581B9 /* Settings+ResetDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Settings+ResetDatabase.swift"; sourceTree = "<group>"; };
 		5EE41698681944B29CE0B89C /* SettingsResetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsResetTests.swift"; sourceTree = "<group>"; };
-		B6D6920D53544AE59F218B53 /* ControllerButtonPlacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerButtonPlacementTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1366,7 +1362,6 @@
 				E519E2BAF174403DB37DB3A5 /* PlaybackSharingTests.swift */,
 				35733EA11CCE9FF25284EFB8 /* AppearanceIntegrationTests.swift */,
 				5EE41698681944B29CE0B89C /* SettingsResetTests.swift */,
-				B6D6920D53544AE59F218B53 /* ControllerButtonPlacementTests.swift */,
 				E73281A93C2F67F4A56FA290 /* BoundDiagnostic.gba */,
 				1EAF49DF04CC61B325DAF2E0 /* TypeChartViewTests.swift */,
 				B8A586A10E1DB92A87DB45B1 /* CompanionCycleButtonTests.swift */,
@@ -1436,7 +1431,6 @@
 				CD788325701142D5A8E31F99 /* BoundLandscapeCompanion.swift */,
 				C3A45FC1148047228B8ECD77 /* BoundLandscapeArrangementOverlay.swift */,
 				E981BE8844E54311AB9D967E /* BoundLandscapeArrangement.swift */,
-				A4D97890387E4772B7BCC199 /* BoundControllerButtonPlacement.swift */,
 				E0B9C64D60692EA8EAC11ACE /* BoundCompanionPanel.swift */,
 				3D638FE02F6B2876A1CB9CBB /* BoundMacWorkspaceView.swift */,
 				32118EFE887BC6DFF711A9BF /* BoundMacWorkspaceGeometry.swift */,
@@ -3141,7 +3135,6 @@
 				074EAD7F7AE78C628F0977A8 /* PlaybackSharingTests.swift in Sources */,
 				273B677E21CFB932EFA82ACD /* AppearanceIntegrationTests.swift in Sources */,
 				5269C7C7055548F49212555B /* SettingsResetTests.swift in Sources */,
-				54F6C0C0B35A4D60AF6A63C3 /* ControllerButtonPlacementTests.swift in Sources */,
 				3EC156C10490F4D05AACF9C7 /* TypeChartViewTests.swift in Sources */,
 				531059D8A4211817FB949969 /* CompanionCycleButtonTests.swift in Sources */,
 				CF8D391A7DCA20ABDE574139 /* MacWorkspaceTests.swift in Sources */,
@@ -3414,7 +3407,6 @@
 				4978387F9B9B4EDFB5172A2F /* BoundLandscapeCompanion.swift in Sources */,
 				FEFF291B6B9D409DB743D71D /* BoundLandscapeArrangementOverlay.swift in Sources */,
 				D231F1F9F6BA455790127F38 /* BoundLandscapeArrangement.swift in Sources */,
-				716AF37EB62B45BD9BC15A0D /* BoundControllerButtonPlacement.swift in Sources */,
 				EE19B3FE32D45413CAB52F5A /* BoundCompanionPanel.swift in Sources */,
 				C9F98F6095050C500082B509 /* BoundMacWorkspaceView.swift in Sources */,
 				AF587D5409BC632CA606F011 /* BoundMacWorkspaceGeometry.swift in Sources */,
