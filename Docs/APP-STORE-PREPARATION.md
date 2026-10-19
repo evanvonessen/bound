@@ -17,20 +17,22 @@ existing public `developer@evanvonessen.com` address.
 
 ## Approved icon
 
-`Resources/AppIcon.icon/Assets/BoundIcon.png` uses the red-and-cream pixel B
-selected by the user on 2026-10-15. The supplied reference is preserved in
-`Artwork/BoundIcon-reference.png`. Built-in imagegen prepared the reference as
-a square, opaque icon without the surrounding gray area or pre-rounded corners;
-the result is normalized to 1024 × 1024 for Xcode. The same artwork is used for
-the light and dark in-app primary-icon previews. Icon Composer glass, shadow,
-and translucency remain disabled; iOS applies the Home Screen mask.
-The website retains its previous artwork. Existing Xcode asset wiring is preserved.
+`Resources/AppIcon.icon/Assets/BoundIcon.png` uses the user's supplied
+`Untitled_Artwork.png`: a gray handwritten b on a white background. The exact
+supplied PNG is preserved in `Artwork/BoundIcon-reference.png`. The app asset
+retains all 1024 × 1024 RGB pixels unchanged; only its unused, fully opaque alpha
+channel is removed. The same artwork is used for the light and dark in-app
+primary-icon previews. Icon Composer uses a white fill with glass, shadow, and
+translucency disabled; iOS applies the Home Screen mask. The website retains its
+previous artwork. Existing Xcode asset wiring is preserved.
 
-SHA-256: `c1a0fb65767430b231e18497cc3593188ce5a3ee52742f9305777f969dbf1046`.
+SHA-256: `72f1ac342c042c2aea880b8f1fa08d8cfbd3c1abb8bba6527d8ba349aae3eeec`.
 
-Preparation prompt: preserve the supplied cream pixel B, flat red background,
-proportions and silhouette; remove the surrounding gray and pre-rounded corner
-cutouts, fill the square canvas red, and add no new visual details.
+The previous red-and-cream pixel B app asset is preserved unchanged at
+`Artwork/AppIcons/BoundIcon-red-pixel.png`, with its original supplied reference
+at `Artwork/AppIcons/BoundIcon-red-pixel-reference.png`.
+Archived app asset SHA-256:
+`c1a0fb65767430b231e18497cc3593188ce5a3ee52742f9305777f969dbf1046`.
 
 ## Privacy source checks
 
