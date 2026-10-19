@@ -283,8 +283,9 @@ final class BoundCompanionCoordinator {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-reset-layout") {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.key)
+            UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.layoutKey)
             UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
-            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") || key.hasPrefix("bound.landscape.option5.") || key.hasPrefix("bound.landscape.option6.") || key.hasPrefix("bound.landscape.option7.") || key.hasPrefix("bound.landscape.controller-mode.") { UserDefaults.standard.removeObject(forKey: key) }
+            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") || key.hasPrefix("bound.landscape.option5.") || key.hasPrefix("bound.landscape.option6.") || key.hasPrefix("bound.landscape.option7.") || key.hasPrefix("bound.landscape.controller-mode.") || key.hasPrefix("bound.landscape.controller-mode2.") { UserDefaults.standard.removeObject(forKey: key) }
         }
         #endif
         #if DEBUG
@@ -526,13 +527,20 @@ final class BoundCompanionCoordinator {
         if previousScreenLayout != screenLayout { previousScreenLayout = screenLayout; cancelInteractions() }
         let landscape = bounds.width > bounds.height
         if state.landscape != landscape { state.landscape = landscape; cancelInteractions() }
-        let usesLandscapeOption2 = landscape && landscapeCompanion.preferences.option == .option2
-        let arrangementOption = landscapeCompanion.preferences.option
-        let controllerModeEnabled = BoundControllerModePreferences().isEnabled
+        let controllerPreferences = BoundControllerModePreferences()
+        let modeTwo = owner.boundControllerModeTwoGeometry()
+        let savedOption = landscapeCompanion.preferences.option
+        // Mode 2 always pairs Friend with Multiview, while preserving the user's
+        // saved landscape option for Mode 1/off and honoring Option 7's tabs.
+        let arrangementOption = modeTwo != nil ? (savedOption == .option7 ? .option7 : .option6) : savedOption
+        let usesLandscapeOption2 = landscape && arrangementOption == .option2
+        let controllerModeEnabled = controllerPreferences.isEnabled
+        let controllerModeLayout = controllerModeEnabled ? controllerPreferences.layout : .mode1
         let usesLandscapeArrangement = landscape && arrangementOption.supportsArrangement
         if usesLandscapeOption2 != landscapeCompanion.active || usesLandscapeArrangement != landscapeArrangement.active
             || (usesLandscapeArrangement && (landscapeArrangement.option != arrangementOption
-                || landscapeArrangement.controllerModeEnabled != controllerModeEnabled)) {
+                || landscapeArrangement.controllerModeEnabled != controllerModeEnabled
+                || landscapeArrangement.controllerModeLayout != controllerModeLayout)) {
             owner.view.endEditing(true)
             textEditing(false)
             notesEditing(false)
@@ -540,7 +548,8 @@ final class BoundCompanionCoordinator {
         }
         landscapeCompanion.setActive(usesLandscapeOption2)
         if usesLandscapeArrangement {
-            landscapeArrangement.useOption(arrangementOption, controllerModeEnabled: controllerModeEnabled)
+            landscapeArrangement.useOption(arrangementOption, controllerModeEnabled: controllerModeEnabled,
+                controllerModeLayout: controllerModeLayout)
         }
         landscapeArrangement.setActive(usesLandscapeArrangement)
         if usesLandscapeArrangement { landscapeArrangement.setContents(state.availableContents) }
@@ -554,7 +563,7 @@ final class BoundCompanionCoordinator {
         let horizontal = CGRect(x: safeArea.left, y: 0, width: max(1, bounds.width - safeArea.left - safeArea.right), height: bounds.height)
         if landscape {
             // The native game and controls must finish layout before placing PiP.
-            owner.gameScreenLayoutBounds = horizontal
+            owner.gameScreenLayoutBounds = modeTwo?.game ?? horizontal
             return bounds
         }
         let geometry = BoundPortraitScreenGeometry(bounds: bounds, safeTop: safeArea.top,
@@ -624,9 +633,12 @@ final class BoundCompanionCoordinator {
             defaults[content] = CGRect(x: center.x - pip.size.width / 2, y: center.y - pip.size.height / 2,
                                        width: pip.size.width, height: pip.size.height)
         }
+        let modeTwo = owner.boundControllerModeTwoGeometry()
+        if let modeTwo { defaults[.friend] = modeTwo.friend }
         landscapeArrangement.updateLayout(canvas: canvas, occupied: occupied, menuFrame: menuFrame,
             boundFrame: !controls.isHidden || landscapeArrangement.multiview ? controls.frame : .zero, defaults: defaults,
-            keyboardHeight: max(0, keyboardHeight - owner.view.safeAreaInsets.bottom), screenBounds: owner.view.bounds)
+            keyboardHeight: max(0, keyboardHeight - owner.view.safeAreaInsets.bottom), screenBounds: owner.view.bounds,
+            friendButtonFrame: modeTwo?.friendButton, viewsButtonFrame: modeTwo?.views)
         overlay.frame = owner.view.bounds
         overlay.isHidden = false; overlay.alpha = 1
         host?.view.frame = overlay.bounds
@@ -755,6 +767,7 @@ final class BoundCompanionCoordinator {
             buttonType: landscapeArrangement.active ? .option1 : BoundCompanionButtonPreferences().effectiveButtonType)
         controls.configureSegments(contents: landscapeArrangement.active ? [] : state.configuration.assignments,
                                    displayedContents: landscapeArrangement.active ? [] : state.displayedButtonContents)
+        if let modeTwo = owner.boundControllerModeTwoGeometry() { controls.frame = modeTwo.views }
         if landscapeArrangement.active {
             // Multiview uses this same position for its X/book toggle, rendered
             // by the arrangement overlay. Keep the measured frame for layout.
@@ -809,7 +822,7 @@ final class BoundCompanionCoordinator {
     var canArrangeLandscapeViews: Bool {
         guard macHost == nil, let owner else { return false }
         return owner.view.bounds.width > owner.view.bounds.height
-            && landscapeCompanion.preferences.option.supportsArrangement
+            && landscapeArrangement.active
     }
     func beginLandscapeArrangementFromMenu() {
         guard canArrangeLandscapeViews, let owner,

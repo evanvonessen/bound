@@ -151,6 +151,14 @@ final class StockControlAndGestureTests: XCTestCase {
     }
 
     func testBoundControllerActionUsesNativeMappingTransformerAndActualReceiverPipeline() throws {
+        let domain = "BoundControllerActionTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        preferences.buttonType = .option1
+        for content in BoundPiPContent.allCases {
+            preferences.setEnabled([.friend, .notes, .types].contains(content), for: content)
+        }
         let controller = BoundVirtualMappingController()
         var mapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: controller.inputType)
         mapping.set(StandardGameControllerInput.menu, forControllerInput: MFiGameController.Input.leftShoulder)
@@ -164,7 +172,7 @@ final class StockControlAndGestureTests: XCTestCase {
         XCTAssertEqual(StandardGameControllerInput(input: try XCTUnwrap(restored.input(forControllerInput: MFiGameController.Input.b))), .b)
         XCTAssertTrue(ControlsEditorView.actionInputs.contains(AnyInput(ActionInput.cycleBoundPanels)))
         XCTAssertEqual(AnyInput(ActionInput.cycleBoundPanels).localizedDisplayName, "Cycle Friend/Notes/Types")
-        let state = BoundCompanionState()
+        let state = BoundCompanionState(preferences: preferences)
         let coordinator = BoundCompanionCoordinator(state: state)
         let receiver = BoundVirtualMappingReceiver(coordinator: coordinator)
         controller.addReceiver(receiver, inputMapping: restored)
@@ -326,13 +334,108 @@ final class StockControlAndGestureTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: name) }
         let preferences = BoundControllerModePreferences(defaults: defaults)
         XCTAssertFalse(preferences.isEnabled)
+        XCTAssertEqual(preferences.layout, .mode1)
         preferences.isEnabled = true
         XCTAssertTrue(BoundControllerModePreferences(defaults: defaults).isEnabled)
+        XCTAssertEqual(BoundControllerModePreferences(defaults: defaults).layout, .mode1)
         for enabled in [false, true] { for layout in BoundScreenLayout.allCases { for landscape in [false, true] {
             XCTAssertEqual(BoundControllerModePreferences.hidesTouchControls(enabled: enabled, layout: layout, landscape: landscape), enabled && layout == .bound && landscape)
         } } }
         preferences.isEnabled = false
         XCTAssertFalse(BoundControllerModePreferences(defaults: defaults).isEnabled)
+        XCTAssertEqual(preferences.layout, .mode1)
+    }
+
+    func testControllerModeLayoutPersistsAndLegacyEnabledPreferenceDefaultsToModeOne() throws {
+        let name = "ControllerModeLayoutTests."+UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        defaults.set(true, forKey: BoundControllerModePreferences.key)
+        let upgradedPreferences = BoundControllerModePreferences(defaults: defaults)
+        XCTAssertTrue(upgradedPreferences.isEnabled)
+        XCTAssertEqual(upgradedPreferences.layout, .mode1)
+
+        upgradedPreferences.layout = .mode2
+        XCTAssertEqual(BoundControllerModePreferences(defaults: defaults).layout, .mode2)
+        upgradedPreferences.isEnabled = false
+        XCTAssertEqual(BoundControllerModePreferences(defaults: defaults).layout, .mode2,
+                       "Turning Controller Mode off should retain the selected layout.")
+        upgradedPreferences.isEnabled = true
+        XCTAssertEqual(BoundControllerModePreferences(defaults: defaults).layout, .mode2)
+    }
+
+    func testControllerModeTwoGeometryFitsLandscapeSafeAreasAndKeepsControlsClear() throws {
+        let cases: [(CGRect, UIEdgeInsets, CGSize)] = [
+            (CGRect(x: 0, y: 0, width: 852, height: 393), UIEdgeInsets(top: 0, left: 59, bottom: 21, right: 34), CGSize(width: 240, height: 160)),
+            (CGRect(x: 0, y: 0, width: 852, height: 393), UIEdgeInsets(top: 0, left: 34, bottom: 21, right: 59), CGSize(width: 240, height: 160)),
+            (CGRect(x: 0, y: 0, width: 1194, height: 834), UIEdgeInsets(top: 24, left: 0, bottom: 20, right: 0), CGSize(width: 240, height: 160)),
+            (CGRect(x: 0, y: 0, width: 852, height: 393), UIEdgeInsets(top: 0, left: 59, bottom: 21, right: 34), CGSize(width: 8, height: 1))
+        ]
+
+        for (bounds, safeArea, gameAspect) in cases {
+            let geometry = try XCTUnwrap(BoundControllerModeTwoGeometry(bounds: bounds, safeArea: safeArea, gameAspect: gameAspect))
+            let safe = bounds.inset(by: safeArea)
+            XCTAssertEqual(geometry.game.maxX, safe.maxX, accuracy: 0.5)
+            XCTAssertEqual(geometry.game.width / geometry.game.height, gameAspect.width / gameAspect.height, accuracy: 0.01)
+            XCTAssertEqual(geometry.friend.width / geometry.friend.height, 1.5, accuracy: 0.01)
+            XCTAssertEqual(geometry.menu.size, CGSize(width: 44, height: 44))
+            XCTAssertEqual(geometry.views.size, CGSize(width: 44, height: 44))
+            XCTAssertEqual(geometry.friendButton.size, CGSize(width: 44, height: 44))
+            XCTAssertTrue(safe.contains(geometry.friend))
+            XCTAssertTrue(safe.contains(geometry.menu))
+            XCTAssertTrue(safe.contains(geometry.views))
+            XCTAssertTrue(safe.contains(geometry.friendButton))
+            XCTAssertGreaterThanOrEqual(geometry.game.minX, safe.minX - 0.5)
+            XCTAssertLessThanOrEqual(geometry.game.maxX, safe.maxX + 0.5)
+            XCTAssertGreaterThanOrEqual(geometry.game.minY, bounds.minY - 0.5)
+            XCTAssertLessThanOrEqual(geometry.game.maxY, bounds.maxY + 0.5)
+            XCTAssertFalse(geometry.friend.intersects(geometry.game))
+            XCTAssertFalse(geometry.menu.intersects(geometry.game))
+            XCTAssertFalse(geometry.views.intersects(geometry.game))
+            XCTAssertFalse(geometry.friendButton.intersects(geometry.game))
+            XCTAssertFalse(geometry.menu.intersects(geometry.views))
+            XCTAssertFalse(geometry.friend.intersects(geometry.menu))
+            XCTAssertFalse(geometry.views.intersects(geometry.friendButton))
+            XCTAssertEqual(geometry.friend.minX, safe.minX, accuracy: 0.5)
+            XCTAssertEqual(geometry.friend.minY, safe.minY, accuracy: 0.5)
+            if bounds.width == 852, gameAspect == CGSize(width: 240, height: 160) {
+                XCTAssertEqual(geometry.game.height, bounds.height, accuracy: 0.5,
+                               "When the left strip fits, keep the current full-height gameplay presentation.")
+            }
+        }
+    }
+
+    func testControllerModeTwoGeometryRejectsPortraitAndInvalidInputs() {
+        XCTAssertNil(BoundControllerModeTwoGeometry(bounds: CGRect(x: 0, y: 0, width: 390, height: 844), safeArea: .zero, gameAspect: CGSize(width: 3, height: 2)))
+        XCTAssertNil(BoundControllerModeTwoGeometry(bounds: CGRect(x: 0, y: 0, width: 844, height: 390), safeArea: .zero, gameAspect: .zero))
+        XCTAssertNil(BoundControllerModeTwoGeometry(bounds: .zero, safeArea: .zero, gameAspect: CGSize(width: 3, height: 2)))
+    }
+
+    func testControllerModeTwoMovesOnlyNativeMenuAndUsesNormalizedFortyFourPointFrame() throws {
+        let base = try XCTUnwrap(DeltaCore.ControllerSkin.standardControllerSkin(for: System.gba.gameType))
+        let traits = DeltaCore.ControllerSkin.Traits(device: .iphone, displayType: .edgeToEdge, orientation: .landscape)
+        let size = CGSize(width: 844, height: 390)
+        let stock = BoundStockControllerSkin(base: base, canvasSize: size,
+            boundLandscapeGutter: CGRect(x: 738.5, y: 0, width: 105.5, height: 369))
+        let originalItems = try XCTUnwrap(stock.items(for: traits))
+        let originalMenu = try XCTUnwrap(originalItems.first { $0.inputs.allInputs.contains { $0.stringValue == "menu" } })
+        let customFrame = CGRect(x: 0.08, y: 0.78, width: 44 / size.width, height: 44 / size.height)
+        let mode1 = BoundControllerModeSkin(base: stock)
+        let mode2 = BoundControllerModeSkin(base: stock, menuFrame: customFrame)
+        let mode1Items = try XCTUnwrap(mode1.items(for: traits))
+        let mode2Items = try XCTUnwrap(mode2.items(for: traits))
+        let mode1Menu = try XCTUnwrap(mode1Items.first)
+        let mode2Menu = try XCTUnwrap(mode2Items.first)
+
+        XCTAssertEqual(mode1Items.map(\.id), [originalMenu.id])
+        XCTAssertEqual(mode1Menu.frame, originalMenu.frame)
+        XCTAssertEqual(mode2Items.map(\.id), [originalMenu.id])
+        XCTAssertEqual(mode2Menu.frame, customFrame)
+        XCTAssertEqual(mode2Menu.frame.width * size.width, 44, accuracy: 0.01)
+        XCTAssertEqual(mode2Menu.frame.height * size.height, 44, accuracy: 0.01)
+        XCTAssertEqual(mode2Menu.inputs.allInputs.map(\.stringValue), originalMenu.inputs.allInputs.map(\.stringValue))
+        XCTAssertEqual(mode2Menu.extendedFrame, customFrame)
     }
 
     func testControllerModeRetainsActualMenuAndRestoresNativeTreeAfterRotationAndOff() throws {

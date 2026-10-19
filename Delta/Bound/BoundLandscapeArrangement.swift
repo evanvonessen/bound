@@ -72,19 +72,22 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         var aboveButtons: Bool
         var allowsButtonOverlap: Bool
         var friendUsesScreenCanvas: Bool
+        var controllerModeTwoDefaultFriend: Bool
         init(_ placement: BoundLandscapeViewPlacement) {
             center = placement.center; widthFraction = placement.widthFraction
             heightFraction = placement.heightFraction; opacity = placement.opacity
             aboveButtons = true
             allowsButtonOverlap = false
             friendUsesScreenCanvas = false
+            controllerModeTwoDefaultFriend = false
         }
         var placement: BoundLandscapeViewPlacement {
             BoundLandscapeViewPlacement(center: center, widthFraction: widthFraction,
                                         heightFraction: heightFraction, opacity: opacity)
         }
         private enum CodingKeys: String, CodingKey {
-            case center, widthFraction, heightFraction, opacity, aboveButtons, allowsButtonOverlap, friendUsesScreenCanvas
+            case center, widthFraction, heightFraction, opacity, aboveButtons, allowsButtonOverlap,
+                 friendUsesScreenCanvas, controllerModeTwoDefaultFriend
         }
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -95,6 +98,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
             aboveButtons = try container.decodeIfPresent(Bool.self, forKey: .aboveButtons) ?? true
             allowsButtonOverlap = try container.decodeIfPresent(Bool.self, forKey: .allowsButtonOverlap) ?? false
             friendUsesScreenCanvas = try container.decodeIfPresent(Bool.self, forKey: .friendUsesScreenCanvas) ?? false
+            controllerModeTwoDefaultFriend = try container.decodeIfPresent(Bool.self, forKey: .controllerModeTwoDefaultFriend) ?? false
         }
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
@@ -105,12 +109,14 @@ final class BoundLandscapeArrangementModel: ObservableObject {
             try container.encode(aboveButtons, forKey: .aboveButtons)
             try container.encode(allowsButtonOverlap, forKey: .allowsButtonOverlap)
             try container.encode(friendUsesScreenCanvas, forKey: .friendUsesScreenCanvas)
+            try container.encode(controllerModeTwoDefaultFriend, forKey: .controllerModeTwoDefaultFriend)
         }
     }
 
     @Published private(set) var active = false
     @Published private(set) var option: BoundLandscapeOption = .option3
     @Published private(set) var controllerModeEnabled = false
+    @Published private(set) var controllerModeLayout: BoundControllerModeLayout = .mode1
     @Published private(set) var editing = false
     @Published private(set) var editorAtTop = false
     @Published private(set) var friendVisible: Bool
@@ -137,13 +143,14 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     private var fadeStartOpacity: Double?
     private var boundButtonFrame: CGRect = .zero
     private var selectionBeforeArrangement: BoundPiPContent?
-    private var layoutInput: (canvas: CGRect, occupied: [CGRect], menu: CGRect, bound: CGRect, defaults: [BoundPiPContent: CGRect], keyboard: CGFloat, screenBounds: CGRect?)?
+    private var layoutInput: (canvas: CGRect, occupied: [CGRect], menu: CGRect, bound: CGRect, defaults: [BoundPiPContent: CGRect], keyboard: CGFloat, screenBounds: CGRect?, friendButton: CGRect?, viewsButton: CGRect?)?
 
     private func refreshLayout(avoidFriend: Bool = false) {
         if let input = layoutInput {
             updateLayout(canvas: input.canvas, occupied: input.occupied, menuFrame: input.menu,
                          boundFrame: input.bound, defaults: input.defaults, keyboardHeight: input.keyboard,
                          screenBounds: input.screenBounds,
+                         friendButtonFrame: input.friendButton, viewsButtonFrame: input.viewsButton,
                          avoidFriend: avoidFriend)
         }
         needsLayout?()
@@ -176,15 +183,22 @@ final class BoundLandscapeArrangementModel: ObservableObject {
 
     /// New variants start as an Option 3 snapshot, then save independently. Keeping
     /// one observable session also keeps the live video canvas and gestures mounted.
-    func useOption(_ value: BoundLandscapeOption, controllerModeEnabled: Bool = false) {
+    func useOption(_ value: BoundLandscapeOption, controllerModeEnabled: Bool = false,
+                   controllerModeLayout: BoundControllerModeLayout = .mode1) {
+        let effectiveControllerLayout = controllerModeEnabled ? controllerModeLayout : .mode1
         guard value.supportsArrangement,
-              option != value || self.controllerModeEnabled != controllerModeEnabled else { return }
+              option != value || self.controllerModeEnabled != controllerModeEnabled
+                || self.controllerModeLayout != effectiveControllerLayout else { return }
         finish(save: false, resume: false)
         if active { beforeSwitch?() }
         if self.controllerModeEnabled != controllerModeEnabled {
             self.controllerModeEnabled = controllerModeEnabled
             // Snapshot fallbacks must come from the destination mode, never the
             // previous mode's in-memory placement or unsaved geometry.
+            readPlacements()
+        }
+        if self.controllerModeLayout != effectiveControllerLayout {
+            self.controllerModeLayout = effectiveControllerLayout
             readPlacements()
         }
         let destination = arrangementNamespace + ".option\(value.rawValue)"
@@ -218,6 +232,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
 
     private func initializeMultiviewSnapshot(destination: String) {
         let option3 = arrangementNamespace + ".option3."
+        let modeTwoNeedsGeometryDefault = controllerModeEnabled && controllerModeLayout == .mode2
         for suffix in ["friend-visible", "reference-visible", "placement.friend"] {
             if let value = defaults.object(forKey: option3 + suffix) {
                 defaults.set(value, forKey: destination + "." + suffix)
@@ -231,10 +246,10 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         defaults.set(initialPage.rawValue, forKey: destination + ".reference-content")
         defaults.set(sourceContent.rawValue, forKey: destination + ".reference-layout-content")
 
-        let sharedState = Self.readState(defaults, key: option3 + "placement." + sourceContent.rawValue)
-            ?? (option == .option3 ? saved[sourceContent] : nil)
-            ?? State(Self.defaultState(for: sourceContent))
-        if let data = try? JSONEncoder().encode(sharedState) {
+        let savedReferenceState = Self.readState(defaults, key: option3 + "placement." + sourceContent.rawValue)
+            ?? (option == .option3 && (!modeTwoNeedsGeometryDefault || persistedContents.contains(sourceContent)) ? saved[sourceContent] : nil)
+        if let stateToCopy = savedReferenceState ?? (modeTwoNeedsGeometryDefault ? nil : State(Self.defaultState(for: sourceContent))),
+           let data = try? JSONEncoder().encode(stateToCopy) {
             defaults.set(data, forKey: destination + ".placement.reference")
         }
         defaults.set(true, forKey: destination + ".initialized")
@@ -243,29 +258,33 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     private func initializeTabbedSnapshot(destination: String) {
         let option6 = arrangementNamespace + ".option6."
         let option3 = arrangementNamespace + ".option3."
+        let modeTwoNeedsGeometryDefault = controllerModeEnabled && controllerModeLayout == .mode2
         let allowed = Self.nonFriend(BoundPiPContent.cycleOrder)
         let option6Initialized = defaults.bool(forKey: option6 + "initialized")
 
         let sourceContent: BoundPiPContent
         let initialPage: BoundPiPContent
         let sharedState: State
+        let hasSavedReferenceState: Bool
         if option6Initialized {
             sourceContent = Self.readContent(defaults, key: option6 + "reference-layout-content", allowed: allowed)
                 ?? Self.readContent(defaults, key: option6 + "reference-content", allowed: Self.multiviewContents)
                 ?? Self.multiviewContents[0]
             initialPage = Self.readContent(defaults, key: option6 + "reference-content", allowed: Self.multiviewContents)
                 ?? Self.multiviewContents[0]
-            sharedState = (option == .option6 ? saved[.dex] : nil)
+            let stored = (option == .option6 && (!modeTwoNeedsGeometryDefault || persistedContents.contains(.dex)) ? saved[.dex] : nil)
                 ?? Self.readState(defaults, key: option6 + "placement.reference")
                 ?? Self.readState(defaults, key: option3 + "placement." + sourceContent.rawValue)
-                ?? State(Self.defaultState(for: sourceContent))
+            hasSavedReferenceState = stored != nil
+            sharedState = stored ?? State(Self.defaultState(for: sourceContent))
         } else {
             sourceContent = Self.readContent(defaults, key: option3 + "reference-content", allowed: allowed)
                 ?? Self.multiviewContents[0]
             initialPage = Self.multiviewContents.contains(sourceContent) ? sourceContent : Self.multiviewContents[0]
-            sharedState = Self.readState(defaults, key: option3 + "placement." + sourceContent.rawValue)
-                ?? (option == .option3 ? saved[sourceContent] : nil)
-                ?? State(Self.defaultState(for: sourceContent))
+            let stored = Self.readState(defaults, key: option3 + "placement." + sourceContent.rawValue)
+                ?? (option == .option3 && (!modeTwoNeedsGeometryDefault || persistedContents.contains(sourceContent)) ? saved[sourceContent] : nil)
+            hasSavedReferenceState = stored != nil
+            sharedState = stored ?? State(Self.defaultState(for: sourceContent))
         }
 
         for suffix in ["friend-visible", "reference-visible"] {
@@ -282,7 +301,8 @@ final class BoundLandscapeArrangementModel: ObservableObject {
 
         defaults.set(initialPage.rawValue, forKey: destination + ".reference-content")
         defaults.set(sourceContent.rawValue, forKey: destination + ".reference-layout-content")
-        if let data = try? JSONEncoder().encode(sharedState) {
+        if (hasSavedReferenceState || !modeTwoNeedsGeometryDefault),
+           let data = try? JSONEncoder().encode(sharedState) {
             defaults.set(data, forKey: destination + ".placement.reference")
         }
         defaults.set(true, forKey: destination + ".initialized")
@@ -328,8 +348,10 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     func updateLayout(canvas: CGRect, occupied: [CGRect], menuFrame: CGRect, boundFrame: CGRect,
                       defaults defaultFrames: [BoundPiPContent: CGRect], keyboardHeight: CGFloat,
                       screenBounds: CGRect? = nil,
+                      friendButtonFrame: CGRect? = nil, viewsButtonFrame: CGRect? = nil,
                       avoidFriend: Bool = false) {
-        layoutInput = (canvas, occupied, menuFrame, boundFrame, defaultFrames, keyboardHeight, screenBounds)
+        layoutInput = (canvas, occupied, menuFrame, boundFrame, defaultFrames, keyboardHeight,
+                       screenBounds, friendButtonFrame, viewsButtonFrame)
         let insetCanvas = canvas.insetBy(dx: 4, dy: 4)
         let friendScreen = screenBounds.flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil } ?? canvas
         let friendCanvas = multiview ? friendScreen : insetCanvas
@@ -351,7 +373,8 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         for content in BoundPiPContent.allCases {
             let placementCanvas = content == .friend ? friendCanvas : insetCanvas
             if var frame = defaultFrames[content], placementCanvas.width > 0, placementCanvas.height > 0 {
-                if content == .friend, let reference = defaultFrames[referenceContent] {
+                if content == .friend, !(controllerModeEnabled && controllerModeLayout == .mode2),
+                   let reference = defaultFrames[referenceContent] {
                     // Start on the opposite side so the reference cannot hide Friend.
                     let x = placementCanvas.minX + placementCanvas.maxX - reference.midX
                     frame.origin.x = x - frame.width / 2
@@ -361,12 +384,28 @@ final class BoundLandscapeArrangementModel: ObservableObject {
                     widthFraction: frame.width / placementCanvas.width,
                     heightFraction: frame.height / placementCanvas.height,
                     opacity: 1))
-                if content == .friend && multiview { initial.friendUsesScreenCanvas = true }
+                if content == .friend && multiview {
+                    initial.friendUsesScreenCanvas = true
+                    if controllerModeEnabled && controllerModeLayout == .mode2 {
+                        initial.controllerModeTwoDefaultFriend = true
+                    }
+                }
                 defaultPlacements[content] = initial
                 if !persistedContents.contains(content) && !initializedDefaults.contains(content) {
                     initializedDefaults.insert(content)
                     saved[content] = initial
                 }
+            }
+        }
+        if controllerModeEnabled, controllerModeLayout == .mode2,
+           let frame = defaultFrames[.friend], friendCanvas.width > 0, friendCanvas.height > 0 {
+            var state = (draft ?? saved)[.friend] ?? State(Self.defaultState(for: .friend))
+            if state.controllerModeTwoDefaultFriend {
+                state.center = BoundLandscapeGeometry.normalizedCenter(frame: frame, canvas: friendCanvas)
+                state.widthFraction = frame.width / friendCanvas.width
+                state.heightFraction = frame.height / friendCanvas.height
+                state.friendUsesScreenCanvas = true
+                if draft != nil { draft?[.friend] = state } else { saved[.friend] = state }
             }
         }
         var next = Layout()
@@ -379,9 +418,9 @@ final class BoundLandscapeArrangementModel: ObservableObject {
                                    y: menuFrame.midY)
         let viewsCenter = CGPoint(x: multiview ? boundFrame.midX : insetCanvas.minX + insetCanvas.maxX - boundFrame.midX,
                                   y: boundFrame.midY)
-        next.friendButton = CGRect(x: friendCenter.x - buttonSize / 2, y: friendCenter.y - buttonSize / 2,
+        next.friendButton = friendButtonFrame ?? CGRect(x: friendCenter.x - buttonSize / 2, y: friendCenter.y - buttonSize / 2,
                                    width: buttonSize, height: buttonSize).intersection(insetCanvas)
-        next.viewsButton = CGRect(x: viewsCenter.x - buttonSize / 2, y: viewsCenter.y - buttonSize / 2,
+        next.viewsButton = viewsButtonFrame ?? CGRect(x: viewsCenter.x - buttonSize / 2, y: viewsCenter.y - buttonSize / 2,
                                   width: buttonSize, height: buttonSize).intersection(insetCanvas)
         // The controls mirror MENU and BOUND across the screen center. If a device
         // reports unusual hit rectangles, keep the pair in-canvas and distinct.
@@ -518,6 +557,9 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         let start = gestureStart?.1 ?? value
         let canvas = placementCanvas(for: content)
         guard canvas.width > 0, canvas.height > 0 else { return }
+        if content == .friend && (translation.width != 0 || translation.height != 0) {
+            value.controllerModeTwoDefaultFriend = false
+        }
         let centerClamp: (CGFloat) -> CGFloat = content == .friend && multiview ? normalizedClamp : clamp
         value.center = CGPoint(x: centerClamp(start.center.x + translation.width / canvas.width),
                                y: centerClamp(start.center.y + translation.height / canvas.height))
@@ -537,6 +579,10 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         if gestureStart?.0 != content { gestureStart = (content, displayedState(for: content)) }
         let start = gestureStart?.1 ?? value
         let canvas = placementCanvas(for: content)
+        guard canvas.width > 0, canvas.height > 0 else { return }
+        if content == .friend && (translation.width != 0 || translation.height != 0) {
+            value.controllerModeTwoDefaultFriend = false
+        }
         let dx = translation.width / max(1, canvas.width)
         let dy = translation.height / max(1, canvas.height)
         switch axis {
@@ -726,7 +772,8 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         defaults.set(data, forKey: key(suffix))
     }
     private var arrangementNamespace: String {
-        controllerModeEnabled ? namespace + ".controller-mode" : namespace
+        guard controllerModeEnabled else { return namespace }
+        return controllerModeLayout == .mode2 ? namespace + ".controller-mode2" : namespace + ".controller-mode"
     }
 
     /// Keep the existing keys for Controller Mode off. On upgrade, preserve all

@@ -100,6 +100,7 @@ class GameViewController: DeltaCore.GameViewController
         let gutter: CGRect?
         let minimal: Bool
         let controllerMode: Bool
+        let controllerMenuFrame: CGRect?
         let style: UIUserInterfaceStyle
         let contrast: UIAccessibilityContrast
     }
@@ -2711,6 +2712,7 @@ extension GameViewController {
         let layout = BoundControlPlacementStore.shared.read(skin: base.identifier, landscape: view.bounds.width > view.bounds.height)
         let mode = BoundControllerModePreferences.hidesTouchControls(enabled: BoundControllerModePreferences().isEnabled,
             layout: BoundAppearancePreferences().effectiveScreenLayout, landscape: view.bounds.width > view.bounds.height)
+        let modeTwo = boundControllerModeTwoGeometry()
         if boundControllerModeActive != mode {
             cancelBoundTouchInputsPreservingExternalHolds()
             boundControllerModeActive = mode
@@ -2724,19 +2726,23 @@ extension GameViewController {
         let insets = nativeBoundControllerInsets(base: base)
         let gutter = nativeBoundLandscapeControlGutter(base: base)
         let configuration = BoundControlConfiguration(skin: base.identifier, layout: layout, canvas: view.bounds.size,
-            source: source, insets: insets, gutter: gutter, minimal: minimal, controllerMode: mode,
+            source: source, insets: insets, gutter: gutter, minimal: minimal, controllerMode: mode, controllerMenuFrame: modeTwo?.menu,
             style: traitCollection.userInterfaceStyle, contrast: traitCollection.accessibilityContrast)
         // A settled layout must not recreate wrappers or serialize placements.
         // Also verify the applied identity, because upstream may replace the skin.
         if configuration == boundControlConfiguration,
            controllerView.controllerSkin?.identifier == boundAppliedSkinIdentifier { return }
         controllerView.usesControlOnlyHitTesting = mode || !layout.positions.isEmpty
-        controllerLayoutBounds = layout.positions.isEmpty ? nil : view.bounds
-        controllerLayoutSize = layout.positions.isEmpty && !minimal ? nil : nativeBoundControllerSize()
+        controllerLayoutBounds = modeTwo != nil || !layout.positions.isEmpty ? view.bounds : nil
+        controllerLayoutSize = modeTwo != nil ? view.bounds.size : layout.positions.isEmpty && !minimal ? nil : nativeBoundControllerSize()
         let stock = BoundStockControllerSkin(base: base, canvasSize: source.size, contentInsets: insets, boundLandscapeGutter: gutter)
         var proposed: ControllerSkinProtocol = layout.positions.isEmpty ? stock : BoundPlacedControllerSkin(base: stock, layout: layout, canvasSize: view.bounds.size, sourceFrame: source)
         if minimal { proposed = BoundMinimalControllerSkin(base: proposed, canvasSize: layout.positions.isEmpty ? source.size : view.bounds.size, traits: traitCollection) }
-        if mode { proposed = BoundControllerModeSkin(base: proposed) }
+        if mode {
+            let menuFrame = modeTwo?.menu.offsetBy(dx: -view.bounds.minX, dy: -view.bounds.minY)
+                .applying(.init(scaleX: 1 / view.bounds.width, y: 1 / view.bounds.height))
+            proposed = BoundControllerModeSkin(base: proposed, menuFrame: menuFrame)
+        }
         let identifier = proposed.identifier
         if controllerView.controllerSkin?.identifier != identifier { controllerView.cancelTouchInputs(); controllerView.controllerSkin = proposed }
         boundControlConfiguration = configuration
@@ -2779,6 +2785,7 @@ extension GameViewController {
     func boundLandscapeControlGutter() -> CGRect? {
         let bounds = view.bounds
         guard BoundAppearancePreferences().effectiveScreenLayout == .bound, bounds.width > bounds.height else { return nil }
+        if boundControllerModeTwoGeometry() != nil { return nil }
         let insets = view.safeAreaInsets
         let horizontal = CGRect(x: bounds.minX+insets.left, y: bounds.minY,
             width: max(1, bounds.width-insets.left-insets.right), height: bounds.height)
@@ -2788,6 +2795,13 @@ extension GameViewController {
         let safe = bounds.inset(by: insets)
         let gutter = CGRect(x: game.maxX, y: safe.minY, width: max(0, safe.maxX-game.maxX), height: safe.height)
         return gutter.width >= 44 && gutter.height >= 44 ? gutter : nil
+    }
+    func boundControllerModeTwoGeometry() -> BoundControllerModeTwoGeometry? {
+        let preferences = BoundControllerModePreferences()
+        guard preferences.isEnabled, preferences.layout == .mode2,
+              BoundAppearancePreferences().effectiveScreenLayout == .bound else { return nil }
+        return BoundControllerModeTwoGeometry(bounds: view.bounds, safeArea: view.safeAreaInsets,
+            gameAspect: emulatorCore?.preferredRenderingSize ?? CGSize(width: 3, height: 2))
     }
     private func nativeBoundLandscapeControlGutter(base: ControllerSkinProtocol) -> CGRect? {
         guard let gutter = boundLandscapeControlGutter() else { return nil }

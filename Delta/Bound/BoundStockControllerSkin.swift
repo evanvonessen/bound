@@ -324,9 +324,16 @@ final class BoundStockControllerSkin: ControllerSkinProtocol {
     func menuInsets(for traits: DeltaCore.ControllerSkin.Traits) -> UIEdgeInsets? { base.menuInsets(for: traits) }
 }
 
-/// Isolated user preference; OFF until explicitly enabled, retained across launches.
+enum BoundControllerModeLayout: Int, CaseIterable {
+    case mode1 = 1
+    case mode2 = 2
+}
+
+/// Controller Mode selection; the enabled flag keeps its original key so
+/// existing users retain their setting and resolve to the original layout.
 final class BoundControllerModePreferences {
     static let key = "bound.controller-mode.v1.enabled"
+    static let layoutKey = "bound.controller-mode.v1.layout"
     private let defaults: UserDefaults
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
     var isEnabled: Bool {
@@ -336,8 +343,48 @@ final class BoundControllerModePreferences {
             NotificationCenter.default.post(name: BoundAppearancePreferences.didChangeNotification, object: nil)
         }
     }
+    var layout: BoundControllerModeLayout {
+        get { BoundControllerModeLayout(rawValue: defaults.integer(forKey: Self.layoutKey)) ?? .mode1 }
+        set {
+            defaults.set(newValue.rawValue, forKey: Self.layoutKey)
+            NotificationCenter.default.post(name: BoundAppearancePreferences.didChangeNotification, object: nil)
+        }
+    }
     static func hidesTouchControls(enabled: Bool, layout: BoundScreenLayout, landscape: Bool) -> Bool {
         enabled && layout == .bound && landscape
+    }
+}
+
+/// Fits gameplay against the safe right edge and reserves a left column for
+/// Friend and touch controls. Gameplay retains its fitted size whenever it fits.
+struct BoundControllerModeTwoGeometry {
+    let game: CGRect
+    let friend: CGRect
+    let menu: CGRect
+    let views: CGRect
+    let friendButton: CGRect
+
+    init?(bounds: CGRect, safeArea: UIEdgeInsets, gameAspect: CGSize) {
+        guard bounds.width.isFinite, bounds.height.isFinite, bounds.width > bounds.height,
+              gameAspect.width.isFinite, gameAspect.height.isFinite,
+              gameAspect.width > 0, gameAspect.height > 0 else { return nil }
+        let safe = bounds.inset(by: safeArea)
+        let gap: CGFloat = 8
+        let minimumColumn: CGFloat = 104
+        guard safe.width > minimumColumn + gap, safe.height >= 160 else { return nil }
+        let ratio = gameAspect.width / gameAspect.height
+        guard ratio.isFinite, ratio > 0 else { return nil }
+        let width = min(bounds.height * ratio, safe.width - minimumColumn - gap)
+        let height = width / ratio
+        game = CGRect(x: safe.maxX - width, y: bounds.midY - height / 2, width: width, height: height)
+        let column = CGRect(x: safe.minX, y: safe.minY, width: game.minX - gap - safe.minX, height: safe.height)
+        let friendWidth = min(column.width, max(0, column.height - 112) * 1.5)
+        friend = CGRect(x: column.midX - friendWidth / 2, y: column.minY,
+                        width: friendWidth, height: friendWidth / 1.5)
+        let buttonY = friend.maxY + 12
+        menu = CGRect(x: column.midX - 48, y: buttonY, width: 44, height: 44)
+        views = CGRect(x: column.midX + 4, y: buttonY, width: 44, height: 44)
+        friendButton = CGRect(x: column.midX - 22, y: menu.maxY + 8, width: 44, height: 44)
     }
 }
 
@@ -345,19 +392,41 @@ final class BoundControllerModePreferences {
 /// touchscreen skin's gameplay controls disappear; its real Menu remains.
 final class BoundControllerModeSkin: ControllerSkinProtocol {
     let base: ControllerSkinProtocol
-    init(base: ControllerSkinProtocol) { self.base = base }
+    private let menuFrame: CGRect?
+    init(base: ControllerSkinProtocol, menuFrame: CGRect? = nil) {
+        self.base = base; self.menuFrame = menuFrame
+    }
     var name: String { base.name }
-    var identifier: String { base.identifier + ".bound-controller-mode" }
+    var identifier: String { base.identifier + ".bound-controller-mode" + (menuFrame.map { String(describing: $0) } ?? "") }
     var gameType: GameType { base.gameType }
     var isDebugModeEnabled: Bool { base.isDebugModeEnabled }
     private func isMenu(_ item: DeltaCore.ControllerSkin.Item) -> Bool { item.inputs.allInputs.contains { $0.stringValue == "menu" } }
     func items(for traits: DeltaCore.ControllerSkin.Traits) -> [DeltaCore.ControllerSkin.Item]? {
         guard traits.orientation == .landscape else { return base.items(for: traits) }
-        return base.items(for: traits)?.filter(isMenu)
+        return base.items(for: traits)?.filter(isMenu).map { item in
+            guard let menuFrame else { return item }
+            var moved = item
+            moved.frame = menuFrame
+            moved.extendedFrame = menuFrame
+            return moved
+        }
     }
     private func artwork(_ image: UIImage?, traits: DeltaCore.ControllerSkin.Traits) -> UIImage? {
         guard traits.orientation == .landscape, let image else { return image }
         return UIGraphicsImageRenderer(size: image.size).image { context in
+            if menuFrame != nil, let menu = items(for: traits)?.first {
+                let frame = menu.frame.applying(.init(scaleX: image.size.width, y: image.size.height))
+                let path = UIBezierPath(ovalIn: frame.insetBy(dx: 1, dy: 1))
+                UIColor.deltaPurple.withAlphaComponent(0.85).setFill(); path.fill()
+                UIColor.white.withAlphaComponent(0.85).setStroke(); path.lineWidth = 1.5; path.stroke()
+                let label = "MENU" as NSString
+                let attributes: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: frame.height * 0.22, weight: .bold),
+                    .foregroundColor: UIColor.white]
+                let size = label.size(withAttributes: attributes)
+                label.draw(at: CGPoint(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2), withAttributes: attributes)
+                return
+            }
             for item in items(for: traits) ?? [] {
                 context.cgContext.saveGState()
                 context.cgContext.clip(to: item.extendedFrame.applying(.init(scaleX: image.size.width, y: image.size.height)))
