@@ -55,6 +55,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
 
     struct Layout: Equatable {
         var canvas: CGRect = .zero
+        var friendCanvas: CGRect = .zero
         var friend: CGRect = .zero
         var reference: CGRect = .zero
         var friendButton: CGRect = .zero
@@ -68,13 +69,42 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         var widthFraction: CGFloat
         var heightFraction: CGFloat
         var opacity: Double
+        var aboveButtons: Bool
+        var allowsButtonOverlap: Bool
+        var friendUsesScreenCanvas: Bool
         init(_ placement: BoundLandscapeViewPlacement) {
             center = placement.center; widthFraction = placement.widthFraction
             heightFraction = placement.heightFraction; opacity = placement.opacity
+            aboveButtons = true
+            allowsButtonOverlap = false
+            friendUsesScreenCanvas = false
         }
         var placement: BoundLandscapeViewPlacement {
             BoundLandscapeViewPlacement(center: center, widthFraction: widthFraction,
                                         heightFraction: heightFraction, opacity: opacity)
+        }
+        private enum CodingKeys: String, CodingKey {
+            case center, widthFraction, heightFraction, opacity, aboveButtons, allowsButtonOverlap, friendUsesScreenCanvas
+        }
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            center = try container.decode(CGPoint.self, forKey: .center)
+            widthFraction = try container.decode(CGFloat.self, forKey: .widthFraction)
+            heightFraction = try container.decode(CGFloat.self, forKey: .heightFraction)
+            opacity = try container.decode(Double.self, forKey: .opacity)
+            aboveButtons = try container.decodeIfPresent(Bool.self, forKey: .aboveButtons) ?? true
+            allowsButtonOverlap = try container.decodeIfPresent(Bool.self, forKey: .allowsButtonOverlap) ?? false
+            friendUsesScreenCanvas = try container.decodeIfPresent(Bool.self, forKey: .friendUsesScreenCanvas) ?? false
+        }
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(center, forKey: .center)
+            try container.encode(widthFraction, forKey: .widthFraction)
+            try container.encode(heightFraction, forKey: .heightFraction)
+            try container.encode(opacity, forKey: .opacity)
+            try container.encode(aboveButtons, forKey: .aboveButtons)
+            try container.encode(allowsButtonOverlap, forKey: .allowsButtonOverlap)
+            try container.encode(friendUsesScreenCanvas, forKey: .friendUsesScreenCanvas)
         }
     }
 
@@ -107,12 +137,13 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     private var fadeStartOpacity: Double?
     private var boundButtonFrame: CGRect = .zero
     private var selectionBeforeArrangement: BoundPiPContent?
-    private var layoutInput: (canvas: CGRect, occupied: [CGRect], menu: CGRect, bound: CGRect, defaults: [BoundPiPContent: CGRect], keyboard: CGFloat)?
+    private var layoutInput: (canvas: CGRect, occupied: [CGRect], menu: CGRect, bound: CGRect, defaults: [BoundPiPContent: CGRect], keyboard: CGFloat, screenBounds: CGRect?)?
 
     private func refreshLayout(avoidFriend: Bool = false) {
         if let input = layoutInput {
             updateLayout(canvas: input.canvas, occupied: input.occupied, menuFrame: input.menu,
                          boundFrame: input.bound, defaults: input.defaults, keyboardHeight: input.keyboard,
+                         screenBounds: input.screenBounds,
                          avoidFriend: avoidFriend)
         }
         needsLayout?()
@@ -296,21 +327,41 @@ final class BoundLandscapeArrangementModel: ObservableObject {
 
     func updateLayout(canvas: CGRect, occupied: [CGRect], menuFrame: CGRect, boundFrame: CGRect,
                       defaults defaultFrames: [BoundPiPContent: CGRect], keyboardHeight: CGFloat,
+                      screenBounds: CGRect? = nil,
                       avoidFriend: Bool = false) {
-        layoutInput = (canvas, occupied, menuFrame, boundFrame, defaultFrames, keyboardHeight)
+        layoutInput = (canvas, occupied, menuFrame, boundFrame, defaultFrames, keyboardHeight, screenBounds)
         let insetCanvas = canvas.insetBy(dx: 4, dy: 4)
+        let friendScreen = screenBounds.flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil } ?? canvas
+        let friendCanvas = multiview ? friendScreen : insetCanvas
+
+        if multiview, insetCanvas.width > 0, insetCanvas.height > 0,
+           friendCanvas.width > 0, friendCanvas.height > 0 {
+            if persistedContents.contains(.friend), var state = saved[.friend], !state.friendUsesScreenCanvas {
+                let oldFrame = frame(for: .friend, state: state, canvas: insetCanvas, base: defaultFrames[.friend])
+                if !oldFrame.isEmpty {
+                    state.center = BoundLandscapeGeometry.normalizedCenter(frame: oldFrame, canvas: friendCanvas)
+                    state.widthFraction = oldFrame.width / friendCanvas.width
+                    state.heightFraction = oldFrame.height / friendCanvas.height
+                    state.friendUsesScreenCanvas = true
+                    saved[.friend] = state
+                    write(state, for: .friend)
+                }
+            }
+        }
         for content in BoundPiPContent.allCases {
-            if var frame = defaultFrames[content], insetCanvas.width > 0, insetCanvas.height > 0 {
+            let placementCanvas = content == .friend ? friendCanvas : insetCanvas
+            if var frame = defaultFrames[content], placementCanvas.width > 0, placementCanvas.height > 0 {
                 if content == .friend, let reference = defaultFrames[referenceContent] {
                     // Start on the opposite side so the reference cannot hide Friend.
-                    let x = insetCanvas.minX + insetCanvas.maxX - reference.midX
+                    let x = placementCanvas.minX + placementCanvas.maxX - reference.midX
                     frame.origin.x = x - frame.width / 2
                 }
-                let initial = State(BoundLandscapeViewPlacement(
-                    center: BoundLandscapeGeometry.normalizedCenter(frame: frame, canvas: insetCanvas),
-                    widthFraction: frame.width / insetCanvas.width,
-                    heightFraction: frame.height / insetCanvas.height,
+                var initial = State(BoundLandscapeViewPlacement(
+                    center: BoundLandscapeGeometry.normalizedCenter(frame: frame, canvas: placementCanvas),
+                    widthFraction: frame.width / placementCanvas.width,
+                    heightFraction: frame.height / placementCanvas.height,
                     opacity: 1))
+                if content == .friend && multiview { initial.friendUsesScreenCanvas = true }
                 defaultPlacements[content] = initial
                 if !persistedContents.contains(content) && !initializedDefaults.contains(content) {
                     initializedDefaults.insert(content)
@@ -320,6 +371,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         }
         var next = Layout()
         next.canvas = insetCanvas
+        next.friendCanvas = friendCanvas
         next.doneButton = menuFrame
         boundButtonFrame = boundFrame
         let buttonSize: CGFloat = 44
@@ -346,7 +398,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
 
         let current = draft ?? saved
         next.friend = frame(for: .friend, state: current[.friend] ?? State(Self.defaultState(for: .friend)),
-                            canvas: insetCanvas, base: defaultFrames[.friend])
+                            canvas: friendCanvas, base: defaultFrames[.friend])
 
         let availableHeight = max(100, insetCanvas.height - max(0, keyboardHeight))
         let referenceCanvas = CGRect(x: insetCanvas.minX, y: insetCanvas.minY,
@@ -365,10 +417,11 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         let obstacles = occupied + (initialSeparation ? [next.friend.insetBy(dx: -4, dy: -4)] : []) + [next.friendButton.insetBy(dx: -4, dy: -4),
                                     next.viewsButton.insetBy(dx: -4, dy: -4),
                                     menuFrame.insetBy(dx: -2, dy: -2), boundFrame.insetBy(dx: -2, dy: -2)]
+        let referenceObstacles = multiview && state.allowsButtonOverlap ? [] : obstacles
         next.reference = BoundLandscapeGeometry.referenceFrame(canvas: referenceCanvas,
                         preferredCenter: state.center, preferredSize: desired,
-                        occupied: obstacles, minimumSize: CGSize(width: 160, height: minimumReferenceHeight)) ??
-                        fallbackReference(base: base, canvas: referenceCanvas, occupied: obstacles,
+                        occupied: referenceObstacles, minimumSize: CGSize(width: 160, height: minimumReferenceHeight)) ??
+                        fallbackReference(base: base, canvas: referenceCanvas, occupied: referenceObstacles,
                                          minimumHeight: tabbedMultiview ? minimumReferenceHeight : nil)
         if initialSeparation, !editing, !next.reference.isEmpty {
             var resolved = state
@@ -386,6 +439,20 @@ final class BoundLandscapeArrangementModel: ObservableObject {
 
     func toggleFriend() { friendVisible.toggle(); defaults.set(friendVisible, forKey: key("friend-visible")); needsLayout?() }
     func toggleReference() { referenceVisible.toggle(); defaults.set(referenceVisible, forKey: key("reference-visible")); needsLayout?() }
+
+    func aboveButtons(for content: BoundPiPContent) -> Bool { state(for: content).aboveButtons }
+
+    /// Layer selection is available only while arranging Options 6 and 7.
+    /// Choosing either layer also allows the shared reference panel to overlap
+    /// native and companion controls instead of being moved away by the solver.
+    func setAboveButtons(_ above: Bool, for content: BoundPiPContent) {
+        guard editing, multiview else { return }
+        var value = displayedState(for: content)
+        value.aboveButtons = above
+        value.allowsButtonOverlap = true
+        setDraft(value, for: content)
+        refreshLayout()
+    }
 
     func cycleReference() {
         guard !contents.isEmpty else { return }
@@ -449,10 +516,11 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         var value = state(for: content)
         if gestureStart?.0 != content { gestureStart = (content, displayedState(for: content)) }
         let start = gestureStart?.1 ?? value
-        let canvas = layout.canvas
+        let canvas = placementCanvas(for: content)
         guard canvas.width > 0, canvas.height > 0 else { return }
-        value.center = CGPoint(x: clamp(start.center.x + translation.width / canvas.width),
-                               y: clamp(start.center.y + translation.height / canvas.height))
+        let centerClamp: (CGFloat) -> CGFloat = content == .friend && multiview ? normalizedClamp : clamp
+        value.center = CGPoint(x: centerClamp(start.center.x + translation.width / canvas.width),
+                               y: centerClamp(start.center.y + translation.height / canvas.height))
         setDraft(value, for: content)
         refreshLayout()
         if ended {
@@ -468,8 +536,9 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         var value = state(for: content)
         if gestureStart?.0 != content { gestureStart = (content, displayedState(for: content)) }
         let start = gestureStart?.1 ?? value
-        let dx = translation.width / max(1, layout.canvas.width)
-        let dy = translation.height / max(1, layout.canvas.height)
+        let canvas = placementCanvas(for: content)
+        let dx = translation.width / max(1, canvas.width)
+        let dy = translation.height / max(1, canvas.height)
         switch axis {
         case .width:
             if content == .friend {
@@ -479,14 +548,14 @@ final class BoundLandscapeArrangementModel: ObservableObject {
             }
         case .height:
             if content == .friend {
-                let requestedWidth = (start.heightFraction + dy) * layout.canvas.height / max(1, layout.canvas.width) * 1.5
+                let requestedWidth = (start.heightFraction + dy) * canvas.height / max(1, canvas.width) * 1.5
                 setFriendWidth(requestedWidth, on: &value)
             } else {
                 value.heightFraction = clamp(start.heightFraction + dy)
             }
         case .scale:
-            let pixelWidth = max(1, layout.canvas.width * start.widthFraction)
-            let pixelHeight = max(1, layout.canvas.height * start.heightFraction)
+            let pixelWidth = max(1, canvas.width * start.widthFraction)
+            let pixelHeight = max(1, canvas.height * start.heightFraction)
             let minScale = max(0.08 / start.widthFraction, 0.08 / start.heightFraction)
             let maxScale = min(1 / start.widthFraction, 1 / start.heightFraction)
             let scale = min(maxScale, max(minScale, 1 + (translation.width + translation.height) / (pixelWidth + pixelHeight)))
@@ -579,11 +648,15 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     private func displayedState(for content: BoundPiPContent) -> State {
         var value = state(for: content)
         let frame = content == .friend ? layout.friend : layout.reference
-        guard !frame.isEmpty, layout.canvas.width > 0, layout.canvas.height > 0 else { return value }
-        value.center = BoundLandscapeGeometry.normalizedCenter(frame: frame, canvas: layout.canvas)
-        value.widthFraction = frame.width / layout.canvas.width
-        value.heightFraction = frame.height / layout.canvas.height
+        let canvas = placementCanvas(for: content)
+        guard !frame.isEmpty, canvas.width > 0, canvas.height > 0 else { return value }
+        value.center = BoundLandscapeGeometry.normalizedCenter(frame: frame, canvas: canvas)
+        value.widthFraction = frame.width / canvas.width
+        value.heightFraction = frame.height / canvas.height
         return value
+    }
+    private func placementCanvas(for content: BoundPiPContent) -> CGRect {
+        content == .friend && layout.friendCanvas.width > 0 ? layout.friendCanvas : layout.canvas
     }
     private func state(for content: BoundPiPContent) -> State {
         draft?[content] ?? saved[content] ?? State(Self.defaultState(for: content))
@@ -606,7 +679,8 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         }
     }
     private func setFriendWidth(_ requested: CGFloat, on state: inout State) {
-        let canvasAspect = layout.canvas.width / max(1, layout.canvas.height)
+        let canvas = layout.friendCanvas.width > 0 ? layout.friendCanvas : layout.canvas
+        let canvasAspect = canvas.width / max(1, canvas.height)
         let minimum = max(0.08, 0.08 * 1.5 / canvasAspect)
         let maximum = min(1, 1.5 / canvasAspect)
         let width = min(maximum, max(minimum, requested))
@@ -677,7 +751,13 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     private func key(_ suffix: String) -> String { arrangementNamespace + ".option\(option.rawValue)." + suffix }
     private static func readState(_ defaults: UserDefaults, key: String) -> State? {
         guard let data = defaults.data(forKey: key), let state = try? JSONDecoder().decode(State.self, from: data) else { return nil }
-        return State(state.placement)
+        var normalized = state
+        let placement = state.placement
+        normalized.center = placement.center
+        normalized.widthFraction = placement.widthFraction
+        normalized.heightFraction = placement.heightFraction
+        normalized.opacity = placement.opacity
+        return normalized
     }
     private static func readContent(_ defaults: UserDefaults, key: String, allowed: [BoundPiPContent]) -> BoundPiPContent? {
         guard let raw = defaults.string(forKey: key), let content = BoundPiPContent(rawValue: raw),
@@ -702,6 +782,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         return CGSize(width: width, height: width / ratio)
     }
     private func clamp(_ value: CGFloat) -> CGFloat { value.isFinite ? min(1, max(0.08, value)) : 0.5 }
+    private func normalizedClamp(_ value: CGFloat) -> CGFloat { value.isFinite ? min(1, max(0, value)) : 0.5 }
     private func unit(_ value: Double) -> Double { value.isFinite ? min(1, max(0, value)) : 1 }
 }
 

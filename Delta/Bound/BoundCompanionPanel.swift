@@ -204,8 +204,11 @@ final class BoundCompanionState: ObservableObject {
 
 /// The overlay yields native button touches even if a moved PiP crosses a button.
 final class BoundOverlayView: UIView {
-    var yieldsTouch: ((CGPoint) -> Bool)?
+    var yieldsTouch: (@MainActor (CGPoint) -> Bool)?
+    var forwardedTouch: (@MainActor (CGPoint, UIEvent?) -> UIView?)?
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard !isHidden, alpha > 0.01, isUserInteractionEnabled else { return nil }
+        if let forwarded = forwardedTouch?(point, event) { return forwarded }
         if yieldsTouch?(point) == true { return nil }
         return super.hitTest(point, with: event)
     }
@@ -238,6 +241,9 @@ final class BoundCompanionCoordinator {
     private var host: UIHostingController<BoundCompanionPresentation>?
     private let landscapeCompanion = BoundLandscapeCompanionModel()
     private lazy var landscapeArrangement = BoundLandscapeArrangementModel()
+    private lazy var arrangementLayers = BoundLandscapePanelLayers(model: landscapeArrangement)
+    private var arrangementEditorHost: UIHostingController<BoundLandscapeArrangementOverlay>?
+    private var arrangementEditorOverlay: BoundOverlayView?
     private var arrangementOpacityGesture: BoundLandscapeOpacityGesture?
     private var multiviewSwipeGesture: BoundLandscapeMultiviewSwipeGesture?
     private var macHost: UIHostingController<BoundMacWorkspaceView>?
@@ -345,7 +351,9 @@ final class BoundCompanionCoordinator {
             }
             landscapeArrangement.endArrangement = { [weak self] resume in self?.notesEditing(false, allowResume: resume) }
             arrangementOpacityGesture = BoundLandscapeOpacityGesture(view: owner.view, model: landscapeArrangement)
-            let panel = BoundCompanionPresentation(sharing: sharing, state: state, landscape: landscapeCompanion, arrangement: landscapeArrangement, gameID: (owner.game as? Game)?.identifier ?? "", editingChanged: { [weak self] in
+            arrangementLayers.owner = owner
+            arrangementLayers.controller = owner.controllerView
+            let panel = BoundCompanionPresentation(sharing: sharing, state: state, landscape: landscapeCompanion, arrangement: landscapeArrangement, layers: arrangementLayers, gameID: (owner.game as? Game)?.identifier ?? "", editingChanged: { [weak self] in
                 guard let self, !self.landscapeCompanion.editing, !self.landscapeArrangement.editing else { return }
                 self.notesEditing($0)
             }, textEditingChanged: { [weak self] in self?.textEditing($0) }, currentSave: { [weak self] gameID in
@@ -353,6 +361,7 @@ final class BoundCompanionCoordinator {
                 return try self.importCurrentRRDexSave(gameID: gameID)
             })
             let host = UIHostingController(rootView: panel)
+            arrangementLayers.presentationHost = host
             // The coordinator positions the overlay and applies portrait top insets.
             // A second inherited home-indicator inset would shrink the visible video
             // and shift the bottom-corner content above its actual PiP frame.
@@ -362,15 +371,39 @@ final class BoundCompanionCoordinator {
             overlay.accessibilityIdentifier = "bound.companion-container"
             overlay.yieldsTouch = { [weak self, weak overlay] point in
                 guard let self, let owner = self.owner, let overlay else { return false }
+                if self.arrangementLayers.active {
+                    return !self.landscapeArrangement.layout.friendButton.contains(point)
+                        && !self.landscapeArrangement.layout.viewsButton.contains(point)
+                }
                 if self.landscapeArrangement.active { return !self.landscapeArrangement.receivesTouch(at: point) }
                 if self.landscapeCompanion.active { return !self.landscapeCompanion.receivesTouch(at: point) }
                 guard !self.isEditingNotes else { return false }
                 let local = owner.controllerView.convert(point, from: overlay)
                 return owner.controllerView.controlHitFrames.contains { $0.contains(local) }
             }
+            overlay.forwardedTouch = { [weak self] point, event in
+                self?.arrangementLayers.referenceHit(at: point, event: event)
+            }
             owner.addChild(host); owner.view.addSubview(overlay); overlay.addSubview(host.view); host.didMove(toParent: owner)
             self.overlay = overlay; self.host = host
-            multiviewSwipeGesture = BoundLandscapeMultiviewSwipeGesture(view: host.view, model: landscapeArrangement)
+            arrangementLayers.overlay = overlay
+            let editorHost = UIHostingController(rootView: BoundLandscapeArrangementOverlay(model: landscapeArrangement, showsButtons: false))
+            editorHost.safeAreaRegions = []
+            editorHost.view.backgroundColor = .clear
+            let editorOverlay = BoundOverlayView()
+            editorOverlay.isHidden = true
+            editorOverlay.backgroundColor = .clear
+            owner.addChild(editorHost)
+            owner.view.addSubview(editorOverlay)
+            editorOverlay.addSubview(editorHost.view)
+            editorHost.didMove(toParent: owner)
+            arrangementEditorHost = editorHost
+            arrangementEditorOverlay = editorOverlay
+            arrangementLayers.editor = editorOverlay
+            multiviewSwipeGesture = BoundLandscapeMultiviewSwipeGesture(view: owner.view, model: landscapeArrangement,
+                isButtonPoint: { [weak self] point in
+                    self?.arrangementLayers.buttonFrames.contains(where: { $0.contains(point) }) ?? false
+                })
             let controls = BoundCompanionCycleButton()
             controls.cycle = { [weak self] in
                 self?.cyclePanels()
@@ -548,6 +581,7 @@ final class BoundCompanionCoordinator {
     }
     func bringControlsToFront() {
         guard let owner else { return }
+        if !arrangementLayers.active { arrangementLayers.apply() }
         if macHost != nil, let overlay {
             owner.view.bringSubviewToFront(overlay)
             sharing.setRemotePresentationEnabled(!overlay.isHidden)
@@ -592,12 +626,16 @@ final class BoundCompanionCoordinator {
         }
         landscapeArrangement.updateLayout(canvas: canvas, occupied: occupied, menuFrame: menuFrame,
             boundFrame: !controls.isHidden || landscapeArrangement.multiview ? controls.frame : .zero, defaults: defaults,
-            keyboardHeight: max(0, keyboardHeight - owner.view.safeAreaInsets.bottom))
+            keyboardHeight: max(0, keyboardHeight - owner.view.safeAreaInsets.bottom), screenBounds: owner.view.bounds)
         overlay.frame = owner.view.bounds
         overlay.isHidden = false; overlay.alpha = 1
         host?.view.frame = overlay.bounds
         owner.view.bringSubviewToFront(overlay)
         owner.view.bringSubviewToFront(controls)
+        arrangementEditorOverlay?.frame = owner.view.bounds
+        arrangementEditorHost?.view.frame = owner.view.bounds
+        arrangementLayers.buttonFrames = native + [landscapeArrangement.layout.friendButton, landscapeArrangement.layout.viewsButton]
+        arrangementLayers.apply()
         #if DEBUG && targetEnvironment(simulator)
         let obstacles = occupied + [landscapeArrangement.layout.friendButton, landscapeArrangement.layout.viewsButton]
         owner.gameView.accessibilityValue = "pip-hit-obstacles=" + obstacles.map { rect in

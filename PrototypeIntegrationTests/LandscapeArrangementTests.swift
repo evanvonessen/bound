@@ -10,7 +10,7 @@ final class LandscapeArrangementTests: XCTestCase {
         return (BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace), defaults, namespace)
     }
 
-    private func arrangeLayout(_ model: BoundLandscapeArrangementModel) {
+    private func arrangeLayout(_ model: BoundLandscapeArrangementModel, screenBounds: CGRect? = nil) {
         let canvas = CGRect(x: 0, y: 0, width: 1000, height: 600)
         let menu = CGRect(x: 900, y: 20, width: 80, height: 70)
         let bound = CGRect(x: 900, y: 500, width: 80, height: 70)
@@ -22,7 +22,8 @@ final class LandscapeArrangementTests: XCTestCase {
             .notes: CGRect(x: 390, y: 130, width: 260, height: 360)
         ]
         model.updateLayout(canvas: canvas, occupied: [menu, bound], menuFrame: menu,
-                           boundFrame: bound, defaults: defaults, keyboardHeight: 0)
+                           boundFrame: bound, defaults: defaults, keyboardHeight: 0,
+                           screenBounds: screenBounds)
     }
 
     private func saveReferenceArrangement(_ model: BoundLandscapeArrangementModel,
@@ -833,6 +834,218 @@ final class LandscapeArrangementTests: XCTestCase {
         XCTAssertFalse(model.receivesTouch(at: CGPoint(x: bound.midX, y: bound.midY)), "BOUND remains tappable while arranging.")
         XCTAssertTrue(model.receivesTouch(at: CGPoint(x: menu.midX, y: menu.midY)), "The temporary DONE target receives MENU touches.")
         XCTAssertTrue(model.layout.opacityZone.contains(CGPoint(x: canvas.midX, y: canvas.midY)))
+    }
+
+    func testLegacyMultiviewPlacementsDecodeWithFrontLayerDefaults() throws {
+        let namespace = "LandscapeArrangementTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        let prefix = namespace + ".option6."
+        defaults.set(true, forKey: prefix + "initialized")
+        defaults.set("dex", forKey: prefix + "reference-content")
+        defaults.set(try JSONEncoder().encode(BoundLandscapeViewPlacement(
+            center: CGPoint(x: 0.42, y: 0.36), widthFraction: 0.31,
+            heightFraction: 0.52, opacity: 0.7)), forKey: prefix + "placement.reference")
+        defaults.set(try JSONEncoder().encode(BoundLandscapeViewPlacement(
+            center: CGPoint(x: 0.77, y: 0.29), widthFraction: 0.25,
+            heightFraction: 0.17, opacity: 0.9)), forKey: prefix + "placement.friend")
+
+        let model = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        model.useOption(.option6)
+        XCTAssertTrue(model.aboveButtons(for: .friend))
+        XCTAssertTrue(model.aboveButtons(for: .dex))
+        XCTAssertTrue(model.aboveButtons(for: .bosses))
+        XCTAssertTrue(model.aboveButtons(for: .types))
+        XCTAssertEqual(model.placement(for: .dex).opacity, 0.7, accuracy: 0.0001)
+    }
+
+    func testMultiviewLayerChoiceIsDraftedSharedAndNamespaced() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([.dex, .bosses, .types])
+        model.setActive(true)
+        model.useOption(.option6)
+        arrangeLayout(model)
+
+        model.setAboveButtons(false, for: .friend)
+        XCTAssertTrue(model.aboveButtons(for: .friend), "Layer changes require an active arrangement edit.")
+        model.arrange()
+        model.setAboveButtons(false, for: .friend)
+        XCTAssertTrue(model.aboveButtons(for: .dex), "Friend and Multiview have independent layer state.")
+        model.setAboveButtons(false, for: .dex)
+        XCTAssertFalse(model.aboveButtons(for: .friend))
+        for page in [BoundPiPContent.dex, .bosses, .types] {
+            XCTAssertFalse(model.aboveButtons(for: page), "Multiview layer state is shared across its pages.")
+        }
+        model.finish(save: false)
+        XCTAssertTrue(model.aboveButtons(for: .friend))
+        XCTAssertTrue(model.aboveButtons(for: .dex), "Cancel restores saved layer state.")
+
+        model.arrange()
+        model.setAboveButtons(false, for: .friend)
+        model.setAboveButtons(false, for: .dex)
+        model.finish(save: true)
+        let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        restored.useOption(.option6)
+        XCTAssertFalse(restored.aboveButtons(for: .friend))
+        for page in [BoundPiPContent.dex, .bosses, .types] {
+            XCTAssertFalse(restored.aboveButtons(for: page))
+        }
+
+        restored.useOption(.option7)
+        restored.setActive(true)
+        arrangeLayout(restored)
+        restored.arrange()
+        restored.setAboveButtons(true, for: .friend)
+        restored.setAboveButtons(true, for: .types)
+        restored.finish(save: true)
+        restored.useOption(.option6)
+        XCTAssertFalse(restored.aboveButtons(for: .friend), "Options 6 and 7 keep separate saved layer choices.")
+        XCTAssertFalse(restored.aboveButtons(for: .dex))
+
+        restored.useOption(.option6, controllerModeEnabled: true)
+        XCTAssertTrue(restored.aboveButtons(for: .friend),
+                      "Controller Mode Option 6 is initialized from its own Option 3 snapshot when it did not exist at the one-time migration.")
+        restored.setActive(true)
+        arrangeLayout(restored)
+        restored.arrange()
+        restored.setAboveButtons(true, for: .friend)
+        restored.setAboveButtons(true, for: .dex)
+        restored.finish(save: true)
+        restored.useOption(.option6, controllerModeEnabled: false)
+        XCTAssertFalse(restored.aboveButtons(for: .friend))
+        restored.useOption(.option6, controllerModeEnabled: true)
+        XCTAssertTrue(restored.aboveButtons(for: .friend))
+    }
+
+    func testMultiviewFriendCanReachPhysicalScreenEdgesAndReferenceStaysSafe() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([.dex, .bosses, .types])
+        model.setActive(true)
+        model.useOption(.option6)
+
+        let screen = CGRect(x: 0, y: 0, width: 1000, height: 600)
+        let safe = CGRect(x: 24, y: 12, width: 952, height: 576)
+        let menu = CGRect(x: 900, y: 18, width: 76, height: 68)
+        let bound = CGRect(x: 900, y: 514, width: 76, height: 68)
+        let obstacle = CGRect(x: 426, y: 214, width: 150, height: 110)
+        let bases: [BoundPiPContent: CGRect] = [
+            .friend: CGRect(x: 650, y: 90, width: 240, height: 160),
+            .dex: CGRect(x: 350, y: 112, width: 300, height: 360),
+            .bosses: CGRect(x: 370, y: 120, width: 260, height: 360),
+            .types: CGRect(x: 370, y: 120, width: 260, height: 360)
+        ]
+        model.updateLayout(canvas: safe, occupied: [obstacle, menu, bound], menuFrame: menu,
+                           boundFrame: bound, defaults: bases, keyboardHeight: 0, screenBounds: screen)
+        XCTAssertEqual(model.layout.friendCanvas, screen)
+        XCTAssertEqual(model.layout.canvas.minX, safe.minX + 4, accuracy: 0.001)
+        model.arrange()
+
+        model.move(content: .friend, translation: CGSize(width: -10_000, height: -10_000), ended: true)
+        XCTAssertEqual(model.layout.friend.minX, screen.minX, accuracy: 0.001)
+        XCTAssertEqual(model.layout.friend.minY, screen.minY, accuracy: 0.001)
+        model.move(content: .friend, translation: CGSize(width: 10_000, height: 0), ended: true)
+        XCTAssertEqual(model.layout.friend.maxX, screen.maxX, accuracy: 0.001)
+        XCTAssertEqual(model.layout.friend.minY, screen.minY, accuracy: 0.001)
+        model.move(content: .friend, translation: CGSize(width: 0, height: 10_000), ended: true)
+        XCTAssertEqual(model.layout.friend.maxX, screen.maxX, accuracy: 0.001)
+        XCTAssertEqual(model.layout.friend.maxY, screen.maxY, accuracy: 0.001)
+        model.move(content: .friend, translation: CGSize(width: -10_000, height: 0), ended: true)
+        XCTAssertEqual(model.layout.friend.minX, screen.minX, accuracy: 0.001)
+        XCTAssertEqual(model.layout.friend.maxY, screen.maxY, accuracy: 0.001)
+
+        XCTAssertGreaterThanOrEqual(model.layout.reference.minX, model.layout.canvas.minX)
+        XCTAssertGreaterThanOrEqual(model.layout.reference.minY, model.layout.canvas.minY)
+        XCTAssertLessThanOrEqual(model.layout.reference.maxX, model.layout.canvas.maxX)
+        XCTAssertLessThanOrEqual(model.layout.reference.maxY, model.layout.canvas.maxY)
+        XCTAssertFalse(model.layout.reference.intersects(obstacle))
+        XCTAssertFalse(model.layout.reference.intersects(menu))
+        XCTAssertFalse(model.layout.reference.intersects(bound))
+    }
+
+    func testFriendCanvasMigrationPreservesPhysicalFrameAndCopiesBasisToOptionSeven() throws {
+        let namespace = "LandscapeArrangementTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        let option6 = namespace + ".option6."
+        defaults.set(true, forKey: option6 + "initialized")
+        defaults.set("dex", forKey: option6 + "reference-content")
+        defaults.set(try JSONEncoder().encode(BoundLandscapeViewPlacement(
+            center: CGPoint(x: 0.37, y: 0.62), widthFraction: 0.26,
+            heightFraction: 0.20, opacity: 0.6)), forKey: option6 + "placement.friend")
+        defaults.set(try JSONEncoder().encode(BoundLandscapeViewPlacement()), forKey: option6 + "placement.reference")
+
+        let safe = CGRect(x: 24, y: 12, width: 952, height: 576)
+        let screen = CGRect(x: 0, y: 0, width: 1000, height: 600)
+        let model = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        model.useOption(.option6)
+        model.updateLayout(canvas: safe, occupied: [], menuFrame: .zero, boundFrame: .zero,
+                           defaults: [.friend: CGRect(x: 650, y: 90, width: 240, height: 160),
+                                      .dex: CGRect(x: 350, y: 112, width: 300, height: 360)],
+                           keyboardHeight: 0, screenBounds: screen)
+
+        let oldCanvas = safe.insetBy(dx: 4, dy: 4)
+        let oldWidth = oldCanvas.width * 0.26
+        let oldHeight = oldCanvas.height * 0.20
+        let width = min(oldWidth, oldHeight * 1.5)
+        let height = width / 1.5
+        let oldCenter = CGPoint(x: oldCanvas.minX + oldCanvas.width * 0.37,
+                                y: oldCanvas.minY + oldCanvas.height * 0.62)
+        let expected = CGRect(x: oldCenter.x - width / 2, y: oldCenter.y - height / 2,
+                              width: width, height: height)
+        XCTAssertEqual(model.layout.friend.minX, expected.minX, accuracy: 0.01)
+        XCTAssertEqual(model.layout.friend.minY, expected.minY, accuracy: 0.01)
+        XCTAssertEqual(model.layout.friend.width, expected.width, accuracy: 0.01)
+        XCTAssertEqual(model.layout.friend.height, expected.height, accuracy: 0.01)
+
+        model.useOption(.option7)
+        model.updateLayout(canvas: safe, occupied: [], menuFrame: .zero, boundFrame: .zero,
+                           defaults: [.friend: CGRect(x: 650, y: 90, width: 240, height: 160),
+                                      .dex: CGRect(x: 350, y: 112, width: 300, height: 360)],
+                           keyboardHeight: 0, screenBounds: screen)
+        XCTAssertEqual(model.layout.friend, expected,
+                       "Option 7 copies the screen-canvas basis and does not migrate it a second time.")
+
+        let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        restored.useOption(.option7)
+        restored.updateLayout(canvas: safe, occupied: [], menuFrame: .zero, boundFrame: .zero,
+                              defaults: [.friend: CGRect(x: 650, y: 90, width: 240, height: 160),
+                                         .dex: CGRect(x: 350, y: 112, width: 300, height: 360)],
+                              keyboardHeight: 0, screenBounds: screen)
+        XCTAssertEqual(restored.layout.friend, expected,
+                       "A later launch preserves the migrated physical frame.")
+    }
+
+    func testExplicitMultiviewLayerAllowsReferenceToStayOverButtons() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([.dex, .bosses, .types])
+        model.setActive(true)
+        model.useOption(.option6)
+        arrangeLayout(model)
+        let menu = model.layout.doneButton
+        XCTAssertFalse(model.layout.reference.intersects(menu), "The default solver keeps the reference clear of controls.")
+
+        model.arrange()
+        model.setAboveButtons(false, for: .dex)
+        let safe = model.layout.canvas
+        let delta = CGSize(width: menu.midX - model.layout.reference.midX,
+                           height: menu.midY - model.layout.reference.midY)
+        model.move(content: .dex, translation: delta, ended: true)
+        XCTAssertTrue(model.layout.reference.intersects(menu),
+                      "After choosing a layer, the panel may overlap the requested button area.")
+        model.finish(save: true)
+
+        let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        restored.useOption(.option6)
+        restored.setActive(true)
+        arrangeLayout(restored)
+        restored.arrange()
+        XCTAssertTrue(restored.layout.reference.intersects(menu), "Explicit overlap survives a later layout pass.")
+        XCTAssertFalse(restored.aboveButtons(for: .dex))
+        XCTAssertGreaterThanOrEqual(restored.layout.reference.minX, safe.minX)
+        XCTAssertLessThanOrEqual(restored.layout.reference.maxX, safe.maxX + 0.001)
     }
 
     func testThreeFingerFadeChangesOnlySelectedViewAndKeepsZeroRecoverable() throws {

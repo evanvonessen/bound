@@ -5067,6 +5067,199 @@ final class ReleaseSmokeUITests: XCTestCase {
 }
 
 extension CompanionUITests {
+    func testLandscapeMultiviewArrangementLayerControlsAndFriendEdgePlacement() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) }
+        }
+
+        let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture",
+                                       "--bound-ui-no-animations", "--bound-ui-screen-layout-bound",
+                                       "-bound.delta.pip.v1.dex.layout", "12"])
+        func chooseOption(_ number: Int) {
+            openBoundSettings(in: app)
+            let options = element("bound.landscape-options", in: app)
+            XCTAssertTrue(options.waitForExistence(timeout: 5))
+            options.tap()
+            app.buttons["Option \(number)"].firstMatch.tap()
+            closeBoundSheet(in: app)
+        }
+        func beginArrangement(_ prefix: String) {
+            openNativePause(in: app)
+            let arrange = app.buttons["bound.menu-arrange-views"]
+            XCTAssertTrue(arrange.waitForExistence(timeout: 5))
+            arrange.tap()
+            XCTAssertTrue(app.buttons[prefix + "-done"].waitForExistence(timeout: 10))
+        }
+        func assertLayer(_ prefix: String, _ content: String, front: Bool) {
+            let frontButton = app.buttons[prefix + "-layer-front." + content]
+            let backButton = app.buttons[prefix + "-layer-back." + content]
+            XCTAssertTrue(frontButton.waitForExistence(timeout: 5))
+            XCTAssertTrue(backButton.waitForExistence(timeout: 5))
+            XCTAssertEqual(frontButton.isSelected, front, "Front arrow should reflect the selected view's layer")
+            XCTAssertEqual(backButton.isSelected, !front, "Back arrow should reflect the selected view's layer")
+        }
+        func move(_ target: XCUIElement, centerX: CGFloat, centerY: CGFloat) {
+            let frame = target.frame
+            let start = target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            start.press(forDuration: 0.05,
+                        thenDragTo: start.withOffset(CGVector(dx: centerX - frame.midX,
+                                                              dy: centerY - frame.midY)))
+        }
+        func verifyOption(_ option: Int) {
+            let prefix = "bound.landscape\(option)"
+            beginArrangement(prefix)
+            let friend = element(prefix + "-move.friend", in: app)
+            let multiview = element(prefix + "-move.dex", in: app)
+            XCTAssertTrue(friend.waitForExistence(timeout: 5))
+            XCTAssertTrue(multiview.waitForExistence(timeout: 5))
+
+            friend.tap()
+            XCTAssertTrue(friend.isSelected)
+            XCTAssertTrue(app.buttons[prefix + "-layer-front.dex"].waitForNonExistence(timeout: 3),
+                          "Layer arrows should only appear for the selected panel")
+            app.buttons[prefix + "-layer-front.friend"].tap()
+            assertLayer(prefix, "friend", front: true)
+
+            // Friend is not covered by emulator controls, so its panel can reach all four screen edges.
+            let screen = app.frame
+            move(friend, centerX: screen.minX + friend.frame.width / 2 - 20,
+                 centerY: screen.minY + friend.frame.height / 2 - 20)
+            XCTAssertEqual(friend.frame.minX, screen.minX, accuracy: 2)
+            XCTAssertEqual(friend.frame.minY, screen.minY, accuracy: 2)
+            screenshot("Landscape-option\(option)-friend-at-top-left-front")
+
+            app.buttons[prefix + "-layer-back.friend"].tap()
+            assertLayer(prefix, "friend", front: false)
+            screenshot("Landscape-option\(option)-friend-at-top-left-behind")
+            move(friend, centerX: screen.maxX - friend.frame.width / 2 + 20,
+                 centerY: screen.maxY - friend.frame.height / 2 + 20)
+            XCTAssertEqual(friend.frame.maxX, screen.maxX, accuracy: 2)
+            XCTAssertEqual(friend.frame.maxY, screen.maxY, accuracy: 2)
+            screenshot("Landscape-option\(option)-friend-at-bottom-right-behind")
+
+            multiview.tap()
+            XCTAssertTrue(multiview.isSelected)
+            XCTAssertTrue(app.buttons[prefix + "-layer-front.friend"].waitForNonExistence(timeout: 3),
+                          "Friend layer arrows should disappear when Multiview is selected")
+            app.buttons[prefix + "-layer-front.dex"].tap()
+            assertLayer(prefix, "dex", front: true)
+            app.buttons[prefix + "-layer-back.dex"].tap()
+            assertLayer(prefix, "dex", front: false)
+            app.buttons[prefix + "-layer-front.dex"].tap()
+            assertLayer(prefix, "dex", front: true)
+
+            // The shared Multiview remains inside its usual safe placement area while its layer
+            // controls decide whether it draws over native landscape buttons.
+            let menu = app.descendants(matching: .any).matching(identifier: "bound.native-menu").firstMatch
+            XCTAssertTrue(menu.waitForExistence(timeout: 5))
+            let multiFrame = multiview.frame
+            move(multiview, centerX: menu.frame.midX, centerY: menu.frame.midY)
+            let menuOverlap = multiview.frame.intersection(menu.frame)
+            XCTAssertGreaterThan(menuOverlap.width * menuOverlap.height, 0,
+                                 "Multiview should overlap the native Menu button area")
+            XCTAssertGreaterThanOrEqual(multiview.frame.minX, screen.minX)
+            XCTAssertGreaterThanOrEqual(multiview.frame.minY, screen.minY)
+            XCTAssertLessThanOrEqual(multiview.frame.maxX, screen.maxX)
+            XCTAssertLessThanOrEqual(multiview.frame.maxY, screen.maxY)
+            XCTAssertGreaterThan(multiview.frame.width, 0)
+            XCTAssertGreaterThan(multiFrame.width, 0)
+            let frontMultiviewFrame = multiview.frame
+            screenshot("Landscape-option\(option)-multiview-over-menu-front")
+            app.buttons[prefix + "-done"].tap()
+            XCTAssertTrue(app.buttons[prefix + "-done"].waitForNonExistence(timeout: 5))
+
+            let viewsToggle = app.buttons[prefix + "-views-button"]
+            XCTAssertTrue(viewsToggle.waitForExistence(timeout: 5))
+            let toggleOverlap = viewsToggle.frame.intersection(frontMultiviewFrame)
+            XCTAssertGreaterThan(toggleOverlap.width * toggleOverlap.height, 0,
+                                 "The front Multiview should overlap the companion Views toggle")
+            viewsToggle.tap()
+            XCTAssertEqual(viewsToggle.label, "Show multiview")
+            XCTAssertTrue(element(prefix + "-reference-content", in: app).waitForNonExistence(timeout: 5))
+            viewsToggle.tap()
+            XCTAssertEqual(viewsToggle.label, "Hide multiview")
+            XCTAssertTrue(element(prefix + "-reference-content", in: app).waitForExistence(timeout: 5))
+
+            // Reopening Arrange View must work through native Menu while Multiview is still in front.
+            beginArrangement(prefix)
+            multiview.tap()
+            XCTAssertTrue(multiview.isSelected)
+            app.buttons[prefix + "-layer-back.dex"].tap()
+            assertLayer(prefix, "dex", front: false)
+            screenshot("Landscape-option\(option)-multiview-over-menu-behind")
+            app.buttons[prefix + "-done"].tap()
+            XCTAssertTrue(app.buttons[prefix + "-done"].waitForNonExistence(timeout: 5))
+
+            // With both panels saved behind the controller, Multiview must still route
+            // gestures inside its content while native controls remain on top.
+            if option == 7 {
+                let docs = app.buttons[prefix + "-tab-bosses"]
+                let dex = app.buttons[prefix + "-tab-dex"]
+                XCTAssertTrue(docs.waitForExistence(timeout: 5))
+                XCTAssertTrue(dex.waitForExistence(timeout: 5))
+                docs.tap()
+                XCTAssertTrue(docs.isSelected)
+                dex.tap()
+                XCTAssertTrue(dex.isSelected)
+            }
+            let referenceContent = element(prefix + "-reference-content", in: app)
+            let dexFooter = app.staticTexts["bound.rrdex-reference-rom"]
+            XCTAssertTrue(referenceContent.waitForExistence(timeout: 5))
+            XCTAssertTrue(dexFooter.waitForExistence(timeout: 5))
+            let footerAtTop = dexFooter.frame.minY
+            let scrollStart = referenceContent.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.82))
+            let scrollEnd = referenceContent.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.30))
+            scrollStart.press(forDuration: 0.05, thenDragTo: scrollEnd,
+                              withVelocity: .slow, thenHoldForDuration: 0.1)
+            let footerMoved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                dexFooter.frame.minY < footerAtTop - 5
+            }, object: dexFooter)
+            wait(for: [footerMoved], timeout: 5)
+            screenshot("Landscape-option\(option)-multiview-background-scroll")
+
+            let restoreStart = referenceContent.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.30))
+            let restoreEnd = referenceContent.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.82))
+            restoreStart.press(forDuration: 0.05, thenDragTo: restoreEnd,
+                               withVelocity: .slow, thenHoldForDuration: 0.1)
+            let footerRestored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                abs(dexFooter.frame.minY - footerAtTop) < 10
+            }, object: dexFooter)
+            wait(for: [footerRestored], timeout: 5)
+
+            viewsToggle.tap()
+            XCTAssertEqual(viewsToggle.label, "Show multiview")
+            XCTAssertTrue(element(prefix + "-reference-content", in: app).waitForNonExistence(timeout: 5))
+            viewsToggle.tap()
+            XCTAssertEqual(viewsToggle.label, "Hide multiview")
+            XCTAssertTrue(element(prefix + "-reference-content", in: app).waitForExistence(timeout: 5))
+
+            beginArrangement(prefix)
+            friend.tap()
+            assertLayer(prefix, "friend", front: false)
+            multiview.tap()
+            assertLayer(prefix, "dex", front: false)
+            app.buttons[prefix + "-done"].tap()
+            XCTAssertTrue(app.buttons[prefix + "-done"].waitForNonExistence(timeout: 5))
+        }
+
+        chooseOption(6)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(app.buttons["bound.landscape6-views-button"].waitForExistence(timeout: 10))
+        verifyOption(6)
+
+        chooseOption(7)
+        XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 10))
+        verifyOption(7)
+    }
+
     func testLandscapeArrangementGeometryIsIndependentByControllerMode() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []

@@ -3,13 +3,15 @@ import UIKit
 
 struct BoundLandscapeArrangementOverlay: View {
     @ObservedObject var model: BoundLandscapeArrangementModel
+    var showsEditor = true
+    var showsButtons = true
     private var multiview: Bool { model.multiview }
     private func title(for content: BoundPiPContent) -> String {
         multiview && content != .friend ? "Multiview" : content.title
     }
     var body: some View {
         ZStack(alignment: .topLeading) {
-            if model.editing {
+            if showsEditor && model.editing {
                 moveTarget(.friend, frame: model.layout.friend).zIndex(model.selected == .friend ? 1 : 0)
                 if !model.contents.isEmpty { moveTarget(model.referenceContent, frame: model.layout.reference).zIndex(model.selected == .friend ? 0 : 1) }
                 if !multiview {
@@ -32,7 +34,8 @@ struct BoundLandscapeArrangementOverlay: View {
                 .accessibilityIdentifier(model.accessibilityPrefix + "-done")
                 .placed(model.layout.doneButton).zIndex(3)
             }
-            Button(action: model.toggleFriend) { Image(systemName: "person.2.fill") }
+            if showsButtons {
+              Button(action: model.toggleFriend) { Image(systemName: "person.2.fill") }
                 .buttonStyle(ArrangementButtonStyle(selected: model.friendVisible))
                 .accessibilityLabel("Friend")
                 .accessibilityValue(model.friendVisible ? "Visible" : "Hidden")
@@ -56,7 +59,9 @@ struct BoundLandscapeArrangementOverlay: View {
                 .accessibilityIdentifier(model.accessibilityPrefix + "-views-button")
                 .disabled(model.editing || model.contents.isEmpty)
                 .placed(model.layout.viewsButton).zIndex(3)
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func moveTarget(_ content: BoundPiPContent, frame: CGRect) -> some View {
@@ -76,6 +81,15 @@ struct BoundLandscapeArrangementOverlay: View {
                     .padding(.horizontal, 8).padding(.vertical, 5)
                     .background(.regularMaterial, in: Capsule()).padding(5).allowsHitTesting(false)
             }
+            .overlay(alignment: .topTrailing) {
+                if multiview && selected {
+                    HStack(spacing: 4) {
+                        layerButton(content, above: true)
+                        layerButton(content, above: false)
+                    }
+                    .padding(5)
+                }
+            }
             .overlay(alignment: .trailing) {
                 if (!model.focusedHandles || selected) && (content == .bosses || content == .dex || (multiview && content != .friend)) {
                     resizeHandle(content, axis: .width, symbol: "arrow.left.and.right", name: "width")
@@ -92,6 +106,22 @@ struct BoundLandscapeArrangementOverlay: View {
                 }
             }
             .placed(frame)
+    }
+    private func layerButton(_ content: BoundPiPContent, above: Bool) -> some View {
+        let active = model.aboveButtons(for: content) == above
+        return Button { model.setAboveButtons(above, for: content) } label: {
+            Image(systemName: above ? "arrow.up" : "arrow.down")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+                .background(active ? Color(uiColor: .deltaPurple) : Color.black.opacity(0.65),
+                            in: RoundedRectangle(cornerRadius: 9))
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(.white.opacity(active ? 1 : 0.4)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(above ? "Bring \(title(for: content)) in front of buttons" : "Put \(title(for: content)) behind buttons")
+        .accessibilityAddTraits(active ? .isSelected : [])
+        .accessibilityIdentifier(model.accessibilityPrefix + (above ? "-layer-front." : "-layer-back.") + content.rawValue)
     }
     private func resizeHandle(_ content: BoundPiPContent, axis: BoundLandscapeArrangementModel.ResizeAxis,
                               symbol: String, name: String) -> some View {

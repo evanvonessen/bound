@@ -6,6 +6,7 @@ import Combine
 final class BoundLandscapeMultiviewSwipeGesture: NSObject, UIGestureRecognizerDelegate {
     private weak var view: UIView?
     private weak var model: BoundLandscapeArrangementModel?
+    private let isButtonPoint: (CGPoint) -> Bool
     private lazy var recognizer: UIPanGestureRecognizer = {
         let recognizer = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         recognizer.delegate = self
@@ -14,9 +15,10 @@ final class BoundLandscapeMultiviewSwipeGesture: NSObject, UIGestureRecognizerDe
         return recognizer
     }()
 
-    init(view: UIView, model: BoundLandscapeArrangementModel) {
+    init(view: UIView, model: BoundLandscapeArrangementModel, isButtonPoint: @escaping (CGPoint) -> Bool = { _ in false }) {
         self.view = view
         self.model = model
+        self.isButtonPoint = isButtonPoint
         super.init()
         view.addGestureRecognizer(recognizer)
     }
@@ -24,6 +26,7 @@ final class BoundLandscapeMultiviewSwipeGesture: NSObject, UIGestureRecognizerDe
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         guard let view, let model, model.active, model.option == .option6,
               model.referenceVisible, !model.editing,
+              !isButtonPoint(touch.location(in: view)),
               model.layout.reference.contains(touch.location(in: view)) else { return false }
 
         var ancestor = touch.view
@@ -255,13 +258,156 @@ final class BoundLandscapeCompanionModel: ObservableObject {
     }
 }
 
-/// A single permanent remote canvas avoids reparenting the live video between
-/// separate hosting controllers on rotation or while changing landscape options.
+/// Retains each live panel while moving its UIKit surface across the controller
+/// layer. SwiftUI zIndex alone cannot order content around native skin buttons.
+@MainActor
+final class BoundLandscapePanelLayers {
+    enum Panel { case friend, reference }
+    private struct Surface {
+        weak var view: UIView?
+        weak var placeholder: UIView?
+        weak var host: UIViewController?
+    }
+    let model: BoundLandscapeArrangementModel
+    weak var owner: UIViewController?
+    weak var presentationHost: UIViewController?
+    weak var controller: UIView?
+    weak var overlay: UIView?
+    weak var editor: UIView?
+    var buttonFrames: [CGRect] = []
+    private var surfaces: [Panel: Surface] = [:]
+    var active: Bool { model.active && model.multiview }
+
+    init(model: BoundLandscapeArrangementModel) { self.model = model }
+
+    func register(_ view: UIView, placeholder: UIView, host: UIViewController, panel: Panel) {
+        surfaces[panel] = Surface(view: view, placeholder: placeholder, host: host)
+        apply()
+    }
+    func unregister(_ panel: Panel) { surfaces.removeValue(forKey: panel) }
+
+    func apply() {
+        guard let owner else { return }
+        editor?.isHidden = !active || !model.editing
+        for panel in [Panel.friend, .reference] {
+            guard let surface = surfaces[panel], let view = surface.view,
+                  let placeholder = surface.placeholder, let host = surface.host,
+                  let parent = active ? owner : presentationHost else { continue }
+            let target = active ? owner.view! : placeholder
+            let changesParent = host.parent !== parent
+            if changesParent {
+                host.willMove(toParent: nil)
+                view.removeFromSuperview()
+                host.removeFromParent()
+                parent.addChild(host)
+            }
+            if view.superview !== target { target.addSubview(view) }
+            if changesParent { host.didMove(toParent: parent) }
+            if active {
+                view.frame = panel == .friend ? model.layout.friend : model.layout.reference
+                view.isHidden = panel == .friend ? !(model.friendVisible || model.editing)
+                    : !(model.referenceVisible || model.editing) || model.layout.reference.isEmpty
+            } else {
+                view.frame = placeholder.bounds
+                view.isHidden = false
+            }
+        }
+        guard active, let controller, let overlay else { return }
+        // Rear panels sit above gameplay but below every native controller item.
+        for panel in [Panel.friend, .reference] {
+            let content: BoundPiPContent = panel == .friend ? .friend : model.referenceContent
+            if !model.aboveButtons(for: content), let view = surfaces[panel]?.view {
+                owner.view.insertSubview(view, belowSubview: controller)
+            }
+        }
+        owner.view.bringSubviewToFront(overlay)
+        for panel in [Panel.friend, .reference] {
+            let content: BoundPiPContent = panel == .friend ? .friend : model.referenceContent
+            if model.aboveButtons(for: content), let view = surfaces[panel]?.view {
+                owner.view.bringSubviewToFront(view)
+            }
+        }
+        // Selection handles, layer arrows and Done must remain reachable while editing.
+        if let editor { owner.view.bringSubviewToFront(editor) }
+    }
+
+    func yieldsTouch(_ point: CGPoint, in view: UIView, panel: Panel) -> Bool {
+        guard active, let owner else { return false }
+        if panel == .friend || model.editing { return true }
+        let point = view.convert(point, to: owner.view)
+        return buttonFrames.contains { $0.contains(point) }
+    }
+
+    func referenceHit(at point: CGPoint, event: UIEvent?) -> UIView? {
+        guard active, !model.editing, model.referenceVisible,
+              !buttonFrames.contains(where: { $0.contains(point) }),
+              let owner, let view = surfaces[.reference]?.view else { return nil }
+        return view.hitTest(view.convert(point, from: owner.view), with: event)
+    }
+}
+
+/// A stable hosting controller preserves the Dex, scroll position and live video
+/// when the panel changes layer or returns to the normal portrait presentation.
+private struct BoundLandscapePanelSurface<Content: View>: UIViewRepresentable {
+    var layers: BoundLandscapePanelLayers
+    var panel: BoundLandscapePanelLayers.Panel
+    @ViewBuilder var content: () -> Content
+
+    func makeCoordinator() -> Coordinator { Coordinator(content: content(), layers: layers, panel: panel) }
+    func makeUIView(context: Context) -> UIView {
+        let placeholder = PanelPlaceholder()
+        placeholder.backgroundColor = .clear
+        let coordinator = context.coordinator
+        coordinator.surface.addSubview(coordinator.host.view)
+        coordinator.host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        placeholder.surface = coordinator.surface
+        layers.register(coordinator.surface, placeholder: placeholder, host: coordinator.host, panel: panel)
+        return placeholder
+    }
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.host.rootView = content()
+        layers.apply()
+    }
+    static func dismantleUIView(_ view: UIView, coordinator: Coordinator) {
+        coordinator.layers.unregister(coordinator.panel)
+        coordinator.host.willMove(toParent: nil)
+        coordinator.host.view.removeFromSuperview()
+        coordinator.host.removeFromParent()
+        coordinator.surface.removeFromSuperview()
+    }
+    final class Coordinator {
+        let host: UIHostingController<Content>
+        let surface = BoundOverlayView()
+        let layers: BoundLandscapePanelLayers
+        let panel: BoundLandscapePanelLayers.Panel
+        init(content: Content, layers: BoundLandscapePanelLayers, panel: BoundLandscapePanelLayers.Panel) {
+            self.layers = layers; self.panel = panel
+            host = UIHostingController(rootView: content)
+            host.safeAreaRegions = []
+            host.view.backgroundColor = .clear
+            surface.backgroundColor = .clear
+            surface.isMultipleTouchEnabled = true
+            surface.yieldsTouch = { [weak surface, weak layers] point in
+                guard let surface, let layers else { return true }
+                return layers.yieldsTouch(point, in: surface, panel: panel)
+            }
+        }
+    }
+    private final class PanelPlaceholder: UIView {
+        weak var surface: UIView?
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            if let surface, surface.superview === self { surface.frame = bounds }
+        }
+    }
+}
+
 struct BoundCompanionPresentation: View {
     @ObservedObject var sharing: FriendSharingSession
     @ObservedObject var state: BoundCompanionState
     @ObservedObject var landscape: BoundLandscapeCompanionModel
     @ObservedObject var arrangement: BoundLandscapeArrangementModel
+    let layers: BoundLandscapePanelLayers
     var gameID: String
     let editingChanged: (Bool) -> Void
     var textEditingChanged: (Bool) -> Void = { _ in }
@@ -285,12 +431,15 @@ struct BoundCompanionPresentation: View {
             let reference = arrangement.active ? arrangement.layout.reference : landscape.active ? landscape.layout.reference : legacyFrame
             let headerHeight: CGFloat = usesMultiviewTabs ? 44 : landscape.active ? 32 : 0
             ZStack(alignment: .topLeading) {
-                friendVideo
+                BoundLandscapePanelSurface(layers: layers, panel: .friend) {
+                    friendVideo
                     .frame(width: max(0, friendFrame.width), height: max(0, friendFrame.height))
                     .clipShape(RoundedRectangle(cornerRadius: state.landscape ? 8 : 4))
                     .opacity(showsFriend ? (arrangement.active ? arrangement.opacity(for: .friend) : landscape.active ? Double(landscape.draft.opacity) : 1) : 0)
                     .allowsHitTesting(!arrangement.active && !landscape.active && showsFriend)
                     .accessibilityHidden(true)
+                }
+                    .frame(width: max(0, friendFrame.width), height: max(0, friendFrame.height))
                     .offset(x: friendFrame.minX, y: friendFrame.minY)
 
                 // Keep the live UIKit canvas mounted, but add its semantic
@@ -309,7 +458,8 @@ struct BoundCompanionPresentation: View {
 
                 // One retained content owner, with the tab bar outside its scroll views.
                 // Composite the bar and background together so saved opacity applies once.
-                VStack(spacing: 0) {
+                BoundLandscapePanelSurface(layers: layers, panel: .reference) {
+                  VStack(spacing: 0) {
                     if usesMultiviewTabs {
                         Group {
                             if showsArrangementReference && !arrangement.editing {
@@ -340,9 +490,11 @@ struct BoundCompanionPresentation: View {
                 }
                 .compositingGroup()
                 .opacity(arrangement.active ? (showsArrangementReference ? arrangement.opacity(for: arrangement.referenceContent) : 0) : landscape.active ? (showsReference ? (landscape.editing ? 0.35 : 1) : 0) : (legacyFriend ? 0 : 1))
+                }
+                .frame(width: max(0, reference.width), height: max(0, reference.height - (landscape.active ? headerHeight : 0)))
                 .offset(x: reference.minX, y: reference.minY + (landscape.active ? headerHeight : 0))
 
-                if arrangement.active { BoundLandscapeArrangementOverlay(model: arrangement) }
+                if arrangement.active { BoundLandscapeArrangementOverlay(model: arrangement, showsEditor: !arrangement.multiview) }
                 if landscape.active {
                     if showsReference { referenceHeader.frame(width: reference.width, height: headerHeight).offset(x: reference.minX, y: reference.minY) }
                     if landscape.editing {
