@@ -356,6 +356,12 @@ final class BoundCompanionCoordinator {
                 return true
             }
             landscapeCompanion.endArrangement = { [weak self] resume in self?.notesEditing(false, allowResume: resume) }
+            let alignmentFeedback = UISelectionFeedbackGenerator()
+            landscapeArrangement.buttonDidAlign = {
+                guard Settings.isButtonHapticFeedbackEnabled else { return }
+                alignmentFeedback.selectionChanged()
+                alignmentFeedback.prepare()
+            }
             landscapeArrangement.needsLayout = { [weak owner] in owner?.view.setNeedsLayout() }
             landscapeArrangement.beforeSwitch = { [weak self, weak owner] in
                 owner?.view.endEditing(true)
@@ -549,8 +555,7 @@ final class BoundCompanionCoordinator {
         let controllerPreferences = BoundControllerModePreferences()
         let modeTwo = owner.boundControllerModeTwoGeometry()
         let savedOption = landscapeCompanion.preferences.option
-        let controllerModeEnabled = controllerPreferences.isEnabled
-            && (controllerPreferences.layout != .mode3 || screenLayout == .bound)
+        let controllerModeEnabled = controllerPreferences.isEnabled && screenLayout == .bound && landscape
         // The additional controller modes always pair Friend with Multiview.
         let usesControllerMultiview = modeTwo != nil || (controllerModeEnabled && controllerPreferences.layout == .mode3)
         let arrangementOption = usesControllerMultiview ? (savedOption == .option7 ? .option7 : .option6) : savedOption
@@ -633,6 +638,11 @@ final class BoundCompanionCoordinator {
         sharing.setRemotePresentationEnabled(state.content == .friend && overlay?.isHidden == false)
         if let controls { owner.view.bringSubviewToFront(controls) }
     }
+    func controllerMenuFrame(defaultFrame: CGRect, canvas: CGRect) -> CGRect? {
+        guard landscapeArrangement.movableControllerButtons else { return nil }
+        return landscapeArrangement.controllerButtonFrame(.menu, defaultFrame: defaultFrame, canvas: canvas)
+    }
+
     private func layoutLandscapeArrangement() {
         guard let owner, let overlay, let controls,
               let skin = owner.controllerView.controllerSkin, let traits = owner.controllerView.controllerSkinTraits,
@@ -640,7 +650,8 @@ final class BoundCompanionCoordinator {
         geometry = nil
         let canvas = owner.view.bounds.inset(by: owner.view.safeAreaInsets)
         let native = owner.controllerView.controlHitFrames.map { owner.controllerView.convert($0, to: owner.view) }
-        let menuFrame = owner.controllerView.convert(menu.frame.applying(.init(scaleX: owner.controllerView.bounds.width,
+        let buttonDefaults = landscapeArrangement.movableControllerButtons ? owner.boundControllerModeButtonDefaults() : nil
+        let menuFrame = buttonDefaults?[.menu] ?? owner.controllerView.convert(menu.frame.applying(.init(scaleX: owner.controllerView.bounds.width,
                                                                               y: owner.controllerView.bounds.height)), to: owner.view)
         let occupied = native + (controls.isHidden ? [] : [controls.frame])
         let game = owner.gameView.convert(owner.gameView.bounds, to: owner.view).intersection(canvas)
@@ -656,9 +667,10 @@ final class BoundCompanionCoordinator {
         let modeTwo = owner.boundControllerModeTwoGeometry()
         if let modeTwo { defaults[.friend] = modeTwo.friend }
         landscapeArrangement.updateLayout(canvas: canvas, occupied: occupied, menuFrame: menuFrame,
-            boundFrame: landscapeArrangement.menuOnlyControllerMode ? .zero : (!controls.isHidden || landscapeArrangement.multiview ? controls.frame : .zero), defaults: defaults,
+            boundFrame: landscapeArrangement.menuOnlyControllerMode ? .zero : (buttonDefaults?[.multiview] ?? (!controls.isHidden || landscapeArrangement.multiview ? controls.frame : .zero)), defaults: defaults,
             keyboardHeight: max(0, keyboardHeight - owner.view.safeAreaInsets.bottom), screenBounds: owner.view.bounds,
-            friendButtonFrame: modeTwo?.friendButton, viewsButtonFrame: modeTwo?.views)
+            friendButtonFrame: buttonDefaults?[.friend] ?? modeTwo?.friendButton,
+            viewsButtonFrame: buttonDefaults?[.multiview] ?? modeTwo?.views)
         overlay.frame = owner.view.bounds
         overlay.isHidden = false; overlay.alpha = 1
         host?.view.frame = overlay.bounds

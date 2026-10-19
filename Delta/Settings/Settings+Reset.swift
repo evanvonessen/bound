@@ -57,7 +57,9 @@ extension Settings {
         let layoutPrefixes = ["bound.fast-forward.enabled.v1.", "bound.controls.v1.", "bound.landscape.v1.",
             "bound.landscape.option3.", "bound.landscape.option4.", "bound.landscape.option5.",
             "bound.landscape.option6.", "bound.landscape.option7.",
-            "bound.landscape.controller-mode.", "bound.landscape.controller-mode2.", "bound.landscape.controller-mode3."]
+            // Match every controller-mode placement namespace, including new
+            // modes added after this reset implementation was introduced.
+            "bound.landscape.controller-mode"]
         keys.formUnion(defaults.dictionaryRepresentation().keys.filter { key in
             layoutPrefixes.contains { key.hasPrefix($0) }
         })

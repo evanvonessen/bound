@@ -2,6 +2,7 @@ import XCTest
 import UIKit
 import AVFoundation
 import CoreData
+import GameController
 import DeltaCore
 @testable import Delta
 @testable import class Delta.Game
@@ -401,6 +402,190 @@ final class StockControlAndGestureTests: XCTestCase {
         XCTAssertFalse(BoundControllerModePreferences(defaults: defaults).isEnabled,
                        "A saved Controller Mode off choice remains off after recreating preferences.")
         XCTAssertEqual(preferences.layout, .mode1)
+    }
+
+    func testBoundTouchControlsRemainAssignedOffAndInPortraitWithExternalPlayerCollision() throws {
+        // updateControllers clears local player 0 when a wireless controller
+        // is also assigned to player 0. Bound still needs its visible virtual
+        // receiver, using that external player's input route.
+        for modeEnabled in [false, true] {
+            for landscape in [false, true] {
+                let modeOnly = BoundControllerModePreferences.hidesTouchControls(
+                    enabled: modeEnabled, layout: .bound, landscape: landscape)
+                let assignment = BoundControllerViewAssignment.resolve(
+                    localPlayerIndex: nil, externalPlayerIndex: 0, menuOnly: modeOnly)
+                XCTAssertTrue(assignment.isVisible)
+                XCTAssertEqual(assignment.playerIndex, 0)
+            }
+        }
+
+        let base = try XCTUnwrap(DeltaCore.ControllerSkin.standardControllerSkin(for: System.gba.gameType))
+        let landscapeTraits = DeltaCore.ControllerSkin.Traits(device: .iphone, displayType: .edgeToEdge, orientation: .landscape)
+        let portraitTraits = DeltaCore.ControllerSkin.Traits(device: .iphone, displayType: .edgeToEdge, orientation: .portrait)
+        let stock = BoundStockControllerSkin(base: base, canvasSize: CGSize(width: 844, height: 390))
+        let gameplayInputs: Set<String> = ["a", "b", "l", "r"]
+
+        let offLandscape = try XCTUnwrap(stock.items(for: landscapeTraits))
+        XCTAssertTrue(gameplayInputs.isSubset(of: Set(offLandscape.flatMap { $0.inputs.allInputs.map(\.stringValue) })))
+
+        let modeSkin = BoundControllerModeSkin(base: stock)
+        let modeLandscape = try XCTUnwrap(modeSkin.items(for: landscapeTraits))
+        XCTAssertEqual(modeLandscape.count, 1)
+        XCTAssertEqual(modeLandscape.first?.inputs.allInputs.map(\.stringValue), ["menu"])
+
+        let modePortrait = try XCTUnwrap(modeSkin.items(for: portraitTraits))
+        XCTAssertTrue(gameplayInputs.isSubset(of: Set(modePortrait.flatMap { $0.inputs.allInputs.map(\.stringValue) })))
+    }
+
+    @available(iOS 17.0, *)
+    func testBoundControllerViewStaysVisibleWithConnectedVirtualPadAcrossModesAndReset() async throws {
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let gameDirectory = DatabaseManager.gamesDirectoryURL
+        try FileManager.default.createDirectory(at: gameDirectory, withIntermediateDirectories: true)
+        let filename = "controller-visibility-\(UUID().uuidString).gba"
+        let gameURL = gameDirectory.appendingPathComponent(filename)
+        try FileManager.default.copyItem(at: fixture, to: gameURL)
+        defer { try? FileManager.default.removeItem(at: gameURL) }
+
+        let modelURL = try XCTUnwrap(Bundle(for: DatabaseManager.self).url(forResource: "Delta", withExtension: "momd"))
+        let model = try XCTUnwrap(NSManagedObjectModel(contentsOf: modelURL))
+        let entity = try XCTUnwrap(model.entitiesByName["Game"])
+        let context = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
+        context.persistentStoreCoordinator = NSPersistentStoreCoordinator(managedObjectModel: model)
+        defer { context.reset() }
+        let game = Game(entity: entity, insertInto: context)
+        game.type = .gba
+        game.filename = filename
+        game.identifier = UUID().uuidString
+        game.name = "Controller Visibility Fixture"
+
+        let appearance = BoundAppearancePreferences()
+        let oldScreenLayout = appearance.screenLayout
+        let oldTheme = appearance.theme
+        let modePreferences = BoundControllerModePreferences()
+        let oldModeEnabled = modePreferences.isEnabled
+        let oldModeLayout = modePreferences.layout
+        let oldLocalPlayerIndex = Settings.localControllerPlayerIndex
+        let manager = ExternalGameControllerManager.shared
+        let oldAutomaticAssignment = manager.automaticallyAssignsPlayerIndexes
+        let oldControllers = manager.connectedControllers.map { ($0, $0.playerIndex) }
+
+        let configuration = GCVirtualController.Configuration()
+        configuration.elements = [GCInputButtonA, GCInputButtonB, GCInputLeftShoulder,
+                                  GCInputRightShoulder, GCInputDirectionPad]
+        configuration.isHidden = true
+        let virtualController = GCVirtualController(configuration: configuration)
+        // Install teardown before connecting: connect() may partially succeed
+        // even when it later reports an error and the test skips.
+        defer { virtualController.disconnect() }
+        do {
+            try await virtualController.connect()
+        } catch {
+            throw XCTSkip("The simulator did not provide a virtual game controller: \(error.localizedDescription)")
+        }
+        let physicalController = try XCTUnwrap(virtualController.controller)
+
+        var window: UIWindow?
+        let gameController = GameViewController()
+        let selectors = (NSSelectorFromString("mfiGameControllerDidConnect:"),
+                         NSSelectorFromString("mfiGameControllerDidDisconnect:"))
+        let previousKeyWindow = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)
+        defer {
+            if manager.connectedControllers.contains(where: { ($0 as? MFiGameController)?.controller === physicalController }) {
+                manager.perform(selectors.1, with: Notification(name: .GCControllerDidDisconnect, object: physicalController))
+            }
+            manager.automaticallyAssignsPlayerIndexes = oldAutomaticAssignment
+            oldControllers.forEach { $0.0.playerIndex = $0.1 }
+            Settings.localControllerPlayerIndex = oldLocalPlayerIndex
+            modePreferences.isEnabled = oldModeEnabled
+            modePreferences.layout = oldModeLayout
+            appearance.screenLayout = oldScreenLayout
+            appearance.theme = oldTheme
+            gameController.emulatorCore?.stop()
+            gameController.game = nil
+            window?.rootViewController = nil
+            window?.isHidden = true
+            previousKeyWindow?.makeKey()
+        }
+
+        manager.automaticallyAssignsPlayerIndexes = false
+        manager.connectedControllers.forEach { $0.playerIndex = nil }
+        if !manager.connectedControllers.contains(where: { ($0 as? MFiGameController)?.controller === physicalController }) {
+            XCTAssertTrue(manager.responds(to: selectors.0), "The real MFi connection entry point must be available to the test")
+            manager.perform(selectors.0, with: Notification(name: .GCControllerDidConnect, object: physicalController))
+        }
+        let external = try XCTUnwrap(manager.connectedControllers.first { ($0 as? MFiGameController)?.controller === physicalController })
+        external.playerIndex = 0
+
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw XCTSkip("The integration test host has no active window scene")
+        }
+        let testWindow = UIWindow(windowScene: scene)
+        window = testWindow
+        testWindow.rootViewController = gameController
+        testWindow.makeKeyAndVisible()
+        gameController.game = game
+        appearance.screenLayout = .bound
+        modePreferences.isEnabled = false
+
+        let landscapeTraits = DeltaCore.ControllerSkin.Traits(device: .iphone, displayType: .edgeToEdge, orientation: .landscape)
+        let portraitTraits = DeltaCore.ControllerSkin.Traits(device: .iphone, displayType: .edgeToEdge, orientation: .portrait)
+        let gameplayInputs: Set<String> = ["a", "b", "l", "r"]
+        let refreshSelector = NSSelectorFromString("updateControllers")
+        XCTAssertTrue(gameController.responds(to: refreshSelector))
+
+        func setViewport(_ size: CGSize, traits: DeltaCore.ControllerSkin.Traits) {
+            gameController.view.bounds = CGRect(origin: .zero, size: size)
+            gameController.view.frame = CGRect(origin: .zero, size: size)
+            gameController.controllerView.overrideControllerSkinTraits = traits
+            gameController.view.setNeedsLayout()
+            gameController.view.layoutIfNeeded()
+            gameController.perform(refreshSelector)
+        }
+        func visibleInputs(_ traits: DeltaCore.ControllerSkin.Traits) -> Set<String> {
+            Set((gameController.controllerView.controllerSkin?.items(for: traits) ?? [])
+                .flatMap { $0.inputs.allInputs.map(\.stringValue) })
+        }
+        func assertTouchControls(_ traits: DeltaCore.ControllerSkin.Traits, file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertFalse(gameController.controllerView.isHidden, file: file, line: line)
+            XCTAssertEqual(gameController.controllerView.playerIndex, 0, file: file, line: line)
+            XCTAssertTrue(gameplayInputs.isSubset(of: visibleInputs(traits)), "GBA A/B/L/R must remain visible", file: file, line: line)
+        }
+
+        // This reproduces local player 0 being cleared when a connected pad
+        // owns player 0. Each saved layout must remain inert while mode is off.
+        for layout in BoundControllerModeLayout.allCases {
+            Settings.localControllerPlayerIndex = 0
+            modePreferences.isEnabled = false
+            modePreferences.layout = layout
+            setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
+            XCTAssertNil(Settings.localControllerPlayerIndex, "The test must exercise the external-player collision")
+            assertTouchControls(landscapeTraits)
+        }
+
+        // Reset's real settings notification must leave the receiver present.
+        modePreferences.isEnabled = false
+        modePreferences.layout = .mode1
+        NotificationCenter.default.post(name: Settings.didChangeNotification, object: nil,
+            userInfo: [Settings.NotificationUserInfoKey.name: Settings.Name.resetToDefaults])
+        setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
+        assertTouchControls(landscapeTraits)
+
+        // Even an enabled Mode 3 cannot remove portrait GBA buttons.
+        modePreferences.isEnabled = true
+        modePreferences.layout = .mode3
+        setViewport(CGSize(width: 390, height: 844), traits: portraitTraits)
+        assertTouchControls(portraitTraits)
+
+        // With the mode truly active in landscape, the same assigned receiver
+        // remains visible and exposes its actual Menu item only.
+        setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
+        XCTAssertFalse(gameController.controllerView.isHidden)
+        XCTAssertEqual(gameController.controllerView.playerIndex, 0)
+        XCTAssertEqual(visibleInputs(landscapeTraits), ["menu"])
     }
 
     func testControllerModeLayoutPersistsAndLegacyEnabledPreferenceDefaultsToModeOne() throws {

@@ -2581,6 +2581,80 @@ final class CompanionUITests: XCTestCase {
         app.terminate()
     }
 
+    func testControllerModesOneAndTwoButtonArrangementIsAvailableWithoutExperimentalSettings() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) }
+        }
+
+        for mode in [1, 2] {
+            let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture",
+                                           "--bound-ui-no-animations", "--bound-ui-screen-layout-bound"])
+            openBoundSettings(in: app)
+            let modePicker = element("bound.controller-mode-layout", in: app)
+            XCTAssertTrue(modePicker.waitForExistence(timeout: 5))
+            modePicker.tap()
+            let selectedMode = app.buttons["Controller Mode \(mode)"].firstMatch
+            XCTAssertTrue(selectedMode.waitForExistence(timeout: 5))
+            selectedMode.tap()
+            let experimental = app.switches["bound.experimental-settings"]
+            XCTAssertEqual(experimental.value as? String, "1")
+            experimental.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            XCTAssertEqual(experimental.value as? String, "0")
+            XCTAssertTrue(modePicker.label.contains("Controller Mode \(mode)")
+                          || (modePicker.value as? String)?.contains("Controller Mode \(mode)") == true,
+                          "Controller Mode remains available and selected with experimental settings hidden.")
+            closeBoundSheet(in: app)
+
+            XCUIDevice.shared.orientation = .landscapeLeft
+            XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 10))
+            func beginArrangement() {
+                openNativePause(in: app)
+                let arrange = app.buttons["bound.menu-arrange-views"]
+                XCTAssertTrue(arrange.waitForExistence(timeout: 5))
+                arrange.tap()
+                XCTAssertTrue(app.buttons["bound.landscape7-done"].waitForExistence(timeout: 8))
+            }
+            func moveButton(_ identifier: String, by offset: CGVector) -> CGRect {
+                let button = element(identifier, in: app)
+                XCTAssertTrue(button.waitForExistence(timeout: 5), "Missing arrangement handle: \(identifier)")
+                let initialFrame = button.frame
+                let start = button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                start.press(forDuration: 0.1, thenDragTo: start.withOffset(offset))
+                XCTAssertNotEqual(button.frame, initialFrame, "Dragging \(identifier) should move its button.")
+                return button.frame
+            }
+            beginArrangement()
+            let movedFrames = [
+                "bound.controller-button-move.friend": moveButton("bound.controller-button-move.friend", by: CGVector(dx: 28, dy: 0)),
+                "bound.controller-button-move.multiview": moveButton("bound.controller-button-move.multiview", by: CGVector(dx: 0, dy: 28)),
+                "bound.controller-button-move.menu": moveButton("bound.controller-button-move.menu", by: CGVector(dx: mode == 1 ? -28 : 28, dy: 0))
+            ]
+            screenshot("Controller-Mode-\(mode)-Buttons-Moved")
+            app.buttons["bound.landscape7-done"].tap()
+            XCTAssertTrue(app.buttons["bound.landscape7-done"].waitForNonExistence(timeout: 5))
+
+            beginArrangement()
+            for (identifier, expectedFrame) in movedFrames {
+                let button = element(identifier, in: app)
+                XCTAssertTrue(button.waitForExistence(timeout: 5))
+                XCTAssertEqual(button.frame.minX, expectedFrame.minX, accuracy: 2, "Saved position for \(identifier)")
+                XCTAssertEqual(button.frame.minY, expectedFrame.minY, accuracy: 2, "Saved position for \(identifier)")
+            }
+            app.buttons["bound.landscape7-done"].tap()
+            XCUIDevice.shared.orientation = .portrait
+            XCTAssertTrue(element("bound.native-r", in: app).waitForExistence(timeout: 10))
+            app.terminate()
+        }
+    }
+
     func testControllerModeThreeShowsOnlyBottomLeftMenuWithoutExperimentalSettings() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []

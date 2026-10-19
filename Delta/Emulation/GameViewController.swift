@@ -22,6 +22,19 @@ import SwiftUI
 
 private var kvoContext = 0
 
+/// Bound keeps a virtual controller receiver alongside a wireless pad so its
+/// touch controls remain available. Controller Mode only changes the skin's
+/// landscape artwork; it never changes whether this receiver is shown.
+struct BoundControllerViewAssignment {
+    let isVisible: Bool
+    let playerIndex: Int
+
+    static func resolve(localPlayerIndex: Int?, externalPlayerIndex: Int?, menuOnly: Bool) -> Self {
+        let playerIndex = (menuOnly ? externalPlayerIndex : nil) ?? localPlayerIndex ?? externalPlayerIndex ?? 0
+        return Self(isVisible: true, playerIndex: playerIndex)
+    }
+}
+
 private extension DeltaCore.ControllerSkin
 {
     func hasTouchScreen(for traits: DeltaCore.ControllerSkin.Traits) -> Bool
@@ -843,9 +856,25 @@ private extension GameViewController
         // normally hides the virtual controller for an assigned external pad.
         let menuOnly = BoundControllerModePreferences.hidesTouchControls(enabled: BoundControllerModePreferences().isEnabled,
             layout: BoundAppearancePreferences().effectiveScreenLayout, landscape: view.bounds.width > view.bounds.height)
+        let usesBoundController = !BoundMacWorkspacePlatform.isEnabled &&
+            BoundAppearancePreferences().effectiveScreenLayout == .bound
         if menuOnly, let firstActiveController {
-            self.controllerView.playerIndex = firstActiveController.playerIndex
+            let assignment = BoundControllerViewAssignment.resolve(
+                localPlayerIndex: Settings.localControllerPlayerIndex,
+                externalPlayerIndex: firstActiveController.playerIndex,
+                menuOnly: true)
+            self.controllerView.playerIndex = assignment.playerIndex
             self.controllerView.isHidden = false
+        }
+        else if usesBoundController {
+            // Bound always keeps its touch controller available. The mode skin
+            // filters it to Menu only in enabled landscape mode.
+            let assignment = BoundControllerViewAssignment.resolve(
+                localPlayerIndex: Settings.localControllerPlayerIndex,
+                externalPlayerIndex: firstActiveController?.playerIndex,
+                menuOnly: false)
+            self.controllerView.playerIndex = assignment.playerIndex
+            self.controllerView.isHidden = !assignment.isVisible
         }
         else if let index = Settings.localControllerPlayerIndex
         {
@@ -957,8 +986,20 @@ private extension GameViewController
         
         let traits = DeltaCore.ControllerSkin.Traits.defaults(for: window)
         let isExternalControllerConnected = ExternalGameControllerManager.shared.connectedControllers.contains(where: { $0.playerIndex != nil })
-        
-        if Settings.localControllerPlayerIndex != nil
+
+        if BoundAppearancePreferences().effectiveScreenLayout == .bound
+        {
+            // A wireless pad's optional external skin may have no on-screen
+            // controls. Bound uses the regular touch skin in every mode and
+            // lets BoundControllerModeSkin hide gameplay buttons only when
+            // Controller Mode is enabled in landscape.
+            if let controllerSkin = Settings.preferredControllerSkin(for: game, traits: traits, forExternalController: false) {
+                self.controllerView.controllerSkin = controllerSkin
+            } else {
+                self.controllerView.controllerSkin = DeltaCore.ControllerSkin.standardControllerSkin(for: game.type)
+            }
+        }
+        else if Settings.localControllerPlayerIndex != nil
         {
             // If there is both a local player and a connected controller with a controller skin, we prioritize local player's skin.
             // Even if the skin doesn't exist, we'll fall back to standard skin for local player.
@@ -2738,7 +2779,10 @@ extension GameViewController {
         let source = nativeBoundControllerFrame(base: base)
         let insets = nativeBoundControllerInsets(base: base)
         let gutter = nativeBoundLandscapeControlGutter(base: base)
-        let controllerMenuFrame = modeTwo?.menu ?? boundControllerModeThreeGeometry()?.menu
+        let movableMenu = boundControllerModeButtonDefaults()?[.menu].flatMap {
+            boundCompanion.controllerMenuFrame(defaultFrame: $0, canvas: view.bounds.inset(by: view.safeAreaInsets))
+        }
+        let controllerMenuFrame = movableMenu ?? modeTwo?.menu ?? boundControllerModeThreeGeometry()?.menu
         let configuration = BoundControlConfiguration(skin: base.identifier, layout: layout, canvas: view.bounds.size,
             source: source, insets: insets, gutter: gutter, minimal: minimal, controllerMode: mode, controllerMenuFrame: controllerMenuFrame,
             style: traitCollection.userInterfaceStyle, contrast: traitCollection.accessibilityContrast)
@@ -2822,6 +2866,31 @@ extension GameViewController {
         guard preferences.isEnabled, preferences.layout == .mode3,
               BoundAppearancePreferences().effectiveScreenLayout == .bound else { return nil }
         return BoundControllerModeThreeGeometry(bounds: view.bounds, safeArea: view.safeAreaInsets)
+    }
+    /// Stable Mode 1-like starting positions, independent of the moved native Menu.
+    func boundControllerModeButtonDefaults() -> [BoundControllerButton: CGRect]? {
+        let preferences = BoundControllerModePreferences()
+        guard preferences.isEnabled, preferences.layout != .mode3,
+              view.bounds.width > view.bounds.height,
+              BoundAppearancePreferences().effectiveScreenLayout == .bound,
+              let current = controllerView.controllerSkin, let traits = controllerView.controllerSkinTraits else { return nil }
+        if let modeTwo = boundControllerModeTwoGeometry() {
+            return [.menu: modeTwo.menu, .friend: modeTwo.friendButton, .multiview: modeTwo.views]
+        }
+        let base = unwrappedBoundControllerSkin(current)
+        let source = nativeBoundControllerFrame(base: base)
+        let stock = BoundStockControllerSkin(base: base, canvasSize: source.size,
+            contentInsets: nativeBoundControllerInsets(base: base), boundLandscapeGutter: nativeBoundLandscapeControlGutter(base: base))
+        guard let item = stock.items(for: traits)?.first(where: { $0.inputs.allInputs.contains { $0.stringValue == "menu" } }) else { return nil }
+        let native = item.frame.applying(.init(scaleX: source.width, y: source.height)).offsetBy(dx: source.minX, dy: source.minY)
+        let canvas = view.bounds.inset(by: view.safeAreaInsets)
+        let menu = CGRect(x: native.midX - 22, y: native.midY - 22, width: 44, height: 44)
+        let initial: [BoundControllerButton: CGRect] = [
+            .menu: menu,
+            .friend: CGRect(x: canvas.minX + canvas.maxX - menu.midX - 22, y: menu.minY, width: 44, height: 44),
+            .multiview: menu.offsetBy(dx: 0, dy: 52)
+        ]
+        return initial.mapValues { BoundControllerButtonPlacement().frame(for: .menu, defaultFrame: $0, canvas: canvas) }
     }
     private func nativeBoundLandscapeControlGutter(base: ControllerSkinProtocol) -> CGRect? {
         guard let gutter = boundLandscapeControlGutter() else { return nil }

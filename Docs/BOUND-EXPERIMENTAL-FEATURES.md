@@ -21,6 +21,16 @@ the Menu button at the bottom-left of the landscape screen. It retains the
 landscape companion views and Arrange Views access through Menu. Existing saved
 preferences take priority over these defaults.
 
+In landscape Controller Modes 1 and 2, open **Menu → Arrange Views** to drag
+the Friend, Multiview, and Menu buttons in Options 6/7, then tap **Done**.
+Horizontal and vertical alignment gives a brief snap and haptic feedback;
+continuing the drag releases the snap. Button positions save separately for
+each controller mode. Mode 3 keeps its Menu button fixed at the bottom-left.
+Controller-mode choices and button positions do not apply while the mode is
+off or in portrait. Bound retains normal touch controls in those states even
+with a wireless controller assigned. Reset Settings to Default clears these
+positions and returns Controller Mode to Off with Mode 1 preselected.
+
 Controller mapping includes **Toggle Friend** and **Toggle Multiview** as normal
 Game Actions, alongside the existing **Menu** mapping. These choices do not
 require the experimental customization checkbox. In landscape Controller Mode
