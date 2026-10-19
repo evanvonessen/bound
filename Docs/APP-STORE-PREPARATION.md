@@ -17,23 +17,26 @@ existing public `developer@evanvonessen.com` address.
 
 ## Approved icon
 
-`Resources/AppIcon.icon/Assets/BoundIcon.png` restores the previous orange pixel B
-artwork, byte-for-byte from `Artwork/AppIcons/BoundIcon-red-pixel.png`. Its original
+`Resources/AppIcon.icon/Assets/BoundIcon.png` restores the handwritten gray b
+artwork, byte-for-byte from `Artwork/AppIcons/BoundIcon-handwritten.png`. Its original
 supplied reference is also restored at `Artwork/BoundIcon-reference.png`. The same
 opaque 1024 × 1024 artwork is used for both light and dark in-app primary-icon
-previews. Icon Composer uses the original matching orange fill with glass, shadow,
+previews. Icon Composer uses a matching white fill with glass, shadow,
 and translucency disabled; iOS applies the Home Screen mask. Existing Xcode asset
 wiring and website artwork are preserved.
 
 Active app asset SHA-256:
-`c1a0fb65767430b231e18497cc3593188ce5a3ee52742f9305777f969dbf1046`.
+`72f1ac342c042c2aea880b8f1fa08d8cfbd3c1abb8bba6527d8ba349aae3eeec`.
 
 The handwritten gray b icon is preserved unchanged at
 `Artwork/AppIcons/BoundIcon-handwritten.png`, and the exact supplied
 `Untitled_Artwork.png` is archived at
 `Artwork/AppIcons/BoundIcon-handwritten-reference.png`.
-Archived handwritten app asset SHA-256:
-`72f1ac342c042c2aea880b8f1fa08d8cfbd3c1abb8bba6527d8ba349aae3eeec`.
+The orange pixel B remains archived unchanged at
+`Artwork/AppIcons/BoundIcon-red-pixel.png`, with its original reference at
+`Artwork/AppIcons/BoundIcon-red-pixel-reference.png`.
+Archived orange app asset SHA-256:
+`c1a0fb65767430b231e18497cc3593188ce5a3ee52742f9305777f969dbf1046`.
 
 ## Privacy source checks
 
