@@ -48,13 +48,13 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertNotNil(reused.cgImage, "The cached display image should have its bitmap ready.")
     }
 
-    func testUIVersionAndViewOrderPersistWithoutChangingOptionOneOrBaseline() throws {
+    func testUIVersionAndViewOrderPersistWithOptionTwoDefault() throws {
         let suite = "BoundUIVersion." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let version = BoundUIVersionPreferences(defaults: defaults)
         let preferences = BoundPiPPreferences(defaults: defaults)
-        XCTAssertEqual(version.version, .option1)
+        XCTAssertEqual(version.version, .option2)
         let original = BoundPiPContent.cycleOrder
         preferences.setContentOrder([.dex, .bosses, .dex])
         XCTAssertEqual(preferences.orderedContents, [.dex, .bosses, .friend, .notes, .types])
@@ -69,7 +69,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(version.effectiveVersion, .option2)
         XCTAssertEqual(version.version, .option2)
         defaults.set(99, forKey: BoundUIVersionPreferences.key)
-        XCTAssertEqual(version.version, .option1)
+        XCTAssertEqual(version.version, .option2)
         defaults.set(["unknown", "notes", "notes"], forKey: "bound.delta.pip.v1.view-order")
         XCTAssertEqual(restarted.orderedContents, [.notes, .friend, .types, .bosses, .dex])
     }
@@ -79,6 +79,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let version = BoundUIVersionPreferences(defaults: defaults)
         let preferences = BoundPiPPreferences(defaults: defaults)
+        preferences.buttonType = .option1
         let state = BoundCompanionState(preferences: preferences)
         state.selected = 3
         XCTAssertEqual(state.content, .bosses)
@@ -252,7 +253,9 @@ final class CompanionCycleButtonTests: XCTestCase {
         let suite = "BoundSettingsLive." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
+        BoundUIVersionPreferences(defaults: defaults).version = .option1
         let preferences = BoundPiPPreferences(defaults: defaults)
+        preferences.buttonType = .option1
         let model = BoundCompanionSettingsModel(preferences: preferences)
         let state = BoundCompanionState(preferences: preferences)
         let versionChanged = expectation(description: "An active session observes the UI version")
@@ -682,7 +685,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(relaunched.assignedContents(for: 2), [.types, .bosses])
 
         XCTAssertEqual(preferences.assignedContents(for: 0, buttonType: .option4), [.friend])
-        XCTAssertEqual(preferences.assignedContents(for: 1, buttonType: .option4), [.bosses])
+        XCTAssertEqual(preferences.assignedContents(for: 1, buttonType: .option4), [.types, .bosses, .dex])
         preferences.setAssignedContents([.dex, .notes], for: 0, buttonType: .option4)
         preferences.setAssignedContents([], for: 1, buttonType: .option4)
         XCTAssertEqual(relaunched.assignedContents(for: 0, buttonType: .option4), [.notes, .dex])
@@ -711,8 +714,8 @@ final class CompanionCycleButtonTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let preferences = BoundCompanionButtonPreferences(defaults: defaults)
-        XCTAssertEqual(preferences.buttonType, .option1, "Existing installs keep the original round button by default.")
-        XCTAssertEqual(preferences.effectiveButtonType, .option1)
+        XCTAssertEqual(preferences.buttonType, .option4, "New installs use the two-button default.")
+        XCTAssertEqual(preferences.effectiveButtonType, .option4)
 
         preferences.buttonType = .option3
         XCTAssertEqual(preferences.buttonType, .option3)
@@ -724,6 +727,66 @@ final class CompanionCycleButtonTests: XCTestCase {
 
         defaults.set(99, forKey: BoundCompanionButtonPreferences.key)
         XCTAssertEqual(preferences.buttonType, .option1, "Unknown stored values safely fall back to Option 1.")
+    }
+
+    func testFreshInstallUsesRequestedPresetWithoutWritingUntilEdited() throws {
+        let suite = "BoundFreshPreset." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        let settings = BoundCompanionSettingsModel(preferences: preferences)
+        XCTAssertEqual(settings.configuration.uiVersion, .option2)
+        XCTAssertEqual(settings.configuration.buttonType, .option4)
+        XCTAssertEqual(settings.configuration.assignments, [[.friend], [.types, .bosses, .dex]])
+        XCTAssertEqual(settings.configuration.availableContents, [.friend, .types, .bosses, .dex])
+
+        let landscape = BoundLandscapePreferences(defaults: defaults)
+        XCTAssertEqual(landscape.option, .option7)
+        let controller = BoundControllerModePreferences(defaults: defaults)
+        XCTAssertFalse(controller.isEnabled, "Controller Mode is off on a fresh install.")
+        XCTAssertEqual(controller.layout, .mode1)
+
+        for key in [BoundUIVersionPreferences.key,
+                    "bound.landscape.v1.option",
+                    BoundCompanionButtonPreferences.key,
+                    BoundCompanionButtonPreferences.legacyKey,
+                    "bound.delta.pip.v1.button.option4.1.views",
+                    "bound.delta.pip.v1.button.option4.2.views",
+                    BoundReferenceLayoutPreferences.dexKey,
+                    BoundReferenceLayoutPreferences.bossKey,
+                    BoundControllerModePreferences.key,
+                    BoundControllerModePreferences.layoutKey] {
+            XCTAssertNil(defaults.object(forKey: key), "Reading the fresh preset must not write \(key).")
+        }
+
+        settings.setButtonType(.option3)
+        XCTAssertEqual(defaults.integer(forKey: BoundCompanionButtonPreferences.key), BoundCompanionButtonType.option3.rawValue)
+
+        let upgradedSuite = "BoundUpgradedPreset." + UUID().uuidString
+        let upgradedDefaults = try XCTUnwrap(UserDefaults(suiteName: upgradedSuite))
+        defer { upgradedDefaults.removePersistentDomain(forName: upgradedSuite) }
+        upgradedDefaults.set(BoundUIVersion.option1.rawValue, forKey: BoundUIVersionPreferences.key)
+        upgradedDefaults.set(BoundLandscapeOption.option3.rawValue, forKey: "bound.landscape.v1.option")
+        upgradedDefaults.set(BoundCompanionButtonType.option4.rawValue, forKey: BoundCompanionButtonPreferences.key)
+        upgradedDefaults.set(["friend", "notes"], forKey: "bound.delta.pip.v1.button.option4.1.views")
+        upgradedDefaults.set(["bosses"], forKey: "bound.delta.pip.v1.button.option4.2.views")
+        upgradedDefaults.set(BoundReferenceLayout.layout4.rawValue, forKey: BoundReferenceLayoutPreferences.dexKey)
+        upgradedDefaults.set(BoundReferenceLayout.layout9.rawValue, forKey: BoundReferenceLayoutPreferences.bossKey)
+        upgradedDefaults.set(false, forKey: BoundControllerModePreferences.key)
+        upgradedDefaults.set(BoundControllerModeLayout.mode2.rawValue, forKey: BoundControllerModePreferences.layoutKey)
+
+        XCTAssertEqual(BoundUIVersionPreferences(defaults: upgradedDefaults).version, .option1)
+        XCTAssertEqual(BoundLandscapePreferences(defaults: upgradedDefaults).option, .option3)
+        let upgradedButtons = BoundPiPPreferences(defaults: upgradedDefaults)
+        XCTAssertEqual(upgradedButtons.buttonType, .option4)
+        XCTAssertEqual(upgradedButtons.assignedContents(for: 0), [.friend, .notes])
+        XCTAssertEqual(upgradedButtons.assignedContents(for: 1), [.bosses])
+        XCTAssertEqual(upgradedDefaults.integer(forKey: BoundReferenceLayoutPreferences.dexKey), BoundReferenceLayout.layout4.rawValue)
+        XCTAssertEqual(upgradedDefaults.integer(forKey: BoundReferenceLayoutPreferences.bossKey), BoundReferenceLayout.layout9.rawValue)
+        let upgradedController = BoundControllerModePreferences(defaults: upgradedDefaults)
+        XCTAssertFalse(upgradedController.isEnabled)
+        XCTAssertEqual(upgradedController.layout, .mode2)
     }
 
     func testBossLayout10NatureEffectsCoverBundledNaturesAndFallbacks() throws {
@@ -747,7 +810,9 @@ final class CompanionCycleButtonTests: XCTestCase {
         let suite = "BoundBaselineCycle." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let state = BoundCompanionState(preferences: BoundPiPPreferences(defaults: defaults))
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        preferences.buttonType = .option1
+        let state = BoundCompanionState(preferences: preferences)
         for expected in [BoundPiPContent.notes, .types, .bosses, .dex, .friend] {
             state.advancePanel()
             XCTAssertEqual(state.content, expected)
@@ -771,6 +836,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = BoundPiPPreferences(defaults: defaults)
+        preferences.buttonType = .option1
         let state = BoundCompanionState(preferences: preferences)
         state.selected = 3
         XCTAssertEqual(state.content, .bosses)
@@ -841,6 +907,8 @@ final class CompanionCycleButtonTests: XCTestCase {
 
         let option4Preferences = BoundPiPPreferences(defaults: defaults)
         option4Preferences.buttonType = .option4
+        option4Preferences.setAssignedContents([.friend], for: 0, buttonType: .option4)
+        option4Preferences.setAssignedContents([.bosses], for: 1, buttonType: .option4)
         XCTAssertEqual(option4Preferences.assignedContents(for: 0), [.friend])
         XCTAssertEqual(option4Preferences.assignedContents(for: 1), [.bosses])
         let option4State = BoundCompanionState(preferences: option4Preferences)

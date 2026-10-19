@@ -261,7 +261,7 @@ struct BoundAccountSocialSettings: View {
     @ObservedObject private var notifications = BoundJiggleNotifications.shared
     @State private var email = ""
     @State private var password = ""
-    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
+    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option2
     private var usesUpdatedUI: Bool { uiVersion == .option2 }
     var body: some View {
         Section("Bound account") {
@@ -279,10 +279,10 @@ struct BoundAccountSocialSettings: View {
                     Task { await notifications.setEnabled(value) }
                 })).disabled(notifications.busy).accessibilityIdentifier("bound.jiggles-enabled")
                 if !notifications.status.isEmpty { Text(notifications.status).font(.caption) }
+                Button("Sign out", role: .destructive) { signOut() }
+                    .disabled(account.busy || account.deletionPending)
+                    .accessibilityIdentifier("bound.account-sign-out")
                 if usesUpdatedUI {
-                    Button("Sign out", role: .destructive) { signOut() }
-                        .disabled(account.busy || account.deletionPending)
-                        .accessibilityIdentifier("bound.account-sign-out")
                     NavigationLink {
                         BoundDeleteAccountView(account: account) { prepareForAccountRemoval() }
                     } label: {
@@ -302,7 +302,7 @@ struct BoundAccountSocialSettings: View {
     }
 
     private func signOut() {
-        guard usesUpdatedUI, account.session != nil, !account.busy, !account.deletionPending else { return }
+        guard account.session != nil, !account.busy, !account.deletionPending else { return }
         prepareForAccountRemoval()
         account.signOut()
     }

@@ -36,8 +36,8 @@ struct BoundBossGuideView: View {
     let presentationChanged: (Bool) -> Void
     @StateObject private var catalogStore = BoundReferenceCatalogStore.shared
     private let preferences = BoundBossGuidePreferences()
-    @AppStorage(BoundReferenceLayoutPreferences.bossKey) private var savedLayout = BoundReferenceLayout.layout1
-    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
+    @AppStorage(BoundReferenceLayoutPreferences.bossKey) private var savedLayout = BoundReferenceLayout.layout12
+    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option2
     @State private var selection = BoundBossGuideSelection(teamID: "kanto-leaders-4", pokemonIndex: 0)
     @State private var showingPicker = false
     @State private var showingTeam = false

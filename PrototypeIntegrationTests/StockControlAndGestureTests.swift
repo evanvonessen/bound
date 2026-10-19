@@ -342,7 +342,8 @@ final class StockControlAndGestureTests: XCTestCase {
             XCTAssertEqual(BoundControllerModePreferences.hidesTouchControls(enabled: enabled, layout: layout, landscape: landscape), enabled && layout == .bound && landscape)
         } } }
         preferences.isEnabled = false
-        XCTAssertFalse(BoundControllerModePreferences(defaults: defaults).isEnabled)
+        XCTAssertFalse(BoundControllerModePreferences(defaults: defaults).isEnabled,
+                       "A saved Controller Mode off choice remains off after recreating preferences.")
         XCTAssertEqual(preferences.layout, .mode1)
     }
 
@@ -517,6 +518,7 @@ final class StockControlAndGestureTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = BoundPiPPreferences(defaults: defaults)
+        preferences.buttonType = .option1
         let state = BoundCompanionState(preferences: preferences)
         state.landscape = true
         let coordinator = BoundCompanionCoordinator(state: state)

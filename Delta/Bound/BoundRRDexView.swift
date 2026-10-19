@@ -13,8 +13,8 @@ struct BoundRRDexView: View {
     var currentSave: () throws -> BoundRRDexSave = { throw BoundRRDexSave.ImportError.currentGameUnavailable }
     @StateObject private var catalogStore = BoundReferenceCatalogStore.shared
     private let preferences = BoundRRDexPreferences()
-    @AppStorage(BoundReferenceLayoutPreferences.dexKey) private var savedLayout = BoundReferenceLayout.layout1
-    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
+    @AppStorage(BoundReferenceLayoutPreferences.dexKey) private var savedLayout = BoundReferenceLayout.layout12
+    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option2
     @State private var choice = BoundRRDexPreferences.Choice()
     @State private var query = ""
     // UIKit owns focus; a SwiftUI FocusState without a .focused view resets it.

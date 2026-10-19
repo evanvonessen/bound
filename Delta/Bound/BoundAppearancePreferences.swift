@@ -31,6 +31,20 @@ enum BoundFeatureVisibility {
     static let simplifiedSettings = true
 }
 
+/// Optional controls for customizing Bound's interface. This setting only
+/// controls which preferences are shown; it never gates saved settings at runtime.
+final class BoundExperimentalSettingsPreferences {
+    static let key = "bound.experimental-settings.enabled.v1"
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+
+    var enabled: Bool {
+        get { defaults.object(forKey: Self.key) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Self.key) }
+    }
+}
+
 /// Appearance and screen arrangement are independent preferences. Touch feedback uses Delta's existing settings.
 final class BoundAppearancePreferences {
     static let defaultScreenLayout: BoundScreenLayout = .bound

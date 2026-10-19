@@ -27,6 +27,10 @@ private func openBoundSettings(in app: XCUIApplication) {
     app.buttons["Settings"].tap()
     XCTAssertTrue(app.buttons["bound.settings-interface"].waitForExistence(timeout: 5))
     app.buttons["bound.settings-interface"].tap()
+    let experimental = app.switches["bound.experimental-settings"]
+    if experimental.exists && experimental.value as? String == "0" {
+        experimental.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+    }
     XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "bound.ui-version").firstMatch.waitForExistence(timeout: 5))
 }
 
@@ -2379,6 +2383,119 @@ final class CompanionUITests: XCTestCase {
             enabled.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
             closeBoundSheet(in: app)
         }
+    }
+
+    func testDefaultPresetAndExperimentalCustomizationVisibility() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) }
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-reset-layout"]
+        app.launch()
+        // The existing layout-reset fixture runs when gameplay is installed.
+        // Relaunch afterward so Library settings read genuinely unset choices.
+        let resetGame = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(resetGame.waitForExistence(timeout: 15)); resetGame.tap()
+        XCTAssertTrue(element("bound.native-menu", in: app).waitForExistence(timeout: 15))
+        app.terminate()
+        app.launchArguments = ["--bound-ui-no-animations"]
+        app.launch()
+        func openInterface() {
+            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 15))
+            app.buttons["Settings"].tap()
+            XCTAssertTrue(app.buttons["bound.settings-interface"].waitForExistence(timeout: 5))
+            app.buttons["bound.settings-interface"].tap()
+        }
+        func reveal(_ target: XCUIElement, towardTop: Bool = false) {
+            for _ in 0..<24 {
+                let footer = element("bound.settings-footer", in: app)
+                let navigation = app.navigationBars["Interface & Companion"]
+                if target.exists && target.isHittable && target.frame.minY >= navigation.frame.maxY &&
+                    target.frame.maxY <= footer.frame.minY { return }
+                dragSettingsContent(towardTop: towardTop, in: app)
+            }
+            XCTAssertTrue(target.isHittable)
+        }
+        let experimental = app.switches["bound.experimental-settings"]
+        func setExperimental(_ enabled: Bool) {
+            reveal(experimental, towardTop: true)
+            if experimental.value as? String != (enabled ? "1" : "0") {
+                experimental.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+            XCTAssertEqual(experimental.value as? String, enabled ? "1" : "0")
+        }
+        let version = element("bound.ui-version", in: app)
+        func assertCustomizationHidden() {
+            for identifier in ["bound.ui-version", "bound.landscape-options", "bound.controller-mode-layout",
+                               "bound.companion-button-type", "bound.button-1-view.friend",
+                               "bound.button-2-view.types", "bound.rrdex-layout", "bound.boss-layout"] {
+                XCTAssertFalse(element(identifier, in: app).exists, "Hidden customization: \(identifier)")
+            }
+        }
+        openInterface()
+        XCTAssertTrue(experimental.waitForExistence(timeout: 5))
+        XCTAssertEqual(experimental.value as? String, "0")
+        assertCustomizationHidden()
+        screenshot("Default-interface-customization-hidden")
+        setExperimental(true)
+        XCTAssertTrue(version.waitForExistence(timeout: 5))
+        XCTAssertTrue(version.label.contains("Option 2"))
+        XCTAssertTrue(element("bound.landscape-options", in: app).label.contains("Option 7"))
+        XCTAssertTrue(element("bound.controller-mode-layout", in: app).label.contains("Off"))
+        let buttonType = app.segmentedControls["bound.companion-button-type"]
+        reveal(buttonType)
+        XCTAssertTrue(buttonType.buttons["4"].isSelected)
+        for button in [1, 2] {
+            for content in ["friend", "notes", "types", "bosses", "dex"] {
+                let toggle = app.switches["bound.button-\(button)-view.\(content)"]
+                reveal(toggle)
+                let enabled = button == 1 ? content == "friend" : ["types", "bosses", "dex"].contains(content)
+                XCTAssertEqual(toggle.value as? String, enabled ? "1" : "0", "Default assignment for button \(button): \(content)")
+            }
+        }
+        for identifier in ["bound.rrdex-layout", "bound.boss-layout"] {
+            let layout = element(identifier, in: app)
+            reveal(layout)
+            XCTAssertTrue(layout.label.contains("Layout 12"))
+        }
+        reveal(version, towardTop: true)
+        version.tap(); app.buttons["Option 1"].firstMatch.tap()
+        XCTAssertTrue(version.label.contains("Option 1"))
+        setExperimental(false)
+        assertCustomizationHidden()
+        app.buttons["bound.settings-close"].tap()
+        app.terminate()
+        app.launchArguments = ["--bound-ui-no-animations"]
+        app.launch()
+        openInterface()
+        XCTAssertEqual(experimental.value as? String, "0")
+        assertCustomizationHidden()
+        setExperimental(true)
+        XCTAssertTrue(version.label.contains("Option 1"), "Hiding customization preserves the selected UI version across launch.")
+        version.tap(); app.buttons["Option 2"].firstMatch.tap()
+        setExperimental(false)
+        app.buttons["bound.settings-close"].tap()
+        let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(game.waitForExistence(timeout: 15)); game.tap()
+        XCTAssertTrue(app.buttons["bound.panel-cycle.1"].waitForExistence(timeout: 15))
+        XCTAssertEqual(app.buttons["bound.panel-cycle.1"].value as? String, "Friend")
+        XCTAssertEqual(app.buttons["bound.panel-cycle.2"].value as? String, "Types")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 10))
+        for content in ["dex", "bosses", "types"] {
+            XCTAssertTrue(app.buttons["bound.landscape7-tab-" + content].exists)
+        }
+        XCTAssertTrue(element("bound.native-l", in: app).exists, "Controller Mode is off by default.")
+        screenshot("Default-landscape-seven-with-touch-controls")
+        app.terminate()
     }
 
     func testLibraryAccountSettingsProvidesBoundSignInAndAccountCreation() throws {

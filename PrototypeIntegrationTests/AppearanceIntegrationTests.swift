@@ -263,6 +263,61 @@ import ZIPFoundation
         XCTAssertTrue(Settings.isThumbstickHapticFeedbackEnabled)
         wait(for: [expectation], timeout: 1)
     }
+
+    func testExperimentalSettingsTogglePreservesExistingPreferences() throws {
+        let suiteName = "BoundExperimentalSettingsTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let uiVersion = BoundUIVersionPreferences(defaults: defaults)
+        let button = BoundCompanionButtonPreferences(defaults: defaults)
+        let companion = BoundPiPPreferences(defaults: defaults)
+        let controller = BoundControllerModePreferences(defaults: defaults)
+        let landscape = BoundLandscapePreferences(defaults: defaults, namespace: "test.landscape")
+        let experimental = BoundExperimentalSettingsPreferences(defaults: defaults)
+
+        uiVersion.version = .option1
+        defaults.set(BoundReferenceLayout.layout4.rawValue, forKey: BoundReferenceLayoutPreferences.dexKey)
+        defaults.set(BoundReferenceLayout.layout9.rawValue, forKey: BoundReferenceLayoutPreferences.bossKey)
+        button.buttonType = .option4
+        companion.setAssignedContents([.friend], for: 0, buttonType: .option4)
+        companion.setAssignedContents([.types, .bosses, .dex], for: 1, buttonType: .option4)
+        companion.setEnabled(false, for: .notes)
+        companion.setContentOrder([.dex, .bosses, .types, .friend, .notes])
+        controller.isEnabled = false
+        controller.layout = .mode1
+        landscape.option = .option3
+        defaults.set(true, forKey: BoundLegacyPreferences.experimentalFeaturesKey)
+
+        XCTAssertFalse(experimental.enabled)
+        XCTAssertNil(defaults.object(forKey: BoundExperimentalSettingsPreferences.key))
+        let savedPreferences = try XCTUnwrap(defaults.persistentDomain(forName: suiteName))
+
+        experimental.enabled = true
+        var expectedPreferences = savedPreferences
+        expectedPreferences[BoundExperimentalSettingsPreferences.key] = true
+        XCTAssertEqual(defaults.persistentDomain(forName: suiteName) as NSDictionary?, expectedPreferences as NSDictionary)
+        XCTAssertEqual(uiVersion.version, .option1)
+        XCTAssertEqual(defaults.integer(forKey: BoundReferenceLayoutPreferences.dexKey), BoundReferenceLayout.layout4.rawValue)
+        XCTAssertEqual(defaults.integer(forKey: BoundReferenceLayoutPreferences.bossKey), BoundReferenceLayout.layout9.rawValue)
+        XCTAssertEqual(button.buttonType, .option4)
+        XCTAssertEqual(companion.assignedContents(for: 0, buttonType: .option4), [.friend])
+        XCTAssertEqual(companion.assignedContents(for: 1, buttonType: .option4), [.dex, .bosses, .types])
+        XCTAssertFalse(companion.isEnabled(.notes))
+        XCTAssertEqual(companion.orderedContents, [.dex, .bosses, .types, .friend, .notes])
+        XCTAssertFalse(controller.isEnabled)
+        XCTAssertEqual(controller.layout, .mode1)
+        XCTAssertEqual(landscape.option, .option3)
+        XCTAssertTrue(defaults.bool(forKey: BoundLegacyPreferences.experimentalFeaturesKey))
+
+        experimental.enabled = false
+        expectedPreferences[BoundExperimentalSettingsPreferences.key] = false
+        XCTAssertEqual(defaults.persistentDomain(forName: suiteName) as NSDictionary?, expectedPreferences as NSDictionary)
+        XCTAssertEqual(uiVersion.version, .option1)
+        XCTAssertFalse(controller.isEnabled)
+        XCTAssertEqual(controller.layout, .mode1)
+        XCTAssertTrue(defaults.bool(forKey: BoundLegacyPreferences.experimentalFeaturesKey))
+    }
 }
 
 extension AppearanceIntegrationTests {

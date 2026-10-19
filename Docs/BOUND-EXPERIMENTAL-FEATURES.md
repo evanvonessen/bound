@@ -2,8 +2,21 @@
 
 Bound permanently provides the feature set that was previously available after
 enabling Experimental Features. The old preference may exist on upgraded devices,
-but it has no authority over app behavior. Fresh installs and upgrades behave
-the same. The historical Build 13 branch remains available in Git history.
+but it has no authority over app behavior. The historical Build 13 branch remains
+available in Git history.
+
+Interface & Companion has a new **Enable experimental features** checkbox, off
+by default. It reveals UI Version, Landscape Options, the Controller Mode selector,
+Bound button style and assignments, companion view choices/order, and RR Dex/Boss
+layout customization. The checkbox only controls settings visibility: disabling it
+preserves saved choices and keeps the features themselves available. It uses a new
+key (`bound.experimental-settings.enabled.v1`); the old runtime gate remains inert.
+
+New installations use UI Option 2, Landscape Option 7, Bound button Option 4,
+and Layout 12 for both RR Dex and Boss View. Button 1 (top) contains only Friend;
+Button 2 (bottom) contains only Types, Bosses and RR Dex. Controller Mode remains
+off by default, with Mode 1 preselected when enabled. Existing saved preferences
+take priority over these defaults.
 
 The Library settings button and pause-menu Settings tile open the same grouped
 home: Interface & Companion, Controls, Audio, Account & Sync,
@@ -27,7 +40,7 @@ Boss View keep independent layout selections. Layout previews do not import a
 live save or change the selected per-ROM reference. See
 `Docs/RADICAL-RED-BOSS-GUIDE.md` and `Docs/RADICAL-RED-DEX.md` for details.
 
-UI Version remains a separate saved preference. Fresh installs use Option 1;
+UI Version remains a separate saved preference. Fresh installs use Option 2;
 upgraded installations keep their saved choice. Option 2 retains its saved view
 order, live read-only layout previews, and alternate companion behavior.
 The `simplifiedSettings` visibility rules remain in effect, and Release builds
@@ -38,14 +51,30 @@ per-ROM remembered fast-forward, source attribution and the supported Dropbox
 sync option are part of the normal Bound experience. Their existing safeguards
 remain active: account and emulator state checks, notification permission and
 per-account Jiggles choice, explicit sharing state, configured sync provider,
-and cancellation/error handling. Sync stays inactive until a supported provider
+and cancellation/error handling. Account & Sync supports Bound sign-in and sign-out
+in both UI versions, independently of the customization checkbox. Sync stays inactive until a supported provider
 is configured and selected. Existing unsupported provider selections remain
 saved without being started.
 
 Existing UI Version, button, view, ordering, Dex/Boss layout, per-ROM reference,
 fast-forward, controller, account, sync, notification, ROM, save, note and
-randomizer preferences remain intact when the old experimental preference is
-missing, false or true. The obsolete key can remain as inert legacy data.
+randomizer preferences remain intact when either experimental preference is
+missing, false or true. The obsolete key can remain as inert legacy data; the new
+checkbox changes only the visibility of interface customization controls.
+
+## Default preset and account settings validation — October 19, 2026
+
+Focused validation passed 110 integration checks, two Simulator UI checks, and
+an unsigned Release iPhone build. The checks cover unset defaults, legacy and
+explicit saved choices, customization visibility and relaunch persistence,
+the default split-button assignments, Landscape Option 7 with touch controls,
+and the Account & Sync sign-in form in both UI versions. Existing synthetic
+account tests verify sign-out clears the session and stored credentials.
+
+The separate PrototypeTests Swift package could not build because its existing
+source list omits the account social types used by BoundFriendAccount. The iOS
+integration target includes those types and passed. Physical-device behavior
+and live sign-in/sign-out services were not exercised.
 
 ## Unified Settings validation — October 17, 2026
 

@@ -23,7 +23,7 @@ final class BoundUIVersionPreferences {
     private let defaults: UserDefaults
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
     var version: BoundUIVersion {
-        get { BoundUIVersion(rawValue: defaults.integer(forKey: Self.key)) ?? .option1 }
+        get { BoundUIVersion(rawValue: defaults.integer(forKey: Self.key)) ?? .option2 }
         set {
             guard version != newValue else { return }
             defaults.set(newValue.rawValue, forKey: Self.key)
@@ -87,7 +87,7 @@ enum BoundReferenceLayout: Int, CaseIterable, Sendable {
 }
 
 enum BoundReferenceLayoutPreferences {
-    // Separate, device-local choices; keeping the existing layout is the default.
+    // Separate, device-local choices. Existing saved choices always take precedence.
     static let bossKey = "bound.delta.pip.v1.bosses.layout"
     static let dexKey = "bound.delta.pip.v1.dex.layout"
 }
@@ -125,6 +125,7 @@ final class BoundCompanionButtonPreferences {
             if let saved = defaults.object(forKey: Self.key) as? Int {
                 return BoundCompanionButtonType(rawValue: saved) ?? .option1
             }
+            guard defaults.object(forKey: Self.legacyKey) != nil else { return .option4 }
             let legacy = defaults.integer(forKey: Self.legacyKey)
             return legacy == 4 ? .option3 : BoundCompanionButtonType(rawValue: legacy) ?? .option1
         }
@@ -166,7 +167,9 @@ final class BoundPiPPreferences {
     func assignedContents(for button: Int, buttonType: BoundCompanionButtonType? = nil) -> [BoundPiPContent] {
         let type = buttonType ?? self.buttonType
         guard (0..<type.splitButtonCount).contains(button) else { return [] }
-        let fallback: [[BoundPiPContent]] = type == .option4 ? [[.friend], [.bosses]] : [[.friend], [.bosses], [.types]]
+        let fallback: [[BoundPiPContent]] = type == .option4
+            ? [[.friend], [.types, .bosses, .dex]]
+            : [[.friend], [.bosses], [.types]]
         let suffix = type == .option3 ? "button.\(button + 1).views" : "button.option4.\(button + 1).views"
         guard let saved = defaults.stringArray(forKey: key(suffix)) else { return fallback[button] }
         let selected = Set(saved.compactMap(BoundPiPContent.init(rawValue:)))
@@ -201,7 +204,7 @@ final class BoundPiPPreferences {
         defaults.set(normalized, forKey: preferenceKey)
         notifyChange()
     }
-    func enabledContents(uiVersion: BoundUIVersion = .option1) -> [BoundPiPContent] {
+    func enabledContents(uiVersion: BoundUIVersion = .option2) -> [BoundPiPContent] {
         let contents = uiVersion == .option2 ? orderedContents : BoundPiPContent.cycleOrder
         return contents.filter { isEnabled($0) }
     }

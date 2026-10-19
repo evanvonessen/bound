@@ -285,6 +285,7 @@ final class BoundCompanionCoordinator {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.layoutKey)
             UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
+            UserDefaults.standard.removeObject(forKey: BoundExperimentalSettingsPreferences.key)
             for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") || key.hasPrefix("bound.landscape.option5.") || key.hasPrefix("bound.landscape.option6.") || key.hasPrefix("bound.landscape.option7.") || key.hasPrefix("bound.landscape.controller-mode.") || key.hasPrefix("bound.landscape.controller-mode2.") { UserDefaults.standard.removeObject(forKey: key) }
         }
         #endif
@@ -1162,7 +1163,7 @@ struct BoundRetainedReferenceView<Content: View>: View {
 }
 
 struct BoundUIVersionSettings: View {
-    @AppStorage(BoundUIVersionPreferences.key) private var version = BoundUIVersion.option1
+    @AppStorage(BoundUIVersionPreferences.key) private var version = BoundUIVersion.option2
     var body: some View {
         Section {
             Picker("UI Version", selection: Binding(get: { version }, set: { BoundUIVersionPreferences().version = $0 })) {
@@ -1178,11 +1179,17 @@ struct BoundUIVersionSettings: View {
 struct BoundInterfaceSettings: View {
     @ObservedObject var model: BoundCompanionSettingsModel
     var gameplay: BoundSettingsGameplayContext? = nil
-    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
-    @AppStorage(BoundReferenceLayoutPreferences.dexKey) private var dexLayout = BoundReferenceLayout.layout1
-    @AppStorage(BoundReferenceLayoutPreferences.bossKey) private var bossLayout = BoundReferenceLayout.layout1
+    @AppStorage(BoundExperimentalSettingsPreferences.key) private var experimentalFeaturesEnabled = false
+    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option2
+    @AppStorage(BoundReferenceLayoutPreferences.dexKey) private var dexLayout = BoundReferenceLayout.layout12
+    @AppStorage(BoundReferenceLayoutPreferences.bossKey) private var bossLayout = BoundReferenceLayout.layout12
     var body: some View {
         Form {
+            Section {
+                Toggle("Enable experimental features", isOn: $experimentalFeaturesEnabled)
+                    .accessibilityIdentifier("bound.experimental-settings")
+            }
+            if experimentalFeaturesEnabled {
                     BoundUIVersionSettings()
                     BoundLandscapeOptionsSettings()
                     Section {
@@ -1239,8 +1246,9 @@ struct BoundInterfaceSettings: View {
                         layoutPicker("RR Dex", selection: $dexLayout, identifier: "bound.rrdex-layout")
                         layoutPicker("Boss View", selection: $bossLayout, identifier: "bound.boss-layout", layouts: BoundReferenceLayout.bossLayouts)
                     } header: { Text("Reference layouts") } footer: {
-                        Text("Each choice is saved separately on this device. Layout 1 is the default.")
+                        Text("Each choice is saved separately on this device. Layout 12 is the default.")
                     }
+            }
 
             BoundAppearanceSettings(includeAbout: false)
             if !BoundFeatureVisibility.simplifiedSettings {
@@ -1331,7 +1339,7 @@ private struct BoundReferenceLayoutGallery: View {
     let isBoss: Bool
     @State private var previewLayout = BoundReferenceLayout.layout1
     @Environment(\.dismiss) private var dismiss
-    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
+    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option2
 
     var body: some View {
         GeometryReader { geometry in
@@ -1524,7 +1532,7 @@ struct BoundFriendsSheet: View {
     @ObservedObject var sharing: FriendSharingSession
     @ObservedObject var onboarding: FriendOnboarding
     @ObservedObject var account: BoundFriendAccount
-    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
+    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option2
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @State private var email = ""

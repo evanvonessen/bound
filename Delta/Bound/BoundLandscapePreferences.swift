@@ -55,7 +55,7 @@ final class BoundLandscapePreferences {
 
     var option: BoundLandscapeOption {
         get {
-            guard let raw = defaults.object(forKey: key("option")) as? Int else { return .option1 }
+            guard let raw = defaults.object(forKey: key("option")) as? Int else { return .option7 }
             return BoundLandscapeOption(rawValue: raw) ?? .option1
         }
         set {

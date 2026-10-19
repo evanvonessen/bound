@@ -5,13 +5,13 @@ import XCTest
 
 final class LandscapeOptionsTests: XCTestCase {
     @MainActor
-    func testLandscapeOptionsDefaultToOptionOneAndPersistSeparately() throws {
+    func testLandscapeOptionsDefaultToOptionSevenAndPersistSeparately() throws {
         let suite = "BoundLandscapeOptions." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let preferences = BoundLandscapePreferences(defaults: defaults)
-        XCTAssertEqual(preferences.option, .option1)
+        XCTAssertEqual(preferences.option, .option7)
         XCTAssertEqual(BoundLandscapeOption.option1.title, "Option 1")
         XCTAssertEqual(preferences.referenceContents, [.notes, .types, .bosses, .dex])
         XCTAssertEqual(preferences.referenceContent, .notes)

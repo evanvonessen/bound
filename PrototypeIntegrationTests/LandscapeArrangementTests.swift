@@ -222,7 +222,7 @@ final class LandscapeArrangementTests: XCTestCase {
         let (model, defaults, namespace) = try makeModel()
         defer { defaults.removePersistentDomain(forName: namespace) }
         let preferences = BoundLandscapePreferences(defaults: defaults)
-        XCTAssertEqual(preferences.option, .option1)
+        XCTAssertEqual(preferences.option, .option7)
         preferences.option = .option2
         preferences.friendPlacement = BoundLandscapeFriendPlacement(center: CGPoint(x: 0.2, y: 0.7), widthFraction: 0.3, opacity: 0.6)
         let optionTwoPlacement = preferences.friendPlacement

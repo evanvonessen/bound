@@ -75,7 +75,7 @@ final class LandscapeCompanionTests: XCTestCase {
         let (model, defaults, suite) = try makeModel()
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = model.preferences
-        XCTAssertEqual(preferences.option, .option1)
+        XCTAssertEqual(preferences.option, .option7)
         preferences.option = .option2
         model.setActive(true)
         model.updateLayout(canvas: CGRect(x: 0, y: 0, width: 900, height: 500), occupied: [], leftShoulder: nil, keyboardHeight: 0)
