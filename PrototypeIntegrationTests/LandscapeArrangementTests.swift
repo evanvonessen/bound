@@ -216,6 +216,195 @@ final class LandscapeArrangementTests: XCTestCase {
         XCTAssertEqual(restored.placement(for: .dex), optionFourDex)
     }
 
+    func testOptionSixSharesOptionThreeNotesPlacementAcrossPagesAndRecreation() throws {
+        try assertOptionSixSnapshot(source: .notes, expectedInitialPage: .dex)
+    }
+
+    func testOptionSixSharesOptionThreeDexPlacementAcrossPagesAndRecreation() throws {
+        try assertOptionSixSnapshot(source: .dex, expectedInitialPage: .dex)
+    }
+
+    private func assertOptionSixSnapshot(source: BoundPiPContent,
+                                         expectedInitialPage: BoundPiPContent) throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([.notes, .dex, .bosses, .types])
+        model.setActive(true)
+        arrangeLayout(model)
+        model.arrange()
+        model.select(source)
+        model.move(content: source, translation: CGSize(width: -55, height: 25), ended: true)
+        model.resize(content: source, translation: CGSize(width: 24, height: 12), axis: .scale, ended: true)
+        model.setOpacity(0.43, for: source)
+        model.finish(save: true)
+        let optionThreeSource = model.placement(for: source)
+
+        model.useOption(.option6)
+        XCTAssertTrue(model.multiview)
+        XCTAssertEqual(model.contents, [.dex, .bosses, .types])
+        XCTAssertEqual(model.referenceContent, expectedInitialPage)
+        for page in model.contents { XCTAssertEqual(model.placement(for: page), optionThreeSource) }
+
+        model.setActive(true)
+        arrangeLayout(model)
+        let initialSize = model.layout.reference.size
+        model.select(.bosses)
+        XCTAssertEqual(model.layout.reference.size, initialSize)
+        model.select(.types)
+        XCTAssertEqual(model.layout.reference.size, initialSize)
+        model.arrange()
+        model.move(content: .types, translation: CGSize(width: 35, height: -18), ended: true)
+        model.resize(content: .types, translation: CGSize(width: 18, height: 9), axis: .scale, ended: true)
+        model.setOpacity(0.71, for: .types)
+        let shared = model.placement(for: .types)
+        for page in model.contents { XCTAssertEqual(model.placement(for: page), shared) }
+        model.finish(save: true)
+
+        model.useOption(.option3)
+        XCTAssertEqual(model.placement(for: source), optionThreeSource,
+                       "Option 6 edits must not change the Option 3 snapshot.")
+        let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        restored.useOption(.option6)
+        XCTAssertEqual(restored.referenceContent, .types,
+                       "Option 6 must persist its selected page independently.")
+        for page in restored.contents {
+            XCTAssertEqual(restored.placement(for: page), shared)
+            XCTAssertEqual(restored.opacity(for: page), 0.71, accuracy: 0.0001)
+        }
+    }
+
+    func testOptionSixKeepsFixedPagesWhenGloballyDisabledAndPlacesToggleOnBound() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([])
+        model.useOption(.option6)
+        XCTAssertEqual(model.contents, [.dex, .bosses, .types])
+        XCTAssertTrue(model.multiview)
+
+        model.setActive(true)
+        arrangeLayout(model)
+        XCTAssertEqual(model.layout.viewsButton.midX, 940, accuracy: 0.001)
+        XCTAssertEqual(model.layout.viewsButton.midY, 535, accuracy: 0.001)
+        XCTAssertEqual(model.layout.friendButton.midX, 60, accuracy: 0.001,
+                       "The Friend toggle remains mirrored from Menu.")
+        model.useOption(.option3)
+        XCTAssertEqual(model.contents, [], "The configured content list returns outside Option 6.")
+    }
+
+    func testOptionSevenCopiesCustomizedOptionSixAndPersistsIndependently() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([.dex, .bosses, .types, .notes])
+        model.useOption(.option6)
+        XCTAssertTrue(model.multiview)
+        model.setActive(true)
+        arrangeLayout(model)
+        model.arrange()
+        model.select(.bosses)
+        model.move(content: .bosses, translation: CGSize(width: -30, height: 18), ended: true)
+        model.setOpacity(0.46, for: .bosses)
+        model.select(.friend)
+        model.move(content: .friend, translation: CGSize(width: 24, height: -14), ended: true)
+        model.toggleFriend()
+        model.toggleReference()
+        model.finish(save: true)
+        let optionSixReference = model.placement(for: .dex)
+        let optionSixFriend = model.placement(for: .friend)
+
+        model.useOption(.option7)
+        XCTAssertTrue(model.multiview)
+        XCTAssertTrue(model.tabbedMultiview)
+        XCTAssertEqual(model.contents, [.dex, .bosses, .types])
+        XCTAssertEqual(model.referenceContent, .bosses)
+        XCTAssertEqual(model.placement(for: .types), optionSixReference)
+        XCTAssertEqual(model.placement(for: .friend), optionSixFriend)
+        XCTAssertFalse(model.friendVisible)
+        XCTAssertFalse(model.referenceVisible)
+
+        model.setActive(true)
+        arrangeLayout(model)
+        model.arrange()
+        model.select(.types)
+        model.setOpacity(0.73, for: .types)
+        let optionSevenReference = model.placement(for: .types)
+        model.finish(save: true)
+        model.useOption(.option6)
+        XCTAssertEqual(model.referenceContent, .bosses)
+        XCTAssertEqual(model.placement(for: .dex), optionSixReference)
+        XCTAssertEqual(model.opacity(for: .dex), 0.46, accuracy: 0.0001)
+
+        let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        restored.useOption(.option7)
+        XCTAssertEqual(restored.referenceContent, .types)
+        XCTAssertEqual(restored.placement(for: .bosses), optionSevenReference)
+        XCTAssertEqual(restored.opacity(for: .bosses), 0.73, accuracy: 0.0001)
+        XCTAssertEqual(restored.placement(for: .friend), optionSixFriend)
+        XCTAssertFalse(restored.friendVisible)
+        XCTAssertFalse(restored.referenceVisible)
+    }
+
+    func testOptionSevenUninitializedOptionSixUsesOptionThreeBaselineAndEnforcesHeaderHeight() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([.dex])
+        model.setActive(true)
+        arrangeLayout(model)
+        model.arrange()
+        model.select(.dex)
+        model.resize(content: .dex, translation: CGSize(width: -1000, height: -1000), axis: .scale, ended: true)
+        model.finish(save: true)
+        let tinyOptionThree = model.placement(for: .dex)
+        model.useOption(.option7)
+        model.setContents([])
+
+        XCTAssertFalse(defaults.bool(forKey: namespace + ".option6.initialized"),
+                        "Creating Option 7 must not initialize or rewrite Option 6.")
+        XCTAssertTrue(model.tabbedMultiview)
+        XCTAssertEqual(model.contents, [.dex, .bosses, .types],
+                       "Fixed Option 7 tabs remain available when global content selection is empty.")
+        XCTAssertEqual(model.placement(for: .dex), tinyOptionThree)
+
+        model.setActive(true)
+        arrangeLayout(model)
+        XCTAssertGreaterThanOrEqual(model.layout.reference.height, 154,
+                                    "The fixed tab header needs 44 points above a 110-point body.")
+        XCTAssertEqual(model.layout.viewsButton.midX, 940, accuracy: 0.001)
+        XCTAssertEqual(model.layout.viewsButton.midY, 535, accuracy: 0.001)
+        XCTAssertEqual(model.layout.friendButton.midX, 60, accuracy: 0.001)
+
+        let shortCanvas = CGRect(x: 0, y: 0, width: 1000, height: 200)
+        let menu = CGRect(x: 900, y: 20, width: 80, height: 40)
+        let bound = CGRect(x: 900, y: 150, width: 80, height: 40)
+        let bases: [BoundPiPContent: CGRect] = [
+            .friend: CGRect(x: 650, y: 35, width: 240, height: 160),
+            .dex: CGRect(x: 380, y: 30, width: 300, height: 130),
+            .bosses: CGRect(x: 390, y: 30, width: 260, height: 130),
+            .types: CGRect(x: 390, y: 30, width: 260, height: 130),
+            .notes: CGRect(x: 390, y: 30, width: 260, height: 130)
+        ]
+        model.updateLayout(canvas: shortCanvas, occupied: [menu, bound], menuFrame: menu,
+                           boundFrame: bound, defaults: bases, keyboardHeight: 50)
+        XCTAssertFalse(model.layout.reference.isEmpty,
+                       "A keyboard-reduced landscape canvas should keep the multiview visible.")
+        XCTAssertLessThanOrEqual(model.layout.reference.height, model.layout.canvas.height)
+    }
+
+    func testOptionSevenCopiesOptionSixAutoLayoutWithoutArrangement() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([.dex, .bosses, .types])
+        model.useOption(.option6)
+        model.setActive(true)
+        arrangeLayout(model)
+        let optionSixReference = model.placement(for: .dex)
+        let optionSixFriend = model.placement(for: .friend)
+
+        model.useOption(.option7)
+        XCTAssertEqual(model.placement(for: .dex), optionSixReference)
+        XCTAssertEqual(model.placement(for: .friend), optionSixFriend,
+                       "Option 7 should preserve Option 6's live auto-layout for Friend.")
+    }
+
     func testOptionFiveCornerPlacementKeepsSizeAndOpacityAndRespectsReferenceControls() throws {
         let (model, defaults, namespace) = try makeModel()
         defer { defaults.removePersistentDomain(forName: namespace) }

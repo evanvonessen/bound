@@ -66,7 +66,7 @@ struct BoundSourceAndLicenses: View {
             }
             Section("Bundled notices") {
                 NavigationLink("Software licenses") {
-                    LicensesViewController.ViewRepresentable().ignoresSafeArea(.container, edges: .top)
+                    LicensesViewController.ViewRepresentable().ignoresSafeArea(.container, edges: [.top, .horizontal])
                 }
                 ForEach(BoundSourceNotices.Document.allCases) { document in
                     NavigationLink(document.title) { BoundLicenseDocumentView(document: document) }

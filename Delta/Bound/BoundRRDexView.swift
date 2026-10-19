@@ -226,15 +226,14 @@ struct BoundRRDexView: View {
     @ViewBuilder
     private func floatingCard(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog, size: CGSize) -> some View {
         let scale = min(size.width / 360, size.height / 300)
-        if layout == .layout1 {
-            card(pokemon: pokemon, catalog: catalog)
-                .frame(width: size.width / max(scale, 0.001), height: 300).scaleEffect(scale)
-                .frame(width: size.width, height: size.height)
-        } else {
-            selectedCard(pokemon: pokemon, catalog: catalog, size: CGSize(width: size.width / max(scale, 0.001), height: 300))
-                .frame(width: size.width / max(scale, 0.001), height: 300).scaleEffect(scale)
-                .frame(width: size.width, height: size.height)
-        }
+        // Keep the existing text/sprite scale while giving the card the full
+        // resized viewport. A fixed 300-point height leaves unused space when
+        // landscape arrangement makes the panel taller without widening it.
+        let contentSize = CGSize(width: size.width / max(scale, 0.001),
+                                 height: size.height / max(scale, 0.001))
+        selectedCard(pokemon: pokemon, catalog: catalog, size: contentSize)
+            .frame(width: contentSize.width, height: contentSize.height).scaleEffect(scale)
+            .frame(width: size.width, height: size.height)
     }
 
     @ViewBuilder

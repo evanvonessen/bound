@@ -239,6 +239,7 @@ final class BoundCompanionCoordinator {
     private let landscapeCompanion = BoundLandscapeCompanionModel()
     private lazy var landscapeArrangement = BoundLandscapeArrangementModel()
     private var arrangementOpacityGesture: BoundLandscapeOpacityGesture?
+    private var multiviewSwipeGesture: BoundLandscapeMultiviewSwipeGesture?
     private var macHost: UIHostingController<BoundMacWorkspaceView>?
     private var controls: BoundCompanionCycleButton?
     private var subscriptions = Set<AnyCancellable>()
@@ -277,7 +278,7 @@ final class BoundCompanionCoordinator {
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-reset-layout") {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
-            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") || key.hasPrefix("bound.landscape.option5.") { UserDefaults.standard.removeObject(forKey: key) }
+            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") || key.hasPrefix("bound.landscape.option5.") || key.hasPrefix("bound.landscape.option6.") || key.hasPrefix("bound.landscape.option7.") { UserDefaults.standard.removeObject(forKey: key) }
         }
         #endif
         #if DEBUG
@@ -369,6 +370,7 @@ final class BoundCompanionCoordinator {
             }
             owner.addChild(host); owner.view.addSubview(overlay); overlay.addSubview(host.view); host.didMove(toParent: owner)
             self.overlay = overlay; self.host = host
+            multiviewSwipeGesture = BoundLandscapeMultiviewSwipeGesture(view: host.view, model: landscapeArrangement)
             let controls = BoundCompanionCycleButton()
             controls.cycle = { [weak self] in
                 self?.cyclePanels()
@@ -585,7 +587,7 @@ final class BoundCompanionCoordinator {
                                        width: pip.size.width, height: pip.size.height)
         }
         landscapeArrangement.updateLayout(canvas: canvas, occupied: occupied, menuFrame: menuFrame,
-            boundFrame: controls.isHidden ? .zero : controls.frame, defaults: defaults,
+            boundFrame: !controls.isHidden || landscapeArrangement.multiview ? controls.frame : .zero, defaults: defaults,
             keyboardHeight: max(0, keyboardHeight - owner.view.safeAreaInsets.bottom))
         overlay.frame = owner.view.bounds
         overlay.isHidden = false; overlay.alpha = 1
@@ -712,6 +714,9 @@ final class BoundCompanionCoordinator {
         controls.configureSegments(contents: landscapeArrangement.active ? [] : state.configuration.assignments,
                                    displayedContents: landscapeArrangement.active ? [] : state.displayedButtonContents)
         if landscapeArrangement.active {
+            // Multiview uses this same position for its X/book toggle, rendered
+            // by the arrangement overlay. Keep the measured frame for layout.
+            controls.isHidden = landscapeArrangement.multiview
             controls.accessibilityValue = landscapeArrangement.contents.isEmpty ? "No views enabled" : landscapeArrangement.referenceContent.title
             controls.accessibilityHint = "Cycles selected views, excluding Friend"
             owner.view.bringSubviewToFront(controls)

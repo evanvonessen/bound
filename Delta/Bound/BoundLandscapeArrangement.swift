@@ -97,6 +97,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     private let defaults: UserDefaults
     private let namespace: String
     private var saved: [BoundPiPContent: State] = [:]
+    private var configuredContents: [BoundPiPContent] = []
     private var persistedContents = Set<BoundPiPContent>()
     private var initializedDefaults = Set<BoundPiPContent>()
     private var defaultPlacements: [BoundPiPContent: State] = [:]
@@ -119,12 +120,17 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     var refined: Bool { option == .option4 }
     var placementShortcuts: Bool { option == .option5 }
     var focusedHandles: Bool { refined || placementShortcuts }
+    var multiview: Bool { option == .option6 || option == .option7 }
+    var tabbedMultiview: Bool { option == .option7 }
     var accessibilityPrefix: String { "bound.landscape\(option.rawValue)" }
+
+    private static let multiviewContents: [BoundPiPContent] = [.dex, .bosses, .types]
 
     init(defaults: UserDefaults? = nil, namespace: String = "bound.landscape") {
         self.defaults = defaults ?? .standard
         self.namespace = namespace
         let contents = Self.nonFriend(BoundPiPContent.cycleOrder)
+        self.configuredContents = contents
         self.contents = contents
         self.selected = contents.first ?? .notes
         self.referenceContent = contents.first ?? .notes
@@ -143,16 +149,23 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         if active { beforeSwitch?() }
         let destination = namespace + ".option\(value.rawValue)"
         if value != .option3, !defaults.bool(forKey: destination + ".initialized") {
-            let suffixes = ["friend-visible", "reference-visible", "reference-content"]
-                + BoundPiPContent.allCases.map { "placement." + $0.rawValue }
-            for suffix in suffixes {
-                if let saved = defaults.object(forKey: namespace + ".option3." + suffix) {
-                    defaults.set(saved, forKey: destination + "." + suffix)
+            if value == .option6 {
+                initializeMultiviewSnapshot(destination: destination)
+            } else if value == .option7 {
+                initializeTabbedSnapshot(destination: destination)
+            } else {
+                let suffixes = ["friend-visible", "reference-visible", "reference-content"]
+                    + BoundPiPContent.allCases.map { "placement." + $0.rawValue }
+                for suffix in suffixes {
+                    if let saved = defaults.object(forKey: namespace + ".option3." + suffix) {
+                        defaults.set(saved, forKey: destination + "." + suffix)
+                    }
                 }
+                defaults.set(true, forKey: destination + ".initialized")
             }
-            defaults.set(true, forKey: destination + ".initialized")
         }
         option = value
+        contents = value == .option6 || value == .option7 ? Self.multiviewContents : configuredContents
         editorAtTop = false
         friendVisible = defaults.object(forKey: key("friend-visible")) as? Bool ?? true
         referenceVisible = defaults.object(forKey: key("reference-visible")) as? Bool ?? true
@@ -163,13 +176,86 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         needsLayout?()
     }
 
+    private func initializeMultiviewSnapshot(destination: String) {
+        let option3 = namespace + ".option3."
+        for suffix in ["friend-visible", "reference-visible", "placement.friend"] {
+            if let value = defaults.object(forKey: option3 + suffix) {
+                defaults.set(value, forKey: destination + "." + suffix)
+            }
+        }
+
+        let allReferences = Self.nonFriend(BoundPiPContent.cycleOrder)
+        let sourceContent = Self.readContent(defaults, key: option3 + "reference-content", allowed: allReferences)
+            ?? Self.multiviewContents[0]
+        let initialPage = Self.multiviewContents.contains(sourceContent) ? sourceContent : Self.multiviewContents[0]
+        defaults.set(initialPage.rawValue, forKey: destination + ".reference-content")
+        defaults.set(sourceContent.rawValue, forKey: destination + ".reference-layout-content")
+
+        let sharedState = Self.readState(defaults, key: option3 + "placement." + sourceContent.rawValue)
+            ?? (option == .option3 ? saved[sourceContent] : nil)
+            ?? State(Self.defaultState(for: sourceContent))
+        if let data = try? JSONEncoder().encode(sharedState) {
+            defaults.set(data, forKey: destination + ".placement.reference")
+        }
+        defaults.set(true, forKey: destination + ".initialized")
+    }
+
+    private func initializeTabbedSnapshot(destination: String) {
+        let option6 = namespace + ".option6."
+        let option3 = namespace + ".option3."
+        let allowed = Self.nonFriend(BoundPiPContent.cycleOrder)
+        let option6Initialized = defaults.bool(forKey: option6 + "initialized")
+
+        let sourceContent: BoundPiPContent
+        let initialPage: BoundPiPContent
+        let sharedState: State
+        if option6Initialized {
+            sourceContent = Self.readContent(defaults, key: option6 + "reference-layout-content", allowed: allowed)
+                ?? Self.readContent(defaults, key: option6 + "reference-content", allowed: Self.multiviewContents)
+                ?? Self.multiviewContents[0]
+            initialPage = Self.readContent(defaults, key: option6 + "reference-content", allowed: Self.multiviewContents)
+                ?? Self.multiviewContents[0]
+            sharedState = (option == .option6 ? saved[.dex] : nil)
+                ?? Self.readState(defaults, key: option6 + "placement.reference")
+                ?? Self.readState(defaults, key: option3 + "placement." + sourceContent.rawValue)
+                ?? State(Self.defaultState(for: sourceContent))
+        } else {
+            sourceContent = Self.readContent(defaults, key: option3 + "reference-content", allowed: allowed)
+                ?? Self.multiviewContents[0]
+            initialPage = Self.multiviewContents.contains(sourceContent) ? sourceContent : Self.multiviewContents[0]
+            sharedState = Self.readState(defaults, key: option3 + "placement." + sourceContent.rawValue)
+                ?? (option == .option3 ? saved[sourceContent] : nil)
+                ?? State(Self.defaultState(for: sourceContent))
+        }
+
+        for suffix in ["friend-visible", "reference-visible"] {
+            let sourceKey = (option6Initialized ? option6 : option3) + suffix
+            defaults.set(defaults.object(forKey: sourceKey) as? Bool ?? true,
+                         forKey: destination + "." + suffix)
+        }
+        let friendSourceKey = (option6Initialized ? option6 : option3) + "placement.friend"
+        let friendState = Self.readState(defaults, key: friendSourceKey)
+            ?? (option == (option6Initialized ? .option6 : .option3) ? saved[.friend] : nil)
+        if let friendState, let data = try? JSONEncoder().encode(friendState) {
+            defaults.set(data, forKey: destination + ".placement.friend")
+        }
+
+        defaults.set(initialPage.rawValue, forKey: destination + ".reference-content")
+        defaults.set(sourceContent.rawValue, forKey: destination + ".reference-layout-content")
+        if let data = try? JSONEncoder().encode(sharedState) {
+            defaults.set(data, forKey: destination + ".placement.reference")
+        }
+        defaults.set(true, forKey: destination + ".initialized")
+    }
+
     private func readPlacements() {
         saved.removeAll()
         persistedContents.removeAll()
         initializedDefaults.removeAll()
         defaultPlacements.removeAll()
         for content in BoundPiPContent.allCases {
-            let placementKey = key("placement." + content.rawValue)
+            let placementKey = multiview && Self.multiviewContents.contains(content)
+                ? key("placement.reference") : key("placement." + content.rawValue)
             if let state = Self.readState(self.defaults, key: placementKey) {
                 saved[content] = state
                 persistedContents.insert(content)
@@ -187,7 +273,8 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     }
 
     func setContents(_ values: [BoundPiPContent]) {
-        let normalized = Self.nonFriend(values)
+        configuredContents = Self.nonFriend(values)
+        let normalized = multiview ? Self.multiviewContents : configuredContents
         guard contents != normalized else { return }
         let referenceWasRemoved = !normalized.contains(referenceContent)
         if referenceWasRemoved && active { beforeSwitch?() }
@@ -229,7 +316,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         let buttonSize: CGFloat = 44
         let friendCenter = CGPoint(x: insetCanvas.minX + insetCanvas.maxX - menuFrame.midX,
                                    y: menuFrame.midY)
-        let viewsCenter = CGPoint(x: insetCanvas.minX + insetCanvas.maxX - boundFrame.midX,
+        let viewsCenter = CGPoint(x: multiview ? boundFrame.midX : insetCanvas.minX + insetCanvas.maxX - boundFrame.midX,
                                   y: boundFrame.midY)
         next.friendButton = CGRect(x: friendCenter.x - buttonSize / 2, y: friendCenter.y - buttonSize / 2,
                                    width: buttonSize, height: buttonSize).intersection(insetCanvas)
@@ -255,24 +342,35 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         let availableHeight = max(100, insetCanvas.height - max(0, keyboardHeight))
         let referenceCanvas = CGRect(x: insetCanvas.minX, y: insetCanvas.minY,
                                      width: insetCanvas.width, height: min(insetCanvas.height, availableHeight))
-        let state = current[referenceContent] ?? State(Self.defaultState(for: referenceContent))
-        let base = defaultFrames[referenceContent] ?? CGRect(origin: .zero, size: defaultSize(for: referenceContent, canvas: referenceCanvas))
+        let geometryContent = multiview
+            ? Self.readContent(defaults, key: key("reference-layout-content"), allowed: Self.nonFriend(BoundPiPContent.cycleOrder)) ?? Self.multiviewContents[0]
+            : referenceContent
+        let stateContent = multiview ? Self.multiviewContents[0] : geometryContent
+        let state = current[stateContent] ?? current[referenceContent] ?? State(Self.defaultState(for: geometryContent))
+        let base = defaultFrames[geometryContent] ?? CGRect(origin: .zero, size: defaultSize(for: geometryContent, canvas: referenceCanvas))
+        let minimumReferenceHeight: CGFloat = tabbedMultiview
+            ? min(154, max(110, referenceCanvas.height)) : 110
         let desired = CGSize(width: max(160, referenceCanvas.width * state.widthFraction),
-                             height: max(110, referenceCanvas.height * state.heightFraction))
+                             height: max(minimumReferenceHeight, referenceCanvas.height * state.heightFraction))
         let initialSeparation = (!persistedContents.contains(referenceContent) && !editing) || avoidFriend
         let obstacles = occupied + (initialSeparation ? [next.friend.insetBy(dx: -4, dy: -4)] : []) + [next.friendButton.insetBy(dx: -4, dy: -4),
                                     next.viewsButton.insetBy(dx: -4, dy: -4),
                                     menuFrame.insetBy(dx: -2, dy: -2), boundFrame.insetBy(dx: -2, dy: -2)]
         next.reference = BoundLandscapeGeometry.referenceFrame(canvas: referenceCanvas,
                         preferredCenter: state.center, preferredSize: desired,
-                        occupied: obstacles, minimumSize: CGSize(width: 160, height: 110)) ??
-                        fallbackReference(base: base, canvas: referenceCanvas, occupied: obstacles)
+                        occupied: obstacles, minimumSize: CGSize(width: 160, height: minimumReferenceHeight)) ??
+                        fallbackReference(base: base, canvas: referenceCanvas, occupied: obstacles,
+                                         minimumHeight: tabbedMultiview ? minimumReferenceHeight : nil)
         if initialSeparation, !editing, !next.reference.isEmpty {
             var resolved = state
             resolved.center = BoundLandscapeGeometry.normalizedCenter(frame: next.reference, canvas: insetCanvas)
             resolved.widthFraction = next.reference.width / insetCanvas.width
             resolved.heightFraction = next.reference.height / insetCanvas.height
-            saved[referenceContent] = resolved
+            if multiview {
+                for content in Self.multiviewContents { saved[content] = resolved }
+            } else {
+                saved[referenceContent] = resolved
+            }
         }
         if layout != next { layout = next }
     }
@@ -484,7 +582,11 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     private func setDraft(_ state: State, for content: BoundPiPContent) {
         if draft == nil { draft = saved }
         objectWillChange.send()
-        draft?[content] = state
+        if multiview && content != .friend {
+            for page in Self.multiviewContents { draft?[page] = state }
+        } else {
+            draft?[content] = state
+        }
     }
     private func selectForEditing(_ content: BoundPiPContent) {
         guard selected != content else { return }
@@ -515,8 +617,10 @@ final class BoundLandscapeArrangementModel: ObservableObject {
                       y: min(max(center.y - fittedHeight / 2, canvas.minY), canvas.maxY - fittedHeight),
                       width: fittedWidth, height: fittedHeight)
     }
-    private func fallbackReference(base: CGRect, canvas: CGRect, occupied: [CGRect]) -> CGRect {
-        let size = CGSize(width: min(base.width, canvas.width), height: min(base.height, canvas.height))
+    private func fallbackReference(base: CGRect, canvas: CGRect, occupied: [CGRect],
+                                   minimumHeight: CGFloat? = nil) -> CGRect {
+        let size = CGSize(width: min(canvas.width, minimumHeight == nil ? base.width : max(160, base.width)),
+                          height: min(canvas.height, minimumHeight.map { max($0, base.height) } ?? base.height))
         let candidates = [CGPoint(x: canvas.midX, y: canvas.midY), CGPoint(x: canvas.minX + size.width/2, y: canvas.midY), CGPoint(x: canvas.maxX - size.width/2, y: canvas.midY)]
         for center in candidates {
             let rect = CGRect(x: center.x-size.width/2, y: center.y-size.height/2, width:size.width,height:size.height)
@@ -534,7 +638,9 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     }
     private func write(_ state: State, for content: BoundPiPContent) {
         guard let data = try? JSONEncoder().encode(state) else { return }
-        defaults.set(data, forKey: key("placement." + content.rawValue))
+        let suffix = multiview && Self.multiviewContents.contains(content)
+            ? "placement.reference" : "placement." + content.rawValue
+        defaults.set(data, forKey: key(suffix))
     }
     private func key(_ suffix: String) -> String { namespace + ".option\(option.rawValue)." + suffix }
     private static func readState(_ defaults: UserDefaults, key: String) -> State? {

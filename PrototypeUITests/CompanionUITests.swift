@@ -94,6 +94,52 @@ private func gamePixelSample(_ game: XCUIElement, in app: XCUIApplication) -> Da
     return rendered ? Data(rgba) : nil
 }
 
+private func settingsPixelLuminance(x normalizedX: CGFloat, in app: XCUIApplication) -> CGFloat? {
+    guard let screenshot = XCUIScreen.main.screenshot().image.cgImage else { return nil }
+    let appFrame = app.frame
+    guard appFrame.width > appFrame.height, appFrame.width > 0, appFrame.height > 0 else { return nil }
+    let width = CGFloat(screenshot.width), height = CGFloat(screenshot.height)
+    let sampleWidth: CGFloat = 0.008, sampleHeight: CGFloat = 0.012
+    let sample: CGRect
+    if screenshot.width < screenshot.height {
+        let rect = CGRect(x: normalizedX - sampleWidth / 2, y: 0.5 - sampleHeight / 2,
+                          width: sampleWidth, height: sampleHeight)
+        if XCUIDevice.shared.orientation == .landscapeRight {
+            sample = CGRect(x: rect.minY * width, y: (1 - rect.maxX) * height,
+                            width: rect.height * width, height: rect.width * height)
+        } else {
+            sample = CGRect(x: (1 - rect.maxY) * width, y: rect.minX * height,
+                            width: rect.height * width, height: rect.width * height)
+        }
+    } else {
+        sample = CGRect(x: (normalizedX - sampleWidth / 2) * width,
+                        y: (0.5 - sampleHeight / 2) * height,
+                        width: sampleWidth * width, height: sampleHeight * height)
+    }
+    let pixels = sample.integral.intersection(CGRect(x: 0, y: 0, width: width, height: height))
+    guard pixels.width > 0, pixels.height > 0, let crop = screenshot.cropping(to: pixels) else { return nil }
+    let pixelWidth = crop.width, pixelHeight = crop.height
+    var rgba = [UInt8](repeating: 0, count: pixelWidth * pixelHeight * 4)
+    let rendered = rgba.withUnsafeMutableBytes { storage -> Bool in
+        guard let base = storage.baseAddress,
+              let context = CGContext(data: base, width: pixelWidth, height: pixelHeight,
+                                      bitsPerComponent: 8, bytesPerRow: pixelWidth * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+        context.draw(crop, in: CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight))
+        return true
+    }
+    guard rendered else { return nil }
+    var luminance: Double = 0
+    for index in stride(from: 0, to: rgba.count, by: 4) {
+        let red = Double(rgba[index]) * 0.2126
+        let green = Double(rgba[index + 1]) * 0.7152
+        let blue = Double(rgba[index + 2]) * 0.0722
+        luminance += red + green + blue
+    }
+    return CGFloat(luminance / Double(pixelWidth * pixelHeight))
+}
+
 private func assertGamePixelsAnimate(_ game: XCUIElement, in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
     guard let initial = gamePixelSample(game, in: app) else {
         XCTFail("Could not capture the game view pixels", file: file, line: line)
@@ -844,6 +890,72 @@ final class CompanionUITests: XCTestCase {
 
     func testUnifiedSettingsCategoriesAndBottomContentLandscape() throws {
         try checkUnifiedSettingsCategoriesAndBottomContent(orientation: .landscapeLeft)
+    }
+
+    func testSettingsLandscapeKeepsFullWidthBackgroundAndNavigationVisible() throws {
+        defer { XCUIDevice.shared.orientation = .portrait }
+
+        let app = XCUIApplication()
+        #if DEBUG
+        app.launchArguments.append("--bound-ui-no-animations")
+        #endif
+        app.launch()
+        let settings = app.buttons["Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 15))
+        settings.tap()
+        XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
+
+        func assertLandscapeEdges(_ page: String) {
+            screenshot("Settings-edges-\(page)-\(XCUIDevice.shared.orientation.rawValue)")
+            let leftEdge = settingsPixelLuminance(x: 0.015, in: app)
+            let leftContent = settingsPixelLuminance(x: 0.08, in: app)
+            let rightEdge = settingsPixelLuminance(x: 0.985, in: app)
+            let rightContent = settingsPixelLuminance(x: 0.92, in: app)
+            XCTAssertNotNil(leftEdge, "Could not sample the left edge on \(page).")
+            XCTAssertNotNil(leftContent)
+            XCTAssertNotNil(rightEdge, "Could not sample the right edge on \(page).")
+            XCTAssertNotNil(rightContent)
+            if let leftEdge, let leftContent {
+                XCTAssertLessThan(abs(leftEdge - leftContent), 6,
+                                  "The left landscape edge should continue the settings background on \(page).")
+            }
+            if let rightEdge, let rightContent {
+                XCTAssertLessThan(abs(rightEdge - rightContent), 6,
+                                  "The right landscape edge should continue the settings background on \(page).")
+            }
+        }
+
+        func checkBackButton(_ title: String) {
+            let back = app.navigationBars[title].buttons.firstMatch
+            XCTAssertTrue(back.waitForExistence(timeout: 5), "\(title) should show its navigation back button.")
+            XCTAssertTrue(back.isHittable, "\(title)'s back button should remain tappable in landscape.")
+            assertLandscapeEdges(title)
+        }
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        waitForFrame(app.buttons["bound.settings-close"]) { _ in app.frame.width > app.frame.height }
+        assertLandscapeEdges("Settings")
+
+        element("bound.settings-audio", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Audio"].waitForExistence(timeout: 5))
+        checkBackButton("Audio")
+        app.navigationBars["Audio"].buttons.firstMatch.tap()
+
+        let about = element("bound.settings-about", in: app)
+        assertSettingsBottomContent(about, in: app, name: "Settings-edges-About-link")
+        about.tap()
+        XCTAssertTrue(app.navigationBars["About"].waitForExistence(timeout: 5))
+        checkBackButton("About")
+        XCUIDevice.shared.orientation = .landscapeRight
+        waitForFrame(app.navigationBars["About"]) { _ in app.frame.width > app.frame.height }
+        checkBackButton("About")
+        app.navigationBars["About"].buttons.firstMatch.tap()
+
+        let audio = element("bound.settings-audio", in: app)
+        assertSettingsBottomContent(audio, in: app, name: "Settings-edges-Audio-link", searchTowardTop: true)
+        audio.tap()
+        XCTAssertTrue(app.navigationBars["Audio"].waitForExistence(timeout: 5))
+        checkBackButton("Audio")
     }
 
     private func checkUnifiedSettingsCategoriesAndBottomContent(orientation: UIDeviceOrientation) throws {
@@ -3662,11 +3774,13 @@ final class CompanionUITests: XCTestCase {
                                              searchTowardTop: Bool = false) {
         let close = app.buttons["bound.settings-close"]
         XCTAssertTrue(close.waitForExistence(timeout: 5))
+        let footer = element("bound.settings-footer", in: app)
+        XCTAssertTrue(footer.waitForExistence(timeout: 5))
         for _ in 0..<30 {
             let navigationBottom = app.navigationBars.allElementsBoundByIndex
                 .filter { $0.isHittable }.map { $0.frame.maxY }.max() ?? app.frame.minY
             if target.exists && target.isHittable && target.frame.minY >= navigationBottom &&
-                target.frame.maxY <= min(app.frame.maxY, close.frame.minY) { break }
+                target.frame.maxY <= min(app.frame.maxY, footer.frame.minY) { break }
             dragSettingsContent(towardTop: target.exists ? target.frame.minY < navigationBottom : searchTowardTop, in: app)
         }
         screenshot(name)
@@ -3677,7 +3791,7 @@ final class CompanionUITests: XCTestCase {
         // Form uses different accessibility container types across OS versions.
         // Drag the visible content between its navigation bar and Done instead.
         let frame = app.frame
-        let bottom = app.buttons["bound.settings-close"].frame.minY
+        let bottom = element("bound.settings-footer", in: app).frame.minY
         let navigationBottom = app.navigationBars.allElementsBoundByIndex
             .filter { $0.frame.intersects(frame) }.map { $0.frame.maxY }.max() ?? frame.minY
         let top = min(navigationBottom, bottom - 44)
@@ -3692,11 +3806,13 @@ final class CompanionUITests: XCTestCase {
     private func assertSettingsElementAboveDone(_ target: XCUIElement, in app: XCUIApplication,
                                                  file: StaticString = #filePath, line: UInt = #line) {
         let close = app.buttons["bound.settings-close"]
+        let footer = element("bound.settings-footer", in: app)
         XCTAssertTrue(close.exists, file: file, line: line)
+        XCTAssertTrue(footer.exists, file: file, line: line)
         XCTAssertTrue(target.exists, file: file, line: line)
         XCTAssertTrue(target.isHittable, "The last Settings content must remain hittable above Done.", file: file, line: line)
         XCTAssertGreaterThanOrEqual(target.frame.minY, app.frame.minY, file: file, line: line)
-        XCTAssertLessThanOrEqual(target.frame.maxY, min(app.frame.maxY, close.frame.minY),
+        XCTAssertLessThanOrEqual(target.frame.maxY, min(app.frame.maxY, footer.frame.minY),
                                  "The last Settings content must fit entirely above the Done footer.", file: file, line: line)
     }
 
@@ -4915,6 +5031,308 @@ final class ReleaseSmokeUITests: XCTestCase {
 }
 
 extension CompanionUITests {
+    func testLandscapeOption7FixedTabsAndIndependentLayout() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) }
+        }
+        let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture",
+                                       "-bound.delta.pip.v1.dex.layout", "12",
+                                       "-bound.delta.pip.v1.bosses.layout", "12"])
+        let bound = app.buttons["bound.panel-cycle"]
+        let portraitButton = bound.frame
+        let portraitSelection = bound.value as? String
+        func chooseOption(_ number: Int) {
+            openBoundSettings(in: app)
+            let options = element("bound.landscape-options", in: app)
+            XCTAssertTrue(options.waitForExistence(timeout: 5))
+            options.tap(); app.buttons["Option \(number)"].firstMatch.tap()
+            closeBoundSheet(in: app)
+        }
+        func beginArrangement(_ prefix: String) {
+            openNativePause(in: app)
+            let arrange = app.buttons["bound.menu-arrange-views"]
+            XCTAssertTrue(arrange.waitForExistence(timeout: 5)); arrange.tap()
+            XCTAssertTrue(app.buttons[prefix + "-done"].waitForExistence(timeout: 5))
+        }
+        func assertFrame(_ actual: CGRect, matches expected: CGRect) {
+            XCTAssertEqual(actual.minX, expected.minX, accuracy: 2)
+            XCTAssertEqual(actual.minY, expected.minY, accuracy: 2)
+            XCTAssertEqual(actual.width, expected.width, accuracy: 2)
+            XCTAssertEqual(actual.height, expected.height, accuracy: 2)
+        }
+
+        chooseOption(6)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(app.buttons["bound.landscape6-views-button"].waitForExistence(timeout: 10))
+        let toggleFrame = app.buttons["bound.landscape6-views-button"].frame
+        beginArrangement("bound.landscape6")
+        let originalOption6 = element("bound.landscape6-move.dex", in: app).frame
+        let heightHandle = element("bound.landscape6-resize-height.dex", in: app)
+        let heightStart = heightHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        heightStart.press(forDuration: 0.05, thenDragTo: heightStart.withOffset(CGVector(dx: 0, dy: -12)))
+        let option6Frame = element("bound.landscape6-move.dex", in: app).frame
+        XCTAssertLessThan(option6Frame.height, originalOption6.height)
+        app.buttons["bound.landscape6-done"].tap()
+
+        chooseOption(7)
+        let prefix = "bound.landscape7"
+        let reference = element(prefix + "-reference-content", in: app)
+        let tabs = element(prefix + "-tabs", in: app)
+        let toggle = app.buttons[prefix + "-views-button"]
+        let menu = element("bound.native-menu", in: app)
+        XCTAssertTrue(tabs.waitForExistence(timeout: 10))
+        XCTAssertTrue(bound.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(toggle.label, "Hide multiview")
+        assertFrame(toggle.frame, matches: toggleFrame)
+        XCTAssertGreaterThan(toggle.frame.midY, menu.frame.midY)
+        let tabFrame = tabs.frame
+        let bodyFrame = reference.frame
+        XCTAssertEqual(tabFrame.height, 44, accuracy: 1)
+        XCTAssertEqual(bodyFrame.minY, tabFrame.maxY, accuracy: 1)
+        assertFrame(tabFrame.union(bodyFrame), matches: option6Frame)
+        for (id, title) in [("dex", "DEX"), ("bosses", "DOCS"), ("types", "TYPES")] {
+            let tab = app.buttons[prefix + "-tab-" + id]
+            XCTAssertEqual(tab.label, title)
+            XCTAssertTrue(tab.isHittable)
+            XCTAssertGreaterThanOrEqual(tab.frame.width, 44)
+            XCTAssertEqual(tab.frame.height, 44, accuracy: 1)
+        }
+        func chooseTab(_ id: String, title: String, identifier: String) {
+            let tab = app.buttons[prefix + "-tab-" + id]
+            tab.tap()
+            XCTAssertEqual(reference.value as? String, title)
+            XCTAssertTrue(tab.isSelected)
+            XCTAssertTrue(element(identifier, in: app).waitForExistence(timeout: 5))
+            assertFrame(tabs.frame, matches: tabFrame)
+            assertFrame(reference.frame, matches: bodyFrame)
+        }
+
+        chooseTab("dex", title: "RR Dex", identifier: "bound.rrdex")
+        reference.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.8))
+            .press(forDuration: 0.05,
+                   thenDragTo: reference.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.8)),
+                   withVelocity: .slow, thenHoldForDuration: 0.1)
+        XCTAssertEqual(reference.value as? String, "RR Dex", "Option 7 uses tabs instead of page swipes.")
+        screenshot("Landscape-option7-DEX-tabs")
+        chooseTab("bosses", title: "Bosses", identifier: "bound.boss-guide")
+        let bossDetails = app.scrollViews["bound.boss-details"]
+        XCTAssertTrue(bossDetails.waitForExistence(timeout: 5))
+        let move = app.staticTexts["bound.boss-move-0"]
+        let moveBeforeScroll = move.frame
+        bossDetails.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.8))
+            .press(forDuration: 0.05,
+                   thenDragTo: bossDetails.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.3)),
+                   withVelocity: .slow, thenHoldForDuration: 0.1)
+        XCTAssertLessThan(move.frame.minY, moveBeforeScroll.minY - 5)
+        assertFrame(tabs.frame, matches: tabFrame)
+        XCTAssertTrue(app.buttons[prefix + "-tab-bosses"].isSelected)
+        screenshot("Landscape-option7-DOCS-fixed-tabs-after-scroll")
+        chooseTab("types", title: "Types", identifier: "bound.type-chart")
+        screenshot("Landscape-option7-TYPES-tabs")
+        toggle.tap()
+        XCTAssertTrue(tabs.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(reference.exists)
+        XCTAssertEqual(toggle.label, "Show multiview")
+        XCTAssertTrue(element(prefix + "-friend", in: app).exists)
+        toggle.tap()
+        XCTAssertTrue(tabs.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons[prefix + "-tab-types"].isSelected)
+        assertFrame(tabs.frame.union(reference.frame), matches: option6Frame)
+
+        beginArrangement(prefix)
+        let widthHandle = element(prefix + "-resize-width.types", in: app)
+        let widthStart = widthHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        widthStart.press(forDuration: 0.05, thenDragTo: widthStart.withOffset(CGVector(dx: -20, dy: 0)))
+        let option7Frame = element(prefix + "-move.types", in: app).frame
+        XCTAssertLessThan(option7Frame.width, option6Frame.width)
+        app.buttons[prefix + "-done"].tap()
+        chooseOption(6)
+        XCTAssertFalse(tabs.exists)
+        beginArrangement("bound.landscape6")
+        assertFrame(element("bound.landscape6-move.dex", in: app).frame, matches: option6Frame)
+        app.buttons["bound.landscape6-done"].tap()
+        chooseOption(7)
+        XCTAssertTrue(tabs.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons[prefix + "-tab-types"].isSelected)
+        // Hidden retained reference pages keep their old viewport. Their AX
+        // union can exceed the visible frame after resizing another page.
+        assertFrame(tabs.frame, matches: CGRect(x: option7Frame.minX, y: option7Frame.minY,
+                                               width: option7Frame.width, height: 44))
+        beginArrangement(prefix)
+        assertFrame(element(prefix + "-move.types", in: app).frame, matches: option7Frame)
+        app.buttons[prefix + "-done"].tap()
+        assertGamePixelsAnimate(element("bound.game-screen", in: app), in: app)
+
+        XCUIDevice.shared.orientation = .landscapeRight
+        XCTAssertTrue(tabs.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons[prefix + "-tab-dex"].isHittable)
+        XCTAssertTrue(app.buttons[prefix + "-tab-bosses"].isHittable)
+        XCTAssertTrue(app.buttons[prefix + "-tab-types"].isHittable)
+        XCTAssertGreaterThan(toggle.frame.midX, app.frame.midX)
+        XCTAssertGreaterThan(toggle.frame.midY, menu.frame.midY)
+        screenshot("Landscape-option7-opposite-orientation")
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(bound.waitForExistence(timeout: 10))
+        XCTAssertFalse(tabs.exists)
+        XCTAssertFalse(toggle.exists)
+        XCTAssertEqual(bound.value as? String, portraitSelection)
+        assertFrame(bound.frame, matches: portraitButton)
+    }
+
+    func testLandscapeOption6MultiviewSwipesToggleAndPortraitRestoration() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) }
+        }
+        let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture",
+                                       "-bound.delta.pip.v1.dex.layout", "12",
+                                       "-bound.delta.pip.v1.bosses.layout", "12"])
+        let bound = app.buttons["bound.panel-cycle"]
+        let portraitButton = bound.frame
+        let portraitSelection = bound.value as? String
+        func chooseOption(_ number: Int) {
+            openBoundSettings(in: app)
+            let options = element("bound.landscape-options", in: app)
+            XCTAssertTrue(options.waitForExistence(timeout: 5))
+            options.tap(); app.buttons["Option \(number)"].firstMatch.tap()
+            closeBoundSheet(in: app)
+        }
+        func beginArrangement(_ prefix: String) {
+            openNativePause(in: app)
+            let arrange = app.buttons["bound.menu-arrange-views"]
+            XCTAssertTrue(arrange.waitForExistence(timeout: 5)); arrange.tap()
+            XCTAssertTrue(app.buttons[prefix + "-done"].waitForExistence(timeout: 5))
+        }
+        func assertFrame(_ actual: CGRect, matches expected: CGRect) {
+            XCTAssertEqual(actual.minX, expected.minX, accuracy: 2)
+            XCTAssertEqual(actual.minY, expected.minY, accuracy: 2)
+            XCTAssertEqual(actual.width, expected.width, accuracy: 2)
+            XCTAssertEqual(actual.height, expected.height, accuracy: 2)
+        }
+
+        chooseOption(3)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(app.buttons["bound.landscape3-views-button"].waitForExistence(timeout: 10))
+        selectCompanion("RR Dex", in: app)
+        let boundSlot = bound.frame
+        beginArrangement("bound.landscape3")
+        let originalOption3 = element("bound.landscape3-move.dex", in: app).frame
+        let heightHandle = element("bound.landscape3-resize-height.dex", in: app)
+        let heightStart = heightHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        heightStart.press(forDuration: 0.05, thenDragTo: heightStart.withOffset(CGVector(dx: 0, dy: -24)))
+        let option3Frame = element("bound.landscape3-move.dex", in: app).frame
+        XCTAssertLessThan(option3Frame.height, originalOption3.height,
+                          "Option 6 must copy a customized Option 3 layout.")
+        app.buttons["bound.landscape3-done"].tap()
+
+        chooseOption(6)
+        let prefix = "bound.landscape6"
+        let reference = element(prefix + "-reference-content", in: app)
+        let toggle = app.buttons[prefix + "-views-button"]
+        let menu = element("bound.native-menu", in: app)
+        XCTAssertTrue(reference.waitForExistence(timeout: 10))
+        XCTAssertEqual(reference.value as? String, "RR Dex")
+        XCTAssertTrue(bound.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(toggle.label, "Hide multiview")
+        XCTAssertEqual(toggle.frame.midX, boundSlot.midX, accuracy: 2)
+        XCTAssertEqual(toggle.frame.midY, boundSlot.midY, accuracy: 2)
+        XCTAssertGreaterThan(toggle.frame.midX, app.frame.midX)
+        XCTAssertGreaterThan(toggle.frame.midY, menu.frame.midY)
+
+        beginArrangement(prefix)
+        assertFrame(element(prefix + "-move.dex", in: app).frame, matches: option3Frame)
+        app.buttons[prefix + "-done"].tap()
+        let sharedFrame = reference.frame
+        func swipe(left: Bool, to title: String, identifier: String) {
+            let start = reference.coordinate(withNormalizedOffset: CGVector(dx: left ? 0.85 : 0.15, dy: 0.8))
+            let end = reference.coordinate(withNormalizedOffset: CGVector(dx: left ? 0.15 : 0.85, dy: 0.8))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+            waitForFrame(reference) { _ in reference.value as? String == title }
+            XCTAssertTrue(element(identifier, in: app).waitForExistence(timeout: 5))
+            assertFrame(reference.frame, matches: sharedFrame)
+        }
+        swipe(left: true, to: "Bosses", identifier: "bound.boss-guide")
+        app.buttons["bound.boss-picker"].tap()
+        let bossSearch = app.searchFields.firstMatch
+        XCTAssertTrue(bossSearch.waitForExistence(timeout: 5))
+        bossSearch.tap(); bossSearch.typeText("Brock")
+        app.buttons["bound.boss-select-kanto-leaders-4"].tap()
+        XCTAssertTrue(bossSearch.waitForNonExistence(timeout: 5))
+        let teamStrip = element("bound.boss-team-strip", in: app)
+        XCTAssertTrue(teamStrip.waitForExistence(timeout: 5))
+        let firstMember = app.buttons["bound.boss-team-member-0"]
+        let memberBeforeScroll = firstMember.frame
+        teamStrip.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+            .press(forDuration: 0.05,
+                   thenDragTo: teamStrip.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)),
+                   withVelocity: .slow, thenHoldForDuration: 0.1)
+        XCTAssertEqual(reference.value as? String, "Bosses",
+                       "Scrolling a horizontal list must not switch multiview pages.")
+        XCTAssertLessThan(firstMember.frame.minX, memberBeforeScroll.minX - 5)
+        swipe(left: true, to: "Types", identifier: "bound.type-chart")
+        swipe(left: false, to: "Bosses", identifier: "bound.boss-guide")
+        swipe(left: false, to: "RR Dex", identifier: "bound.rrdex")
+        screenshot("Landscape-option6-multiview-visible")
+        toggle.tap()
+        XCTAssertTrue(reference.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(toggle.label, "Show multiview")
+        XCTAssertEqual(toggle.value as? String, "Hidden")
+        XCTAssertTrue(element(prefix + "-friend", in: app).exists)
+        screenshot("Landscape-option6-multiview-hidden-book")
+        toggle.tap()
+        XCTAssertTrue(reference.waitForExistence(timeout: 5))
+        XCTAssertEqual(reference.value as? String, "RR Dex")
+        assertFrame(reference.frame, matches: sharedFrame)
+
+        // Edits belong to the shared Option 6 panel, independently of Option 3.
+        beginArrangement(prefix)
+        let move = element(prefix + "-move.dex", in: app)
+        let handle = element(prefix + "-resize-width.dex", in: app)
+        let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: -20, dy: 0)))
+        let option6Frame = move.frame
+        XCTAssertLessThan(option6Frame.width, option3Frame.width)
+        app.buttons[prefix + "-done"].tap()
+        chooseOption(3)
+        XCTAssertTrue(bound.waitForExistence(timeout: 5))
+        beginArrangement("bound.landscape3")
+        assertFrame(element("bound.landscape3-move.dex", in: app).frame, matches: option3Frame)
+        app.buttons["bound.landscape3-done"].tap()
+        chooseOption(6)
+        beginArrangement(prefix)
+        assertFrame(element(prefix + "-move.dex", in: app).frame, matches: option6Frame)
+        app.buttons[prefix + "-done"].tap()
+        assertGamePixelsAnimate(element("bound.game-screen", in: app), in: app)
+
+        XCUIDevice.shared.orientation = .landscapeRight
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertFalse(bound.exists)
+        XCTAssertGreaterThan(toggle.frame.midX, app.frame.midX)
+        XCTAssertGreaterThan(toggle.frame.midY, menu.frame.midY)
+        screenshot("Landscape-option6-opposite-orientation")
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(bound.waitForExistence(timeout: 10))
+        XCTAssertFalse(toggle.exists)
+        XCTAssertFalse(reference.exists)
+        XCTAssertEqual(bound.value as? String, portraitSelection)
+        assertFrame(bound.frame, matches: portraitButton)
+    }
+
     func testLandscapeOption3ArrangementGesturesAndIndependentViews() throws {
         try verifyLandscapeArrangement(option: 3)
     }
@@ -4925,6 +5343,96 @@ extension CompanionUITests {
 
     func testLandscapeOption5CornerPlacementAndIndependentViews() throws {
         try verifyLandscapeArrangement(option: 5)
+    }
+
+    func testLandscapeRRDexHeightResizeFillsContent() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originalImplementations: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originalImplementations.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer {
+            for (method, original) in originalImplementations {
+                imp_removeBlock(method_setImplementation(method, original))
+            }
+        }
+
+        let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture",
+                                       "-bound.delta.pip.v1.dex.layout", "12"])
+        openBoundSettings(in: app)
+        let options = element("bound.landscape-options", in: app)
+        XCTAssertTrue(options.waitForExistence(timeout: 5))
+        options.tap()
+        app.buttons["Option 5"].firstMatch.tap()
+        closeBoundSheet(in: app)
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let prefix = "bound.landscape5"
+        let arrangeTile = app.buttons["bound.menu-arrange-views"]
+        openNativePause(in: app)
+        XCTAssertTrue(arrangeTile.waitForExistence(timeout: 10))
+        arrangeTile.tap()
+        XCTAssertTrue(app.buttons[prefix + "-done"].waitForExistence(timeout: 10))
+        app.buttons[prefix + "-choose-view"].tap()
+        app.buttons[prefix + "-select.dex"].tap()
+
+        let moveDex = element(prefix + "-move.dex", in: app)
+        let widthHandle = element(prefix + "-resize-width.dex", in: app)
+        let heightHandle = element(prefix + "-resize-height.dex", in: app)
+        XCTAssertTrue(moveDex.waitForExistence(timeout: 5))
+        let widthStart = widthHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        widthStart.press(forDuration: 0.1, thenDragTo: widthStart.withOffset(CGVector(dx: -220, dy: 0)))
+        let heightStart = heightHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        heightStart.press(forDuration: 0.1, thenDragTo: heightStart.withOffset(CGVector(dx: 0, dy: -180)))
+        let minimumHeightHandle = element(prefix + "-resize-height.dex", in: app)
+        let minimumHeightStart = minimumHeightHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        minimumHeightStart.press(forDuration: 0.1, thenDragTo: minimumHeightStart.withOffset(CGVector(dx: 0, dy: 40)))
+        app.buttons[prefix + "-done"].tap()
+        XCTAssertTrue(app.buttons[prefix + "-done"].waitForNonExistence(timeout: 5))
+        screenshot("Landscape-option5-rrdex-height-baseline")
+
+        let details = app.scrollViews["bound.rrdex-layout12-details"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        let minimumDetailsHeight = details.frame.height
+        XCTAssertGreaterThan(minimumDetailsHeight, 0)
+
+        openNativePause(in: app)
+        XCTAssertTrue(arrangeTile.waitForExistence(timeout: 5))
+        arrangeTile.tap()
+        XCTAssertTrue(app.buttons[prefix + "-done"].waitForExistence(timeout: 10))
+        app.buttons[prefix + "-choose-view"].tap()
+        app.buttons[prefix + "-select.dex"].tap()
+        let currentHeightHandle = element(prefix + "-resize-height.dex", in: app)
+        let beforeGrow = moveDex.frame.size
+        let growStart = currentHeightHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        growStart.press(forDuration: 0.1, thenDragTo: growStart.withOffset(CGVector(dx: 0, dy: 60)))
+        let outerHeightDelta = moveDex.frame.height - beforeGrow.height
+        XCTAssertEqual(moveDex.frame.width, beforeGrow.width, accuracy: 2,
+                       "A pure height resize must leave the RR Dex panel width unchanged")
+        XCTAssertGreaterThan(outerHeightDelta, 30,
+                             "The outer RR Dex panel must grow from its saved minimum height")
+        let resizedFrame = moveDex.frame
+        app.buttons[prefix + "-done"].tap()
+        XCTAssertTrue(app.buttons[prefix + "-done"].waitForNonExistence(timeout: 5))
+        XCTAssertEqual(details.frame.height - minimumDetailsHeight, outerHeightDelta, accuracy: 3,
+                        "The visible RR Dex details viewport must track the panel's height increase")
+        screenshot("Landscape-option5-rrdex-height-resized")
+
+        let bound = app.buttons["bound.panel-cycle"]
+        for _ in 0..<5 where bound.value as? String != "Notes" { bound.tap() }
+        XCTAssertEqual(bound.value as? String, "Notes")
+        for _ in 0..<5 where bound.value as? String != "RR Dex" { bound.tap() }
+        XCTAssertEqual(bound.value as? String, "RR Dex")
+        // The native drag target measures the panel itself; the accessibility
+        // container can include offscreen descendants from the detail scroller.
+        openNativePause(in: app)
+        XCTAssertTrue(arrangeTile.waitForExistence(timeout: 5))
+        arrangeTile.tap()
+        XCTAssertTrue(moveDex.waitForExistence(timeout: 5))
+        XCTAssertEqual(moveDex.frame, resizedFrame, "The resized RR Dex frame must persist when cycling away and back")
+        app.buttons[prefix + "-done"].tap()
     }
 
     private func verifyLandscapeArrangement(option: Int) throws {

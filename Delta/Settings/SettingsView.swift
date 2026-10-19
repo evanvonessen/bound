@@ -163,6 +163,9 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
+            // NavigationStack draws its bars and backgrounds into the side safe
+            // areas. Include those areas in its clipping bounds in landscape.
+            .ignoresSafeArea(.container, edges: .horizontal)
             // Reserve real layout space for Done. UIKit destinations that ignore
             // safe areas must still end above the footer, including after rotation.
             HStack {
@@ -174,6 +177,8 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 16)
             .background(.bar)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("bound.settings-footer")
         }
     }
 }
@@ -327,7 +332,7 @@ private struct DeltaSyncSettingsSection: View
         Section {
             NavigationLink {
                 SyncingServicesViewController.ViewRepresentable()
-                    .ignoresSafeArea(.container, edges: .top)
+                    .ignoresSafeArea(.container, edges: [.top, .horizontal])
             } label: {
                 SettingsRow(label: Text("Delta Sync"), systemImage: "arrow.triangle.2.circlepath", color: .indigo) {
                     if let name = syncingServiceName {
@@ -341,7 +346,7 @@ private struct DeltaSyncSettingsSection: View
             {
                 NavigationLink {
                     SyncStatusViewController.ViewRepresentable()
-                        .ignoresSafeArea(.container, edges: .top)
+                        .ignoresSafeArea(.container, edges: [.top, .horizontal])
                 } label: {
                     SettingsRow(label: Text("Sync Status"), systemImage: "checkmark.icloud", color: .indigo) {
                         if syncConflictsCount > 0
@@ -397,7 +402,7 @@ private struct PatreonSection: View
             Section {
                 NavigationLink {
                     PatreonViewController.ViewRepresentable()
-                        .ignoresSafeArea(.container, edges: .top)
+                        .ignoresSafeArea(.container, edges: [.top, .horizontal])
                 } label: {
                     SettingsRow(
                         label: Text(PurchaseManager.shared.isActivePatron
@@ -422,7 +427,7 @@ private struct DisplaySection: View
             NavigationLink {
                 AltAppIconsViewController.ViewRepresentable()
                     .navigationBarTitleDisplayMode(.large)
-                    .ignoresSafeArea(.container, edges: .top)
+                    .ignoresSafeArea(.container, edges: [.top, .horizontal])
             } label: {
                 SettingsRow(label: Text("App Icon"), systemImage: "square.grid.2x2", color: .blue)
             }
@@ -475,7 +480,7 @@ private struct CreditsSection: View
 
             NavigationLink {
                 LicensesViewController.ViewRepresentable()
-                    .ignoresSafeArea(.container, edges: .top)
+                    .ignoresSafeArea(.container, edges: [.top, .horizontal])
             } label: {
                 Text("Software Licenses")
             }

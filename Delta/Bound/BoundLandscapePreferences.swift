@@ -7,8 +7,10 @@ enum BoundLandscapeOption: Int, CaseIterable, Sendable {
     case option3 = 3
     case option4 = 4
     case option5 = 5
+    case option6 = 6
+    case option7 = 7
 
-    var supportsArrangement: Bool { self == .option3 || self == .option4 || self == .option5 }
+    var supportsArrangement: Bool { self == .option3 || self == .option4 || self == .option5 || self == .option6 || self == .option7 }
 
     var title: String { "Option \(rawValue)" }
 }

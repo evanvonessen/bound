@@ -3,6 +3,10 @@ import UIKit
 
 struct BoundLandscapeArrangementOverlay: View {
     @ObservedObject var model: BoundLandscapeArrangementModel
+    private var multiview: Bool { model.multiview }
+    private func title(for content: BoundPiPContent) -> String {
+        multiview && content != .friend ? "Multiview" : content.title
+    }
     var body: some View {
         ZStack(alignment: .topLeading) {
             if model.editing {
@@ -35,16 +39,18 @@ struct BoundLandscapeArrangementOverlay: View {
                 .disabled(model.editing)
                 .placed(model.layout.friendButton).zIndex(3)
             Button(action: model.toggleReference) {
-                if model.placementShortcuts {
+                if multiview {
+                    Image(systemName: model.referenceVisible ? "xmark" : "book")
+                } else if model.placementShortcuts {
                     Text("VIEWS").font(.system(size: 10, weight: .heavy))
                 } else {
                     Image(systemName: model.refined ? (model.referenceVisible ? "eye" : "eye.slash") : "xmark")
                 }
             }
                 .buttonStyle(ArrangementButtonStyle(selected: model.referenceVisible))
-                .accessibilityLabel(model.focusedHandles ? (model.referenceVisible ? "Hide views" : "Show views") : "Toggle views")
+                .accessibilityLabel(multiview ? (model.referenceVisible ? "Hide multiview" : "Show multiview") : model.focusedHandles ? (model.referenceVisible ? "Hide views" : "Show views") : "Toggle views")
                 .accessibilityValue(model.referenceVisible ? "Visible" : "Hidden")
-                .accessibilityHint("Shows or hides the selected reference view. Bound changes the selection.")
+                .accessibilityHint(model.option == .option7 ? "Shows or hides Multiview. Use the DEX, DOCS, and TYPES tabs to switch views." : multiview ? "Shows or hides Multiview. Swipe left or right inside it to switch views." : "Shows or hides the selected reference view. Bound changes the selection.")
                 .accessibilityIdentifier(model.accessibilityPrefix + "-views-button")
                 .disabled(model.editing || model.contents.isEmpty)
                 .placed(model.layout.viewsButton).zIndex(3)
@@ -57,23 +63,23 @@ struct BoundLandscapeArrangementOverlay: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(selected ? Color.purple : Color.white.opacity(model.focusedHandles ? 0.5 : 1), lineWidth: selected ? 3 : 1.5)
                 .allowsHitTesting(false)
-            ArrangementDragTarget(identifier: model.accessibilityPrefix + "-move.\(content.rawValue)", label: "Move \(content.title)",
+            ArrangementDragTarget(identifier: model.accessibilityPrefix + "-move.\(content.rawValue)", label: "Move \(title(for: content))",
                                   select: { model.select(content) }, cancelled: model.cancelManipulation) {
                 model.move(content: content, translation: $0, ended: $1)
             }
         }
             .overlay(alignment: .topLeading) {
-                Text(content.title).font(.caption.weight(.semibold))
+                Text(title(for: content)).font(.caption.weight(.semibold))
                     .padding(.horizontal, 8).padding(.vertical, 5)
                     .background(.regularMaterial, in: Capsule()).padding(5).allowsHitTesting(false)
             }
             .overlay(alignment: .trailing) {
-                if (!model.focusedHandles || selected) && (content == .bosses || content == .dex) {
+                if (!model.focusedHandles || selected) && (content == .bosses || content == .dex || (multiview && content != .friend)) {
                     resizeHandle(content, axis: .width, symbol: "arrow.left.and.right", name: "width")
                 }
             }
             .overlay(alignment: .bottom) {
-                if (!model.focusedHandles || selected) && (content == .bosses || content == .dex) {
+                if (!model.focusedHandles || selected) && (content == .bosses || content == .dex || (multiview && content != .friend)) {
                     resizeHandle(content, axis: .height, symbol: "arrow.up.and.down", name: "height")
                 }
             }
@@ -91,7 +97,7 @@ struct BoundLandscapeArrangementOverlay: View {
             .background(model.focusedHandles ? Color(uiColor: .deltaPurple).opacity(0.9) : Color.purple, in: RoundedRectangle(cornerRadius: 9))
             .overlay {
                 ArrangementDragTarget(identifier: model.accessibilityPrefix + "-resize-\(name).\(content.rawValue)",
-                                      label: "Resize \(content.title) \(name)", select: { model.select(content) },
+                                      label: "Resize \(title(for: content)) \(name)", select: { model.select(content) },
                                       cancelled: model.cancelManipulation) {
                     model.resize(content: content, translation: $0, axis: axis, ended: $1)
                 }
@@ -110,7 +116,7 @@ struct BoundLandscapeArrangementOverlay: View {
                 Text("Opacity").font(.caption)
                 Slider(value: Binding(get: { model.opacity(for: model.selected) },
                                       set: { model.setOpacity($0, for: model.selected) }), in: 0...1)
-                    .accessibilityLabel("\(model.selected.title) opacity")
+                    .accessibilityLabel("\(title(for: model.selected)) opacity")
                     .accessibilityIdentifier(model.accessibilityPrefix + "-opacity")
                 Text("\(Int((model.opacity(for: model.selected) * 100).rounded()))%")
                     .font(.caption.monospacedDigit()).frame(width: 35, alignment: .trailing)
@@ -230,7 +236,7 @@ struct BoundLandscapeArrangementOverlay: View {
 
     private func selection(_ content: BoundPiPContent) -> some View {
         Button { model.select(content) } label: {
-            Text(content.title).fontWeight(model.selected == content ? .bold : .regular)
+            Text(title(for: content)).fontWeight(model.selected == content ? .bold : .regular)
                 .padding(.horizontal, 7).padding(.vertical, 3)
                 .frame(minHeight: model.refined ? 36 : nil)
                 .background(model.selected == content ? Color.purple.opacity(0.22) : Color.clear, in: Capsule())

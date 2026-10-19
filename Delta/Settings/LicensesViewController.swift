@@ -62,8 +62,10 @@ class LicensesViewController: UIViewController
     {
         super.viewDidLayoutSubviews()
         
-        self.textView.textContainerInset.left = self.view.layoutMargins.left
-        self.textView.textContainerInset.right = self.view.layoutMargins.right
+        // The text view already starts inside the safe area. Apply only the
+        // remaining margin so landscape does not count the side insets twice.
+        self.textView.textContainerInset.left = max(0, self.view.layoutMargins.left - self.textView.frame.minX)
+        self.textView.textContainerInset.right = max(0, self.view.layoutMargins.right - (self.view.bounds.maxX - self.textView.frame.maxX))
         self.textView.textContainer.lineFragmentPadding = 0
         
         if !_didAppear

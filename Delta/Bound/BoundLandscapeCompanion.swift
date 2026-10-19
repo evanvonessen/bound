@@ -2,6 +2,72 @@ import SwiftUI
 import UIKit
 import Combine
 
+@MainActor
+final class BoundLandscapeMultiviewSwipeGesture: NSObject, UIGestureRecognizerDelegate {
+    private weak var view: UIView?
+    private weak var model: BoundLandscapeArrangementModel?
+    private lazy var recognizer: UIPanGestureRecognizer = {
+        let recognizer = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        recognizer.delegate = self
+        recognizer.minimumNumberOfTouches = 1
+        recognizer.maximumNumberOfTouches = 1
+        return recognizer
+    }()
+
+    init(view: UIView, model: BoundLandscapeArrangementModel) {
+        self.view = view
+        self.model = model
+        super.init()
+        view.addGestureRecognizer(recognizer)
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        guard let view, let model, model.active, model.option == .option6,
+              model.referenceVisible, !model.editing,
+              model.layout.reference.contains(touch.location(in: view)) else { return false }
+
+        var ancestor = touch.view
+        while let candidate = ancestor, candidate !== view {
+            if let scrollView = candidate as? UIScrollView, scrollView.isScrollEnabled,
+               scrollView.alwaysBounceHorizontal ||
+                scrollView.contentSize.width + scrollView.adjustedContentInset.left + scrollView.adjustedContentInset.right > scrollView.bounds.width + 0.5 {
+                return false
+            }
+            ancestor = candidate.superview
+        }
+        return true
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer, let view else { return false }
+        let velocity = pan.velocity(in: view)
+        return abs(velocity.x) > 20 && abs(velocity.x) > abs(velocity.y) * 1.5
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let scrollView = otherGestureRecognizer.view as? UIScrollView,
+              otherGestureRecognizer === scrollView.panGestureRecognizer,
+              scrollView.isScrollEnabled else { return false }
+        let verticallyScrollable = scrollView.alwaysBounceVertical ||
+            scrollView.contentSize.height + scrollView.adjustedContentInset.top + scrollView.adjustedContentInset.bottom > scrollView.bounds.height + 0.5
+        let horizontallyScrollable = scrollView.alwaysBounceHorizontal ||
+            scrollView.contentSize.width + scrollView.adjustedContentInset.left + scrollView.adjustedContentInset.right > scrollView.bounds.width + 0.5
+        return verticallyScrollable && !horizontallyScrollable
+    }
+
+    @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
+        guard recognizer.state == .ended, let view, let model,
+              model.active, model.option == .option6, model.referenceVisible, !model.editing else { return }
+        let translation = recognizer.translation(in: view)
+        guard abs(translation.x) > 40, abs(translation.x) > abs(translation.y) * 1.5,
+              let index = model.contents.firstIndex(of: model.referenceContent) else { return }
+        let destination = index + (translation.x < 0 ? 1 : -1)
+        guard model.contents.indices.contains(destination) else { return }
+        model.select(model.contents[destination])
+    }
+}
+
 /// Option 2 owns its presentation state; the original panel selection, gestures,
 /// and placement preferences remain available unchanged when returning to Option 1.
 @MainActor
@@ -211,12 +277,13 @@ struct BoundCompanionPresentation: View {
     private var showsReference: Bool {
         landscape.referenceVisible && !landscape.referenceContents.isEmpty && !landscape.layout.reference.isEmpty
     }
+    private var usesMultiviewTabs: Bool { arrangement.active && arrangement.option == .option7 }
     var body: some View {
         GeometryReader { geometry in
             let legacyFrame = CGRect(origin: .zero, size: geometry.size)
             let friendFrame = arrangement.active ? arrangement.layout.friend : landscape.active ? landscape.layout.friend : legacyFrame
             let reference = arrangement.active ? arrangement.layout.reference : landscape.active ? landscape.layout.reference : legacyFrame
-            let headerHeight: CGFloat = landscape.active ? 32 : 0
+            let headerHeight: CGFloat = usesMultiviewTabs ? 44 : landscape.active ? 32 : 0
             ZStack(alignment: .topLeading) {
                 friendVideo
                     .frame(width: max(0, friendFrame.width), height: max(0, friendFrame.height))
@@ -240,17 +307,39 @@ struct BoundCompanionPresentation: View {
                         .offset(x: friendFrame.minX, y: friendFrame.minY)
                 }
 
-                BoundCompanionPanel(sharing: sharing, state: state, gameID: gameID,
-                    editingChanged: editingChanged, textEditingChanged: textEditingChanged, currentSave: currentSave,
-                    contentOverride: arrangement.active ? arrangement.referenceContent : landscape.active ? landscape.referenceContent : nil,
-                    presentationEnabled: arrangement.active ? showsArrangementReference : !landscape.active || showsReference, rendersFriend: false)
-                    .frame(width: max(0, reference.width), height: max(0, reference.height - headerHeight))
-                    .opacity(arrangement.active ? (showsArrangementReference ? arrangement.opacity(for: arrangement.referenceContent) : 0) : landscape.active ? (showsReference ? (landscape.editing ? 0.35 : 1) : 0) : (legacyFriend ? 0 : 1))
-                    .allowsHitTesting(arrangement.active ? showsArrangementReference && !arrangement.editing : landscape.active ? showsReference && !landscape.editing : !legacyFriend)
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier(arrangement.active ? (showsArrangementReference && !arrangement.editing ? arrangement.accessibilityPrefix + "-reference-content" : "") : landscape.active ? "bound.landscape-reference-content" : "bound.companion-content")
-                    .accessibilityHidden(arrangement.active ? !showsArrangementReference || arrangement.editing : landscape.active ? !showsReference || landscape.editing : legacyFriend)
-                    .offset(x: reference.minX, y: reference.minY + headerHeight)
+                // One retained content owner, with the tab bar outside its scroll views.
+                // Composite the bar and background together so saved opacity applies once.
+                VStack(spacing: 0) {
+                    if usesMultiviewTabs {
+                        Group {
+                            if showsArrangementReference && !arrangement.editing {
+                                multiviewTabs
+                            } else {
+                                Color.clear.accessibilityHidden(true)
+                            }
+                        }
+                        .frame(height: headerHeight)
+                    }
+                    BoundCompanionPanel(sharing: sharing, state: state, gameID: gameID,
+                        editingChanged: editingChanged, textEditingChanged: textEditingChanged, currentSave: currentSave,
+                        contentOverride: arrangement.active ? arrangement.referenceContent : landscape.active ? landscape.referenceContent : nil,
+                        presentationEnabled: arrangement.active ? showsArrangementReference : !landscape.active || showsReference, rendersFriend: false)
+                        .frame(width: max(0, reference.width), height: max(0, reference.height - headerHeight))
+                        .allowsHitTesting(arrangement.active ? showsArrangementReference && !arrangement.editing : landscape.active ? showsReference && !landscape.editing : !legacyFriend)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier(arrangement.active ? (showsArrangementReference && !arrangement.editing ? arrangement.accessibilityPrefix + "-reference-content" : "") : landscape.active ? "bound.landscape-reference-content" : "bound.companion-content")
+                        .accessibilityValue(arrangement.active && arrangement.multiview ? arrangement.referenceContent.title : "")
+                        .accessibilityHidden(arrangement.active ? !showsArrangementReference || arrangement.editing : landscape.active ? !showsReference || landscape.editing : legacyFriend)
+                }
+                .frame(width: max(0, reference.width), height: max(0, reference.height - (landscape.active ? headerHeight : 0)))
+                .background {
+                    if usesMultiviewTabs {
+                        RoundedRectangle(cornerRadius: 8).fill(Color(uiColor: .systemBackground))
+                    }
+                }
+                .compositingGroup()
+                .opacity(arrangement.active ? (showsArrangementReference ? arrangement.opacity(for: arrangement.referenceContent) : 0) : landscape.active ? (showsReference ? (landscape.editing ? 0.35 : 1) : 0) : (legacyFriend ? 0 : 1))
+                .offset(x: reference.minX, y: reference.minY + (landscape.active ? headerHeight : 0))
 
                 if arrangement.active { BoundLandscapeArrangementOverlay(model: arrangement) }
                 if landscape.active {
@@ -274,6 +363,39 @@ struct BoundCompanionPresentation: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
+    }
+    private var multiviewTabs: some View {
+        HStack(spacing: 0) {
+            multiviewTab("DEX", content: .dex)
+            multiviewTab("DOCS", content: .bosses)
+            multiviewTab("TYPES", content: .types)
+        }
+        .background(Color(uiColor: .systemBackground))
+        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 8, topTrailingRadius: 8))
+        .overlay(alignment: .bottom) { Divider().allowsHitTesting(false) }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("bound.landscape7-tabs")
+    }
+    private func multiviewTab(_ title: String, content: BoundPiPContent) -> some View {
+        let selected = arrangement.referenceContent == content
+        return Button { arrangement.select(content) } label: {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1).minimumScaleFactor(0.9)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .foregroundStyle(selected ? Color(uiColor: .deltaPurple) : .secondary)
+                .background(selected ? Color(uiColor: .deltaPurple).opacity(0.12) : .clear)
+                .overlay(alignment: .bottom) {
+                    if selected { Color(uiColor: .deltaPurple).frame(height: 3) }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(selected ? "Selected" : "Not selected")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityHint(content == .bosses ? "Shows Boss View" : "Shows \(content.title)")
+        .accessibilityIdentifier("bound.landscape7-tab-" + content.rawValue)
     }
     private var friendVideo: some View {
         ZStack {
@@ -402,6 +524,8 @@ struct BoundLandscapeOptionsSettings: View {
             .accessibilityIdentifier("bound.landscape-options")
         } header: { Text("Landscape Options") } footer: {
             Text(option == .option1 ? "The existing landscape controls and companion panel. Portrait stays unchanged."
+                 : option == .option7 ? "Use the fixed DEX, DOCS, and TYPES tabs at the top of Multiview. DOCS opens Boss View. The book button under Menu opens Multiview; X hides it. Friend stays separate. Starts with a copy of Option 6 and saves separately. Portrait stays unchanged."
+                 : option == .option6 ? "Swipe left or right in Multiview to switch between RR Dex, Bosses, and Types. The book button under Menu opens it; X hides it. Friend stays separate. Starts with a copy of Option 3 and saves separately. Portrait stays unchanged."
                  : option == .option5 ? "Open Menu and tap Arrange Views to quickly place a view in a corner, then drag to fine-tune. A compact toolbar stays opposite the selected view. VIEWS shows or hides references; Bound cycles them. Starts with a copy of Option 3 and saves separately. Portrait stays unchanged."
                  : option == .option4 ? "Open Menu and tap Arrange Views for direct view selection, larger handles for the selected view, and Reset. The eye button shows or hides references. Starts with a copy of Option 3, then saves its own layout. Portrait stays unchanged."
                  : option == .option3 ? "Friend and the selected reference appear independently. Friend toggles video, X toggles references, and Bound cycles the views selected in Companion settings. In landscape, open Menu and tap Arrange Views to move, resize, or change each view’s opacity. Done locks the layout; references stay interactive."

@@ -50,7 +50,7 @@ struct CoreSettingsLinks: View {
         case .gbc: GBCCoreSettingsView()
         case .gba: GBACoreSettingsView()
         case .ds: MelonDSCoreSettingsView()
-            .ignoresSafeArea(.container, edges: .top)
+            .ignoresSafeArea(.container, edges: [.top, .horizontal])
         }
     }
 }
