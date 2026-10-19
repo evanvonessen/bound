@@ -2381,6 +2381,76 @@ final class CompanionUITests: XCTestCase {
         }
     }
 
+    func testLibraryAccountSettingsProvidesBoundSignInAndAccountCreation() throws {
+        let app = XCUIApplication()
+        for version in [1, 2] {
+            app.launchArguments = ["--bound-ui-no-animations", "-bound.ui.version.v1", "\(version)"]
+            app.launch()
+
+            let settings = app.buttons["Settings"]
+            XCTAssertTrue(settings.waitForExistence(timeout: 20))
+            settings.tap()
+            let accountSettings = app.buttons["bound.settings-account"]
+            XCTAssertTrue(accountSettings.waitForExistence(timeout: 10))
+            accountSettings.tap()
+            XCTAssertTrue(app.navigationBars["Account & Sync"].waitForExistence(timeout: 5))
+
+            // This QA check must never sign out a saved account or alter its state.
+            if app.descendants(matching: .any).matching(identifier: "bound.account-username").firstMatch.exists ||
+                app.buttons["bound.account-sign-out"].exists {
+                app.terminate()
+                throw XCTSkip("Account & Sync is signed in; keep this check read-only for saved accounts.")
+            }
+
+            screenshot("Library-Account-Sign-In-Option-\(version)")
+            let email = app.textFields["account.signin.email"]
+            let password = app.secureTextFields["account.signin.password"]
+            let submit = app.buttons["account.signin.submit"]
+            XCTAssertTrue(email.waitForExistence(timeout: 5))
+            XCTAssertTrue(password.exists)
+            XCTAssertFalse(submit.isEnabled, "Sign in stays disabled until both fields have values.")
+            email.tap()
+            email.typeText("library-fixture@example.invalid")
+
+            app.buttons["account.signin.create-account"].tap()
+            let signupEmail = app.textFields["account.signup.email"]
+            XCTAssertTrue(signupEmail.waitForExistence(timeout: 5))
+            XCTAssertEqual(signupEmail.value as? String, "library-fixture@example.invalid",
+                           "Create Account carries the entered address into the signup form.")
+            XCTAssertTrue(app.secureTextFields["account.signup.password"].exists)
+            XCTAssertTrue(app.textFields["account.signup.username"].exists)
+
+            app.navigationBars["Create Account"].buttons["Cancel"].tap()
+            XCTAssertTrue(email.waitForExistence(timeout: 5), "Cancel returns to the sign-in form.")
+            XCTAssertTrue(password.exists)
+            XCTAssertFalse(submit.isEnabled)
+
+            password.tap()
+            let fixturePassword = "offline-fixture-password"
+            password.typeText(fixturePassword)
+            XCTAssertTrue(submit.isEnabled)
+            // No login is submitted. Clear this fixture before navigating so iOS
+            // does not offer to save dummy credentials over the app's controls.
+            password.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: fixturePassword.count))
+            XCTAssertFalse(submit.isEnabled)
+
+            app.navigationBars["Account & Sync"].buttons.firstMatch.tap()
+            XCTAssertTrue(accountSettings.waitForExistence(timeout: 5), "Back returns to the Settings list.")
+            accountSettings.tap()
+            XCTAssertTrue(app.navigationBars["Account & Sync"].waitForExistence(timeout: 5))
+            let reopenedSubmit = app.buttons["account.signin.submit"]
+            XCTAssertTrue(app.textFields["account.signin.email"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.secureTextFields["account.signin.password"].exists)
+            XCTAssertFalse(reopenedSubmit.isEnabled, "Reopening Account & Sync does not restore the password.")
+
+            app.navigationBars["Account & Sync"].buttons.firstMatch.tap()
+            XCTAssertTrue(accountSettings.waitForExistence(timeout: 5))
+            app.buttons["bound.settings-close"].tap()
+            XCTAssertTrue(settings.waitForExistence(timeout: 5), "Done returns from Account & Sync to the game library.")
+            app.terminate()
+        }
+    }
+
     func testUsernameIsRequiredForSignup() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []

@@ -259,6 +259,8 @@ struct BoundAccountSocialSettings: View {
     @ObservedObject private var account = BoundFriendAccount.shared
     @ObservedObject private var profile = BoundAccountProfile.shared
     @ObservedObject private var notifications = BoundJiggleNotifications.shared
+    @State private var email = ""
+    @State private var password = ""
     @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option1
     private var usesUpdatedUI: Bool { uiVersion == .option2 }
     var body: some View {
@@ -290,10 +292,13 @@ struct BoundAccountSocialSettings: View {
                     .accessibilityIdentifier("bound.account-delete")
                 }
             } else {
-                Text("Sign in from Friends to set your account username and receive Jiggles.").font(.subheadline)
+                BoundAccountSignInFields(account: account, email: $email, password: $password)
+                Text(account.status).font(.caption)
+                    .accessibilityIdentifier("account.signin.status")
             }
         }
         .task(id: account.session?.owner) { await profile.refresh() }
+        .onDisappear { password = "" }
     }
 
     private func signOut() {

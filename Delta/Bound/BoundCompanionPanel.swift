@@ -1555,15 +1555,7 @@ struct BoundFriendsSheet: View {
                             Task { await account.resumeAccountDeletion(); onboarding.synchronizeAccount() }
                         }.disabled(account.busy)
                     } else if account.session == nil {
-                        TextField("Email", text: $email).textContentType(.username).textInputAutocapitalization(.never).keyboardType(.emailAddress).autocorrectionDisabled()
-                        SecureField("Password", text: $password).textContentType(.password)
-                        Button("Sign in") {
-                            let entered = password; password = ""
-                            Task { await account.signIn(email: email, password: entered); onboarding.synchronizeAccount() }
-                        }.disabled(account.busy || email.isEmpty || password.isEmpty)
-                        NavigationLink("Create Account") {
-                            BoundCreateAccountView(account: account, signInEmail: $email) { onboarding.synchronizeAccount() }
-                        }.disabled(account.busy)
+                        BoundAccountSignInFields(account: account, email: $email, password: $password) { onboarding.synchronizeAccount() }
                     } else if !usesUpdatedUI {
                         Button("Sign out") { BoundJiggleNotifications.shared.prepareForSignOut(); sharing.stop(); onboarding.signOut(); account.signOut() }.disabled(account.busy)
                     }
@@ -1858,6 +1850,38 @@ private struct BoundReportView: View {
             }.navigationTitle("Report")
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }
+    }
+}
+
+/// Library settings and Friends share the same credentials form and account owner.
+struct BoundAccountSignInFields: View {
+    @ObservedObject var account: BoundFriendAccount
+    @Binding var email: String
+    @Binding var password: String
+    var signedIn: () -> Void = {}
+
+    var body: some View {
+        Group {
+            TextField("Email", text: $email)
+                .textContentType(.username).textInputAutocapitalization(.never)
+                .keyboardType(.emailAddress).autocorrectionDisabled()
+                .accessibilityIdentifier("account.signin.email")
+            SecureField("Password", text: $password)
+                .textContentType(.password)
+                .accessibilityIdentifier("account.signin.password")
+            Button("Sign in") {
+                let entered = password; password = ""
+                Task { await account.signIn(email: email, password: entered); signedIn() }
+            }
+            .disabled(email.isEmpty || password.isEmpty)
+            .accessibilityIdentifier("account.signin.submit")
+            NavigationLink("Create Account") {
+                BoundCreateAccountView(account: account, signInEmail: $email, signedIn: signedIn)
+            }
+            .accessibilityIdentifier("account.signin.create-account")
+            if account.busy { ProgressView("Signing in…") }
+        }
+        .disabled(account.busy || account.deletionPending)
     }
 }
 
