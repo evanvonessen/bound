@@ -5321,6 +5321,127 @@ extension CompanionUITests {
         assertFrame(bound.frame, matches: portraitButton)
     }
 
+    func testLandscapeMultiviewArrangementUsesThreeFingerOpacityWithoutEditorBox() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            for (method, original) in originals {
+                imp_removeBlock(method_setImplementation(method, original))
+            }
+        }
+
+        let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture",
+                                       "--bound-ui-no-animations", "--bound-ui-screen-layout-bound",
+                                       "-bound.delta.pip.v1.dex.layout", "12"])
+        func chooseOption(_ number: Int) {
+            openBoundSettings(in: app)
+            let options = element("bound.landscape-options", in: app)
+            XCTAssertTrue(options.waitForExistence(timeout: 5))
+            options.tap()
+            app.buttons["Option \(number)"].firstMatch.tap()
+            closeBoundSheet(in: app)
+        }
+        func beginArrangement(_ prefix: String) {
+            openNativePause(in: app)
+            let arrange = app.buttons["bound.menu-arrange-views"]
+            XCTAssertTrue(arrange.waitForExistence(timeout: 5))
+            arrange.tap()
+            XCTAssertTrue(app.buttons[prefix + "-done"].waitForExistence(timeout: 10))
+        }
+        func swipeOpacity(in app: XCUIApplication) throws {
+            let screen = app.frame
+            // This is the lower canvas area occupied by the old opacity editor.
+            // Multiview should now accept the gesture there without drawing a box.
+            try BoundUITestGestures.swipe(
+                withStart: CGPoint(x: screen.midX, y: screen.height * 0.82),
+                deltaY: 40,
+                orientation: UIInterfaceOrientation.landscapeRight.rawValue,
+                screenSize: screen.size)
+        }
+        func waitForOpacityChange(on target: XCUIElement, from baseline: String) {
+            let changed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value != %@", baseline), object: target)
+            wait(for: [changed], timeout: 5)
+        }
+        func verifyOption(_ option: Int) throws {
+            let prefix = "bound.landscape\(option)"
+            beginArrangement(prefix)
+
+            let editor = element(prefix + "-arrangement", in: app)
+            XCTAssertFalse(editor.exists, "Options 6 and 7 must not show the opacity editor box")
+            XCTAssertEqual(app.sliders.matching(identifier: prefix + "-opacity").count, 0)
+            XCTAssertFalse(element(prefix + "-reset", in: app).exists)
+            screenshot("Landscape-option\(option)-multiview-opacity-without-editor")
+
+            let friend = element(prefix + "-move.friend", in: app)
+            let multiview = element(prefix + "-move.dex", in: app)
+            XCTAssertTrue(friend.waitForExistence(timeout: 5))
+            XCTAssertTrue(multiview.waitForExistence(timeout: 5))
+            let initialFriendOpacity = try XCTUnwrap(friend.value as? String)
+            let initialMultiviewOpacity = try XCTUnwrap(multiview.value as? String)
+            XCTAssertTrue(initialFriendOpacity.hasPrefix("Opacity "))
+            XCTAssertTrue(initialMultiviewOpacity.hasPrefix("Opacity "))
+            let initialFriendPercent = try XCTUnwrap(Int(initialFriendOpacity
+                .replacingOccurrences(of: "Opacity ", with: "")
+                .replacingOccurrences(of: "%", with: "")))
+            let initialMultiviewPercent = try XCTUnwrap(Int(initialMultiviewOpacity
+                .replacingOccurrences(of: "Opacity ", with: "")
+                .replacingOccurrences(of: "%", with: "")))
+            XCTAssertGreaterThan(initialFriendPercent, 0)
+            XCTAssertGreaterThan(initialMultiviewPercent, 0)
+
+            friend.tap()
+            XCTAssertTrue(friend.isSelected, "Tapping Friend selects it for the opacity gesture")
+            XCTAssertFalse(multiview.isSelected)
+            try swipeOpacity(in: app)
+            waitForOpacityChange(on: friend, from: initialFriendOpacity)
+            XCTAssertTrue(friend.isSelected)
+            XCTAssertFalse(multiview.isSelected)
+            let changedFriendOpacity = try XCTUnwrap(friend.value as? String)
+            XCTAssertNotEqual(changedFriendOpacity, initialFriendOpacity)
+            XCTAssertEqual(multiview.value as? String, initialMultiviewOpacity,
+                           "A Friend swipe must leave Multiview opacity unchanged")
+
+            multiview.tap()
+            XCTAssertTrue(multiview.isSelected, "Tapping Multiview selects it for the opacity gesture")
+            XCTAssertFalse(friend.isSelected)
+            try swipeOpacity(in: app)
+            waitForOpacityChange(on: multiview, from: initialMultiviewOpacity)
+            XCTAssertTrue(multiview.isSelected)
+            XCTAssertFalse(friend.isSelected)
+            let changedMultiviewOpacity = try XCTUnwrap(multiview.value as? String)
+            XCTAssertNotEqual(changedMultiviewOpacity, initialMultiviewOpacity)
+            XCTAssertEqual(friend.value as? String, changedFriendOpacity,
+                           "A Multiview swipe must leave Friend opacity unchanged")
+
+            app.buttons[prefix + "-done"].tap()
+            XCTAssertTrue(app.buttons[prefix + "-done"].waitForNonExistence(timeout: 5))
+            beginArrangement(prefix)
+            XCTAssertFalse(editor.exists)
+            XCTAssertEqual(friend.value as? String, changedFriendOpacity,
+                           "Done saves Friend opacity when Arrange Views is reopened")
+            XCTAssertEqual(multiview.value as? String, changedMultiviewOpacity,
+                           "Done saves Multiview opacity when Arrange Views is reopened")
+            app.buttons[prefix + "-done"].tap()
+            XCTAssertTrue(app.buttons[prefix + "-done"].waitForNonExistence(timeout: 5))
+        }
+
+        chooseOption(6)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(app.buttons["bound.landscape6-views-button"].waitForExistence(timeout: 10))
+        try verifyOption(6)
+
+        chooseOption(7)
+        XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 10))
+        try verifyOption(7)
+    }
+
     func testLandscapeOption6MultiviewSwipesToggleAndPortraitRestoration() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []

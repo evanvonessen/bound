@@ -12,12 +12,14 @@ struct BoundLandscapeArrangementOverlay: View {
             if model.editing {
                 moveTarget(.friend, frame: model.layout.friend).zIndex(model.selected == .friend ? 1 : 0)
                 if !model.contents.isEmpty { moveTarget(model.referenceContent, frame: model.layout.reference).zIndex(model.selected == .friend ? 0 : 1) }
-                Group {
-                    if model.placementShortcuts { placementEditor }
-                    else if model.refined { refinedEditor }
-                    else { editor }
+                if !multiview {
+                    Group {
+                        if model.placementShortcuts { placementEditor }
+                        else if model.refined { refinedEditor }
+                        else { editor }
+                    }
+                    .placed(arrangementEditorFrame(for: model)).zIndex(2)
                 }
-                .placed(arrangementEditorFrame(for: model)).zIndex(2)
                 Button { model.finish(save: true) } label: {
                     Text("DONE").font(.system(size: 11, weight: .heavy))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -64,6 +66,7 @@ struct BoundLandscapeArrangementOverlay: View {
                 .stroke(selected ? Color.purple : Color.white.opacity(model.focusedHandles ? 0.5 : 1), lineWidth: selected ? 3 : 1.5)
                 .allowsHitTesting(false)
             ArrangementDragTarget(identifier: model.accessibilityPrefix + "-move.\(content.rawValue)", label: "Move \(title(for: content))",
+                                  value: "Opacity \(Int((model.opacity(for: content) * 100).rounded()))%", selected: selected,
                                   select: { model.select(content) }, cancelled: model.cancelManipulation) {
                 model.move(content: content, translation: $0, ended: $1)
             }
@@ -276,10 +279,12 @@ private extension View {
 /// A separate, exact-three-finger recognizer leaves the old gestures untouched.
 @MainActor
 final class BoundLandscapeOpacityGesture: NSObject, UIGestureRecognizerDelegate {
+    private enum SwipeDirection { case pending, vertical, rejected }
     private weak var view: UIView?
     private let model: BoundLandscapeArrangementModel
     private var gate = BoundPiPTouchCountGate()
     private var translation: CGFloat = 0
+    private var direction = SwipeDirection.pending
     private var pan: ArrangementReleasePan!
     init(view: UIView, model: BoundLandscapeArrangementModel) {
         self.view = view; self.model = model
@@ -296,16 +301,33 @@ final class BoundLandscapeOpacityGesture: NSObject, UIGestureRecognizerDelegate 
         case .ignore: break
         case .cancel: model.fade(phase: .cancelled, dy: 0)
         case .deliver:
+            if gesture.state == .began { direction = .pending }
             if gesture.state == .began || (gesture.state == .changed && !gesture.isReleasing) {
-                translation = gesture.translation(in: view).y
+                let delta = gesture.translation(in: view)
+                if model.multiview {
+                    // UIKit can begin a three-finger pan with zero translation.
+                    // Wait for movement before locking the swipe to its axis.
+                    if direction == .pending, max(abs(delta.x), abs(delta.y)) >= 4 {
+                        direction = abs(delta.y) > abs(delta.x) ? .vertical : .rejected
+                    }
+                    if direction == .rejected {
+                        model.fade(phase: .cancelled, dy: 0)
+                        return
+                    }
+                    if direction == .pending && gesture.state == .changed { return }
+                }
+                translation = delta.y
             }
             model.fade(phase: gesture.state, dy: translation)
         }
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         let point = touch.location(in: view)
-        return model.active && model.editing && model.layout.opacityZone.contains(point)
-            && !arrangementEditorFrame(for: model).contains(point)
+        guard model.active && model.editing else { return false }
+        // Multiview has no toolbar: a selected panel can be faded anywhere in
+        // the arrangement canvas, including where the old opacity box sat.
+        if model.multiview { return model.layout.canvas.contains(point) }
+        return model.layout.opacityZone.contains(point) && !arrangementEditorFrame(for: model).contains(point)
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
@@ -313,7 +335,8 @@ final class BoundLandscapeOpacityGesture: NSObject, UIGestureRecognizerDelegate 
     }
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         let delta = pan.translation(in: view)
-        return model.active && model.editing && pan.numberOfTouches == 3 && abs(delta.y) > abs(delta.x)
+        return model.active && model.editing && pan.numberOfTouches == 3
+            && (model.multiview || abs(delta.y) > abs(delta.x))
     }
 }
 private final class ArrangementReleasePan: UIPanGestureRecognizer {
@@ -334,6 +357,8 @@ private final class ArrangementReleasePan: UIPanGestureRecognizer {
 private struct ArrangementDragTarget: UIViewRepresentable {
     var identifier: String
     var label: String
+    var value: String? = nil
+    var selected = false
     var select: () -> Void
     var cancelled: () -> Void
     var moved: (CGSize, Bool) -> Void
@@ -356,6 +381,8 @@ private struct ArrangementDragTarget: UIViewRepresentable {
         context.coordinator.target = self
         view.accessibilityIdentifier = identifier
         view.accessibilityLabel = label
+        view.accessibilityValue = value
+        view.accessibilityTraits = selected ? .selected : []
     }
     final class Coordinator: NSObject {
         var target: ArrangementDragTarget
