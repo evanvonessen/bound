@@ -278,7 +278,7 @@ final class BoundCompanionCoordinator {
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-reset-layout") {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
-            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") || key.hasPrefix("bound.landscape.option5.") || key.hasPrefix("bound.landscape.option6.") || key.hasPrefix("bound.landscape.option7.") { UserDefaults.standard.removeObject(forKey: key) }
+            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") || key.hasPrefix("bound.landscape.option5.") || key.hasPrefix("bound.landscape.option6.") || key.hasPrefix("bound.landscape.option7.") || key.hasPrefix("bound.landscape.controller-mode.") { UserDefaults.standard.removeObject(forKey: key) }
         }
         #endif
         #if DEBUG
@@ -495,16 +495,20 @@ final class BoundCompanionCoordinator {
         if state.landscape != landscape { state.landscape = landscape; cancelInteractions() }
         let usesLandscapeOption2 = landscape && landscapeCompanion.preferences.option == .option2
         let arrangementOption = landscapeCompanion.preferences.option
+        let controllerModeEnabled = BoundControllerModePreferences().isEnabled
         let usesLandscapeArrangement = landscape && arrangementOption.supportsArrangement
         if usesLandscapeOption2 != landscapeCompanion.active || usesLandscapeArrangement != landscapeArrangement.active
-            || (usesLandscapeArrangement && landscapeArrangement.option != arrangementOption) {
+            || (usesLandscapeArrangement && (landscapeArrangement.option != arrangementOption
+                || landscapeArrangement.controllerModeEnabled != controllerModeEnabled)) {
             owner.view.endEditing(true)
             textEditing(false)
             notesEditing(false)
             keyboardHeight = 0
         }
         landscapeCompanion.setActive(usesLandscapeOption2)
-        if usesLandscapeArrangement { landscapeArrangement.useOption(arrangementOption) }
+        if usesLandscapeArrangement {
+            landscapeArrangement.useOption(arrangementOption, controllerModeEnabled: controllerModeEnabled)
+        }
         landscapeArrangement.setActive(usesLandscapeArrangement)
         if usesLandscapeArrangement { landscapeArrangement.setContents(state.availableContents) }
         gestures?.setEnabled(!landscapeCompanion.active && !landscapeArrangement.active)

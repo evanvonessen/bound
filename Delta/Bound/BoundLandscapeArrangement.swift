@@ -80,6 +80,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
 
     @Published private(set) var active = false
     @Published private(set) var option: BoundLandscapeOption = .option3
+    @Published private(set) var controllerModeEnabled = false
     @Published private(set) var editing = false
     @Published private(set) var editorAtTop = false
     @Published private(set) var friendVisible: Bool
@@ -138,16 +139,24 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         self.referenceVisible = self.defaults.object(forKey: namespace + ".option3.reference-visible") as? Bool ?? true
         self.referenceContent = Self.readContent(self.defaults, key: namespace + ".option3.reference-content", allowed: contents) ?? contents.first ?? .notes
         self.selected = self.referenceContent
+        migrateControllerModeArrangements()
         readPlacements()
     }
 
     /// New variants start as an Option 3 snapshot, then save independently. Keeping
     /// one observable session also keeps the live video canvas and gestures mounted.
-    func useOption(_ value: BoundLandscapeOption) {
-        guard value.supportsArrangement, option != value else { return }
+    func useOption(_ value: BoundLandscapeOption, controllerModeEnabled: Bool = false) {
+        guard value.supportsArrangement,
+              option != value || self.controllerModeEnabled != controllerModeEnabled else { return }
         finish(save: false, resume: false)
         if active { beforeSwitch?() }
-        let destination = namespace + ".option\(value.rawValue)"
+        if self.controllerModeEnabled != controllerModeEnabled {
+            self.controllerModeEnabled = controllerModeEnabled
+            // Snapshot fallbacks must come from the destination mode, never the
+            // previous mode's in-memory placement or unsaved geometry.
+            readPlacements()
+        }
+        let destination = arrangementNamespace + ".option\(value.rawValue)"
         if value != .option3, !defaults.bool(forKey: destination + ".initialized") {
             if value == .option6 {
                 initializeMultiviewSnapshot(destination: destination)
@@ -157,7 +166,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
                 let suffixes = ["friend-visible", "reference-visible", "reference-content"]
                     + BoundPiPContent.allCases.map { "placement." + $0.rawValue }
                 for suffix in suffixes {
-                    if let saved = defaults.object(forKey: namespace + ".option3." + suffix) {
+                    if let saved = defaults.object(forKey: arrangementNamespace + ".option3." + suffix) {
                         defaults.set(saved, forKey: destination + "." + suffix)
                     }
                 }
@@ -177,7 +186,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     }
 
     private func initializeMultiviewSnapshot(destination: String) {
-        let option3 = namespace + ".option3."
+        let option3 = arrangementNamespace + ".option3."
         for suffix in ["friend-visible", "reference-visible", "placement.friend"] {
             if let value = defaults.object(forKey: option3 + suffix) {
                 defaults.set(value, forKey: destination + "." + suffix)
@@ -201,8 +210,8 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     }
 
     private func initializeTabbedSnapshot(destination: String) {
-        let option6 = namespace + ".option6."
-        let option3 = namespace + ".option3."
+        let option6 = arrangementNamespace + ".option6."
+        let option3 = arrangementNamespace + ".option3."
         let allowed = Self.nonFriend(BoundPiPContent.cycleOrder)
         let option6Initialized = defaults.bool(forKey: option6 + "initialized")
 
@@ -642,7 +651,30 @@ final class BoundLandscapeArrangementModel: ObservableObject {
             ? "placement.reference" : "placement." + content.rawValue
         defaults.set(data, forKey: key(suffix))
     }
-    private func key(_ suffix: String) -> String { namespace + ".option\(option.rawValue)." + suffix }
+    private var arrangementNamespace: String {
+        controllerModeEnabled ? namespace + ".controller-mode" : namespace
+    }
+
+    /// Keep the existing keys for Controller Mode off. On upgrade, preserve all
+    /// saved variants in Controller Mode on too, then let the two sets diverge.
+    private func migrateControllerModeArrangements() {
+        let destination = namespace + ".controller-mode"
+        guard !defaults.bool(forKey: destination + ".initialized") else { return }
+        let savedValues = defaults.dictionaryRepresentation()
+        for option in BoundLandscapeOption.allCases where option.supportsArrangement {
+            let sourcePrefix = namespace + ".option\(option.rawValue)."
+            for (key, value) in savedValues where key.hasPrefix(sourcePrefix) {
+                let suffix = key.dropFirst(namespace.count)
+                let destinationKey = destination + suffix
+                if defaults.object(forKey: destinationKey) == nil {
+                    defaults.set(value, forKey: destinationKey)
+                }
+            }
+        }
+        defaults.set(true, forKey: destination + ".initialized")
+    }
+
+    private func key(_ suffix: String) -> String { arrangementNamespace + ".option\(option.rawValue)." + suffix }
     private static func readState(_ defaults: UserDefaults, key: String) -> State? {
         guard let data = defaults.data(forKey: key), let state = try? JSONDecoder().decode(State.self, from: data) else { return nil }
         return State(state.placement)

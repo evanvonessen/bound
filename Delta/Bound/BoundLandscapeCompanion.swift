@@ -523,13 +523,14 @@ struct BoundLandscapeOptionsSettings: View {
             }
             .accessibilityIdentifier("bound.landscape-options")
         } header: { Text("Landscape Options") } footer: {
-            Text(option == .option1 ? "The existing landscape controls and companion panel. Portrait stays unchanged."
+            Text((option == .option1 ? "The existing landscape controls and companion panel. Portrait stays unchanged."
                  : option == .option7 ? "Use the fixed DEX, DOCS, and TYPES tabs at the top of Multiview. DOCS opens Boss View. The book button under Menu opens Multiview; X hides it. Friend stays separate. Starts with a copy of Option 6 and saves separately. Portrait stays unchanged."
                  : option == .option6 ? "Swipe left or right in Multiview to switch between RR Dex, Bosses, and Types. The book button under Menu opens it; X hides it. Friend stays separate. Starts with a copy of Option 3 and saves separately. Portrait stays unchanged."
                  : option == .option5 ? "Open Menu and tap Arrange Views to quickly place a view in a corner, then drag to fine-tune. A compact toolbar stays opposite the selected view. VIEWS shows or hides references; Bound cycles them. Starts with a copy of Option 3 and saves separately. Portrait stays unchanged."
                  : option == .option4 ? "Open Menu and tap Arrange Views for direct view selection, larger handles for the selected view, and Reset. The eye button shows or hides references. Starts with a copy of Option 3, then saves its own layout. Portrait stays unchanged."
                  : option == .option3 ? "Friend and the selected reference appear independently. Friend toggles video, X toggles references, and Bound cycles the views selected in Companion settings. In landscape, open Menu and tap Arrange Views to move, resize, or change each view’s opacity. Done locks the layout; references stay interactive."
                  : "Separate Friend and Views buttons. Hold Friend to position, resize, and lock it. Locked friend video lets touches reach the controls underneath. Portrait stays unchanged.")
+                 + (option.supportsArrangement ? " Arrangements save separately for Controller Mode on and off." : ""))
         }
         if option == .option2 {
             Section {

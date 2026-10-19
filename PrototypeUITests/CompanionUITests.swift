@@ -5067,6 +5067,104 @@ final class ReleaseSmokeUITests: XCTestCase {
 }
 
 extension CompanionUITests {
+    func testLandscapeArrangementGeometryIsIndependentByControllerMode() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) }
+        }
+
+        let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture",
+                                       "--bound-ui-no-animations", "--bound-ui-screen-layout-bound",
+                                       "-bound.delta.pip.v1.dex.layout", "12"])
+        func assertFrame(_ actual: CGRect, matches expected: CGRect, accuracy: CGFloat = 2) {
+            XCTAssertEqual(actual.minX, expected.minX, accuracy: accuracy)
+            XCTAssertEqual(actual.minY, expected.minY, accuracy: accuracy)
+            XCTAssertEqual(actual.width, expected.width, accuracy: accuracy)
+            XCTAssertEqual(actual.height, expected.height, accuracy: accuracy)
+        }
+        func chooseOption7() {
+            openBoundSettings(in: app)
+            let options = element("bound.landscape-options", in: app)
+            XCTAssertTrue(options.waitForExistence(timeout: 5))
+            options.tap(); app.buttons["Option 7"].firstMatch.tap()
+            closeBoundSheet(in: app)
+        }
+        func setControllerMode(_ enabled: Bool) {
+            openNativePause(in: app)
+            let mode = app.buttons["bound.controller-mode"]
+            XCTAssertTrue(mode.waitForExistence(timeout: 5))
+            let expected = enabled ? "On" : "Off"
+            if (mode.value as? String) != expected { mode.tap() }
+            XCTAssertEqual(mode.value as? String, expected)
+            resumeNativePause(in: app)
+        }
+        func arrangeDexAndResize(heightDelta: CGFloat) -> CGRect {
+            openNativePause(in: app)
+            let arrange = app.buttons["bound.menu-arrange-views"]
+            XCTAssertTrue(arrange.waitForExistence(timeout: 5)); arrange.tap()
+            let prefix = "bound.landscape7"
+            let move = element(prefix + "-move.dex", in: app)
+            XCTAssertTrue(move.waitForExistence(timeout: 5))
+            let before = move.frame
+            let handle = element(prefix + "-resize-height.dex", in: app)
+            XCTAssertTrue(handle.waitForExistence(timeout: 5))
+            if heightDelta != 0 {
+                let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                start.press(forDuration: 0.05,
+                            thenDragTo: start.withOffset(CGVector(dx: 0, dy: heightDelta)))
+            }
+            let after = move.frame
+            if heightDelta != 0 {
+                XCTAssertGreaterThan(abs(after.height - before.height), 12,
+                                     "Dragging the height handle should change the saved panel geometry.")
+            }
+            app.buttons[prefix + "-done"].tap()
+            return after
+        }
+
+        chooseOption7()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 10))
+        app.buttons["bound.landscape7-tab-dex"].tap()
+        XCTAssertEqual(element("bound.landscape7-reference-content", in: app).value as? String, "RR Dex")
+        setControllerMode(false)
+
+        let controllerModeOffFrame = arrangeDexAndResize(heightDelta: -28)
+        setControllerMode(true)
+        let modeOnInherited = arrangeDexAndResize(heightDelta: 28)
+        XCTAssertGreaterThan(abs(modeOnInherited.height - controllerModeOffFrame.height), 24,
+                             "Controller Mode on must keep its own edited height.")
+
+        setControllerMode(false)
+        let restoredOffFrame = arrangeDexAndResize(heightDelta: 0)
+        assertFrame(restoredOffFrame, matches: controllerModeOffFrame)
+        setControllerMode(true)
+        let restoredOnFrame = arrangeDexAndResize(heightDelta: 0)
+        assertFrame(restoredOnFrame, matches: modeOnInherited)
+
+        app.terminate()
+        app.launchArguments = app.launchArguments.filter { $0 != "--bound-ui-reset-layout" }
+        app.launch()
+        let diagnostic = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(diagnostic.waitForExistence(timeout: 20))
+        diagnostic.tap()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 15))
+        setControllerMode(true)
+        openNativePause(in: app)
+        let arrange = app.buttons["bound.menu-arrange-views"]
+        XCTAssertTrue(arrange.waitForExistence(timeout: 5)); arrange.tap()
+        assertFrame(element("bound.landscape7-move.dex", in: app).frame, matches: modeOnInherited)
+        app.buttons["bound.landscape7-done"].tap()
+    }
+
     func testLandscapeOption7FixedTabsAndIndependentLayout() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []

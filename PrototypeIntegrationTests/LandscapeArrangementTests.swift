@@ -25,6 +25,198 @@ final class LandscapeArrangementTests: XCTestCase {
                            boundFrame: bound, defaults: defaults, keyboardHeight: 0)
     }
 
+    private func saveReferenceArrangement(_ model: BoundLandscapeArrangementModel,
+                                          content: BoundPiPContent,
+                                          translation: CGSize,
+                                          resize: CGSize,
+                                          opacity: Double) {
+        model.setActive(true)
+        arrangeLayout(model)
+        model.arrange()
+        model.select(content)
+        model.move(content: content, translation: translation, ended: true)
+        model.resize(content: content, translation: resize, axis: .scale, ended: true)
+        model.setOpacity(opacity, for: content)
+        model.finish(save: true)
+    }
+
+    func testControllerModeMigrationCopiesOptionsThreeThroughSevenOnce() throws {
+        let namespace = "LandscapeArrangementTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+        defer { defaults.removePersistentDomain(forName: namespace) }
+
+        let options: [BoundLandscapeOption] = [.option3, .option4, .option5, .option6, .option7]
+        var expected: [BoundLandscapeOption: BoundLandscapeViewPlacement] = [:]
+        for (index, option) in options.enumerated() {
+            let placement = BoundLandscapeViewPlacement(
+                center: CGPoint(x: 0.16 + Double(index) * 0.13, y: 0.22 + Double(index) * 0.11),
+                widthFraction: 0.24 + Double(index) * 0.07,
+                heightFraction: 0.31 + Double(index) * 0.08,
+                opacity: 0.35 + Double(index) * 0.1)
+            expected[option] = placement
+            let prefix = namespace + ".option\(option.rawValue)."
+            let referenceContent: BoundPiPContent = [.dex, .bosses, .types][index % 3]
+            defaults.set(index.isMultiple(of: 2), forKey: prefix + "friend-visible")
+            defaults.set(!index.isMultiple(of: 2), forKey: prefix + "reference-visible")
+            defaults.set(referenceContent.rawValue, forKey: prefix + "reference-content")
+            defaults.set(try JSONEncoder().encode(placement),
+                         forKey: prefix + (option == .option6 || option == .option7
+                                          ? "placement.reference" : "placement.\(referenceContent.rawValue)"))
+            defaults.set(try JSONEncoder().encode(BoundLandscapeViewPlacement(
+                center: CGPoint(x: 0.8, y: 0.7), widthFraction: 0.2, heightFraction: 0.18, opacity: 0.9)),
+                         forKey: prefix + "placement.friend")
+            if option != .option3 {
+                defaults.set(true, forKey: prefix + "initialized")
+            }
+        }
+
+        let model = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        XCTAssertTrue(defaults.bool(forKey: namespace + ".controller-mode.initialized"))
+        for (index, option) in options.enumerated() {
+            model.useOption(option, controllerModeEnabled: true)
+            XCTAssertTrue(model.controllerModeEnabled)
+            let content = model.referenceContent
+            XCTAssertEqual(content, [.dex, .bosses, .types][index % 3])
+            XCTAssertEqual(model.placement(for: content), try XCTUnwrap(expected[option]))
+            XCTAssertEqual(model.friendVisible, index.isMultiple(of: 2))
+            XCTAssertEqual(model.referenceVisible, !index.isMultiple(of: 2))
+        }
+        XCTAssertTrue(defaults.bool(forKey: namespace + ".controller-mode.initialized"),
+                      "The controller-mode namespace is migrated once on model creation.")
+
+        model.useOption(.option5, controllerModeEnabled: true)
+        saveReferenceArrangement(model, content: .types, translation: CGSize(width: -42, height: 28),
+                                 resize: CGSize(width: 24, height: 18), opacity: 0.73)
+        let controllerPlacement = model.placement(for: .types)
+        XCTAssertNotEqual(controllerPlacement, expected[.option5])
+
+        model.useOption(.option5, controllerModeEnabled: false)
+        XCTAssertFalse(model.controllerModeEnabled)
+        XCTAssertEqual(model.placement(for: .types), expected[.option5],
+                       "Editing Controller Mode on must leave the original Option 5 arrangement intact.")
+        model.useOption(.option5, controllerModeEnabled: true)
+        XCTAssertEqual(model.placement(for: .types), controllerPlacement,
+                       "Switching back must reload the saved Controller Mode on arrangement.")
+
+        let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        restored.useOption(.option5, controllerModeEnabled: true)
+        XCTAssertEqual(restored.placement(for: .types), controllerPlacement,
+                       "A later model initialization must not copy the old arrangement over the migrated state.")
+        XCTAssertEqual(restored.referenceContent, .types)
+        XCTAssertTrue(restored.friendVisible)
+        XCTAssertFalse(restored.referenceVisible)
+    }
+
+    func testControllerModeVariantsSnapshotAndPersistWithinTheirOwnNamespace() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setContents([.dex, .bosses, .types])
+        model.useOption(.option3, controllerModeEnabled: false)
+        saveReferenceArrangement(model, content: .dex, translation: CGSize(width: 74, height: -38),
+                                 resize: CGSize(width: -25, height: 19), opacity: 0.86)
+        let controllerModeOffOptionThree = model.placement(for: .dex)
+
+        // makeModel initialized the one-time migration before this later off-mode save.
+        // Entering Controller Mode now must load its own pre-edit fallback, not reuse
+        // the recently changed off-mode placement from memory.
+        model.useOption(.option3, controllerModeEnabled: true)
+        let initialControllerOptionThree = model.placement(for: .dex)
+        XCTAssertNotEqual(initialControllerOptionThree, controllerModeOffOptionThree)
+        saveReferenceArrangement(model, content: .dex, translation: CGSize(width: -68, height: 34),
+                                 resize: CGSize(width: 28, height: 14), opacity: 0.44)
+        let controllerOptionThree = model.placement(for: .dex)
+
+        model.useOption(.option4, controllerModeEnabled: true)
+        XCTAssertEqual(model.placement(for: .dex), controllerOptionThree)
+        saveReferenceArrangement(model, content: .dex, translation: CGSize(width: 82, height: -26),
+                                 resize: CGSize(width: -20, height: 10), opacity: 0.82)
+        let controllerOptionFour = model.placement(for: .dex)
+        XCTAssertNotEqual(controllerOptionFour, controllerOptionThree)
+
+        model.useOption(.option5, controllerModeEnabled: true)
+        XCTAssertEqual(model.placement(for: .dex), controllerOptionThree,
+                       "Option 5 takes its initial snapshot from Controller Mode Option 3.")
+        saveReferenceArrangement(model, content: .dex, translation: CGSize(width: 35, height: 48),
+                                 resize: CGSize(width: 16, height: -12), opacity: 0.61)
+        let controllerOptionFive = model.placement(for: .dex)
+
+        model.useOption(.option6, controllerModeEnabled: true)
+        XCTAssertEqual(model.placement(for: .types), controllerOptionThree,
+                       "Option 6 starts from Controller Mode Option 3's reference arrangement.")
+        saveReferenceArrangement(model, content: .types, translation: CGSize(width: -24, height: 19),
+                                 resize: CGSize(width: 20, height: 13), opacity: 0.69)
+        let controllerOptionSix = model.placement(for: .dex)
+
+        model.useOption(.option7, controllerModeEnabled: true)
+        XCTAssertEqual(model.placement(for: .bosses), controllerOptionSix,
+                       "Option 7 starts from Controller Mode Option 6.")
+        saveReferenceArrangement(model, content: .bosses, translation: CGSize(width: 51, height: -21),
+                                 resize: CGSize(width: -15, height: 17), opacity: 0.77)
+        let controllerOptionSeven = model.placement(for: .types)
+
+        for (option, expected) in [
+            (BoundLandscapeOption.option3, controllerOptionThree),
+            (.option4, controllerOptionFour), (.option5, controllerOptionFive),
+            (.option6, controllerOptionSix), (.option7, controllerOptionSeven)
+        ] {
+            model.useOption(option, controllerModeEnabled: true)
+            XCTAssertEqual(model.placement(for: .dex), expected,
+                           "Controller Mode Option \(option.rawValue) should retain its own saved state.")
+        }
+
+        model.useOption(.option3, controllerModeEnabled: false)
+        XCTAssertEqual(model.placement(for: .dex), controllerModeOffOptionThree,
+                       "Controller Mode on snapshots must not replace Controller Mode off state.")
+        let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        for (option, expected) in [
+            (BoundLandscapeOption.option3, controllerOptionThree),
+            (.option4, controllerOptionFour), (.option5, controllerOptionFive),
+            (.option6, controllerOptionSix), (.option7, controllerOptionSeven)
+        ] {
+            restored.useOption(option, controllerModeEnabled: true)
+            XCTAssertEqual(restored.placement(for: .dex), expected)
+        }
+    }
+
+    func testSwitchingControllerModeCancelsDraftAndReloadsTheSameOption() throws {
+        let namespace = "LandscapeArrangementTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        let migratedPlacement = BoundLandscapeViewPlacement(
+            center: CGPoint(x: 0.31, y: 0.42), widthFraction: 0.39, heightFraction: 0.63, opacity: 0.67)
+        defaults.set(try JSONEncoder().encode(migratedPlacement),
+                     forKey: namespace + ".option3.placement.dex")
+        let model = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        model.setContents([.dex, .bosses])
+        model.useOption(.option3, controllerModeEnabled: false)
+        model.setActive(true)
+        arrangeLayout(model)
+        model.arrange()
+        model.select(.dex)
+        model.setOpacity(0.58, for: .dex)
+        model.finish(save: true)
+        let savedOff = model.placement(for: .dex)
+        XCTAssertNotEqual(savedOff, migratedPlacement)
+
+        var resumeValues: [Bool] = []
+        model.endArrangement = { resumeValues.append($0) }
+        model.arrange()
+        model.setOpacity(0.12, for: .dex)
+        model.useOption(.option3, controllerModeEnabled: true)
+        XCTAssertFalse(model.editing)
+        XCTAssertEqual(resumeValues, [false], "Changing mode must cancel the active draft without resuming gameplay.")
+        XCTAssertEqual(model.placement(for: .dex), migratedPlacement,
+                       "Controller Mode on retains the value copied once during initialization.")
+
+        model.arrange()
+        model.setOpacity(0.91, for: .dex)
+        model.useOption(.option3, controllerModeEnabled: false)
+        XCTAssertFalse(model.editing)
+        XCTAssertEqual(resumeValues, [false, false])
+        XCTAssertEqual(model.placement(for: .dex), savedOff,
+                       "Returning to Controller Mode off discards the unsaved on draft.")
+    }
+
     func testOptionThreeKeepsEarlierOptionsAndDiscardsDraftWhenLeavingLandscape() throws {
         let (model, defaults, namespace) = try makeModel()
         defer { defaults.removePersistentDomain(forName: namespace) }
