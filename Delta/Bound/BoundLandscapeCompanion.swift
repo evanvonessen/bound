@@ -323,7 +323,8 @@ struct BoundCompanionPresentation: View {
                     BoundCompanionPanel(sharing: sharing, state: state, gameID: gameID,
                         editingChanged: editingChanged, textEditingChanged: textEditingChanged, currentSave: currentSave,
                         contentOverride: arrangement.active ? arrangement.referenceContent : landscape.active ? landscape.referenceContent : nil,
-                        presentationEnabled: arrangement.active ? showsArrangementReference : !landscape.active || showsReference, rendersFriend: false)
+                        presentationEnabled: arrangement.active ? showsArrangementReference : !landscape.active || showsReference,
+                        rendersFriend: false, inlineDexSearch: arrangement.active && arrangement.multiview)
                         .frame(width: max(0, reference.width), height: max(0, reference.height - headerHeight))
                         .allowsHitTesting(arrangement.active ? showsArrangementReference && !arrangement.editing : landscape.active ? showsReference && !landscape.editing : !legacyFriend)
                         .accessibilityElement(children: .contain)

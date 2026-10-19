@@ -4,6 +4,7 @@ import UIKit
 struct BoundRRDexView: View {
     let gameID: String
     var floating = false
+    var inlineSearch = false
     var portraitTopInset: CGFloat = 0
     var previewLayout: BoundReferenceLayout? = nil
     var isActive = true
@@ -46,6 +47,7 @@ struct BoundRRDexView: View {
     private var editingText: Bool { searching || moveSearchFocused }
     private var interacting: Bool { editingText || sheet != nil || importError != nil }
     private var hasIslandActions: Bool { !floating && portraitTopInset >= 51 }
+    private var hasInlineSearch: Bool { floating && inlineSearch && layout.rawValue >= 7 }
     private var contentTopInset: CGFloat {
         // Use the spare clearance below the Island without moving its actions.
         hasIslandActions && layout.rawValue >= 8 ? max(51, portraitTopInset - 6) : portraitTopInset
@@ -380,7 +382,7 @@ struct BoundRRDexView: View {
     private func cardLayout7(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog,
                              compact: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            if !hasIslandActions {
+            if !hasIslandActions && !hasInlineSearch {
                 HStack {
                     Color.clear.frame(width: 44, height: 44)
                     Spacer(minLength: 0)
@@ -388,7 +390,7 @@ struct BoundRRDexView: View {
                 }
             }
             if searching || !query.isEmpty {
-                searchRow(catalog: catalog)
+                searchRow(catalog: catalog, comfortableTargets: hasInlineSearch)
                 if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text("Search Pokémon by name.").font(.system(size: 12)).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: compact ? nil : .infinity, alignment: .topLeading)
@@ -415,7 +417,7 @@ struct BoundRRDexView: View {
     private func cardLayout8(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog,
                              compact: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            if !hasIslandActions {
+            if !hasIslandActions && !hasInlineSearch {
                 HStack {
                     Color.clear.frame(width: 44, height: 44)
                     Spacer(minLength: 0)
@@ -423,7 +425,7 @@ struct BoundRRDexView: View {
                 }
             }
             if searching || !query.isEmpty {
-                searchRow(catalog: catalog)
+                searchRow(catalog: catalog, comfortableTargets: hasInlineSearch)
                 if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     if layout == .layout12 {
                         if !compact { Spacer(minLength: 0) }
@@ -1317,7 +1319,15 @@ struct BoundRRDexView: View {
                         .contentShape(Rectangle())
                 }
                     .accessibilityLabel("Clear search").accessibilityIdentifier("bound.rrdex-clear-search")
-            } else if searching {
+            }
+            if hasInlineSearch {
+                Button { query = ""; searching = false } label: {
+                    Text("Done").font(.system(size: 11))
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                }
+                .accessibilityLabel("Close Pokémon search")
+                .accessibilityIdentifier("bound.rrdex-search-open")
+            } else if query.isEmpty && searching {
                 Button { searching = false } label: {
                     Text("Done").font(.system(size: 11))
                         .frame(minWidth: comfortableTargets ? 44 : nil, minHeight: comfortableTargets ? 44 : nil)
@@ -1479,6 +1489,10 @@ struct BoundRRDexView: View {
                     }
                 }
                 Spacer(minLength: 0)
+                if hasInlineSearch {
+                    if layout == .layout7 { layout7SearchButton }
+                    else { layout8SearchButton }
+                }
             }
             if expandedReference {
                 layout7AbilityDescriptions(pokemon: pokemon, catalog: catalog, layoutNumber: layout.rawValue)

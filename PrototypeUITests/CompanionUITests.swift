@@ -5467,6 +5467,112 @@ extension CompanionUITests {
         assertFrame(bound.frame, matches: portraitButton)
     }
 
+    func testLandscapeMultiviewDexSearchSharesPokemonHeaderRow() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) }
+        }
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-reset-layout", "--bound-ui-friend-fixture",
+                              "--bound-ui-screen-layout-bound", "--bound-ui-no-animations",
+                              "-bound.delta.pip.v1.dex.layout", "12",
+                              "-bound.delta.pip.v1.bosses.layout", "12"]
+        app.launch()
+        let diagnostic = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(diagnostic.waitForExistence(timeout: 20))
+        diagnostic.tap()
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+        selectCompanion("Dex", in: app)
+        let portraitSearch = app.buttons["bound.rrdex-search-open"]
+        XCTAssertTrue(portraitSearch.isHittable)
+        XCTAssertLessThan(portraitSearch.frame.midY, 70,
+                          "Portrait keeps the existing search position near the top safe area.")
+
+        func chooseOption(_ number: Int) {
+            openBoundSettings(in: app)
+            let options = element("bound.landscape-options", in: app)
+            XCTAssertTrue(options.waitForExistence(timeout: 5))
+            options.tap(); app.buttons["Option \(number)"].firstMatch.tap()
+            closeBoundSheet(in: app)
+        }
+
+        func verifyDexHeader(option: Int) {
+            let prefix = "bound.landscape\(option)"
+            if option == 7 {
+                let dexTab = app.buttons[prefix + "-tab-dex"]
+                XCTAssertTrue(dexTab.waitForExistence(timeout: 10)); dexTab.tap()
+            }
+            let content = element(prefix + "-reference-content", in: app)
+            XCTAssertTrue(content.waitForExistence(timeout: 10))
+            XCTAssertEqual(content.value as? String, "RR Dex")
+            let sprite = element("bound.rrdex-picture", in: app)
+            let searchButton = app.buttons["bound.rrdex-search-open"]
+            XCTAssertTrue(sprite.waitForExistence(timeout: 5))
+            XCTAssertTrue(searchButton.isHittable)
+            XCTAssertEqual(searchButton.frame.midY, sprite.frame.midY, accuracy: 5,
+                           "Landscape Option \(option) places search beside the Pokémon sprite.")
+            XCTAssertEqual(searchButton.frame.height, sprite.frame.height * 44 / 58, accuracy: 2,
+                           "The 44pt search target scales with the floating Dex card.")
+
+            let contentTop = option == 7 ? element(prefix + "-tabs", in: app).frame.maxY : content.frame.minY
+            XCTAssertLessThanOrEqual(sprite.frame.minY, contentTop + 16,
+                                     "The Dex body starts immediately under the multiview top edge, without a standalone search bar.")
+            XCTAssertFalse(app.textFields["bound.rrdex-search"].exists)
+            screenshot("Landscape-option\(option)-Dex-inline-search")
+
+            searchButton.tap()
+            let search = app.textFields["bound.rrdex-search"]
+            XCTAssertTrue(search.waitForExistence(timeout: 5))
+            let done = app.buttons["bound.rrdex-search-open"]
+            XCTAssertTrue(done.waitForExistence(timeout: 5))
+            done.tap()
+            XCTAssertTrue(search.waitForNonExistence(timeout: 5),
+                          "The inline Done control closes an empty search and restores details.")
+            XCTAssertTrue(app.staticTexts["bound.rrdex-pokemon"].exists)
+            searchButton.tap()
+            XCTAssertTrue(search.waitForExistence(timeout: 5))
+            search.tap(); search.typeText("bulbasaur")
+            let bulbasaur = app.buttons["bound.rrdex-suggestion-1"]
+            XCTAssertTrue(bulbasaur.waitForExistence(timeout: 5))
+            bulbasaur.tap()
+            XCTAssertTrue(search.waitForNonExistence(timeout: 5))
+            XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Bulbasaur")
+            XCTAssertTrue(app.buttons["bound.rrdex-search-open"].isHittable,
+                          "Selecting a result returns to details with inline search available.")
+        }
+
+        chooseOption(6)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(app.buttons["bound.landscape6-views-button"].waitForExistence(timeout: 10))
+        verifyDexHeader(option: 6)
+
+        chooseOption(3)
+        selectCompanion("RR Dex", in: app)
+        let option3Search = app.buttons["bound.rrdex-search-open"]
+        let option3Details = app.scrollViews["bound.rrdex-layout12-details"]
+        XCTAssertTrue(option3Search.isHittable)
+        XCTAssertTrue(option3Details.waitForExistence(timeout: 5))
+        XCTAssertLessThan(option3Search.frame.maxY, option3Details.frame.minY,
+                          "Option 3 keeps the existing separate search header.")
+
+        chooseOption(7)
+        XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 10))
+        verifyDexHeader(option: 7)
+
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(portraitSearch.waitForExistence(timeout: 10))
+        XCTAssertLessThan(portraitSearch.frame.midY, 70,
+                          "Returning to portrait restores its existing search position.")
+    }
+
     func testLandscapeOption3ArrangementGesturesAndIndependentViews() throws {
         try verifyLandscapeArrangement(option: 3)
     }

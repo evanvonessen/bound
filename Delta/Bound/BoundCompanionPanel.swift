@@ -1009,6 +1009,7 @@ struct BoundCompanionPanel: View {
     var contentOverride: BoundPiPContent? = nil
     var presentationEnabled = true
     var rendersFriend = true
+    var inlineDexSearch = false
     private var displayedContent: BoundPiPContent { contentOverride ?? state.content }
     private func shows(_ content: BoundPiPContent) -> Bool {
         presentationEnabled && (contentOverride != nil || !state.availableContents.isEmpty) && displayedContent == content
@@ -1049,7 +1050,8 @@ struct BoundCompanionPanel: View {
             .id("boss-" + gameID)
             BoundRetainedReferenceView(isActive: shows(.dex), floating: state.landscape,
                                        portraitTopInset: state.referenceTopInset) { floating, topInset in
-                BoundRRDexView(gameID: gameID, floating: floating, portraitTopInset: topInset,
+                BoundRRDexView(gameID: gameID, floating: floating, inlineSearch: inlineDexSearch,
+                               portraitTopInset: topInset,
                                isActive: shows(.dex), presentationChanged: { active in
                     if shows(.dex) { editingChanged(active) }
                 }, textEditingChanged: { active in
