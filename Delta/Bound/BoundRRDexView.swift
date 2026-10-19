@@ -51,6 +51,11 @@ struct BoundRRDexView: View {
         // Use the spare clearance below the Island without moving its actions.
         hasIslandActions && layout.rawValue >= 8 ? max(51, portraitTopInset - 6) : portraitTopInset
     }
+    private var portraitReferenceBottomInset: CGFloat? {
+        guard !floating, portraitTopInset > 0 else { return nil }
+        // Match Boss's lower band without changing the panel or gameplay frame.
+        return 6
+    }
     private var layout: BoundReferenceLayout { previewLayout ?? savedLayout }
     private var usesUIVersion2: Bool { uiVersion == .option2 }
     private var referenceMode: String {
@@ -473,7 +478,7 @@ struct BoundRRDexView: View {
         }
         .padding(.horizontal, compact ? 10 : 12)
         .padding(.top, hasIslandActions ? 4 : compact ? 10 : 12)
-        .padding(.bottom, compact ? 10 : 12)
+        .padding(.bottom, portraitReferenceBottomInset ?? (compact ? 10 : 12))
         .background(Color(uiColor: .systemBackground))
     }
 
@@ -805,6 +810,7 @@ struct BoundRRDexView: View {
             }
         }
         .padding(.horizontal, 12)
+        .padding(.bottom, portraitReferenceBottomInset ?? 0)
         .background(Color(uiColor: .systemBackground))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("bound.rrdex-layout12-learnset")
