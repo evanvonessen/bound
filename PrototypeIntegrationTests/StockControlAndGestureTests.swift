@@ -150,7 +150,7 @@ final class StockControlAndGestureTests: XCTestCase {
         }
     }
 
-    func testBoundControllerActionUsesNativeMappingTransformerAndActualReceiverPipeline() throws {
+    func testLandscapeControllerTogglesUseNativeMappingTransformerAndActualReceiverPipeline() throws {
         let domain = "BoundControllerActionTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
@@ -163,15 +163,23 @@ final class StockControlAndGestureTests: XCTestCase {
         var mapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: controller.inputType)
         mapping.set(StandardGameControllerInput.menu, forControllerInput: MFiGameController.Input.leftShoulder)
         mapping.set(ActionInput.cycleBoundPanels, forControllerInput: MFiGameController.Input.rightShoulder)
+        mapping.set(ActionInput.toggleBoundFriend, forControllerInput: MFiGameController.Input.x)
+        mapping.set(ActionInput.toggleBoundMultiview, forControllerInput: MFiGameController.Input.y)
         mapping.set(StandardGameControllerInput.b, forControllerInput: MFiGameController.Input.b)
         let transformer = GameControllerInputMappingTransformer()
         let bytes = try XCTUnwrap(transformer.transformedValue(mapping) as? Data)
         let restored = try XCTUnwrap(transformer.reverseTransformedValue(bytes) as? DeltaCore.GameControllerInputMapping)
         XCTAssertEqual(StandardGameControllerInput(input: try XCTUnwrap(restored.input(forControllerInput: MFiGameController.Input.leftShoulder))), .menu)
         XCTAssertEqual(ActionInput(input: try XCTUnwrap(restored.input(forControllerInput: MFiGameController.Input.rightShoulder))), .cycleBoundPanels)
+        XCTAssertEqual(ActionInput(input: try XCTUnwrap(restored.input(forControllerInput: MFiGameController.Input.x))), .toggleBoundFriend)
+        XCTAssertEqual(ActionInput(input: try XCTUnwrap(restored.input(forControllerInput: MFiGameController.Input.y))), .toggleBoundMultiview)
         XCTAssertEqual(StandardGameControllerInput(input: try XCTUnwrap(restored.input(forControllerInput: MFiGameController.Input.b))), .b)
         XCTAssertTrue(ControlsEditorView.actionInputs.contains(AnyInput(ActionInput.cycleBoundPanels)))
         XCTAssertEqual(AnyInput(ActionInput.cycleBoundPanels).localizedDisplayName, "Cycle Friend/Notes/Types")
+        XCTAssertTrue(ControlsEditorView.actionInputs.contains(AnyInput(ActionInput.toggleBoundFriend)))
+        XCTAssertEqual(AnyInput(ActionInput.toggleBoundFriend).localizedDisplayName, "Toggle Friend")
+        XCTAssertTrue(ControlsEditorView.actionInputs.contains(AnyInput(ActionInput.toggleBoundMultiview)))
+        XCTAssertEqual(AnyInput(ActionInput.toggleBoundMultiview).localizedDisplayName, "Toggle Multiview")
         let state = BoundCompanionState(preferences: preferences)
         let coordinator = BoundCompanionCoordinator(state: state)
         let receiver = BoundVirtualMappingReceiver(coordinator: coordinator)
@@ -184,6 +192,54 @@ final class StockControlAndGestureTests: XCTestCase {
         controller.deactivate(MFiGameController.Input.b)
         XCTAssertEqual(receiver.gameBActivations, 1)
         XCTAssertEqual(state.selected, 0, "Game B remains a game input")
+
+        // Each action is independently mapped and routed through the actual
+        // GameController receiver callback. Simultaneous holds must not collide.
+        controller.activate(MFiGameController.Input.x)
+        controller.activate(MFiGameController.Input.y)
+        controller.activate(MFiGameController.Input.x, value: 0.9)
+        controller.activate(MFiGameController.Input.y, value: 0.9)
+        XCTAssertEqual(receiver.friendToggleActivations, 1)
+        XCTAssertEqual(receiver.multiviewToggleActivations, 1)
+        controller.deactivate(MFiGameController.Input.x)
+        controller.deactivate(MFiGameController.Input.y)
+        XCTAssertEqual(receiver.friendToggleActivations, 1)
+        XCTAssertEqual(receiver.multiviewToggleActivations, 1)
+
+        // Releasing one mapped action re-arms that action alone.
+        controller.activate(MFiGameController.Input.x)
+        controller.activate(MFiGameController.Input.y)
+        receiver.router.release(controller: controller, action: .toggleBoundFriend)
+        controller.activate(MFiGameController.Input.x)
+        controller.activate(MFiGameController.Input.y)
+        XCTAssertEqual(receiver.friendToggleActivations, 3)
+        XCTAssertEqual(receiver.multiviewToggleActivations, 2)
+        controller.deactivate(MFiGameController.Input.x)
+        controller.deactivate(MFiGameController.Input.y)
+
+        // A hold that starts while blocked stays consumed until release.
+        receiver.eligible = false
+        controller.activate(MFiGameController.Input.x)
+        XCTAssertEqual(receiver.friendToggleActivations, 3)
+        receiver.eligible = true
+        controller.activate(MFiGameController.Input.x)
+        XCTAssertEqual(receiver.friendToggleActivations, 3)
+        controller.deactivate(MFiGameController.Input.x)
+        controller.activate(MFiGameController.Input.x)
+        XCTAssertEqual(receiver.friendToggleActivations, 4)
+        controller.deactivate(MFiGameController.Input.x)
+
+        // The disconnect reset clears every action hold for this controller.
+        controller.activate(MFiGameController.Input.x)
+        controller.activate(MFiGameController.Input.y)
+        receiver.router.release(controller: controller)
+        controller.activate(MFiGameController.Input.x)
+        controller.activate(MFiGameController.Input.y)
+        XCTAssertEqual(receiver.friendToggleActivations, 6)
+        XCTAssertEqual(receiver.multiviewToggleActivations, 4)
+        controller.deactivate(MFiGameController.Input.x)
+        controller.deactivate(MFiGameController.Input.y)
+
         for selected in [1, 2, 0] {
             controller.activate(MFiGameController.Input.rightShoulder)
             controller.activate(MFiGameController.Input.rightShoulder, value: 0.9)
@@ -614,14 +670,23 @@ private final class BoundVirtualMappingReceiver: GameControllerReceiver {
     var eligible = true
     var menuActivations = 0
     var gameBActivations = 0
+    var friendToggleActivations = 0
+    var multiviewToggleActivations = 0
     init(coordinator: BoundCompanionCoordinator) { self.coordinator = coordinator }
     func gameController(_ gameController: GameController, didActivate input: Input, value: Double) {
-        if ActionInput(input: input) == .cycleBoundPanels {
-            router.activate(controller: gameController, eligible: eligible) { coordinator.cyclePanels() }
+        if let action = ActionInput(input: input) {
+            router.activate(controller: gameController, action: action, eligible: eligible) {
+                switch action {
+                case .cycleBoundPanels: coordinator.cyclePanels()
+                case .toggleBoundFriend: friendToggleActivations += 1
+                case .toggleBoundMultiview: multiviewToggleActivations += 1
+                default: break
+                }
+            }
         } else if StandardGameControllerInput(input: input) == .menu { menuActivations += 1 }
         else if StandardGameControllerInput(input: input) == .b { gameBActivations += 1 }
     }
     func gameController(_ gameController: GameController, didDeactivate input: Input) {
-        if ActionInput(input: input) == .cycleBoundPanels { router.release(controller: gameController) }
+        if let action = ActionInput(input: input) { router.release(controller: gameController, action: action) }
     }
 }

@@ -282,6 +282,8 @@ extension Input
             case .reverseScreens: return NSLocalizedString("Reverse Screens", comment: "")
             case .screenshot: return NSLocalizedString("Screenshot", comment: "")
             case .cycleBoundPanels: return NSLocalizedString("Cycle Friend/Notes/Types", comment: "")
+            case .toggleBoundFriend: return NSLocalizedString("Toggle Friend", comment: "")
+            case .toggleBoundMultiview: return NSLocalizedString("Toggle Multiview", comment: "")
             }
             
         default: break
@@ -425,6 +427,8 @@ extension Input
             case .reverseScreens: return "rectangle.2.swap"
             case .screenshot: return "camera"
             case .cycleBoundPanels: return "rectangle.2.swap"
+            case .toggleBoundFriend: return "person.2.fill"
+            case .toggleBoundMultiview: return "book.closed"
             }
             
         default: return "questionmark.circle"

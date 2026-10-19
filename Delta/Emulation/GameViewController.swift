@@ -327,8 +327,8 @@ class GameViewController: DeltaCore.GameViewController
     override func gameController(_ gameController: GameController, didActivate input: Input, value: Double)
     {
         super.gameController(gameController, didActivate: input, value: value)
-        if ActionInput(input: input) == .cycleBoundPanels {
-            self.receiveBoundPanelAction(from: gameController, pressed: true)
+        if let action = ActionInput(input: input), action == .cycleBoundPanels || action == .toggleBoundFriend || action == .toggleBoundMultiview {
+            self.receiveBoundPanelAction(action, from: gameController, pressed: true)
             return
         }
         
@@ -349,7 +349,7 @@ class GameViewController: DeltaCore.GameViewController
             case .fastForward: self.performFastForwardAction(activate: true, remember: false)
             case .reverseScreens: self.performReverseScreensAction()
             case .screenshot: self.performScreenshotAction()
-            case .cycleBoundPanels: break // Handled independently above; never an emulated B input.
+            case .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview: break // Handled independently above; never emulated inputs.
             case .toggleFastForward:
                 let isFastForwarding = (emulatorCore.rate != emulatorCore.deltaCore.supportedRates.lowerBound)
                 self.performFastForwardAction(activate: !isFastForwarding)
@@ -360,8 +360,8 @@ class GameViewController: DeltaCore.GameViewController
     override func gameController(_ gameController: GameController, didDeactivate input: Input)
     {
         super.gameController(gameController, didDeactivate: input)
-        if ActionInput(input: input) == .cycleBoundPanels {
-            self.receiveBoundPanelAction(from: gameController, pressed: false)
+        if let action = ActionInput(input: input), action == .cycleBoundPanels || action == .toggleBoundFriend || action == .toggleBoundMultiview {
+            self.receiveBoundPanelAction(action, from: gameController, pressed: false)
             return
         }
         
@@ -382,15 +382,15 @@ class GameViewController: DeltaCore.GameViewController
             case .toggleFastForward: break
             case .reverseScreens: break
             case .screenshot: break
-            case .cycleBoundPanels: break
+            case .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview: break
             }
         }
     }
-    private func receiveBoundPanelAction(from controller: GameController, pressed: Bool) {
+    private func receiveBoundPanelAction(_ action: ActionInput, from controller: GameController, pressed: Bool) {
         let expectedCore = emulatorCore
         let apply = { [weak self, weak controller] in
             guard let self, let controller else { return }
-            if !pressed { self.boundPanelActions.release(controller: controller); return }
+            if !pressed { self.boundPanelActions.release(controller: controller, action: action); return }
             let eligible = self.emulatorCore === expectedCore && expectedCore?.state == .running
                 && controller.inputType != .controllerSkin && controller.playerIndex != nil
                 && ExternalGameControllerManager.shared.connectedControllers.contains(where: { $0 === controller })
@@ -398,13 +398,20 @@ class GameViewController: DeltaCore.GameViewController
                 && UIApplication.shared.applicationState == .active && self.presentedViewController == nil
                 && !self.boundCompanion.isEditingNotes
                 && !self.boundCompanion.state.showingFriends && !self.boundCompanion.state.showingSettings
-            self.boundPanelActions.activate(controller: controller, eligible: eligible) { self.boundCompanion.cyclePanels() }
+            self.boundPanelActions.activate(controller: controller, action: action, eligible: eligible) {
+                if action == .cycleBoundPanels { self.boundCompanion.cyclePanels() }
+                else { self.boundCompanion.toggleControllerPanel(action) }
+            }
         }
         if Thread.isMainThread { apply() } else { DispatchQueue.main.async(execute: apply) }
     }
     @objc private func boundControllerDisconnected(with notification: Notification) {
         guard let controller = notification.object as? GameController else { return }
-        receiveBoundPanelAction(from: controller, pressed: false)
+        let release = { [weak self, weak controller] in
+            guard let self, let controller else { return }
+            self.boundPanelActions.release(controller: controller)
+        }
+        if Thread.isMainThread { release() } else { DispatchQueue.main.async(execute: release) }
     }
 }
 

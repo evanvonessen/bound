@@ -18,6 +18,21 @@ Button 2 (bottom) contains only Types, Bosses and RR Dex. Controller Mode remain
 off by default, with Mode 1 preselected when enabled. Existing saved preferences
 take priority over these defaults.
 
+Controller mapping includes **Toggle Friend** and **Toggle Multiview** as normal
+Game Actions, alongside the existing **Menu** mapping. These choices do not
+require the experimental customization checkbox. In landscape Controller Mode
+1 or 2, Toggle Friend shows/hides the friend screen; Toggle Multiview shows/hides
+the Option 6/7 panel without changing its selected view. The new toggles are
+inactive in portrait, with Controller Mode off, or while arranging views.
+Menu retains its existing pause/resume behavior. Bindings use the existing
+per-player, per-system controller mapping storage.
+
+Controller-toggle validation passed 53 focused integration checks and an unsigned
+Release iPhone build. Tests cover mapping serialization and receiver delivery,
+independent press/release handling, blocked holds and disconnect cleanup, both
+controller layouts, portrait/mode-off/editing guards, and selected-tab preservation.
+Physical Bluetooth/wired controllers were not exercised.
+
 The Library settings button and pause-menu Settings tile open the same grouped
 home: Interface & Companion, Controls, Audio, Account & Sync,
 General, and About. Audio opens its controls directly; About includes the Game

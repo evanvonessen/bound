@@ -894,6 +894,18 @@ final class BoundCompanionCoordinator {
         }
         state.advancePanel()
     }
+    func toggleControllerPanel(_ action: ActionInput) {
+        guard state.landscape, BoundControllerModePreferences().isEnabled,
+              BoundAppearancePreferences().effectiveScreenLayout == .bound else { return }
+        switch action {
+        case .toggleBoundFriend:
+            if landscapeArrangement.active { landscapeArrangement.toggleControllerFriend() }
+            else if landscapeCompanion.active { landscapeCompanion.toggleFriend() }
+        case .toggleBoundMultiview:
+            landscapeArrangement.toggleControllerMultiview()
+        default: break
+        }
+    }
     var allowsOpacityGesture: Bool { !state.availableContents.isEmpty && state.landscape && state.content != .types && !isEditingNotes }
     private func companionBaseSize(width: CGFloat, content: BoundPiPContent? = nil) -> CGSize {
         let content = content ?? state.content

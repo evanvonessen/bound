@@ -23,19 +23,39 @@ enum ActionInput: String
     case reverseScreens
     case screenshot
     case cycleBoundPanels
+    case toggleBoundFriend
+    case toggleBoundMultiview
 }
 
 /// One activation per physical hold, using the upstream controller/mapping pipeline.
 /// Weak keys do not retain disconnected controllers; release/disconnect re-arm the action.
 @MainActor
 final class BoundPanelActionRouter {
-    private let pressed = NSHashTable<AnyObject>.weakObjects()
-    func activate(controller: GameController, eligible: Bool, cycle: () -> Void) {
+    private var pressedByAction = [ActionInput: NSHashTable<AnyObject>]()
+
+    func activate(controller: GameController, action: ActionInput = .cycleBoundPanels, eligible: Bool, cycle: () -> Void) {
+        let pressed = pressedByAction[action] ?? NSHashTable<AnyObject>.weakObjects()
         guard !pressed.contains(controller) else { return }
         pressed.add(controller)
+        pressedByAction[action] = pressed
         if eligible { cycle() }
     }
-    func release(controller: GameController) { pressed.remove(controller) }
+
+    func release(controller: GameController, action: ActionInput? = nil) {
+        if let action {
+            pressedByAction[action]?.remove(controller)
+            if pressedByAction[action]?.allObjects.isEmpty == true {
+                pressedByAction[action] = nil
+            }
+        } else {
+            for action in Array(pressedByAction.keys) {
+                pressedByAction[action]?.remove(controller)
+                if pressedByAction[action]?.allObjects.isEmpty == true {
+                    pressedByAction[action] = nil
+                }
+            }
+        }
+    }
 }
 
 extension ActionInput: Input

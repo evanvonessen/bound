@@ -478,6 +478,14 @@ final class BoundLandscapeArrangementModel: ObservableObject {
 
     func toggleFriend() { friendVisible.toggle(); defaults.set(friendVisible, forKey: key("friend-visible")); needsLayout?() }
     func toggleReference() { referenceVisible.toggle(); defaults.set(referenceVisible, forKey: key("reference-visible")); needsLayout?() }
+    func toggleControllerFriend() {
+        guard active, controllerModeEnabled, !editing else { return }
+        toggleFriend()
+    }
+    func toggleControllerMultiview() {
+        guard active, controllerModeEnabled, multiview, !editing, !contents.isEmpty else { return }
+        toggleReference()
+    }
 
     func aboveButtons(for content: BoundPiPContent) -> Bool { state(for: content).aboveButtons }
 

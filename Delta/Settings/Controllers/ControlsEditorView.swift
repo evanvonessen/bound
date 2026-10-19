@@ -105,7 +105,7 @@ private class ControlsEditor
 // Edits the input mapping for one player + system + controller type.
 struct ControlsEditorView: View
 {
-    static let actionInputs: [AnyInput] = [ActionInput.quickSave, .quickLoad, .fastForward, .screenshot, .cycleBoundPanels].map(AnyInput.init)
+    static let actionInputs: [AnyInput] = [ActionInput.quickSave, .quickLoad, .fastForward, .screenshot, .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview].map(AnyInput.init)
     @SwiftUI.State
     private var editor: ControlsEditor
     

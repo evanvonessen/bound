@@ -26,6 +26,57 @@ final class LandscapeArrangementTests: XCTestCase {
                            screenBounds: screenBounds)
     }
 
+    func testControllerTogglesPreserveSelectionAndRespectLandscapeModeAndEditing() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        for option in [BoundLandscapeOption.option6, .option7] {
+            for mode in [BoundControllerModeLayout.mode1, .mode2] {
+                model.useOption(option, controllerModeEnabled: true, controllerModeLayout: mode)
+                model.setContents([.friend, .dex, .bosses, .types])
+                model.setActive(true)
+                arrangeLayout(model)
+                model.select(.bosses)
+                let friend = model.friendVisible
+                let reference = model.referenceVisible
+
+                model.toggleControllerFriend()
+                XCTAssertEqual(model.friendVisible, !friend)
+                XCTAssertEqual(model.referenceVisible, reference)
+                model.toggleControllerMultiview()
+                XCTAssertEqual(model.referenceVisible, !reference)
+                XCTAssertEqual(model.referenceContent, .bosses)
+                model.toggleControllerMultiview()
+                XCTAssertEqual(model.referenceVisible, reference)
+                XCTAssertEqual(model.referenceContent, .bosses, "Show/hide must not cycle the selected tab.")
+                model.toggleControllerFriend()
+                XCTAssertEqual(model.friendVisible, friend)
+
+                // Rotation to portrait deactivates the landscape model.
+                model.setActive(false)
+                model.toggleControllerFriend(); model.toggleControllerMultiview()
+                XCTAssertEqual(model.friendVisible, friend)
+                XCTAssertEqual(model.referenceVisible, reference)
+                model.setActive(true)
+                model.arrange()
+                let editingFriend = model.friendVisible, editingReference = model.referenceVisible
+                model.toggleControllerFriend(); model.toggleControllerMultiview()
+                XCTAssertEqual(model.friendVisible, editingFriend)
+                XCTAssertEqual(model.referenceVisible, editingReference)
+                model.finish(save: false)
+
+                model.useOption(option, controllerModeEnabled: false)
+                let touchFriend = model.friendVisible, touchReference = model.referenceVisible
+                model.toggleControllerFriend(); model.toggleControllerMultiview()
+                XCTAssertEqual(model.friendVisible, touchFriend)
+                XCTAssertEqual(model.referenceVisible, touchReference)
+            }
+        }
+        model.useOption(.option3, controllerModeEnabled: true)
+        let legacyReference = model.referenceVisible
+        model.toggleControllerMultiview()
+        XCTAssertEqual(model.referenceVisible, legacyReference, "Multiview is available only in Options 6 and 7.")
+    }
+
     private func saveReferenceArrangement(_ model: BoundLandscapeArrangementModel,
                                           content: BoundPiPContent,
                                           translation: CGSize,
