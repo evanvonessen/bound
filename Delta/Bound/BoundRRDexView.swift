@@ -32,13 +32,12 @@ struct BoundRRDexView: View {
     @State private var layout4EvolutionExpanded = false
     @State private var layout5EvolutionExpanded = false
     private enum Detail: Identifiable {
-        case weaknesses, learnset, information, evolution
+        case weaknesses, learnset, evolution
         case ability(String, String)
         var id: String {
             switch self {
             case .weaknesses: "weaknesses"
             case .learnset: "learnset"
-            case .information: "information"
             case .evolution: "evolution"
             case let .ability(name, _): "ability-\(name)"
             }
@@ -57,14 +56,7 @@ struct BoundRRDexView: View {
         return 6
     }
     private var layout: BoundReferenceLayout { previewLayout ?? savedLayout }
-    private let informationFooterHeight: CGFloat = 18
     private var usesUIVersion2: Bool { uiVersion == .option2 }
-    private var referenceMode: String {
-        if automaticSaveStatus == BoundRRDexSave.ImportError.difficulty.localizedDescription {
-            return "Hardcore / Restricted"
-        }
-        return "Normal"
-    }
     private var statLabels: [String] {
         usesUIVersion2 ? ["HP", "Atk", "Def", "SpAtk", "SpDef", "Speed"] : ["HP", "Atk", "Def", "SpA", "SpD", "Spe"]
     }
@@ -74,31 +66,23 @@ struct BoundRRDexView: View {
             if let catalog = catalogStore.dex,
                let pokemon = catalog.pokemon(id: choice.speciesID) ?? catalog.species.first {
                 GeometryReader { geometry in
-                    let contentSize = CGSize(width: geometry.size.width,
-                                             height: max(0, geometry.size.height - informationFooterHeight))
-                    VStack(spacing: 0) {
-                        Group {
-                            if layout == .layout12 && layout12LearnsetPresented {
-                                layout12Learnset(pokemon: pokemon, catalog: catalog, compact: geometry.size.height < 140)
-                            } else if floating {
-                                floatingCard(pokemon: pokemon, catalog: catalog, size: geometry.size)
-                            } else if geometry.size.height < 140 {
-                                // Keep fixed controls reachable when the portrait strip
-                                // is too short to hold them beside a scrolling list.
-                                ScrollView {
-                                    compactCard(pokemon: pokemon, catalog: catalog)
-                                        .frame(width: contentSize.width)
-                                }
-                                .id((layout == .layout4 || layout == .layout5 || layout == .layout6 || layout == .layout7 || layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12) && (searching || !query.isEmpty))
-                                .scrollDismissesKeyboard(.interactively)
-                                .frame(width: contentSize.width, height: contentSize.height)
-                            } else {
-                                selectedCard(pokemon: pokemon, catalog: catalog, size: geometry.size)
-                                    .frame(width: contentSize.width, height: contentSize.height)
-                            }
+                    if layout == .layout12 && layout12LearnsetPresented {
+                        layout12Learnset(pokemon: pokemon, catalog: catalog, compact: geometry.size.height < 140)
+                    } else if floating {
+                        floatingCard(pokemon: pokemon, catalog: catalog, size: geometry.size)
+                    } else if geometry.size.height < 140 {
+                        // Keep fixed controls reachable when the portrait strip
+                        // is too short to hold them beside a scrolling list.
+                        ScrollView {
+                            compactCard(pokemon: pokemon, catalog: catalog)
+                                .frame(width: geometry.size.width)
                         }
-                        .frame(width: contentSize.width, height: contentSize.height, alignment: .topLeading)
-                        informationFooter
+                        .id((layout == .layout4 || layout == .layout5 || layout == .layout6 || layout == .layout7 || layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12) && (searching || !query.isEmpty))
+                        .scrollDismissesKeyboard(.interactively)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                    } else {
+                        selectedCard(pokemon: pokemon, catalog: catalog, size: geometry.size)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
                     }
                 }
                 .padding(.top, contentTopInset)
@@ -166,9 +150,6 @@ struct BoundRRDexView: View {
                         switch detail {
                         case .weaknesses: BoundRRDexMatchups(pokemon: pokemon, catalog: catalog)
                         case .learnset: BoundRRDexLearnset(pokemon: pokemon, catalog: catalog, save: choice.save)
-                        case .information:
-                            if layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12 { informationLayout8() }
-                            else { information(catalog: catalog) }
                         case .evolution: evolutionDetail(pokemon: pokemon, catalog: catalog)
                         case let .ability(name, description):
                             ScrollView { Text(description).frame(maxWidth: .infinity, alignment: .leading).padding() }
@@ -226,26 +207,26 @@ struct BoundRRDexView: View {
         switch detail {
         case .weaknesses: "Type matchups"
         case .learnset: "Learnset"
-        case .information: "RRDex"
         case .evolution: "Evolution and methods"
         case let .ability(name, _): name
         }
     }
 
-    private var informationFooter: some View {
-        Button { showDetail(.information) } label: {
-            Text("Information")
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .frame(height: informationFooterHeight)
-                .contentShape(Rectangle())
+    private var referenceFooter: some View {
+        VStack(spacing: 2) {
+            Text("Radical Red Version 4.1")
+                .accessibilityIdentifier("bound.rrdex-reference-rom")
+            Text("Normal Difficulty")
+                .accessibilityIdentifier("bound.rrdex-reference-difficulty")
         }
-        .buttonStyle(.plain)
+        .font(.system(size: 10))
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
-        .background(Color(uiColor: .systemBackground))
-        .accessibilityLabel("Dex information")
-        .accessibilityIdentifier("bound.rrdex-info")
+        .padding(.top, 12)
+        .padding(.bottom, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("bound.rrdex-reference-footer")
     }
 
     @ViewBuilder
@@ -254,14 +235,11 @@ struct BoundRRDexView: View {
         // Keep the existing text/sprite scale while giving the card the full
         // resized viewport. A fixed 300-point height leaves unused space when
         // landscape arrangement makes the panel taller without widening it.
-        let viewportHeight = max(0, size.height - informationFooterHeight)
-        let layoutSize = CGSize(width: size.width / max(scale, 0.001),
-                                height: size.height / max(scale, 0.001))
-        let contentSize = CGSize(width: layoutSize.width,
-                                 height: viewportHeight / max(scale, 0.001))
-        selectedCard(pokemon: pokemon, catalog: catalog, size: layoutSize)
+        let contentSize = CGSize(width: size.width / max(scale, 0.001),
+                                 height: size.height / max(scale, 0.001))
+        selectedCard(pokemon: pokemon, catalog: catalog, size: contentSize)
             .frame(width: contentSize.width, height: contentSize.height).scaleEffect(scale)
-            .frame(width: size.width, height: viewportHeight)
+            .frame(width: size.width, height: size.height)
     }
 
     @ViewBuilder
@@ -960,6 +938,7 @@ struct BoundRRDexView: View {
             matchupSummary(pokemon: pokemon, catalog: catalog, compact: denseSizing)
             statsLine(pokemon: pokemon, compact: denseSizing)
             evolutionLine(pokemon: pokemon, catalog: catalog)
+            referenceFooter
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1017,6 +996,7 @@ struct BoundRRDexView: View {
                     matchupSummary(pokemon: pokemon, catalog: catalog, compact: true)
                     statsLine(pokemon: pokemon, compact: true)
                     evolutionLine(pokemon: pokemon, catalog: catalog).font(.system(size: 10))
+                    referenceFooter
                 }
             } else {
                 ScrollView {
@@ -1024,6 +1004,7 @@ struct BoundRRDexView: View {
                         matchupSummary(pokemon: pokemon, catalog: catalog, compact: true)
                         statsLine(pokemon: pokemon, compact: true)
                         evolutionLine(pokemon: pokemon, catalog: catalog).font(.system(size: 10))
+                        referenceFooter
                     }
                 }
                 .accessibilityIdentifier("bound.rrdex-layout3-details")
@@ -1110,8 +1091,8 @@ struct BoundRRDexView: View {
 
     /// Layout 5 keeps the species identity, matchup summary, and every base
     /// stat visible before evolution details. The single detail scroller gives
-    /// short portrait panels room to reveal the lower modules while the search,
-    /// import, and information controls stay reachable at the game edge.
+    /// short portrait panels room to reveal the lower modules while the search
+    /// and import controls stay reachable at the game edge.
     private func cardLayout5(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog,
                              compact: Bool, denseSizing: Bool = false) -> some View {
         cardLayoutShell(catalog: catalog, compact: compact, denseSizing: denseSizing,
@@ -1163,8 +1144,14 @@ struct BoundRRDexView: View {
         VStack(alignment: .leading, spacing: spacing ?? (compact ? 4 : 6)) {
             if compact {
                 content(true)
+                if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { referenceFooter }
             } else {
-                ScrollView { content(denseSizing) }
+                ScrollView {
+                    VStack(spacing: 0) {
+                        content(denseSizing)
+                        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { referenceFooter }
+                    }
+                }
                     .id(searching || !query.isEmpty)
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier(detailsIdentifier)
@@ -1522,6 +1509,7 @@ struct BoundRRDexView: View {
                                          showsExceptionalMultipliers: usesUIVersion2)
             }
             if layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12 { inlineLearnset(pokemon: pokemon, catalog: catalog) }
+            referenceFooter
         }
     }
 
@@ -1685,36 +1673,6 @@ struct BoundRRDexView: View {
             choice = preferences.read(gameID: gameID)
         }
         automaticSaveStatus = error.localizedDescription
-    }
-    private func informationLayout8() -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("ROM: Radical Red Version 4.1")
-                .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-info-rom")
-            Text("Difficulty: \(referenceMode)")
-                .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-info-difficulty")
-            Text(choice.save == nil ? "No Save Loaded" : "Save Loaded")
-                .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-info-save")
-        }
-        .font(.body)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(16)
-    }
-
-    private func information(catalog: BoundRRDexCatalog) -> some View {
-        List {
-            Section("Save") {
-                Text(choice.save?.summary ?? "Browsing the standard Normal dex")
-                Text("Bound reads the current game's save automatically when you open the Dex and refreshes it when the game saves or loads a state. Save once in-game to include new randomizer settings.")
-                Text("Bound deletes the temporary export after reading it and keeps only the randomizer seed and settings for this ROM on this device.")
-                if let automaticSaveStatus { Text(automaticSaveStatus).foregroundStyle(.secondary) }
-            }
-            Section("Reference") {
-                Text("Radical Red 4.1 · \(referenceMode) difficulty")
-                Text("\(catalog.species.count) Pokémon and forms · \(catalog.moves.count) moves")
-                Text("Stats are base stats. Evolution methods and type matchups follow this version of Radical Red.")
-                Text("Pokémon characters and artwork belong to their respective owners. Radical Red is a community project.").font(.caption).foregroundStyle(.secondary)
-            }
-        }
     }
 }
 
