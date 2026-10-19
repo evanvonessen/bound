@@ -57,6 +57,7 @@ struct BoundRRDexView: View {
         return 6
     }
     private var layout: BoundReferenceLayout { previewLayout ?? savedLayout }
+    private let informationFooterHeight: CGFloat = 18
     private var usesUIVersion2: Bool { uiVersion == .option2 }
     private var referenceMode: String {
         if automaticSaveStatus == BoundRRDexSave.ImportError.difficulty.localizedDescription {
@@ -73,23 +74,31 @@ struct BoundRRDexView: View {
             if let catalog = catalogStore.dex,
                let pokemon = catalog.pokemon(id: choice.speciesID) ?? catalog.species.first {
                 GeometryReader { geometry in
-                    if layout == .layout12 && layout12LearnsetPresented {
-                        layout12Learnset(pokemon: pokemon, catalog: catalog, compact: geometry.size.height < 140)
-                    } else if floating {
-                        floatingCard(pokemon: pokemon, catalog: catalog, size: geometry.size)
-                    } else if geometry.size.height < 140 {
-                        // Keep fixed controls reachable when the portrait strip
-                        // is too short to hold them beside a scrolling list.
-                        ScrollView {
-                            compactCard(pokemon: pokemon, catalog: catalog)
-                                .frame(width: geometry.size.width)
+                    let contentSize = CGSize(width: geometry.size.width,
+                                             height: max(0, geometry.size.height - informationFooterHeight))
+                    VStack(spacing: 0) {
+                        Group {
+                            if layout == .layout12 && layout12LearnsetPresented {
+                                layout12Learnset(pokemon: pokemon, catalog: catalog, compact: geometry.size.height < 140)
+                            } else if floating {
+                                floatingCard(pokemon: pokemon, catalog: catalog, size: geometry.size)
+                            } else if geometry.size.height < 140 {
+                                // Keep fixed controls reachable when the portrait strip
+                                // is too short to hold them beside a scrolling list.
+                                ScrollView {
+                                    compactCard(pokemon: pokemon, catalog: catalog)
+                                        .frame(width: contentSize.width)
+                                }
+                                .id((layout == .layout4 || layout == .layout5 || layout == .layout6 || layout == .layout7 || layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12) && (searching || !query.isEmpty))
+                                .scrollDismissesKeyboard(.interactively)
+                                .frame(width: contentSize.width, height: contentSize.height)
+                            } else {
+                                selectedCard(pokemon: pokemon, catalog: catalog, size: geometry.size)
+                                    .frame(width: contentSize.width, height: contentSize.height)
+                            }
                         }
-                        .id((layout == .layout4 || layout == .layout5 || layout == .layout6 || layout == .layout7 || layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12) && (searching || !query.isEmpty))
-                        .scrollDismissesKeyboard(.interactively)
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                    } else {
-                        selectedCard(pokemon: pokemon, catalog: catalog, size: geometry.size)
-                            .frame(width: geometry.size.width, height: geometry.size.height)
+                        .frame(width: contentSize.width, height: contentSize.height, alignment: .topLeading)
+                        informationFooter
                     }
                 }
                 .padding(.top, contentTopInset)
@@ -107,7 +116,7 @@ struct BoundRRDexView: View {
                         } else if layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12 {
                             HStack(spacing: 0) {
                                 Spacer(minLength: 0)
-                                layout8InformationButton
+                                Color.clear.frame(width: 44, height: 44)
                                 Color.clear.frame(width: 160, height: 1)
                                 layout8SearchButton
                                 Spacer(minLength: 0)
@@ -117,7 +126,7 @@ struct BoundRRDexView: View {
                         } else {
                             HStack(spacing: 0) {
                                 if layout == .layout7 {
-                                    layout7InformationButton.frame(maxWidth: .infinity, alignment: .leading)
+                                    Color.clear.frame(width: 44, height: 44).frame(maxWidth: .infinity, alignment: .leading)
                                 } else {
                                     detailButton("Weaknesses", icon: "shield.lefthalf.filled", detail: .weaknesses, besideIsland: true)
                                 }
@@ -223,17 +232,36 @@ struct BoundRRDexView: View {
         }
     }
 
+    private var informationFooter: some View {
+        Button { showDetail(.information) } label: {
+            Text("Information")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .frame(height: informationFooterHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .background(Color(uiColor: .systemBackground))
+        .accessibilityLabel("Dex information")
+        .accessibilityIdentifier("bound.rrdex-info")
+    }
+
     @ViewBuilder
     private func floatingCard(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog, size: CGSize) -> some View {
         let scale = min(size.width / 360, size.height / 300)
         // Keep the existing text/sprite scale while giving the card the full
         // resized viewport. A fixed 300-point height leaves unused space when
         // landscape arrangement makes the panel taller without widening it.
-        let contentSize = CGSize(width: size.width / max(scale, 0.001),
-                                 height: size.height / max(scale, 0.001))
-        selectedCard(pokemon: pokemon, catalog: catalog, size: contentSize)
+        let viewportHeight = max(0, size.height - informationFooterHeight)
+        let layoutSize = CGSize(width: size.width / max(scale, 0.001),
+                                height: size.height / max(scale, 0.001))
+        let contentSize = CGSize(width: layoutSize.width,
+                                 height: viewportHeight / max(scale, 0.001))
+        selectedCard(pokemon: pokemon, catalog: catalog, size: layoutSize)
             .frame(width: contentSize.width, height: contentSize.height).scaleEffect(scale)
-            .frame(width: size.width, height: size.height)
+            .frame(width: size.width, height: viewportHeight)
     }
 
     @ViewBuilder
@@ -298,8 +326,7 @@ struct BoundRRDexView: View {
                 } label: { Label(choice.save == nil ? "Import save" : "Save loaded", systemImage: choice.save == nil ? "square.and.arrow.down" : "checkmark.circle") }
                     .font(.system(size: 11, weight: .medium)).accessibilityIdentifier("bound.rrdex-import")
                     .accessibilityHint("Imports or refreshes the current game's save automatically")
-                Button { showDetail(.information) } label: { Image(systemName: "info.circle") }
-                    .accessibilityLabel("Dex information").accessibilityIdentifier("bound.rrdex-info")
+                Image(systemName: "info.circle").hidden().accessibilityHidden(true)
             }
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -343,14 +370,6 @@ struct BoundRRDexView: View {
         .background(Color(uiColor: .systemBackground))
     }
 
-    private var layout7InformationButton: some View {
-        Button { showDetail(.information) } label: {
-            Image(systemName: "info.circle").font(.system(size: 16))
-                .frame(width: 44, height: 44).contentShape(Rectangle())
-        }
-        .accessibilityLabel("Dex information").accessibilityIdentifier("bound.rrdex-info")
-    }
-
     private var layout7SearchButton: some View {
         Button {
             if searching || !query.isEmpty { query = ""; searching = false }
@@ -361,17 +380,6 @@ struct BoundRRDexView: View {
         }
         .accessibilityLabel(searching ? "Close Pokémon search" : "Search Pokémon")
         .accessibilityIdentifier("bound.rrdex-search-open")
-    }
-
-    private var layout8InformationButton: some View {
-        Button { showDetail(.information) } label: {
-            Image(systemName: "info.circle")
-                .font(.system(size: 22, weight: .regular))
-                .foregroundStyle(Color.primary)
-                .frame(width: 44, height: 44).contentShape(Rectangle())
-        }
-        .accessibilityLabel("Dex information")
-        .accessibilityIdentifier("bound.rrdex-info")
     }
 
     private var layout8SearchButton: some View {
@@ -396,7 +404,7 @@ struct BoundRRDexView: View {
         VStack(alignment: .leading, spacing: 7) {
             if !hasIslandActions {
                 HStack {
-                    layout7InformationButton
+                    Color.clear.frame(width: 44, height: 44)
                     Spacer(minLength: 0)
                     layout7SearchButton
                 }
@@ -431,7 +439,7 @@ struct BoundRRDexView: View {
         VStack(alignment: .leading, spacing: 7) {
             if !hasIslandActions {
                 HStack {
-                    layout8InformationButton
+                    Color.clear.frame(width: 44, height: 44)
                     Spacer(minLength: 0)
                     layout8SearchButton
                 }
@@ -1248,7 +1256,7 @@ struct BoundRRDexView: View {
             footerAction(choice.save == nil ? "Import save" : "Save loaded",
                          icon: choice.save == nil ? "square.and.arrow.down" : "checkmark.circle",
                          identifier: "bound.rrdex-import", width: 74) { importCurrentGameSave() }
-            footerAction("Info", icon: "info.circle", identifier: "bound.rrdex-info", width: 44) { showDetail(.information) }
+            Color.clear.frame(width: 44, height: 44)
         }
         .frame(height: 44)
         .accessibilityElement(children: .contain)
@@ -1302,12 +1310,9 @@ struct BoundRRDexView: View {
             }
             .accessibilityIdentifier("bound.rrdex-import")
             .accessibilityHint("Imports or refreshes the current game's save automatically")
-            Button { showDetail(.information) } label: {
-                Image(systemName: "info.circle")
-                    .frame(minWidth: comfortableTargets ? 44 : nil, minHeight: comfortableTargets ? 44 : nil)
-                    .contentShape(Rectangle())
-            }
-                .accessibilityLabel("Dex information").accessibilityIdentifier("bound.rrdex-info")
+            Image(systemName: "info.circle")
+                .frame(minWidth: comfortableTargets ? 44 : nil, minHeight: comfortableTargets ? 44 : nil)
+                .hidden().accessibilityHidden(true)
         }
         .frame(minHeight: comfortableTargets ? 44 : 28)
     }

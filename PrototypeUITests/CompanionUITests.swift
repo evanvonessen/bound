@@ -616,7 +616,7 @@ final class CompanionUITests: XCTestCase {
             XCTAssertEqual(element("bound.rrdex", in: app).value as? String, "Layout 7")
             XCTAssertEqual(app.buttons["bound.rrdex-info"].label,
                            "Dex information",
-                           "The information icon opens the current-save details.")
+                           "The Information footer opens the current-save details.")
         }
         func assertAutomaticSave() {
             XCTAssertFalse(app.buttons["bound.rrdex-import"].exists, "Layout 7 has no manual save control")
@@ -637,7 +637,11 @@ final class CompanionUITests: XCTestCase {
         let searchButton = app.buttons["bound.rrdex-search-open"]
         XCTAssertTrue(searchButton.isHittable)
         XCTAssertGreaterThan(searchButton.frame.minX, app.frame.midX + 78)
-        XCTAssertLessThan(app.buttons["bound.rrdex-info"].frame.maxX, app.frame.midX - 78)
+        let infoFooter = app.buttons["bound.rrdex-info"]
+        let dexView = element("bound.rrdex", in: app)
+        XCTAssertEqual(infoFooter.frame.height, 18, accuracy: 1)
+        XCTAssertEqual(infoFooter.frame.midX, dexView.frame.midX, accuracy: 2)
+        XCTAssertEqual(infoFooter.frame.maxY, dexView.frame.maxY, accuracy: 4)
         searchButton.tap()
         let search = app.textFields["bound.rrdex-search"]
         XCTAssertTrue(search.waitForExistence(timeout: 5))
@@ -682,6 +686,83 @@ final class CompanionUITests: XCTestCase {
         assertAutomaticSave()
         XCTAssertEqual(app.staticTexts["bound.rrdex-pokemon"].label, "Bulbasaur")
         assertGamePixelsAnimate(element("bound.game-screen", in: app), in: app)
+    }
+
+    func testRRDexInformationFooterPortraitAndLandscape() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) }
+        }
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-reset-layout", "--bound-ui-friend-fixture",
+                               "--bound-ui-screen-layout-bound", "--bound-ui-no-animations",
+                               "-bound.delta.pip.v1.dex.layout", "12"]
+        app.launch()
+        let diagnostic = libraryGame(named: "BoundRRDexDiagnostic", in: app)
+        XCTAssertTrue(diagnostic.waitForExistence(timeout: 20))
+        diagnostic.tap()
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 15))
+        let game = element("bound.game-screen", in: app)
+        XCTAssertTrue(game.waitForExistence(timeout: 10))
+        selectCompanion("Dex", in: app)
+        let dex = element("bound.rrdex", in: app)
+        let info = app.buttons["bound.rrdex-info"]
+
+        func assertInformationFooter(_ screenshotName: String) {
+            XCTAssertTrue(dex.waitForExistence(timeout: 10))
+            XCTAssertEqual(dex.value as? String, "Layout 12")
+            XCTAssertEqual(app.buttons.matching(identifier: "bound.rrdex-info").count, 1,
+                           "Dex should expose one Information action.")
+            XCTAssertTrue(info.isHittable)
+            XCTAssertEqual(info.label, "Dex information")
+            XCTAssertEqual(info.frame.height, 18, accuracy: 1)
+            XCTAssertEqual(info.frame.midX, dex.frame.midX, accuracy: 2)
+            XCTAssertEqual(info.frame.maxY, dex.frame.maxY, accuracy: 4)
+            XCTAssertEqual(app.images.matching(identifier: "bound.rrdex-info").count, 0,
+                           "The footer is text rather than an information icon.")
+            screenshot(screenshotName)
+        }
+
+        func openAndCloseInformation() {
+            info.tap()
+            XCTAssertEqual(element("bound.rrdex-layout12-info-rom", in: app).label,
+                           "ROM: Radical Red Version 4.1")
+            XCTAssertEqual(element("bound.rrdex-layout12-info-difficulty", in: app).label,
+                           "Difficulty: Normal")
+            XCTAssertEqual(element("bound.rrdex-layout12-info-save", in: app).label, "Save Loaded")
+            XCTAssertEqual(app.staticTexts.matching(
+                NSPredicate(format: "identifier BEGINSWITH %@", "bound.rrdex-layout12-info-")).count, 3)
+            app.buttons["bound.rrdex-close-detail"].tap()
+            XCTAssertTrue(app.buttons["bound.rrdex-close-detail"].waitForNonExistence(timeout: 5))
+        }
+
+        assertInformationFooter("RRDex-Information-Footer-Portrait")
+        let search = app.buttons["bound.rrdex-search-open"]
+        XCTAssertTrue(search.isHittable)
+        XCTAssertEqual(search.frame.midX, app.frame.midX + 102, accuracy: 4)
+        XCTAssertLessThan(search.frame.midY, 70)
+        XCTAssertEqual(search.frame.width, 44, accuracy: 1)
+        XCTAssertEqual(search.frame.height, 44, accuracy: 1)
+        openAndCloseInformation()
+        assertGamePixelsAnimate(game, in: app)
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        assertInformationFooter("RRDex-Information-Footer-Landscape-Left")
+        openAndCloseInformation()
+        assertGamePixelsAnimate(game, in: app)
+
+        XCUIDevice.shared.orientation = .landscapeRight
+        assertInformationFooter("RRDex-Information-Footer-Landscape-Right")
+        openAndCloseInformation()
+        assertGamePixelsAnimate(game, in: app)
     }
 
     private func swipeDownDetail(named title: String, in app: XCUIApplication) {
@@ -1939,13 +2020,14 @@ final class CompanionUITests: XCTestCase {
         selectCompanion("Dex", in: app)
         let info = app.buttons["bound.rrdex-info"]
         let search = app.buttons["bound.rrdex-search-open"]
+        let dex = element("bound.rrdex", in: app)
         XCTAssertTrue(info.isHittable); XCTAssertTrue(search.isHittable)
-        XCTAssertLessThan(info.frame.midY, 70); XCTAssertLessThan(search.frame.midY, 70)
-        XCTAssertLessThan(info.frame.midX, app.frame.midX)
-        XCTAssertGreaterThan(search.frame.midX, app.frame.midX)
-        XCTAssertGreaterThanOrEqual(search.frame.minX - info.frame.maxX, 160,
-                                    "Keep the Dynamic Island clear between the Dex actions.")
-        XCTAssertGreaterThanOrEqual(info.frame.width, 44); XCTAssertGreaterThanOrEqual(info.frame.height, 44)
+        XCTAssertEqual(info.label, "Dex information")
+        XCTAssertEqual(info.frame.height, 18, accuracy: 1)
+        XCTAssertEqual(info.frame.midX, dex.frame.midX, accuracy: 2)
+        XCTAssertEqual(info.frame.maxY, dex.frame.maxY, accuracy: 4)
+        XCTAssertLessThan(search.frame.midY, 70)
+        XCTAssertEqual(search.frame.midX, app.frame.midX + 102, accuracy: 4)
         XCTAssertGreaterThanOrEqual(search.frame.width, 44); XCTAssertGreaterThanOrEqual(search.frame.height, 44)
         info.tap()
         XCTAssertEqual(element("bound.rrdex-layout8-info-rom", in: app).label, "ROM: Radical Red Version 4.1")
@@ -2974,18 +3056,17 @@ final class CompanionUITests: XCTestCase {
         let search = app.buttons["bound.rrdex-search-open"]
         XCTAssertTrue(info.isHittable); XCTAssertTrue(search.isHittable)
         XCTAssertEqual(info.label, "Dex information")
-        XCTAssertEqual(info.frame.width, 44, accuracy: 1)
+        XCTAssertEqual(info.frame.height, 18, accuracy: 1)
+        XCTAssertEqual(info.frame.midX, dexCard.frame.midX, accuracy: 2)
+        XCTAssertEqual(info.frame.maxY, dexCard.frame.maxY, accuracy: 4)
         XCTAssertEqual(search.frame.width, 44, accuracy: 1)
-        XCTAssertEqual(info.frame.height, 44, accuracy: 1)
         XCTAssertEqual(search.frame.height, 44, accuracy: 1)
-        XCTAssertLessThan(info.frame.midY, 70); XCTAssertLessThan(search.frame.midY, 70)
-        XCTAssertEqual(search.frame.minX - info.frame.maxX, 160, accuracy: 1,
-                       "The original inward placement reserves 160 points for the Dynamic Island.")
-        XCTAssertEqual((info.frame.midX + search.frame.midX) / 2, app.frame.midX, accuracy: 1)
+        XCTAssertLessThan(search.frame.midY, 70)
+        XCTAssertEqual(search.frame.midX, app.frame.midX + 102, accuracy: 4,
+                       "The search control keeps its original Dynamic Island clearance and x position.")
         let dexBody = app.scrollViews["bound.rrdex-layout12-details"]
-        XCTAssertGreaterThanOrEqual(dexBody.frame.minY, info.frame.maxY + 2)
-        XCTAssertLessThanOrEqual(dexBody.frame.minY, info.frame.maxY + 8,
-                                 "The Dex body uses the space below the Island without the old extra padding.")
+        XCTAssertLessThanOrEqual(dexBody.frame.maxY, info.frame.minY,
+                                 "The scrolling Dex body ends above the Information footer.")
         screenshot("RRDex-Layout12-Restored-Island-Controls")
         info.tap()
         XCTAssertEqual(element("bound.rrdex-layout12-info-rom", in: app).label, "ROM: Radical Red Version 4.1")
@@ -5418,6 +5499,10 @@ extension CompanionUITests {
         XCTAssertTrue(app.buttons[prefix + "-done"].waitForNonExistence(timeout: 5))
         XCTAssertEqual(details.frame.height - minimumDetailsHeight, outerHeightDelta, accuracy: 3,
                         "The visible RR Dex details viewport must track the panel's height increase")
+        let infoFooter = app.buttons["bound.rrdex-info"]
+        XCTAssertEqual(infoFooter.frame.height, 18, accuracy: 1)
+        XCTAssertLessThanOrEqual(details.frame.maxY, infoFooter.frame.minY,
+                                 "The details scroller must end above the Information footer.")
         screenshot("Landscape-option5-rrdex-height-resized")
 
         let bound = app.buttons["bound.panel-cycle"]
