@@ -295,7 +295,7 @@ final class BoundCompanionCoordinator {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.layoutKey)
             UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundExperimentalSettingsPreferences.key)
-            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") || key.hasPrefix("bound.landscape.option5.") || key.hasPrefix("bound.landscape.option6.") || key.hasPrefix("bound.landscape.option7.") || key.hasPrefix("bound.landscape.controller-mode.") || key.hasPrefix("bound.landscape.controller-mode2.") { UserDefaults.standard.removeObject(forKey: key) }
+            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") || key.hasPrefix("bound.landscape.option5.") || key.hasPrefix("bound.landscape.option6.") || key.hasPrefix("bound.landscape.option7.") || key.hasPrefix("bound.landscape.controller-mode.") || key.hasPrefix("bound.landscape.controller-mode2.") || key.hasPrefix("bound.landscape.controller-mode3.") { UserDefaults.standard.removeObject(forKey: key) }
         }
         #endif
         #if DEBUG
@@ -356,6 +356,12 @@ final class BoundCompanionCoordinator {
                 return true
             }
             landscapeCompanion.endArrangement = { [weak self] resume in self?.notesEditing(false, allowResume: resume) }
+            let alignmentFeedback = UISelectionFeedbackGenerator()
+            landscapeArrangement.buttonDidAlign = {
+                guard Settings.isButtonHapticFeedbackEnabled else { return }
+                alignmentFeedback.selectionChanged()
+                alignmentFeedback.prepare()
+            }
             landscapeArrangement.needsLayout = { [weak owner] in owner?.view.setNeedsLayout() }
             landscapeArrangement.beforeSwitch = { [weak self, weak owner] in
                 owner?.view.endEditing(true)
@@ -549,11 +555,12 @@ final class BoundCompanionCoordinator {
         let controllerPreferences = BoundControllerModePreferences()
         let modeTwo = owner.boundControllerModeTwoGeometry()
         let savedOption = landscapeCompanion.preferences.option
-        // Mode 2 always pairs Friend with Multiview, while preserving the user's
-        // saved landscape option for Mode 1/off and honoring Option 7's tabs.
-        let arrangementOption = modeTwo != nil ? (savedOption == .option7 ? .option7 : .option6) : savedOption
-        let usesLandscapeOption2 = landscape && arrangementOption == .option2
         let controllerModeEnabled = controllerPreferences.isEnabled
+            && (controllerPreferences.layout != .mode3 || screenLayout == .bound)
+        // The additional controller modes always pair Friend with Multiview.
+        let usesControllerMultiview = modeTwo != nil || (controllerModeEnabled && controllerPreferences.layout == .mode3)
+        let arrangementOption = usesControllerMultiview ? (savedOption == .option7 ? .option7 : .option6) : savedOption
+        let usesLandscapeOption2 = landscape && arrangementOption == .option2
         let controllerModeLayout = controllerModeEnabled ? controllerPreferences.layout : .mode1
         let usesLandscapeArrangement = landscape && arrangementOption.supportsArrangement
         if usesLandscapeOption2 != landscapeCompanion.active || usesLandscapeArrangement != landscapeArrangement.active
@@ -632,6 +639,10 @@ final class BoundCompanionCoordinator {
         sharing.setRemotePresentationEnabled(state.content == .friend && overlay?.isHidden == false)
         if let controls { owner.view.bringSubviewToFront(controls) }
     }
+    func controllerMenuFrame(defaultFrame: CGRect, canvas: CGRect) -> CGRect {
+        landscapeArrangement.controllerButtonFrame(.menu, defaultFrame: defaultFrame, canvas: canvas)
+    }
+
     private func layoutLandscapeArrangement() {
         guard let owner, let overlay, let controls,
               let skin = owner.controllerView.controllerSkin, let traits = owner.controllerView.controllerSkinTraits,
@@ -639,7 +650,8 @@ final class BoundCompanionCoordinator {
         geometry = nil
         let canvas = owner.view.bounds.inset(by: owner.view.safeAreaInsets)
         let native = owner.controllerView.controlHitFrames.map { owner.controllerView.convert($0, to: owner.view) }
-        let menuFrame = owner.controllerView.convert(menu.frame.applying(.init(scaleX: owner.controllerView.bounds.width,
+        let buttonDefaults = owner.boundControllerModeThreeButtonDefaults()
+        let menuFrame = buttonDefaults?[.menu] ?? owner.controllerView.convert(menu.frame.applying(.init(scaleX: owner.controllerView.bounds.width,
                                                                               y: owner.controllerView.bounds.height)), to: owner.view)
         let occupied = native + (controls.isHidden ? [] : [controls.frame])
         let game = owner.gameView.convert(owner.gameView.bounds, to: owner.view).intersection(canvas)
@@ -655,9 +667,9 @@ final class BoundCompanionCoordinator {
         let modeTwo = owner.boundControllerModeTwoGeometry()
         if let modeTwo { defaults[.friend] = modeTwo.friend }
         landscapeArrangement.updateLayout(canvas: canvas, occupied: occupied, menuFrame: menuFrame,
-            boundFrame: !controls.isHidden || landscapeArrangement.multiview ? controls.frame : .zero, defaults: defaults,
+            boundFrame: buttonDefaults?[.multiview] ?? (!controls.isHidden || landscapeArrangement.multiview ? controls.frame : .zero), defaults: defaults,
             keyboardHeight: max(0, keyboardHeight - owner.view.safeAreaInsets.bottom), screenBounds: owner.view.bounds,
-            friendButtonFrame: modeTwo?.friendButton, viewsButtonFrame: modeTwo?.views)
+            friendButtonFrame: buttonDefaults?[.friend] ?? modeTwo?.friendButton, viewsButtonFrame: buttonDefaults?[.multiview] ?? modeTwo?.views)
         overlay.frame = owner.view.bounds
         overlay.isHidden = false; overlay.alpha = 1
         host?.view.frame = overlay.bounds
@@ -1219,6 +1231,7 @@ struct BoundInterfaceSettings: View {
                 Toggle("Enable experimental features", isOn: $experimentalFeaturesEnabled)
                     .accessibilityIdentifier("bound.experimental-settings")
             }
+            BoundControllerModeSettings()
             if experimentalFeaturesEnabled {
                     BoundUIVersionSettings()
                     BoundLandscapeOptionsSettings()

@@ -327,6 +327,7 @@ final class BoundStockControllerSkin: ControllerSkinProtocol {
 enum BoundControllerModeLayout: Int, CaseIterable {
     case mode1 = 1
     case mode2 = 2
+    case mode3 = 3
 }
 
 /// Controller Mode selection; the enabled flag keeps its original key so

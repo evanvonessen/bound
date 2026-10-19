@@ -6,17 +6,21 @@ but it has no authority over app behavior. The historical Build 13 branch remain
 available in Git history.
 
 Interface & Companion has a new **Enable experimental features** checkbox, off
-by default. It reveals UI Version, Landscape Options, the Controller Mode selector,
-Bound button style and assignments, companion view choices/order, and RR Dex/Boss
-layout customization. The checkbox only controls settings visibility: disabling it
-preserves saved choices and keeps the features themselves available. It uses a new
-key (`bound.experimental-settings.enabled.v1`); the old runtime gate remains inert.
+by default. It reveals UI Version, Landscape Options, Bound button style and
+assignments, companion view choices/order, and RR Dex/Boss layout customization.
+Controller Mode is available regardless of this checkbox. The checkbox only
+controls settings visibility: disabling it preserves saved choices and keeps the
+features themselves available. It uses a new key
+(`bound.experimental-settings.enabled.v1`); the old runtime gate remains inert.
 
 New installations use UI Option 2, Landscape Option 7, Bound button Option 4,
 and Layout 12 for both RR Dex and Boss View. Button 1 (top) contains only Friend;
 Button 2 (bottom) contains only Types, Bosses and RR Dex. Controller Mode remains
-off by default, with Mode 1 preselected when enabled. Existing saved preferences
-take priority over these defaults.
+off by default, with Mode 1 preselected when enabled. Controller Mode 3 lets users
+move the Friend, Multiview, and Menu buttons in landscape Arrange Views. Brief
+horizontal or vertical alignment snaps provide haptic feedback and release as the
+user continues dragging. Existing saved preferences take priority over these
+defaults.
 
 Controller mapping includes **Toggle Friend** and **Toggle Multiview** as normal
 Game Actions, alongside the existing **Menu** mapping. These choices do not

@@ -22,6 +22,11 @@ struct BoundLandscapeArrangementOverlay: View {
                     }
                     .placed(arrangementEditorFrame(for: model)).zIndex(2)
                 }
+                if model.movableControllerButtons {
+                    buttonAlignmentGuides.allowsHitTesting(false).zIndex(2)
+                    buttonMoveTarget(.friend).zIndex(4)
+                    buttonMoveTarget(.multiview).zIndex(4)
+                }
                 Button { model.finish(save: true) } label: {
                     Text("DONE").font(.system(size: 11, weight: .heavy))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -33,6 +38,7 @@ struct BoundLandscapeArrangementOverlay: View {
                 .accessibilityLabel("Done arranging views")
                 .accessibilityIdentifier(model.accessibilityPrefix + "-done")
                 .placed(model.layout.doneButton).zIndex(3)
+                if model.movableControllerButtons { buttonMoveTarget(.menu).zIndex(4) }
             }
             if showsButtons {
               Button(action: model.toggleFriend) { Image(systemName: "person.2.fill") }
@@ -62,6 +68,36 @@ struct BoundLandscapeArrangementOverlay: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var buttonAlignmentGuides: some View {
+        Path { path in
+            if let x = model.buttonAlignmentX {
+                path.move(to: CGPoint(x: x, y: model.layout.canvas.minY))
+                path.addLine(to: CGPoint(x: x, y: model.layout.canvas.maxY))
+            }
+            if let y = model.buttonAlignmentY {
+                path.move(to: CGPoint(x: model.layout.canvas.minX, y: y))
+                path.addLine(to: CGPoint(x: model.layout.canvas.maxX, y: y))
+            }
+        }.stroke(Color.cyan, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+    }
+
+    private func buttonMoveTarget(_ button: BoundControllerButton) -> some View {
+        ZStack {
+            if button != .menu {
+                Circle().fill(Color(uiColor: .deltaPurple))
+                Image(systemName: button == .friend ? "person.2.fill" : (model.referenceVisible ? "xmark" : "book"))
+                    .font(.system(size: 18, weight: .bold)).foregroundStyle(.white)
+            }
+            Circle().stroke(.white, lineWidth: 2)
+            ArrangementDragTarget(identifier: "bound.controller-button-move." + button.rawValue,
+                label: "Move " + (button == .friend ? "Friend" : button == .multiview ? "Multiview" : "Menu"),
+                select: { if button == .menu { model.finish(save: true) } },
+                cancelled: model.cancelControllerButtonMove) {
+                    model.moveControllerButton(button, translation: $0, ended: $1)
+                }
+        }.placed(model.buttonFrame(button))
     }
 
     private func moveTarget(_ content: BoundPiPContent, frame: CGRect) -> some View {

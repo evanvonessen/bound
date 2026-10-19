@@ -2738,21 +2738,25 @@ extension GameViewController {
         let source = nativeBoundControllerFrame(base: base)
         let insets = nativeBoundControllerInsets(base: base)
         let gutter = nativeBoundLandscapeControlGutter(base: base)
+        let movableMenu = boundControllerModeThreeButtonDefaults()?[.menu].map {
+            boundCompanion.controllerMenuFrame(defaultFrame: $0, canvas: view.bounds.inset(by: view.safeAreaInsets))
+        }
+        let controllerMenuFrame = modeTwo?.menu ?? movableMenu
         let configuration = BoundControlConfiguration(skin: base.identifier, layout: layout, canvas: view.bounds.size,
-            source: source, insets: insets, gutter: gutter, minimal: minimal, controllerMode: mode, controllerMenuFrame: modeTwo?.menu,
+            source: source, insets: insets, gutter: gutter, minimal: minimal, controllerMode: mode, controllerMenuFrame: controllerMenuFrame,
             style: traitCollection.userInterfaceStyle, contrast: traitCollection.accessibilityContrast)
         // A settled layout must not recreate wrappers or serialize placements.
         // Also verify the applied identity, because upstream may replace the skin.
         if configuration == boundControlConfiguration,
            controllerView.controllerSkin?.identifier == boundAppliedSkinIdentifier { return }
         controllerView.usesControlOnlyHitTesting = mode || !layout.positions.isEmpty
-        controllerLayoutBounds = modeTwo != nil || !layout.positions.isEmpty ? view.bounds : nil
-        controllerLayoutSize = modeTwo != nil ? view.bounds.size : layout.positions.isEmpty && !minimal ? nil : nativeBoundControllerSize()
+        controllerLayoutBounds = controllerMenuFrame != nil || !layout.positions.isEmpty ? view.bounds : nil
+        controllerLayoutSize = controllerMenuFrame != nil ? view.bounds.size : layout.positions.isEmpty && !minimal ? nil : nativeBoundControllerSize()
         let stock = BoundStockControllerSkin(base: base, canvasSize: source.size, contentInsets: insets, boundLandscapeGutter: gutter)
         var proposed: ControllerSkinProtocol = layout.positions.isEmpty ? stock : BoundPlacedControllerSkin(base: stock, layout: layout, canvasSize: view.bounds.size, sourceFrame: source)
         if minimal { proposed = BoundMinimalControllerSkin(base: proposed, canvasSize: layout.positions.isEmpty ? source.size : view.bounds.size, traits: traitCollection) }
         if mode {
-            let menuFrame = modeTwo?.menu.offsetBy(dx: -view.bounds.minX, dy: -view.bounds.minY)
+            let menuFrame = controllerMenuFrame?.offsetBy(dx: -view.bounds.minX, dy: -view.bounds.minY)
                 .applying(.init(scaleX: 1 / view.bounds.width, y: 1 / view.bounds.height))
             proposed = BoundControllerModeSkin(base: proposed, menuFrame: menuFrame)
         }
@@ -2815,6 +2819,28 @@ extension GameViewController {
               BoundAppearancePreferences().effectiveScreenLayout == .bound else { return nil }
         return BoundControllerModeTwoGeometry(bounds: view.bounds, safeArea: view.safeAreaInsets,
             gameAspect: emulatorCore?.preferredRenderingSize ?? CGSize(width: 3, height: 2))
+    }
+    /// Stable Mode 1-like starting positions, independent of the moved native Menu.
+    func boundControllerModeThreeButtonDefaults() -> [BoundControllerButton: CGRect]? {
+        let preferences = BoundControllerModePreferences()
+        guard preferences.isEnabled, preferences.layout == .mode3,
+              view.bounds.width > view.bounds.height,
+              BoundAppearancePreferences().effectiveScreenLayout == .bound,
+              let current = controllerView.controllerSkin, let traits = controllerView.controllerSkinTraits else { return nil }
+        let base = unwrappedBoundControllerSkin(current)
+        let source = nativeBoundControllerFrame(base: base)
+        let stock = BoundStockControllerSkin(base: base, canvasSize: source.size,
+            contentInsets: nativeBoundControllerInsets(base: base), boundLandscapeGutter: nativeBoundLandscapeControlGutter(base: base))
+        guard let item = stock.items(for: traits)?.first(where: { $0.inputs.allInputs.contains { $0.stringValue == "menu" } }) else { return nil }
+        let native = item.frame.applying(.init(scaleX: source.width, y: source.height)).offsetBy(dx: source.minX, dy: source.minY)
+        let canvas = view.bounds.inset(by: view.safeAreaInsets)
+        let menu = CGRect(x: native.midX - 22, y: native.midY - 22, width: 44, height: 44)
+        let initial: [BoundControllerButton: CGRect] = [
+            .menu: menu,
+            .friend: CGRect(x: canvas.minX + canvas.maxX - menu.midX - 22, y: menu.minY, width: 44, height: 44),
+            .multiview: menu.offsetBy(dx: 0, dy: 52)
+        ]
+        return initial.mapValues { BoundControllerButtonPlacement().frame(for: .menu, defaultFrame: $0, canvas: canvas) }
     }
     private func nativeBoundLandscapeControlGutter(base: ControllerSkinProtocol) -> CGRect? {
         guard let gutter = boundLandscapeControlGutter() else { return nil }

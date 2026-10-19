@@ -666,10 +666,6 @@ struct BoundLandscapeOptionsSettings: View {
     @State private var option = BoundLandscapePreferences().option
     @State private var contents = BoundLandscapePreferences().referenceContents
     @State private var scale = BoundLandscapePreferences().referenceScale
-    @State private var controllerModeSelection: Int = {
-        let preferences = BoundControllerModePreferences()
-        return preferences.isEnabled ? preferences.layout.rawValue : 0
-    }()
     private let preferences = BoundLandscapePreferences()
     var body: some View {
         Section {
@@ -679,31 +675,15 @@ struct BoundLandscapeOptionsSettings: View {
                 ForEach(BoundLandscapeOption.allCases, id: \.rawValue) { Text($0.title).tag($0) }
             }
             .accessibilityIdentifier("bound.landscape-options")
-            Picker("Controller Mode", selection: Binding(get: { controllerModeSelection }, set: { selection in
-                controllerModeSelection = selection
-                let modePreferences = BoundControllerModePreferences()
-                guard selection != 0, let layout = BoundControllerModeLayout(rawValue: selection) else {
-                    modePreferences.isEnabled = false
-                    return
-                }
-                if modePreferences.layout != layout { modePreferences.layout = layout }
-                if !modePreferences.isEnabled { modePreferences.isEnabled = true }
-            })) {
-                Text("Off").tag(0)
-                Text("Controller Mode 1").tag(BoundControllerModeLayout.mode1.rawValue)
-                Text("Controller Mode 2").tag(BoundControllerModeLayout.mode2.rawValue)
-            }
-            .accessibilityIdentifier("bound.controller-mode-layout")
         } header: { Text("Landscape Options") } footer: {
-            Text((controllerModeSelection == 2 ? "Gameplay fits against the right edge, with Friend on the left. Menu and the Multiview X/book button sit below Friend. Use fixed tabs with Landscape Option 7, or swipe between views with the other options. Portrait stays unchanged."
-                 : option == .option1 ? "The existing landscape controls and companion panel. Portrait stays unchanged."
+            Text((option == .option1 ? "The existing landscape controls and companion panel. Portrait stays unchanged."
                  : option == .option7 ? "Use the fixed DEX, DOCS, and TYPES tabs at the top of Multiview. DOCS opens Boss View. The book button under Menu opens Multiview; X hides it. Friend stays separate. Starts with a copy of Option 6 and saves separately. Portrait stays unchanged."
                  : option == .option6 ? "Swipe left or right in Multiview to switch between RR Dex, Bosses, and Types. The book button under Menu opens it; X hides it. Friend stays separate. Starts with a copy of Option 3 and saves separately. Portrait stays unchanged."
                  : option == .option5 ? "Open Menu and tap Arrange Views to quickly place a view in a corner, then drag to fine-tune. A compact toolbar stays opposite the selected view. VIEWS shows or hides references; Bound cycles them. Starts with a copy of Option 3 and saves separately. Portrait stays unchanged."
                  : option == .option4 ? "Open Menu and tap Arrange Views for direct view selection, larger handles for the selected view, and Reset. The eye button shows or hides references. Starts with a copy of Option 3, then saves its own layout. Portrait stays unchanged."
                  : option == .option3 ? "Friend and the selected reference appear independently. Friend toggles video, X toggles references, and Bound cycles the views selected in Companion settings. In landscape, open Menu and tap Arrange Views to move, resize, or change each view’s opacity. Done locks the layout; references stay interactive."
                  : "Separate Friend and Views buttons. Hold Friend to position, resize, and lock it. Locked friend video lets touches reach the controls underneath. Portrait stays unchanged.")
-                 + (option.supportsArrangement || controllerModeSelection == 2 ? " Arrangements save separately for Controller Mode off, Mode 1, and Mode 2." : ""))
+                 + (option.supportsArrangement ? " Arrangements save separately for Controller Mode off, Mode 1, Mode 2, and Mode 3." : ""))
         }
         if option == .option2 {
             Section {
@@ -721,6 +701,34 @@ struct BoundLandscapeOptionsSettings: View {
             } header: { Text("Landscape Views") } footer: {
                 Text("Views cycles through these selections, separately from Friend. Reference views remain interactive and avoid game controls. These choices apply only to landscape Option 2.")
             }
+        }
+    }
+}
+
+struct BoundControllerModeSettings: View {
+    @State private var selection: Int = {
+        let preferences = BoundControllerModePreferences()
+        return preferences.isEnabled ? preferences.layout.rawValue : 0
+    }()
+
+    var body: some View {
+        Section {
+            Picker("Controller Mode", selection: Binding(get: { selection }, set: { newValue in
+                selection = newValue
+                let preferences = BoundControllerModePreferences()
+                guard newValue != 0, let layout = BoundControllerModeLayout(rawValue: newValue) else {
+                    preferences.isEnabled = false
+                    return
+                }
+                if preferences.layout != layout { preferences.layout = layout }
+                if !preferences.isEnabled { preferences.isEnabled = true }
+            })) {
+                Text("Off").tag(0)
+                ForEach(BoundControllerModeLayout.allCases, id: \.rawValue) { layout in
+                    Text("Controller Mode \(layout.rawValue)").tag(layout.rawValue)
+                }
+            }
+            .accessibilityIdentifier("bound.controller-mode-layout")
         }
     }
 }

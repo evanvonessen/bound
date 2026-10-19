@@ -30,7 +30,8 @@ final class SettingsResetTests: XCTestCase {
         appearance.theme = .minimal
         let controllerMode = BoundControllerModePreferences(defaults: defaults)
         controllerMode.isEnabled = true
-        controllerMode.layout = .mode2
+        controllerMode.layout = .mode3
+        defaults.set(Data([1, 2, 3]), forKey: "bound.landscape.controller-mode3.buttons.v1")
         let companion = BoundCompanionButtonPreferences(defaults: defaults)
         companion.buttonType = .option3
         let pip = BoundPiPPreferences(defaults: defaults)
@@ -75,6 +76,7 @@ final class SettingsResetTests: XCTestCase {
         XCTAssertFalse(BoundFastForwardPreferences(defaults: defaults).isEnabled(for: "ROM123"))
         XCTAssertFalse(controllerMode.isEnabled)
         XCTAssertEqual(controllerMode.layout, .mode1)
+        XCTAssertNil(defaults.object(forKey: "bound.landscape.controller-mode3.buttons.v1"))
         XCTAssertEqual(companion.buttonType, .option4)
         XCTAssertTrue(pip.isEnabled(.dex))
         XCTAssertEqual(BoundLandscapePreferences(defaults: defaults).option, .option7)
