@@ -356,8 +356,8 @@ final class BoundControllerModePreferences {
     }
 }
 
-/// Fits gameplay against the safe right edge and reserves a left column for
-/// Friend and touch controls. Gameplay retains its fitted size whenever it fits.
+/// Right-aligns the same fitted gameplay size used by Modes 1 and 3.
+/// Friend and touch controls use the left column without reducing gameplay.
 struct BoundControllerModeTwoGeometry {
     let game: CGRect
     let friend: CGRect
@@ -375,10 +375,13 @@ struct BoundControllerModeTwoGeometry {
         guard safe.width > minimumColumn + gap, safe.height >= 160 else { return nil }
         let ratio = gameAspect.width / gameAspect.height
         guard ratio.isFinite, ratio > 0 else { return nil }
-        let width = min(bounds.height * ratio, safe.width - minimumColumn - gap)
+        let width = min(bounds.height * ratio, safe.width)
         let height = width / ratio
         game = CGRect(x: safe.maxX - width, y: bounds.midY - height / 2, width: width, height: height)
-        let column = CGRect(x: safe.minX, y: safe.minY, width: game.minX - gap - safe.minX, height: safe.height)
+        // On screens without a wide enough gutter, keep controls reachable over
+        // the game's left edge instead of shrinking the game to make room.
+        let column = CGRect(x: safe.minX, y: safe.minY,
+                            width: max(minimumColumn, game.minX - gap - safe.minX), height: safe.height)
         let friendWidth = min(column.width, max(0, column.height - 112) * 1.5)
         friend = CGRect(x: column.midX - friendWidth / 2, y: column.minY,
                         width: friendWidth, height: friendWidth / 1.5)

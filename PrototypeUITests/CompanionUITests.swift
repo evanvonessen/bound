@@ -5159,8 +5159,8 @@ final class CompanionUITests: XCTestCase {
         func chooseLandscapeOption(_ option: Int) {
             openBoundSettings(in: app)
             let picker = element("bound.landscape-options", in: app)
-            XCTAssertTrue(picker.waitForExistence(timeout: 5))
             scrollToSetting(picker, in: app)
+            XCTAssertTrue(picker.waitForExistence(timeout: 5))
             picker.tap()
             app.buttons["Option \(option)"].firstMatch.tap()
             closeBoundSheet(in: app)
@@ -5168,8 +5168,8 @@ final class CompanionUITests: XCTestCase {
         func chooseControllerMode(_ mode: Int) {
             openBoundSettings(in: app)
             let picker = element("bound.controller-mode-layout", in: app)
-            XCTAssertTrue(picker.waitForExistence(timeout: 5))
             scrollToSetting(picker, in: app)
+            XCTAssertTrue(picker.waitForExistence(timeout: 5))
             picker.tap()
             let label = mode == 0 ? "Off" : "Controller Mode \(mode)"
             app.buttons[label].firstMatch.tap()

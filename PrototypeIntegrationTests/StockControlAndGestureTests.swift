@@ -422,10 +422,11 @@ final class StockControlAndGestureTests: XCTestCase {
         XCTAssertEqual(BoundControllerModePreferences(defaults: defaults).layout, .mode2)
     }
 
-    func testControllerModeTwoGeometryFitsLandscapeSafeAreasAndKeepsControlsClear() throws {
+    func testControllerModeTwoMatchesStandardGameSizeAndKeepsControlsAccessible() throws {
         let cases: [(CGRect, UIEdgeInsets, CGSize)] = [
             (CGRect(x: 0, y: 0, width: 852, height: 393), UIEdgeInsets(top: 0, left: 59, bottom: 21, right: 34), CGSize(width: 240, height: 160)),
             (CGRect(x: 0, y: 0, width: 852, height: 393), UIEdgeInsets(top: 0, left: 34, bottom: 21, right: 59), CGSize(width: 240, height: 160)),
+            (CGRect(x: 0, y: 0, width: 667, height: 375), .zero, CGSize(width: 240, height: 160)),
             (CGRect(x: 0, y: 0, width: 1194, height: 834), UIEdgeInsets(top: 24, left: 0, bottom: 20, right: 0), CGSize(width: 240, height: 160)),
             (CGRect(x: 0, y: 0, width: 852, height: 393), UIEdgeInsets(top: 0, left: 59, bottom: 21, right: 34), CGSize(width: 8, height: 1))
         ]
@@ -433,6 +434,12 @@ final class StockControlAndGestureTests: XCTestCase {
         for (bounds, safeArea, gameAspect) in cases {
             let geometry = try XCTUnwrap(BoundControllerModeTwoGeometry(bounds: bounds, safeArea: safeArea, gameAspect: gameAspect))
             let safe = bounds.inset(by: safeArea)
+            let standardBounds = CGRect(x: safe.minX, y: bounds.minY, width: safe.width, height: bounds.height)
+            let standardGame = AVMakeRect(aspectRatio: gameAspect, insideRect: standardBounds)
+            XCTAssertEqual(geometry.game.width, standardGame.width, accuracy: 0.001)
+            XCTAssertEqual(geometry.game.height, standardGame.height, accuracy: 0.001,
+                           "Mode 2 must preserve the game size from Modes 1 and 3, even without a left gutter.")
+            XCTAssertEqual(geometry.game.midY, standardGame.midY, accuracy: 0.001)
             XCTAssertEqual(geometry.game.maxX, safe.maxX, accuracy: 0.5)
             XCTAssertEqual(geometry.game.width / geometry.game.height, gameAspect.width / gameAspect.height, accuracy: 0.01)
             XCTAssertEqual(geometry.friend.width / geometry.friend.height, 1.5, accuracy: 0.01)
@@ -447,10 +454,12 @@ final class StockControlAndGestureTests: XCTestCase {
             XCTAssertLessThanOrEqual(geometry.game.maxX, safe.maxX + 0.5)
             XCTAssertGreaterThanOrEqual(geometry.game.minY, bounds.minY - 0.5)
             XCTAssertLessThanOrEqual(geometry.game.maxY, bounds.maxY + 0.5)
-            XCTAssertFalse(geometry.friend.intersects(geometry.game))
-            XCTAssertFalse(geometry.menu.intersects(geometry.game))
-            XCTAssertFalse(geometry.views.intersects(geometry.game))
-            XCTAssertFalse(geometry.friendButton.intersects(geometry.game))
+            if geometry.game.minX - safe.minX >= 112 {
+                XCTAssertFalse(geometry.friend.intersects(geometry.game))
+                XCTAssertFalse(geometry.menu.intersects(geometry.game))
+                XCTAssertFalse(geometry.views.intersects(geometry.game))
+                XCTAssertFalse(geometry.friendButton.intersects(geometry.game))
+            }
             XCTAssertFalse(geometry.menu.intersects(geometry.views))
             XCTAssertFalse(geometry.friend.intersects(geometry.menu))
             XCTAssertFalse(geometry.views.intersects(geometry.friendButton))
