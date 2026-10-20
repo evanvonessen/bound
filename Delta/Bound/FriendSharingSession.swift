@@ -172,6 +172,7 @@ struct FriendSharingFrameTiming {
 
 @MainActor
 protocol FriendSharingTransport: SharingTransport {
+    var presenceConnectionCheck: BoundPresenceTransportCheck { get }
     func setPresenceReceiver(_ receiver: (@MainActor (Data) -> Void)?)
     func sendPresence(_ data: Data) -> Bool
     func pollPresence()
@@ -188,6 +189,7 @@ protocol FriendSharingTransport: SharingTransport {
 }
 
 extension FriendSharingTransport {
+    var presenceConnectionCheck: BoundPresenceTransportCheck { .init() }
     func setPresenceReceiver(_ receiver: (@MainActor (Data) -> Void)?) {}
     func sendPresence(_ data: Data) -> Bool { false }
     func pollPresence() {}
@@ -268,6 +270,7 @@ final class FriendSharingSession: ObservableObject {
         self.sharing = try! SharingSession(transport: transport, scheduler: scheduler,
                                           minimumPublicationInterval: FriendSharingCadence.interval)
         remoteView.backgroundColor = .black
+        livePresence.connectionCheck.snapshot = { [weak self] in self?.presenceConnectionSample() }
         if isConfigured { status = "Game sharing ready" }
     }
 
@@ -506,6 +509,18 @@ final class FriendSharingSession: ObservableObject {
             guard let self, self.active, self.joined, !self.reconnecting, !self.backgrounded else { return false }
             return self.transport.sendPresence(data)
         }
+    }
+
+    private func presenceConnectionSample() -> BoundPresenceConnectionSample {
+        var sample = BoundPresenceConnectionSample()
+        sample.authenticated = authenticatedMode
+        sample.authorizationReady = authenticatedMode && configuration != nil
+        sample.active = active; sample.joined = joined; sample.reconnecting = reconnecting
+        sample.tokenRenewals = tokenRenewals; sample.reconnectCompletions = recoveryCompletions
+        sample.videoAcceptedSends = transport.publishedFrames; sample.videoReceivedFrames = transport.receivedFrames
+        sample.transport = transport.presenceConnectionCheck
+        sample.reader = livePresence.connectionReaderCheck(at: ProcessInfo.processInfo.systemUptime)
+        return sample
     }
 
     private func stop(clearReconnectIntent: Bool) {

@@ -360,6 +360,8 @@ final class AgoraSharingTransport: FriendSharingTransport {
     private var presenceReceiver: (@MainActor (Data) -> Void)?
     private var presenceStream: Int?
     private var sentPresence = 0
+    private var presenceCreateResult: Int?
+    private var presenceSendResult: Int?
     private let metalAvailable = MTLCreateSystemDefaultDevice() != nil
 
     private(set) var publishedFrames = 0
@@ -368,6 +370,11 @@ final class AgoraSharingTransport: FriendSharingTransport {
         let times = callbacks?.frameTimes
         return FriendSharingFrameTiming(received: times?.received, converted: times?.converted,
                                         presented: lastPresentedAt, published: lastPublishedAt)
+    }
+    var presenceConnectionCheck: BoundPresenceTransportCheck {
+        .init(kind: .agora, streamCreated: presenceStream != nil, createResult: presenceCreateResult,
+              sendResult: presenceSendResult, acceptedSends: sentPresence,
+              receivedMessages: callbacks?.diagnostics["presencePackets"] ?? 0)
     }
 
     var diagnostics: [String: Any] {
@@ -457,6 +464,7 @@ final class AgoraSharingTransport: FriendSharingTransport {
         BoundMainActorDisposal.drainPending()
         stop()
         sentPresence = 0
+        presenceCreateResult = nil; presenceSendResult = nil
         lastFailure = [:]; lastConnectionState = nil; lastConnectionReason = nil
         joinResult = nil; lastPushAccepted = nil; attemptedFrames = 0; lastAttemptedSequence = 0
         recoveryCount = 0; recoverySuccessCount = 0; sdkRejoinCallbacks = 0; lastRecoveryReason = nil
@@ -643,10 +651,15 @@ final class AgoraSharingTransport: FriendSharingTransport {
         if presenceStream == nil {
             var stream = 0
             let config = AgoraDataStreamConfig(); config.ordered = false; config.syncWithAudio = false
-            guard engine.createDataStream(&stream, config: config) == 0 else { return false }
+            let result = engine.createDataStream(&stream, config: config)
+            presenceCreateResult = Int(result)
+            guard result == 0 else { return false }
             presenceStream = stream
         }
-        guard let presenceStream, engine.sendStreamMessage(presenceStream, data: data) == 0 else { return false }
+        guard let presenceStream else { return false }
+        let result = engine.sendStreamMessage(presenceStream, data: data)
+        presenceSendResult = Int(result)
+        guard result == 0 else { return false }
         sentPresence += 1; return true
     }
     func renewToken(_ token: String) -> Bool { engine?.renewToken(token) == 0 }

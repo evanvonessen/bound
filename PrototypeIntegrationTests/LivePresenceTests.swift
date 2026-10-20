@@ -225,4 +225,32 @@ final class LivePresenceTests: XCTestCase {
         sharing.stop(); XCTAssertFalse(presence.connected); XCTAssertNil(transport.receiver)
         staleReceiver(old); XCTAssertNil(presence.pose())
     }
+
+    func testPresentationDiagnosticsAreOptInAndNeverExportCoordinatesOrArtwork() throws {
+        let session = session(), viewer = try XCTUnwrap(reading().player)
+        let a = try XCTUnwrap(BoundPresencePose(reading: reading()))
+        let b = try XCTUnwrap(BoundPresencePose(reading: reading(x: 120)))
+        session.consume(reading(), at: 20)
+        session.observePresentation(pose: a, viewer: viewer, frameResolved: true, visiblePixels: 100, at: 20)
+        XCTAssertEqual(session.connectionReaderCheck(at: 20).renderedTicks, 0)
+        let check = session.connectionCheck
+        check.snapshot = { [weak session] in
+            guard let session else { return nil }
+            var value = BoundPresenceConnectionSample(); value.reader = session.connectionReaderCheck(at: 20); return value
+        }
+        check.start(schedule: false)
+        session.observePresentation(pose: a, viewer: viewer, frameResolved: true, visiblePixels: 100, at: 20)
+        session.observePresentation(pose: b, viewer: viewer, frameResolved: true, visiblePixels: 100, at: 20)
+        let result = session.connectionReaderCheck(at: 20)
+        XCTAssertEqual(result.renderedTicks, 2); XCTAssertEqual(result.movementChanges, 1)
+        XCTAssertEqual(result.mapMatches, true); XCTAssertEqual(result.elevationMatches, true)
+        XCTAssertEqual(result.visiblePixels, 100)
+        XCTAssertEqual(session.connectionReaderCheck(at: 21).visiblePixels, 0, "Stale display metrics cannot claim current visibility")
+        session.observePresentation(pose: nil, viewer: nil, frameResolved: false, visiblePixels: 0, at: 20)
+        XCTAssertEqual(session.connectionReaderCheck(at: 20).visiblePixels, 0)
+        let text = try XCTUnwrap(String(data: check.export(), encoding: .utf8))
+        for forbidden in ["frameAddress", "palette", "mapGroup", "mapNumber", "worldFoot", "tiles", "token", "channel"] {
+            XCTAssertFalse(text.contains("\"\(forbidden)\""))
+        }
+    }
 }

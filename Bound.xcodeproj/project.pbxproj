@@ -459,8 +459,10 @@
 		18BC10A8D7EF4D1397B91702 /* BoundPlayerScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BC10A8D7EF4D1397B91701 /* BoundPlayerScene.swift */; };
 		18BC10A8D7EF4D1397B91704 /* BoundRecordedPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BC10A8D7EF4D1397B91703 /* BoundRecordedPlayer.swift */; };
 		A15E00000000000000000002 /* BoundLivePresence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000001 /* BoundLivePresence.swift */; };
+		A15E00000000000000000008 /* BoundPresenceConnectionCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000007 /* BoundPresenceConnectionCheck.swift */; };
 		18BC10A8D7EF4D1397B91706 /* RecordedPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */; };
 		A15E00000000000000000004 /* LivePresenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000003 /* LivePresenceTests.swift */; };
+		A15E0000000000000000000A /* PresenceConnectionCheckTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */; };
 		A15E00000000000000000006 /* LivePresenceRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000005 /* LivePresenceRuntimeTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -1281,8 +1283,10 @@
 		18BC10A8D7EF4D1397B91701 /* BoundPlayerScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPlayerScene.swift; sourceTree = "<group>"; };
 		18BC10A8D7EF4D1397B91703 /* BoundRecordedPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundRecordedPlayer.swift; sourceTree = "<group>"; };
 		A15E00000000000000000001 /* BoundLivePresence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLivePresence.swift; sourceTree = "<group>"; };
+		A15E00000000000000000007 /* BoundPresenceConnectionCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPresenceConnectionCheck.swift; sourceTree = "<group>"; };
 		18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordedPlayerTests.swift; sourceTree = "<group>"; };
 		A15E00000000000000000003 /* LivePresenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePresenceTests.swift; sourceTree = "<group>"; };
+		A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresenceConnectionCheckTests.swift; sourceTree = "<group>"; };
 		A15E00000000000000000005 /* LivePresenceRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePresenceRuntimeTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -1401,6 +1405,7 @@
 				3DB42D13CD4642F59F46B8EE /* PlayerStateTests.swift */,
 				18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */,
 				A15E00000000000000000003 /* LivePresenceTests.swift */,
+				A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */,
 				A15E00000000000000000005 /* LivePresenceRuntimeTests.swift */,
 				35733EA11CCE9FF25284EFB8 /* AppearanceIntegrationTests.swift */,
 				79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */,
@@ -1511,6 +1516,7 @@
 				18BC10A8D7EF4D1397B91701 /* BoundPlayerScene.swift */,
 				18BC10A8D7EF4D1397B91703 /* BoundRecordedPlayer.swift */,
 				A15E00000000000000000001 /* BoundLivePresence.swift */,
+				A15E00000000000000000007 /* BoundPresenceConnectionCheck.swift */,
 				E875C2DEF127D860254648FA /* BoundFrameCaptureGate.swift */,
 				9F35BC570DB6B8BA023B9B53 /* BoundCompanionCycleButton.swift */,
 				6D75D15A8F3B6F2793C7F56D /* BoundPortraitScreenGeometry.swift */,
@@ -3193,6 +3199,7 @@
 				87214F8B08E34E1699AB1A1A /* PlayerStateTests.swift in Sources */,
 				18BC10A8D7EF4D1397B91706 /* RecordedPlayerTests.swift in Sources */,
 				A15E00000000000000000004 /* LivePresenceTests.swift in Sources */,
+				A15E0000000000000000000A /* PresenceConnectionCheckTests.swift in Sources */,
 				A15E00000000000000000006 /* LivePresenceRuntimeTests.swift in Sources */,
 				273B677E21CFB932EFA82ACD /* AppearanceIntegrationTests.swift in Sources */,
 				0DCC5A17E990440B949F4582 /* ConfigurationExportTests.swift in Sources */,
@@ -3502,6 +3509,7 @@
 				18BC10A8D7EF4D1397B91702 /* BoundPlayerScene.swift in Sources */,
 				18BC10A8D7EF4D1397B91704 /* BoundRecordedPlayer.swift in Sources */,
 				A15E00000000000000000002 /* BoundLivePresence.swift in Sources */,
+				A15E00000000000000000008 /* BoundPresenceConnectionCheck.swift in Sources */,
 				A5AAF6B64EA97D56F73A4A9D /* BoundFrameCaptureGate.swift in Sources */,
 				9EE1E66A051751E201D09F44 /* BoundCompanionCycleButton.swift in Sources */,
 				086D5B30CBE1065AE9A6C9AA /* BoundPortraitScreenGeometry.swift in Sources */,
@@ -3941,7 +3949,8 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_MODULES_AUTOLINK = NO;
-				CODE_SIGN_ENTITLEMENTS = Delta/Delta.entitlements;
+				BOUND_APP_ENTITLEMENTS = Delta/Delta.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "$(BOUND_APP_ENTITLEMENTS)";
 				BOUND_APNS_ENVIRONMENT = development;
 				BOUND_GOOGLE_CLIENT_ID = "";
 				BOUND_GOOGLE_REVERSED_CLIENT_ID = "bound-google-unconfigured";
@@ -3950,7 +3959,8 @@
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 3N83BX5M9G;
-				INFOPLIST_FILE = "Delta/Supporting Files/Info.plist";
+				BOUND_APP_INFO_PLIST = "Delta/Supporting Files/Info.plist";
+				INFOPLIST_FILE = "$(BOUND_APP_INFO_PLIST)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -3996,7 +4006,8 @@
 					"\"AuthenticationServices\"",
 				);
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" -DDEBUG";
-				PRODUCT_BUNDLE_IDENTIFIER = com.evanvonessen.bound;
+				BOUND_APP_BUNDLE_IDENTIFIER = com.evanvonessen.bound;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BOUND_APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_MODULE_NAME = Delta;
 				PRODUCT_NAME = Bound;
 				PROVISIONING_PROFILE = "";
@@ -4021,7 +4032,8 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_MODULES_AUTOLINK = NO;
-				CODE_SIGN_ENTITLEMENTS = Delta/Delta.entitlements;
+				BOUND_APP_ENTITLEMENTS = Delta/Delta.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "$(BOUND_APP_ENTITLEMENTS)";
 				BOUND_APNS_ENVIRONMENT = production;
 				BOUND_GOOGLE_CLIENT_ID = "";
 				BOUND_GOOGLE_REVERSED_CLIENT_ID = "bound-google-unconfigured";
@@ -4030,7 +4042,8 @@
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 3N83BX5M9G;
-				INFOPLIST_FILE = "Delta/Supporting Files/Info.plist";
+				BOUND_APP_INFO_PLIST = "Delta/Supporting Files/Info.plist";
+				INFOPLIST_FILE = "$(BOUND_APP_INFO_PLIST)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -4038,7 +4051,8 @@
 					"@executable_path/Frameworks",
 				);
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" -DIMPACTOR";
-				PRODUCT_BUNDLE_IDENTIFIER = com.evanvonessen.bound;
+				BOUND_APP_BUNDLE_IDENTIFIER = com.evanvonessen.bound;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BOUND_APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_MODULE_NAME = Delta;
 				PRODUCT_NAME = Bound;
 				PROVISIONING_PROFILE = "";

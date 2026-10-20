@@ -166,6 +166,9 @@ def main():
             raise TimeoutError("Timed out at " + stage + ": " + json.dumps(state.snapshot()))
 
         wait("walk", lambda r: r["positions"] > 10 and r["visibleTicks"] > 40 and not r["hidden"], 120)
+        # Keep walking long enough for both optional one-second diagnostic
+        # samplers to observe native movement before testing interruptions.
+        time.sleep(1.1)
         state.change("pauseA")
         wait("pauseA", lambda r: r["hidden"])
         state.change("resumed")

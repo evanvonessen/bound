@@ -295,8 +295,14 @@ final class BoundPlayerStateDisplay {
         let now = ProcessInfo.processInfo.systemUptime
         if let presence, let reading = currentReading, reading.status == .live,
            let lastFrameAt, now - lastFrameAt <= 0.5, let profile, let viewer = reading.player {
-            livePlayerOverlay.show(pose: presence.pose(at: now)?.rendered(profile: profile, viewer: viewer), scene: viewer.scene)
-        } else { livePlayerOverlay.show(pose: nil, scene: nil) }
+            let pose = presence.pose(at: now), rendered = pose?.rendered(profile: profile, viewer: viewer)
+            livePlayerOverlay.show(pose: rendered, scene: viewer.scene)
+            presence.observePresentation(pose: pose, viewer: viewer, frameResolved: rendered != nil,
+                                         visiblePixels: livePlayerOverlay.visiblePixels, at: now)
+        } else {
+            livePlayerOverlay.show(pose: nil, scene: nil)
+            presence?.observePresentation(pose: nil, viewer: nil, frameResolved: false, visiblePixels: 0, at: now)
+        }
     }
 
     func layout(in owner: UIViewController, gameView: UIView) {

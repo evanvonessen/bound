@@ -72,6 +72,7 @@ struct BoundPresencePacket: Codable, Equatable, Sendable {
 /// challenge; packets must acknowledge it before their poses can be displayed.
 @MainActor
 final class BoundLivePresenceSession: ObservableObject {
+    let connectionCheck = BoundPresenceConnectionCheck()
     static let interval: TimeInterval = 0.05
     static let timeout: TimeInterval = 0.75
     @Published private(set) var enabled = false
@@ -99,6 +100,10 @@ final class BoundLivePresenceSession: ObservableObject {
     private var localPose: BoundPresencePose?
     private var romVerified = false
     private var localAt: TimeInterval?
+    private var readerStatus = "waiting"
+    private var presentationCheck = BoundPresenceReaderCheck()
+    private var lastPresentationAt: TimeInterval?
+    private var lastPresentedPose: BoundPresencePose?
     private struct Sample { let time: TimeInterval; let pose: BoundPresencePose }
     private var samples: [Sample] = []
 
@@ -140,6 +145,7 @@ final class BoundLivePresenceSession: ObservableObject {
     }
 
     func consume(_ reading: BoundPlayerStateReading, at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        readerStatus = reading.status.rawValue
         localPose = needsReader && romVerified ? BoundPresencePose(reading: reading) : nil
         localAt = now
         if localPose == nil { presentationChanged?() }
@@ -241,6 +247,41 @@ final class BoundLivePresenceSession: ObservableObject {
         setStatus(!enabled ? "Live sprites are off" : connected ? "Waiting for friend presence" : "Connect to your friend in Friends")
     }
     private func setStatus(_ value: String) { if status != value { status = value } }
+
+    func observePresentation(pose: BoundPresencePose?, viewer: BoundPlayerState?, frameResolved: Bool,
+                             visiblePixels: Int, at now: TimeInterval) {
+        guard connectionCheck.recording else { return }
+        presentationCheck.peerPoseAvailable = pose != nil
+        presentationCheck.mapMatches = pose.flatMap { pose in viewer.map { $0.mapGroup == pose.mapGroup && $0.mapNumber == pose.mapNumber } }
+        presentationCheck.elevationMatches = pose.flatMap { pose in viewer.map { $0.elevation == pose.elevation } }
+        presentationCheck.frameResolved = frameResolved
+        presentationCheck.visiblePixels = visiblePixels
+        if visiblePixels > 0, let pose {
+            presentationCheck.renderedTicks += 1
+            if let previous = lastPresentedPose {
+                if previous.x != pose.x || previous.y != pose.y { presentationCheck.movementChanges += 1 }
+                if previous.facing != pose.facing { presentationCheck.facingChanges += 1 }
+                if previous.frameAddress != pose.frameAddress || previous.flipX != pose.flipX || previous.flipY != pose.flipY {
+                    presentationCheck.animationChanges += 1
+                }
+            }
+            lastPresentedPose = pose
+        } else { lastPresentedPose = nil }
+        lastPresentationAt = now
+    }
+
+    func connectionReaderCheck(at now: TimeInterval) -> BoundPresenceReaderCheck {
+        var check = presentationCheck
+        check.romVerified = romVerified; check.status = readerStatus
+        check.localPoseFresh = needsReader && localPose != nil && localAt.map({ now - $0 <= 0.5 }) ?? false
+        check.peerConfirmed = peerEpoch != nil
+        check.sent = sentPackets; check.received = receivedPackets; check.rejected = rejectedPackets; check.buffered = bufferedSamples
+        check.lastReceiveAgeMS = lastReceived.map { Int(min(1_000_000, max(0, (now - $0) * 1000))) }
+        if !needsReader || !check.localPoseFresh || lastPresentationAt.map({ now - $0 > 0.5 }) ?? true {
+            check.visiblePixels = 0; check.frameResolved = false
+        }
+        return check
+    }
 }
 
 struct BoundLivePresenceControls: View {
@@ -253,6 +294,7 @@ struct BoundLivePresenceControls: View {
                 .accessibilityIdentifier("bound.live-presence-status")
             Text("Connect in Friends and enable this on both devices. Requires the supported Radical Red ROM and on-foot gameplay. Each player keeps their own save and progress.")
                 .font(.footnote).foregroundStyle(.secondary)
+            BoundPresenceConnectionCheckControls(check: session.connectionCheck)
         }
     }
 }

@@ -24,6 +24,11 @@ private final class PresenceHTTPTransport: FriendSharingTransport {
     private var sending: Task<Void, Never>?
     private var run = UUID()
     private var online = true
+    private var presenceSends = 0
+    private var presenceReceives = 0
+    var presenceConnectionCheck: BoundPresenceTransportCheck {
+        .init(kind: .fixture, acceptedSends: presenceSends, receivedMessages: presenceReceives)
+    }
     private let session: URLSession
     init(peer: String, port: Int) {
         self.peer = peer; self.port = port
@@ -48,6 +53,7 @@ private final class PresenceHTTPTransport: FriendSharingTransport {
                     if available != online { online = available; event(available ? .rejoined : .reconnecting) }
                     if http.statusCode == 200, data.count <= BoundPresencePacket.maximumBytes {
                         cursor = http.value(forHTTPHeaderField: "X-Relay-Sequence") ?? cursor
+                        presenceReceives += 1
                         receiver?(data)
                     }
                 } catch {
@@ -67,6 +73,7 @@ private final class PresenceHTTPTransport: FriendSharingTransport {
             _ = try? await session.data(for: request)
             if run == generation { sending = nil }
         }
+        presenceSends += 1
         return true
     }
     func stop() {
@@ -147,6 +154,7 @@ final class LivePresenceRuntimeTests: XCTestCase {
         UserDefaults.standard.set(false, forKey: BoundPlayerStatePreferences.key)
         NotificationCenter.default.post(name: BoundPlayerStatePreferences.didChange, object: nil)
         presence.setEnabled(true); sharing.start()
+        presence.connectionCheck.start()
         var movementFrame = 0, lastMask = 0
         let route = peer == "A" ? [32, 64, 16, 128] : [64, 32, 128, 16]
         core.updateHandler = { core in
@@ -197,6 +205,11 @@ final class LivePresenceRuntimeTests: XCTestCase {
         XCTAssertEqual(stage, "done"); XCTAssertGreaterThan(visibleTicks, 30); XCTAssertGreaterThan(positions.count, 10)
         XCTAssertGreaterThan(cameras.count, 16); XCTAssertTrue(pausedHidden); XCTAssertTrue(offlineHidden); XCTAssertTrue(recoveredVisible)
         XCTAssertNotNil(screenshot); XCTAssertTrue(display.hud.isHidden, "Live presence works with the diagnostic card off")
+        presence.connectionCheck.stop()
+        XCTAssertGreaterThan(presence.connectionCheck.sampleCount, 1)
+        XCTAssertTrue(presence.connectionCheck.samples.contains { $0.reader.visiblePixels > 20 && $0.reader.movementChanges > 10 })
+        XCTAssertTrue(presence.connectionCheck.samples.allSatisfy { $0.transport.kind == .fixture })
+        try presence.connectionCheck.export().write(to: root.appendingPathComponent("connection-check-\(peer).json"), options: .atomic)
         if let screenshot {
             let attachment = XCTAttachment(image: screenshot); attachment.name = "VBA-M live peer \(peer)"; attachment.lifetime = .keepAlways; add(attachment)
             try screenshot.pngData()?.write(to: root.appendingPathComponent("live-peer-\(peer).png"), options: .atomic)

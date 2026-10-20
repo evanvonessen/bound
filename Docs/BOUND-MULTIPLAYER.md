@@ -268,6 +268,11 @@ The live-presence milestone was validated on October 20, 2026:
 
 ## Following milestones
 
+The next device-acceptance preparation adds opt-in connection reports and a
+separate QA app identity without changing the existing cloud setup. See
+[device QA preparation and pending acceptance](BOUND-MULTIPLAYER-DEVICE-QA.md).
+Two physical devices are unavailable; real Internet acceptance remains open.
+
 Additional fixtures are needed for doors, connected maps, bike/surf/ledge
 movement, late-game scripts and save-state restoration in actual VBA-M gameplay.
 The live presence implementation now feeds this renderer through the existing
