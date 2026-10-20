@@ -2,10 +2,13 @@ import XCTest
 import UIKit
 import SwiftUI
 import CoreVideo
+import CoreData
 import MetalKit
 import ObjectiveC
 import DeltaCore
+import DeltaFeatures
 @testable import Delta
+@testable import class Delta.Game
 @testable import class Delta.GameViewController
 
 private struct FixtureGame: GameProtocol {
@@ -669,19 +672,19 @@ extension PlaybackSharingTests {
 
         owner.performFastForwardAction(activate: true, showToast: false)
         XCTAssertTrue(BoundFastForwardPreferences(defaults: defaults).isEnabled(for: gameID))
-        XCTAssertGreaterThan(firstCore.rate, firstCore.deltaCore.supportedRates.lowerBound)
+        XCTAssertEqual(firstCore.deltaCore.supportedRates.upperBound, 3)
+        XCTAssertEqual(firstCore.rate, 3)
 
         // Replacing the core for the same ROM models a fresh app/game session.
         owner.game = nil
         owner.game = FixtureGame(fileURL: fixture,
                                  gameSaveURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sav"))
         let restoredCore = try XCTUnwrap(owner.emulatorCore)
-        XCTAssertGreaterThan(restoredCore.rate, restoredCore.deltaCore.supportedRates.lowerBound)
+        XCTAssertEqual(restoredCore.rate, 3)
         XCTAssertTrue(owner.resumeEmulation())
         for _ in 0..<40 where restoredCore.state != .running { try await wait(0.05) }
         XCTAssertEqual(restoredCore.state, .running)
-        XCTAssertGreaterThan(restoredCore.rate, restoredCore.deltaCore.supportedRates.lowerBound,
-                             "Starting the recreated GBA core must preserve the restored rate")
+        XCTAssertEqual(restoredCore.rate, 3, "Starting the recreated GBA core must preserve the default fast-forward rate")
         _ = owner.pauseEmulation()
 
         owner.performFastForwardAction(activate: false, showToast: false)
@@ -716,8 +719,10 @@ extension PlaybackSharingTests {
         let preferences = BoundFastForwardPreferences(defaults: defaults)
 
         owner.performFastForwardAction(activate: true, remember: false, showToast: false)
+        XCTAssertEqual(core.rate, 3)
         XCTAssertFalse(preferences.isEnabled(for: gameID), "A held fast-forward action must not become a saved toggle")
         owner.performFastForwardAction(activate: false, remember: false, showToast: false)
+        XCTAssertEqual(core.rate, 1)
         XCTAssertFalse(preferences.isEnabled(for: gameID))
 
         core.isWirelessMultiplayerActive = true
@@ -744,11 +749,72 @@ extension PlaybackSharingTests {
             else { UserDefaults.standard.removeObject(forKey: legacyKey) }
             let owner = fastForwardOwner(for: fixture, defaults: defaults)
             let core = try XCTUnwrap(owner.emulatorCore)
-            XCTAssertGreaterThan(core.rate, core.deltaCore.supportedRates.lowerBound,
-                                 "Saved fast-forward must restore independently of the retired opt-in")
+            XCTAssertEqual(core.rate, 3, "Saved fast-forward must restore independently of the retired opt-in")
             XCTAssertTrue(preferences.isEnabled(for: gameID))
             owner.game = nil
         }
+    }
+
+    func testFastForwardIgnoresLegacySpeedOverrides() throws {
+        // DeltaFeatures persisted options as "<feature>_<option>". Seed the
+        // original keys directly to model upgrading with custom speeds saved.
+        let legacyKeys = ["customFastForward_gba", "customFastForward_allowUnrestrictedSpeeds"]
+        let standardDefaults = UserDefaults.standard
+        let previousValues = legacyKeys.map { standardDefaults.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(legacyKeys, previousValues) {
+                if let value { standardDefaults.set(value, forKey: key) }
+                else { standardDefaults.removeObject(forKey: key) }
+            }
+        }
+        let (defaults, suite) = isolatedFastForwardDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundFastForwardPreferences(defaults: defaults)
+
+        // An unsaved library Game exercises the old per-game override path
+        // without adding a ROM or preferences to the user's library.
+        let modelURL = try XCTUnwrap(Bundle(for: DatabaseManager.self).url(forResource: "Delta", withExtension: "momd"))
+        let model = try XCTUnwrap(NSManagedObjectModel(contentsOf: modelURL))
+        let entity = try XCTUnwrap(model.entitiesByName["Game"])
+        let context = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
+        context.persistentStoreCoordinator = NSPersistentStoreCoordinator(managedObjectModel: model)
+        defer { context.reset() }
+        let game = Game(entity: entity, insertInto: context)
+        game.type = .gba
+        game.filename = "default-fast-forward-fixture.gba"
+        game.identifier = UUID().uuidString
+        game.name = "Default Fast Forward Fixture"
+
+        let scenarios: [(system: Double, game: Double?, unrestricted: Bool)] = [
+            (2, nil, false), (8, nil, true), (2, 2, false), (8, 8, true)
+        ]
+        for scenario in scenarios {
+            standardDefaults.set(scenario.system, forKey: legacyKeys[0])
+            standardDefaults.set(scenario.unrestricted, forKey: legacyKeys[1])
+            game.settings = scenario.game.map { [.fastForwardSpeed: $0] } ?? [:]
+            preferences.setEnabled(true, for: game.identifier)
+
+            let owner = GameViewController()
+            owner.delegate = fastForwardRenderer
+            owner.boundFastForwardPreferences = preferences
+            owner.loadViewIfNeeded()
+            owner.game = game
+            defer { owner.game = nil }
+            let core = try XCTUnwrap(owner.emulatorCore)
+            XCTAssertEqual(core.rate, 3, "A restored toggle must ignore all legacy speed overrides")
+
+            owner.performFastForwardAction(activate: false, showToast: false)
+            XCTAssertEqual(core.rate, 1)
+            owner.performFastForwardAction(activate: true, showToast: false)
+            XCTAssertEqual(core.rate, 3, "Manual activation must use the same default as restoration")
+            XCTAssertTrue(preferences.isEnabled(for: game.identifier))
+
+            let pauseController = PauseViewController()
+            pauseController.emulatorCore = core
+            XCTAssertTrue(try XCTUnwrap(pauseController.fastForwardItem).menuOptions.isEmpty)
+            XCTAssertEqual(game.settings[.fastForwardSpeed] as? Double, scenario.game)
+        }
+        XCTAssertFalse(Settings.features.allFeatures.contains { $0.key == "customFastForward" })
     }
 
     func testControllerModeCancellationPreservesActualNativeExternalHeldAndSustainedA() async throws {

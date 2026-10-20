@@ -21,9 +21,6 @@ extension Settings
         
         // Previous Experimental Features
         
-        @Feature(enabledWith: CustomFastForwardOptions())
-        var customFastForward
-
         @Feature(enabledWith: RetroAchievementsOptions())
         var retroAchievements
         

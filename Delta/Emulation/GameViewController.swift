@@ -1671,30 +1671,9 @@ extension GameViewController
         
         if activate
         {
-            // Per-game speed > system-wide per-system speed > maximum supported
-            let speed: Double
-            if let game = emulatorCore.game as? Game,
-               let speedValue = game.settings[.fastForwardSpeed] as? Double
-            {
-                speed = speedValue
-            }
-            else if let preferredSpeed = Settings.features.customFastForward[emulatorCore.game.type]
-            {
-                speed = preferredSpeed.rawValue
-            }
-            else
-            {
-                speed = emulatorCore.deltaCore.supportedRates.upperBound
-            }
-
-            if speed <= emulatorCore.deltaCore.supportedRates.upperBound || Settings.features.customFastForward.allowUnrestrictedSpeeds
-            {
-                emulatorCore.rate = speed
-            }
-            else
-            {
-                emulatorCore.rate = emulatorCore.deltaCore.supportedRates.upperBound
-            }
+            // Use Delta's default for this core (3x for GBA), regardless of
+            // legacy per-game, per-system, or unrestricted-speed preferences.
+            emulatorCore.rate = emulatorCore.deltaCore.supportedRates.upperBound
 
             if showToast && ExperimentalFeatures.shared.toastNotifications.fastForwardEnabled
             {

@@ -316,11 +316,6 @@ private extension PauseViewController
         self.controllerModeItem?.preservesSelectionOnReturn = true
         self.controllerModeItem?.accessibilityIdentifier = "bound.controller-mode"
 
-        if let game = emulatorCore.game as? Game
-        {
-            let menuOptions = self.makeFastForwardMenuOptions(for: game)
-            self.fastForwardItem?.menuOptions = menuOptions ?? []
-        }
         // Add Lu menu item if enabled
         if ExperimentalFeatures.shared.Lu.isEnabled {
             self.askLuItem = self.configureLuMenuItem()
@@ -356,63 +351,6 @@ private extension PauseViewController
         {
             self.additionalSafeAreaInsets = .zero
         }
-    }
-    
-    func makeFastForwardMenuOptions(for game: Game) -> [Action]?
-    {
-        guard let deltaCore = Delta.core(for: game.type) else { return nil }
-        
-        let preferredSpeed = game.settings[.fastForwardSpeed] as? Double
-        
-        let supportedSpeeds = FastForwardSpeed.speeds(in: deltaCore.supportedRates)
-        var menuOptions = zip(0..., supportedSpeeds).map { (index, speed) in
-            
-            let style: Action.Style = (speed.rawValue == preferredSpeed) ? .selected : .default
-            var action = Action(title: speed.description, style: style) { [weak self] action in
-                DatabaseManager.shared.performBackgroundTask { context in
-                    let temporaryGame = context.object(with: game.objectID) as! Game
-                    temporaryGame.settings[.fastForwardSpeed] = speed.rawValue
-                    context.saveWithErrorLogging()
-                }
-                
-                if let fastForwardItem = self?.fastForwardItem
-                {
-                    fastForwardItem.isSelected = true // Always enable FF after selecting speed.
-                    fastForwardItem.action(fastForwardItem)
-                    
-                    // Update selected state for menu options
-                    fastForwardItem.menuOptions = self?.makeFastForwardMenuOptions(for: game) ?? []
-                }
-            }
-            
-            let configuration = UIImage.SymbolConfiguration(hierarchicalColor: .deltaPurple)
-            
-            let percentage = Double(index + 1) / Double(supportedSpeeds.count)
-            action.image = UIImage(systemName: "timelapse", variableValue: percentage, configuration: configuration)
-            
-            return action
-        }
-        
-        let style: Action.Style = (preferredSpeed == nil) ? .selected : .default
-        let action = Action(title: NSLocalizedString("Default", comment: ""), style: style) { [weak self] action in
-            DatabaseManager.shared.performBackgroundTask { context in
-                let temporaryGame = context.object(with: game.objectID) as! Game
-                temporaryGame.settings[.fastForwardSpeed] = nil
-                context.saveWithErrorLogging()
-            }
-            
-            if let fastForwardItem = self?.fastForwardItem
-            {
-                fastForwardItem.isSelected = true // Always enable FF after selecting speed.
-                fastForwardItem.action(fastForwardItem)
-                
-                // Update selected state for menu options
-                fastForwardItem.menuOptions = self?.makeFastForwardMenuOptions(for: game) ?? []
-            }
-        }
-        menuOptions.append(action)
-        
-        return menuOptions
     }
     
     func openNewMainWindow()
