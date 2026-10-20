@@ -8,6 +8,8 @@
 
 import SwiftUI
 import CoreData
+import GameController
+import UIKit
 
 import DeltaCore
 
@@ -58,6 +60,11 @@ private class ControlsEditor
         
         var inputMapping = self.inputMapping
         inputMapping.name = String.localizedStringWithFormat("Custom %@", self.controller.name)
+
+        if let controller = self.controller as? MFiGameController
+        {
+            BoundControllerSystemGestures.apply(to: controller, mapping: inputMapping)
+        }
         
         DatabaseManager.shared.performBackgroundTask { context in
             let existingMapping = GameControllerInputMapping.inputMapping(forPlayer: self.playerIndex, gameType: self.system.gameType, controllerType: self.controller.inputType, in: context)
@@ -111,6 +118,9 @@ struct ControlsEditorView: View
     
     @SwiftUI.State
     private var isConfirmingReset = false
+
+    @SwiftUI.State
+    private var homeButtonSettingsError: String?
     
     @Environment(\.dismiss)
     private var dismiss
@@ -122,6 +132,19 @@ struct ControlsEditorView: View
     
     var body: some View {
         Form {
+            if let controller = editor.controller as? MFiGameController,
+               controller.physicalHomeInput != nil,
+               #available(iOS 27, *)
+            {
+                Section {
+                    Button("Home Button Settings") {
+                        ControllerHomeButtonSettings.open { error in
+                            homeButtonSettingsError = error.localizedDescription
+                        }
+                    }
+                }
+            }
+
             if editor.controller.inputType == .keyboard
             {
                 KeyboardMappingSections(editor: editor)
@@ -156,6 +179,14 @@ struct ControlsEditorView: View
                     }
                 }
             }
+        }
+        .alert("Unable to Open Home Button Settings", isPresented: Binding(
+            get: { homeButtonSettingsError != nil },
+            set: { if !$0 { homeButtonSettingsError = nil } }
+        )) {
+            Button("OK") { homeButtonSettingsError = nil }
+        } message: {
+            Text(homeButtonSettingsError ?? "")
         }
     }
 }
@@ -242,9 +273,9 @@ private struct InputSection
     let inputs: [Input]
     
     static let mfiSections: [InputSection] = [
-        InputSection(name: String(localized: "Buttons"), inputs: [MFiGameController.Input.a, .b, .x, .y, .up, .down, .left, .right, .leftShoulder, .leftTrigger, .rightShoulder, .rightTrigger, .start, .select, .menu]),
-        InputSection(name: String(localized: "Left Thumbstick"), inputs: [MFiGameController.Input.leftThumbstickUp, .leftThumbstickDown, .leftThumbstickLeft, .leftThumbstickRight]),
-        InputSection(name: String(localized: "Right Thumbstick"), inputs: [MFiGameController.Input.rightThumbstickUp, .rightThumbstickDown, .rightThumbstickLeft, .rightThumbstickRight])
+        InputSection(name: String(localized: "Buttons"), inputs: [MFiGameController.Input.a, .b, .x, .y, .up, .down, .left, .right, .leftShoulder, .leftTrigger, .rightShoulder, .rightTrigger, .start, .select, .menu, .share]),
+        InputSection(name: String(localized: "Left Thumbstick"), inputs: [MFiGameController.Input.leftThumbstickUp, .leftThumbstickDown, .leftThumbstickLeft, .leftThumbstickRight, .leftThumbstickButton]),
+        InputSection(name: String(localized: "Right Thumbstick"), inputs: [MFiGameController.Input.rightThumbstickUp, .rightThumbstickDown, .rightThumbstickLeft, .rightThumbstickRight, .rightThumbstickButton])
     ]
     
     static let keyboardSections: [InputSection] = [
@@ -269,9 +300,39 @@ private struct InputMappingRow: View
     var mappableInputs: [AnyInput] {
         editor.system.editorInputs.map(AnyInput.init) + [AnyInput(StandardGameControllerInput.menu)]
     }
+
+    private var isPhysicalHomeButton: Bool {
+        guard let controller = editor.controller as? MFiGameController,
+              let physicalHome = controller.physicalHomeInput
+        else { return false }
+        return physicalHome.stringValue == controllerInput.stringValue
+    }
+
+    private var isLeftThumbstickDirection: Bool {
+        switch controllerInput.type
+        {
+        case .controller(.standard):
+            guard let input = StandardGameControllerInput(input: controllerInput) else { return false }
+            return [.leftThumbstickUp, .leftThumbstickDown, .leftThumbstickLeft, .leftThumbstickRight].contains(input)
+        case .controller(.mfi):
+            guard let input = MFiGameController.Input(input: controllerInput) else { return false }
+            return [.leftThumbstickUp, .leftThumbstickDown, .leftThumbstickLeft, .leftThumbstickRight].contains(input)
+        default: return false
+        }
+    }
+
+    private var availableActions: [ActionInput] {
+        Self.actionInputs.compactMap(ActionInput.init(input:)).filter { action in
+            action != .none && (!isLeftThumbstickDirection || !action.isBoundPanelAction)
+        }
+    }
     
     var defaultInput: Input? {
         editor.defaultMapping.input(forControllerInput: controllerInput)
+    }
+
+    private var controllerInputName: String {
+        isPhysicalHomeButton ? String(localized: "Home / Overlay") : controllerInput.localizedDisplayName
     }
     
     var body: some View {
@@ -283,9 +344,9 @@ private struct InputMappingRow: View
                 Picker(selection: mappedInput) {
                     pickerOptions
                 } label: {
-                    Label(controllerInput.localizedDisplayName, systemImage: controllerInput.sfSymbolName)
+                    Label(controllerInputName, systemImage: controllerInput.sfSymbolName)
                 } currentValueLabel: {
-                    Text(mappedInput.wrappedValue?.localizedDisplayName ?? String(localized: defaultInput == nil ? "Remove" : "Default"))
+                    Text(mappedInput.wrappedValue?.localizedDisplayName ?? String(localized: "Default"))
                 }
             }
             else
@@ -293,7 +354,7 @@ private struct InputMappingRow: View
                 Picker(selection: mappedInput) {
                     pickerOptions
                 } label: {
-                    Label(controllerInput.localizedDisplayName, systemImage: controllerInput.sfSymbolName)
+                    Label(controllerInputName, systemImage: controllerInput.sfSymbolName)
                 }
             }
         }
@@ -303,8 +364,11 @@ private struct InputMappingRow: View
     
     @ViewBuilder
     var pickerOptions: some View {
-        Text(defaultInput == nil ? "Remove" : "Default")
+        Text("Default")
             .tag(AnyInput?.none)
+
+        Label("None", systemImage: ActionInput.none.sfSymbolName)
+            .tag(AnyInput?.some(AnyInput(ActionInput.none)))
         
         Section {
             ForEach(mappableInputs, id: \.self) { input in
@@ -315,10 +379,18 @@ private struct InputMappingRow: View
         }
         
         Section("Game Actions") {
-            ForEach(Self.actionInputs, id: \.self) { input in
+            ForEach(availableActions.map(AnyInput.init), id: \.self) { input in
                 Label(input.localizedDisplayName, systemImage: input.sfSymbolName)
                     .tint(.accentColor)
                     .tag(AnyInput?.some(input))
+            }
+        }
+
+        if isPhysicalHomeButton
+        {
+            Section("System") {
+                Label(ActionInput.systemOverlay.localizedDisplayName, systemImage: ActionInput.systemOverlay.sfSymbolName)
+                    .tag(AnyInput?.some(AnyInput(ActionInput.systemOverlay)))
             }
         }
     }
@@ -340,6 +412,24 @@ private struct InputMappingRow: View
                 editor.inputMapping.set(newValue ?? defaultInput, forControllerInput: controllerInput)
             }
         )
+    }
+}
+
+@MainActor
+enum ControllerHomeButtonSettings
+{
+    static func open(onFailure: (Error) -> Void)
+    {
+        guard #available(iOS 27, *) else { return }
+
+        do
+        {
+            try GCControllerHomeButtonSettingsManager().openControllerHomeButtonSettings(for: .customizeInAppAction)
+        }
+        catch
+        {
+            onFailure(error)
+        }
     }
 }
 

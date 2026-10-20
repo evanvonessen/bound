@@ -31,7 +31,14 @@ class ControllerInputsViewController: UIViewController
     private lazy var managedObjectContext: NSManagedObjectContext = DatabaseManager.shared.newBackgroundContext()
     private var inputMappings = [System: GameControllerInputMapping]()
     
-    private var supportedActionInputs: [ActionInput] { ActionInput.configurableActions }
+    private var supportedActionInputs: [ActionInput] {
+        var actions = ActionInput.configurableActions
+        if let controller = self.gameController as? MFiGameController, controller.physicalHomeInput != nil
+        {
+            actions.append(.systemOverlay)
+        }
+        return actions
+    }
     
     private var gameViewController: DeltaCore.GameViewController!
     private var actionsMenuViewController: GridMenuViewController!
@@ -39,6 +46,8 @@ class ControllerInputsViewController: UIViewController
     private var calloutViews = [AnyInput: InputCalloutView]()
     
     private var activeCalloutView: InputCalloutView?
+
+    private var savedCurrentMapping = false
     
     private var _didLayoutSubviews = false
     
@@ -81,6 +90,15 @@ class ControllerInputsViewController: UIViewController
         
         self.preparePopoverMenuController()
         self.updateSystem()
+
+        if #available(iOS 27, *),
+           let controller = self.gameController as? MFiGameController,
+           controller.physicalHomeInput != nil
+        {
+            var rightItems = self.navigationItem.rightBarButtonItems ?? []
+            rightItems.append(UIBarButtonItem(title: NSLocalizedString("Home Button Settings", comment: ""), style: .plain, target: self, action: #selector(self.openHomeButtonSettings)))
+            self.navigationItem.rightBarButtonItems = rightItems
+        }
     }
     
     override func viewDidLayoutSubviews()
@@ -121,6 +139,42 @@ class ControllerInputsViewController: UIViewController
         
         // controllerView must be first responder to receive keyboard presses.
         self.gameViewController.controllerView.becomeFirstResponder()
+
+        if let controller = self.gameController as? MFiGameController,
+           let mapping = self.inputMappings[self.system]
+        {
+            BoundControllerSystemGestures.apply(to: controller, mapping: mapping, capturing: true)
+        }
+    }
+
+    override func viewDidDisappear(_ animated: Bool)
+    {
+        super.viewDidDisappear(animated)
+
+        guard let controller = self.gameController as? MFiGameController else { return }
+
+        let mapping: GameControllerInputMappingProtocol
+        if savedCurrentMapping, let currentMapping = self.inputMappings[self.system]
+        {
+            mapping = currentMapping
+        }
+        else if let storedMapping = GameControllerInputMapping.inputMapping(forPlayer: controller.playerIndex,
+                                                                             gameType: self.system.gameType,
+                                                                             controllerType: controller.inputType,
+                                                                             in: DatabaseManager.shared.viewContext)
+        {
+            mapping = storedMapping
+        }
+        else if let defaultMapping = controller.defaultInputMapping as? DeltaCore.GameControllerInputMapping
+        {
+            mapping = defaultMapping
+        }
+        else
+        {
+            mapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: controller.inputType)
+        }
+
+        BoundControllerSystemGestures.apply(to: controller, mapping: mapping, capturing: false)
     }
 }
 
@@ -142,8 +196,22 @@ extension ControllerInputsViewController
             self.managedObjectContext.performAndWait {
                 self.managedObjectContext.saveWithErrorLogging()
             }
+            self.savedCurrentMapping = true
             
         default: break
+        }
+    }
+
+    @objc private func openHomeButtonSettings()
+    {
+        guard #available(iOS 27, *) else { return }
+
+        ControllerHomeButtonSettings.open { [weak self] error in
+            let alert = UIAlertController(title: NSLocalizedString("Unable to Open Home Button Settings", comment: ""),
+                                          message: error.localizedDescription,
+                                          preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: NSLocalizedString("OK", comment: ""), style: .default))
+            self?.present(alert, animated: true)
         }
     }
 }
@@ -342,6 +410,27 @@ private extension ControllerInputsViewController
         guard let activeCalloutView = self.activeCalloutView else { return }
         
         guard let input = self.calloutViews.first(where: { $0.value == activeCalloutView })?.key else { return }
+
+        if let controllerInput,
+           let action = ActionInput(input: input)
+        {
+            if BoundControllerInputMapping.isLeftStickDirection(controllerInput), action.isBoundPanelAction
+            {
+                self.showMappingFeedback(NSLocalizedString("Use the right thumbstick for view controls.", comment: ""))
+                return
+            }
+
+            if action == .systemOverlay
+            {
+                guard let controller = self.gameController as? MFiGameController,
+                      controller.physicalHomeInput?.stringValue == controllerInput.stringValue
+                else
+                {
+                    self.showMappingFeedback(NSLocalizedString("Overlay can only be assigned to the Home button.", comment: ""))
+                    return
+                }
+            }
+        }
         
         if let controllerInput = controllerInput
         {
@@ -359,14 +448,19 @@ private extension ControllerInputsViewController
         }
         
         self.managedObjectContext.performAndWait {
-            for supportedInput in inputMapping.supportedControllerInputs
+            let isNoneAction = ActionInput(input: input) == Optional(ActionInput.none)
+
+            if !isNoneAction
             {
-                let mappedInput = self.mappedInput(for: supportedInput)
-                
-                if mappedInput == input
+                for supportedInput in inputMapping.supportedControllerInputs
                 {
-                    // Set all existing controller inputs that currently map to "input" to instead map to nil.
-                    inputMapping.set(nil, forControllerInput: supportedInput)
+                    let mappedInput = self.mappedInput(for: supportedInput)
+
+                    if mappedInput == input
+                    {
+                        // Keep ordinary actions one-to-one. None may be assigned to several physical buttons.
+                        inputMapping.set(nil, forControllerInput: supportedInput)
+                    }
                 }
             }
             
@@ -375,10 +469,21 @@ private extension ControllerInputsViewController
                 inputMapping.set(input, forControllerInput: controllerInput)
             }
         }
+
+        if let controller = self.gameController as? MFiGameController
+        {
+            BoundControllerSystemGestures.apply(to: controller, mapping: inputMapping, capturing: true)
+        }
         
         activeCalloutView.input = controllerInput
         
         self.toggle(activeCalloutView)
+    }
+
+    func showMappingFeedback(_ message: String)
+    {
+        let toast = RSTToastView(text: message, detailText: nil)
+        toast.show(in: self.navigationController?.view ?? self.view, duration: 2.5)
     }
     
     func toggle(_ calloutView: InputCalloutView)

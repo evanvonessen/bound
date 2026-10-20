@@ -46,6 +46,25 @@ Select opens a Pokémon or boss chooser, previous/next changes its highlighted
 candidate, and Select confirms it. Back closes the chooser or detail view.
 Reset Settings to Default turns navigation off and resets custom mappings.
 
+Controller mapping exposes Xbox Share and left/right thumbstick clicks (L3/R3).
+**None** is an explicit saved binding, distinct from **Default**. **Menu** opens
+Bound's pause menu. The physical Home button also offers **Overlay**, which
+leaves its Apple system gesture enabled. Share keeps its system capture behavior
+until assigned; assigning an action or None requests that iOS disable capture
+for that button. Existing mapping identifiers remain compatible.
+
+The Home button remains subject to Apple's system policy. On iOS 27 and later,
+**Home Button Settings** opens Apple's controller settings for the user to allow
+the app's Home-button handling. Bound cannot silently change that system setting.
+See Apple's [Home button settings API](https://developer.apple.com/documentation/gamecontroller/gccontrollerhomebuttonsettingsmanager)
+and [system gesture preference](https://developer.apple.com/documentation/gamecontroller/gccontrollerelement/preferredsystemgesturestate).
+
+Companion navigation ignores left-stick directional bindings, including older
+saved bindings; right-stick directions and ordinary buttons remain configurable.
+L3 is a separate button and may still be assigned. Dex/Boss content and sheets
+use scoped controller-event hosts so UIKit does not independently scroll or move
+focus with the left stick. Touch scrolling remains available.
+
 Controller mapping includes **Toggle Friend** and **Toggle Multiview** as normal
 Game Actions, alongside the existing **Menu** mapping. These choices do not
 require the experimental customization checkbox. In landscape Controller Mode

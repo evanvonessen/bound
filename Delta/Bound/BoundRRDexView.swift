@@ -75,6 +75,7 @@ struct BoundRRDexView: View {
     }
 
     var body: some View {
+        BoundControllerInputHost {
         Group {
             if let catalog = catalogStore.dex,
                let pokemon = catalog.pokemon(id: choice.speciesID) ?? catalog.species.first {
@@ -165,6 +166,7 @@ struct BoundRRDexView: View {
                     refreshAutomaticSave()
                 }
                 .sheet(item: $sheet, onDismiss: detailDismissed) { detail in
+                    BoundControllerInputHost {
                     BoundRRDexDetail(title: detailTitle(detail)) {
                         switch detail {
                         case .weaknesses: BoundRRDexMatchups(pokemon: pokemon, catalog: catalog)
@@ -178,6 +180,7 @@ struct BoundRRDexView: View {
                     }
                     .boundControllerScroll(gameID: gameID, content: .dex,
                                            active: isActive && !isControllerSpeciesPickerPresented)
+                    }
                 }
             } else if catalogStore.hasFinishedLoading {
                 ContentUnavailableView("RRDex unavailable", systemImage: "book.closed", description: Text("The bundled dex could not be loaded."))
@@ -224,6 +227,7 @@ struct BoundRRDexView: View {
         }
         .allowsHitTesting(isActive && previewLayout == nil)
         .accessibilityHidden(!isActive)
+        }
     }
 
     private func detailTitle(_ detail: Detail) -> String {

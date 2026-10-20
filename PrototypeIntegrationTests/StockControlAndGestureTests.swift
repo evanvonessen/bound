@@ -490,7 +490,7 @@ final class StockControlAndGestureTests: XCTestCase {
         let physicalController = try XCTUnwrap(virtualController.controller)
 
         var window: UIWindow?
-        let gameController = GameViewController()
+        let gameController = BoundControllerMenuProbe()
         let selectors = (NSSelectorFromString("mfiGameControllerDidConnect:"),
                          NSSelectorFromString("mfiGameControllerDidDisconnect:"))
         let previousKeyWindow = UIApplication.shared.connectedScenes
@@ -676,6 +676,29 @@ final class StockControlAndGestureTests: XCTestCase {
                 XCTAssertEqual(events.count, countAfterTransition, "The completed action must hide the multiview")
             }
         }
+
+        var stickMapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: external.inputType)
+        stickMapping.set(ActionInput.boundScrollDown, forControllerInput: MFiGameController.Input.leftThumbstickDown)
+        stickMapping.set(ActionInput.boundScrollDown, forControllerInput: MFiGameController.Input.rightThumbstickDown)
+        stickMapping.set(ActionInput.none, forControllerInput: MFiGameController.Input.a)
+        external.addReceiver(gameController, inputMapping: BoundControllerInputMapping(base: stickMapping))
+        let beforeStickInput = events.count
+        external.activate(MFiGameController.Input.leftThumbstickDown, value: 0.9)
+        external.deactivate(MFiGameController.Input.leftThumbstickDown)
+        external.activate(MFiGameController.Input.a)
+        external.deactivate(MFiGameController.Input.a)
+        external.activate(MFiGameController.Input.rightThumbstickDown, value: 0.1)
+        XCTAssertEqual(events.count, beforeStickInput, "Left stick, None bindings, and stick drift must not navigate companion views")
+        external.activate(MFiGameController.Input.rightThumbstickDown, value: 0.9)
+        external.deactivate(MFiGameController.Input.rightThumbstickDown)
+        XCTAssertEqual(events.count, beforeStickInput + 1, "The right stick must still reach the active companion")
+
+        var menuMapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: external.inputType)
+        menuMapping.set(StandardGameControllerInput.menu, forControllerInput: MFiGameController.Input.share)
+        external.addReceiver(gameController, inputMapping: BoundControllerInputMapping(base: menuMapping))
+        external.activate(MFiGameController.Input.share)
+        external.deactivate(MFiGameController.Input.share)
+        XCTAssertTrue(gameController.didRequestPauseMenu, "A button bound to Menu must request Bound's pause menu")
     }
 
     func testViewNavigationMappingsRoundTripAndRequireOptInInBothEditors() throws {
@@ -999,6 +1022,16 @@ private final class BoundVirtualMappingController: NSObject, GameController {
     var playerIndex: Int? = 0
     let inputType = GameControllerInputType.mfi
     var defaultInputMapping: GameControllerInputMappingProtocol? { nil }
+}
+
+@MainActor
+private final class BoundControllerMenuProbe: GameViewController {
+    var didRequestPauseMenu = false
+
+    override func performSegue(withIdentifier identifier: String, sender: Any?) {
+        if identifier == "pause" { didRequestPauseMenu = true }
+        else { super.performSegue(withIdentifier: identifier, sender: sender) }
+    }
 }
 
 @MainActor

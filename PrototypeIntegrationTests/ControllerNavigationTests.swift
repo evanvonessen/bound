@@ -1,6 +1,8 @@
 import XCTest
 import UIKit
 import SwiftUI
+import GameController
+import DeltaCore
 @testable import Delta
 
 @MainActor
@@ -36,6 +38,99 @@ final class ControllerNavigationTests: XCTestCase {
             BoundControllerNavigationEvent.commandKey: "execute-arbitrary-action"
         ])
         XCTAssertNil(BoundControllerNavigationEvent.command(from: invalidCommand, gameID: "game-a", content: .dex))
+    }
+
+    func testMFiShareAndThumbstickClickInputsHaveExpectedDefaultMappings() throws {
+        XCTAssertEqual(MFiGameController.Input(rawValue: "share"), .share)
+        XCTAssertEqual(MFiGameController.Input(rawValue: "leftThumbstickButton"), .leftThumbstickButton)
+        XCTAssertEqual(MFiGameController.Input(rawValue: "rightThumbstickButton"), .rightThumbstickButton)
+
+        let controller = GCController.withExtendedGamepad()
+        let adapter = MFiGameController(controller: controller)
+        let mapping = try XCTUnwrap(adapter.defaultInputMapping as? DeltaCore.GameControllerInputMapping)
+        XCTAssertEqual(StandardGameControllerInput(input: try XCTUnwrap(mapping.input(forControllerInput: MFiGameController.Input.leftThumbstickButton))), .l3)
+        XCTAssertEqual(StandardGameControllerInput(input: try XCTUnwrap(mapping.input(forControllerInput: MFiGameController.Input.rightThumbstickButton))), .r3)
+        XCTAssertNil(mapping.input(forControllerInput: MFiGameController.Input.share), "Share must remain available for an explicit user binding.")
+        XCTAssertFalse(mapping.supportedControllerInputs.contains { MFiGameController.Input(input: $0) == .share })
+    }
+
+    func testSnapshotThumbstickClicksReachReceiverAsDistinctMFiInputs() async throws {
+        let controller = GCController.withExtendedGamepad()
+        let adapter = MFiGameController(controller: controller)
+        let receiver = ControllerNavigationInputCapture()
+        adapter.addReceiver(receiver, inputMapping: nil)
+        defer { adapter.removeReceiver(receiver) }
+
+        let profile = controller.physicalInputProfile
+        let leftClick = try XCTUnwrap(profile.buttons[GCInputLeftThumbstickButton])
+        let rightClick = try XCTUnwrap(profile.buttons[GCInputRightThumbstickButton])
+
+        leftClick.setValue(1)
+        rightClick.setValue(1)
+        let activated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in receiver.activated.count == 2 }, object: nil)
+        await fulfillment(of: [activated], timeout: 2)
+        XCTAssertEqual(receiver.activated.map(\.stringValue), ["leftThumbstickButton", "rightThumbstickButton"])
+        leftClick.setValue(0)
+        rightClick.setValue(0)
+        let deactivated = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in receiver.deactivated.count == 2 }, object: nil)
+        await fulfillment(of: [deactivated], timeout: 2)
+        XCTAssertEqual(receiver.deactivated.map(\.stringValue), ["leftThumbstickButton", "rightThumbstickButton"])
+    }
+
+    func testNoneAndOverlaySentinelsRoundTripThroughInputSerialization() throws {
+        for action in [ActionInput.none, .systemOverlay] {
+            let encoded = try JSONEncoder().encode(AnyInput(action))
+            let decoded = try JSONDecoder().decode(AnyInput.self, from: encoded)
+            XCTAssertEqual(ActionInput(input: decoded), action)
+        }
+    }
+
+    func testControllerInputMappingDropsNoneAndOverlayAndFiltersOnlyLeftStickCompanionActions() throws {
+        var base = DeltaCore.GameControllerInputMapping(gameControllerInputType: .mfi)
+        base.set(ActionInput.none, forControllerInput: MFiGameController.Input.a)
+        base.set(ActionInput.systemOverlay, forControllerInput: MFiGameController.Input.b)
+        base.set(ActionInput.boundScrollDown, forControllerInput: MFiGameController.Input.leftThumbstickDown)
+        base.set(ActionInput.boundScrollDown, forControllerInput: MFiGameController.Input.rightThumbstickDown)
+        base.set(ActionInput.boundNextItem, forControllerInput: MFiGameController.Input.leftThumbstickButton)
+        base.set(ActionInput.boundNextItem, forControllerInput: MFiGameController.Input.rightThumbstickButton)
+
+        let mapping = BoundControllerInputMapping(base: base)
+        XCTAssertNil(mapping.input(forControllerInput: MFiGameController.Input.a))
+        XCTAssertNil(mapping.input(forControllerInput: MFiGameController.Input.b))
+        XCTAssertNil(mapping.input(forControllerInput: MFiGameController.Input.leftThumbstickDown))
+        XCTAssertEqual(ActionInput(input: try XCTUnwrap(mapping.input(forControllerInput: MFiGameController.Input.rightThumbstickDown))), .boundScrollDown)
+        XCTAssertEqual(ActionInput(input: try XCTUnwrap(mapping.input(forControllerInput: MFiGameController.Input.leftThumbstickButton))), .boundNextItem)
+        XCTAssertEqual(ActionInput(input: try XCTUnwrap(mapping.input(forControllerInput: MFiGameController.Input.rightThumbstickButton))), .boundNextItem)
+    }
+
+    func testControllerSystemGesturePolicyUsesOnlyAssignedOverlayAndCaptureOverridesIt() {
+        XCTAssertEqual(BoundControllerSystemGestures.preferredState(for: ActionInput.quickSave), .disabled)
+        XCTAssertEqual(BoundControllerSystemGestures.preferredState(for: ActionInput.none), .disabled)
+        XCTAssertEqual(BoundControllerSystemGestures.preferredState(for: ActionInput.systemOverlay), .enabled)
+        XCTAssertEqual(BoundControllerSystemGestures.preferredState(for: nil), .enabled)
+        XCTAssertEqual(BoundControllerSystemGestures.preferredState(for: ActionInput.quickSave, capturing: true), .disabled)
+        XCTAssertEqual(BoundControllerSystemGestures.preferredState(for: nil, capturing: true), .disabled)
+    }
+
+    func testControllerInputHostScopesEventSuppressionAndPreservesProposedSize() throws {
+        let root = BoundControllerInputHost {
+            Color.clear
+                .frame(width: 180, height: 100)
+                .accessibilityIdentifier("bound.controller-input-host.content")
+        }
+        .frame(width: 180, height: 100)
+        let hostingController = UIHostingController(rootView: root)
+        let window = makeWindow(rootViewController: hostingController)
+        hostingController.view.frame = window.bounds
+        window.layoutIfNeeded()
+
+        let eventController = try XCTUnwrap(descendantViewControllers(of: hostingController).compactMap { $0 as? GCEventViewController }.first)
+        XCTAssertFalse(eventController.controllerUserInteractionEnabled)
+        XCTAssertEqual(eventController.view.bounds.width, 180, accuracy: 0.5)
+        XCTAssertEqual(eventController.view.bounds.height, 100, accuracy: 0.5)
+        let childHostingController = try XCTUnwrap(eventController.children.first as? UIHostingController<AnyView>)
+        XCTAssertEqual(childHostingController.view.bounds.width, 180, accuracy: 0.5)
+        XCTAssertEqual(childHostingController.view.bounds.height, 100, accuracy: 0.5)
     }
 
     func testVerticalAndHorizontalScrollingUseViewportStepsAndClampAtEdges() throws {
@@ -168,6 +263,16 @@ final class ControllerNavigationTests: XCTestCase {
         return result
     }
 
+    private func descendantViewControllers(of root: UIViewController) -> [UIViewController] {
+        var result: [UIViewController] = []
+        var stack = root.children
+        while let controller = stack.popLast() {
+            result.append(controller)
+            stack.append(contentsOf: controller.children)
+        }
+        return result
+    }
+
     private func isVisible(_ view: UIView) -> Bool {
         guard !view.isHidden, view.alpha > 0.01, view.window != nil else { return false }
         var ancestor = view.superview
@@ -201,5 +306,18 @@ private struct ControllerNavigationScrollFixture: View {
         }
         .frame(width: 260, height: 226)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private final class ControllerNavigationInputCapture: GameControllerReceiver {
+    var activated = [Input]()
+    var deactivated = [Input]()
+
+    func gameController(_ gameController: DeltaCore.GameController, didActivate input: Input, value: Double) {
+        activated.append(input)
+    }
+
+    func gameController(_ gameController: DeltaCore.GameController, didDeactivate input: Input) {
+        deactivated.append(input)
     }
 }

@@ -71,6 +71,7 @@ struct BoundBossGuideView: View {
     private var usesIslandActions: Bool { (layout == .layout3 || layout == .layout4 || layout == .layout5 || layout == .layout6 || layout == .layout7 || layout == .layout8 || layout == .layout9 || layout == .layout10 || layout == .layout11 || layout == .layout12) && !floating && portraitTopInset >= 51 }
 
     var body: some View {
+        BoundControllerInputHost {
         Group {
             if let catalog = catalogStore.bosses {
                 let selected = selection.resolved(in: catalog)
@@ -111,17 +112,22 @@ struct BoundBossGuideView: View {
                     if previewLayout == nil { selection = preferences.read(gameID: gameID, catalog: catalog) }
                 }
                 .sheet(isPresented: $showingPicker, onDismiss: presentationDismissed) {
+                    BoundControllerInputHost {
                     BoundBossPicker(gameID: gameID, isActive: isActive, previewLayout: previewLayout,
                                     catalog: catalog, selectedID: selected.teamID,
                                     highlightedTeamID: $controllerPickerTeamID) { id in
                         choose(BoundBossGuideSelection(teamID: id, pokemonIndex: 0), catalog: catalog)
                     }
+                    }
                 }
                 .sheet(isPresented: $showingTeam, onDismiss: presentationDismissed) {
+                    BoundControllerInputHost {
                     BoundBossTeamView(catalog: catalog, team: team)
                         .boundControllerScroll(gameID: gameID, content: .bosses, active: isActive)
+                    }
                 }
                 .sheet(item: $detailSheet, onDismiss: presentationDismissed) { sheet in
+                    BoundControllerInputHost {
                     Group {
                         switch sheet {
                         case let .ability(name, description):
@@ -133,6 +139,7 @@ struct BoundBossGuideView: View {
                         }
                     }
                     .boundControllerScroll(gameID: gameID, content: .bosses, active: isActive)
+                    }
                 }
             } else if catalogStore.hasFinishedLoading {
                 ContentUnavailableView("Boss guide unavailable", systemImage: "book.closed",
@@ -153,6 +160,7 @@ struct BoundBossGuideView: View {
         }
         .allowsHitTesting(isActive && previewLayout == nil)
         .accessibilityHidden(!isActive)
+        }
     }
 
     @ViewBuilder

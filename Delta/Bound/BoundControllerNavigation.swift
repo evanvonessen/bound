@@ -1,5 +1,53 @@
 import SwiftUI
 import UIKit
+import DeltaCore
+import GameController
+
+/// Filters app-only choices before they reach either gameplay input receiver.
+struct BoundControllerInputMapping: GameControllerInputMappingProtocol {
+    let base: GameControllerInputMappingProtocol
+    var gameControllerInputType: GameControllerInputType { base.gameControllerInputType }
+
+    static func isLeftStickDirection(_ input: Input) -> Bool {
+        if let input = MFiGameController.Input(input: input) {
+            return [.leftThumbstickUp, .leftThumbstickDown, .leftThumbstickLeft, .leftThumbstickRight].contains(input)
+        }
+        if let input = StandardGameControllerInput(input: input) {
+            return [.leftThumbstickUp, .leftThumbstickDown, .leftThumbstickLeft, .leftThumbstickRight].contains(input)
+        }
+        return false
+    }
+
+    func input(forControllerInput controllerInput: Input) -> Input? {
+        guard let target = base.input(forControllerInput: controllerInput) else { return nil }
+        if let action = ActionInput(input: target) {
+            if action == .none || action == .systemOverlay { return nil }
+            if Self.isLeftStickDirection(controllerInput), action.isBoundPanelAction { return nil }
+        }
+        return target
+    }
+}
+
+enum BoundControllerSystemGestures {
+    static func preferredState(for target: Input?, capturing: Bool = false) -> GCControllerElement.SystemGestureState {
+        if capturing { return .disabled }
+        guard let target else { return .enabled }
+        return ActionInput(input: target) == .systemOverlay ? .enabled : .disabled
+    }
+
+    /// Request app control only for assigned buttons. iOS retains final control
+    /// over reserved Home gestures; Overlay intentionally leaves them enabled.
+    static func apply(to controller: MFiGameController, mapping: GameControllerInputMappingProtocol, capturing: Bool = false) {
+        let inputs: [MFiGameController.Input] = [.menu, .start, .select, .share,
+            .a, .b, .x, .y, .up, .down, .left, .right,
+            .leftShoulder, .rightShoulder, .leftTrigger, .rightTrigger,
+            .leftThumbstickButton, .rightThumbstickButton]
+        for input in inputs {
+            controller.physicalButton(for: input)?.preferredSystemGestureState = preferredState(
+                for: mapping.input(forControllerInput: input), capturing: capturing)
+        }
+    }
+}
 
 enum BoundControllerNavigationCommand: String, CaseIterable, Sendable {
     case scrollUp

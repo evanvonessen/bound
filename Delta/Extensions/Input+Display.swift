@@ -129,6 +129,9 @@ extension Input
             case .rightTrigger: return NSLocalizedString("R2", comment: "")
             case .start: return NSLocalizedString("Start", comment: "")
             case .select: return NSLocalizedString("Select", comment: "")
+            case .leftThumbstickButton: return NSLocalizedString("L3", comment: "")
+            case .rightThumbstickButton: return NSLocalizedString("R3", comment: "")
+            case .share: return NSLocalizedString("Share", comment: "")
             }
             
         case .controller(.keyboard):
@@ -249,6 +252,9 @@ extension Input
             case .rightTrigger: return NSLocalizedString("R2 Button", comment: "")
             case .start: return NSLocalizedString("Start", comment: "")
             case .select: return NSLocalizedString("Select", comment: "")
+            case .leftThumbstickButton: return NSLocalizedString("L3 Button", comment: "")
+            case .rightThumbstickButton: return NSLocalizedString("R3 Button", comment: "")
+            case .share: return NSLocalizedString("Share Button", comment: "")
             }
             
         case .controller(.keyboard):
@@ -275,6 +281,8 @@ extension Input
             let input = ActionInput(input: self)!
             switch input
             {
+            case .none: return NSLocalizedString("None", comment: "")
+            case .systemOverlay: return NSLocalizedString("Overlay", comment: "")
             case .quickSave: return NSLocalizedString("Quick Save", comment: "")
             case .quickLoad: return NSLocalizedString("Quick Load", comment: "")
             case .fastForward: return NSLocalizedString("Fast Forward", comment: "")
@@ -399,6 +407,9 @@ extension Input
             case .rightTrigger: return "r2.button.roundedtop.horizontal"
             case .start: return "plus.circle"
             case .select: return "minus.circle"
+            case .leftThumbstickButton: return "l.joystick.press.down"
+            case .rightThumbstickButton: return "r.joystick.press.down"
+            case .share: return "square.and.arrow.up"
             }
             
         case .controller(.keyboard):
@@ -436,6 +447,8 @@ extension Input
             let input = ActionInput(input: self)!
             switch input
             {
+            case .none: return "slash.circle"
+            case .systemOverlay: return "rectangle.on.rectangle"
             case .quickSave: return "square.and.arrow.down"
             case .quickLoad: return "square.and.arrow.up"
             case .fastForward: return "forward"
@@ -462,7 +475,7 @@ extension Input
             case .boundShowBosses: return "person.crop.rectangle"
             case .boundShowTypes: return "square.grid.3x3"
             }
-            
+
         default: return "questionmark.circle"
         }
     }

@@ -341,7 +341,7 @@ class GameViewController: DeltaCore.GameViewController
     {
         super.gameController(gameController, didActivate: input, value: value)
         if let action = ActionInput(input: input), action.isBoundPanelAction {
-            self.receiveBoundPanelAction(action, from: gameController, pressed: true)
+            self.receiveBoundPanelAction(action, from: gameController, pressed: value >= 0.5)
             return
         }
         
@@ -357,6 +357,7 @@ class GameViewController: DeltaCore.GameViewController
         {
             switch actionInput
             {
+            case .none, .systemOverlay: break
             case .quickSave: self.performQuickSaveAction()
             case .quickLoad: self.performQuickLoadAction()
             case .fastForward: self.performFastForwardAction(activate: true, remember: false)
@@ -393,6 +394,7 @@ class GameViewController: DeltaCore.GameViewController
         {
             switch actionInput
             {
+            case .none, .systemOverlay: break
             case .quickSave: break
             case .quickLoad: break
             case .fastForward: self.performFastForwardAction(activate: false, remember: false)
@@ -954,8 +956,12 @@ private extension GameViewController
                         inputMapping = DefaultInputMapping(gameController: gameController)
                     }
                     
-                    gameController.addReceiver(self, inputMapping: inputMapping)
-                    gameController.addReceiver(emulatorCore, inputMapping: inputMapping)
+                    if let controller = gameController as? MFiGameController {
+                        BoundControllerSystemGestures.apply(to: controller, mapping: inputMapping)
+                    }
+                    let gameplayMapping = BoundControllerInputMapping(base: inputMapping)
+                    gameController.addReceiver(self, inputMapping: gameplayMapping)
+                    gameController.addReceiver(emulatorCore, inputMapping: gameplayMapping)
                 }
                 else
                 {

@@ -6,6 +6,20 @@ private func selectCompanion(_ name: String, in app: XCUIApplication) {
     let cycle = app.buttons["bound.panel-cycle"]
     XCTAssertTrue(cycle.waitForExistence(timeout: 15))
     resumeNativePause(in: app)
+    // The default portrait layout splits Friend and reference views into
+    // separate controls; the parent button no longer cycles every view.
+    let segments = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "bound.panel-cycle.")).allElementsBoundByIndex
+    if !segments.isEmpty {
+        for segment in segments where segment.isEnabled {
+            segment.tap()
+            for _ in 0..<5 {
+                if segment.value as? String == name { return }
+                segment.tap()
+            }
+        }
+        XCTFail("No companion button contains \(name)")
+        return
+    }
     for _ in 0..<5 {
         if cycle.value as? String == name { return }
         cycle.tap()

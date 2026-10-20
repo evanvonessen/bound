@@ -16,6 +16,8 @@ public extension GameControllerInputType
 
 enum ActionInput: String
 {
+    case none
+    case systemOverlay
     case quickSave
     case quickLoad
     case fastForward
@@ -38,7 +40,7 @@ enum ActionInput: String
         .boundHideFriend, .boundHideMultiview
     ]
     static var configurableActions: [Self] {
-        [.quickSave, .quickLoad, .fastForward, .screenshot, .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview]
+        [.none, .quickSave, .quickLoad, .fastForward, .screenshot, .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview]
             + (BoundControllerNavigationPreferences().isEnabled ? viewNavigationActions : [])
     }
     var isViewNavigationAction: Bool { Self.viewNavigationActions.contains(self) }
