@@ -131,6 +131,10 @@
     {
       "path": "PrototypePatches/dependency-tool-diagnostics.patch",
       "purpose": "Skip App Intents extraction only for frameworks without intents and omit empty-symbol archive diagnostics only for targets with intentional conditional or Objective-C category-only objects; preserve other diagnostics."
+    },
+    {
+      "path": "PrototypePatches/remaining-xcode-recommended-settings.patch",
+      "purpose": "Apply remaining reviewed Xcode 27.1 recommendations: N64 framework module verification with existing language standards, quoted-header diagnostics, string catalog symbols, and parallel builds; GPGX framework signing defaults and string catalog symbols; preserve pinned revisions, identities, and deployment targets."
     }
   ],
   "sha256": {
@@ -7259,7 +7263,7 @@
     "Cores/GBCDeltaCore/gambatte/test/testrunner.cpp": "19e63624b7e365a57b65a7b47e38a14e8de8575afabbbc2849108b82ff97a08f",
     "Cores/GPGXDeltaCore/.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata": "7f3b00b5c3fdb45242d7b87e1e5c4e25d1fa8129a16c94295ecc4e8ea2235c5f",
     "Cores/GPGXDeltaCore/.swiftpm/xcode/package.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist": "dfa0f9bb85b95ccba9c6811adadf8cb407fb5d52088e89db83ebc308ec448542",
-    "Cores/GPGXDeltaCore/GPGXDeltaCore.xcodeproj/project.pbxproj": "97111e27d26d3af97982551ace2bdc7e5caaed550ccdec579fdf01913b7ab380",
+    "Cores/GPGXDeltaCore/GPGXDeltaCore.xcodeproj/project.pbxproj": "66d18d06af2fa3d65d5ca6c033a200393fd4bd722f1c4c3f9b9b3b481f2e9c02",
     "Cores/GPGXDeltaCore/GPGXDeltaCore.xcodeproj/project.xcworkspace/contents.xcworkspacedata": "7f3b00b5c3fdb45242d7b87e1e5c4e25d1fa8129a16c94295ecc4e8ea2235c5f",
     "Cores/GPGXDeltaCore/GPGXDeltaCore/GPGXDeltaCore.h": "34c178aa3314ca7ecfbbc9dfa950b358e19517f380a0c6e252c6513d4833b68b",
     "Cores/GPGXDeltaCore/Package.swift": "5187a39133771cfd6a73d50e83868ad527f4e8039efff8a7e9bbd7aadf4d8e53",
@@ -9730,7 +9734,7 @@
     "Cores/N64DeltaCore/N64DeltaCore-Video/fp.h": "1ec55b244e4f8cc90973bc3281aae820559135f57638468e3212a2bc7dce84c4",
     "Cores/N64DeltaCore/N64DeltaCore-Video/plugin_delta.cpp": "111b1cedfe7c57918adb4eb2bef39939c1ad7b776b51e96ee28e9c32465aac2e",
     "Cores/N64DeltaCore/N64DeltaCore.podspec": "5a0dec3bd1613e5e6c8c4f8a65e0fe8039986898c82d3bb230048be8a7e2433b",
-    "Cores/N64DeltaCore/N64DeltaCore.xcodeproj/project.pbxproj": "d014dfca99f22fd25d3890a72013f43271b4ea05bc83510008a3e0facf1ced78",
+    "Cores/N64DeltaCore/N64DeltaCore.xcodeproj/project.pbxproj": "c001abba259bb3a892571d6fedbf60603288fae6c94b6285d8242992bf79a20c",
     "Cores/N64DeltaCore/N64DeltaCore.xcodeproj/project.xcworkspace/contents.xcworkspacedata": "bf2bf3531832b51af5dd8da1954d42b2986acc88bc2c2c545224bff6735bd187",
     "Cores/N64DeltaCore/N64DeltaCore.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist": "dfa0f9bb85b95ccba9c6811adadf8cb407fb5d52088e89db83ebc308ec448542",
     "Cores/N64DeltaCore/N64DeltaCore.xcodeproj/xcshareddata/xcschemes/N64DeltaCore-RSP.xcscheme": "e9f35f406b8d323e16ec116eadbcc9b8ff3ffe4717b17f2b8c8ac310381a99eb",
