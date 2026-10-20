@@ -713,6 +713,12 @@ final class BoundLandscapeArrangementModel: ObservableObject {
             ? CGRect(x: bottom.minX, y: canvas.minY + 4, width: bottom.width, height: bottom.height) : bottom
     }
     var buttonToolsExpandUpward: Bool { buttonToolbarFrame.midY > layout.canvas.midY }
+    /// Editor chrome stays fixed and never participates in object placement.
+    var buttonGridSpacingFrame: CGRect {
+        let canvas = layoutInput?.canvas ?? layout.canvas
+        let width = min(220, canvas.width)
+        return CGRect(x: canvas.midX - width / 2, y: canvas.maxY - 90, width: width, height: 36)
+    }
     var buttonTrashFrame: CGRect {
         CGRect(x: buttonToolbarFrame.minX + 44, y: buttonToolbarFrame.minY, width: 44, height: 44)
     }
@@ -743,8 +749,10 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         BoundControllerButtonGridPreferences.setSpacing(value, in: defaults)
     }
 
-    private var buttonGridCenter: CGPoint {
-        let bounds = layoutInput?.screenBounds ?? layoutInput?.canvas ?? layout.canvas
+    var buttonGridBounds: CGRect { layoutInput?.screenBounds ?? layoutInput?.canvas ?? layout.canvas }
+
+    var buttonGridCenter: CGPoint {
+        let bounds = buttonGridBounds
         return CGPoint(x: bounds.midX, y: bounds.midY)
     }
 

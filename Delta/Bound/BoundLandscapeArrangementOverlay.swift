@@ -27,6 +27,11 @@ struct BoundLandscapeArrangementOverlay: View {
                     .placed(arrangementEditorFrame(for: model)).zIndex(2)
                 }
                 if model.movableControllerButtons {
+                    if model.distanceSnappingEnabled {
+                        buttonDistanceGrid.allowsHitTesting(false).accessibilityHidden(true).zIndex(-2)
+                    }
+                    // Placement handles take precedence even when they overlap the slider.
+                    gridSpacingControl.zIndex(-1)
                     buttonAlignmentGuides.allowsHitTesting(false).zIndex(2)
                     if let hint = model.buttonAlignmentHint {
                         Text(hint).font(.caption.weight(.semibold)).foregroundStyle(.cyan)
@@ -193,22 +198,12 @@ struct BoundLandscapeArrangementOverlay: View {
                         .placed(model.buttonTrayFrame(button))
                 }
             }
-            gridSpacingControl
         }
         .tint(Color(uiColor: .deltaPurple))
     }
 
     private var gridSpacingControl: some View {
-        let canvas = model.layout.canvas
-        let toolbar = model.buttonToolbarFrame
-        let width = min(220, canvas.width)
-        let y: CGFloat
-        if model.showingButtonTray {
-            y = model.buttonToolsExpandUpward ? canvas.minY + 4 : canvas.maxY - 40
-        } else {
-            y = model.buttonToolsExpandUpward ? toolbar.minY - 42 : toolbar.maxY + 4
-        }
-        let x = min(canvas.maxX - width, max(canvas.minX, canvas.midX - width / 2))
+        let frame = model.buttonGridSpacingFrame
         return HStack(spacing: 7) {
             Text("\(Int(model.buttonGridSpacing)) pt")
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
@@ -223,10 +218,32 @@ struct BoundLandscapeArrangementOverlay: View {
                 .accessibilityIdentifier("bound.arrange-buttons.grid-spacing")
         }
         .padding(.horizontal, 10)
-        .frame(width: width, height: 36)
+        .frame(width: frame.width, height: frame.height)
         .background(.ultraThinMaterial, in: Capsule())
         .opacity(0.86)
-        .placed(CGRect(x: x, y: y, width: width, height: 36))
+        .tint(Color(uiColor: .deltaPurple))
+        .placed(frame)
+    }
+
+    private var buttonDistanceGrid: some View {
+        let bounds = model.buttonGridBounds
+        let center = model.buttonGridCenter
+        let spacing = model.buttonGridSpacing
+        return Path { path in
+            var x = center.x + ceil((bounds.minX - center.x) / spacing) * spacing
+            while x <= bounds.maxX {
+                path.move(to: CGPoint(x: x, y: bounds.minY))
+                path.addLine(to: CGPoint(x: x, y: bounds.maxY))
+                x += spacing
+            }
+            var y = center.y + ceil((bounds.minY - center.y) / spacing) * spacing
+            while y <= bounds.maxY {
+                path.move(to: CGPoint(x: bounds.minX, y: y))
+                path.addLine(to: CGPoint(x: bounds.maxX, y: y))
+                y += spacing
+            }
+        }
+        .stroke(Color.cyan.opacity(0.18), lineWidth: 0.5)
     }
 
     private var buttonAlignmentGuides: some View {

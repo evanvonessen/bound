@@ -34,7 +34,9 @@ snap to a square grid anchored at the screen center, so equal offsets on either
 side are symmetric. **Settings → Controls → Button Grid Spacing** adjusts the
 increment from 6 to 48 points; the default is 18 points (roughly 3 mm on iPhones).
 The same spacing slider is also visible in a small translucent control inside
-Arrange Views.
+Arrange Views. It stays fixed above the bottom toolbar area, and overlapping
+placement handles take touch priority. A faint, noninteractive grid appears when
+Distance Snapping is on and updates with the spacing slider.
 This grid applies only to Menu, Friend and Multiview buttons. Changing its settings
 does not move existing buttons; dragging applies the grid. Their saved placements
 and the grid settings are included in **Export All Config**.

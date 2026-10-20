@@ -2935,6 +2935,7 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(trash.exists)
         let arrangementSpacing = app.sliders["bound.arrange-buttons.grid-spacing"]
         XCTAssertTrue(arrangementSpacing.waitForExistence(timeout: 5))
+        let spacingFrame = arrangementSpacing.frame
         XCTAssertEqual(arrangementSpacing.value as? String, "48 points")
         arrangementSpacing.adjust(toNormalizedSliderPosition: 0)
         XCTAssertEqual(arrangementSpacing.value as? String, "6 points")
@@ -2946,6 +2947,7 @@ final class CompanionUITests: XCTestCase {
         func add(_ name: String, byDragging: Bool = false) {
             if element("bound.controller-button-move.\(name)", in: app).exists { return }
             plus.tap()
+            XCTAssertEqual(arrangementSpacing.frame, spacingFrame, "The spacing slider stays fixed when the add-button tray opens.")
             let add = element("bound.arrange-buttons.add.\(name)", in: app)
             XCTAssertTrue(add.waitForExistence(timeout: 5))
             if byDragging {
@@ -3007,7 +3009,23 @@ final class CompanionUITests: XCTestCase {
         for offset in [friend.frame.midX - app.frame.midX, friend.frame.midY - app.frame.midY] {
             XCTAssertGreaterThan(abs(offset - (offset / 48).rounded() * 48), 6)
         }
+        let ontoSlider = friend.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        ontoSlider.press(forDuration: 0.1, thenDragTo: arrangementSpacing.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
+        XCTAssertTrue(friend.frame.intersects(spacingFrame), "Buttons can be placed over the spacing slider.")
+        let overlappingFrame = friend.frame
+        let awayFromSlider = friend.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        awayFromSlider.press(forDuration: 0.1, thenDragTo: awayFromSlider.withOffset(CGVector(dx: -85, dy: -60)))
+        XCTAssertLessThan(friend.frame.midX - overlappingFrame.midX, -50, "A button over the slider must remain draggable.")
+        XCTAssertLessThan(friend.frame.midY - overlappingFrame.midY, -30)
+        XCTAssertEqual(arrangementSpacing.value as? String, "48 points", "Dragging over the slider must not resize the grid.")
+        XCTAssertEqual(arrangementSpacing.frame, spacingFrame)
         let savedFriendFrame = friend.frame
+        let beforeToolbar = trash.frame
+        let menuHandle = element("bound.controller-button-move.menu", in: app)
+        menuHandle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.1,
+            thenDragTo: trash.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
+        XCTAssertNotEqual(trash.frame, beforeToolbar, "The toolbar avoids Menu while the slider keeps its fixed anchor.")
+        XCTAssertEqual(arrangementSpacing.frame, spacingFrame)
         done.tap()
         XCTAssertTrue(done.waitForNonExistence(timeout: 5))
 
