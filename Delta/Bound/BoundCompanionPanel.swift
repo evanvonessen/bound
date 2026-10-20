@@ -898,7 +898,8 @@ final class BoundCompanionCoordinator {
         beginMacSheet(from: presenter)
         let context = BoundSettingsGameplayContext(emulationDetails: state.emulationDetails,
             editControls: { [weak self] in self?.state.pendingControlEditor = true },
-            showCompanion: { [weak self] in self?.state.hidden = false; self?.state.refresh() })
+            showCompanion: { [weak self] in self?.state.hidden = false; self?.state.refresh() },
+            recordedPlayer: playerStateDisplay.supportsRecording ? playerStateDisplay.recordingSession : nil)
         let host = BoundSettingsHostingController(model: state.settings, gameplay: context, closed: { [weak self] in
             guard let self else { return }; self.state.showingSettings = false
             self.cancelInteractions()

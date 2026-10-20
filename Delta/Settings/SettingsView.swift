@@ -31,6 +31,7 @@ struct BoundSettingsGameplayContext {
     let emulationDetails: BoundEmulationDetails?
     var editControls: (() -> Void)? = nil
     var showCompanion: (() -> Void)? = nil
+    var recordedPlayer: BoundRecordedPlayerSession? = nil
 }
 
 /// Both entry points use this owner so closing and interactive dismissal share
@@ -133,6 +134,7 @@ struct SettingsView: View {
                             Form {
                                 ControlsSection()
                                 BoundPlayerStateSetting()
+                                if let session = gameplay?.recordedPlayer { BoundRecordedPlayerControls(session: session) }
                                 BoundCompanionControlsSections(model: model, gameplay: gameplay)
                                 if !BoundFeatureVisibility.simplifiedSettings, let edit = gameplay?.editControls {
                                     Section { Button("Button placement") { edit(); close() } }

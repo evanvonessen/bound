@@ -14,6 +14,7 @@ struct BoundPlayerState: Equatable, Sendable {
     let graphicsID: Int
     let runningState: Int
     let tileTransitionState: Int
+    var scene: BoundPlayerScene? = nil
 }
 
 struct BoundPlayerStateReading: Equatable, Sendable {
@@ -51,6 +52,7 @@ final class BoundPlayerROMProfile: Sendable {
     static let supportedSHA256 = "689299664a954c12dad66e03c2d18446b348cb31bd98b395c87b9b514b288066"
     enum ProfileError: Error { case unsupportedROM }
     private let rom: Data
+    let sceneAssets = BoundPlayerSceneAssets()
 
     init(rom: Data) throws {
         guard SHA256.hash(data: rom).map({ String(format: "%02x", $0) }).joined() == Self.supportedSHA256 else {
@@ -107,8 +109,12 @@ enum BoundPlayerStateDecoder {
         Int(Int16(bitPattern: UInt16(half(bytes, offset))))
     }
 
-    static func read(profile: BoundPlayerROMProfile, memory: BoundGBAMemorySnapshot, frame: UInt64) -> BoundPlayerStateReading {
-        decode(memory: memory, frame: frame, romBytes: profile.bytes)
+    static func read(profile: BoundPlayerROMProfile, memory: BoundGBAMemorySnapshot, frame: UInt64,
+                     includeScene: Bool = false) -> BoundPlayerStateReading {
+        let reading = decode(memory: memory, frame: frame, romBytes: profile.bytes)
+        guard includeScene, var player = reading.player else { return reading }
+        player.scene = BoundPlayerSceneDecoder.read(player: player, memory: memory, profile: profile)
+        return .init(frame: frame, status: reading.status, detail: reading.detail, player: player)
     }
 
     /// Pure decoder seam for small metadata fixtures. Production admission always

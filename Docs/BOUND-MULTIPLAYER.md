@@ -1,4 +1,4 @@
-# Bound player-state milestone
+# Bound multiplayer milestones
 
 Branch: `multiplayer`. VBA-M is the primary reader and runtime for this work.
 Keep Bound's existing GBADeltaCore identity and pinned VBA-M source. The earlier
@@ -49,9 +49,72 @@ Bound's SHA-1 game identifier is not used as a substitute for this check.
   drops coordinates and reports **Waiting**.
 
 The reader never writes game RAM or exports a battery save. It does not send
-network packets or create remote sprites. Disabled capture performs no RAM
+network packets. Disabled capture performs no RAM
 reads. The full bank-copy approach establishes a simple coherent-frame contract;
 physical-device cost still needs profiling before claiming a performance bound.
+
+## Record and replay a second player
+
+While a GBA game is open, use the Bound menu's **Settings → Controls → Recorded
+player** section:
+
+1. Choose **Record movement**, close Settings and resume the game. Walk a short
+   route on the map. The optional player-state card can remain off.
+2. Open the pause menu to finish recording, or let the 30-second limit finish it.
+3. Move your player somewhere else, then choose **Replay recorded player** in
+   the same Settings section and resume. The second player follows the recorded
+   route while you move independently. Replay finishes at the recording's end.
+4. Use **Stop replay** or **Clear recording** as needed. Leaving the game clears
+   the recording. Recordings are memory-only and are not synced or exported.
+
+This milestone supports ordinary on-foot, 16×32 player sprites in the exact ROM
+profile above. Unsupported movement/graphics, menus or scripts that lock field
+controls, invalid reader states, pause, app inactivity and stale captures hide
+the replay. Playback waits during unavailable local scenes. A map or elevation
+mismatch hides the recorded player. Loading a save state stops replay and
+requires explicitly starting it again; the recorded route is retained.
+
+### Coordinates and artwork
+
+VBA-M remains the only runtime reader. The native sprite's `x/y`, animation
+table, image table, flip bits and current faded palette provide pixel positions
+and walking frames. Character images are decoded from the user's loaded ROM at
+runtime; no ROM artwork, ROM image or recording is bundled.
+
+World positions use native GBA pixels, with feet at tile origin + `(8, 16)`.
+During a step, derive each axis of the viewer's camera translation as:
+
+```
+(7 - saveTile) * 16 - cameraResidual + sign(cameraResidual) * 16
+    + signed16(spriteCoordOffset - totalCameraPixelOffset)
+```
+
+The residual is `gFieldCamera.x/y` at `0x03005060/64`; total camera offsets are
+at `0x0300506C/68`; sprite offsets are at `0x02021BC8/CA`. Signed wrap is handled
+before calculating the translation. Subtract this translation from the local
+sprite's screen feet to obtain a smooth map-local pixel position. Validate it
+against the current/previous tiles. The recorded route stores world points,
+appearance and map/elevation identity; it never stores the viewer's camera.
+
+A 60 Hz main-thread consumer records/presents the latest coherent VBA-M sample
+only while recording or replaying. There is no per-frame task queue. Recorded
+frame numbers drive playback; small missing samples interpolate only within a
+continuous map/elevation segment. Gaps and warps never interpolate. Both duration
+and sample count are bounded to 30 seconds / 1,801 samples.
+
+The sprite is a touch-transparent child of the live `GameView`, clipped to its
+native 240×160 viewport and scaled with the gameplay view. It does not modify
+RAM, the ROM, the framebuffer, save files or native object/sprite slots. Current
+foreground BG tilemaps, scroll registers, ROM tile graphics and sprite priority
+mask the replay per pixel; nearer visible object sprites also mask it. Note the
+game's naming: `gBGTilemapBuffers2` is **BG1**, and `gBGTilemapBuffers1` is **BG2**.
+ROM tileset decompression is bounded and cached for at most eight layouts.
+
+The mask uses the ROM's base tiles and ordinary object frames. Animated terrain
+tile replacements, reflections, grass effects, bridges with different elevation
+rules, large/affine/subsprite objects and image-warping video filters need
+additional support and gameplay fixtures. Device performance and exact visual
+timing relative to presented Metal frames still require device validation.
 
 ## Checks
 
@@ -59,6 +122,14 @@ Use the `BoundIntegrationQA` scheme with `BoundIntegrationTests/PlayerStateTests
 for decoder, borrowed-memory ownership, pointer/slot, invalid-state, admission,
 display-clearing and preference export/reset checks. The test also supports an
 opt-in actual-ROM cold-boot/movement run in the pinned **VBA-M** core.
+
+`BoundIntegrationTests/RecordedPlayerTests` checks pixel camera continuity,
+signed wrap, 4bpp sprites/flips, bounded LZ77, recording gaps, map/elevation
+agreement, lifecycle clearing and foreground/object occlusion. Its opt-in VBA-M
+test records four walking directions, moves the viewer independently, and
+checks that the recorded player remains visible and moves while the camera
+changes. Screenshots and JSON diagnostics stay in the private fixture directory
+and ignored `.build/recorded-player-validation/` output.
 
 The actual-ROM test reads only private copies installed in the dedicated QA
 app's Documents/MultiplayerValidation directory:
@@ -93,11 +164,28 @@ Validated on October 20, 2026 with Xcode 27.0 and an iPhone 18 Pro simulator:
 - The unsigned `Bound` Release build for generic iOS succeeded. No physical
   device performance or multiplayer network session has been validated.
 
+The recorded-player milestone was also validated on October 20, 2026:
+
+- All 25 focused tests passed with no skips, including both private actual-ROM
+  VBA-M cases. The new case recorded and replayed four walking directions,
+  observed 12 distinct sprite frames, moved the viewer independently and
+  captured two separately positioned player sprites with a scrolling camera.
+- Recording worked with the diagnostic card disabled. Pause hid the replay,
+  restored-state invalidation stopped it, and the input ROM/seed hashes remained
+  unchanged. Unit checks additionally cover recording gaps/end-of-track,
+  map/elevation gating and per-pixel foreground/object masking.
+- Source integrity verified 17,060 pinned files and the unsigned Release iPhone
+  build passed in an isolated checkout containing this milestone on `7dd7163b`.
+  This excludes the accidental performance commit. The hosted test canvas is
+  simulator evidence; full-app UI navigation and device performance remain
+  separate validation work.
+
 ## Following milestones
 
 Additional fixtures are needed for doors, connected maps, bike/surf/ledge
 movement, late-game scripts and save-state restoration in actual VBA-M gameplay.
-Only after the local reader is verified should a presence transport and remote
-avatar renderer consume its values. Those need map/session agreement, timeout
-handling, camera transforms, interpolation and foreground-layer occlusion while
-keeping each player's local progress independent.
+The next milestone is a two-instance presence transport feeding this renderer.
+It needs a session/ROM handshake, peer identity, sequence/timestamps, bounded
+receive interpolation and disconnect timeouts, while keeping each player's
+local progress independent. Recorded playback is the local renderer proof;
+networking and actual friend sessions are not implemented here.
