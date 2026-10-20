@@ -84,6 +84,11 @@ struct SettingsView: View {
     @State private var resetting = false
     @State private var resetFailed = false
     @State private var resetRevision = 0
+    @AppStorage(BoundDeveloperFeatures.key) private var developerFeaturesEnabled = false
+    @State private var configurationExportFile: BoundConfigurationFile?
+    @State private var pendingConfigurationExportFile: BoundConfigurationFile?
+    @State private var exportingConfiguration = false
+    @State private var configurationExportFailed = false
     var gameplay: BoundSettingsGameplayContext?
     var close: () -> Void = {}
 
@@ -170,6 +175,27 @@ struct SettingsView: View {
                         }
                         .disabled(resetting)
                         .accessibilityIdentifier("bound.settings-reset-defaults")
+
+                        Toggle("Enable Developer Features", isOn: $developerFeaturesEnabled)
+                            .accessibilityIdentifier("bound.settings-developer-features")
+
+                        if developerFeaturesEnabled {
+                            Button("Export All Config") {
+                                exportingConfiguration = true
+                                Task { @MainActor in
+                                    do {
+                                        let file = try await BoundConfigurationExport.file()
+                                        pendingConfigurationExportFile = file
+                                        configurationExportFile = file
+                                    } catch {
+                                        exportingConfiguration = false
+                                        configurationExportFailed = true
+                                    }
+                                }
+                            }
+                            .disabled(exportingConfiguration)
+                            .accessibilityIdentifier("bound.settings-export-all-config")
+                        }
                     }
                 }
                 .safeAreaPadding(.top, 8)
@@ -180,6 +206,18 @@ struct SettingsView: View {
             .id(resetRevision)
             .alert("Unable to Reset Settings", isPresented: $resetFailed) {
                 Button("OK", role: .cancel) {}
+            }
+            .alert("Unable to Export Configuration", isPresented: $configurationExportFailed) {
+                Button("OK", role: .cancel) {}
+            }
+            .sheet(item: $configurationExportFile, onDismiss: {
+                pendingConfigurationExportFile?.removeTemporaryFile()
+                pendingConfigurationExportFile = nil
+                exportingConfiguration = false
+            }) { file in
+                BoundConfigurationFilePicker(file: file) {
+                    configurationExportFile = nil
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
@@ -203,6 +241,7 @@ struct SettingsView: View {
             }
         }
     }
+
 }
 
 // MARK: - Controls

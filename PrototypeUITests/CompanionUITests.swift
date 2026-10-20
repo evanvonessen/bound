@@ -1024,6 +1024,117 @@ final class CompanionUITests: XCTestCase {
         app.buttons["bound.settings-close"].tap()
     }
 
+    func testDeveloperFeaturesExportAllConfigAndReset() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations"]
+        app.launch()
+        defer { app.terminate() }
+
+        func openSettings() {
+            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 15))
+            app.buttons["Settings"].tap()
+            XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
+        }
+
+        openSettings()
+        let reset = app.buttons["bound.settings-reset-defaults"]
+        let developerFeatures = app.switches["bound.settings-developer-features"]
+        XCTAssertTrue(reset.waitForExistence(timeout: 5))
+        XCTAssertTrue(developerFeatures.waitForExistence(timeout: 5))
+        XCTAssertLessThan(reset.frame.midY, developerFeatures.frame.midY,
+                          "Developer Features sits below Reset Settings to Default.")
+
+        if developerFeatures.value as? String == "1" {
+            developerFeatures.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        XCTAssertEqual(developerFeatures.value as? String, "0")
+        XCTAssertFalse(app.buttons["bound.settings-export-all-config"].exists,
+                       "Export All Config is hidden while Developer Features is off.")
+
+        developerFeatures.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(developerFeatures.value as? String, "1")
+        let export = app.buttons["bound.settings-export-all-config"]
+        XCTAssertTrue(export.waitForExistence(timeout: 5))
+        XCTAssertLessThan(developerFeatures.frame.midY, export.frame.midY,
+                          "Export All Config appears immediately below the switch.")
+
+        app.terminate()
+        app.launch()
+        openSettings()
+        let persistedDeveloperFeatures = app.switches["bound.settings-developer-features"]
+        XCTAssertTrue(persistedDeveloperFeatures.waitForExistence(timeout: 5))
+        XCTAssertEqual(persistedDeveloperFeatures.value as? String, "1",
+                       "The developer-features choice persists across app launches.")
+        let persistedExport = app.buttons["bound.settings-export-all-config"]
+        XCTAssertTrue(persistedExport.waitForExistence(timeout: 5))
+        persistedExport.tap()
+
+        let pickerNavigation = app.navigationBars["FullDocumentManagerViewControllerNavigationBar"]
+        let saveExport = app.buttons["DOCPicker.actionButton"]
+        func cancelPicker() {
+            // Files is a dismissible sheet on current iOS. Its accessibility
+            // Cancel proxy can overlap More, so exercise the visible sheet gesture.
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: pickerNavigation.frame.midX, dy: pickerNavigation.frame.minY - 6))
+            let destination = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+            origin.press(forDuration: 0.1, thenDragTo: destination)
+        }
+        XCTAssertTrue(saveExport.waitForExistence(timeout: 15),
+                      "Export opens the system Save to Files picker.")
+        screenshot("Configuration-Export-Files-Picker")
+        cancelPicker()
+        XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10),
+                      "Cancel returns to Settings.")
+        XCTAssertFalse(app.alerts["Unable to Export Configuration"].exists)
+        XCTAssertTrue(saveExport.waitForNonExistence(timeout: 10),
+                      "Wait for the file picker to dismiss before retrying export.")
+        let exportEnabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"),
+                                                      object: persistedExport)
+        XCTAssertEqual(XCTWaiter.wait(for: [exportEnabled], timeout: 5), .completed,
+                       "Cancel re-enables Export All Config.")
+        persistedExport.tap()
+        XCTAssertTrue(saveExport.waitForExistence(timeout: 10),
+                      "Export can be opened again after canceling the first picker.")
+        cancelPicker()
+        XCTAssertTrue(saveExport.waitForNonExistence(timeout: 10))
+        XCTAssertFalse(app.alerts["Unable to Export Configuration"].exists)
+
+        persistedExport.tap()
+        XCTAssertTrue(saveExport.waitForExistence(timeout: 10),
+                      "The system file picker exposes its Save action.")
+        screenshot("Configuration-Export-Before-Save")
+        saveExport.tap()
+        XCTAssertTrue(saveExport.waitForNonExistence(timeout: 10),
+                      "Saving the JSON export dismisses the file picker.")
+        XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10),
+                      "Saving returns to Settings.")
+        let exportEnabledAfterSave = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"),
+                                                               object: persistedExport)
+        XCTAssertEqual(XCTWaiter.wait(for: [exportEnabledAfterSave], timeout: 5), .completed,
+                       "Export is available again after the save completes.")
+        XCTAssertFalse(app.alerts["Unable to Export Configuration"].exists)
+
+        let resetAfterExport = app.buttons["bound.settings-reset-defaults"]
+        XCTAssertTrue(resetAfterExport.waitForExistence(timeout: 5))
+        resetAfterExport.tap()
+        let resetDeveloperFeatures = app.switches["bound.settings-developer-features"]
+        XCTAssertTrue(resetDeveloperFeatures.waitForExistence(timeout: 5))
+        XCTAssertEqual(resetDeveloperFeatures.value as? String, "0",
+                       "Reset Settings to Default disables Developer Features.")
+        XCTAssertFalse(app.buttons["bound.settings-export-all-config"].exists,
+                       "Reset Settings to Default hides Export All Config.")
+        XCTAssertFalse(app.alerts["Unable to Reset Settings"].exists)
+    }
+
     func testUnifiedSettingsPreferencesPersistAcrossEntryPointsRelaunchAndRotation() throws {
         throw XCTSkip("This test only covers removed Interface customization controls.")
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))

@@ -19,7 +19,7 @@ extension Settings {
             "gameShortcutIdentifiers", "preferredWFCServer", "customWFCServer", "preferredGBColorPalette",
             "gameScreenOffsetPortrait", "gameScreenOffsetLandscape",
             "preferredSaveStatesSorting", "prefersDescendingSaveStatesSorting",
-            BoundUIVersionPreferences.key, BoundExperimentalSettingsPreferences.key,
+            BoundUIVersionPreferences.key, BoundExperimentalSettingsPreferences.key, BoundDeveloperFeatures.key,
             BoundAppearancePreferences.screenLayoutKey, BoundAppearancePreferences.themeKey,
             BoundControllerModePreferences.key, BoundControllerModePreferences.layoutKey,
             BoundControllerNavigationPreferences.key,

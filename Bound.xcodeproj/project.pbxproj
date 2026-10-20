@@ -449,6 +449,8 @@
 		B7FD562362DE4F058F1A24B0 /* BoundControllerNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = F15BD47D825443D7A8647F32 /* BoundControllerNavigation.swift */; };
 		39FB7E274D8542D1BF2B5CE1 /* ControllerNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E476E4D2D17148F9A0B63E4D /* ControllerNavigationTests.swift */; };
 		B478FFB04AC0484F86943117 /* CompanionControllerNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11CA9D7692114487B210F790 /* CompanionControllerNavigationTests.swift */; };
+		6D3165E003A5490495F2064E /* BoundConfigurationExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B71EC63FAFA4C8A8C29BCB8 /* BoundConfigurationExport.swift */; };
+		0DCC5A17E990440B949F4582 /* ConfigurationExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1258,6 +1260,8 @@
 		F15BD47D825443D7A8647F32 /* BoundControllerNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundControllerNavigation.swift; sourceTree = "<group>"; };
 		E476E4D2D17148F9A0B63E4D /* ControllerNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerNavigationTests.swift; sourceTree = "<group>"; };
 		11CA9D7692114487B210F790 /* CompanionControllerNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionControllerNavigationTests.swift; sourceTree = "<group>"; };
+		3B71EC63FAFA4C8A8C29BCB8 /* BoundConfigurationExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundConfigurationExport.swift; sourceTree = "<group>"; };
+		79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigurationExportTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1373,6 +1377,7 @@
 				5DD465FEC61E429CA4EAC9AB /* SourceAndLicenseTests.swift */,
 				E519E2BAF174403DB37DB3A5 /* PlaybackSharingTests.swift */,
 				35733EA11CCE9FF25284EFB8 /* AppearanceIntegrationTests.swift */,
+				79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */,
 				5EE41698681944B29CE0B89C /* SettingsResetTests.swift */,
 				B6D6920D53544AE59F218B53 /* ControllerButtonPlacementTests.swift */,
 				11CA9D7692114487B210F790 /* CompanionControllerNavigationTests.swift */,
@@ -1446,6 +1451,7 @@
 				CD788325701142D5A8E31F99 /* BoundLandscapeCompanion.swift */,
 				C3A45FC1148047228B8ECD77 /* BoundLandscapeArrangementOverlay.swift */,
 				E981BE8844E54311AB9D967E /* BoundLandscapeArrangement.swift */,
+				3B71EC63FAFA4C8A8C29BCB8 /* BoundConfigurationExport.swift */,
 				A4D97890387E4772B7BCC199 /* BoundControllerButtonPlacement.swift */,
 				F15BD47D825443D7A8647F32 /* BoundControllerNavigation.swift */,
 				B14000000000000000000001 /* BoundControllerInputHost.swift */,
@@ -3152,6 +3158,7 @@
 				59CF946CE2E3410795B06A0E /* SourceAndLicenseTests.swift in Sources */,
 				074EAD7F7AE78C628F0977A8 /* PlaybackSharingTests.swift in Sources */,
 				273B677E21CFB932EFA82ACD /* AppearanceIntegrationTests.swift in Sources */,
+				0DCC5A17E990440B949F4582 /* ConfigurationExportTests.swift in Sources */,
 				5269C7C7055548F49212555B /* SettingsResetTests.swift in Sources */,
 				54F6C0C0B35A4D60AF6A63C3 /* ControllerButtonPlacementTests.swift in Sources */,
 				B478FFB04AC0484F86943117 /* CompanionControllerNavigationTests.swift in Sources */,
@@ -3428,6 +3435,7 @@
 				4978387F9B9B4EDFB5172A2F /* BoundLandscapeCompanion.swift in Sources */,
 				FEFF291B6B9D409DB743D71D /* BoundLandscapeArrangementOverlay.swift in Sources */,
 				D231F1F9F6BA455790127F38 /* BoundLandscapeArrangement.swift in Sources */,
+				6D3165E003A5490495F2064E /* BoundConfigurationExport.swift in Sources */,
 				716AF37EB62B45BD9BC15A0D /* BoundControllerButtonPlacement.swift in Sources */,
 				B7FD562362DE4F058F1A24B0 /* BoundControllerNavigation.swift in Sources */,
 				B14000000000000000000002 /* BoundControllerInputHost.swift in Sources */,
