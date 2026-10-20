@@ -31,7 +31,7 @@ class ControllerInputsViewController: UIViewController
     private lazy var managedObjectContext: NSManagedObjectContext = DatabaseManager.shared.newBackgroundContext()
     private var inputMappings = [System: GameControllerInputMapping]()
     
-    private let supportedActionInputs: [ActionInput] = [.quickSave, .quickLoad, .fastForward, .screenshot, .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview]
+    private var supportedActionInputs: [ActionInput] { ActionInput.configurableActions }
     
     private var gameViewController: DeltaCore.GameViewController!
     private var actionsMenuViewController: GridMenuViewController!
@@ -244,37 +244,14 @@ private extension ControllerInputsViewController
             let image: UIImage
             let text: String
             
-            switch input
-            {
-            case .quickSave:
-                image = #imageLiteral(resourceName: "SaveSaveState")
-                text = NSLocalizedString("Quick Save", comment: "")
-                
-            case .quickLoad:
-                image = #imageLiteral(resourceName: "LoadSaveState")
-                text = NSLocalizedString("Quick Load", comment: "")
-                
-            case .fastForward:
-                image = #imageLiteral(resourceName: "FastForward")
-                text = NSLocalizedString("Fast Forward", comment: "")
-                
-            case .screenshot:
-                image = #imageLiteral(resourceName: "Screenshot")
-                text = NSLocalizedString("Screenshot", comment: "")
-                
-            case .toggleFastForward, .reverseScreens: continue
-            case .cycleBoundPanels:
-                image = UIImage(systemName: "rectangle.2.swap") ?? #imageLiteral(resourceName: "Screenshot")
-                text = NSLocalizedString("Cycle Friend/Notes/Types", comment: "")
-
-            case .toggleBoundFriend:
-                image = UIImage(systemName: "person.2.fill") ?? #imageLiteral(resourceName: "Screenshot")
-                text = NSLocalizedString("Toggle Friend", comment: "")
-
-            case .toggleBoundMultiview:
-                image = UIImage(systemName: "book.closed") ?? #imageLiteral(resourceName: "Screenshot")
-                text = NSLocalizedString("Toggle Multiview", comment: "")
+            switch input {
+            case .quickSave: image = #imageLiteral(resourceName: "SaveSaveState")
+            case .quickLoad: image = #imageLiteral(resourceName: "LoadSaveState")
+            case .fastForward: image = #imageLiteral(resourceName: "FastForward")
+            case .screenshot: image = #imageLiteral(resourceName: "Screenshot")
+            default: image = UIImage(systemName: input.sfSymbolName) ?? #imageLiteral(resourceName: "Screenshot")
             }
+            text = input.localizedDisplayName
             
             let item = MenuItem(text: text, image: image) { [unowned self] (item) in
                 guard let calloutView = self.calloutViews[AnyInput(input)] else { return }

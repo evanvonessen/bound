@@ -265,6 +265,8 @@ final class BoundCompanionCoordinator {
     private weak var boundCore: EmulatorCore?
     private var gameID = ""
     private var notesPaused = false
+    private var notesDismissalTask: Task<Void, Never>?
+    private var pendingControllerReferenceAction: ActionInput?
     private var macSheetPaused = false
     private weak var macSheetCore: EmulatorCore?
     private(set) var isEditingNotes = false
@@ -293,6 +295,7 @@ final class BoundCompanionCoordinator {
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-reset-layout") {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.layoutKey)
+            UserDefaults.standard.removeObject(forKey: BoundControllerNavigationPreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundExperimentalSettingsPreferences.key)
             for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") || key.hasPrefix("bound.landscape.option5.") || key.hasPrefix("bound.landscape.option6.") || key.hasPrefix("bound.landscape.option7.") || key.hasPrefix("bound.landscape.controller-mode.") || key.hasPrefix("bound.landscape.controller-mode2.") || key.hasPrefix("bound.landscape.controller-mode3.") { UserDefaults.standard.removeObject(forKey: key) }
@@ -339,6 +342,7 @@ final class BoundCompanionCoordinator {
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.background() })
         // The sharing session restores only a previously active connection.
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in self?.foreground() })
+        observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.scheduleNotesDismissalIfNeeded() })
         if BoundMacWorkspacePlatform.isEnabled {
             installMacWorkspace(in: owner)
         } else {
@@ -515,6 +519,7 @@ final class BoundCompanionCoordinator {
     }
     func bind(core: EmulatorCore?, gameID: String) {
         guard boundCore !== core || self.gameID != gameID else { return }
+        notesDismissalTask?.cancel(); notesDismissalTask = nil; pendingControllerReferenceAction = nil
         cancelInteractions(); tap.setEnabled(false); sharing.stop(); notesPaused = false; isEditingNotes = false; isEditingText = false; owner?.controllerView.isUserInteractionEnabled = true; self.gameID = gameID
         host?.rootView.gameID = gameID
         macHost?.rootView.gameID = gameID
@@ -907,6 +912,7 @@ final class BoundCompanionCoordinator {
         }
     }
     func cancelInteractions() {
+        pendingControllerReferenceAction = nil
         landscapeArrangement.finish(save: false)
         landscapeCompanion.finishArrangement(save: false)
         gestures?.cancel(); translation = .zero; pinchScale = 1; liveOpacity = nil
@@ -934,9 +940,75 @@ final class BoundCompanionCoordinator {
             if landscapeArrangement.active { landscapeArrangement.toggleControllerFriend() }
             else if landscapeCompanion.active { landscapeCompanion.toggleFriend() }
         case .toggleBoundMultiview:
+            if dismissReferenceBeforeControllerAction(action) { return }
             landscapeArrangement.toggleControllerMultiview()
         default: break
         }
+    }
+    var controllerNavigationAvailable: Bool {
+        BoundControllerNavigationPreferences().isEnabled && state.landscape
+            && BoundControllerModePreferences().isEnabled
+            && BoundAppearancePreferences().effectiveScreenLayout == .bound
+            && !state.showingFriends && !state.showingSettings
+            && !landscapeArrangement.editing && !landscapeCompanion.editing
+            && (landscapeArrangement.active || landscapeCompanion.active)
+    }
+    private var controllerReferenceContent: BoundPiPContent? {
+        if landscapeArrangement.active {
+            return landscapeArrangement.referenceVisible ? landscapeArrangement.referenceContent : nil
+        }
+        if landscapeCompanion.active {
+            return landscapeCompanion.referenceVisible ? landscapeCompanion.referenceContent : nil
+        }
+        return nil
+    }
+    var allowsControllerNavigationWhilePaused: Bool {
+        controllerNavigationAvailable && isEditingNotes
+            && controllerReferenceContent.map { $0 == .dex || $0 == .bosses } == true
+    }
+    private func dismissReferenceBeforeControllerAction(_ action: ActionInput) -> Bool {
+        guard allowsControllerNavigationWhilePaused, let content = controllerReferenceContent else { return false }
+        // Keep the reference active until its presentation has dismissed and
+        // returned the gameplay pause; hiding it first loses that callback.
+        pendingControllerReferenceAction = action
+        BoundControllerNavigationEvent.post(command: .back, gameID: gameID, content: content)
+        return true
+    }
+    func navigateControllerView(_ action: ActionInput) {
+        guard controllerNavigationAvailable else { return }
+        if let command = action.navigationCommand {
+            guard let content = controllerReferenceContent, content == .dex || content == .bosses else { return }
+            BoundControllerNavigationEvent.post(command: command, gameID: gameID, content: content)
+            return
+        }
+        if [.boundHideMultiview, .boundShowDex, .boundShowBosses, .boundShowTypes,
+            .boundNextView, .boundPreviousView].contains(action),
+           dismissReferenceBeforeControllerAction(action) { return }
+        switch action {
+        case .boundHideFriend:
+            if landscapeArrangement.active, landscapeArrangement.friendVisible { landscapeArrangement.toggleFriend() }
+            else if landscapeCompanion.active, landscapeCompanion.friendVisible { landscapeCompanion.toggleFriend() }
+        case .boundHideMultiview:
+            if landscapeArrangement.active, landscapeArrangement.referenceVisible { landscapeArrangement.toggleReference() }
+            else if landscapeCompanion.active { landscapeCompanion.hideReference() }
+        case .boundShowDex: showControllerReference(.dex)
+        case .boundShowBosses: showControllerReference(.bosses)
+        case .boundShowTypes: showControllerReference(.types)
+        case .boundNextView, .boundPreviousView:
+            let contents = landscapeArrangement.active ? landscapeArrangement.contents : landscapeCompanion.referenceContents
+            guard !contents.isEmpty else { return }
+            let current = landscapeArrangement.active ? landscapeArrangement.referenceContent : landscapeCompanion.referenceContent
+            let index = contents.firstIndex(of: current) ?? 0
+            let direction = action == .boundNextView ? 1 : -1
+            showControllerReference(contents[(index + direction + contents.count) % contents.count])
+        default: break
+        }
+    }
+    private func showControllerReference(_ content: BoundPiPContent) {
+        if landscapeArrangement.active, landscapeArrangement.contents.contains(content) {
+            landscapeArrangement.select(content)
+            if !landscapeArrangement.referenceVisible { landscapeArrangement.toggleReference() }
+        } else if landscapeCompanion.active { landscapeCompanion.selectReference(content) }
     }
     var allowsOpacityGesture: Bool { !state.availableContents.isEmpty && state.landscape && state.content != .types && !isEditingNotes }
     private func companionBaseSize(width: CGFloat, content: BoundPiPContent? = nil) -> CGSize {
@@ -1006,6 +1078,7 @@ final class BoundCompanionCoordinator {
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
     func foreground() {
         foregroundTask?.cancel()
+        scheduleNotesDismissalIfNeeded()
         if state.content == .dex || (macHost != nil && state.macReference == .dex)
             || (landscapeCompanion.active && landscapeCompanion.referenceContent == .dex)
             || (landscapeArrangement.active && landscapeArrangement.referenceContent == .dex) {
@@ -1026,9 +1099,17 @@ final class BoundCompanionCoordinator {
         if usesLocalPairedFixture { sharing.start() }
         #endif
     }
-    func background() { foregroundTask?.cancel(); foregroundTask = nil; landscapeArrangement.finish(save: false, resume: false); landscapeCompanion.finishArrangement(save: false, resume: false); cancelInteractions(); tap.setEnabled(false); sharing.background(); onboarding.close() }
+    func background() {
+        foregroundTask?.cancel(); foregroundTask = nil
+        landscapeArrangement.finish(save: false, resume: false); landscapeCompanion.finishArrangement(save: false, resume: false)
+        notesDismissalTask?.cancel(); notesDismissalTask = nil
+        let pendingAction = pendingControllerReferenceAction
+        cancelInteractions(); pendingControllerReferenceAction = pendingAction
+        tap.setEnabled(false); sharing.background(); onboarding.close()
+    }
     func stop() {
         foregroundTask?.cancel(); foregroundTask = nil
+        notesDismissalTask?.cancel(); notesDismissalTask = nil; pendingControllerReferenceAction = nil
         macSheetPaused = false; macSheetCore = nil
         landscapeArrangement.finish(save: false, resume: false)
         landscapeCompanion.finishArrangement(save: false, resume: false)
@@ -1075,18 +1156,61 @@ final class BoundCompanionCoordinator {
     }
     private func notesEditing(_ editing: Bool, allowResume: Bool = true) {
         guard isEditingNotes != editing else { return }
+        notesDismissalTask?.cancel()
+        notesDismissalTask = nil
         isEditingNotes = editing; owner?.controllerView.cancelTouchInputs()
         owner?.controllerView.isUserInteractionEnabled = !editing
         owner?.view.setNeedsLayout()
         guard let owner, let core = owner.emulatorCore else { return }
         if editing {
-            notesPaused = core.state == .running && owner.gameViewControllerShouldPauseEmulation(owner)
-            if notesPaused { core.pause() }
+            notesPaused = notesPaused || (core.state == .running && owner.gameViewControllerShouldPauseEmulation(owner))
+            if notesPaused, core.state == .running { core.pause() }
         } else {
-            let resume = notesPaused; notesPaused = false
-            if resume, allowResume, core.state == .paused, owner.view.window != nil,
-               UIApplication.shared.applicationState == .active,
-               owner.gameViewControllerShouldResumeEmulation(owner) { core.resume() }
+            guard allowResume else { notesPaused = false; return }
+            scheduleNotesDismissalIfNeeded()
+        }
+    }
+    private func scheduleNotesDismissalIfNeeded() {
+        guard notesDismissalTask == nil, !isEditingNotes,
+              notesPaused || pendingControllerReferenceAction != nil,
+              let owner, let core = owner.emulatorCore else { return }
+        let expectedGameID = gameID
+        notesDismissalTask = Task { @MainActor [weak self, weak owner, weak core] in
+            // SwiftUI alerts change their binding before UIKit dismisses.
+            // Keep the pause ownership and queued action until UIKit finishes.
+            while !Task.isCancelled {
+                guard let self, let owner, let core else { return }
+                guard owner.emulatorCore === core, self.gameID == expectedGameID,
+                      core.state != .stopped else {
+                    self.notesDismissalTask = nil
+                    self.notesPaused = false
+                    self.pendingControllerReferenceAction = nil
+                    return
+                }
+                guard !self.isEditingNotes else { self.notesDismissalTask = nil; return }
+                // Inactive or detached views are retried by foreground(), not polled.
+                guard owner.view.window != nil,
+                      UIApplication.shared.applicationState == .active else {
+                    self.notesDismissalTask = nil
+                    return
+                }
+                if owner.presentedViewController != nil {
+                    do { try await Task.sleep(nanoseconds: 50_000_000) }
+                    catch { return }
+                    continue
+                }
+                let resume = self.notesPaused
+                let action = self.pendingControllerReferenceAction
+                self.notesPaused = false
+                self.pendingControllerReferenceAction = nil
+                self.notesDismissalTask = nil
+                if resume, core.state == .paused,
+                   owner.gameViewControllerShouldResumeEmulation(owner) { core.resume() }
+                guard let action, self.controllerNavigationAvailable else { return }
+                if action == .toggleBoundMultiview { self.toggleControllerPanel(action) }
+                else { self.navigateControllerView(action) }
+                return
+            }
         }
     }
     private func editControls() {

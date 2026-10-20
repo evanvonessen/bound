@@ -40,6 +40,7 @@ struct BoundBossGuideView: View {
     @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option2
     @State private var selection = BoundBossGuideSelection(teamID: "kanto-leaders-4", pokemonIndex: 0)
     @State private var showingPicker = false
+    @State private var controllerPickerTeamID: String?
     @State private var showingTeam = false
     @State private var detailSheet: DetailSheet?
     @State private var showsLayout4Stats = false
@@ -78,9 +79,22 @@ struct BoundBossGuideView: View {
                 GeometryReader { geometry in
                     sizedCard(team: team, pokemon: pokemon, index: selected.pokemonIndex, size: geometry.size)
                 }
+                .boundControllerScroll(gameID: gameID, content: .bosses, active: isActive && !anyPresentation)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("bound.boss-guide")
                 .accessibilityValue(layout.title)
+                .onReceive(NotificationCenter.default.publisher(for: BoundControllerNavigationEvent.notificationName)) { notification in
+                    guard isActive, previewLayout == nil, !showingPicker,
+                          let command = BoundControllerNavigationEvent.command(from: notification, gameID: gameID, content: .bosses) else { return }
+                    if showingTeam || detailSheet != nil {
+                        if case .back = command {
+                            showingTeam = false
+                            detailSheet = nil
+                        }
+                        return
+                    }
+                    handleControllerNavigation(command, team: team, catalog: catalog)
+                }
                 .padding(.top, floating ? 0 : contentTopInset)
                 .overlay(alignment: .top) {
                     if usesIslandActions {
@@ -97,22 +111,28 @@ struct BoundBossGuideView: View {
                     if previewLayout == nil { selection = preferences.read(gameID: gameID, catalog: catalog) }
                 }
                 .sheet(isPresented: $showingPicker, onDismiss: presentationDismissed) {
-                    BoundBossPicker(catalog: catalog, selectedID: selected.teamID) { id in
+                    BoundBossPicker(gameID: gameID, isActive: isActive, previewLayout: previewLayout,
+                                    catalog: catalog, selectedID: selected.teamID,
+                                    highlightedTeamID: $controllerPickerTeamID) { id in
                         choose(BoundBossGuideSelection(teamID: id, pokemonIndex: 0), catalog: catalog)
                     }
                 }
                 .sheet(isPresented: $showingTeam, onDismiss: presentationDismissed) {
                     BoundBossTeamView(catalog: catalog, team: team)
+                        .boundControllerScroll(gameID: gameID, content: .bosses, active: isActive)
                 }
                 .sheet(item: $detailSheet, onDismiss: presentationDismissed) { sheet in
-                    switch sheet {
-                    case let .ability(name, description):
-                        BoundBossTextDetail(title: "Ability", name: name, description: description)
-                    case let .item(name, description):
-                        BoundBossTextDetail(title: "Held item", name: name, description: description)
-                    case let .weaknesses(species, dex):
-                        BoundBossWeaknessDetail(pokemon: species, catalog: dex)
+                    Group {
+                        switch sheet {
+                        case let .ability(name, description):
+                            BoundBossTextDetail(title: "Ability", name: name, description: description)
+                        case let .item(name, description):
+                            BoundBossTextDetail(title: "Held item", name: name, description: description)
+                        case let .weaknesses(species, dex):
+                            BoundBossWeaknessDetail(pokemon: species, catalog: dex)
+                        }
                     }
+                    .boundControllerScroll(gameID: gameID, content: .bosses, active: isActive)
                 }
             } else if catalogStore.hasFinishedLoading {
                 ContentUnavailableView("Boss guide unavailable", systemImage: "book.closed",
@@ -1591,6 +1611,26 @@ struct BoundBossGuideView: View {
         guard let catalog = catalogStore.bosses else { return }
         choose(BoundBossGuideSelection(teamID: team.id, pokemonIndex: selection.pokemonIndex + direction), catalog: catalog)
     }
+
+    private func handleControllerNavigation(_ command: BoundControllerNavigationCommand,
+                                           team: BoundBossTeam, catalog: BoundBossCatalog) {
+        switch command {
+        case .scrollUp, .scrollDown, .scrollLeft, .scrollRight:
+            return
+        case .previousItem:
+            advance(-1, team: team)
+        case .nextItem:
+            advance(1, team: team)
+        case .select:
+            controllerPickerTeamID = team.id
+            showingPicker = true
+        case .details:
+            showingTeam = true
+        case .back:
+            if showingTeam { showingTeam = false }
+            else if detailSheet != nil { detailSheet = nil }
+        }
+    }
 }
 
 private struct BoundBossTextDetail: View {
@@ -1769,8 +1809,12 @@ private struct BoundBossDescription: View {
 }
 
 private struct BoundBossPicker: View {
+    let gameID: String
+    let isActive: Bool
+    let previewLayout: BoundReferenceLayout?
     let catalog: BoundBossCatalog
     let selectedID: String
+    @Binding var highlightedTeamID: String?
     let choose: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
@@ -1778,7 +1822,8 @@ private struct BoundBossPicker: View {
     @State private var expandedEncounters: Set<String> = []
     var body: some View {
         NavigationStack {
-            List {
+            ScrollViewReader { proxy in
+              List {
                 Picker("Category", selection: $category) {
                     Text("All bosses").tag(nil as String?)
                     ForEach(catalog.categories, id: \.self) { Text($0).tag(Optional($0)) }
@@ -1805,7 +1850,8 @@ private struct BoundBossPicker: View {
                             .listRowBackground(Color.black)
                     }
                 }
-            }
+              }
+            .boundControllerScroll(gameID: gameID, content: .bosses, active: isActive)
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .background(Color.black)
@@ -1822,28 +1868,81 @@ private struct BoundBossPicker: View {
                         .accessibilityLabel("Guide information")
                 }
             }
+            .onChange(of: highlightedTeamID) { _, id in
+                if let id { proxy.scrollTo("bound.boss-select-\(id)", anchor: .center) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: BoundControllerNavigationEvent.notificationName)) { notification in
+                guard isActive, previewLayout == nil,
+                      let command = BoundControllerNavigationEvent.command(from: notification, gameID: gameID, content: .bosses) else { return }
+                handleControllerNavigation(command)
+            }
+            .onAppear {
+                if highlightedTeamID == nil { highlightedTeamID = selectedID }
+                expandEncounter(containing: highlightedTeamID ?? selectedID)
+                scrollHighlighted(using: proxy)
+            }
+            .onChange(of: expandedEncounters) { _, _ in scrollHighlighted(using: proxy) }
+            }
         }
         .preferredColorScheme(.dark)
         .tint(.white)
-        .onAppear {
-            if let current = catalog.encounters(matching: "").first(where: { $0.teams.count > 1 && $0.teams.contains { $0.id == selectedID } }) {
-                expandedEncounters.insert(current.id)
-            }
-        }
         .onChange(of: query) { _, text in
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 expandedEncounters.formUnion(catalog.encounters(matching: text, category: category).filter { $0.teams.count > 1 }.map(\.id))
             }
+            selectFirstAvailableIfNeeded()
+        }
+        .onChange(of: category) { _, _ in selectFirstAvailableIfNeeded() }
+    }
+    private func handleControllerNavigation(_ command: BoundControllerNavigationCommand) {
+        let candidates = catalog.teams(matching: query, category: category)
+        switch command {
+        case .scrollUp, .scrollDown, .scrollLeft, .scrollRight, .details:
+            return
+        case .previousItem:
+            moveHighlight(-1, candidates: candidates)
+        case .nextItem:
+            moveHighlight(1, candidates: candidates)
+        case .select:
+            guard let id = highlightedTeamID, candidates.contains(where: { $0.id == id }) else { return }
+            choose(id)
+            dismiss()
+        case .back:
+            dismiss()
         }
     }
+    private func moveHighlight(_ delta: Int, candidates: [BoundBossTeam]) {
+        guard !candidates.isEmpty else { highlightedTeamID = nil; return }
+        let current = candidates.firstIndex { $0.id == highlightedTeamID } ?? 0
+        let nextID = candidates[(current + delta + candidates.count) % candidates.count].id
+        highlightedTeamID = nextID
+        expandEncounter(containing: nextID)
+    }
+    private func expandEncounter(containing teamID: String) {
+        if let encounter = catalog.encounters(matching: query, category: category).first(where: { $0.teams.contains { $0.id == teamID } }),
+           encounter.teams.count > 1 {
+            expandedEncounters.insert(encounter.id)
+        }
+    }
+    private func scrollHighlighted(using proxy: ScrollViewProxy) {
+        guard let id = highlightedTeamID else { return }
+        DispatchQueue.main.async { proxy.scrollTo("bound.boss-select-\(id)", anchor: .center) }
+    }
+    private func selectFirstAvailableIfNeeded() {
+        let candidates = catalog.teams(matching: query, category: category)
+        if !candidates.contains(where: { $0.id == highlightedTeamID }) { highlightedTeamID = candidates.first?.id }
+    }
     private func selectionButton(_ team: BoundBossTeam, title: String, subtitle: String) -> some View {
-        Button {
+        let highlighted = team.id == highlightedTeamID
+        return Button {
             choose(team.id); dismiss()
         } label: {
-            pickerRow(team, title: title, subtitle: subtitle, detail: "\(team.category) · \(team.pokemon.count) Pokémon", selected: team.id == selectedID)
+            pickerRow(team, title: title, subtitle: subtitle, detail: "\(team.category) · \(team.pokemon.count) Pokémon", selected: highlighted)
         }
         .accessibilityIdentifier("bound.boss-select-\(team.id)")
-        .listRowBackground(Color.black)
+        .accessibilityValue(highlighted ? "Highlighted" : team.id == selectedID ? "Current" : "")
+        .listRowBackground(highlighted ? Color(uiColor: .deltaPurple).opacity(0.35) : Color.black)
+        .id("bound.boss-select-\(team.id)")
     }
     private func pickerRow(_ team: BoundBossTeam, title: String, subtitle: String, detail: String, selected: Bool, showsCap: Bool = true) -> some View {
         HStack(spacing: 12) {

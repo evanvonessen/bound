@@ -31,6 +31,8 @@ final class SettingsResetTests: XCTestCase {
         let controllerMode = BoundControllerModePreferences(defaults: defaults)
         controllerMode.isEnabled = true
         controllerMode.layout = .mode3
+        let controllerNavigation = BoundControllerNavigationPreferences(defaults: defaults)
+        controllerNavigation.isEnabled = true
         defaults.set(Data([1, 2, 3]), forKey: "bound.landscape.controller-mode.buttons.v1")
         defaults.set(Data([4, 5, 6]), forKey: "bound.landscape.controller-mode2.buttons.v1")
         defaults.set(Data([7, 8, 9]), forKey: "bound.landscape.controller-mode3.buttons.v1")
@@ -78,6 +80,7 @@ final class SettingsResetTests: XCTestCase {
         XCTAssertFalse(BoundFastForwardPreferences(defaults: defaults).isEnabled(for: "ROM123"))
         XCTAssertFalse(controllerMode.isEnabled)
         XCTAssertEqual(controllerMode.layout, .mode1)
+        XCTAssertFalse(controllerNavigation.isEnabled)
         XCTAssertNil(defaults.object(forKey: "bound.landscape.controller-mode.buttons.v1"))
         XCTAssertNil(defaults.object(forKey: "bound.landscape.controller-mode2.buttons.v1"))
         XCTAssertNil(defaults.object(forKey: "bound.landscape.controller-mode3.buttons.v1"))
@@ -94,6 +97,32 @@ final class SettingsResetTests: XCTestCase {
             XCTAssertEqual(defaults.object(forKey: key) as? NSObject, expected as? NSObject,
                            "Reset must preserve \(key).")
         }
+    }
+
+    func testControllerModeTileCycleRunsOffThroughModesOneToThreeAndBackOff() throws {
+        let (defaults, suite) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundControllerModePreferences(defaults: defaults)
+
+        XCTAssertFalse(preferences.isEnabled)
+        XCTAssertEqual(preferences.displayName, "Off")
+        preferences.cycle()
+        XCTAssertTrue(preferences.isEnabled)
+        XCTAssertEqual(preferences.layout, .mode1)
+        XCTAssertEqual(preferences.displayName, "Mode 1")
+        preferences.cycle()
+        XCTAssertEqual(preferences.layout, .mode2)
+        preferences.cycle()
+        XCTAssertEqual(preferences.layout, .mode3)
+        preferences.cycle()
+        XCTAssertFalse(preferences.isEnabled)
+        XCTAssertEqual(preferences.displayName, "Off")
+    }
+
+    func testControllerViewNavigationDefaultsOff() throws {
+        let (defaults, suite) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertFalse(BoundControllerNavigationPreferences(defaults: defaults).isEnabled)
     }
 
     func testResetReloadsCachedOption7Arrangement() throws {

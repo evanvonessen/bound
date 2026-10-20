@@ -351,8 +351,35 @@ final class BoundControllerModePreferences {
             NotificationCenter.default.post(name: BoundAppearancePreferences.didChangeNotification, object: nil)
         }
     }
+    var displayName: String { isEnabled ? "Mode \(layout.rawValue)" : "Off" }
+
+    func cycle() {
+        if !isEnabled {
+            layout = .mode1
+            isEnabled = true
+        } else if layout == .mode3 {
+            isEnabled = false
+        } else {
+            layout = BoundControllerModeLayout(rawValue: layout.rawValue + 1) ?? .mode1
+        }
+    }
     static func hidesTouchControls(enabled: Bool, layout: BoundScreenLayout, landscape: Bool) -> Bool {
         enabled && layout == .bound && landscape
+    }
+}
+
+/// Optional controller navigation for Bound's Dex, Boss, and Types views.
+/// Kept independent from Controller Mode so it can be configured in advance.
+final class BoundControllerNavigationPreferences {
+    static let key = "bound.controller-navigation.v1.enabled"
+    private let defaults: UserDefaults
+    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    var isEnabled: Bool {
+        get { defaults.bool(forKey: Self.key) }
+        set {
+            defaults.set(newValue, forKey: Self.key)
+            NotificationCenter.default.post(name: BoundAppearancePreferences.didChangeNotification, object: nil)
+        }
     }
 }
 

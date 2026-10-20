@@ -25,6 +25,40 @@ enum ActionInput: String
     case cycleBoundPanels
     case toggleBoundFriend
     case toggleBoundMultiview
+    case boundScrollUp, boundScrollDown, boundScrollLeft, boundScrollRight
+    case boundPreviousItem, boundNextItem, boundSelect, boundBack, boundDetails
+    case boundPreviousView, boundNextView
+    case boundHideFriend, boundHideMultiview
+    case boundShowDex, boundShowBosses, boundShowTypes
+
+    static let viewNavigationActions: [Self] = [
+        .boundScrollUp, .boundScrollDown, .boundScrollLeft, .boundScrollRight,
+        .boundPreviousItem, .boundNextItem, .boundSelect, .boundBack, .boundDetails,
+        .boundPreviousView, .boundNextView, .boundShowDex, .boundShowBosses, .boundShowTypes,
+        .boundHideFriend, .boundHideMultiview
+    ]
+    static var configurableActions: [Self] {
+        [.quickSave, .quickLoad, .fastForward, .screenshot, .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview]
+            + (BoundControllerNavigationPreferences().isEnabled ? viewNavigationActions : [])
+    }
+    var isViewNavigationAction: Bool { Self.viewNavigationActions.contains(self) }
+    var isBoundPanelAction: Bool {
+        self == .cycleBoundPanels || self == .toggleBoundFriend || self == .toggleBoundMultiview || isViewNavigationAction
+    }
+    var navigationCommand: BoundControllerNavigationCommand? {
+        switch self {
+        case .boundScrollUp: .scrollUp
+        case .boundScrollDown: .scrollDown
+        case .boundScrollLeft: .scrollLeft
+        case .boundScrollRight: .scrollRight
+        case .boundPreviousItem: .previousItem
+        case .boundNextItem: .nextItem
+        case .boundSelect: .select
+        case .boundBack: .back
+        case .boundDetails: .details
+        default: nil
+        }
+    }
 }
 
 /// One activation per physical hold, using the upstream controller/mapping pipeline.

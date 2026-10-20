@@ -215,9 +215,34 @@ private struct ControlsSection: View
     private var gameControllerManager: ExternalGameControllerManager = .shared
 
     @SwiftUI.State private var opacity = Double(Settings.translucentControllerSkinOpacity)
+    @SwiftUI.State private var controllerModeEnabled = BoundControllerModePreferences().isEnabled
+    @SwiftUI.State private var controllerModeLayout = BoundControllerModePreferences().layout
+    @SwiftUI.State private var controllerNavigationEnabled = BoundControllerNavigationPreferences().isEnabled
 
     var body: some View {
         Section("Controls") {
+            Toggle("Controller Mode", isOn: $controllerModeEnabled)
+                .accessibilityIdentifier("bound.controller-mode-enabled")
+                .onChange(of: controllerModeEnabled) { _, enabled in
+                    BoundControllerModePreferences().isEnabled = enabled
+                }
+
+            Picker("Controller Mode", selection: $controllerModeLayout) {
+                ForEach(BoundControllerModeLayout.allCases, id: \.self) { layout in
+                    Text("Mode \(layout.rawValue)").tag(layout)
+                }
+            }
+            .accessibilityIdentifier("bound.controller-mode-layout")
+            .onChange(of: controllerModeLayout) { _, layout in
+                BoundControllerModePreferences().layout = layout
+            }
+
+            Toggle("Controller View Navigation", isOn: $controllerNavigationEnabled)
+                .accessibilityIdentifier("bound.controller-view-navigation")
+                .onChange(of: controllerNavigationEnabled) { _, enabled in
+                    BoundControllerNavigationPreferences().isEnabled = enabled
+                }
+
             NavigationLink {
                 ControllerSettingsView()
             } label: {
@@ -250,6 +275,11 @@ private struct ControlsSection: View
                         .onChange(of: opacity) { _, value in Settings.translucentControllerSkinOpacity = value }
                 }
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: BoundAppearancePreferences.didChangeNotification)) { _ in
+            controllerModeEnabled = BoundControllerModePreferences().isEnabled
+            controllerModeLayout = BoundControllerModePreferences().layout
+            controllerNavigationEnabled = BoundControllerNavigationPreferences().isEnabled
         }
     }
 }

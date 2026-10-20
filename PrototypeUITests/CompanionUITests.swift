@@ -2581,6 +2581,55 @@ final class CompanionUITests: XCTestCase {
         app.terminate()
     }
 
+    func testControllerModeCyclesAndNavigationCanBeEnabledFromMainSettings() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) }
+        }
+        let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture",
+                                       "--bound-ui-no-animations", "--bound-ui-screen-layout-bound"])
+        openNativePause(in: app)
+        let tile = app.buttons["bound.controller-mode"]
+        XCTAssertTrue(tile.waitForExistence(timeout: 5))
+        XCTAssertEqual(tile.label, "Controller Mode: Off")
+        for state in ["Mode 1", "Mode 2", "Mode 3", "Off", "Mode 1"] {
+            tile.tap()
+            let updated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Controller Mode: " + state), object: tile)
+            XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 5), .completed)
+        }
+        app.buttons["Settings"].tap()
+        let controls = app.buttons["bound.settings-controls"]
+        XCTAssertTrue(controls.waitForExistence(timeout: 5)); controls.tap()
+        let enabled = app.switches["bound.controller-mode-enabled"]
+        let navigation = app.switches["bound.controller-view-navigation"]
+        XCTAssertTrue(enabled.waitForExistence(timeout: 5))
+        XCTAssertEqual(enabled.value as? String, "1")
+        XCTAssertEqual(navigation.value as? String, "0")
+        navigation.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(navigation.value as? String, "1")
+        enabled.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(enabled.value as? String, "0")
+        closeBoundSheet(in: app)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(element("bound.native-r", in: app).waitForExistence(timeout: 8))
+        openNativePause(in: app)
+        XCTAssertEqual(tile.label, "Controller Mode: Off")
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(controls.waitForExistence(timeout: 5)); controls.tap()
+        XCTAssertEqual(navigation.value as? String, "1", "Navigation preference remains independent of mode enablement")
+        enabled.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        closeBoundSheet(in: app)
+        XCTAssertTrue(element("bound.native-r", in: app).waitForNonExistence(timeout: 5))
+        app.terminate()
+    }
+
     func testControllerModesOneAndTwoButtonArrangementIsAvailableWithoutExperimentalSettings() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
@@ -5162,7 +5211,7 @@ final class CompanionUITests: XCTestCase {
         openNativePause(in: app)
         let mode = app.buttons["bound.controller-mode"]
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
-        XCTAssertEqual(mode.label, "Controller Mode")
+        XCTAssertEqual(mode.label, "Controller Mode: Off")
         XCTAssertEqual(mode.value as? String, "Off")
         XCTAssertTrue(app.frame.contains(mode.frame))
         for label in ["Save State", "Load State", "Cheat Codes", "Fast Forward", "Connect", "Settings"] {
@@ -5195,7 +5244,7 @@ final class CompanionUITests: XCTestCase {
         XCTAssertFalse(shoulder.exists)
         openNativePause(in: app)
         XCTAssertEqual(mode.value as? String, "On")
-        mode.tap()
+        for _ in 0..<3 { mode.tap() }
         resumeNativePause(in: app)
         XCTAssertTrue(shoulder.waitForExistence(timeout: 5))
         XCTAssertTrue(cycle.exists)
@@ -5907,7 +5956,7 @@ extension CompanionUITests {
             let mode = app.buttons["bound.controller-mode"]
             XCTAssertTrue(mode.waitForExistence(timeout: 5))
             let expected = enabled ? "On" : "Off"
-            if (mode.value as? String) != expected { mode.tap() }
+            for _ in 0..<4 where (mode.value as? String) != expected { mode.tap() }
             XCTAssertEqual(mode.value as? String, expected)
             resumeNativePause(in: app)
         }

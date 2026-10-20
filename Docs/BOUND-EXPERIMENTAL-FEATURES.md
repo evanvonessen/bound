@@ -31,6 +31,21 @@ off or in portrait. Bound retains normal touch controls in those states even
 with a wireless controller assigned. Reset Settings to Default clears these
 positions and returns Controller Mode to Off with Mode 1 preselected.
 
+Controller Mode is also available in **Settings → Controls**. The pause-menu
+Controller Mode tile shows its current state and cycles **Off → Mode 1 → Mode 2
+→ Mode 3 → Off**. Turning it on from Off always starts at Mode 1.
+
+**Controller View Navigation** is a non-experimental, default-off setting in
+Settings → Controls. Enabling it adds view actions to the controller mapping
+editor: four-way scrolling, previous/next Pokémon or item, Select/Choose, Back,
+Details, previous/next view or tab, direct Dex/Bosses/Types selection, and explicit
+Hide Friend/Hide Multiview actions. Existing toggle actions remain available.
+These actions apply only to the active landscape controller view; disabled
+Controller Mode, portrait, settings and arrangement editors do not receive them.
+Select opens a Pokémon or boss chooser, previous/next changes its highlighted
+candidate, and Select confirms it. Back closes the chooser or detail view.
+Reset Settings to Default turns navigation off and resets custom mappings.
+
 Controller mapping includes **Toggle Friend** and **Toggle Multiview** as normal
 Game Actions, alongside the existing **Menu** mapping. These choices do not
 require the experimental customization checkbox. In landscape Controller Mode

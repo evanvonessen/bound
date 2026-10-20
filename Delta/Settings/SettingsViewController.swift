@@ -105,6 +105,11 @@ private extension SettingsViewController
 
 class SettingsViewController: UITableViewController
 {
+    private enum BoundControllerSettingsRow: Int {
+        case enabled = 4
+        case mode = 5
+        case navigation = 6
+    }
     @IBOutlet private var controllerOpacityLabel: UILabel!
     @IBOutlet private var controllerOpacitySlider: UISlider!
     
@@ -282,6 +287,54 @@ private extension SettingsViewController
         self.previewsEnabledSwitch.isOn = Settings.isPreviewsEnabled
         
         self.tableView.reloadData()
+    }
+
+    func controllerSettingsCell(title: String, detail: String? = nil, identifier: String,
+                                toggle: UISwitch? = nil) -> UITableViewCell {
+        let cell = UITableViewCell(style: .value1, reuseIdentifier: nil)
+        cell.textLabel?.text = NSLocalizedString(title, comment: "")
+        cell.detailTextLabel?.text = detail
+        cell.accessibilityIdentifier = identifier
+        if let toggle {
+            cell.selectionStyle = .none
+            cell.accessoryView = toggle
+        } else {
+            cell.accessoryType = .disclosureIndicator
+        }
+        return cell
+    }
+
+    @objc func controllerModeSettingChanged(_ sender: UISwitch) {
+        BoundControllerModePreferences().isEnabled = sender.isOn
+        tableView.reloadRows(at: [IndexPath(row: BoundControllerSettingsRow.mode.rawValue,
+                                           section: Section.controllers.rawValue)], with: .none)
+    }
+
+    @objc func controllerNavigationSettingChanged(_ sender: UISwitch) {
+        BoundControllerNavigationPreferences().isEnabled = sender.isOn
+    }
+
+    func presentControllerModePicker() {
+        let preferences = BoundControllerModePreferences()
+        let alert = UIAlertController(title: NSLocalizedString("Controller Mode", comment: ""), message: nil,
+                                      preferredStyle: .actionSheet)
+        alert.addAction(UIAlertAction(title: NSLocalizedString("Off", comment: ""), style: .default) { _ in
+            preferences.isEnabled = false
+            self.tableView.reloadSections(IndexSet(integer: Section.controllers.rawValue), with: .none)
+        })
+        for layout in BoundControllerModeLayout.allCases {
+            alert.addAction(UIAlertAction(title: "Mode \(layout.rawValue)", style: .default) { _ in
+                preferences.layout = layout
+                preferences.isEnabled = true
+                self.tableView.reloadSections(IndexSet(integer: Section.controllers.rawValue), with: .none)
+            })
+        }
+        alert.addAction(UIAlertAction(title: NSLocalizedString("Cancel", comment: ""), style: .cancel))
+        if let popover = alert.popoverPresentationController {
+            popover.sourceView = self.view
+            popover.sourceRect = CGRect(x: self.view.bounds.midX, y: self.view.bounds.maxY - 80, width: 1, height: 1)
+        }
+        present(alert, animated: true)
     }
     
     func updateControllerOpacityLabel()
@@ -642,7 +695,7 @@ extension SettingsViewController
         if section == .cores && BoundFeatureVisibility.simplifiedSettings { return 1 }
         switch section
         {
-        case .controllers: return 4
+        case .controllers: return 7
         case .controllerSkins: return System.registeredSystems.count
         case .airPlay:
             var numberOfRows = 1
@@ -692,6 +745,27 @@ extension SettingsViewController
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell
     {
         let indexPath = (BoundFeatureVisibility.simplifiedSettings && indexPath.section == Section.cores.rawValue) ? IndexPath(row: CoresRow.gba.rawValue, section: indexPath.section) : indexPath
+        if indexPath.section == Section.controllers.rawValue,
+           let row = BoundControllerSettingsRow(rawValue: indexPath.row) {
+            switch row {
+            case .enabled:
+                let toggle = UISwitch()
+                toggle.isOn = BoundControllerModePreferences().isEnabled
+                toggle.accessibilityIdentifier = "bound.controller-mode-enabled"
+                toggle.addTarget(self, action: #selector(controllerModeSettingChanged(_:)), for: .valueChanged)
+                return controllerSettingsCell(title: "Controller Mode", identifier: "bound.controller-mode-enabled-row", toggle: toggle)
+            case .mode:
+                let preferences = BoundControllerModePreferences()
+                return controllerSettingsCell(title: "Mode", detail: preferences.displayName,
+                                              identifier: "bound.controller-mode-setting")
+            case .navigation:
+                let toggle = UISwitch()
+                toggle.isOn = BoundControllerNavigationPreferences().isEnabled
+                toggle.accessibilityIdentifier = "bound.controller-view-navigation"
+                toggle.addTarget(self, action: #selector(controllerNavigationSettingChanged(_:)), for: .valueChanged)
+                return controllerSettingsCell(title: "Controller View Navigation", identifier: "bound.controller-view-navigation-row", toggle: toggle)
+            }
+        }
         let cell = super.tableView(tableView, cellForRowAt: indexPath)
 
         let section = Section(rawValue: indexPath.section)!
@@ -796,7 +870,12 @@ extension SettingsViewController
 
         switch section
         {
-        case .controllers: self.performSegue(withIdentifier: Segue.controllers.rawValue, sender: cell)
+        case .controllers:
+            if let row = BoundControllerSettingsRow(rawValue: indexPath.row) {
+                if row == .mode { presentControllerModePicker() }
+                return
+            }
+            self.performSegue(withIdentifier: Segue.controllers.rawValue, sender: cell)
         case .controllerSkins: self.performSegue(withIdentifier: Segue.controllerSkins.rawValue, sender: cell)
         case .display: self.performSegue(withIdentifier: Segue.altAppIcons.rawValue, sender: cell)
         case .patreon, .controllerOpacity, .gameAudio, .multitasking, .hapticFeedback, .airPlay, .hapticTouch, .syncing: break
@@ -881,6 +960,8 @@ extension SettingsViewController
     
     override func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat
     {
+        if indexPath.section == Section.controllers.rawValue,
+           BoundControllerSettingsRow(rawValue: indexPath.row) != nil { return UITableView.automaticDimension }
     primary:
         switch Section(rawValue: indexPath.section)!
         {

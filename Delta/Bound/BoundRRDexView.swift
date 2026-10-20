@@ -29,23 +29,34 @@ struct BoundRRDexView: View {
     @State private var automaticSaveStatus: String?
     @State private var refreshingSave = false
     @State private var sheet: Detail?
+    @State private var controllerSpeciesQuery = ""
+    @State private var controllerSpeciesIndex = 0
     @State private var awaitingDetailDismissal = false
     @State private var layout4EvolutionExpanded = false
     @State private var layout5EvolutionExpanded = false
     private enum Detail: Identifiable {
-        case weaknesses, learnset, evolution
+        case weaknesses, learnset, evolution, controllerSpeciesPicker
         case ability(String, String)
         var id: String {
             switch self {
             case .weaknesses: "weaknesses"
             case .learnset: "learnset"
             case .evolution: "evolution"
+            case .controllerSpeciesPicker: "controller-species-picker"
             case let .ability(name, _): "ability-\(name)"
             }
         }
     }
     private var editingText: Bool { searching || moveSearchFocused }
     private var interacting: Bool { editingText || sheet != nil || importError != nil }
+    private var isControllerSpeciesPickerPresented: Bool {
+        if case .controllerSpeciesPicker? = sheet { return true }
+        return false
+    }
+    private var hasPresentedSheet: Bool {
+        if case .some(_) = sheet { return true }
+        return false
+    }
     private var hasIslandActions: Bool { !floating && portraitTopInset >= 51 }
     private var hasInlineSearch: Bool { floating && inlineSearch && layout.rawValue >= 7 }
     private var contentTopInset: CGFloat {
@@ -87,6 +98,7 @@ struct BoundRRDexView: View {
                             .frame(width: geometry.size.width, height: geometry.size.height)
                     }
                 }
+                .boundControllerScroll(gameID: gameID, content: .dex, active: isActive && !hasPresentedSheet)
                 .padding(.top, contentTopInset)
                 .overlay(alignment: .top) {
                     if hasIslandActions {
@@ -131,6 +143,11 @@ struct BoundRRDexView: View {
                 }
                 .accessibilityElement(children: .contain).accessibilityIdentifier("bound.rrdex")
                 .accessibilityValue(layout.title)
+                .onReceive(NotificationCenter.default.publisher(for: BoundControllerNavigationEvent.notificationName)) { notification in
+                    guard isActive, previewLayout == nil,
+                          let command = BoundControllerNavigationEvent.command(from: notification, gameID: gameID, content: .dex) else { return }
+                    handleControllerNavigation(command, catalog: catalog)
+                }
                 .onAppear {
                     if previewLayout == nil { choice = preferences.read(gameID: gameID) }
                     expandedLearnsetMethod = nil
@@ -153,11 +170,14 @@ struct BoundRRDexView: View {
                         case .weaknesses: BoundRRDexMatchups(pokemon: pokemon, catalog: catalog)
                         case .learnset: BoundRRDexLearnset(pokemon: pokemon, catalog: catalog, save: choice.save)
                         case .evolution: evolutionDetail(pokemon: pokemon, catalog: catalog)
+                        case .controllerSpeciesPicker: controllerSpeciesPicker(catalog: catalog)
                         case let .ability(name, description):
                             ScrollView { Text(description).frame(maxWidth: .infinity, alignment: .leading).padding() }
                                 .accessibilityIdentifier("bound.rrdex-ability-description")
                         }
                     }
+                    .boundControllerScroll(gameID: gameID, content: .dex,
+                                           active: isActive && !isControllerSpeciesPickerPresented)
                 }
             } else if catalogStore.hasFinishedLoading {
                 ContentUnavailableView("RRDex unavailable", systemImage: "book.closed", description: Text("The bundled dex could not be loaded."))
@@ -190,6 +210,7 @@ struct BoundRRDexView: View {
                 presentationChanged(false)
             }
         }
+        .onChange(of: query) { _, _ in controllerSpeciesIndex = 0 }
         .onChange(of: layout) { previous, current in
             expandedLearnsetMethod = nil
             if previous == .layout12 || current == .layout12 { closeLayout12Learnset() }
@@ -210,6 +231,7 @@ struct BoundRRDexView: View {
         case .weaknesses: "Type matchups"
         case .learnset: "Learnset"
         case .evolution: "Evolution and methods"
+        case .controllerSpeciesPicker: "Choose Pokémon"
         case let .ability(name, _): name
         }
     }
@@ -1555,7 +1577,7 @@ struct BoundRRDexView: View {
             if results.isEmpty {
                 Text("No Pokémon found").font(.system(size: 13)).foregroundStyle(.secondary).padding(.top, 20)
             }
-            ForEach(results) { pokemon in
+            ForEach(Array(results.enumerated()), id: \.element.id) { index, pokemon in
                 Button { select(pokemon) } label: {
                     HStack {
                         Text(pokemon.name).font(.system(size: 13, weight: .medium)).foregroundStyle(.primary)
@@ -1563,7 +1585,10 @@ struct BoundRRDexView: View {
                         Text(pokemon.types.compactMap { catalog.type(id: $0)?.name }.joined(separator: " / "))
                             .font(.system(size: 10)).foregroundStyle(.secondary)
                     }.padding(.vertical, 10).frame(minHeight: usesUIVersion2 ? 44 : nil).contentShape(Rectangle())
+                        .background(index == controllerSpeciesIndex && searching ? Color(uiColor: .deltaPurple).opacity(0.18) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 7))
                 }.buttonStyle(.plain).accessibilityIdentifier("bound.rrdex-suggestion-\(pokemon.id)")
+                    .accessibilityValue(index == controllerSpeciesIndex && searching ? "Highlighted" : "")
                 Divider()
             }
         }
@@ -1652,6 +1677,126 @@ struct BoundRRDexView: View {
         layout4EvolutionExpanded = false
         layout5EvolutionExpanded = false
         preferences.write(choice, gameID: gameID)
+    }
+
+    private func handleControllerNavigation(_ command: BoundControllerNavigationCommand, catalog: BoundRRDexCatalog) {
+        if hasPresentedSheet && !isControllerSpeciesPickerPresented {
+            if case .back = command { sheet = nil }
+            return
+        }
+        switch command {
+        case .scrollUp, .scrollDown, .scrollLeft, .scrollRight:
+            return
+        case .previousItem:
+            moveControllerSpeciesCursor(-1, catalog: catalog)
+        case .nextItem:
+            moveControllerSpeciesCursor(1, catalog: catalog)
+        case .select:
+            if isControllerSpeciesPickerPresented {
+                let candidates = controllerSpeciesCandidates(catalog: catalog)
+                guard candidates.indices.contains(controllerSpeciesIndex) else { return }
+                select(candidates[controllerSpeciesIndex])
+                sheet = nil
+            } else if searching, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let candidates = catalog.suggestions(query)
+                guard candidates.indices.contains(controllerSpeciesIndex) else { return }
+                select(candidates[controllerSpeciesIndex])
+            } else {
+                searching = false
+                controllerSpeciesQuery = ""
+                controllerSpeciesIndex = catalog.species.firstIndex(where: { $0.id == choice.speciesID }) ?? 0
+                awaitingDetailDismissal = true
+                sheet = .controllerSpeciesPicker
+            }
+        case .details:
+            guard !isControllerSpeciesPickerPresented else { return }
+            if layout == .layout12 {
+                openLayout12Learnset(method: nil)
+            } else {
+                showDetail(.learnset)
+            }
+        case .back:
+            if importError != nil {
+                importError = nil
+            } else if sheet != nil {
+                sheet = nil
+            } else if layout == .layout12 && layout12LearnsetPresented {
+                closeLayout12Learnset()
+            } else if editingText || !query.isEmpty {
+                query = ""
+                searching = false
+                moveSearchFocused = false
+            }
+        }
+    }
+
+    private func controllerSpeciesCandidates(catalog: BoundRRDexCatalog) -> [BoundRRDexSpecies] {
+        let filter = controllerSpeciesQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        return filter.isEmpty ? catalog.species : catalog.suggestions(filter)
+    }
+
+    private func moveControllerSpeciesCursor(_ delta: Int, catalog: BoundRRDexCatalog) {
+        if isControllerSpeciesPickerPresented {
+            let candidates = controllerSpeciesCandidates(catalog: catalog)
+            guard !candidates.isEmpty else { controllerSpeciesIndex = 0; return }
+            controllerSpeciesIndex = (controllerSpeciesIndex + delta + candidates.count) % candidates.count
+        } else if searching, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let candidates = catalog.suggestions(query)
+            guard !candidates.isEmpty else { controllerSpeciesIndex = 0; return }
+            controllerSpeciesIndex = (controllerSpeciesIndex + delta + candidates.count) % candidates.count
+        } else {
+            guard !catalog.species.isEmpty else { return }
+            let current = catalog.species.firstIndex(where: { $0.id == choice.speciesID }) ?? 0
+            let index = (current + delta + catalog.species.count) % catalog.species.count
+            select(catalog.species[index])
+        }
+    }
+
+    private func controllerSpeciesPicker(catalog: BoundRRDexCatalog) -> some View {
+        let candidates = controllerSpeciesCandidates(catalog: catalog)
+        return ScrollViewReader { proxy in
+            List {
+                ForEach(Array(candidates.enumerated()), id: \.offset) { index, pokemon in
+                    Button {
+                        select(pokemon)
+                        sheet = nil
+                    } label: {
+                        HStack {
+                            Text(pokemon.name)
+                            Spacer()
+                            Text(pokemon.types.compactMap { catalog.type(id: $0)?.name }.joined(separator: " / "))
+                                .font(.caption).foregroundStyle(.secondary)
+                            if index == controllerSpeciesIndex {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(Color(uiColor: .deltaPurple))
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("bound.rrdex-controller-species-\(pokemon.id)")
+                    .accessibilityValue(index == controllerSpeciesIndex ? "Highlighted" : "")
+                    .id(pokemon.id)
+                }
+            }
+            .listStyle(.plain)
+            .accessibilityIdentifier("bound.rrdex-controller-species-picker")
+            .boundControllerScroll(gameID: gameID, content: .dex, active: isActive && isControllerSpeciesPickerPresented)
+            .searchable(text: $controllerSpeciesQuery, prompt: "Pokémon")
+            .onChange(of: controllerSpeciesQuery) { _, _ in
+                controllerSpeciesIndex = 0
+                if let first = controllerSpeciesCandidates(catalog: catalog).first { proxy.scrollTo(first.id, anchor: .center) }
+            }
+            .onChange(of: controllerSpeciesIndex) { _, index in
+                let visibleCandidates = controllerSpeciesCandidates(catalog: catalog)
+                if visibleCandidates.indices.contains(index) { proxy.scrollTo(visibleCandidates[index].id, anchor: .center) }
+            }
+            .onAppear {
+                if let index = candidates.firstIndex(where: { $0.id == choice.speciesID }) {
+                    controllerSpeciesIndex = index
+                    proxy.scrollTo(candidates[index].id, anchor: .center)
+                }
+            }
+        }
     }
     private func importCurrentGameSave() {
         searching = false

@@ -340,7 +340,7 @@ class GameViewController: DeltaCore.GameViewController
     override func gameController(_ gameController: GameController, didActivate input: Input, value: Double)
     {
         super.gameController(gameController, didActivate: input, value: value)
-        if let action = ActionInput(input: input), action == .cycleBoundPanels || action == .toggleBoundFriend || action == .toggleBoundMultiview {
+        if let action = ActionInput(input: input), action.isBoundPanelAction {
             self.receiveBoundPanelAction(action, from: gameController, pressed: true)
             return
         }
@@ -362,7 +362,11 @@ class GameViewController: DeltaCore.GameViewController
             case .fastForward: self.performFastForwardAction(activate: true, remember: false)
             case .reverseScreens: self.performReverseScreensAction()
             case .screenshot: self.performScreenshotAction()
-            case .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview: break // Handled independently above; never emulated inputs.
+            case .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview,
+                 .boundScrollUp, .boundScrollDown, .boundScrollLeft, .boundScrollRight,
+                 .boundPreviousItem, .boundNextItem, .boundSelect, .boundBack, .boundDetails,
+                 .boundPreviousView, .boundNextView, .boundHideFriend, .boundHideMultiview,
+                 .boundShowDex, .boundShowBosses, .boundShowTypes: break // Handled independently above; never emulated inputs.
             case .toggleFastForward:
                 let isFastForwarding = (emulatorCore.rate != emulatorCore.deltaCore.supportedRates.lowerBound)
                 self.performFastForwardAction(activate: !isFastForwarding)
@@ -373,7 +377,7 @@ class GameViewController: DeltaCore.GameViewController
     override func gameController(_ gameController: GameController, didDeactivate input: Input)
     {
         super.gameController(gameController, didDeactivate: input)
-        if let action = ActionInput(input: input), action == .cycleBoundPanels || action == .toggleBoundFriend || action == .toggleBoundMultiview {
+        if let action = ActionInput(input: input), action.isBoundPanelAction {
             self.receiveBoundPanelAction(action, from: gameController, pressed: false)
             return
         }
@@ -395,7 +399,11 @@ class GameViewController: DeltaCore.GameViewController
             case .toggleFastForward: break
             case .reverseScreens: break
             case .screenshot: break
-            case .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview: break
+            case .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview,
+                 .boundScrollUp, .boundScrollDown, .boundScrollLeft, .boundScrollRight,
+                 .boundPreviousItem, .boundNextItem, .boundSelect, .boundBack, .boundDetails,
+                 .boundPreviousView, .boundNextView, .boundHideFriend, .boundHideMultiview,
+                 .boundShowDex, .boundShowBosses, .boundShowTypes: break
             }
         }
     }
@@ -404,15 +412,20 @@ class GameViewController: DeltaCore.GameViewController
         let apply = { [weak self, weak controller] in
             guard let self, let controller else { return }
             if !pressed { self.boundPanelActions.release(controller: controller, action: action); return }
-            let eligible = self.emulatorCore === expectedCore && expectedCore?.state == .running
+            let navigatingReference = (action.isViewNavigationAction || action == .toggleBoundMultiview || action == .toggleBoundFriend)
+                && self.boundCompanion.allowsControllerNavigationWhilePaused
+            let eligible = self.emulatorCore === expectedCore
+                && (expectedCore?.state == .running || (navigatingReference && expectedCore?.state == .paused))
                 && controller.inputType != .controllerSkin && controller.playerIndex != nil
                 && ExternalGameControllerManager.shared.connectedControllers.contains(where: { $0 === controller })
                 && self.view.window?.windowScene?.hasKeyboardFocus == true
-                && UIApplication.shared.applicationState == .active && self.presentedViewController == nil
-                && !self.boundCompanion.isEditingNotes
+                && UIApplication.shared.applicationState == .active
+                && (self.presentedViewController == nil || (navigatingReference && !(self.presentedViewController is PauseViewController)))
+                && (!self.boundCompanion.isEditingNotes || navigatingReference)
                 && !self.boundCompanion.state.showingFriends && !self.boundCompanion.state.showingSettings
             self.boundPanelActions.activate(controller: controller, action: action, eligible: eligible) {
-                if action == .cycleBoundPanels { self.boundCompanion.cyclePanels() }
+                if action.isViewNavigationAction { self.boundCompanion.navigateControllerView(action) }
+                else if action == .cycleBoundPanels { self.boundCompanion.cyclePanels() }
                 else { self.boundCompanion.toggleControllerPanel(action) }
             }
         }
@@ -635,9 +648,13 @@ extension GameViewController
             pauseViewController.controllerModeItem?.isSelected = BoundControllerModePreferences().isEnabled
             pauseViewController.controllerModeItem?.action = { [weak self] item in
                 guard let self else { return }
-                let enabled = !BoundControllerModePreferences().isEnabled
-                self.setBoundControllerModeEnabled(enabled)
-                item.isSelected = enabled
+                self.cancelBoundTouchInputsPreservingExternalHolds()
+                let preferences = BoundControllerModePreferences()
+                preferences.cycle()
+                self.view.setNeedsLayout()
+                self.view.layoutIfNeeded()
+                item.text = "Controller Mode: \(preferences.displayName)"
+                item.isSelected = preferences.isEnabled
             }
             if self.emulatorCore?.deltaCore.supportedRates.upperBound == 1
             {

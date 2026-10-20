@@ -466,6 +466,10 @@ final class StockControlAndGestureTests: XCTestCase {
         let oldModeEnabled = modePreferences.isEnabled
         let oldModeLayout = modePreferences.layout
         let oldLocalPlayerIndex = Settings.localControllerPlayerIndex
+        let navigationPreferences = BoundControllerNavigationPreferences()
+        let oldNavigationEnabled = navigationPreferences.isEnabled
+        let landscapePreferences = BoundLandscapePreferences()
+        let oldLandscapeOption = landscapePreferences.option
         let manager = ExternalGameControllerManager.shared
         let oldAutomaticAssignment = manager.automaticallyAssignsPlayerIndexes
         let oldControllers = manager.connectedControllers.map { ($0, $0.playerIndex) }
@@ -502,6 +506,8 @@ final class StockControlAndGestureTests: XCTestCase {
             Settings.localControllerPlayerIndex = oldLocalPlayerIndex
             modePreferences.isEnabled = oldModeEnabled
             modePreferences.layout = oldModeLayout
+            navigationPreferences.isEnabled = oldNavigationEnabled
+            landscapePreferences.option = oldLandscapeOption
             appearance.screenLayout = oldScreenLayout
             appearance.theme = oldTheme
             gameController.emulatorCore?.stop()
@@ -586,6 +592,114 @@ final class StockControlAndGestureTests: XCTestCase {
         XCTAssertFalse(gameController.controllerView.isHidden)
         XCTAssertEqual(gameController.controllerView.playerIndex, 0)
         XCTAssertEqual(visibleInputs(landscapeTraits), ["menu"])
+
+        // Drive mapped actions through the same live receiver used by a pad.
+        landscapePreferences.option = .option7
+        navigationPreferences.isEnabled = true
+        setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
+        let core = try XCTUnwrap(gameController.emulatorCore)
+        if core.state == .stopped { core.start() }
+        if core.state == .paused { core.resume() }
+        XCTAssertEqual(core.state, .running)
+        var events: [Notification] = []
+        let observation = NotificationCenter.default.addObserver(forName: BoundControllerNavigationEvent.notificationName,
+                                                                 object: nil, queue: .main) { events.append($0) }
+        defer { NotificationCenter.default.removeObserver(observation) }
+        func press(_ action: ActionInput) {
+            var mapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: external.inputType)
+            mapping.set(action, forControllerInput: MFiGameController.Input.a)
+            external.addReceiver(gameController, inputMapping: mapping)
+            external.activate(MFiGameController.Input.a)
+            external.deactivate(MFiGameController.Input.a)
+        }
+        press(.boundShowDex)
+        press(.boundNextItem)
+        XCTAssertEqual(events.count, 1, "The connected pad must reach the visible Dex through GameViewController")
+        XCTAssertEqual(BoundControllerNavigationEvent.command(from: try XCTUnwrap(events.last), gameID: game.identifier, content: .dex), .nextItem)
+        navigationPreferences.isEnabled = false
+        press(.boundNextItem)
+        XCTAssertEqual(events.count, 1, "Opting out disables navigation without removing mappings")
+        navigationPreferences.isEnabled = true
+        modePreferences.isEnabled = false
+        setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
+        press(.boundNextItem)
+        XCTAssertEqual(events.count, 1, "Controller Mode off ignores mapped view actions")
+        modePreferences.isEnabled = true
+        setViewport(CGSize(width: 390, height: 844), traits: portraitTraits)
+        press(.boundNextItem)
+        XCTAssertEqual(events.count, 1, "Portrait ignores landscape controller navigation")
+        setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
+        press(.boundShowBosses)
+        press(.boundNextItem)
+        XCTAssertEqual(events.count, 2)
+        XCTAssertEqual(BoundControllerNavigationEvent.command(from: try XCTUnwrap(events.last), gameID: game.identifier, content: .bosses), .nextItem)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        press(.boundSelect)
+        for _ in 0..<30 where core.state != .paused { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertEqual(core.state, .paused, "The existing companion presentation flow pauses gameplay")
+        // Let the actual UIKit presentation finish before sending Back from the pad.
+        try await Task.sleep(nanoseconds: 500_000_000)
+        press(.boundBack)
+        for _ in 0..<30 where core.state != .running { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertEqual(core.state, .running, "Controller Back must remain available while a reference sheet pauses the core")
+        let countBeforeHiding = events.count
+        XCTAssertEqual(countBeforeHiding, 4)
+        press(.boundHideMultiview)
+        press(.boundNextItem)
+        XCTAssertEqual(events.count, countBeforeHiding, "Hidden reference views cannot be navigated")
+
+        // Hiding or switching an open selector must finish its dismissal before
+        // removing the reference, so the existing pause is returned to gameplay.
+        for action in [ActionInput.boundHideMultiview, .toggleBoundMultiview, .boundShowDex] {
+            press(.boundShowBosses)
+            try await Task.sleep(nanoseconds: 150_000_000)
+            press(.boundSelect)
+            for _ in 0..<30 where core.state != .paused { try await Task.sleep(nanoseconds: 50_000_000) }
+            XCTAssertEqual(core.state, .paused)
+            try await Task.sleep(nanoseconds: 500_000_000)
+            press(action)
+            if action == .boundHideMultiview {
+                try await Task.sleep(nanoseconds: 50_000_000)
+                NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+                try await Task.sleep(nanoseconds: 50_000_000)
+                NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+            }
+            for _ in 0..<30 where core.state != .running { try await Task.sleep(nanoseconds: 50_000_000) }
+            XCTAssertEqual(core.state, .running, "\(action) must dismiss the selector and resume gameplay")
+            try await Task.sleep(nanoseconds: 150_000_000)
+            let countAfterTransition = events.count
+            press(.boundNextItem)
+            if action == .boundShowDex {
+                XCTAssertEqual(events.count, countAfterTransition + 1)
+                XCTAssertEqual(BoundControllerNavigationEvent.command(from: try XCTUnwrap(events.last), gameID: game.identifier, content: .dex), .nextItem)
+            } else {
+                XCTAssertEqual(events.count, countAfterTransition, "The completed action must hide the multiview")
+            }
+        }
+    }
+
+    func testViewNavigationMappingsRoundTripAndRequireOptInInBothEditors() throws {
+        let preferences = BoundControllerNavigationPreferences()
+        let original = preferences.isEnabled
+        defer { preferences.isEnabled = original }
+        preferences.isEnabled = false
+        for action in ActionInput.viewNavigationActions {
+            XCTAssertFalse(ActionInput.configurableActions.contains(action))
+            XCTAssertFalse(ControlsEditorView.actionInputs.contains(AnyInput(action)))
+        }
+        preferences.isEnabled = true
+        let transformer = GameControllerInputMappingTransformer()
+        for action in ActionInput.viewNavigationActions {
+            var mapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: .mfi)
+            mapping.set(action, forControllerInput: MFiGameController.Input.x)
+            let encoded = try XCTUnwrap(transformer.transformedValue(mapping) as? Data)
+            let decoded = try XCTUnwrap(transformer.reverseTransformedValue(encoded) as? DeltaCore.GameControllerInputMapping)
+            XCTAssertEqual(ActionInput(input: try XCTUnwrap(decoded.input(forControllerInput: MFiGameController.Input.x))), action)
+            XCTAssertTrue(ActionInput.configurableActions.contains(action))
+            XCTAssertTrue(ControlsEditorView.actionInputs.contains(AnyInput(action)))
+            XCTAssertFalse(action.localizedDisplayName.isEmpty)
+            XCTAssertNotEqual(action.sfSymbolName, "questionmark.circle")
+        }
     }
 
     func testControllerModeLayoutPersistsAndLegacyEnabledPreferenceDefaultsToModeOne() throws {

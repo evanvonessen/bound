@@ -284,6 +284,22 @@ extension Input
             case .cycleBoundPanels: return NSLocalizedString("Cycle Friend/Notes/Types", comment: "")
             case .toggleBoundFriend: return NSLocalizedString("Toggle Friend", comment: "")
             case .toggleBoundMultiview: return NSLocalizedString("Toggle Multiview", comment: "")
+            case .boundScrollUp: return NSLocalizedString("View: Scroll Up", comment: "")
+            case .boundScrollDown: return NSLocalizedString("View: Scroll Down", comment: "")
+            case .boundScrollLeft: return NSLocalizedString("View: Scroll Left", comment: "")
+            case .boundScrollRight: return NSLocalizedString("View: Scroll Right", comment: "")
+            case .boundPreviousItem: return NSLocalizedString("View: Previous Pokémon / Item", comment: "")
+            case .boundNextItem: return NSLocalizedString("View: Next Pokémon / Item", comment: "")
+            case .boundSelect: return NSLocalizedString("View: Select / Choose", comment: "")
+            case .boundBack: return NSLocalizedString("View: Back", comment: "")
+            case .boundDetails: return NSLocalizedString("View: Details", comment: "")
+            case .boundPreviousView: return NSLocalizedString("Previous View / Tab", comment: "")
+            case .boundNextView: return NSLocalizedString("Next View / Tab", comment: "")
+            case .boundHideFriend: return NSLocalizedString("Hide Friend", comment: "")
+            case .boundHideMultiview: return NSLocalizedString("Hide Multiview", comment: "")
+            case .boundShowDex: return NSLocalizedString("Show Dex", comment: "")
+            case .boundShowBosses: return NSLocalizedString("Show Bosses", comment: "")
+            case .boundShowTypes: return NSLocalizedString("Show Types", comment: "")
             }
             
         default: break
@@ -429,6 +445,22 @@ extension Input
             case .cycleBoundPanels: return "rectangle.2.swap"
             case .toggleBoundFriend: return "person.2.fill"
             case .toggleBoundMultiview: return "book.closed"
+            case .boundScrollUp: return "arrow.up"
+            case .boundScrollDown: return "arrow.down"
+            case .boundScrollLeft: return "arrow.left"
+            case .boundScrollRight: return "arrow.right"
+            case .boundPreviousItem: return "chevron.left"
+            case .boundNextItem: return "chevron.right"
+            case .boundSelect: return "checkmark.circle"
+            case .boundBack: return "arrow.uturn.backward"
+            case .boundDetails: return "list.bullet.rectangle"
+            case .boundPreviousView: return "rectangle.lefthalf.inset.filled"
+            case .boundNextView: return "rectangle.righthalf.inset.filled"
+            case .boundHideFriend: return "person.2.slash"
+            case .boundHideMultiview: return "eye.slash"
+            case .boundShowDex: return "book"
+            case .boundShowBosses: return "person.crop.rectangle"
+            case .boundShowTypes: return "square.grid.3x3"
             }
             
         default: return "questionmark.circle"

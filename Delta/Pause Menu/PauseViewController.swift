@@ -305,9 +305,11 @@ private extension PauseViewController
         self.friendsItem = MenuItem(text: NSLocalizedString("Connect", comment: ""), image: UIImage(systemName: "person.2.fill"), action: { _ in })
         self.screenshotItem = MenuItem(text: NSLocalizedString("Settings", comment: ""), image: #imageLiteral(resourceName: "Screenshot"), action: { _ in })
         
-        self.controllerModeItem = MenuItem(text: "Controller Mode", image: UIImage(systemName: "gamecontroller.fill"), action: { item in
+        let controllerMode = BoundControllerModePreferences()
+        self.controllerModeItem = MenuItem(text: "Controller Mode: \(controllerMode.displayName)", image: UIImage(systemName: "gamecontroller.fill"), action: { item in
             let preferences = BoundControllerModePreferences()
-            preferences.isEnabled = !preferences.isEnabled
+            preferences.cycle()
+            item.text = "Controller Mode: \(preferences.displayName)"
             item.isSelected = preferences.isEnabled
         })
         self.controllerModeItem?.isSelected = BoundControllerModePreferences().isEnabled
