@@ -10,6 +10,15 @@ private struct PresenceRuntimeGame: GameProtocol {
     var type: GameType { .gba }
 }
 
+/// One-use access session for the two dedicated QA accounts. Never a password,
+/// refresh token, app certificate or production app's persisted session.
+private struct PresenceAgoraIdentity: Decodable {
+    let owner: UUID
+    let key: String
+    let token: String
+    let roomID: String
+}
+
 /// Test-only, bounded loopback wire transport. Uses the production friend-session
 /// lifecycle and presence packets; deliberately makes no Agora/Internet claim.
 @MainActor
@@ -107,6 +116,7 @@ final class LivePresenceRuntimeTests: XCTestCase {
         }
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MultiplayerValidation", isDirectory: true)
+        let realAgora = env["BOUND_PAIR_AGORA"] == "1"
         let rom = root.appendingPathComponent("RadicalRed.gba"), seed = root.appendingPathComponent("seed.sav")
         let romHash = SHA256.hash(data: try Data(contentsOf: rom)), seedHash = SHA256.hash(data: try Data(contentsOf: seed))
         let battery = root.appendingPathComponent("presence-\(peer).sav")
@@ -124,15 +134,33 @@ final class LivePresenceRuntimeTests: XCTestCase {
         gameView.frame = CGRect(x: 0, y: 180, width: owner.view.bounds.width, height: owner.view.bounds.width * 2 / 3)
         owner.view.addSubview(gameView); core.add(gameView)
         let transport = PresenceHTTPTransport(peer: peer, port: port)
-        let sharing = FriendSharingSession(configuration: .init(appID: String(repeating: "0", count: 32),
-            channel: "presence-fixture", uid: peer == "A" ? 1 : 2, remoteUID: peer == "A" ? 2 : 1,
-            token: "offline-fixture"), transport: transport, authenticatedMode: false)
+        let sharing: FriendSharingSession
+        if realAgora {
+            let input = root.appendingPathComponent("agora-session.json")
+            let bytes = try Data(contentsOf: input)
+            try FileManager.default.removeItem(at: input)
+            guard bytes.count <= 16384,
+                  let value = try? JSONDecoder().decode(PresenceAgoraIdentity.self, from: bytes),
+                  UUID(uuidString: value.roomID) != nil,
+                  let identity = try? AppCloudSession(owner: value.owner, key: value.key, token: value.token) else {
+                XCTFail("Invalid one-use QA session; details redacted"); return
+            }
+            sharing = FriendSharingSession(configuration: nil, authenticatedMode: true)
+            sharing.configureAuthenticatedRoom(value.roomID, identity: { identity })
+        } else {
+            sharing = FriendSharingSession(configuration: .init(appID: String(repeating: "0", count: 32),
+                channel: "presence-fixture", uid: peer == "A" ? 1 : 2, remoteUID: peer == "A" ? 2 : 1,
+                token: "offline-fixture"), transport: transport, authenticatedMode: false)
+        }
+        let tap = BoundDeltaFrameTap { frame in sharing.receivePlaybackFrame(frame) }
+        tap.setEnabled(realAgora)
         let display = BoundPlayerStateDisplay(), presence = sharing.livePresence
         let oldPreference = UserDefaults.standard.object(forKey: BoundPlayerStatePreferences.key)
         UserDefaults.standard.set(true, forKey: BoundPlayerStatePreferences.key)
         display.attachPresence(presence); display.install(in: owner); display.bind(core: core)
         display.layout(in: owner, gameView: gameView)
         defer {
+            tap.setEnabled(false)
             sharing.stop(); display.stop(); _ = core.stop(); window.isHidden = true; oldWindow?.makeKeyAndVisible()
             if let oldPreference { UserDefaults.standard.set(oldPreference, forKey: BoundPlayerStatePreferences.key) }
             else { UserDefaults.standard.removeObject(forKey: BoundPlayerStatePreferences.key) }
@@ -159,6 +187,7 @@ final class LivePresenceRuntimeTests: XCTestCase {
         let route = peer == "A" ? [32, 64, 16, 128] : [64, 32, 128, 16]
         core.updateHandler = { core in
             probe.receive(core)
+            tap.receive(core)
             let segment = movementFrame % 208
             let mask = segment < 160 ? route[segment / 40] : 0
             for bit in [16, 32, 64, 128] where (mask & bit) != (lastMask & bit) {
@@ -170,7 +199,7 @@ final class LivePresenceRuntimeTests: XCTestCase {
         XCTAssertTrue(core.resume()); core.audioManager.isEnabled = false
         var stage = "", visibleTicks = 0, positions = Set<String>(), cameras = Set<String>()
         var pausedHidden = false, offlineHidden = false, recoveredVisible = false, screenshot: UIImage?
-        let deadline = ProcessInfo.processInfo.systemUptime + 150
+        let deadline = ProcessInfo.processInfo.systemUptime + (realAgora ? 300 : 150)
         while ProcessInfo.processInfo.systemUptime < deadline {
             let next = try await transport.control()
             if next != stage {
@@ -178,6 +207,8 @@ final class LivePresenceRuntimeTests: XCTestCase {
                 if stage == "pauseA", peer == "A" { XCTAssertTrue(core.pause()) }
                 if stage == "resumed", peer == "A" { XCTAssertTrue(core.resume()); core.audioManager.isEnabled = false }
                 if stage == "restore", peer == "A" { display.didLoadSaveState() }
+                if realAgora, stage == "offline", peer == "B" { sharing.stop() }
+                if realAgora, stage == "recovered", peer == "B" { sharing.start() }
             }
             if stage == "done" { break }
             for _ in 0..<12 {
@@ -200,7 +231,10 @@ final class LivePresenceRuntimeTests: XCTestCase {
             try await transport.report(["stage": stage, "visibleTicks": visibleTicks, "positions": positions.count,
                 "cameraPositions": cameras.count, "hidden": hidden, "received": presence.receivedPackets,
                 "sent": presence.sentPackets, "rejected": presence.rejectedPackets,
-                "epoch": presence.epoch.uuidString, "batteryName": battery.lastPathComponent])
+                "epoch": presence.epoch.uuidString, "batteryName": battery.lastPathComponent,
+                "agora": realAgora, "joined": sharing.joined,
+                "tokenRenewals": presence.connectionCheck.samples.last?.tokenRenewals ?? 0,
+                "videoReceivedFrames": sharing.receivedFrames])
         }
         XCTAssertEqual(stage, "done"); XCTAssertGreaterThan(visibleTicks, 30); XCTAssertGreaterThan(positions.count, 10)
         XCTAssertGreaterThan(cameras.count, 16); XCTAssertTrue(pausedHidden); XCTAssertTrue(offlineHidden); XCTAssertTrue(recoveredVisible)
@@ -208,7 +242,13 @@ final class LivePresenceRuntimeTests: XCTestCase {
         presence.connectionCheck.stop()
         XCTAssertGreaterThan(presence.connectionCheck.sampleCount, 1)
         XCTAssertTrue(presence.connectionCheck.samples.contains { $0.reader.visiblePixels > 20 && $0.reader.movementChanges > 10 })
-        XCTAssertTrue(presence.connectionCheck.samples.allSatisfy { $0.transport.kind == .fixture })
+        XCTAssertTrue(presence.connectionCheck.samples.allSatisfy { $0.transport.kind == (realAgora ? .agora : .fixture) })
+        if realAgora {
+            XCTAssertTrue(presence.connectionCheck.samples.contains { $0.authenticated && $0.authorizationReady && $0.joined })
+            XCTAssertTrue(presence.connectionCheck.samples.contains { $0.tokenRenewals >= 2 })
+            XCTAssertTrue(presence.connectionCheck.samples.contains { $0.videoReceivedFrames > 30 },
+                          "Actual native video must also cross Agora before the scripted rejoin resets its counters")
+        }
         try presence.connectionCheck.export().write(to: root.appendingPathComponent("connection-check-\(peer).json"), options: .atomic)
         if let screenshot {
             let attachment = XCTAttachment(image: screenshot); attachment.name = "VBA-M live peer \(peer)"; attachment.lifetime = .keepAlways; add(attachment)
@@ -218,7 +258,7 @@ final class LivePresenceRuntimeTests: XCTestCase {
         XCTAssertEqual(SHA256.hash(data: try Data(contentsOf: rom)), romHash)
         XCTAssertEqual(SHA256.hash(data: try Data(contentsOf: seed)), seedHash)
         XCTAssertEqual(SHA256.hash(data: try Data(contentsOf: battery)), seedHash)
-        let report: [String: Any] = ["peer": peer, "engine": "VBA-M", "transport": "test-only loopback HTTP",
+        let report: [String: Any] = ["peer": peer, "engine": "VBA-M", "transport": realAgora ? "authenticated Agora" : "test-only loopback HTTP",
             "visibleTicks": visibleTicks, "distinctRemotePositions": positions.count, "cameraPositions": cameras.count,
             "received": presence.receivedPackets, "sent": presence.sentPackets, "pausedHidden": pausedHidden,
             "offlineHidden": offlineHidden, "recoveredVisible": recoveredVisible, "independentBattery": battery.lastPathComponent,

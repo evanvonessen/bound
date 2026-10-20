@@ -10,7 +10,8 @@ visible movement and identify their runtime as `simulator` and transport as
 `fixture`. Normal and QA unsigned Release iPhone builds both succeeded; their
 bundled cloud configuration is byte-identical. All 58 protected backend, auth,
 sync and configuration files and 17,060 pinned source files passed integrity
-checks. No physical install or real Agora Internet session was performed.
+checks. Those were preparation-only results; the subsequent real Agora simulator
+validation is recorded below. No physical install has been performed.
 
 ## Preserve the current Bound setup
 
@@ -110,6 +111,88 @@ time, app version/build, device-versus-simulator classification and optional
 QA source provenance. They contain no tokens, keys, account/room/channel/UID
 identifiers, raw coordinates, ROM artwork, memory banks, saves or story flags.
 Clearing the report releases its retained samples/export document.
+
+## Real Agora on two simulators
+
+The paired VBA-M harness also supports `--agora`. This uses the production
+`FriendSharingSession`, token fetch/renewal and `AgoraSharingTransport` on both
+simulators. The loopback coordinator controls test stages and receives counters;
+its pose endpoints reject requests in this mode, and the run requires zero
+loopback pose packets. Native game video also crosses Agora.
+
+Use only two dedicated QA accounts and an authorized QA friend room. Each owned
+simulator's private `Documents/MultiplayerValidation/agora-session.json` must
+contain a fresh normal access session (`owner`, `key`, `token`, `roomID`), staged
+through a private credential helper with owner-only permissions. The test consumes
+and deletes that file before decoding it. Never copy a normal Bound app session,
+use an app certificate/admin key, or put credentials in command-line arguments,
+logs, source or build products. Remove any unconsumed input after a failed launch.
+The harness neither provisions accounts nor changes cloud settings. Its caller
+must remove a temporary QA friendship if it created one for the run.
+
+After preparing the existing private ROM/seed fixtures and building the
+`BoundIntegrationQA` scheme, run:
+
+```sh
+umask 077
+python3 -B PrototypeTools/live-presence-relay.py \
+  --xctestrun /absolute/path/to/BoundIntegrationQA_iphonesimulator27.0-arm64.xctestrun \
+  --sim-a QA_SIMULATOR_A --sim-b QA_SIMULATOR_B \
+  --output .build/agora-presence-run --agora
+```
+
+The run observes movement for more than 125 seconds after both peers first
+display a sprite, requires at least two token renewals on each instance, then
+checks pause/resume, explicit B disconnect/rejoin and reader restore admission.
+This proves real Agora delivery from two simulator processes on the same host
+network. Explicit disconnect/rejoin is not a network-outage test; full app
+navigation, physical devices and separate Internet connections remain separate
+acceptance checks.
+
+### Observed Agora validation — October 20, 2026
+
+The final paired run passed both native tests and both `xcodebuild` processes
+exited successfully. Each test ran for about 140 seconds using an actual VBA-M
+core, the supported private ROM and a separate disposable battery save.
+
+| Observation | Simulator A | Simulator B |
+| --- | ---: | ---: |
+| Recorded interval (seconds) | 133 | 133 |
+| Maximum observed token renewals | 5 | 4 |
+| Maximum admitted presence messages | 2,522 | 2,508 |
+| Maximum received native video frames | 3,080 | 3,023 |
+| Distinct displayed peer positions | 202 | 167 |
+| Distinct local camera positions | 160 | 193 |
+
+The reports identify `runtime = simulator` and `transport.kind = agora`.
+Real SDK stream creation/sending succeeded, bidirectional visible movement
+continued beyond the initial token lifetime, and the loopback pose packet
+counts were zero. Pause/resume, stale-sprite hiding, explicit B disconnect/rejoin
+with resumed movement/video, reader restore admission and stop passed. The ROM,
+seed and both disposable battery hashes remained unchanged. The recording does
+not measure network latency or physical-device performance.
+
+Two existing dedicated development accounts used normal password authentication
+and the existing `agora-token` function. Each attempt created only a temporary
+QA friendship through the existing API, removed it afterward, and verified the
+original active friend lists. One-use credential inputs were removed; no Jiggle
+notification, admin operation, schema/configuration change or deployment ran.
+All 58 protected setup/auth/sync source files and 17,060 pinned source files
+matched their baselines; the unsigned iPhone Release build also passed.
+
+Earlier attempts are retained in the ignored evidence directory. The first
+final assertion incorrectly examined a video counter after rejoin reset it;
+the corrected assertion checks observations within the recording. Subsequent
+native assertions passed, but Xcode result finalization stalled in
+`XCTHRunDestinationAllocator.collectSimulatorDiagnostics` / `simctl diagnose`.
+The final run used the verified `-collect-test-diagnostics never` option in the
+QA command and completed cleanly. This does not suppress native test failures
+or change app/cloud configuration.
+
+Local evidence is in `.build/agora-presence-validation/validation.json`,
+`paired-4/A.xcresult`, `paired-4/B.xcresult`, and the sanitized
+`agora-connection-check-A.json` / `agora-connection-check-B.json` reports.
+These artifacts, private inputs, ROMs, saves and SDK logs are excluded from Git.
 
 ## Interpret the evidence
 

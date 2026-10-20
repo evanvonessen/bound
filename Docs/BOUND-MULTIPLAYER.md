@@ -268,10 +268,16 @@ The live-presence milestone was validated on October 20, 2026:
 
 ## Following milestones
 
-The next device-acceptance preparation adds opt-in connection reports and a
+The device-acceptance preparation adds opt-in connection reports and a
 separate QA app identity without changing the existing cloud setup. See
 [device QA preparation and pending acceptance](BOUND-MULTIPLAYER-DEVICE-QA.md).
-Two physical devices are unavailable; real Internet acceptance remains open.
+Real authenticated Agora delivery has now passed on two Bound simulators with
+actual VBA-M gameplay, native video, multiple token renewals, pause/resume and
+explicit disconnect/rejoin. Both final native tests and Xcode processes passed;
+the local pose relay was disabled. Temporary QA friendships were removed and
+original active friend lists restored. Cloud settings/deployments were unchanged.
+Two physical devices are unavailable; physical and separate-network acceptance
+remains open.
 
 Additional fixtures are needed for doors, connected maps, bike/surf/ledge
 movement, late-game scripts and save-state restoration in actual VBA-M gameplay.
