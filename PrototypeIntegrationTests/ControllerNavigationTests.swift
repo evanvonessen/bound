@@ -85,6 +85,47 @@ final class ControllerNavigationTests: XCTestCase {
         }
     }
 
+    func testMultiviewTabBindingsRemainAvailableWhenDetailedNavigationIsOff() {
+        let defaults = UserDefaults.standard
+        let previousValue = defaults.object(forKey: BoundControllerNavigationPreferences.key)
+        defer {
+            if let previousValue { defaults.set(previousValue, forKey: BoundControllerNavigationPreferences.key) }
+            else { defaults.removeObject(forKey: BoundControllerNavigationPreferences.key) }
+        }
+
+        BoundControllerNavigationPreferences().isEnabled = false
+        let actions = ActionInput.configurableActions
+        XCTAssertTrue(actions.contains(.boundPreviousView))
+        XCTAssertTrue(actions.contains(.boundNextView))
+        XCTAssertFalse(actions.contains(.boundScrollUp))
+        XCTAssertTrue(ActionInput.boundPreviousView.isMultiviewTabAction)
+        XCTAssertTrue(ActionInput.boundNextView.isMultiviewTabAction)
+    }
+
+    func testMultiviewTabCyclingWrapsAtBothEnds() {
+        XCTAssertEqual(BoundMultiviewTabCycling.index(current: 2, direction: 1, count: 3), 0)
+        XCTAssertEqual(BoundMultiviewTabCycling.index(current: 0, direction: -1, count: 3), 2)
+        XCTAssertEqual(BoundMultiviewTabCycling.index(current: 0, direction: 1, count: 1), 0)
+        XCTAssertNil(BoundMultiviewTabCycling.index(current: 0, direction: 1, count: 0))
+    }
+
+    func testPreviousAndNextTabBindingsActivateSeparatelyOncePerHold() {
+        let controller = MFiGameController(controller: GCController.withExtendedGamepad())
+        let router = BoundPanelActionRouter()
+        var previousActivations = 0
+        var nextActivations = 0
+
+        router.activate(controller: controller, action: .boundPreviousView, eligible: true) { previousActivations += 1 }
+        router.activate(controller: controller, action: .boundPreviousView, eligible: true) { previousActivations += 1 }
+        router.activate(controller: controller, action: .boundNextView, eligible: true) { nextActivations += 1 }
+        XCTAssertEqual(previousActivations, 1)
+        XCTAssertEqual(nextActivations, 1)
+
+        router.release(controller: controller)
+        router.activate(controller: controller, action: .boundNextView, eligible: true) { nextActivations += 1 }
+        XCTAssertEqual(nextActivations, 2)
+    }
+
     func testControllerInputMappingDropsNoneAndOverlayAndFiltersOnlyLeftStickCompanionActions() throws {
         var base = DeltaCore.GameControllerInputMapping(gameControllerInputType: .mfi)
         base.set(ActionInput.none, forControllerInput: MFiGameController.Input.a)

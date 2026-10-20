@@ -87,6 +87,7 @@ private extension GameViewController
 class GameViewController: DeltaCore.GameViewController
 {
     private let boundCompanion = BoundCompanionCoordinator()
+    var boundCompanionForTesting: BoundCompanionCoordinator { boundCompanion }
     private(set) var boundRRDexSaveCache = BoundRRDexSaveCache()
     func boundRRDexDidLoadSaveState(core: EmulatorCore) {
         guard core === emulatorCore, core.game.type == .gba else { return }
@@ -414,8 +415,11 @@ class GameViewController: DeltaCore.GameViewController
         let apply = { [weak self, weak controller] in
             guard let self, let controller else { return }
             if !pressed { self.boundPanelActions.release(controller: controller, action: action); return }
-            let navigatingReference = (action.isViewNavigationAction || action == .toggleBoundMultiview || action == .toggleBoundFriend)
-                && self.boundCompanion.allowsControllerNavigationWhilePaused
+            let navigationIsAllowedWhilePaused = action.isMultiviewTabAction
+                ? self.boundCompanion.allowsControllerTabCyclingWhilePaused
+                : self.boundCompanion.allowsControllerNavigationWhilePaused
+            let navigatingReference = (action.isViewNavigationAction || action.isMultiviewTabAction || action == .toggleBoundMultiview || action == .toggleBoundFriend)
+                && navigationIsAllowedWhilePaused
             let eligible = self.emulatorCore === expectedCore
                 && (expectedCore?.state == .running || (navigatingReference && expectedCore?.state == .paused))
                 && controller.inputType != .controllerSkin && controller.playerIndex != nil
@@ -426,7 +430,7 @@ class GameViewController: DeltaCore.GameViewController
                 && (!self.boundCompanion.isEditingNotes || navigatingReference)
                 && !self.boundCompanion.state.showingFriends && !self.boundCompanion.state.showingSettings
             self.boundPanelActions.activate(controller: controller, action: action, eligible: eligible) {
-                if action.isViewNavigationAction { self.boundCompanion.navigateControllerView(action) }
+                if action.isViewNavigationAction || action.isMultiviewTabAction { self.boundCompanion.navigateControllerView(action) }
                 else if action == .cycleBoundPanels { self.boundCompanion.cyclePanels() }
                 else { self.boundCompanion.toggleControllerPanel(action) }
             }

@@ -677,6 +677,46 @@ final class StockControlAndGestureTests: XCTestCase {
             }
         }
 
+        // Previous/next tab bindings remain active with detailed navigation
+        // disabled, and wrap across the three fixed multiview tabs.
+        navigationPreferences.isEnabled = true
+        modePreferences.isEnabled = true
+        landscapePreferences.option = .option7
+        setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
+        press(.boundShowDex)
+        let companion = gameController.boundCompanionForTesting
+        XCTAssertEqual(companion.controllerReferenceContent, .dex)
+        navigationPreferences.isEnabled = false
+        press(.boundPreviousView)
+        XCTAssertEqual(companion.controllerReferenceContent, .types, "Previous from the first tab must wrap to the last")
+        press(.boundNextView)
+        XCTAssertEqual(companion.controllerReferenceContent, .dex, "Next from the last tab must wrap to the first")
+        press(.boundNextView)
+        XCTAssertEqual(companion.controllerReferenceContent, .bosses)
+        press(.boundNextView)
+        XCTAssertEqual(companion.controllerReferenceContent, .types)
+        press(.boundNextView)
+        XCTAssertEqual(companion.controllerReferenceContent, .dex, "Next must continue cycling rather than stop at the last tab")
+
+        // A tab action also dismisses the Boss selector and returns gameplay
+        // from its pause when detailed navigation is disabled.
+        navigationPreferences.isEnabled = true
+        press(.boundShowBosses)
+        try await Task.sleep(nanoseconds: 150_000_000)
+        press(.boundSelect)
+        for _ in 0..<30 where core.state != .paused { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertEqual(core.state, .paused)
+        try await Task.sleep(nanoseconds: 500_000_000)
+        navigationPreferences.isEnabled = false
+        press(.boundNextView)
+        for _ in 0..<30 where core.state != .running { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertEqual(core.state, .running, "A tab action must dismiss the Boss selector and resume gameplay")
+        XCTAssertEqual(companion.controllerReferenceContent, .types, "The paused tab action must advance from Bosses to Types")
+
+        navigationPreferences.isEnabled = true
+        press(.boundShowDex)
+        XCTAssertEqual(companion.controllerReferenceContent, .dex)
+
         var stickMapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: external.inputType)
         stickMapping.set(ActionInput.boundScrollDown, forControllerInput: MFiGameController.Input.leftThumbstickDown)
         stickMapping.set(ActionInput.boundScrollDown, forControllerInput: MFiGameController.Input.rightThumbstickDown)

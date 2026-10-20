@@ -39,33 +39,32 @@ struct BoundAppearanceSettings: View {
         }
         }
         if includeAbout {
-        Section("About Bound") {
+        Section {
             LabeledContent("Version", value: (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") + " (" + (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") + ")")
-            Text("Bound is built on Delta. Delta and its emulator dependencies retain their original copyright and license notices.").font(.footnote).foregroundStyle(.secondary)
-            DisclosureGroup("Emulation backend") {
-                    if let details = emulationDetails {
-                        LabeledContent("Active package", value: details.packageName).accessibilityIdentifier("bound.emulation-package")
+            if let details = emulationDetails {
+            DisclosureGroup("Emulation") {
+                        LabeledContent("Package", value: details.packageName).accessibilityIdentifier("bound.emulation-package")
                         #if DEBUG
-                        LabeledContent("Package identifier", value: details.packageIdentifier).font(.caption)
-                        LabeledContent("Package build", value: details.packageBuild).accessibilityIdentifier("bound.emulation-package-build")
+                        LabeledContent("Package Identifier", value: details.packageIdentifier).font(.caption)
+                        LabeledContent("Package Build", value: details.packageBuild).accessibilityIdentifier("bound.emulation-package-build")
                         #else
-                        LabeledContent("Package version", value: details.packageVersion ?? "Source build").accessibilityIdentifier("bound.emulation-package-build")
+                        LabeledContent("Package Version", value: details.packageVersion ?? "Source Build").accessibilityIdentifier("bound.emulation-package-build")
                         #endif
                         if let engine = details.engineName {
-                            LabeledContent("Emulator engine", value: engine).accessibilityIdentifier("bound.emulation-engine")
+                            LabeledContent("Engine", value: engine).accessibilityIdentifier("bound.emulation-engine")
                             #if DEBUG
                             if let revision = details.engineRevision {
-                                LabeledContent("Engine source", value: "Pinned " + String(revision.prefix(12))).accessibilityIdentifier("bound.emulation-engine-build")
+                                LabeledContent("Engine Source", value: String(revision.prefix(12))).accessibilityIdentifier("bound.emulation-engine-build")
                             }
                             #endif
                         }
                         #if DEBUG
-                        Text("DeltaCore pinned source " + String(BoundEmulationDetails.deltaCoreRevision.prefix(12))).font(.caption)
-                        Text("Delta upstream source " + String(BoundEmulationDetails.deltaUpstreamRevision.prefix(12))).font(.caption)
+                        LabeledContent("DeltaCore Source", value: String(BoundEmulationDetails.deltaCoreRevision.prefix(12))).font(.caption)
+                        LabeledContent("Delta Source", value: String(BoundEmulationDetails.deltaUpstreamRevision.prefix(12))).font(.caption)
                         #endif
-                    } else { Text("No emulation package is active.") }
             }
-            NavigationLink("Source and licenses") { BoundSourceAndLicenses() }
+            }
+            NavigationLink("Sources & Licenses") { BoundSourceAndLicenses() }
                 .accessibilityIdentifier("bound.source-and-licenses-link")
         }
         }

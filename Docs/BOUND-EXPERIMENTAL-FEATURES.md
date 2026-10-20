@@ -38,13 +38,19 @@ Controller Mode tile shows its current state and cycles **Off → Mode 1 → Mod
 **Controller View Navigation** is a non-experimental, default-off setting in
 Settings → Controls. Enabling it adds view actions to the controller mapping
 editor: four-way scrolling, previous/next Pokémon or item, Select/Choose, Back,
-Details, previous/next view or tab, direct Dex/Bosses/Types selection, and explicit
+Details, direct Dex/Bosses/Types selection, and explicit
 Hide Friend/Hide Multiview actions. Existing toggle actions remain available.
 These actions apply only to the active landscape controller view; disabled
 Controller Mode, portrait, settings and arrangement editors do not receive them.
 Select opens a Pokémon or boss chooser, previous/next changes its highlighted
 candidate, and Select confirms it. Back closes the chooser or detail view.
 Reset Settings to Default turns navigation off and resets custom mappings.
+
+**Previous Multiview Tab** and **Next Multiview Tab** are separate controller
+bindings available alongside Toggle Multiview, without enabling Controller View
+Navigation. They follow the visible tab order and wrap from either end to the
+other. Existing saved previous/next bindings retain their identifiers. An open
+Dex or Boss sheet dismisses before the tab changes so gameplay resumes normally.
 
 Controller mapping exposes Xbox Share and left/right thumbstick clicks (L3/R3).
 **None** is an explicit saved binding, distinct from **Default**. **Menu** opens
@@ -81,8 +87,11 @@ controller layouts, portrait/mode-off/editing guards, and selected-tab preservat
 Physical Bluetooth/wired controllers were not exercised.
 
 The Library settings button and pause-menu Settings tile open the same grouped
-home: Interface & Companion, Controls, Audio, Account & Sync,
-General, and About. Audio opens its controls directly; About includes the Game
+home: Interface & Companion, Controls, Audio, Account & Sync, and About.
+Context Menu Previews and Pause Menu Button Placement are in Interface &
+Companion and remain available without experimental features. About uses concise
+source labels in Sources & Licenses while retaining attribution and bundled
+license documents. Audio opens its controls directly; About includes the Game
 Boy Advance core information. The shared screen has one navigation stack and one Done
 action. Done and swipe dismissal run cleanup and close-time sync once; opening
 a detail page does neither. In-game Settings returns to the paused menu.

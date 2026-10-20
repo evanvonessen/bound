@@ -813,9 +813,10 @@ final class CompanionUITests: XCTestCase {
         func assertSharedSettingsHome() {
             XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
             for identifier in ["bound.settings-interface", "bound.settings-controls", "bound.settings-audio",
-                               "bound.settings-account", "bound.settings-general", "bound.settings-about"] {
+                               "bound.settings-account", "bound.settings-about"] {
                 XCTAssertTrue(element(identifier, in: app).exists, "Shared settings home must contain \(identifier).")
             }
+            XCTAssertFalse(element("bound.settings-general", in: app).exists)
             XCTAssertFalse(app.switches["bound.enable-experimental-features"].exists)
         }
         func closeSettings() {
@@ -878,6 +879,62 @@ final class CompanionUITests: XCTestCase {
         app.buttons["Settings"].tap()
         assertSharedSettingsHome()
         closeSettings()
+    }
+
+    func testGeneralSettingsMoveIntoInterfaceAndAboutKeepsConciseSources() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations"]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 10))
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(element("bound.settings-interface", in: app).waitForExistence(timeout: 5))
+        XCTAssertFalse(element("bound.settings-general", in: app).exists)
+        element("bound.settings-interface", in: app).tap()
+
+        let experimental = app.switches["bound.experimental-settings"]
+        XCTAssertTrue(experimental.waitForExistence(timeout: 5))
+        let wasExperimental = experimental.value as? String == "1"
+        if wasExperimental { experimental.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap() }
+        let previews = app.switches["bound.context-menu-previews"]
+        scrollToSetting(previews, in: app)
+        XCTAssertTrue(previews.isHittable, "Moved settings must be available without experimental features")
+        let originalPreviewValue = previews.value as? String
+        previews.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertNotEqual(previews.value as? String, originalPreviewValue)
+        let placement = element("bound.pause-menu-button-placement", in: app)
+        scrollToSetting(placement, in: app)
+        XCTAssertTrue(placement.isHittable)
+        screenshot("Interface-Moved-General-Settings")
+        app.navigationBars["Interface & Companion"].buttons.firstMatch.tap()
+        element("bound.settings-interface", in: app).tap()
+        scrollToSetting(previews, in: app)
+        XCTAssertNotEqual(previews.value as? String, originalPreviewValue, "The moved control must persist through navigation")
+        previews.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(previews.value as? String, originalPreviewValue)
+        if wasExperimental {
+            scrollToSetting(experimental, in: app)
+            experimental.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        app.navigationBars["Interface & Companion"].buttons.firstMatch.tap()
+        element("bound.settings-about", in: app).tap()
+        let sources = element("bound.source-and-licenses-link", in: app)
+        XCTAssertTrue(sources.waitForExistence(timeout: 5))
+        XCTAssertEqual(sources.label, "Sources & Licenses")
+        XCTAssertTrue(element("bound.rules-and-contact-link", in: app).exists)
+        screenshot("About-Organized")
+        sources.tap()
+        XCTAssertTrue(app.navigationBars["Sources & Licenses"].waitForExistence(timeout: 5))
+        XCTAssertEqual(element("bound.source-repository", in: app).label, "Source")
+        XCTAssertEqual(element("bound.source-radical-red-pokedex", in: app).label, "Pokédex")
+        XCTAssertEqual(element("bound.source-radical-red-docs", in: app).label, "Trainer Data")
+        XCTAssertFalse(element("bound.source-availability", in: app).exists)
+        screenshot("Sources-Concise-Labels")
+        let license = element("bound.license-agpl", in: app)
+        scrollToSetting(license, in: app)
+        license.tap()
+        XCTAssertTrue(app.staticTexts["bound.license-content"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["bound.license-content"].label.contains("GNU AFFERO GENERAL PUBLIC LICENSE"))
     }
 
     func testResetSettingsToDefaultFromLibraryAndGameSettings() throws {
@@ -4517,7 +4574,6 @@ final class CompanionUITests: XCTestCase {
         let about = element("bound.settings-about", in: app)
         XCTAssertTrue(about.waitForExistence(timeout: 5))
         about.tap()
-        XCTAssertTrue(app.staticTexts["About Bound"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["bound.source-and-licenses-link"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.switches["Menu Button Gestures"].exists)
         screenshot("Bound-settings-over-native-pause")
@@ -5689,17 +5745,18 @@ final class ReleaseSmokeUITests: XCTestCase {
         settings.tap()
         XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
         for identifier in ["bound.settings-interface", "bound.settings-controls", "bound.settings-audio",
-                           "bound.settings-account", "bound.settings-general", "bound.settings-about"] {
+                           "bound.settings-account", "bound.settings-about"] {
             XCTAssertTrue(element(identifier, in: app).exists, "Release settings should include \(identifier).")
         }
+        XCTAssertFalse(element("bound.settings-general", in: app).exists)
         XCTAssertFalse(app.staticTexts["Experimental Features"].exists)
         XCTAssertFalse(app.staticTexts["Patreon"].exists)
 
         element("bound.settings-about", in: app).tap()
-        XCTAssertTrue(app.staticTexts["About Bound"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["bound.source-and-licenses-link"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Build entry"].exists)
-        XCTAssertFalse(app.staticTexts["Engine source"].exists)
-        XCTAssertFalse(app.staticTexts["Package identifier"].exists)
+        XCTAssertFalse(app.staticTexts["Engine Source"].exists)
+        XCTAssertFalse(app.staticTexts["Package Identifier"].exists)
         XCTAssertFalse(app.staticTexts["Experimental"].exists)
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "private testing prototype")).firstMatch.exists)
         let source = app.buttons["bound.source-and-licenses-link"].firstMatch

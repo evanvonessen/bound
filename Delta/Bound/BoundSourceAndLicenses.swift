@@ -16,10 +16,10 @@ enum BoundSourceNotices {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .agpl: return "GNU AGPL version 3"
-            case .modifications: return "Bound modifications"
-            case .dependencies: return "Dependency inventory"
-            case .notesFont: return "Notes font license"
+            case .agpl: return "GNU AGPL Version 3"
+            case .modifications: return "Bound Modifications"
+            case .dependencies: return "Dependency Inventory"
+            case .notesFont: return "Notes Font License"
             }
         }
         var resource: String {
@@ -44,28 +44,27 @@ enum BoundSourceNotices {
 struct BoundSourceAndLicenses: View {
     var body: some View {
         Form {
-            Section("This build") {
+            Section("Bound") {
                 LabeledContent("Version", value: BoundSourceNotices.version())
                     .accessibilityIdentifier("bound.source-version")
-                Text(BoundSourceNotices.availability)
-                    .accessibilityIdentifier("bound.source-availability")
-                Link("Bound source repository", destination: BoundSourceNotices.sourceRepository)
+                Link("Source", destination: BoundSourceNotices.sourceRepository)
                     .accessibilityIdentifier("bound.source-repository")
             }
-            Section("Upstream") {
-                Text("Built on Delta. Delta and its emulator dependencies retain their original copyright and license notices.")
-                Link("Delta upstream source", destination: URL(string: "https://github.com/rileytestut/Delta")!)
+            Section("Delta") {
+                Link("Source", destination: URL(string: "https://github.com/rileytestut/Delta")!)
             }
-            Section("Radical Red references") {
-                Link("Pokémon and moves · Radical Red Pokédex", destination: BoundSourceNotices.radicalRedPokedex)
+            Section {
+                Link("Pokédex", destination: BoundSourceNotices.radicalRedPokedex)
                     .accessibilityIdentifier("bound.source-radical-red-pokedex")
-                Link("Trainer data · Radical Red 4.1 documentation", destination: BoundSourceNotices.radicalRedBossDocumentation)
+                Link("Trainer Data", destination: BoundSourceNotices.radicalRedBossDocumentation)
                     .accessibilityIdentifier("bound.source-radical-red-docs")
-                Text("The Pokédex is by JwowSquared. Radical Red is a community project; Pokémon characters and artwork belong to their respective owners.")
-                    .font(.footnote)
+            } header: {
+                Text("Radical Red")
+            } footer: {
+                Text("Pokédex by JwowSquared.")
             }
-            Section("Bundled notices") {
-                NavigationLink("Software licenses") {
+            Section("Licenses") {
+                NavigationLink("Software Licenses") {
                     LicensesViewController.ViewRepresentable().ignoresSafeArea(.container, edges: [.top, .horizontal])
                 }
                 ForEach(BoundSourceNotices.Document.allCases) { document in
@@ -74,7 +73,7 @@ struct BoundSourceAndLicenses: View {
                 }
             }
         }
-        .navigationTitle("Source and licenses")
+        .navigationTitle("Sources & Licenses")
         .navigationBarTitleDisplayMode(.inline)
         .accessibilityIdentifier("bound.source-and-licenses")
     }

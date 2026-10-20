@@ -36,16 +36,21 @@ enum ActionInput: String
     static let viewNavigationActions: [Self] = [
         .boundScrollUp, .boundScrollDown, .boundScrollLeft, .boundScrollRight,
         .boundPreviousItem, .boundNextItem, .boundSelect, .boundBack, .boundDetails,
-        .boundPreviousView, .boundNextView, .boundShowDex, .boundShowBosses, .boundShowTypes,
+        .boundShowDex, .boundShowBosses, .boundShowTypes,
         .boundHideFriend, .boundHideMultiview
     ]
+    /// Tab cycling is a basic multiview control and remains available even
+    /// when detailed controller navigation is disabled.
+    static let multiviewTabActions: [Self] = [.boundPreviousView, .boundNextView]
     static var configurableActions: [Self] {
         [.none, .quickSave, .quickLoad, .fastForward, .screenshot, .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview]
+            + multiviewTabActions
             + (BoundControllerNavigationPreferences().isEnabled ? viewNavigationActions : [])
     }
     var isViewNavigationAction: Bool { Self.viewNavigationActions.contains(self) }
+    var isMultiviewTabAction: Bool { Self.multiviewTabActions.contains(self) }
     var isBoundPanelAction: Bool {
-        self == .cycleBoundPanels || self == .toggleBoundFriend || self == .toggleBoundMultiview || isViewNavigationAction
+        self == .cycleBoundPanels || self == .toggleBoundFriend || self == .toggleBoundMultiview || isViewNavigationAction || isMultiviewTabAction
     }
     var navigationCommand: BoundControllerNavigationCommand? {
         switch self {

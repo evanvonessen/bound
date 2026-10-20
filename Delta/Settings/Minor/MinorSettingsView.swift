@@ -8,7 +8,7 @@
 
 import SwiftUI
 
-struct MinorSettingsView: View
+struct BoundGeneralSettingsSections: View
 {
     @AppStorage(Settings.Name.isPreviewsEnabled.rawValue)
     private var isPreviewsEnabled: Bool = true
@@ -17,32 +17,19 @@ struct MinorSettingsView: View
     private var pauseMenuToolbarPlacement: Settings.PauseMenuToolbarPlacement = .bottom
 
     var body: some View {
-        Form {
-            Section {
-                Toggle("Context Menu Previews", isOn: $isPreviewsEnabled)
-                    .onChange(of: isPreviewsEnabled) { _, newValue in
-                        Settings.isPreviewsEnabled = newValue
-                    }
-            } footer: {
-                Text("Preview games and save states when using context menus.")
-            }
-
-            Section {
-                Picker("Button Placement", selection: $pauseMenuToolbarPlacement) {
-                    Text("Top").tag(Settings.PauseMenuToolbarPlacement.top)
-                    Text("Bottom").tag(Settings.PauseMenuToolbarPlacement.bottom)
-                }
-                .onChange(of: pauseMenuToolbarPlacement) { _, newValue in
-                    Settings.pauseMenuToolbarPlacement = newValue
-                }
-            } header: {
-                Text("Pause Menu")
-            } footer: {
-                Text("Choose where the Resume and Home buttons appear in the pause menu.")
-            }
+        Section {
+            Toggle("Context Menu Previews", isOn: $isPreviewsEnabled)
+                .accessibilityIdentifier("bound.context-menu-previews")
+                .onChange(of: isPreviewsEnabled) { _, value in Settings.isPreviewsEnabled = value }
         }
-        .tint(.accentColor)
-        .navigationTitle("General")
-        .navigationBarTitleDisplayMode(.inline)
+
+        Section("Pause Menu") {
+            Picker("Button Placement", selection: $pauseMenuToolbarPlacement) {
+                Text("Top").tag(Settings.PauseMenuToolbarPlacement.top)
+                Text("Bottom").tag(Settings.PauseMenuToolbarPlacement.bottom)
+            }
+            .accessibilityIdentifier("bound.pause-menu-button-placement")
+            .onChange(of: pauseMenuToolbarPlacement) { _, value in Settings.pauseMenuToolbarPlacement = value }
+        }
     }
 }

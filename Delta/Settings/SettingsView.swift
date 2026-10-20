@@ -119,17 +119,12 @@ struct SettingsView: View {
                             SettingsRow(label: Text("Account & Sync"), systemImage: "person.crop.circle", color: .indigo)
                         }.accessibilityIdentifier("bound.settings-account")
                         NavigationLink {
-                            MinorSettingsView()
-                        } label: {
-                            SettingsRow(label: Text("General"), systemImage: "slider.horizontal.3", color: .gray)
-                        }.accessibilityIdentifier("bound.settings-general")
-                        NavigationLink {
                             Form {
                                 BoundAppearanceSettings(emulationDetails: gameplay?.emulationDetails, includeAppearance: false)
                                 Section("Cores") { CoreSettingsLinks() }
                                 Section("Links") {
                                     Link(destination: URL(string: "https://evanvonessen.github.io/bound/moderation.html")!) {
-                                        SettingsRow(label: Text("Rules & contact"), systemImage: "book.closed", color: .orange) {
+                                        SettingsRow(label: Text("Rules & Contact"), systemImage: "book.closed", color: .orange) {
                                             Image(systemName: "arrow.up.right")
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
@@ -485,37 +480,6 @@ private struct DisplaySection: View
             } label: {
                 SettingsRow(label: Text("App Icon"), systemImage: "square.grid.2x2", color: .blue)
             }
-        }
-    }
-}
-
-// MARK: - Experimental, Minor, & Advanced
-
-private struct MiscellaneousSection: View
-{
-    var body: some View {
-        Section {
-            NavigationLink {
-                MinorSettingsView()
-            } label: {
-                SettingsRow(label: Text("Minor"), systemImage: "slider.horizontal.3", color: .gray)
-            }
-
-            #if DEBUG
-            NavigationLink {
-                AdvancedSettingsView()
-            } label: {
-                SettingsRow(label: Text("Advanced"), systemImage: "gearshape", color: .gray)
-            }
-            
-            NavigationLink {
-                ExperimentalFeaturesView()
-            } label: {
-                SettingsRow(label: Text("Experimental"), systemImage: "flask", color: .gray) {
-                    SettingsBadge(text: "Patrons")
-                }
-            }
-            #endif
         }
     }
 }

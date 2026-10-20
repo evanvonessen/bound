@@ -946,14 +946,21 @@ final class BoundCompanionCoordinator {
         }
     }
     var controllerNavigationAvailable: Bool {
-        BoundControllerNavigationPreferences().isEnabled && state.landscape
+        BoundControllerNavigationPreferences().isEnabled && controllerCompanionAvailable
+    }
+    private var controllerCompanionAvailable: Bool {
+        state.landscape
             && BoundControllerModePreferences().isEnabled
             && BoundAppearancePreferences().effectiveScreenLayout == .bound
             && !state.showingFriends && !state.showingSettings
             && !landscapeArrangement.editing && !landscapeCompanion.editing
             && (landscapeArrangement.active || landscapeCompanion.active)
     }
-    private var controllerReferenceContent: BoundPiPContent? {
+    var controllerMultiviewTabCyclingAvailable: Bool {
+        controllerCompanionAvailable
+            && (landscapeArrangement.active ? landscapeArrangement.contents.count > 1 : landscapeCompanion.referenceContents.count > 1)
+    }
+    var controllerReferenceContent: BoundPiPContent? {
         if landscapeArrangement.active {
             return landscapeArrangement.referenceVisible ? landscapeArrangement.referenceContent : nil
         }
@@ -966,8 +973,15 @@ final class BoundCompanionCoordinator {
         controllerNavigationAvailable && isEditingNotes
             && controllerReferenceContent.map { $0 == .dex || $0 == .bosses } == true
     }
+    var allowsControllerTabCyclingWhilePaused: Bool {
+        controllerMultiviewTabCyclingAvailable && isEditingNotes
+            && controllerReferenceContent.map { $0 == .dex || $0 == .bosses } == true
+    }
     private func dismissReferenceBeforeControllerAction(_ action: ActionInput) -> Bool {
-        guard allowsControllerNavigationWhilePaused, let content = controllerReferenceContent else { return false }
+        let canDismissForAction = action.isMultiviewTabAction
+            ? allowsControllerTabCyclingWhilePaused
+            : allowsControllerNavigationWhilePaused
+        guard canDismissForAction, let content = controllerReferenceContent else { return false }
         // Keep the reference active until its presentation has dismissed and
         // returned the gameplay pause; hiding it first loses that callback.
         pendingControllerReferenceAction = action
@@ -975,7 +989,10 @@ final class BoundCompanionCoordinator {
         return true
     }
     func navigateControllerView(_ action: ActionInput) {
-        guard controllerNavigationAvailable else { return }
+        let isAvailable = action.isMultiviewTabAction
+            ? controllerMultiviewTabCyclingAvailable
+            : controllerNavigationAvailable
+        guard isAvailable else { return }
         if let command = action.navigationCommand {
             guard let content = controllerReferenceContent, content == .dex || content == .bosses else { return }
             BoundControllerNavigationEvent.post(command: command, gameID: gameID, content: content)
@@ -1000,7 +1017,8 @@ final class BoundCompanionCoordinator {
             let current = landscapeArrangement.active ? landscapeArrangement.referenceContent : landscapeCompanion.referenceContent
             let index = contents.firstIndex(of: current) ?? 0
             let direction = action == .boundNextView ? 1 : -1
-            showControllerReference(contents[(index + direction + contents.count) % contents.count])
+            guard let nextIndex = BoundMultiviewTabCycling.index(current: index, direction: direction, count: contents.count) else { return }
+            showControllerReference(contents[nextIndex])
         default: break
         }
     }
@@ -1206,7 +1224,11 @@ final class BoundCompanionCoordinator {
                 self.notesDismissalTask = nil
                 if resume, core.state == .paused,
                    owner.gameViewControllerShouldResumeEmulation(owner) { core.resume() }
-                guard let action, self.controllerNavigationAvailable else { return }
+                guard let action else { return }
+                let isAvailable = action.isMultiviewTabAction
+                    ? self.controllerMultiviewTabCyclingAvailable
+                    : self.controllerNavigationAvailable
+                guard isAvailable else { return }
                 if action == .toggleBoundMultiview { self.toggleControllerPanel(action) }
                 else { self.navigateControllerView(action) }
                 return
@@ -1358,6 +1380,7 @@ struct BoundInterfaceSettings: View {
                     .accessibilityIdentifier("bound.experimental-settings")
             }
             BoundControllerModeSettings()
+            BoundGeneralSettingsSections()
             if experimentalFeaturesEnabled {
                     BoundUIVersionSettings()
                     BoundLandscapeOptionsSettings()

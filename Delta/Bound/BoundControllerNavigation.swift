@@ -3,6 +3,14 @@ import UIKit
 import DeltaCore
 import GameController
 
+enum BoundMultiviewTabCycling {
+    static func index(current: Int, direction: Int, count: Int) -> Int? {
+        guard count > 0, direction != 0 else { return nil }
+        let step = direction > 0 ? 1 : -1
+        return (current + step + count) % count
+    }
+}
+
 /// Filters app-only choices before they reach either gameplay input receiver.
 struct BoundControllerInputMapping: GameControllerInputMappingProtocol {
     let base: GameControllerInputMappingProtocol
