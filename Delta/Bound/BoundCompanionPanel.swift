@@ -859,11 +859,11 @@ final class BoundCompanionCoordinator {
     }
     var canArrangeLandscapeViews: Bool {
         guard macHost == nil, let owner else { return false }
-        return owner.view.bounds.width > owner.view.bounds.height
-            && landscapeArrangement.active
+        return owner.view.bounds.width <= owner.view.bounds.height || landscapeArrangement.active
     }
     func beginLandscapeArrangementFromMenu() {
         guard canArrangeLandscapeViews, let owner,
+              owner.view.bounds.width > owner.view.bounds.height,
               !state.showingSettings, !state.showingFriends,
               UIApplication.shared.applicationState == .active else { return }
         owner.view.endEditing(true)

@@ -422,6 +422,9 @@ class GameViewController: DeltaCore.GameViewController
                 && navigationIsAllowedWhilePaused
             let eligible = self.emulatorCore === expectedCore
                 && (expectedCore?.state == .running || (navigatingReference && expectedCore?.state == .paused))
+                // Consume landscape companion bindings in portrait without
+                // changing a panel or falling back to the button's game input.
+                && self.view.bounds.width > self.view.bounds.height
                 && controller.inputType != .controllerSkin && controller.playerIndex != nil
                 && ExternalGameControllerManager.shared.connectedControllers.contains(where: { $0 === controller })
                 && self.view.window?.windowScene?.hasKeyboardFocus == true
@@ -645,9 +648,16 @@ extension GameViewController
                 guard let self, let presenter = pauseViewController else { return }
                 self.boundCompanion.presentSettings(from: presenter)
             }
-            pauseViewController.arrangeViewsItem = MenuItem(text: "Arrange Views", image: UIImage(systemName: "arrow.up.and.down.and.arrow.left.and.right")?.withRenderingMode(.alwaysTemplate)) { [weak self] item in
+            pauseViewController.arrangeViewsItem = MenuItem(text: "Arrange Views", image: UIImage(systemName: "arrow.up.and.down.and.arrow.left.and.right")?.withRenderingMode(.alwaysTemplate)) { [weak self, weak pauseViewController] item in
                 item.isSelected = false
-                self?.boundCompanion.beginLandscapeArrangementFromMenu()
+                guard let self else { return }
+                guard self.view.bounds.width > self.view.bounds.height else {
+                    let alert = UIAlertController(title: nil, message: "Rotate your phone", preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: NSLocalizedString("OK", comment: ""), style: .default))
+                    pauseViewController?.present(alert, animated: true)
+                    return
+                }
+                self.boundCompanion.beginLandscapeArrangementFromMenu()
             }
             pauseViewController.arrangeViewsItem?.accessibilityIdentifier = "bound.menu-arrange-views"
             pauseViewController.showsArrangeViews = boundCompanion.canArrangeLandscapeViews

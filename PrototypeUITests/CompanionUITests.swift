@@ -6632,6 +6632,46 @@ extension CompanionUITests {
         try verifyLandscapeArrangement(option: 5)
     }
 
+    func testArrangeViewsPortraitPromptThenLandscapeEntry() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originalImplementations: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originalImplementations.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer {
+            for (method, original) in originalImplementations {
+                imp_removeBlock(method_setImplementation(method, original))
+            }
+        }
+
+        let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture"])
+        let arrange = app.buttons["bound.menu-arrange-views"]
+
+        openNativePause(in: app)
+        XCTAssertTrue(arrange.waitForExistence(timeout: 10))
+        arrange.tap()
+        XCTAssertTrue(app.staticTexts["Rotate your phone"].waitForExistence(timeout: 5))
+        screenshot("Portrait-arrange-views-rotate-prompt")
+        app.alerts.buttons["OK"].tap()
+        XCTAssertTrue(arrange.exists, "Dismissing the portrait prompt leaves the game paused in Menu")
+        XCTAssertTrue(app.buttons["Settings"].exists)
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(arrange.waitForExistence(timeout: 10))
+        arrange.tap()
+        let done = app.buttons["bound.landscape7-done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 10), "Option 7 should open Arrange Views in landscape")
+        done.tap()
+        XCTAssertTrue(done.waitForNonExistence(timeout: 10))
+
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 10))
+        openNativePause(in: app)
+        XCTAssertTrue(arrange.waitForExistence(timeout: 10), "The tile remains available in portrait after arranging")
+    }
+
     func testLandscapeRRDexHeightResizeFillsContent() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originalImplementations: [(Method, IMP)] = []
@@ -6753,17 +6793,23 @@ extension CompanionUITests {
         app.buttons["Option \(option)"].firstMatch.tap()
         closeBoundSheet(in: app)
 
-        // Arrange Views is a native Menu tile that appears live when the game
-        // rotates into landscape, without requiring the Settings screen.
+        // The tile stays in the native Menu in portrait and updates as the
+        // game rotates into landscape, without reopening Settings.
         let arrangeTile = app.buttons["bound.menu-arrange-views"]
         openNativePause(in: app)
-        XCTAssertFalse(arrangeTile.exists, "Arrange Views is absent while the Menu is in portrait")
+        XCTAssertTrue(arrangeTile.waitForExistence(timeout: 10),
+                      "Arrange Views should remain available in portrait so it can explain the rotation requirement")
+        arrangeTile.tap()
+        XCTAssertTrue(app.staticTexts["Rotate your phone"].waitForExistence(timeout: 5))
+        app.alerts.buttons["OK"].tap()
+        XCTAssertTrue(arrangeTile.exists, "The portrait prompt should leave the Menu open")
         XCUIDevice.shared.orientation = .landscapeLeft
         XCTAssertTrue(arrangeTile.waitForExistence(timeout: 10),
                       "The Menu tile should appear as soon as the game enters landscape")
         if option == 5 {
             XCUIDevice.shared.orientation = .portrait
-            XCTAssertTrue(arrangeTile.waitForNonExistence(timeout: 10))
+            XCTAssertTrue(arrangeTile.waitForExistence(timeout: 10),
+                          "Arrange Views should remain visible when the Menu returns to portrait")
             XCUIDevice.shared.orientation = .landscapeLeft
             XCTAssertTrue(arrangeTile.waitForExistence(timeout: 10))
             // Returning from Settings updates this same paused menu, including
@@ -6779,7 +6825,15 @@ extension CompanionUITests {
                 app.buttons["bound.settings-close"].tap()
                 XCTAssertTrue(app.buttons["bound.settings-close"].waitForNonExistence(timeout: 5))
                 if selectedOption == 5 { XCTAssertTrue(arrangeTile.waitForExistence(timeout: 5)) }
-                else { XCTAssertTrue(arrangeTile.waitForNonExistence(timeout: 5)) }
+                else {
+                    XCTAssertTrue(arrangeTile.waitForNonExistence(timeout: 5),
+                                  "Landscape Options 1 and 2 do not support arranging")
+                    XCUIDevice.shared.orientation = .portrait
+                    XCTAssertTrue(arrangeTile.waitForExistence(timeout: 10),
+                                  "The portrait tile remains available regardless of landscape option")
+                    XCUIDevice.shared.orientation = .landscapeLeft
+                    XCTAssertTrue(arrangeTile.waitForNonExistence(timeout: 10))
+                }
             }
         }
         screenshot("Landscape-option\(option)-menu-arrange-tile")
@@ -6920,13 +6974,13 @@ extension CompanionUITests {
         for _ in 0..<5 where bound.value as? String != "RR Dex" { bound.tap() }
         XCTAssertEqual(reference.frame, savedDex, "Each reference keeps its own placement")
 
-        // Portrait returns to its existing single-panel control and hides the landscape tile.
+        // Portrait returns to its existing single-panel control; Arrange Views remains available from Menu.
         XCUIDevice.shared.orientation = .portrait
         XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 10))
         XCTAssertFalse(friendToggle.exists)
         openNativePause(in: app)
-        XCTAssertFalse(arrangeTile.exists,
-                       "Arrange Views should disappear from the Menu when returning to portrait")
+        XCTAssertTrue(arrangeTile.waitForExistence(timeout: 10),
+                      "Arrange Views should remain available from the Menu in portrait")
         app.buttons["Settings"].tap()
         XCTAssertTrue(app.buttons["bound.settings-interface"].waitForExistence(timeout: 5))
         XCTAssertFalse(element("bound.settings-arrange-views", in: app).exists)

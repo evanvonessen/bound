@@ -733,6 +733,61 @@ final class StockControlAndGestureTests: XCTestCase {
         external.deactivate(MFiGameController.Input.rightThumbstickDown)
         XCTAssertEqual(events.count, beforeStickInput + 1, "The right stick must still reach the active companion")
 
+        // A landscape-only R1 assignment consumes the button in portrait.
+        // Exercise the app and emulator receivers together so a no-op cannot
+        // silently fall back to the shoulder's default GBA R input.
+        let bridge = try XCTUnwrap(core.deltaCore.emulatorBridge as? NSObject)
+        func nativeInputs() throws -> UInt32 {
+            try XCTUnwrap(bridge.value(forKey: "activatedInputs") as? NSNumber).uint32Value
+        }
+        func bindRightShoulder(_ input: Input) {
+            var mapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: external.inputType)
+            mapping.set(input, forControllerInput: MFiGameController.Input.rightShoulder)
+            let gameplayMapping = BoundControllerInputMapping(base: mapping)
+            external.addReceiver(gameController, inputMapping: gameplayMapping)
+            external.addReceiver(core, inputMapping: gameplayMapping)
+        }
+        let landscapeActions: [ActionInput] = [.cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview]
+            + ActionInput.multiviewTabActions + ActionInput.viewNavigationActions
+        for modeEnabled in [false, true] {
+            modePreferences.isEnabled = modeEnabled
+            setViewport(CGSize(width: 390, height: 844), traits: portraitTraits)
+            let portraitContent = companion.state.content
+            let portraitHidden = companion.state.hidden
+            let portraitEventCount = events.count
+            for action in landscapeActions {
+                core.deltaCore.emulatorBridge.resetInputs()
+                bindRightShoulder(action)
+                external.activate(MFiGameController.Input.rightShoulder)
+                XCTAssertEqual(try nativeInputs(), 0, "\(action) must not fall back to GBA R in portrait")
+                external.deactivate(MFiGameController.Input.rightShoulder)
+                XCTAssertEqual(companion.state.content, portraitContent, "\(action) must not change the portrait companion")
+                XCTAssertEqual(companion.state.hidden, portraitHidden)
+                XCTAssertEqual(events.count, portraitEventCount)
+                XCTAssertEqual(core.state, .running)
+                XCTAssertFalse(gameController.didRequestPauseMenu)
+            }
+            assertTouchControls(portraitTraits)
+        }
+        bindRightShoulder(StandardGameControllerInput.r1)
+        external.activate(MFiGameController.Input.rightShoulder)
+        XCTAssertNotEqual(try nativeInputs(), 0, "An ordinary game binding must still work in portrait")
+        external.deactivate(MFiGameController.Input.rightShoulder)
+        XCTAssertEqual(try nativeInputs(), 0)
+
+        bindRightShoulder(ActionInput.boundNextView)
+        external.activate(MFiGameController.Input.rightShoulder)
+        setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
+        press(.boundShowDex)
+        bindRightShoulder(ActionInput.boundNextView)
+        external.activate(MFiGameController.Input.rightShoulder)
+        XCTAssertEqual(companion.controllerReferenceContent, .dex, "A hold started in portrait must remain ignored until released")
+        external.deactivate(MFiGameController.Input.rightShoulder)
+        external.activate(MFiGameController.Input.rightShoulder)
+        external.deactivate(MFiGameController.Input.rightShoulder)
+        XCTAssertEqual(companion.controllerReferenceContent, .bosses, "Rotating back to landscape must reactivate the saved action")
+        XCTAssertEqual(try nativeInputs(), 0)
+
         var menuMapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: external.inputType)
         menuMapping.set(StandardGameControllerInput.menu, forControllerInput: MFiGameController.Input.share)
         external.addReceiver(gameController, inputMapping: BoundControllerInputMapping(base: menuMapping))

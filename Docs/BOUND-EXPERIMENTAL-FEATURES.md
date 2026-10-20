@@ -30,6 +30,8 @@ Controller-mode choices and button positions do not apply while the mode is
 off or in portrait. Bound retains normal touch controls in those states even
 with a wireless controller assigned. Reset Settings to Default clears these
 positions and returns Controller Mode to Off with Mode 1 preselected.
+The portrait pause menu also shows **Arrange Views**. Tapping it displays
+**Rotate your phone**; arranging still starts in landscape.
 
 Controller Mode is also available in **Settings → Controls**. The pause-menu
 Controller Mode tile shows its current state and cycles **Off → Mode 1 → Mode 2
@@ -79,6 +81,9 @@ shows/hides the Option 6/7 panel without changing its selected view. The new
 toggles are inactive in portrait, with Controller Mode off, or while arranging views.
 Menu retains its existing pause/resume behavior. Bindings use the existing
 per-player, per-system controller mapping storage.
+All landscape companion bindings, including Cycle Views and previous/next tabs,
+are inert in portrait. They retain their assignments without falling back to
+the button's default game input. Regular game bindings continue to work.
 
 Controller-toggle validation passed 53 focused integration checks and an unsigned
 Release iPhone build. Tests cover mapping serialization and receiver delivery,
