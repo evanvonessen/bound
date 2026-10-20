@@ -102,14 +102,33 @@ final class StockControlAndGestureTests: XCTestCase {
         let previousMetalPreference = ExperimentalFeatures.shared.metal.isEnabled
         defer { ExperimentalFeatures.shared.metal.isEnabled = previousMetalPreference }
 
-        let gba = RendererFixtureGame(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("renderer-fixture.gba"), type: .gba)
-        ExperimentalFeatures.shared.metal.isEnabled = false
-        var (gameplayOptions, previewOptions) = options(for: gba)
-        XCTAssertEqual(gameplayOptions[.metal] as? Bool, true)
-        XCTAssertEqual(previewOptions[.metal] as? Bool, true, "GBA previews must use the same Metal path as gameplay")
-        XCTAssertEqual(previewOptions[.metal] as? Bool, gameplayOptions[.metal] as? Bool)
+        func expectedGbaMetal(enabled: Bool) -> Bool {
+            #if targetEnvironment(simulator)
+            return true
+            #else
+            if #available(iOS 18, macOS 15, *), ProcessInfo.processInfo.isiOSAppOnMac {
+                return true
+            }
+            return enabled
+            #endif
+        }
+
+        let gbaFixture = RendererFixtureGame(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("renderer-fixture.gba"), type: .gba)
+        let gbaGame = makeGame(type: .gba)
+        let gbaGames: [GameProtocol] = [gbaFixture, gbaGame]
+        for gba in gbaGames {
+            for enabled in [false, true] {
+                ExperimentalFeatures.shared.metal.isEnabled = enabled
+                let (gameplayOptions, previewOptions) = options(for: gba)
+                let expected = expectedGbaMetal(enabled: enabled)
+                XCTAssertEqual(gameplayOptions[.metal] as? Bool, expected)
+                XCTAssertEqual(previewOptions[.metal] as? Bool, expected, "GBA previews must use the same renderer selection as gameplay")
+            }
+        }
 
         let otherGame = makeGame(type: .gbc)
+        var gameplayOptions: [EmulatorCore.Option: Any]
+        var previewOptions: [EmulatorCore.Option: Any]
         for enabled in [false, true] {
             ExperimentalFeatures.shared.metal.isEnabled = enabled
             (gameplayOptions, previewOptions) = options(for: otherGame)

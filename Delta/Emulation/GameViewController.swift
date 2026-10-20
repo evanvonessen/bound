@@ -1968,9 +1968,11 @@ extension GameViewController: GameViewControllerDelegate
         else
         {
             var options: [EmulatorCore.Option: Any] = [.metal: ExperimentalFeatures.shared.metal.isEnabled]
-            // Use Delta's existing Metal bitmap path for the resizable GBA companion layout.
             // The Simulator GL driver crashes when keyboard/layout resize races a resumed draw.
+            // Physical devices keep Delta's existing Metal preference for GBA.
+            #if targetEnvironment(simulator)
             if game.type == .gba { options[.metal] = true }
+            #endif
             
             if #available(iOS 18, macOS 15, *), ProcessInfo.processInfo.isiOSAppOnMac
             {

@@ -1126,8 +1126,11 @@ extension PlaybackSharingTests {
 
     /// Opt-in because other UI/build work on the shared host invalidates timing.
     /// Set BOUND_APP_PACING=1 in the generated xctestrun EnvironmentVariables.
+    /// Rates default to 1x and 3x; optional ROM/state paths must be disposable
+    /// fixtures accessible to the test host, never the user's live library.
     func testActualAppAndNativeControllerPacing() async throws {
-        let runMode = ProcessInfo.processInfo.environment["BOUND_APP_PACING"]
+        let environment = ProcessInfo.processInfo.environment
+        let runMode = environment["BOUND_APP_PACING"]
         guard runMode == "1" || runMode == "smoke" else {
             throw XCTSkip("Requires an exclusive host timing slot and explicit opt-in")
         }
@@ -1138,7 +1141,17 @@ extension PlaybackSharingTests {
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             }
         }
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let bundledFixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let fixture = environment["BOUND_APP_PACING_ROM"].map { URL(fileURLWithPath: $0) } ?? bundledFixture
+        let initialState = environment["BOUND_APP_PACING_STATE"].map { URL(fileURLWithPath: $0) }
+        let rates = try (environment["BOUND_APP_PACING_RATES"] ?? "1,3").split(separator: ",").map {
+            try XCTUnwrap(Double($0), "Invalid pacing rate: \($0)")
+        }
+        guard !rates.isEmpty, rates.allSatisfy({ $0.isFinite && System.gba.deltaCore.supportedRates.contains($0) }) else {
+            XCTFail("Pacing rates must be finite and within the GBA core's supported range")
+            return
+        }
+        let moveDuringMeasurement = environment["BOUND_APP_PACING_MOVE"] == "1"
         // Import consumes its source URL, including when the game already exists.
         // Keep the bundled cartridge available for the other playback tests.
         let importDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1192,17 +1205,19 @@ extension PlaybackSharingTests {
         var rows: [[String: Any]] = []
         // Reverse the order on every other repeat to expose order effects.
         let standardModes = ["native-controller-gl", "native-controller-metal", "bound-classic", "bound-arrangement"]
-        let requestedModes = ProcessInfo.processInfo.environment["BOUND_APP_PACING_MODES"]?.split(separator: ",").map(String.init)
+        let requestedModes = environment["BOUND_APP_PACING_MODES"]?.split(separator: ",").map(String.init)
         let modes = requestedModes ?? standardModes
         XCTAssertFalse(modes.isEmpty)
         XCTAssertTrue(modes.allSatisfy { standardModes.contains($0) })
-        let repeats = ProcessInfo.processInfo.environment["BOUND_APP_PACING_REPEATS"] == "1" ? 1 : (smoke ? 1 : 3)
+        let cases = rates.flatMap { rate in modes.map { (mode: $0, rate: rate) } }
+        let repeats = environment["BOUND_APP_PACING_REPEATS"] == "1" ? 1 : (smoke ? 1 : 3)
         for repeatIndex in 0..<repeats {
-            for mode in repeatIndex.isMultiple(of: 2) ? modes : Array(modes.reversed()) {
-                let native = mode.hasPrefix("native-"), usesMetal = mode != "native-controller-gl"
+            for testCase in repeatIndex.isMultiple(of: 2) ? cases : Array(cases.reversed()) {
+                let mode = testCase.mode, rate = testCase.rate
+                let native = mode.hasPrefix("native-")
                 preferences.screenLayout = mode == "bound-arrangement" ? .bound : .delta
                 let owner: DeltaCore.GameViewController = native ? DeltaCore.GameViewController() : GameViewController()
-                let nativeDelegate = AppPacingNativeDelegate(metal: usesMetal)
+                let nativeDelegate = AppPacingNativeDelegate(metal: mode != "native-controller-gl")
                 if native { owner.delegate = nativeDelegate }
                 owner.automaticallyPausesWhileInactive = false
                 owner.loadViewIfNeeded(); owner.game = game
@@ -1215,6 +1230,9 @@ extension PlaybackSharingTests {
                     userInfo: [Settings.NotificationUserInfoKey.name: Settings.Name.localControllerPlayerIndex])
                 owner.view.layoutIfNeeded()
                 let core = try XCTUnwrap(owner.emulatorCore)
+                // Read the core's resolved option: the physical app may use
+                // upstream OpenGL while Simulator requires its Metal workaround.
+                let usesMetal = core.videoManager.options[.metal] as? Bool ?? false
                 let prior = core.updateHandler, callbacks = FrameProbe(), presentations = FrameProbe(), ticks = AppPacingTicks()
                 core.updateHandler = { core in
                     let start = ProcessInfo.processInfo.systemUptime
@@ -1223,25 +1241,50 @@ extension PlaybackSharingTests {
                 }
                 // Let the controller's native appearance queue own startup.
                 // Starting here too can race that queue's synchronous main hop.
+                try await wait(0.5)
+                XCTAssertEqual(core.state, .running)
+                if let initialState {
+                    XCTAssertTrue(core.pause())
+                    do {
+                        try core.load(DeltaCore.SaveState(fileURL: initialState, gameType: game.type))
+                    } catch {
+                        _ = core.resume()
+                        throw error
+                    }
+                    XCTAssertTrue(core.resume())
+                }
+                core.rate = rate
                 try await wait(warmup) // Equal warmup, excluded from every distribution.
                 XCTAssertEqual(core.state, .running)
-                XCTAssertEqual(core.rate, 1)
+                XCTAssertEqual(core.rate, rate)
                 XCTAssertFalse(controllers.connectedControllers.contains { $0.playerIndex != nil })
                 XCTAssertFalse(owner.controllerView.isHidden)
                 XCTAssertNotNil(owner.controllerView.controllerSkin)
                 XCTAssertNotNil(owner.controllerView.controllerSkinTraits)
                 XCTAssertNotNil(owner.gameView.outputImage)
                 XCTAssertEqual(owner.controllerView.playerIndex, 0)
-                let layer = metalLayer(owner.gameView.layer)
+                let layer = usesMetal ? metalLayer(owner.gameView.layer) : nil
                 if usesMetal { XCTAssertNotNil(layer) }
                 AppPacingDrawableObserver.shared.observe(layer, probe: presentations)
                 let measurementStartedAt = Date().timeIntervalSince1970
                 callbacks.reset(); ticks.start()
-                try await wait(duration)
+                if moveDuringMeasurement {
+                    let right = try XCTUnwrap(StandardGameControllerInput.right.input(for: game.type))
+                    let left = try XCTUnwrap(StandardGameControllerInput.left.input(for: game.type))
+                    for step in 0..<Int(duration * 2) {
+                        let input = step.isMultiple(of: 2) ? right : left
+                        owner.controllerView.activate(input)
+                        try await wait(0.5)
+                        owner.controllerView.deactivate(input)
+                    }
+                } else {
+                    try await wait(duration)
+                }
                 ticks.stop(); AppPacingDrawableObserver.shared.observe(nil, probe: nil)
                 // Freeze callback observations before any post-measurement layout work.
                 callbacks.stop(); core.updateHandler = prior
                 let measurementEndedAt = Date().timeIntervalSince1970
+                XCTAssertEqual(core.rate, rate, "The measured rate must remain stable throughout the sample")
                 let callbackSummary = summary(callbacks), presentationSummary = summary(presentations), tickSummary = summary(ticks.probe)
                 XCTAssertGreaterThan(callbacks.snapshot().0.count, smoke ? 10 : 500)
                 if usesMetal { XCTAssertGreaterThan(presentations.snapshot().0.count, smoke ? 3 : 100) }
@@ -1255,6 +1298,8 @@ extension PlaybackSharingTests {
                 var row: [String: Any] = ["mode": mode, "repeat": repeatIndex, "configuration": _isDebugAssertConfiguration() ? "Debug" : "Release",
                     "baselineScope": native ? "DeltaCore native controller; not original Delta app" : "actual Bound app controller and companion coordinator",
                     "renderer": usesMetal ? "Metal" : "OpenGL", "sharing": "off", "speed": core.rate,
+                    "cartridge": fixture.lastPathComponent, "loadedInitialState": initialState != nil,
+                    "alternatingMovement": moveDuringMeasurement,
                     "measurementStartUnix": measurementStartedAt, "measurementEndUnix": measurementEndedAt,
                     "smokeOnly": smoke, "warmupSeconds": warmup, "sampleSeconds": duration, "screenPoints": [window.bounds.width, window.bounds.height],
                     "gameFramePoints": [frame.minX, frame.minY, frame.width, frame.height],
@@ -1265,7 +1310,7 @@ extension PlaybackSharingTests {
                     "externalControllerCount": ExternalGameControllerManager.shared.connectedControllers.count,
                     "drawablePixels": layer.map { [$0.drawableSize.width, $0.drawableSize.height] } ?? [],
                     "coreCallbacks": callbackSummary, "metalDrawableObservations": presentationSummary,
-                    "metalMetric": ProcessInfo.processInfo.environment["SIMULATOR_UDID"] == nil ? "actual presented timestamps" : "drawable acquisitions; presentation timestamps unavailable in Simulator SDK",
+                    "metalMetric": !usesMetal ? "not measured for OpenGL" : (environment["SIMULATOR_UDID"] == nil ? "actual presented timestamps" : "drawable acquisitions; presentation timestamps unavailable in Simulator SDK"),
                     "mainRunLoopTicks": tickSummary,
                     "settledLayoutMeanMs": layoutCosts.reduce(0, +) / Double(layoutCosts.count)]
                 print("BOUND_APP_PACING \(row)")
@@ -1277,7 +1322,7 @@ extension PlaybackSharingTests {
                     window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
                 }
                 let screenshot = XCTAttachment(image: image)
-                screenshot.name = "pacing-\(mode)-\(repeatIndex)"; screenshot.lifetime = .keepAlways; add(screenshot)
+                screenshot.name = "pacing-\(mode)-\(rate)x-\(repeatIndex)"; screenshot.lifetime = .keepAlways; add(screenshot)
                 _ = core.stop(); core.updateHandler = prior
                 owner.game = nil; window.isHidden = true; window.rootViewController = nil
                 withExtendedLifetime(nativeDelegate) {}
