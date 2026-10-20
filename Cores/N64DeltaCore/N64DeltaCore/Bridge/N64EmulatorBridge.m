@@ -443,9 +443,11 @@ static void MupenSetAudioSpeed(int percent)
         
         BOOL didLoadVideoPlugin = [self loadPlugin:@"N64DeltaCore_Video" type:M64PLUGIN_GFX];
         NSAssert(didLoadVideoPlugin, @"Failed to load video plugin.");
+        (void)didLoadVideoPlugin; // NSAssert is compiled out in Release.
         
         BOOL didLoadRSPPlugin = [self loadPlugin:@"N64DeltaCore_RSP" type:M64PLUGIN_RSP];
         NSAssert(didLoadRSPPlugin, @"Failed to load RSP plugin.");
+        (void)didLoadRSPPlugin;
         
         self.didLoadPlugins = YES;
     }

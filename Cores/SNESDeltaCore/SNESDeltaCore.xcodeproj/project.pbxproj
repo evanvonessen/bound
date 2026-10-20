@@ -772,7 +772,8 @@
 			isa = PBXProject;
 			attributes = {
 				LastSwiftUpdateCheck = 0700;
-				LastUpgradeCheck = 1010;
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2710;
 				ORGANIZATIONNAME = "Riley Testut";
 				TargetAttributes = {
 					BF6D1BDB1EB3F73200476805 = {
@@ -946,6 +947,7 @@
 				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
 				GCC_OPTIMIZATION_LEVEL = s;
 				GCC_WARN_INHIBIT_ALL_WARNINGS = YES;
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				OTHER_LDFLAGS = "-ObjC";
 				PRODUCT_NAME = Snes9x;
 				SKIP_INSTALL = YES;
@@ -959,6 +961,7 @@
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
 				GCC_WARN_INHIBIT_ALL_WARNINGS = YES;
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				OTHER_LDFLAGS = "-ObjC";
 				PRODUCT_NAME = Snes9x;
 				SKIP_INSTALL = YES;
@@ -968,6 +971,7 @@
 		BF9F4FF01AAD8070004C9500 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
 				CODE_SIGNING_ALLOWED = NO;
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++0x";
@@ -996,9 +1000,11 @@
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu99;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -1043,6 +1049,7 @@
 		BF9F4FF11AAD8070004C9500 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
 				CODE_SIGNING_ALLOWED = NO;
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++0x";
@@ -1071,9 +1078,11 @@
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu99;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_PREPROCESSOR_DEFINITIONS = "";
@@ -1101,7 +1110,8 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "com.rileytestut.$(PRODUCT_NAME:rfc1034identifier)";
 				PRODUCT_NAME = "";
 				SDKROOT = iphoneos;
-				SWIFT_OPTIMIZATION_LEVEL = "-Owholemodule";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALIDATE_PRODUCT = YES;
 				VERSIONING_SYSTEM = "apple-generic";
@@ -1122,6 +1132,7 @@
 				INFOPLIST_FILE = SNESDeltaCore/Info.plist;
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
+				LM_SKIP_METADATA_EXTRACTION = YES;
 				PRODUCT_NAME = SNESDeltaCore;
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
@@ -1142,9 +1153,11 @@
 				INFOPLIST_FILE = SNESDeltaCore/Info.plist;
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
+				LM_SKIP_METADATA_EXTRACTION = YES;
 				PRODUCT_NAME = SNESDeltaCore;
 				SKIP_INSTALL = YES;
-				SWIFT_OPTIMIZATION_LEVEL = "-Owholemodule";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
 				USER_HEADER_SEARCH_PATHS = "\"$(SRCROOT)\"";
 			};

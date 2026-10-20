@@ -3206,7 +3206,8 @@
 			isa = PBXProject;
 			attributes = {
 				LastSwiftUpdateCheck = 1600;
-				LastUpgradeCheck = 1600;
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2710;
 			};
 			buildConfigurationList = 4821239608C13582E20E6DA73FD5F1F9 /* Build configuration list for PBXProject "Pods" */;
 			compatibilityVersion = "Xcode 12.0";
@@ -4028,6 +4029,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				MODULEMAP_FILE = Headers/Public/GTMSessionFetcher/GTMSessionFetcher.modulemap;
 				OTHER_LDFLAGS = "";
 				OTHER_LIBTOOLFLAGS = "";
@@ -4079,6 +4081,7 @@
 				GCC_PREFIX_HEADER = "Target Support Files/SDWebImage/SDWebImage-prefix.pch";
 				GENERATE_INFOPLIST_FILE = NO;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				MODULEMAP_FILE = Headers/Public/SDWebImage/SDWebImage.modulemap;
 				OTHER_LDFLAGS = "";
 				OTHER_LIBTOOLFLAGS = "";
@@ -4109,6 +4112,7 @@
 				GCC_PREFIX_HEADER = "Target Support Files/Roxas/Roxas-prefix.pch";
 				GENERATE_INFOPLIST_FILE = NO;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				MODULEMAP_FILE = Headers/Public/Roxas/Roxas.modulemap;
 				OTHER_LDFLAGS = "";
 				OTHER_LIBTOOLFLAGS = "";
@@ -4246,6 +4250,7 @@
 				GCC_PREFIX_HEADER = "Target Support Files/Roxas/Roxas-prefix.pch";
 				GENERATE_INFOPLIST_FILE = NO;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				MODULEMAP_FILE = Headers/Public/Roxas/Roxas.modulemap;
 				OTHER_LDFLAGS = "";
 				OTHER_LIBTOOLFLAGS = "";
@@ -4304,6 +4309,7 @@
 				GCC_PREFIX_HEADER = "Target Support Files/AppAuth/AppAuth-prefix.pch";
 				GENERATE_INFOPLIST_FILE = NO;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				MODULEMAP_FILE = Headers/Public/AppAuth/AppAuth.modulemap;
 				OTHER_LDFLAGS = "";
 				OTHER_LIBTOOLFLAGS = "";
@@ -4356,6 +4362,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -4473,6 +4480,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				MODULEMAP_FILE = Headers/Public/GTMAppAuth/GTMAppAuth.modulemap;
 				OTHER_LDFLAGS = "";
 				OTHER_LIBTOOLFLAGS = "";
@@ -4542,6 +4550,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -4804,6 +4813,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				MODULEMAP_FILE = Headers/Public/GTMAppAuth/GTMAppAuth.modulemap;
 				OTHER_LDFLAGS = "";
 				OTHER_LIBTOOLFLAGS = "";
@@ -4832,6 +4842,7 @@
 				GCC_PREFIX_HEADER = "Target Support Files/SDWebImage/SDWebImage-prefix.pch";
 				GENERATE_INFOPLIST_FILE = NO;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				MODULEMAP_FILE = Headers/Public/SDWebImage/SDWebImage.modulemap;
 				OTHER_LDFLAGS = "";
 				OTHER_LIBTOOLFLAGS = "";
@@ -4929,6 +4940,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				MODULEMAP_FILE = Headers/Public/GTMSessionFetcher/GTMSessionFetcher.modulemap;
 				OTHER_LDFLAGS = "";
 				OTHER_LIBTOOLFLAGS = "";
@@ -4958,6 +4970,7 @@
 				GCC_PREFIX_HEADER = "Target Support Files/AppAuth/AppAuth-prefix.pch";
 				GENERATE_INFOPLIST_FILE = NO;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				MODULEMAP_FILE = Headers/Public/AppAuth/AppAuth.modulemap;
 				OTHER_LDFLAGS = "";
 				OTHER_LIBTOOLFLAGS = "";

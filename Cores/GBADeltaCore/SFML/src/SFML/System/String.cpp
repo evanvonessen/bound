@@ -34,7 +34,7 @@
 namespace sf
 {
 ////////////////////////////////////////////////////////////
-const std::size_t String::InvalidPos = std::basic_string<Uint32>::npos;
+const std::size_t String::InvalidPos = String::Utf32String::npos;
 
 
 ////////////////////////////////////////////////////////////
@@ -119,7 +119,8 @@ String::String(const Uint32* utf32String)
 
 
 ////////////////////////////////////////////////////////////
-String::String(const std::basic_string<Uint32>& utf32String) :
+// Bound compatibility: use explicit traits without changing UTF conversion.
+String::String(const Utf32String& utf32String) :
 m_string(utf32String)
 {
 }
@@ -175,10 +176,10 @@ std::wstring String::toWideString() const
 
 
 ////////////////////////////////////////////////////////////
-std::basic_string<Uint8> String::toUtf8() const
+String::Utf8String String::toUtf8() const
 {
     // Prepare the output string
-    std::basic_string<Uint8> output;
+    Utf8String output;
     output.reserve(m_string.length());
 
     // Convert
@@ -189,10 +190,10 @@ std::basic_string<Uint8> String::toUtf8() const
 
 
 ////////////////////////////////////////////////////////////
-std::basic_string<Uint16> String::toUtf16() const
+String::Utf16String String::toUtf16() const
 {
     // Prepare the output string
-    std::basic_string<Uint16> output;
+    Utf16String output;
     output.reserve(m_string.length());
 
     // Convert
@@ -203,7 +204,7 @@ std::basic_string<Uint16> String::toUtf16() const
 
 
 ////////////////////////////////////////////////////////////
-std::basic_string<Uint32> String::toUtf32() const
+String::Utf32String String::toUtf32() const
 {
     return m_string;
 }

@@ -194,6 +194,16 @@ public class ControllerView: UIView, GameController
     private func initialize()
     {
         self.backgroundColor = UIColor.clear
+
+        if #available(iOS 17.0, *)
+        {
+            let layoutTraits: [UITrait] = [UITraitUserInterfaceIdiom.self,
+                                          UITraitHorizontalSizeClass.self,
+                                          UITraitVerticalSizeClass.self]
+            self.registerForTraitChanges(layoutTraits + UITraitCollection.systemTraitsAffectingImageLookup) { (self: ControllerView, _) in
+                self.setNeedsLayout()
+            }
+        }
         
         self.contentView.translatesAutoresizingMaskIntoConstraints = false
         self.addSubview(self.contentView)
@@ -344,11 +354,15 @@ public class ControllerView: UIView, GameController
     
     //MARK: - <UITraitEnvironment>
     /// <UITraitEnvironment>
+    @available(iOS, introduced: 8.0, deprecated: 17.0, message: "Uses trait change registration on iOS 17 and later.")
     public override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?)
     {
         super.traitCollectionDidChange(previousTraitCollection)
-        
-        self.setNeedsLayout()
+
+        if #unavailable(iOS 17.0)
+        {
+            self.setNeedsLayout()
+        }
     }
 }
 

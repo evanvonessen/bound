@@ -26,11 +26,11 @@ class CustomerInfoResponseHandler {
         userID: String,
         failIfInvalidSubscriptionKeyDetectedInDebug: Bool,
         isDebug: Bool = {
-            var debug = false
             #if DEBUG
-            debug = true
+            return true
+            #else
+            return false
             #endif
-            return debug
         }()
     ) {
         self.offlineCreator = offlineCreator

@@ -261,7 +261,7 @@ private extension PauseViewController
         self.screenshotItem = nil
         self.controllerModeItem = nil
         
-        guard let emulatorCore = self.emulatorCore else { return }
+        guard self.emulatorCore != nil else { return }
         
         self.saveStateItem = MenuItem(text: NSLocalizedString("Save State", comment: ""), image: #imageLiteral(resourceName: "SaveSaveState"), action: { [unowned self] item in
             self.saveStatesViewControllerMode = .saving

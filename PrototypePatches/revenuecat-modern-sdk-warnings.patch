@@ -1,0 +1,100 @@
+# Local compatibility with the installed StoreKit SDK; retain RevenueCat 5.8.0 error fallbacks and dependency pin.
+diff --git a/Vendor/RevenueCat/Sources/Error Handling/SKError+Extensions.swift b/Vendor/RevenueCat/Sources/Error Handling/SKError+Extensions.swift
+index 397e9d85..2463ff4a 100644
+--- a/Vendor/RevenueCat/Sources/Error Handling/SKError+Extensions.swift	
++++ b/Vendor/RevenueCat/Sources/Error Handling/SKError+Extensions.swift	
+@@ -63,6 +63,10 @@ extension SKError: PurchasesErrorConvertible {
+ 
+             return ErrorUtils.storeProblemError(error: self)
+ 
++        case .paymentMethodBindingConfigurationRequired:
++            // Preserve the fallback behavior of the pinned SDK for this newer StoreKit error.
++            return ErrorUtils.unknownError(error: self)
++
+         @unknown default:
+             switch SKError.UndocumentedCode(rawValue: self.code.rawValue) {
+             case .unhandledException:
+@@ -137,6 +141,8 @@ extension SKError.Code {
+             return "unsupported_platform"
+         case .overlayPresentedInBackgroundScene:
+             return "overlay_presented_in_background_scene"
++        case .paymentMethodBindingConfigurationRequired:
++            return "unknown_store_kit_error"
+         @unknown default:
+             return "unknown_store_kit_error"
+         }
+diff --git a/Vendor/RevenueCat/Sources/Error Handling/StoreKitError+Extensions.swift b/Vendor/RevenueCat/Sources/Error Handling/StoreKitError+Extensions.swift
+index a58af737..564b5bd9 100644
+--- a/Vendor/RevenueCat/Sources/Error Handling/StoreKitError+Extensions.swift	
++++ b/Vendor/RevenueCat/Sources/Error Handling/StoreKitError+Extensions.swift	
+@@ -42,6 +42,10 @@ extension StoreKitError: PurchasesErrorConvertible {
+             /// so we can't extract any additional information like we do on `SKError.toPurchasesErrorCode`
+             return ErrorUtils.storeProblemError(error: self)
+ 
++        case .unsupported, .invalidPresentationContext:
++            // Preserve the fallback behavior of the pinned SDK for newer StoreKit errors.
++            return ErrorUtils.unknownError(error: self)
++
+         @unknown default:
+             return ErrorUtils.unknownError(error: self)
+         }
+@@ -61,6 +65,8 @@ extension StoreKitError: PurchasesErrorConvertible {
+             return "not_available_in_storefront"
+         case .notEntitled:
+             return "not_entitled"
++        case .unsupported, .invalidPresentationContext:
++            return "unknown_store_kit_error"
+         @unknown default:
+             return "unknown_store_kit_error"
+         }
+@@ -92,6 +98,9 @@ extension Product.PurchaseError: PurchasesErrorConvertible {
+                 .missingOfferParameters:
+             return ErrorUtils.invalidPromotionalOfferError(error: self)
+ 
++        case .paymentMethodBindingConfigurationRequired:
++            return ErrorUtils.unknownError(error: self)
++
+         @unknown default:
+             return ErrorUtils.unknownError(error: self)
+         }
+@@ -115,6 +124,8 @@ extension Product.PurchaseError: PurchasesErrorConvertible {
+             return "invalid_offer_signature"
+         case .missingOfferParameters:
+             return "missing_offer_parameters"
++        case .paymentMethodBindingConfigurationRequired:
++            return "unknown_store_kit_error"
+         @unknown default:
+             return "unknown_store_kit_error"
+         }
+diff --git a/Vendor/RevenueCat/Sources/Networking/Operations/Handling/CustomerInfoResponseHandler.swift b/Vendor/RevenueCat/Sources/Networking/Operations/Handling/CustomerInfoResponseHandler.swift
+index 78cce738..5332d7db 100644
+--- a/Vendor/RevenueCat/Sources/Networking/Operations/Handling/CustomerInfoResponseHandler.swift
++++ b/Vendor/RevenueCat/Sources/Networking/Operations/Handling/CustomerInfoResponseHandler.swift
+@@ -26,11 +26,11 @@ class CustomerInfoResponseHandler {
+         userID: String,
+         failIfInvalidSubscriptionKeyDetectedInDebug: Bool,
+         isDebug: Bool = {
+-            var debug = false
+             #if DEBUG
+-            debug = true
++            return true
++            #else
++            return false
+             #endif
+-            return debug
+         }()
+     ) {
+         self.offlineCreator = offlineCreator
+diff --git a/Vendor/RevenueCat/Sources/Purchasing/StoreKit2/SK2BeginRefundRequestHelper.swift b/Vendor/RevenueCat/Sources/Purchasing/StoreKit2/SK2BeginRefundRequestHelper.swift
+index bb6fecee..b73da1f8 100644
+--- a/Vendor/RevenueCat/Sources/Purchasing/StoreKit2/SK2BeginRefundRequestHelper.swift
++++ b/Vendor/RevenueCat/Sources/Purchasing/StoreKit2/SK2BeginRefundRequestHelper.swift
+@@ -105,6 +105,8 @@ private extension SK2BeginRefundRequestHelperType {
+                 return Strings.purchase.duplicate_refund_request(details: details).description
+             case .failed:
+                 return Strings.purchase.failed_refund_request(details: details).description
++            case .ineligible:
++                return Strings.purchase.unknown_refund_request_error_type(details: details).description
+             @unknown default:
+                 return Strings.purchase.unknown_refund_request_error_type(details: details).description
+             }

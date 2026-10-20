@@ -105,6 +105,8 @@ private extension SK2BeginRefundRequestHelperType {
                 return Strings.purchase.duplicate_refund_request(details: details).description
             case .failed:
                 return Strings.purchase.failed_refund_request(details: details).description
+            case .ineligible:
+                return Strings.purchase.unknown_refund_request_error_type(details: details).description
             @unknown default:
                 return Strings.purchase.unknown_refund_request_error_type(details: details).description
             }

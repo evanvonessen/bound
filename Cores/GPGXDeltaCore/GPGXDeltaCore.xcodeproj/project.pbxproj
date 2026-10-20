@@ -733,7 +733,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2600;
-				LastUpgradeCheck = 2600;
+				LastUpgradeCheck = 2710;
 				TargetAttributes = {
 					D5DC53482E258D3600764740 = {
 						CreatedOnToolsVersion = 26.0;
@@ -907,6 +907,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -974,6 +975,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -1040,6 +1042,7 @@
 				);
 				GCC_WARN_INHIBIT_ALL_WARNINGS = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				OTHER_CFLAGS = (
 					"-DUSE_32BPP_RENDERING",
 					"-DFLAC__HAS_OGG=0",
@@ -1098,6 +1101,7 @@
 				);
 				GCC_WARN_INHIBIT_ALL_WARNINGS = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				OTHER_CFLAGS = (
 					"-DUSE_32BPP_RENDERING",
 					"-DFLAC__HAS_OGG=0",
@@ -1134,6 +1138,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
+				LM_SKIP_METADATA_EXTRACTION = YES;
 				MARKETING_VERSION = 1.0;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
@@ -1168,6 +1173,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
+				LM_SKIP_METADATA_EXTRACTION = YES;
 				MARKETING_VERSION = 1.0;
 				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
 				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";

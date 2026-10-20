@@ -30,6 +30,7 @@
 ////////////////////////////////////////////////////////////
 #include <SFML/System/Export.hpp>
 #include <SFML/System/Utf.hpp>
+#include <SFML/System/UtfCharTraits.hpp>
 #include <iterator>
 #include <locale>
 #include <string>
@@ -49,8 +50,12 @@ public:
     ////////////////////////////////////////////////////////////
     // Types
     ////////////////////////////////////////////////////////////
-    typedef std::basic_string<Uint32>::iterator       Iterator;      ///< Iterator type
-    typedef std::basic_string<Uint32>::const_iterator ConstIterator; ///< Read-only iterator type
+    // Bound compatibility: keep unsigned code units with explicit portable traits.
+    typedef std::basic_string<Uint8, priv::UtfCharTraits<Uint8> > Utf8String;
+    typedef std::basic_string<Uint16, priv::UtfCharTraits<Uint16> > Utf16String;
+    typedef std::basic_string<Uint32, priv::UtfCharTraits<Uint32> > Utf32String;
+    typedef Utf32String::iterator       Iterator;      ///< Iterator type
+    typedef Utf32String::const_iterator ConstIterator; ///< Read-only iterator type
 
     ////////////////////////////////////////////////////////////
     // Static member data
@@ -147,7 +152,7 @@ public:
     /// \param utf32String UTF-32 string to assign
     ///
     ////////////////////////////////////////////////////////////
-    String(const std::basic_string<Uint32>& utf32String);
+    String(const Utf32String& utf32String);
 
     ////////////////////////////////////////////////////////////
     /// \brief Copy constructor
@@ -190,7 +195,7 @@ public:
     ///
     /// This function is provided for consistency, it is equivalent to
     /// using the constructors that takes a const sf::Uint32* or
-    /// a std::basic_string<sf::Uint32>.
+    /// a sf::String::Utf32String.
     ///
     /// \param begin Forward iterator to the beginning of the UTF-32 sequence
     /// \param end   Forward iterator to the end of the UTF-32 sequence
@@ -273,7 +278,7 @@ public:
     /// \see toUtf16, toUtf32
     ///
     ////////////////////////////////////////////////////////////
-    std::basic_string<Uint8> toUtf8() const;
+    Utf8String toUtf8() const;
 
     ////////////////////////////////////////////////////////////
     /// \brief Convert the Unicode string to a UTF-16 string
@@ -283,7 +288,7 @@ public:
     /// \see toUtf8, toUtf32
     ///
     ////////////////////////////////////////////////////////////
-    std::basic_string<Uint16> toUtf16() const;
+    Utf16String toUtf16() const;
 
     ////////////////////////////////////////////////////////////
     /// \brief Convert the Unicode string to a UTF-32 string
@@ -296,7 +301,7 @@ public:
     /// \see toUtf8, toUtf16
     ///
     ////////////////////////////////////////////////////////////
-    std::basic_string<Uint32> toUtf32() const;
+    Utf32String toUtf32() const;
 
     ////////////////////////////////////////////////////////////
     /// \brief Overload of assignment operator
@@ -524,7 +529,7 @@ private:
     ////////////////////////////////////////////////////////////
     // Member data
     ////////////////////////////////////////////////////////////
-    std::basic_string<Uint32> m_string; ///< Internal string of UTF-32 characters
+    Utf32String m_string; ///< Internal string of UTF-32 characters
 };
 
 ////////////////////////////////////////////////////////////

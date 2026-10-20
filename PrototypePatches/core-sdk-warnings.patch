@@ -1,0 +1,264 @@
+# Local SDK compatibility fixes for bridge diagnostics and SFML unsigned UTF strings; upstream revisions and emulator algorithms unchanged.
+diff --git a/Cores/GBADeltaCore/SFML/include/SFML/System/String.hpp b/Cores/GBADeltaCore/SFML/include/SFML/System/String.hpp
+index 0a54628d..0fc9d3d1 100755
+--- a/Cores/GBADeltaCore/SFML/include/SFML/System/String.hpp
++++ b/Cores/GBADeltaCore/SFML/include/SFML/System/String.hpp
+@@ -30,6 +30,7 @@
+ ////////////////////////////////////////////////////////////
+ #include <SFML/System/Export.hpp>
+ #include <SFML/System/Utf.hpp>
++#include <SFML/System/UtfCharTraits.hpp>
+ #include <iterator>
+ #include <locale>
+ #include <string>
+@@ -49,8 +50,12 @@ public:
+     ////////////////////////////////////////////////////////////
+     // Types
+     ////////////////////////////////////////////////////////////
+-    typedef std::basic_string<Uint32>::iterator       Iterator;      ///< Iterator type
+-    typedef std::basic_string<Uint32>::const_iterator ConstIterator; ///< Read-only iterator type
++    // Bound compatibility: keep unsigned code units with explicit portable traits.
++    typedef std::basic_string<Uint8, priv::UtfCharTraits<Uint8> > Utf8String;
++    typedef std::basic_string<Uint16, priv::UtfCharTraits<Uint16> > Utf16String;
++    typedef std::basic_string<Uint32, priv::UtfCharTraits<Uint32> > Utf32String;
++    typedef Utf32String::iterator       Iterator;      ///< Iterator type
++    typedef Utf32String::const_iterator ConstIterator; ///< Read-only iterator type
+ 
+     ////////////////////////////////////////////////////////////
+     // Static member data
+@@ -147,7 +152,7 @@ public:
+     /// \param utf32String UTF-32 string to assign
+     ///
+     ////////////////////////////////////////////////////////////
+-    String(const std::basic_string<Uint32>& utf32String);
++    String(const Utf32String& utf32String);
+ 
+     ////////////////////////////////////////////////////////////
+     /// \brief Copy constructor
+@@ -190,7 +195,7 @@ public:
+     ///
+     /// This function is provided for consistency, it is equivalent to
+     /// using the constructors that takes a const sf::Uint32* or
+-    /// a std::basic_string<sf::Uint32>.
++    /// a sf::String::Utf32String.
+     ///
+     /// \param begin Forward iterator to the beginning of the UTF-32 sequence
+     /// \param end   Forward iterator to the end of the UTF-32 sequence
+@@ -273,7 +278,7 @@ public:
+     /// \see toUtf16, toUtf32
+     ///
+     ////////////////////////////////////////////////////////////
+-    std::basic_string<Uint8> toUtf8() const;
++    Utf8String toUtf8() const;
+ 
+     ////////////////////////////////////////////////////////////
+     /// \brief Convert the Unicode string to a UTF-16 string
+@@ -283,7 +288,7 @@ public:
+     /// \see toUtf8, toUtf32
+     ///
+     ////////////////////////////////////////////////////////////
+-    std::basic_string<Uint16> toUtf16() const;
++    Utf16String toUtf16() const;
+ 
+     ////////////////////////////////////////////////////////////
+     /// \brief Convert the Unicode string to a UTF-32 string
+@@ -296,7 +301,7 @@ public:
+     /// \see toUtf8, toUtf16
+     ///
+     ////////////////////////////////////////////////////////////
+-    std::basic_string<Uint32> toUtf32() const;
++    Utf32String toUtf32() const;
+ 
+     ////////////////////////////////////////////////////////////
+     /// \brief Overload of assignment operator
+@@ -524,7 +529,7 @@ private:
+     ////////////////////////////////////////////////////////////
+     // Member data
+     ////////////////////////////////////////////////////////////
+-    std::basic_string<Uint32> m_string; ///< Internal string of UTF-32 characters
++    Utf32String m_string; ///< Internal string of UTF-32 characters
+ };
+ 
+ ////////////////////////////////////////////////////////////
+diff --git a/Cores/GBADeltaCore/SFML/src/SFML/System/String.cpp b/Cores/GBADeltaCore/SFML/src/SFML/System/String.cpp
+index df5c1691..9b739d11 100755
+--- a/Cores/GBADeltaCore/SFML/src/SFML/System/String.cpp
++++ b/Cores/GBADeltaCore/SFML/src/SFML/System/String.cpp
+@@ -34,7 +34,7 @@
+ namespace sf
+ {
+ ////////////////////////////////////////////////////////////
+-const std::size_t String::InvalidPos = std::basic_string<Uint32>::npos;
++const std::size_t String::InvalidPos = String::Utf32String::npos;
+ 
+ 
+ ////////////////////////////////////////////////////////////
+@@ -119,7 +119,8 @@ String::String(const Uint32* utf32String)
+ 
+ 
+ ////////////////////////////////////////////////////////////
+-String::String(const std::basic_string<Uint32>& utf32String) :
++// Bound compatibility: use explicit traits without changing UTF conversion.
++String::String(const Utf32String& utf32String) :
+ m_string(utf32String)
+ {
+ }
+@@ -175,10 +176,10 @@ std::wstring String::toWideString() const
+ 
+ 
+ ////////////////////////////////////////////////////////////
+-std::basic_string<Uint8> String::toUtf8() const
++String::Utf8String String::toUtf8() const
+ {
+     // Prepare the output string
+-    std::basic_string<Uint8> output;
++    Utf8String output;
+     output.reserve(m_string.length());
+ 
+     // Convert
+@@ -189,10 +190,10 @@ std::basic_string<Uint8> String::toUtf8() const
+ 
+ 
+ ////////////////////////////////////////////////////////////
+-std::basic_string<Uint16> String::toUtf16() const
++String::Utf16String String::toUtf16() const
+ {
+     // Prepare the output string
+-    std::basic_string<Uint16> output;
++    Utf16String output;
+     output.reserve(m_string.length());
+ 
+     // Convert
+@@ -203,7 +204,7 @@ std::basic_string<Uint16> String::toUtf16() const
+ 
+ 
+ ////////////////////////////////////////////////////////////
+-std::basic_string<Uint32> String::toUtf32() const
++String::Utf32String String::toUtf32() const
+ {
+     return m_string;
+ }
+diff --git a/Cores/GPGXDeltaCore/Sources/GPGXBridge/GPGXEmulatorBridge.m b/Cores/GPGXDeltaCore/Sources/GPGXBridge/GPGXEmulatorBridge.m
+index c7873f69..5a7768d9 100644
+--- a/Cores/GPGXDeltaCore/Sources/GPGXBridge/GPGXEmulatorBridge.m
++++ b/Cores/GPGXDeltaCore/Sources/GPGXBridge/GPGXEmulatorBridge.m
+@@ -406,7 +406,8 @@ static u32 decode_cheat(char *string, int index)
+       if (i == 4) string++;
+       p = strchr (ggvalidchars, *string++);
+       if (p == NULL) return 0;
+-      n = p - ggvalidchars;
++      // strchr found an element in the fixed 32-character code alphabet.
++      n = (int)(p - ggvalidchars);
+ 
+       switch (i)
+       {
+diff --git a/Cores/N64DeltaCore/N64DeltaCore/Bridge/N64EmulatorBridge.m b/Cores/N64DeltaCore/N64DeltaCore/Bridge/N64EmulatorBridge.m
+index 145bc060..b9988797 100644
+--- a/Cores/N64DeltaCore/N64DeltaCore/Bridge/N64EmulatorBridge.m
++++ b/Cores/N64DeltaCore/N64DeltaCore/Bridge/N64EmulatorBridge.m
+@@ -443,9 +443,11 @@ - (void)startWithGameURL:(NSURL *)gameURL
+         
+         BOOL didLoadVideoPlugin = [self loadPlugin:@"N64DeltaCore_Video" type:M64PLUGIN_GFX];
+         NSAssert(didLoadVideoPlugin, @"Failed to load video plugin.");
++        (void)didLoadVideoPlugin; // NSAssert is compiled out in Release.
+         
+         BOOL didLoadRSPPlugin = [self loadPlugin:@"N64DeltaCore_RSP" type:M64PLUGIN_RSP];
+         NSAssert(didLoadRSPPlugin, @"Failed to load RSP plugin.");
++        (void)didLoadRSPPlugin;
+         
+         self.didLoadPlugins = YES;
+     }
+diff --git a/Cores/GBADeltaCore/SFML/include/SFML/System/UtfCharTraits.hpp b/Cores/GBADeltaCore/SFML/include/SFML/System/UtfCharTraits.hpp
+new file mode 100644
+index 00000000..6c1c3009
+--- /dev/null
++++ b/Cores/GBADeltaCore/SFML/include/SFML/System/UtfCharTraits.hpp
+@@ -0,0 +1,88 @@
++// Bound compatibility addition: explicit traits for SFML's unsigned UTF code
++// units. Standard libraries only guarantee std::char_traits specializations
++// for the standard character types.
++
++#ifndef SFML_UTFCHARTRAITS_HPP
++#define SFML_UTFCHARTRAITS_HPP
++
++#include <algorithm>
++#include <cstdint>
++#include <cstring>
++#include <cwchar>
++#include <iosfwd>
++#include <limits>
++#include <type_traits>
++
++namespace sf
++{
++namespace priv
++{
++template <typename T>
++struct UtfCharTraits
++{
++    typedef T char_type;
++    typedef std::uint_least64_t int_type;
++    typedef std::streamoff off_type;
++    typedef std::streampos pos_type;
++    typedef std::mbstate_t state_type;
++
++    static_assert(std::is_unsigned<T>::value &&
++                  std::numeric_limits<T>::digits < std::numeric_limits<int_type>::digits,
++                  "UTF code units must fit in int_type alongside a distinct EOF value");
++
++    static void assign(char_type& destination, const char_type& source) { destination = source; }
++    static bool eq(char_type left, char_type right) { return left == right; }
++    static bool lt(char_type left, char_type right) { return left < right; }
++
++    static int compare(const char_type* left, const char_type* right, std::size_t count)
++    {
++        for (std::size_t i = 0; i < count; ++i)
++        {
++            if (lt(left[i], right[i])) return -1;
++            if (lt(right[i], left[i])) return 1;
++        }
++        return 0;
++    }
++
++    static std::size_t length(const char_type* string)
++    {
++        std::size_t count = 0;
++        while (!eq(string[count], char_type())) ++count;
++        return count;
++    }
++
++    static const char_type* find(const char_type* string, std::size_t count, const char_type& value)
++    {
++        for (std::size_t i = 0; i < count; ++i)
++            if (eq(string[i], value)) return string + i;
++        return NULL;
++    }
++
++    static char_type* move(char_type* destination, const char_type* source, std::size_t count)
++    {
++        if (count) std::memmove(destination, source, count * sizeof(char_type));
++        return destination;
++    }
++
++    static char_type* copy(char_type* destination, const char_type* source, std::size_t count)
++    {
++        if (count) std::memcpy(destination, source, count * sizeof(char_type));
++        return destination;
++    }
++
++    static char_type* assign(char_type* destination, std::size_t count, char_type value)
++    {
++        if (count) std::fill_n(destination, count, value);
++        return destination;
++    }
++
++    static int_type to_int_type(char_type value) { return static_cast<int_type>(value); }
++    static char_type to_char_type(int_type value) { return static_cast<char_type>(value); }
++    static bool eq_int_type(int_type left, int_type right) { return left == right; }
++    static int_type eof() { return std::numeric_limits<int_type>::max(); }
++    static int_type not_eof(int_type value) { return eq_int_type(value, eof()) ? 0 : value; }
++};
++}
++}
++
++#endif

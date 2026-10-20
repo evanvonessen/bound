@@ -5,6 +5,7 @@ export DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}"
 logs="$(pwd)/.build/verification/latest"
 mkdir -p "$logs"
 PrototypeTools/prepare.sh > "$logs/prepare.log" 2>&1
+PrototypeTools/validate-sfml-strings.sh > "$logs/sfml-strings.log" 2>&1
 swift test --package-path PrototypeTests > "$logs/models.log" 2>&1
 if [[ -z "${QA_SIMULATOR_ID:-}" ]]; then
     QA_SIMULATOR_ID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next((v["udid"] for a in d["devices"].values() for v in a if v["name"]=="Bound Gameplay Pacing QA"), ""))')"

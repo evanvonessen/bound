@@ -42,6 +42,10 @@ extension StoreKitError: PurchasesErrorConvertible {
             /// so we can't extract any additional information like we do on `SKError.toPurchasesErrorCode`
             return ErrorUtils.storeProblemError(error: self)
 
+        case .unsupported, .invalidPresentationContext:
+            // Preserve the fallback behavior of the pinned SDK for newer StoreKit errors.
+            return ErrorUtils.unknownError(error: self)
+
         @unknown default:
             return ErrorUtils.unknownError(error: self)
         }
@@ -61,6 +65,8 @@ extension StoreKitError: PurchasesErrorConvertible {
             return "not_available_in_storefront"
         case .notEntitled:
             return "not_entitled"
+        case .unsupported, .invalidPresentationContext:
+            return "unknown_store_kit_error"
         @unknown default:
             return "unknown_store_kit_error"
         }
@@ -92,6 +98,9 @@ extension Product.PurchaseError: PurchasesErrorConvertible {
                 .missingOfferParameters:
             return ErrorUtils.invalidPromotionalOfferError(error: self)
 
+        case .paymentMethodBindingConfigurationRequired:
+            return ErrorUtils.unknownError(error: self)
+
         @unknown default:
             return ErrorUtils.unknownError(error: self)
         }
@@ -115,6 +124,8 @@ extension Product.PurchaseError: PurchasesErrorConvertible {
             return "invalid_offer_signature"
         case .missingOfferParameters:
             return "missing_offer_parameters"
+        case .paymentMethodBindingConfigurationRequired:
+            return "unknown_store_kit_error"
         @unknown default:
             return "unknown_store_kit_error"
         }

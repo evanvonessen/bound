@@ -4300,6 +4300,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
+				LM_SKIP_METADATA_EXTRACTION = YES;
 				OTHER_CFLAGS = (
 					"-fno-strict-aliasing",
 					"-DGCC",
@@ -4347,6 +4348,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
+				LM_SKIP_METADATA_EXTRACTION = YES;
 				OTHER_CFLAGS = (
 					"-fno-strict-aliasing",
 					"-DGCC",
@@ -4380,6 +4382,7 @@
 					"\"$(SRCROOT)/libMupen64Plus/SDL\"",
 					"\"$(SRCROOT)/Mupen64Plus/mupen64plus-core/subprojects\"/**",
 				);
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				OTHER_CFLAGS = (
 					"$(inherited)",
 					"-DM64P_PARALLEL=1",
@@ -4410,6 +4413,7 @@
 					"\"$(SRCROOT)/libMupen64Plus/SDL\"",
 					"\"$(SRCROOT)/Mupen64Plus/mupen64plus-core/subprojects\"/**",
 				);
+				LIBTOOL_NO_WARNING_FOR_NO_SYMBOLS = YES;
 				OTHER_CFLAGS = (
 					"$(inherited)",
 					"-DM64P_PARALLEL=1",

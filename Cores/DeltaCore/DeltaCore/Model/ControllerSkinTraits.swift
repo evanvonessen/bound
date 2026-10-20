@@ -61,8 +61,18 @@ extension ControllerSkin
             let device: Device
             let displayType: DisplayType
             let orientation: Orientation
+
+            let externalDisplayRole: UISceneSession.Role
+            if #available(iOS 16.0, *)
+            {
+                externalDisplayRole = .windowExternalDisplayNonInteractive
+            }
+            else
+            {
+                externalDisplayRole = .windowExternalDisplay
+            }
             
-            if let scene = window.windowScene, scene.session.role == .windowExternalDisplay
+            if let scene = window.windowScene, scene.session.role == externalDisplayRole
             {
                 //TODO: Support .portrait TV skins
                 device = .tv

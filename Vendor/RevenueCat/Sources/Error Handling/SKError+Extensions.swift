@@ -63,6 +63,10 @@ extension SKError: PurchasesErrorConvertible {
 
             return ErrorUtils.storeProblemError(error: self)
 
+        case .paymentMethodBindingConfigurationRequired:
+            // Preserve the fallback behavior of the pinned SDK for this newer StoreKit error.
+            return ErrorUtils.unknownError(error: self)
+
         @unknown default:
             switch SKError.UndocumentedCode(rawValue: self.code.rawValue) {
             case .unhandledException:
@@ -137,6 +141,8 @@ extension SKError.Code {
             return "unsupported_platform"
         case .overlayPresentedInBackgroundScene:
             return "overlay_presented_in_background_scene"
+        case .paymentMethodBindingConfigurationRequired:
+            return "unknown_store_kit_error"
         @unknown default:
             return "unknown_store_kit_error"
         }

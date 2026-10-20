@@ -406,7 +406,8 @@ static u32 decode_cheat(char *string, int index)
       if (i == 4) string++;
       p = strchr (ggvalidchars, *string++);
       if (p == NULL) return 0;
-      n = p - ggvalidchars;
+      // strchr found an element in the fixed 32-character code alphabet.
+      n = (int)(p - ggvalidchars);
 
       switch (i)
       {

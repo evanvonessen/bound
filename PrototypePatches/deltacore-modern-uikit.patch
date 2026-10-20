@@ -1,0 +1,64 @@
+# Local UIKit compatibility updates; preserve the iOS 14 package deployment target and upstream revision.
+diff --git a/Cores/DeltaCore/DeltaCore/Model/ControllerSkinTraits.swift b/Cores/DeltaCore/DeltaCore/Model/ControllerSkinTraits.swift
+index f0ba5d15..c04df71a 100644
+--- a/Cores/DeltaCore/DeltaCore/Model/ControllerSkinTraits.swift
++++ b/Cores/DeltaCore/DeltaCore/Model/ControllerSkinTraits.swift
+@@ -61,8 +61,18 @@ extension ControllerSkin
+             let device: Device
+             let displayType: DisplayType
+             let orientation: Orientation
++
++            let externalDisplayRole: UISceneSession.Role
++            if #available(iOS 16.0, *)
++            {
++                externalDisplayRole = .windowExternalDisplayNonInteractive
++            }
++            else
++            {
++                externalDisplayRole = .windowExternalDisplay
++            }
+             
+-            if let scene = window.windowScene, scene.session.role == .windowExternalDisplay
++            if let scene = window.windowScene, scene.session.role == externalDisplayRole
+             {
+                 //TODO: Support .portrait TV skins
+                 device = .tv
+diff --git a/Cores/DeltaCore/DeltaCore/UI/Controller/ControllerView.swift b/Cores/DeltaCore/DeltaCore/UI/Controller/ControllerView.swift
+index 0965b6cf..6a05f264 100644
+--- a/Cores/DeltaCore/DeltaCore/UI/Controller/ControllerView.swift
++++ b/Cores/DeltaCore/DeltaCore/UI/Controller/ControllerView.swift
+@@ -194,6 +194,16 @@ public class ControllerView: UIView, GameController
+     private func initialize()
+     {
+         self.backgroundColor = UIColor.clear
++
++        if #available(iOS 17.0, *)
++        {
++            let layoutTraits: [UITrait] = [UITraitUserInterfaceIdiom.self,
++                                          UITraitHorizontalSizeClass.self,
++                                          UITraitVerticalSizeClass.self]
++            self.registerForTraitChanges(layoutTraits + UITraitCollection.systemTraitsAffectingImageLookup) { (self: ControllerView, _) in
++                self.setNeedsLayout()
++            }
++        }
+         
+         self.contentView.translatesAutoresizingMaskIntoConstraints = false
+         self.addSubview(self.contentView)
+@@ -344,11 +354,15 @@ public class ControllerView: UIView, GameController
+     
+     //MARK: - <UITraitEnvironment>
+     /// <UITraitEnvironment>
++    @available(iOS, introduced: 8.0, deprecated: 17.0, message: "Uses trait change registration on iOS 17 and later.")
+     public override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?)
+     {
+         super.traitCollectionDidChange(previousTraitCollection)
+-        
+-        self.setNeedsLayout()
++
++        if #unavailable(iOS 17.0)
++        {
++            self.setNeedsLayout()
++        }
+     }
+ }
+ 
