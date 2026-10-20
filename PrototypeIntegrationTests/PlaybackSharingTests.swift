@@ -1139,10 +1139,18 @@ extension PlaybackSharingTests {
             }
         }
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        // Import consumes its source URL, including when the game already exists.
+        // Keep the bundled cartridge available for the other playback tests.
+        let importDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: importDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: importDirectory) }
+        let importURL = importDirectory.appendingPathComponent(fixture.lastPathComponent)
+        try FileManager.default.copyItem(at: fixture, to: importURL)
         let imported = await withCheckedContinuation { continuation in
-            DatabaseManager.shared.importGames(at: [fixture]) { continuation.resume(returning: ($0, $1)) }
+            DatabaseManager.shared.importGames(at: [importURL]) { continuation.resume(returning: ($0, $1)) }
         }
         XCTAssertTrue(imported.1.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.path), "Import must preserve the shared test cartridge")
         let game = try XCTUnwrap(imported.0.first)
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         let controllers = ExternalGameControllerManager.shared
