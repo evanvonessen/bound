@@ -3,7 +3,7 @@ import UIKit
 import AVFoundation
 import CoreData
 import GameController
-import DeltaCore
+@testable import DeltaCore
 @testable import Delta
 @testable import class Delta.Game
 @testable import class Delta.GameViewController
@@ -14,7 +14,89 @@ private struct RendererFixtureGame: GameProtocol {
 }
 
 @MainActor
+private final class StaticButtonTouch: UITouch {
+    let target: UIView
+    var point: CGPoint
+
+    init(target: UIView, point: CGPoint) {
+        self.target = target
+        self.point = point
+        super.init()
+    }
+
+    override var view: UIView? { target }
+    override func location(in view: UIView?) -> CGPoint {
+        target.convert(point, to: view)
+    }
+}
+
+@MainActor
 final class StockControlAndGestureTests: XCTestCase {
+    func testNativeButtonsStayVisuallyStaticWhilePressSlideAndCancelReachInputs() throws {
+        let native = try XCTUnwrap(DeltaCore.ControllerSkin.standardControllerSkin(for: .gba))
+        for orientation: DeltaCore.ControllerSkin.Orientation in [.portrait, .landscape] {
+            let traits = DeltaCore.ControllerSkin.Traits(device: .iphone, displayType: .edgeToEdge, orientation: orientation)
+            let size = orientation == .portrait ? CGSize(width: 390, height: 300) : CGSize(width: 844, height: 390)
+            let minimal = BoundMinimalControllerSkin(base: native, canvasSize: size, traits: UITraitCollection(userInterfaceStyle: .light))
+            for skin: ControllerSkinProtocol in [native, minimal] {
+                let controller = ControllerView(frame: CGRect(origin: .zero, size: size))
+                controller.overrideControllerSkinTraits = traits
+                controller.overrideControllerSkinSize = .large
+                controller.controllerSkin = skin
+                controller.layoutIfNeeded()
+
+                func inputView(in view: UIView) -> ButtonsInputView? {
+                    (view as? ButtonsInputView) ?? view.subviews.compactMap { inputView(in: $0) }.first
+                }
+                let buttons = try XCTUnwrap(inputView(in: controller))
+                XCTAssertNil(buttons.pressedImage, "Pressed skin artwork must not replace the static controls")
+                for enabled in [false, true] {
+                    controller.isButtonHapticFeedbackEnabled = enabled
+                    XCTAssertEqual(buttons.isHapticFeedbackEnabled, enabled, "The existing Delta haptic preference still reaches the native touch handler")
+                }
+
+                let items = try XCTUnwrap(buttons.items)
+                var points = items.filter { $0.kind == .button }.map { CGPoint(x: $0.frame.midX, y: $0.frame.midY) }
+                let dpad = try XCTUnwrap(items.first { $0.kind == .dPad })
+                points += [
+                    CGPoint(x: dpad.frame.midX, y: dpad.frame.minY + dpad.frame.height * 0.1),
+                    CGPoint(x: dpad.frame.maxX - dpad.frame.width * 0.1, y: dpad.frame.midY)
+                ]
+                points = points.map { CGPoint(x: $0.x * buttons.bounds.width, y: $0.y * buttons.bounds.height) }
+                XCTAssertGreaterThanOrEqual(points.count, 9, "Cover A/B, shoulders, Start/Select/Menu, and D-pad transitions")
+
+                func pixels() throws -> Data {
+                    let format = UIGraphicsImageRendererFormat()
+                    format.scale = 1
+                    let image = UIGraphicsImageRenderer(size: size, format: format).image {
+                        controller.layer.render(in: $0.cgContext)
+                    }
+                    return try XCTUnwrap(image.cgImage?.dataProvider?.data) as Data
+                }
+                let normal = try pixels()
+                let touch = StaticButtonTouch(target: buttons, point: try XCTUnwrap(points.first))
+                buttons.touchesBegan([touch], with: nil)
+                for point in points {
+                    touch.point = point
+                    buttons.touchesMoved([touch], with: nil)
+                    var expected = Set((buttons.inputs(at: point) ?? []).map(\.stringValue))
+                    if expected.contains("menu") { expected = ["menu"] }
+                    XCTAssertFalse(expected.isEmpty)
+                    XCTAssertEqual(Set(controller.activatedInputs.keys.map(\.stringValue)), expected,
+                                   "Sliding must release the previous input and activate the new one")
+                    XCTAssertTrue(try pixels() == normal, "Presses must not shrink, tilt, or swap the button artwork")
+                }
+                buttons.touchesEnded([touch], with: nil)
+                XCTAssertTrue(controller.activatedInputs.isEmpty)
+                XCTAssertTrue(try pixels() == normal)
+                buttons.touchesBegan([touch], with: nil)
+                buttons.cancelTouchInputs()
+                XCTAssertTrue(controller.activatedInputs.isEmpty, "Cancelling for a menu/layout change must release held inputs")
+                XCTAssertTrue(try pixels() == normal)
+            }
+        }
+    }
+
     func testStockMenuDefaultFrameCacheReusesAndInvalidatesItsGeometryKey() {
         let skin = NSObject()
         let otherSkin = NSObject()

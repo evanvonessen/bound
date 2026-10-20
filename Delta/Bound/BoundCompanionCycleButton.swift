@@ -50,7 +50,6 @@ final class BoundCompanionCycleButton: UIButton {
         feedbackGenerator.prepare()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override var isHighlighted: Bool { didSet { setNeedsDisplay() } }
     @objc private func pressVisual() {
         guard isEnabled, isUserInteractionEnabled, !isHidden else { return }
         isHighlighted = true
@@ -153,11 +152,10 @@ final class BoundCompanionCycleButton: UIButton {
         CGRect(x: bounds.midX-visualSize.width/2, y: bounds.midY-visualSize.height/2,
                width: visualSize.width, height: visualSize.height)
     }
-    /// Native Select/Start assets press inward by two points, immediately on
-    /// contact and immediately reset on release. No spring or delayed animation.
+    /// The companion control tracks touch state for input semantics, but keeps
+    /// its artwork fixed during gameplay presses.
     var materialFrame: CGRect {
-        let inner = artworkFrame.insetBy(dx: 1.2, dy: 1.2)
-        return isHighlighted ? inner.insetBy(dx: 2, dy: 2) : inner
+        artworkFrame.insetBy(dx: 1.2, dy: 1.2)
     }
     func configure(menuFrame: CGRect, controllerFrame: CGRect, landscape: Bool, minimal: Bool,
                    content: BoundPiPContent, canvas: CGRect, occupied: [CGRect], rightShoulderFrame: CGRect? = nil, menuHitSize: CGSize? = nil, boundPortrait: Bool = false, selectArtwork: UIImage? = nil, rightControlGutter: CGRect? = nil, menuHitFrame: CGRect? = nil, buttonType: BoundCompanionButtonType = .option1) {
@@ -345,8 +343,8 @@ final class BoundCompanionCycleButton: UIButton {
         let inset = max(1.5, 2 * scale)
         let inner = box.insetBy(dx: inset, dy: inset)
         let innerRadius = max(1, radius - inset)
-        let material = isHighlighted ? inner.insetBy(dx: 2, dy: 2) : inner
-        let materialRadius = max(1, innerRadius - (isHighlighted ? 2 : 0))
+        let material = inner
+        let materialRadius = innerRadius
         let surface = UIBezierPath(roundedRect: material, cornerRadius: materialRadius)
         let context = UIGraphicsGetCurrentContext()
 
@@ -371,7 +369,7 @@ final class BoundCompanionCycleButton: UIButton {
 
         let edge = UIBezierPath(roundedRect: material.insetBy(dx: 0.7, dy: 0.7), cornerRadius: max(1, materialRadius - 0.7))
         edge.lineWidth = 1
-        UIColor.white.withAlphaComponent(isHighlighted ? 0.18 : 0.42).setStroke()
+        UIColor.white.withAlphaComponent(0.42).setStroke()
         edge.stroke()
         context?.saveGState()
         context?.translateBy(x: 0, y: max(0.8, scale))

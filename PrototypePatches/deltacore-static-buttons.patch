@@ -1,0 +1,189 @@
+diff --git a/Cores/DeltaCore/DeltaCore/UI/Controller/ControllerView.swift b/Cores/DeltaCore/DeltaCore/UI/Controller/ControllerView.swift
+index 631979b0..0965b6cf 100644
+--- a/Cores/DeltaCore/DeltaCore/UI/Controller/ControllerView.swift
++++ b/Cores/DeltaCore/DeltaCore/UI/Controller/ControllerView.swift
+@@ -205,12 +205,7 @@ public class ControllerView: UIView, GameController
+         self.buttonsView.deactivateInputsHandler = { [weak self] (inputs) in
+             self?.deactivateButtonInputs(inputs)
+         }
+-        self.buttonsView.activateItemsHandler = { [weak self] (items) in
+-            self?.activateControllerSkinItems(items)
+-        }
+-        self.buttonsView.deactivateItemsHandler = { [weak self] (items) in
+-            self?.deactivateControllerSkinItems(items)
+-        }
++        // Keep Delta's input and haptic callbacks, without moving button artwork.
+         self.contentView.addSubview(self.buttonsView)
+         
+         self.controllerDebugView.translatesAutoresizingMaskIntoConstraints = false
+@@ -490,7 +485,6 @@ public extension ControllerView
+             else
+             {
+                 let image: UIImage?
+-                let pressedImage: UIImage?
+                 
+                 if let controllerSkin = self.controllerSkin
+                 {
+@@ -518,40 +512,15 @@ public extension ControllerView
+                             self.imageCache.setObject(cache, forKey: controllerSkin.identifier as NSString)
+                         }
+                     }
+-                    
+-                    do
+-                    {
+-                        // Pressed
+-                        
+-                        let cacheKey = String(describing: traits) + "-" + String(describing: self.controllerSkinSize) + "-" + "pressed"
+-                        
+-                        if
+-                            let cache = self.imageCache.object(forKey: controllerSkin.identifier as NSString),
+-                            let cachedImage = cache.object(forKey: cacheKey as NSString)
+-                        {
+-                            pressedImage = cachedImage
+-                        }
+-                        else
+-                        {
+-                            pressedImage = controllerSkin.pressedImage(for: traits, preferredSize: self.controllerSkinSize)
+-                        }
+-                        
+-                        if let pressedImage
+-                        {
+-                            let cache = self.imageCache.object(forKey: controllerSkin.identifier as NSString) ?? NSCache<NSString, UIImage>()
+-                            cache.setObject(pressedImage, forKey: cacheKey as NSString)
+-                            self.imageCache.setObject(cache, forKey: controllerSkin.identifier as NSString)
+-                        }
+-                    }
+                 }
+                 else
+                 {
+                     image = nil
+-                    pressedImage = nil
+                 }
+                 
+                 self.buttonsView.image = image
+-                self.buttonsView.pressedImage = pressedImage
++                // Static artwork also avoids Core Image compositing on each press.
++                self.buttonsView.pressedImage = nil
+             }
+             
+             self.buttonsView.items = items
+@@ -834,119 +803,6 @@ private extension ControllerView
+         }
+     }
+     
+-    func activateControllerSkinItems(_ items: Set<ControllerSkin.Item>)
+-    {
+-        for item in items
+-        {
+-            guard let imageView = self.buttonImageViews[item.id] else { continue }
+-            
+-            let perspectiveDistance = 500.0
+-            
+-            var transform = CATransform3DIdentity
+-            transform.m34 = -1.0/perspectiveDistance
+-            
+-            switch (item.kind, item.inputs)
+-            {
+-            case (.button, _):
+-                let pressDepthInPoints = 2.0
+-                
+-                let scaleX = 1 - (2 * pressDepthInPoints) / imageView.bounds.width
+-                let scaleY = 1 - (2 * pressDepthInPoints) / imageView.bounds.height
+-                transform = CATransform3DScale(transform, scaleX, scaleY, 1.0)
+-                
+-            case (.dPad, .directional(let up, let down, let left, let right)):
+-                let pressDepthInPoints = 3.0
+-                
+-                // Calculate tilt angle so a point `radius` from center of dpad appears to be pressed `pressDepthInPoints`
+-                func theta(distanceFromCenter radius: Double) -> Double
+-                {
+-                    // Equation = sqrt[(r / D)^2 + 2e / r] - (r / D)
+-                    return sqrt(pow(radius / perspectiveDistance, 2) + 2 * pressDepthInPoints / radius) - (radius / perspectiveDistance)
+-                }
+-                
+-                let thetaHorizontal = theta(distanceFromCenter: imageView.bounds.width / 2) // Smaller input == bigger theta
+-                let thetaVertical = theta(distanceFromCenter: imageView.bounds.height / 2)
+-                let thetaDiagonal = max(thetaHorizontal, thetaVertical) // Prefer larger theta for diagonals
+-                
+-                if self.activatedInputs.keys.contains(AnyInput(up))
+-                {
+-                    if self.activatedInputs.keys.contains(AnyInput(left))
+-                    {
+-                        // Up + Left
+-                        transform = CATransform3DRotate(transform, thetaDiagonal, 0.707, -0.707, 0)
+-                    }
+-                    else if self.activatedInputs.keys.contains(AnyInput(right))
+-                    {
+-                        // Up + Right
+-                        transform = CATransform3DRotate(transform, thetaDiagonal, 0.707, 0.707, 0)
+-                    }
+-                    else
+-                    {
+-                        // Up
+-                        transform = CATransform3DRotate(transform, thetaVertical, 1, 0, 0)
+-                    }
+-                }
+-                else if self.activatedInputs.keys.contains(AnyInput(down))
+-                {
+-                    if self.activatedInputs.keys.contains(AnyInput(left))
+-                    {
+-                        // Down + Left
+-                        transform = CATransform3DRotate(transform, thetaDiagonal, -0.707, -0.707, 0)
+-                    }
+-                    else if self.activatedInputs.keys.contains(AnyInput(right))
+-                    {
+-                        // Down + Right
+-                        transform = CATransform3DRotate(transform, thetaDiagonal, -0.707, 0.707, 0)
+-                    }
+-                    else
+-                    {
+-                        // Down
+-                        transform = CATransform3DRotate(transform, thetaVertical, -1, 0, 0)
+-                    }
+-                }
+-                else if self.activatedInputs.keys.contains(AnyInput(left))
+-                {
+-                    // Left
+-                    transform = CATransform3DRotate(transform, thetaHorizontal, 0, -1, 0)
+-                    
+-                }
+-                else if self.activatedInputs.keys.contains(AnyInput(right))
+-                {
+-                    // Right
+-                    transform = CATransform3DRotate(transform, thetaHorizontal, 0, 1, 0)
+-                }
+-                else
+-                {
+-                    // None (center)
+-                }
+-                
+-                // "Press" entire d-pad down additional 1 point into screen.
+-                // Makes effect easier to see, and handles pressing center of dpad (with no active inputs).
+-                let centerDPadPressDepthInPoints = 1.0
+-                
+-                let scaleX = 1 - (2 * centerDPadPressDepthInPoints) / imageView.bounds.width
+-                let scaleY = 1 - (2 * centerDPadPressDepthInPoints) / imageView.bounds.height
+-                transform = CATransform3DScale(transform, scaleX, scaleY, 1.0)
+-            
+-            default: break
+-            }
+-            
+-            imageView.transform3D = transform
+-            imageView.layer.zPosition = 100 // Make sure it's large enough we're not clipped by views behind us.
+-            imageView.layer.allowsEdgeAntialiasing = true // Ensure edges appear smooth regardless of transform.
+-        }
+-    }
+-    
+-    func deactivateControllerSkinItems(_ items: Set<ControllerSkin.Item>)
+-    {
+-        for item in items
+-        {
+-            guard let imageView = self.buttonImageViews[item.id] else { continue }
+-            imageView.transform3D = CATransform3DIdentity
+-            imageView.layer.zPosition = 0
+-        }
+-    }
+-    
+     func updateThumbstickValues(item: ControllerSkin.Item, xAxis: Double, yAxis: Double)
+     {
+         guard case .directional(let up, let down, let left, let right) = item.inputs else { return }

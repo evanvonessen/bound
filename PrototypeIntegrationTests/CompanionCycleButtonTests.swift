@@ -16,6 +16,11 @@ final class CompanionCycleButtonTests: XCTestCase {
         }
     }
 
+    private func renderedPixels(_ image: UIImage) -> Data? {
+        guard let cgImage = image.cgImage, let data = cgImage.dataProvider?.data else { return nil }
+        return data as Data
+    }
+
     func testReferenceCatalogStoreSharesConcurrentLoadAndPublishesOnce() async {
         let loadCounter = LockedCounter()
         let loaderThreads = LockedValues<Bool>()
@@ -1102,7 +1107,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         }
     }
 
-    func testBoundPortraitMaterialPressMatchesNativeDepthAndCancelNeverCycles() {
+    func testBoundPortraitButtonPressKeepsArtworkStableAndPreservesHapticCycleSemantics() {
         let originalLayout = BoundAppearancePreferences().screenLayout
         let originalFeedback = Settings.isButtonHapticFeedbackEnabled
         defer { BoundAppearancePreferences().screenLayout = originalLayout; Settings.isButtonHapticFeedbackEnabled = originalFeedback }
@@ -1111,25 +1116,48 @@ final class CompanionCycleButtonTests: XCTestCase {
         let material = UIGraphicsImageRenderer(size: CGSize(width: 17, height: 17)).image { _ in
             UIColor.lightGray.setFill(); UIBezierPath(rect: CGRect(x: 0, y: 0, width: 17, height: 17)).fill()
         }
-        let button = BoundCompanionCycleButton()
-        button.configure(menuFrame: CGRect(x: 20, y: 200, width: 17, height: 17),
-            controllerFrame: CGRect(x: 0, y: 0, width: 390, height: 300), landscape: false,
-            minimal: false, content: .friend, canvas: CGRect(x: 0, y: 0, width: 390, height: 300), occupied: [], boundPortrait: true, selectArtwork: material)
+        let canvas = CGRect(x: 0, y: 0, width: 390, height: 300)
+        let menu = CGRect(x: 20, y: 200, width: 17, height: 17)
         var cycles = 0, feedback = 0
-        button.cycle = { cycles += 1 }; button.buttonFeedback = { feedback += 1 }
-        let hit = button.frame, normal = button.materialFrame
-        button.sendActions(for: .touchDown)
-        XCTAssertTrue(button.isHighlighted)
-        XCTAssertEqual(button.materialFrame.width, normal.width-4, accuracy: 0.001)
-        XCTAssertEqual(button.materialFrame.height, normal.height-4, accuracy: 0.001)
-        XCTAssertEqual(button.frame, hit)
-        XCTAssertEqual(feedback, 1); XCTAssertEqual(cycles, 1)
-        button.sendActions(for: .touchCancel)
-        XCTAssertFalse(button.isHighlighted); XCTAssertEqual(button.materialFrame, normal)
-        XCTAssertEqual(feedback, 1); XCTAssertEqual(cycles, 1)
-        button.sendActions(for: .touchDown); button.sendActions(for: .touchUpInside)
-        XCTAssertFalse(button.isHighlighted); XCTAssertEqual(button.materialFrame, normal)
-        XCTAssertEqual(feedback, 2); XCTAssertEqual(cycles, 2)
+
+        for type in BoundCompanionButtonType.allCases {
+            let button = BoundCompanionCycleButton()
+            button.configure(menuFrame: menu, controllerFrame: canvas, landscape: false,
+                minimal: false, content: .friend, canvas: canvas, occupied: [], boundPortrait: true,
+                selectArtwork: material, buttonType: type)
+            button.cycle = { cycles += 1 }; button.buttonFeedback = { feedback += 1 }
+
+            let cyclesBefore = cycles
+            let feedbackBefore = feedback
+            let hit = button.frame
+            let normalMaterial = button.materialFrame
+            let normalPixels = renderedPixels(renderedButtonStrip(button))
+            XCTAssertNotNil(normalPixels, "\(type.title) should render to a pixel buffer.")
+
+            button.sendActions(for: .touchDown)
+            XCTAssertTrue(button.isHighlighted, "Touch state remains available for \(type.title).")
+            XCTAssertEqual(button.frame, hit)
+            XCTAssertEqual(button.materialFrame, normalMaterial)
+            XCTAssertEqual(renderedPixels(renderedButtonStrip(button)), normalPixels,
+                           "\(type.title) artwork must not change while pressed.")
+            XCTAssertEqual(feedback, feedbackBefore + 1)
+            XCTAssertEqual(cycles, cyclesBefore + 1)
+
+            button.sendActions(for: .touchCancel)
+            XCTAssertFalse(button.isHighlighted)
+            XCTAssertEqual(button.materialFrame, normalMaterial)
+            XCTAssertEqual(renderedPixels(renderedButtonStrip(button)), normalPixels,
+                           "\(type.title) artwork must remain stable after release.")
+            XCTAssertEqual(feedback, feedbackBefore + 1, "Cancel must not emit extra feedback.")
+            XCTAssertEqual(cycles, cyclesBefore + 1, "Cancel must not perform an extra cycle.")
+
+            button.sendActions(for: .touchDown)
+            button.sendActions(for: .touchUpInside)
+            XCTAssertFalse(button.isHighlighted)
+            XCTAssertEqual(feedback, feedbackBefore + 2)
+            XCTAssertEqual(cycles, cyclesBefore + 2,
+                           "A second completed tap performs exactly one cycle and feedback event.")
+        }
     }
 
     func testSplitOptionsUseOptionTwoFootprintAndActivateIndependentSegmentsOnTouchDown() {

@@ -103,6 +103,10 @@
     {
       "path": "PrototypePatches/deltacore-streaming-render-cache.patch",
       "purpose": "Disable Core Image intermediate caching for continuously changing game frames; preserve upstream revisions and emulator algorithms."
+    },
+    {
+      "path": "PrototypePatches/deltacore-static-buttons.patch",
+      "purpose": "Keep gameplay button artwork static without changing Delta's native touch input handling, haptic feedback, or thumbstick tracking."
     }
   ],
   "sha256": {
@@ -169,7 +173,7 @@
     "Cores/DeltaCore/DeltaCore/UI/Controller/ButtonsInputView.swift": "be06646f8b36f207ac64f5f88a16da71d96f2a7ff82158d5c627a48bf4beb244",
     "Cores/DeltaCore/DeltaCore/UI/Controller/ControllerDebugView.swift": "b904f1b6c06961d5574e7dca9909f30c60f2e5af64853c46d1032189ce4037e8",
     "Cores/DeltaCore/DeltaCore/UI/Controller/ControllerInputView.swift": "b08eee09c635fc0d6a84d6710a964971a38674b3351a9fff69bd4aefcdd1c88c",
-    "Cores/DeltaCore/DeltaCore/UI/Controller/ControllerView.swift": "73087b7dcc3427aa877afabc29b60697f6893a6e6406c2dc61e6700d7d1fcce7",
+    "Cores/DeltaCore/DeltaCore/UI/Controller/ControllerView.swift": "122eca30fadba5393fedecb13c07400e4b80f5e8adff5374cc9553b42e534268",
     "Cores/DeltaCore/DeltaCore/UI/Controller/ImmediatePanGestureRecognizer.swift": "7c00fa765f2f187e0d75cf9fcb9e11fd763c7d905f726bcb5e2f3e8f0cdbfe3b",
     "Cores/DeltaCore/DeltaCore/UI/Controller/ThumbstickInputView.swift": "1ffe2444f8297c0556b28b2a05f916aadb65df23f44372c8824ba61040b031ee",
     "Cores/DeltaCore/DeltaCore/UI/Controller/TouchControllerSkin.swift": "d62931f0142c85a7393ce5a1b32bba49c5af46abbd6d2e0dc2a0e46c07e7ac5c",
