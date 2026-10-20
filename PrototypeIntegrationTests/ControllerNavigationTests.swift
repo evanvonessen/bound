@@ -18,6 +18,77 @@ final class ControllerNavigationTests: XCTestCase {
         super.tearDown()
     }
 
+    func testAutomaticMultiviewDefaultsCaptureAndOptOut() throws {
+        let name = "MultiviewPreferenceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let preference = BoundControllerMultiviewPreferences(defaults: defaults)
+        XCTAssertFalse(preference.isEnabled)
+        preference.isEnabled = true
+        let export = try BoundConfigurationExport.snapshot(defaults: defaults, mappings: [])
+        let sections = try XCTUnwrap(export["preferences"] as? [String: [String: Any]])
+        XCTAssertEqual(sections["settings"]?[BoundControllerMultiviewPreferences.key] as? Bool, true)
+        Settings.resetPreferenceValues(in: defaults)
+        XCTAssertFalse(preference.isEnabled)
+
+        let controller = MFiGameController(controller: GCController.withExtendedGamepad())
+        let stock = BoundMultiviewDefaultMapping.mapping(for: controller, enabled: false)
+        let automatic = BoundMultiviewDefaultMapping.mapping(for: controller, enabled: true)
+        XCTAssertEqual(ActionInput(input: try XCTUnwrap(automatic.input(forControllerInput: MFiGameController.Input.leftTrigger))), .boundPreviousView)
+        XCTAssertEqual(ActionInput(input: try XCTUnwrap(automatic.input(forControllerInput: MFiGameController.Input.rightTrigger))), .boundNextView)
+        for input in [MFiGameController.Input.leftShoulder, .rightShoulder] {
+            XCTAssertEqual(automatic.input(forControllerInput: input).map(AnyInput.init), stock.input(forControllerInput: input).map(AnyInput.init))
+        }
+        let captured = BoundControllerInputMapping(base: stock, multiviewActive: true, multiviewDefaults: automatic)
+        let regular = BoundControllerInputMapping(base: stock, multiviewDefaults: automatic)
+        let expected: [(MFiGameController.Input, ActionInput)] = [(.up, .boundFocusUp), (.down, .boundFocusDown),
+            (.left, .boundFocusLeft), (.right, .boundFocusRight), (.a, .boundSelect), (.b, .boundBack),
+            (.rightThumbstickDown, .boundScrollDown), (.rightThumbstickUp, .boundScrollUp)]
+        for (input, action) in expected {
+            XCTAssertEqual(ActionInput(input: try XCTUnwrap(captured.input(forControllerInput: input))), action)
+            XCTAssertEqual(regular.input(forControllerInput: input).map(AnyInput.init), stock.input(forControllerInput: input).map(AnyInput.init))
+        }
+        for trigger in [MFiGameController.Input.leftTrigger, .rightTrigger] {
+            XCTAssertEqual(regular.input(forControllerInput: trigger).map(AnyInput.init), stock.input(forControllerInput: trigger).map(AnyInput.init),
+                           "Hidden Multiview returns default triggers to gameplay too")
+        }
+        XCTAssertNil(captured.input(forControllerInput: MFiGameController.Input.leftThumbstickDown))
+        XCTAssertNil(captured.input(forControllerInput: MFiGameController.Input.rightShoulder))
+        var custom = stock
+        custom.set(ActionInput.none, forControllerInput: MFiGameController.Input.a)
+        custom.set(ActionInput.toggleBoundMultiview, forControllerInput: MFiGameController.Input.b)
+        custom.set(StandardGameControllerInput.menu, forControllerInput: MFiGameController.Input.x)
+        custom.set(ActionInput.boundShowTypes, forControllerInput: MFiGameController.Input.leftTrigger)
+        let customCapture = BoundControllerInputMapping(base: custom, multiviewActive: true)
+        XCTAssertNil(customCapture.input(forControllerInput: MFiGameController.Input.a))
+        XCTAssertEqual(ActionInput(input: try XCTUnwrap(customCapture.input(forControllerInput: MFiGameController.Input.b))), .toggleBoundMultiview)
+        XCTAssertEqual(StandardGameControllerInput(input: try XCTUnwrap(customCapture.input(forControllerInput: MFiGameController.Input.x))), .menu)
+        XCTAssertEqual(ActionInput(input: try XCTUnwrap(customCapture.input(forControllerInput: MFiGameController.Input.leftTrigger))), .boundShowTypes)
+    }
+
+    func testAutomaticMultiviewHeldNavigationStopsOnReleaseAndEligibilityLoss() async throws {
+        let controller = MFiGameController(controller: GCController.withExtendedGamepad())
+        let repeater = BoundMultiviewInputRepeater()
+        var count = 0
+        repeater.begin(controller: controller, action: .boundScrollDown) { count += 1; return true }
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertGreaterThan(count, 0)
+        repeater.end(controller: controller, action: .boundScrollDown)
+        let released = count
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(count, released)
+        var eligible = true
+        repeater.begin(controller: controller, action: .boundFocusDown) {
+            guard eligible else { return false }
+            count += 1
+            return true
+        }
+        eligible = false
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertEqual(count, released)
+        repeater.endAll()
+    }
+
     func testNavigationEventsRequireMatchingGameContentAndCommand() {
         let notification = Notification(
             name: BoundControllerNavigationEvent.notificationName,
@@ -239,9 +310,12 @@ final class ControllerNavigationTests: XCTestCase {
 
     func testLegacySettingsControllerRendersAndUpdatesControllerPreferences() throws {
         let defaults = UserDefaults.standard
+        let priorMultiview = defaults.object(forKey: BoundControllerMultiviewPreferences.key)
         let priorMode = defaults.object(forKey: BoundControllerModePreferences.key)
         let priorNavigation = defaults.object(forKey: BoundControllerNavigationPreferences.key)
         defer {
+            if let priorMultiview { defaults.set(priorMultiview, forKey: BoundControllerMultiviewPreferences.key) }
+            else { defaults.removeObject(forKey: BoundControllerMultiviewPreferences.key) }
             if let priorMode { defaults.set(priorMode, forKey: BoundControllerModePreferences.key) }
             else { defaults.removeObject(forKey: BoundControllerModePreferences.key) }
             if let priorNavigation { defaults.set(priorNavigation, forKey: BoundControllerNavigationPreferences.key) }
@@ -256,8 +330,8 @@ final class ControllerNavigationTests: XCTestCase {
         let modeEnabledPath = IndexPath(row: 4, section: 1)
         let navigationPath = IndexPath(row: 5, section: 1)
 
-        XCTAssertEqual(settings.tableView(tableView, numberOfRowsInSection: 1), 6)
-        for indexPath in [modeEnabledPath, navigationPath] {
+        XCTAssertEqual(settings.tableView(tableView, numberOfRowsInSection: 1), 7)
+        for indexPath in [modeEnabledPath, navigationPath, IndexPath(row: 6, section: 1)] {
             XCTAssertEqual(settings.tableView(tableView, heightForRowAt: indexPath), UITableView.automaticDimension)
             XCTAssertNotNil(settings.tableView(tableView, cellForRowAt: indexPath))
         }
@@ -275,6 +349,14 @@ final class ControllerNavigationTests: XCTestCase {
         navigationSwitch.isOn = !oldNavigation
         navigationSwitch.sendActions(for: .valueChanged)
         XCTAssertEqual(BoundControllerNavigationPreferences().isEnabled, !oldNavigation)
+
+        let multiviewCell = settings.tableView(tableView, cellForRowAt: IndexPath(row: 6, section: 1))
+        XCTAssertEqual(multiviewCell.textLabel?.text, "Allow Controller to Control Multiview")
+        let multiviewSwitch = try XCTUnwrap(multiviewCell.accessoryView as? UISwitch)
+        let oldMultiview = BoundControllerMultiviewPreferences().isEnabled
+        multiviewSwitch.isOn = !oldMultiview
+        multiviewSwitch.sendActions(for: .valueChanged)
+        XCTAssertEqual(BoundControllerMultiviewPreferences().isEnabled, !oldMultiview)
     }
 
     private func makeWindow() throws -> UIWindow {

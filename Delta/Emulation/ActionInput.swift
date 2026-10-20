@@ -28,6 +28,7 @@ enum ActionInput: String
     case toggleBoundFriend
     case toggleBoundMultiview
     case boundScrollUp, boundScrollDown, boundScrollLeft, boundScrollRight
+    case boundFocusUp, boundFocusDown, boundFocusLeft, boundFocusRight
     case boundPreviousItem, boundNextItem, boundSelect, boundBack, boundDetails
     case boundPreviousView, boundNextView
     case boundHideFriend, boundHideMultiview
@@ -47,7 +48,8 @@ enum ActionInput: String
             + multiviewTabActions
             + (BoundControllerNavigationPreferences().isEnabled ? viewNavigationActions : [])
     }
-    var isViewNavigationAction: Bool { Self.viewNavigationActions.contains(self) }
+    var isAutomaticFocusAction: Bool { [.boundFocusUp, .boundFocusDown, .boundFocusLeft, .boundFocusRight].contains(self) }
+    var isViewNavigationAction: Bool { Self.viewNavigationActions.contains(self) || isAutomaticFocusAction }
     var isMultiviewTabAction: Bool { Self.multiviewTabActions.contains(self) }
     var isBoundPanelAction: Bool {
         self == .cycleBoundPanels || self == .toggleBoundFriend || self == .toggleBoundMultiview || isViewNavigationAction || isMultiviewTabAction
@@ -60,6 +62,10 @@ enum ActionInput: String
         case .boundScrollRight: .scrollRight
         case .boundPreviousItem: .previousItem
         case .boundNextItem: .nextItem
+        case .boundFocusUp: .focusUp
+        case .boundFocusDown: .focusDown
+        case .boundFocusLeft: .focusLeft
+        case .boundFocusRight: .focusRight
         case .boundSelect: .select
         case .boundBack: .back
         case .boundDetails: .details

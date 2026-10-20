@@ -298,6 +298,10 @@ extension Input
             case .boundScrollRight: return NSLocalizedString("View: Scroll Right", comment: "")
             case .boundPreviousItem: return NSLocalizedString("View: Previous Pokémon / Item", comment: "")
             case .boundNextItem: return NSLocalizedString("View: Next Pokémon / Item", comment: "")
+            case .boundFocusUp: return "View: Focus Up"
+            case .boundFocusDown: return "View: Focus Down"
+            case .boundFocusLeft: return "View: Focus Left"
+            case .boundFocusRight: return "View: Focus Right"
             case .boundSelect: return NSLocalizedString("View: Select / Choose", comment: "")
             case .boundBack: return NSLocalizedString("View: Back", comment: "")
             case .boundDetails: return NSLocalizedString("View: Details", comment: "")
@@ -464,6 +468,10 @@ extension Input
             case .boundScrollRight: return "arrow.right"
             case .boundPreviousItem: return "chevron.left"
             case .boundNextItem: return "chevron.right"
+            case .boundFocusUp: return "arrow.up"
+            case .boundFocusDown: return "arrow.down"
+            case .boundFocusLeft: return "arrow.left"
+            case .boundFocusRight: return "arrow.right"
             case .boundSelect: return "checkmark.circle"
             case .boundBack: return "arrow.uturn.backward"
             case .boundDetails: return "list.bullet.rectangle"

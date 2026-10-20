@@ -2783,11 +2783,18 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(controls.waitForExistence(timeout: 5)); controls.tap()
         let enabled = app.switches["bound.controller-mode-enabled"]
         let navigation = app.switches["bound.controller-view-navigation"]
+        let multiview = app.switches["bound.controller-multiview"]
         XCTAssertTrue(enabled.waitForExistence(timeout: 5))
         XCTAssertFalse(element("bound.controller-mode-layout", in: app).exists,
                         "Controller Mode is a single on/off setting.")
         XCTAssertEqual(enabled.value as? String, "1")
         XCTAssertEqual(navigation.value as? String, "0")
+        XCTAssertTrue(multiview.waitForExistence(timeout: 5))
+        XCTAssertEqual(multiview.label, "Allow Controller to Control Multiview")
+        XCTAssertEqual(multiview.value as? String, "0")
+        multiview.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(multiview.value as? String, "1")
+        screenshot("Controls-Allow-Multiview-Portrait")
         navigation.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         XCTAssertEqual(navigation.value as? String, "1")
         enabled.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
@@ -2800,6 +2807,10 @@ final class CompanionUITests: XCTestCase {
         app.buttons["Settings"].tap()
         XCTAssertTrue(controls.waitForExistence(timeout: 5)); controls.tap()
         XCTAssertEqual(navigation.value as? String, "1", "Navigation preference remains independent of mode enablement")
+        XCTAssertEqual(multiview.value as? String, "1", "Automatic Multiview preference persists independently of Controller Mode")
+        screenshot("Controls-Allow-Controller-to-Control-Multiview")
+        multiview.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(multiview.value as? String, "0")
         enabled.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         closeBoundSheet(in: app)
         XCTAssertTrue(element("bound.native-r", in: app).waitForNonExistence(timeout: 5))

@@ -451,6 +451,7 @@
 		B478FFB04AC0484F86943117 /* CompanionControllerNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11CA9D7692114487B210F790 /* CompanionControllerNavigationTests.swift */; };
 		6D3165E003A5490495F2064E /* BoundConfigurationExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B71EC63FAFA4C8A8C29BCB8 /* BoundConfigurationExport.swift */; };
 		0DCC5A17E990440B949F4582 /* ConfigurationExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */; };
+		4C2097EAF620479EAF50EA68 /* MultiviewDexNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1D82587FA554BF8B7A9E409 /* MultiviewDexNavigationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1262,6 +1263,7 @@
 		11CA9D7692114487B210F790 /* CompanionControllerNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionControllerNavigationTests.swift; sourceTree = "<group>"; };
 		3B71EC63FAFA4C8A8C29BCB8 /* BoundConfigurationExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundConfigurationExport.swift; sourceTree = "<group>"; };
 		79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigurationExportTests.swift; sourceTree = "<group>"; };
+		C1D82587FA554BF8B7A9E409 /* MultiviewDexNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiviewDexNavigationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1378,6 +1380,7 @@
 				E519E2BAF174403DB37DB3A5 /* PlaybackSharingTests.swift */,
 				35733EA11CCE9FF25284EFB8 /* AppearanceIntegrationTests.swift */,
 				79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */,
+				C1D82587FA554BF8B7A9E409 /* MultiviewDexNavigationTests.swift */,
 				5EE41698681944B29CE0B89C /* SettingsResetTests.swift */,
 				B6D6920D53544AE59F218B53 /* ControllerButtonPlacementTests.swift */,
 				11CA9D7692114487B210F790 /* CompanionControllerNavigationTests.swift */,
@@ -3159,6 +3162,7 @@
 				074EAD7F7AE78C628F0977A8 /* PlaybackSharingTests.swift in Sources */,
 				273B677E21CFB932EFA82ACD /* AppearanceIntegrationTests.swift in Sources */,
 				0DCC5A17E990440B949F4582 /* ConfigurationExportTests.swift in Sources */,
+				4C2097EAF620479EAF50EA68 /* MultiviewDexNavigationTests.swift in Sources */,
 				5269C7C7055548F49212555B /* SettingsResetTests.swift in Sources */,
 				54F6C0C0B35A4D60AF6A63C3 /* ControllerButtonPlacementTests.swift in Sources */,
 				B478FFB04AC0484F86943117 /* CompanionControllerNavigationTests.swift in Sources */,

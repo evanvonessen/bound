@@ -41,6 +41,7 @@ struct BoundBossGuideView: View {
     @State private var selection = BoundBossGuideSelection(teamID: "kanto-leaders-4", pokemonIndex: 0)
     @State private var showingPicker = false
     @State private var controllerPickerTeamID: String?
+    @State private var controllerNavigationFocus: ControllerNavigationFocus?
     @State private var showingTeam = false
     @State private var detailSheet: DetailSheet?
     @State private var showsLayout4Stats = false
@@ -56,6 +57,10 @@ struct BoundBossGuideView: View {
             case .weaknesses(_, _): "weaknesses"
             }
         }
+    }
+    private enum ControllerNavigationFocus: Equatable {
+        case trainer
+        case lineup
     }
     private var anyPresentation: Bool {
         showingPicker || showingTeam || detailSheet != nil
@@ -156,6 +161,7 @@ struct BoundBossGuideView: View {
         .onChange(of: isActive) { _, active in
             if !active {
                 showingPicker = false; showingTeam = false; detailSheet = nil
+                controllerNavigationFocus = nil
             }
         }
         .allowsHitTesting(isActive && previewLayout == nil)
@@ -298,6 +304,8 @@ struct BoundBossGuideView: View {
                 }
                 .buttonStyle(.plain).accessibilityLabel("Choose boss, \(team.name)")
                 .accessibilityIdentifier("bound.boss-picker")
+                .overlay { controllerFocusOutline(.trainer) }
+                .accessibilityValue(controllerNavigationFocus == .trainer ? "Focused" : "")
             }
             conditionBadges(team, compact: true)
             layout12PokemonRow(team: team, pokemon: pokemon, index: index, detail: detail, reference: reference)
@@ -397,6 +405,8 @@ struct BoundBossGuideView: View {
             }
             .buttonStyle(.plain).accessibilityLabel("Choose boss, \(team.name)")
             .accessibilityIdentifier("bound.boss-picker")
+            .overlay { controllerFocusOutline(.trainer) }
+            .accessibilityValue(controllerNavigationFocus == .trainer ? "Focused" : "")
             Group {
                 if scrollsDetails { ScrollView { details } } else { details }
             }
@@ -472,6 +482,8 @@ struct BoundBossGuideView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Choose boss, \(team.name)")
                     .accessibilityIdentifier("bound.boss-picker")
+                    .overlay { controllerFocusOutline(.trainer) }
+                .accessibilityValue(controllerNavigationFocus == .trainer ? "Focused" : "")
                     capBadge(team)
                 }
             }
@@ -513,6 +525,8 @@ struct BoundBossGuideView: View {
             }
             .accessibilityLabel("Choose boss, \(team.name)")
             .accessibilityIdentifier("bound.boss-picker")
+            .overlay { controllerFocusOutline(.trainer) }
+            .accessibilityValue(controllerNavigationFocus == .trainer ? "Focused" : "")
             if onIsland { Color.clear.frame(width: 160, height: 1).accessibilityHidden(true) }
             if isLayout11Or12, let catalog {
                 HStack(spacing: 0) {
@@ -615,6 +629,8 @@ struct BoundBossGuideView: View {
                 }
             }.fixedSize()
         }
+        .overlay { controllerFocusOutline(.lineup) }
+        .accessibilityValue(controllerNavigationFocus == .lineup ? "Focused Pokémon lineup" : "")
     }
 
     /// Keep the selected Pokémon and the team choices together in one row.
@@ -642,6 +658,8 @@ struct BoundBossGuideView: View {
             }
         }
         .frame(height: 46)
+        .overlay { controllerFocusOutline(.lineup) }
+        .accessibilityValue(controllerNavigationFocus == .lineup ? "Focused Pokémon lineup" : "")
     }
 
     private func layout12PokemonIdentity(pokemon: BoundBossPokemon, types: [BoundRRDexType],
@@ -769,6 +787,8 @@ struct BoundBossGuideView: View {
                 }
                 .buttonStyle(.plain).accessibilityLabel("Choose boss, \(team.name)")
                 .accessibilityIdentifier("bound.boss-picker")
+                .overlay { controllerFocusOutline(.trainer) }
+                .accessibilityValue(controllerNavigationFocus == .trainer ? "Focused" : "")
                 if !usesIslandActions {
                     Button { showWeaknesses(pokemon, reference: catalogStore.reference) } label: {
                         Image(systemName: "shield.lefthalf.filled").frame(width: compact ? 26 : 32, height: compact ? 26 : 32)
@@ -819,6 +839,8 @@ struct BoundBossGuideView: View {
                     }
                     .buttonStyle(.plain).accessibilityLabel("Choose boss, \(team.name)")
                     .accessibilityIdentifier("bound.boss-picker")
+                    .overlay { controllerFocusOutline(.trainer) }
+                .accessibilityValue(controllerNavigationFocus == .trainer ? "Focused" : "")
                     capBadge(team)
                 }
                 conditionBadges(team, compact: true)
@@ -865,6 +887,8 @@ struct BoundBossGuideView: View {
                 }
                 .buttonStyle(.plain).accessibilityLabel("Choose boss, \(team.name)")
                 .accessibilityIdentifier("bound.boss-picker")
+                .overlay { controllerFocusOutline(.trainer) }
+                .accessibilityValue(controllerNavigationFocus == .trainer ? "Focused" : "")
                 capBadge(team)
             }
             conditionBadges(team, compact: true)
@@ -1013,6 +1037,8 @@ struct BoundBossGuideView: View {
             .accessibilityLabel("Choose boss, \(team.name)")
             .accessibilityHint("Opens the boss list")
             .accessibilityIdentifier("bound.boss-picker")
+            .overlay { controllerFocusOutline(.trainer) }
+            .accessibilityValue(controllerNavigationFocus == .trainer ? "Focused" : "")
             capBadge(team)
             layout5DetailSelector()
         }
@@ -1198,6 +1224,8 @@ struct BoundBossGuideView: View {
             .accessibilityLabel("Choose boss: \(context)")
             .accessibilityHint("Opens the boss list")
             .accessibilityIdentifier("bound.boss-picker")
+            .overlay { controllerFocusOutline(.trainer) }
+            .accessibilityValue(controllerNavigationFocus == .trainer ? "Focused" : "")
             VStack(alignment: .trailing, spacing: 0) {
                 capBadge(team)
                 layout6ConditionBadges(team)
@@ -1625,19 +1653,51 @@ struct BoundBossGuideView: View {
         switch command {
         case .scrollUp, .scrollDown, .scrollLeft, .scrollRight:
             return
+        case .clearFocus:
+            controllerNavigationFocus = nil
+        case .focusDown:
+            if controllerNavigationFocus == nil { controllerNavigationFocus = .trainer }
+            else if controllerNavigationFocus == .trainer { controllerNavigationFocus = .lineup }
+        case .focusUp:
+            if controllerNavigationFocus == .lineup { controllerNavigationFocus = .trainer }
+            else if controllerNavigationFocus == .trainer { controllerNavigationFocus = nil }
+        case .focusLeft:
+            if controllerNavigationFocus == .trainer { moveTrainer(-1, from: team, catalog: catalog) }
+            else if controllerNavigationFocus == .lineup { advance(-1, team: team) }
+        case .focusRight:
+            if controllerNavigationFocus == .trainer { moveTrainer(1, from: team, catalog: catalog) }
+            else if controllerNavigationFocus == .lineup { advance(1, team: team) }
         case .previousItem:
-            advance(-1, team: team)
+            if controllerNavigationFocus == .trainer { moveTrainer(-1, from: team, catalog: catalog) }
+            else { advance(-1, team: team) }
         case .nextItem:
-            advance(1, team: team)
+            if controllerNavigationFocus == .trainer { moveTrainer(1, from: team, catalog: catalog) }
+            else { advance(1, team: team) }
         case .select:
-            controllerPickerTeamID = team.id
-            showingPicker = true
+            if controllerNavigationFocus == .lineup { showingTeam = true }
+            else {
+                controllerPickerTeamID = team.id
+                showingPicker = true
+            }
         case .details:
             showingTeam = true
         case .back:
             if showingTeam { showingTeam = false }
             else if detailSheet != nil { detailSheet = nil }
+            else { controllerNavigationFocus = nil }
         }
+    }
+
+    private func moveTrainer(_ offset: Int, from team: BoundBossTeam, catalog: BoundBossCatalog) {
+        guard let next = catalog.adjacentTrainer(to: team.id, offset: offset) else { return }
+        choose(BoundBossGuideSelection(teamID: next.id, pokemonIndex: 0), catalog: catalog)
+    }
+
+    private func controllerFocusOutline(_ focus: ControllerNavigationFocus) -> some View {
+        RoundedRectangle(cornerRadius: 8)
+            .strokeBorder(Color(uiColor: .deltaPurple), lineWidth: controllerNavigationFocus == focus ? 3 : 0)
+            .padding(-2)
+            .accessibilityHidden(true)
     }
 }
 
@@ -1907,6 +1967,16 @@ private struct BoundBossPicker: View {
         switch command {
         case .scrollUp, .scrollDown, .scrollLeft, .scrollRight, .details:
             return
+        case .clearFocus:
+            highlightedTeamID = nil
+        case .focusUp:
+            moveHighlight(-1, candidates: candidates)
+        case .focusDown:
+            moveHighlight(1, candidates: candidates)
+        case .focusLeft:
+            moveHighlight(-1, candidates: candidates)
+        case .focusRight:
+            moveHighlight(1, candidates: candidates)
         case .previousItem:
             moveHighlight(-1, candidates: candidates)
         case .nextItem:

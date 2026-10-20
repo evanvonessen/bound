@@ -95,7 +95,7 @@ enum BoundConfigurationExport {
         snapshot["connectedControllerDefaults"] = ExternalGameControllerManager.shared.connectedControllers.map { controller in
             ["controllerType": controller.inputType.rawValue,
              "playerIndex": controller.playerIndex.map { $0 as Any } ?? NSNull(),
-             "bindings": (try? json(bindings(in: controller.defaultInputMapping as? DeltaCore.GameControllerInputMapping))) ?? [:]] as [String: Any]
+             "bindings": (try? json(bindings(in: BoundMultiviewDefaultMapping.mapping(for: controller)))) ?? [:]] as [String: Any]
         }
         return BoundConfigurationDocument(data: try JSONSerialization.data(withJSONObject: snapshot, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]))
     }
@@ -166,7 +166,7 @@ enum BoundConfigurationExport {
         var keys = Set(Settings.defaultPreferences.keys)
         keys.formUnion([
             BoundUIVersionPreferences.key, BoundAppearancePreferences.screenLayoutKey, BoundAppearancePreferences.themeKey,
-            BoundControllerModePreferences.key, BoundControllerModePreferences.layoutKey, BoundControllerNavigationPreferences.key,
+            BoundControllerModePreferences.key, BoundControllerModePreferences.layoutKey, BoundControllerNavigationPreferences.key, BoundControllerMultiviewPreferences.key,
             "gameScreenOffsetPortrait", "gameScreenOffsetLandscape", "preferredGBColorPalette",
             "preferredSaveStatesSorting", "prefersDescendingSaveStatesSorting"
         ])
@@ -209,6 +209,7 @@ enum BoundConfigurationExport {
         values[BoundAppearancePreferences.themeKey] = BoundAppearancePreferences(defaults: defaults).theme.rawValue
         values[BoundControllerModePreferences.key] = BoundControllerModePreferences(defaults: defaults).isEnabled
         values[BoundControllerNavigationPreferences.key] = BoundControllerNavigationPreferences(defaults: defaults).isEnabled
+        values[BoundControllerMultiviewPreferences.key] = BoundControllerMultiviewPreferences(defaults: defaults).isEnabled
         values[BoundCompanionButtonPreferences.key] = BoundCompanionButtonPreferences(defaults: defaults).buttonType.rawValue
         values[BoundReferenceLayoutPreferences.bossKey] = 12
         values[BoundReferenceLayoutPreferences.dexKey] = 12

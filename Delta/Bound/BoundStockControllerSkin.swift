@@ -374,6 +374,21 @@ final class BoundControllerNavigationPreferences {
     }
 }
 
+/// Automatic controls are opt-in and apply only while landscape Multiview is visible.
+final class BoundControllerMultiviewPreferences {
+    static let key = "bound.controller-multiview.v1.enabled"
+    private let defaults: UserDefaults
+    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    var isEnabled: Bool {
+        get { defaults.bool(forKey: Self.key) }
+        set {
+            defaults.set(newValue, forKey: Self.key)
+            NotificationCenter.default.post(name: BoundAppearancePreferences.didChangeNotification, object: nil,
+                                            userInfo: [Self.key: newValue])
+        }
+    }
+}
+
 /// Right-aligns the same fitted gameplay size used by Modes 1 and 3.
 /// Friend and touch controls use the left column without reducing gameplay.
 struct BoundControllerModeTwoGeometry {

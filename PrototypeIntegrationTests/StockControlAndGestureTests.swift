@@ -468,6 +468,9 @@ final class StockControlAndGestureTests: XCTestCase {
         let oldLocalPlayerIndex = Settings.localControllerPlayerIndex
         let navigationPreferences = BoundControllerNavigationPreferences()
         let oldNavigationEnabled = navigationPreferences.isEnabled
+        let automaticMultiview = BoundControllerMultiviewPreferences()
+        let oldAutomaticMultiview = automaticMultiview.isEnabled
+        automaticMultiview.isEnabled = false
         let landscapePreferences = BoundLandscapePreferences()
         let oldLandscapeOption = landscapePreferences.option
         let manager = ExternalGameControllerManager.shared
@@ -507,6 +510,7 @@ final class StockControlAndGestureTests: XCTestCase {
             modePreferences.isEnabled = oldModeEnabled
             modePreferences.layout = oldModeLayout
             navigationPreferences.isEnabled = oldNavigationEnabled
+            automaticMultiview.isEnabled = oldAutomaticMultiview
             landscapePreferences.option = oldLandscapeOption
             appearance.screenLayout = oldScreenLayout
             appearance.theme = oldTheme
@@ -633,7 +637,9 @@ final class StockControlAndGestureTests: XCTestCase {
         press(.boundNextItem)
         XCTAssertEqual(events.count, 2)
         XCTAssertEqual(BoundControllerNavigationEvent.command(from: try XCTUnwrap(events.last), gameID: game.identifier, content: .bosses), .nextItem)
-        try await Task.sleep(nanoseconds: 150_000_000)
+        // Allow the newly selected SwiftUI panel to finish mounting before
+        // asking its notification receiver to present the selector.
+        try await Task.sleep(nanoseconds: 500_000_000)
         press(.boundSelect)
         for _ in 0..<30 where core.state != .paused { try await Task.sleep(nanoseconds: 50_000_000) }
         XCTAssertEqual(core.state, .paused, "The existing companion presentation flow pauses gameplay")
@@ -775,18 +781,101 @@ final class StockControlAndGestureTests: XCTestCase {
         external.deactivate(MFiGameController.Input.rightShoulder)
         XCTAssertEqual(try nativeInputs(), 0)
 
-        bindRightShoulder(ActionInput.boundNextView)
-        external.activate(MFiGameController.Input.rightShoulder)
+        // Rotation reloads persisted bindings. Use a real mapping record here,
+        // rather than an injected receiver mapping that a reload would replace.
+        do {
+            let mappingsContext = DatabaseManager.shared.viewContext
+            let existing = GameControllerInputMapping.inputMapping(forPlayer: external.playerIndex,
+                gameType: .gba, controllerType: external.inputType, in: mappingsContext)
+            let previousMapping = existing?.deltaCoreInputMapping
+            let mappingEntity = try XCTUnwrap(NSEntityDescription.entity(forEntityName: "GameControllerInputMapping", in: mappingsContext))
+            let record = existing ?? GameControllerInputMapping(entity: mappingEntity, insertInto: mappingsContext)
+            defer {
+                if let previousMapping { record.deltaCoreInputMapping = previousMapping }
+                else { mappingsContext.delete(record) }
+                mappingsContext.processPendingChanges()
+            }
+            var saved = DeltaCore.GameControllerInputMapping(gameControllerInputType: external.inputType)
+            saved.set(ActionInput.boundNextView, forControllerInput: MFiGameController.Input.rightShoulder)
+            record.deltaCoreInputMapping = saved
+            record.gameType = .gba
+            record.gameControllerInputType = external.inputType
+            record.playerIndex = Int16(try XCTUnwrap(external.playerIndex))
+            gameController.refreshBoundControllerPreferences()
+            external.activate(MFiGameController.Input.rightShoulder)
+            setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
+            companion.navigateControllerView(.boundShowDex)
+            external.activate(MFiGameController.Input.rightShoulder)
+            XCTAssertEqual(companion.controllerReferenceContent, .dex, "A hold started in portrait must remain ignored until released")
+            external.deactivate(MFiGameController.Input.rightShoulder)
+            external.activate(MFiGameController.Input.rightShoulder)
+            external.deactivate(MFiGameController.Input.rightShoulder)
+            XCTAssertEqual(companion.controllerReferenceContent, .bosses, "Rotating back to landscape must reactivate the saved action")
+            XCTAssertEqual(try nativeInputs(), 0)
+        }
+
+        // The automatic switch works independently of Controller Mode and
+        // transfers physical input without waiting for another layout frame.
+        navigationPreferences.isEnabled = false
+        modePreferences.isEnabled = false
+        automaticMultiview.isEnabled = true
         setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
-        press(.boundShowDex)
-        bindRightShoulder(ActionInput.boundNextView)
-        external.activate(MFiGameController.Input.rightShoulder)
-        XCTAssertEqual(companion.controllerReferenceContent, .dex, "A hold started in portrait must remain ignored until released")
-        external.deactivate(MFiGameController.Input.rightShoulder)
-        external.activate(MFiGameController.Input.rightShoulder)
-        external.deactivate(MFiGameController.Input.rightShoulder)
-        XCTAssertEqual(companion.controllerReferenceContent, .bosses, "Rotating back to landscape must reactivate the saved action")
+        companion.navigateControllerView(.boundShowDex)
+        gameController.refreshBoundControllerPreferences()
+        XCTAssertTrue(companion.automaticControllerMultiviewAvailable)
+        core.deltaCore.emulatorBridge.resetInputs()
+        let automaticEvents = events.count
+        external.activate(MFiGameController.Input.down)
+        XCTAssertEqual(try nativeInputs(), 0, "D-pad navigation must not also move the game")
+        external.deactivate(MFiGameController.Input.down)
+        XCTAssertEqual(BoundControllerNavigationEvent.command(from: try XCTUnwrap(events.last), gameID: game.identifier, content: .dex), .focusDown)
+        external.activate(MFiGameController.Input.leftThumbstickDown, value: 1)
+        external.deactivate(MFiGameController.Input.leftThumbstickDown)
+        XCTAssertEqual(events.count, automaticEvents + 1, "Left stick must not navigate Multiview")
         XCTAssertEqual(try nativeInputs(), 0)
+        external.activate(MFiGameController.Input.rightTrigger)
+        external.deactivate(MFiGameController.Input.rightTrigger)
+        XCTAssertEqual(companion.controllerReferenceContent, .bosses)
+        external.activate(MFiGameController.Input.leftTrigger)
+        external.deactivate(MFiGameController.Input.leftTrigger)
+        XCTAssertEqual(companion.controllerReferenceContent, .dex)
+        companion.toggleControllerPanel(.toggleBoundMultiview)
+        XCTAssertFalse(companion.automaticControllerMultiviewAvailable)
+        external.activate(MFiGameController.Input.up)
+        XCTAssertNotEqual(try nativeInputs(), 0, "Game input returns on hide, before a layout pass")
+        companion.navigateControllerView(.boundShowDex)
+        XCTAssertEqual(try nativeInputs(), 0, "Opening Multiview releases an already-held game direction")
+        companion.navigateControllerView(.boundHideMultiview)
+        XCTAssertNotEqual(try nativeInputs(), 0, "Hiding restores a still-held direction immediately")
+        external.deactivate(MFiGameController.Input.up)
+        XCTAssertEqual(try nativeInputs(), 0)
+        companion.navigateControllerView(.boundShowDex)
+        automaticMultiview.isEnabled = false
+        external.activate(MFiGameController.Input.a)
+        XCTAssertNotEqual(try nativeInputs(), 0, "Opting out restores normal game buttons even with Multiview visible")
+        external.deactivate(MFiGameController.Input.a)
+        automaticMultiview.isEnabled = true
+        setViewport(CGSize(width: 390, height: 844), traits: portraitTraits)
+        let beforePortraitAutomatic = events.count
+        external.activate(MFiGameController.Input.down)
+        XCTAssertNotEqual(try nativeInputs(), 0, "Portrait always keeps gameplay control")
+        external.deactivate(MFiGameController.Input.down)
+        XCTAssertEqual(events.count, beforePortraitAutomatic)
+        automaticMultiview.isEnabled = false
+        modePreferences.isEnabled = true
+        setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
+
+        // Native touch skins use their own mapping protocol, not a serialized
+        // wireless mapping. Refreshing automatic navigation must preserve it.
+        modePreferences.isEnabled = false
+        setViewport(CGSize(width: 390, height: 844), traits: portraitTraits)
+        let touchA = AnyInput(stringValue: "a", intValue: nil, type: .controller(.controllerSkin))
+        gameController.controllerView.activate(touchA)
+        XCTAssertNotEqual(try nativeInputs(), 0, "Touch A must still reach the game after controller mapping refreshes")
+        gameController.controllerView.deactivate(touchA)
+        XCTAssertEqual(try nativeInputs(), 0)
+        modePreferences.isEnabled = true
+        setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
 
         var menuMapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: external.inputType)
         menuMapping.set(StandardGameControllerInput.menu, forControllerInput: MFiGameController.Input.share)

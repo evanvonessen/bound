@@ -220,7 +220,7 @@ private extension ControllerInputsViewController
 {
     func makeDefaultInputMapping() -> GameControllerInputMapping
     {
-        let deltaCoreInputMapping = self.gameController.defaultInputMapping as? DeltaCore.GameControllerInputMapping ?? DeltaCore.GameControllerInputMapping(gameControllerInputType: gameController.inputType)
+        let deltaCoreInputMapping = BoundMultiviewDefaultMapping.mapping(for: self.gameController)
         
         let inputMapping = GameControllerInputMapping(inputMapping: deltaCoreInputMapping, context: self.managedObjectContext)
         inputMapping.gameControllerInputType = gameController.inputType

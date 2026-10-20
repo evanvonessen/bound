@@ -37,7 +37,7 @@ private class ControlsEditor
         self.system = system
         self.playerIndex = playerIndex
         
-        self.defaultMapping = controller.defaultInputMapping as? DeltaCore.GameControllerInputMapping ?? DeltaCore.GameControllerInputMapping(gameControllerInputType: controller.inputType)
+        self.defaultMapping = BoundMultiviewDefaultMapping.mapping(for: controller)
         
         self.inputMapping = self.defaultMapping
         self.loadMapping()

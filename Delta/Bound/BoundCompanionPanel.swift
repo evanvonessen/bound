@@ -267,6 +267,7 @@ final class BoundCompanionCoordinator {
     private var notesPaused = false
     private var notesDismissalTask: Task<Void, Never>?
     private var pendingControllerReferenceAction: ActionInput?
+    private var lastControllerFocusContent: BoundPiPContent?
     private var macSheetPaused = false
     private weak var macSheetCore: EmulatorCore?
     private(set) var isEditingNotes = false
@@ -296,6 +297,7 @@ final class BoundCompanionCoordinator {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.layoutKey)
             UserDefaults.standard.removeObject(forKey: BoundControllerNavigationPreferences.key)
+            UserDefaults.standard.removeObject(forKey: BoundControllerMultiviewPreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundExperimentalSettingsPreferences.key)
             for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") || key.hasPrefix("bound.landscape.option5.") || key.hasPrefix("bound.landscape.option6.") || key.hasPrefix("bound.landscape.option7.") || key.hasPrefix("bound.landscape.controller-mode.") || key.hasPrefix("bound.landscape.controller-mode2.") || key.hasPrefix("bound.landscape.controller-mode3.") || key.hasPrefix("bound.landscape.controller-unified.") || key == "bound.landscape.game-screen.v1" { UserDefaults.standard.removeObject(forKey: key) }
@@ -305,7 +307,10 @@ final class BoundCompanionCoordinator {
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-screen-layout-bound") { BoundAppearancePreferences().screenLayout = .bound }
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-reset-screen-layout") { UserDefaults.standard.removeObject(forKey: BoundAppearancePreferences.screenLayoutKey) }
         #endif
-        state.changed = { [weak owner] in owner?.view.setNeedsLayout() }
+        state.changed = { [weak self, weak owner] in
+            owner?.view.setNeedsLayout()
+            self?.refreshControllerMultiviewRouting()
+        }
         state.editControls = { [weak self] in self?.editControls() }
         state.selectionChanged = { [weak self] in self?.cancelInteractions() }
         state.sharingChanged = { [weak self] in self?.tap.setEnabled($0) }
@@ -315,7 +320,14 @@ final class BoundCompanionCoordinator {
             self.keyboardHeight = owner.presentedViewController == nil ? max(0, owner.view.bounds.maxY - local.minY) : 0
             owner.view.setNeedsLayout()
         })
-        observers.append(NotificationCenter.default.addObserver(forName: BoundAppearancePreferences.didChangeNotification, object: nil, queue: .main) { [weak self, weak owner] _ in self?.cancelInteractions(); owner?.view.setNeedsLayout() })
+        observers.append(NotificationCenter.default.addObserver(forName: BoundAppearancePreferences.didChangeNotification, object: nil, queue: .main) { [weak self, weak owner] notification in
+            self?.cancelInteractions()
+            owner?.view.setNeedsLayout()
+            if notification.userInfo?[BoundControllerMultiviewPreferences.key] != nil {
+                owner?.refreshBoundControllerPreferences()
+            }
+            self?.refreshControllerMultiviewRouting()
+        })
         observers.append(NotificationCenter.default.addObserver(forName: Settings.didResetNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
             self.cancelInteractions()
@@ -347,7 +359,10 @@ final class BoundCompanionCoordinator {
             installMacWorkspace(in: owner)
         } else {
             landscapeCompanion.reload()
-            landscapeCompanion.needsLayout = { [weak owner] in owner?.view.setNeedsLayout() }
+            landscapeCompanion.needsLayout = { [weak self, weak owner] in
+                owner?.view.setNeedsLayout()
+                self?.refreshControllerMultiviewRouting()
+            }
             landscapeCompanion.beforeSwitch = { [weak self, weak owner] in
                 owner?.view.endEditing(true)
                 self?.gestures?.cancel()
@@ -366,7 +381,10 @@ final class BoundCompanionCoordinator {
                 alignmentFeedback.selectionChanged()
                 alignmentFeedback.prepare()
             }
-            landscapeArrangement.needsLayout = { [weak owner] in owner?.view.setNeedsLayout() }
+            landscapeArrangement.needsLayout = { [weak self, weak owner] in
+                owner?.view.setNeedsLayout()
+                self?.refreshControllerMultiviewRouting()
+            }
             landscapeArrangement.beforeSwitch = { [weak self, weak owner] in
                 owner?.view.endEditing(true)
                 owner?.controllerView.cancelTouchInputs()
@@ -535,6 +553,7 @@ final class BoundCompanionCoordinator {
     }
     func layout(in bounds: CGRect, safeArea: UIEdgeInsets, controllerSize: CGSize) -> CGRect? {
         guard let owner else { return nil }
+        defer { refreshControllerMultiviewRouting() }
         if let macHost, let overlay {
             let safeBounds = bounds.inset(by: safeArea)
             let geometry = BoundMacWorkspaceGeometry(bounds: CGRect(origin: .zero, size: safeBounds.size))
@@ -931,24 +950,42 @@ final class BoundCompanionCoordinator {
         state.advancePanel()
     }
     func toggleControllerPanel(_ action: ActionInput) {
-        guard state.landscape, BoundControllerModePreferences().isEnabled,
+        guard state.landscape,
+              BoundControllerModePreferences().isEnabled || BoundControllerMultiviewPreferences().isEnabled,
               BoundAppearancePreferences().effectiveScreenLayout == .bound else { return }
         switch action {
         case .toggleBoundFriend:
-            if landscapeArrangement.active { landscapeArrangement.toggleControllerFriend() }
+            if landscapeArrangement.active, !landscapeArrangement.editing { landscapeArrangement.toggleFriend() }
             else if landscapeCompanion.active { landscapeCompanion.toggleFriend() }
         case .toggleBoundMultiview:
             if dismissReferenceBeforeControllerAction(action) { return }
-            landscapeArrangement.toggleControllerMultiview()
+            if landscapeArrangement.active, landscapeArrangement.multiview, !landscapeArrangement.editing {
+                landscapeArrangement.toggleReference()
+            } else if landscapeCompanion.active {
+                if landscapeCompanion.referenceVisible { landscapeCompanion.hideReference() }
+                else { landscapeCompanion.selectReference(landscapeCompanion.referenceContent) }
+            }
         default: break
         }
     }
     var controllerNavigationAvailable: Bool {
-        BoundControllerNavigationPreferences().isEnabled && controllerCompanionAvailable
+        controllerCompanionAvailable && (BoundControllerMultiviewPreferences().isEnabled
+            || (BoundControllerNavigationPreferences().isEnabled && BoundControllerModePreferences().isEnabled))
+    }
+    var automaticControllerMultiviewAvailable: Bool {
+        BoundControllerMultiviewPreferences().isEnabled && controllerCompanionAvailable
+            && controllerReferenceContent != nil
+    }
+    private func refreshControllerMultiviewRouting() {
+        let content = automaticControllerMultiviewAvailable ? controllerReferenceContent : nil
+        if let oldContent = lastControllerFocusContent, oldContent != content {
+            BoundControllerNavigationEvent.post(command: .clearFocus, gameID: gameID, content: oldContent)
+        }
+        lastControllerFocusContent = content
+        owner?.refreshBoundMultiviewInputRouting()
     }
     private var controllerCompanionAvailable: Bool {
         state.landscape
-            && BoundControllerModePreferences().isEnabled
             && BoundAppearancePreferences().effectiveScreenLayout == .bound
             && !state.showingFriends && !state.showingSettings
             && !landscapeArrangement.editing && !landscapeCompanion.editing
@@ -956,6 +993,7 @@ final class BoundCompanionCoordinator {
     }
     var controllerMultiviewTabCyclingAvailable: Bool {
         controllerCompanionAvailable
+            && (BoundControllerModePreferences().isEnabled || BoundControllerMultiviewPreferences().isEnabled)
             && (landscapeArrangement.active ? landscapeArrangement.contents.count > 1 : landscapeCompanion.referenceContents.count > 1)
     }
     var controllerReferenceContent: BoundPiPContent? {

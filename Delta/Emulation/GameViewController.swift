@@ -63,6 +63,12 @@ private extension GameViewController
     struct DefaultInputMapping: GameControllerInputMappingProtocol
     {
         let gameController: GameController
+        let defaultMapping: GameControllerInputMappingProtocol?
+
+        init(gameController: GameController) {
+            self.gameController = gameController
+            self.defaultMapping = gameController.defaultInputMapping
+        }
         
         var gameControllerInputType: GameControllerInputType {
             return self.gameController.inputType
@@ -70,7 +76,7 @@ private extension GameViewController
         
         func input(forControllerInput controllerInput: Input) -> Input?
         {
-            if let mappedInput = self.gameController.defaultInputMapping?.input(forControllerInput: controllerInput)
+            if let mappedInput = self.defaultMapping?.input(forControllerInput: controllerInput)
             {
                 return mappedInput
             }
@@ -88,6 +94,10 @@ class GameViewController: DeltaCore.GameViewController
 {
     private let boundCompanion = BoundCompanionCoordinator()
     var boundCompanionForTesting: BoundCompanionCoordinator { boundCompanion }
+    func refreshBoundControllerPreferences() {
+        updateControllers()
+        refreshBoundMultiviewInputRouting()
+    }
     private(set) var boundRRDexSaveCache = BoundRRDexSaveCache()
     func boundRRDexDidLoadSaveState(core: EmulatorCore) {
         guard core === emulatorCore, core.game.type == .gba else { return }
@@ -121,6 +131,9 @@ class GameViewController: DeltaCore.GameViewController
     private var boundControlConfiguration: BoundControlConfiguration?
     private var boundAppliedSkinIdentifier: String?
     private let boundPanelActions = BoundPanelActionRouter()
+    private let boundMultiviewRepeater = BoundMultiviewInputRepeater()
+    private var boundMultiviewCapturing = false
+    private var updatingBoundMultiviewRouting = false
     var boundFastForwardPreferences = BoundFastForwardPreferences()
     /// Assumed to be Delta.Game instance
     override var game: GameProtocol? {
@@ -366,6 +379,7 @@ class GameViewController: DeltaCore.GameViewController
             case .screenshot: self.performScreenshotAction()
             case .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview,
                  .boundScrollUp, .boundScrollDown, .boundScrollLeft, .boundScrollRight,
+                 .boundFocusUp, .boundFocusDown, .boundFocusLeft, .boundFocusRight,
                  .boundPreviousItem, .boundNextItem, .boundSelect, .boundBack, .boundDetails,
                  .boundPreviousView, .boundNextView, .boundHideFriend, .boundHideMultiview,
                  .boundShowDex, .boundShowBosses, .boundShowTypes: break // Handled independently above; never emulated inputs.
@@ -404,6 +418,7 @@ class GameViewController: DeltaCore.GameViewController
             case .screenshot: break
             case .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview,
                  .boundScrollUp, .boundScrollDown, .boundScrollLeft, .boundScrollRight,
+                 .boundFocusUp, .boundFocusDown, .boundFocusLeft, .boundFocusRight,
                  .boundPreviousItem, .boundNextItem, .boundSelect, .boundBack, .boundDetails,
                  .boundPreviousView, .boundNextView, .boundHideFriend, .boundHideMultiview,
                  .boundShowDex, .boundShowBosses, .boundShowTypes: break
@@ -414,7 +429,11 @@ class GameViewController: DeltaCore.GameViewController
         let expectedCore = emulatorCore
         let apply = { [weak self, weak controller] in
             guard let self, let controller else { return }
-            if !pressed { self.boundPanelActions.release(controller: controller, action: action); return }
+            if !pressed {
+                self.boundPanelActions.release(controller: controller, action: action)
+                self.boundMultiviewRepeater.end(controller: controller, action: action)
+                return
+            }
             let navigationIsAllowedWhilePaused = action.isMultiviewTabAction
                 ? self.boundCompanion.allowsControllerTabCyclingWhilePaused
                 : self.boundCompanion.allowsControllerNavigationWhilePaused
@@ -436,6 +455,21 @@ class GameViewController: DeltaCore.GameViewController
                 if action.isViewNavigationAction || action.isMultiviewTabAction { self.boundCompanion.navigateControllerView(action) }
                 else if action == .cycleBoundPanels { self.boundCompanion.cyclePanels() }
                 else { self.boundCompanion.toggleControllerPanel(action) }
+                if self.boundMultiviewCapturing,
+                   action.isAutomaticFocusAction || [.boundScrollUp, .boundScrollDown, .boundScrollLeft, .boundScrollRight].contains(action) {
+                    self.boundMultiviewRepeater.begin(controller: controller, action: action) { [weak self, weak controller] in
+                        guard let self, let controller, self.boundMultiviewCapturing,
+                              self.boundCompanion.automaticControllerMultiviewAvailable,
+                              self.emulatorCore === expectedCore,
+                              expectedCore?.state == .running || (expectedCore?.state == .paused && self.boundCompanion.allowsControllerNavigationWhilePaused),
+                              self.presentedViewController == nil || self.boundCompanion.allowsControllerNavigationWhilePaused,
+                              controller.playerIndex != nil,
+                              self.view.window?.windowScene?.hasKeyboardFocus == true,
+                              UIApplication.shared.applicationState == .active else { return false }
+                        self.boundCompanion.navigateControllerView(action)
+                        return true
+                    }
+                }
             }
         }
         if Thread.isMainThread { apply() } else { DispatchQueue.main.async(execute: apply) }
@@ -445,6 +479,7 @@ class GameViewController: DeltaCore.GameViewController
         let release = { [weak self, weak controller] in
             guard let self, let controller else { return }
             self.boundPanelActions.release(controller: controller)
+            self.boundMultiviewRepeater.end(controller: controller)
         }
         if Thread.isMainThread { release() } else { DispatchQueue.main.async(execute: release) }
     }
@@ -872,6 +907,51 @@ private extension GameViewController
 //MARK: - Controllers -
 private extension GameViewController
 {
+    /// Change only receiver mappings when a panel opens/closes. No controller
+    /// reconnect, database fetch, or next-frame delay is needed for this handoff.
+    internal func refreshBoundMultiviewInputRouting() {
+        guard !updatingBoundMultiviewRouting, let core = emulatorCore else { return }
+        let capture = boundCompanion.automaticControllerMultiviewAvailable
+            && view.bounds.width > view.bounds.height
+        guard capture != boundMultiviewCapturing else { return }
+        updatingBoundMultiviewRouting = true
+        boundMultiviewCapturing = capture
+        boundMultiviewRepeater.endAll()
+        for controller in ExternalGameControllerManager.shared.connectedControllers {
+            guard controller.playerIndex != nil,
+                  let old = controller.inputMapping(for: self) as? BoundControllerInputMapping else { continue }
+            let mapping = BoundControllerInputMapping(base: old.base, multiviewActive: capture,
+                                                       multiviewDefaults: old.multiviewDefaults)
+            installBoundInputMapping(mapping, controller: controller, core: core)
+        }
+        updatingBoundMultiviewRouting = false
+    }
+
+    private func installBoundInputMapping(_ mapping: BoundControllerInputMapping,
+                                         controller: GameController, core: EmulatorCore) {
+        let old = controller.inputMapping(for: self)
+        let held = controller.activatedInputs
+        // Release the OLD mapped game input before swapping. Otherwise holding
+        // a direction while opening Multiview can leave the emulator latched.
+        for (physical, _) in held {
+            guard let previous = old?.input(forControllerInput: physical),
+                  AnyInput(previous) != mapping.input(forControllerInput: physical).map(AnyInput.init) else { continue }
+            self.gameController(controller, didDeactivate: previous)
+            core.gameController(controller, didDeactivate: previous)
+        }
+        controller.addReceiver(self, inputMapping: mapping)
+        controller.addReceiver(core, inputMapping: mapping)
+        for (physical, value) in held {
+            guard let target = mapping.input(forControllerInput: physical),
+                  ActionInput(input: target) == nil,
+                  StandardGameControllerInput(input: target) != .menu,
+                  old?.input(forControllerInput: physical).map(AnyInput.init) != AnyInput(target) else { continue }
+            // Resume a still-held gameplay direction immediately on hiding the panel.
+            self.gameController(controller, didActivate: target, value: value)
+            core.gameController(controller, didActivate: target, value: value)
+        }
+    }
+
     @objc func updateControllers()
     {
         let firstActiveController = ExternalGameControllerManager.shared.connectedControllers.first(where: { $0.playerIndex != nil })
@@ -960,22 +1040,27 @@ private extension GameViewController
                 if gameController.playerIndex != nil
                 {
                     let inputMapping: GameControllerInputMappingProtocol
+                    let multiviewDefaults: DeltaCore.GameControllerInputMapping?
                     
                     if let mapping = GameControllerInputMapping.inputMapping(forPlayer: gameController.playerIndex, gameType: game.type, controllerType: gameController.inputType, in: DatabaseManager.shared.viewContext)
                     {
                         inputMapping = mapping
+                        multiviewDefaults = nil
                     }
                     else
                     {
                         inputMapping = DefaultInputMapping(gameController: gameController)
+                        multiviewDefaults = BoundControllerMultiviewPreferences().isEnabled
+                            ? BoundMultiviewDefaultMapping.mapping(for: gameController) : nil
                     }
                     
                     if let controller = gameController as? MFiGameController {
                         BoundControllerSystemGestures.apply(to: controller, mapping: inputMapping)
                     }
-                    let gameplayMapping = BoundControllerInputMapping(base: inputMapping)
-                    gameController.addReceiver(self, inputMapping: gameplayMapping)
-                    gameController.addReceiver(emulatorCore, inputMapping: gameplayMapping)
+                    let gameplayMapping = BoundControllerInputMapping(base: inputMapping,
+                        multiviewActive: gameController.inputType != .controllerSkin && boundMultiviewCapturing,
+                        multiviewDefaults: multiviewDefaults)
+                    installBoundInputMapping(gameplayMapping, controller: gameController, core: emulatorCore)
                 }
                 else
                 {

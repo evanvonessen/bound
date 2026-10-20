@@ -22,7 +22,7 @@ extension Settings {
             BoundUIVersionPreferences.key, BoundExperimentalSettingsPreferences.key, BoundDeveloperFeatures.key,
             BoundAppearancePreferences.screenLayoutKey, BoundAppearancePreferences.themeKey,
             BoundControllerModePreferences.key, BoundControllerModePreferences.layoutKey,
-            BoundControllerNavigationPreferences.key,
+            BoundControllerNavigationPreferences.key, BoundControllerMultiviewPreferences.key,
             BoundCompanionButtonPreferences.key, BoundCompanionButtonPreferences.legacyKey,
             BoundReferenceLayoutPreferences.bossKey, BoundReferenceLayoutPreferences.dexKey,
             "bound.delta.pip.v1.corner", "bound.delta.pip.v1.view-order"

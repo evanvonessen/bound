@@ -14,6 +14,8 @@ enum BoundMultiviewTabCycling {
 /// Filters app-only choices before they reach either gameplay input receiver.
 struct BoundControllerInputMapping: GameControllerInputMappingProtocol {
     let base: GameControllerInputMappingProtocol
+    var multiviewActive = false
+    var multiviewDefaults: DeltaCore.GameControllerInputMapping? = nil
     var gameControllerInputType: GameControllerInputType { base.gameControllerInputType }
 
     static func isLeftStickDirection(_ input: Input) -> Bool {
@@ -27,13 +29,41 @@ struct BoundControllerInputMapping: GameControllerInputMappingProtocol {
     }
 
     func input(forControllerInput controllerInput: Input) -> Input? {
-        guard let target = base.input(forControllerInput: controllerInput) else { return nil }
-        if let action = ActionInput(input: target) {
+        let target = (multiviewActive ? multiviewDefaults : nil)?.input(forControllerInput: controllerInput)
+            ?? base.input(forControllerInput: controllerInput)
+        if let target, let action = ActionInput(input: target) {
             if action == .none || action == .systemOverlay { return nil }
             if Self.isLeftStickDirection(controllerInput), action.isBoundPanelAction { return nil }
+            // Keep the user's panel and menu shortcuts available during capture.
+            if action.isBoundPanelAction { return target }
+        }
+        if multiviewActive {
+            if let target, StandardGameControllerInput(input: target) == .menu { return target }
+            return Self.multiviewAction(for: controllerInput)
         }
         return target
     }
+
+    static func multiviewAction(for input: Input) -> ActionInput? {
+        let name: String
+        if let input = MFiGameController.Input(input: input) { name = input.rawValue }
+        else if let input = StandardGameControllerInput(input: input) { name = input.rawValue }
+        else { return nil }
+        switch name {
+        case "up": return .boundFocusUp
+        case "down": return .boundFocusDown
+        case "left": return .boundFocusLeft
+        case "right": return .boundFocusRight
+        case "a": return .boundSelect
+        case "b": return .boundBack
+        case "rightThumbstickUp": return .boundScrollUp
+        case "rightThumbstickDown": return .boundScrollDown
+        case "rightThumbstickLeft": return .boundScrollLeft
+        case "rightThumbstickRight": return .boundScrollRight
+        default: return nil
+        }
+    }
+
 }
 
 enum BoundControllerSystemGestures {
@@ -62,6 +92,7 @@ enum BoundControllerNavigationCommand: String, CaseIterable, Sendable {
     case scrollDown
     case scrollLeft
     case scrollRight
+    case focusUp, focusDown, focusLeft, focusRight, clearFocus
     case previousItem
     case nextItem
     case select
@@ -294,4 +325,50 @@ enum BoundControllerNavigationScrollTarget {
         scrollView.setContentOffset(offset, animated: animated)
         return true
     }
+}
+
+/// Default trigger shortcuts are supplied only for an uncustomized mapping.
+/// Saved maps remain authoritative, including explicit None assignments.
+enum BoundMultiviewDefaultMapping {
+    static func mapping(for controller: GameController, enabled: Bool = BoundControllerMultiviewPreferences().isEnabled) -> DeltaCore.GameControllerInputMapping {
+        var mapping = controller.defaultInputMapping as? DeltaCore.GameControllerInputMapping
+            ?? DeltaCore.GameControllerInputMapping(gameControllerInputType: controller.inputType)
+        guard enabled, controller.inputType == .mfi else { return mapping }
+        mapping.set(ActionInput.boundPreviousView, forControllerInput: MFiGameController.Input.leftTrigger)
+        mapping.set(ActionInput.boundNextView, forControllerInput: MFiGameController.Input.rightTrigger)
+        return mapping
+    }
+}
+
+@MainActor
+final class BoundMultiviewInputRepeater {
+    private struct Hold: Hashable {
+        let controller: ObjectIdentifier
+        let action: ActionInput
+    }
+    private var timers: [Hold: Timer] = [:]
+    func begin(controller: GameController, action: ActionInput, perform: @escaping () -> Bool) {
+        let key = Hold(controller: ObjectIdentifier(controller), action: action)
+        guard timers[key] == nil else { return }
+        let timer = Timer(timeInterval: 0.18, repeats: true) { [weak self] timer in
+            guard perform() else {
+                timer.invalidate()
+                self?.timers[key] = nil
+                return
+            }
+        }
+        timer.fireDate = Date(timeIntervalSinceNow: 0.35)
+        timers[key] = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+    func end(controller: GameController, action: ActionInput? = nil) {
+        for key in Array(timers.keys) where key.controller == ObjectIdentifier(controller) && (action == nil || key.action == action) {
+            timers.removeValue(forKey: key)?.invalidate()
+        }
+    }
+    func endAll() {
+        timers.values.forEach { $0.invalidate() }
+        timers.removeAll()
+    }
+    deinit { timers.values.forEach { $0.invalidate() } }
 }

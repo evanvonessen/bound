@@ -254,6 +254,7 @@ private struct ControlsSection: View
     @SwiftUI.State private var opacity = Double(Settings.translucentControllerSkinOpacity)
     @SwiftUI.State private var controllerModeEnabled = BoundControllerModePreferences().isEnabled
     @SwiftUI.State private var controllerNavigationEnabled = BoundControllerNavigationPreferences().isEnabled
+    @SwiftUI.State private var controllerMultiviewEnabled = BoundControllerMultiviewPreferences().isEnabled
 
     var body: some View {
         Section("Controls") {
@@ -261,6 +262,12 @@ private struct ControlsSection: View
                 .accessibilityIdentifier("bound.controller-mode-enabled")
                 .onChange(of: controllerModeEnabled) { _, enabled in
                     BoundControllerModePreferences().isEnabled = enabled
+                }
+
+            Toggle("Allow Controller to Control Multiview", isOn: $controllerMultiviewEnabled)
+                .accessibilityIdentifier("bound.controller-multiview")
+                .onChange(of: controllerMultiviewEnabled) { _, enabled in
+                    BoundControllerMultiviewPreferences().isEnabled = enabled
                 }
 
             Toggle("Controller View Navigation", isOn: $controllerNavigationEnabled)
@@ -305,6 +312,7 @@ private struct ControlsSection: View
         .onReceive(NotificationCenter.default.publisher(for: BoundAppearancePreferences.didChangeNotification)) { _ in
             controllerModeEnabled = BoundControllerModePreferences().isEnabled
             controllerNavigationEnabled = BoundControllerNavigationPreferences().isEnabled
+            controllerMultiviewEnabled = BoundControllerMultiviewPreferences().isEnabled
         }
     }
 }

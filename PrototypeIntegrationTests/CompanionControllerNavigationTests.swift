@@ -169,6 +169,96 @@ final class CompanionControllerNavigationTests: XCTestCase {
                        "Back closes the picker without changing the committed team.")
     }
 
+    func testBossMultiviewDirectionalFocusTrainerLineupAndPicker() async throws {
+        await BoundReferenceCatalogStore.shared.loadIfNeeded()
+        let catalog = try XCTUnwrap(BoundReferenceCatalogStore.shared.bosses)
+        let gameID = "CTRLBOSSFOCUS_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let preferences = BoundBossGuidePreferences()
+        let startingTeam = catalog.defaultTeam
+        let candidates = catalog.teams(matching: "")
+        let currentPickerIndex = try XCTUnwrap(candidates.firstIndex { $0.id == startingTeam.id })
+        let nextPickerTeam = candidates[(currentPickerIndex + 1) % candidates.count]
+        guard let previousTrainer = catalog.adjacentTrainer(to: startingTeam.id, offset: -1),
+              let nextTrainer = catalog.adjacentTrainer(to: startingTeam.id, offset: 1) else {
+            return XCTFail("The default team should have adjacent trainers for directional navigation.")
+        }
+        let original = BoundBossGuideSelection(teamID: startingTeam.id, pokemonIndex: 0)
+        preferences.write(original, gameID: gameID, catalog: catalog)
+        defer { UserDefaults.standard.removeObject(forKey: "bound.boss-guide.selection.v1." + gameID) }
+        var presentationStates: [Bool] = []
+        let mounted = try await mount(BoundBossGuideView(gameID: gameID, presentationChanged: { presentationStates.append($0) }))
+        defer { unmount(mounted) }
+        let host = mounted.host
+
+        // The first Down focuses the trainer row, where horizontal movement
+        // changes the trainer instead of the selected Pokémon.
+        BoundControllerNavigationEvent.post(command: .focusDown, gameID: gameID, content: .bosses)
+        await settle(mounted)
+        BoundControllerNavigationEvent.post(command: .focusLeft, gameID: gameID, content: .bosses)
+        let movedToPreviousTrainer = await settle(mounted, until: {
+            preferences.read(gameID: gameID, catalog: catalog).teamID == previousTrainer.id
+        })
+        XCTAssertTrue(movedToPreviousTrainer)
+        BoundControllerNavigationEvent.post(command: .focusRight, gameID: gameID, content: .bosses)
+        let returnedToStartingTrainer = await settle(mounted, until: {
+            preferences.read(gameID: gameID, catalog: catalog).teamID == startingTeam.id
+        })
+        XCTAssertTrue(returnedToStartingTrainer)
+
+        // The second Down focuses the lineup, where horizontal movement
+        // changes Pokémon within the selected trainer.
+        BoundControllerNavigationEvent.post(command: .focusDown, gameID: gameID, content: .bosses)
+        await settle(mounted)
+        BoundControllerNavigationEvent.post(command: .focusRight, gameID: gameID, content: .bosses)
+        let movedWithinLineup = await settle(mounted, until: {
+            preferences.read(gameID: gameID, catalog: catalog).pokemonIndex == 1
+        })
+        XCTAssertTrue(movedWithinLineup)
+        BoundControllerNavigationEvent.post(command: .focusLeft, gameID: gameID, content: .bosses)
+        let returnedWithinLineup = await settle(mounted, until: {
+            preferences.read(gameID: gameID, catalog: catalog).pokemonIndex == 0
+        })
+        XCTAssertTrue(returnedWithinLineup)
+
+        // A opens the focused lineup and B returns to the guide.
+        BoundControllerNavigationEvent.post(command: .select, gameID: gameID, content: .bosses)
+        let openedLineup = await settle(mounted, until: { host.presentedViewController != nil })
+        XCTAssertTrue(openedLineup)
+        BoundControllerNavigationEvent.post(command: .back, gameID: gameID, content: .bosses)
+        let closedLineup = await settle(mounted, timeout: 5, until: {
+            host.presentedViewController == nil && presentationStates.last == false
+        })
+        XCTAssertTrue(closedLineup)
+
+        // Up returns focus to the trainer row. A opens its picker, Down moves
+        // the highlighted trainer, A commits it, and clearFocus releases the
+        // controller focus before the legacy A/B picker behavior is checked.
+        BoundControllerNavigationEvent.post(command: .focusUp, gameID: gameID, content: .bosses)
+        await settle(mounted)
+        BoundControllerNavigationEvent.post(command: .select, gameID: gameID, content: .bosses)
+        let openedPicker = await settle(mounted, until: { host.presentedViewController != nil })
+        XCTAssertTrue(openedPicker)
+        BoundControllerNavigationEvent.post(command: .focusDown, gameID: gameID, content: .bosses)
+        await settle(mounted)
+        BoundControllerNavigationEvent.post(command: .select, gameID: gameID, content: .bosses)
+        let selectedAndClosedPicker = await settle(mounted, timeout: 5, until: {
+            preferences.read(gameID: gameID, catalog: catalog).teamID == nextPickerTeam.id &&
+                host.presentedViewController == nil && presentationStates.last == false
+        })
+        XCTAssertTrue(selectedAndClosedPicker)
+
+        BoundControllerNavigationEvent.post(command: .clearFocus, gameID: gameID, content: .bosses)
+        await settle(mounted)
+        BoundControllerNavigationEvent.post(command: .select, gameID: gameID, content: .bosses)
+        let legacyPickerOpened = await settle(mounted, until: { host.presentedViewController != nil })
+        XCTAssertTrue(legacyPickerOpened, "Clearing focus should retain the existing Select-to-open-picker behavior.")
+        BoundControllerNavigationEvent.post(command: .back, gameID: gameID, content: .bosses)
+        let legacyPickerClosed = await settle(mounted, timeout: 5, until: {
+            host.presentedViewController == nil && presentationStates.last == false
+        })
+        XCTAssertTrue(legacyPickerClosed)
+    }
+
     func testScopedControllerScrollMovesVisibleScrollViewAndIgnoresOtherROMs() async throws {
         let gameID = "CTRLSCROLL_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
         let root = ScrollView {

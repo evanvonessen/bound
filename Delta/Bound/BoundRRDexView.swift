@@ -31,6 +31,7 @@ struct BoundRRDexView: View {
     @State private var sheet: Detail?
     @State private var controllerSpeciesQuery = ""
     @State private var controllerSpeciesIndex = 0
+    @State private var controllerDexFocus: ControllerDexFocus?
     @State private var awaitingDetailDismissal = false
     @State private var layout4EvolutionExpanded = false
     @State private var layout5EvolutionExpanded = false
@@ -46,6 +47,15 @@ struct BoundRRDexView: View {
             case let .ability(name, _): "ability-\(name)"
             }
         }
+    }
+    private enum ControllerDexFocus: Equatable {
+        case speciesSearch
+        case learnsetSearch
+        case learnsetSearchInput
+        case learnsetMethod(Int)
+    }
+    private var controllerMultiviewNavigationEnabled: Bool {
+        BoundControllerMultiviewPreferences().isEnabled
     }
     private var editingText: Bool { searching || moveSearchFocused }
     private var interacting: Bool { editingText || sheet != nil || importError != nil }
@@ -151,6 +161,7 @@ struct BoundRRDexView: View {
                 }
                 .onAppear {
                     if previewLayout == nil { choice = preferences.read(gameID: gameID) }
+                    controllerDexFocus = nil
                     expandedLearnsetMethod = nil
                     layout12LearnsetPresented = false
                     if layout == .layout12 {
@@ -204,6 +215,7 @@ struct BoundRRDexView: View {
             if active {
                 if previewLayout == nil { refreshAutomaticSave() }
             } else {
+                controllerDexFocus = nil
                 searching = false
                 moveSearchFocused = false
                 sheet = nil
@@ -219,7 +231,7 @@ struct BoundRRDexView: View {
             if previous == .layout12 || current == .layout12 { closeLayout12Learnset() }
         }
         .onDisappear {
-            searching = false; moveSearchFocused = false; sheet = nil
+            searching = false; moveSearchFocused = false; sheet = nil; controllerDexFocus = nil
             if isActive {
                 textEditingChanged(false)
                 if !awaitingDetailDismissal { presentationChanged(false) }
@@ -386,6 +398,8 @@ struct BoundRRDexView: View {
         }
         .accessibilityLabel(searching ? "Close Pokémon search" : "Search Pokémon")
         .accessibilityIdentifier("bound.rrdex-search-open")
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(controllerFocusColor(for: .speciesSearch), lineWidth: 2).padding(2))
+        .accessibilityValue(controllerDexFocus == .speciesSearch ? "Controller highlighted" : "")
     }
 
     private var layout8SearchButton: some View {
@@ -401,6 +415,8 @@ struct BoundRRDexView: View {
         }
         .accessibilityLabel(searching ? "Close Pokémon search" : "Search Pokémon")
         .accessibilityIdentifier("bound.rrdex-search-open")
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(controllerFocusColor(for: .speciesSearch), lineWidth: 2).padding(2))
+        .accessibilityValue(controllerDexFocus == .speciesSearch ? "Controller highlighted" : "")
     }
 
     /// Layout 1's reference card, with its persistent search row replaced by an
@@ -485,6 +501,16 @@ struct BoundRRDexView: View {
                     }
                     .onChange(of: expandedLearnsetMethod) { _, method in
                         if let method { proxy.scrollTo("learnset-method-\(method)", anchor: .top) }
+                    }
+                    .onChange(of: controllerDexFocus) { _, focus in
+                        switch focus {
+                        case .some(.speciesSearch):
+                            proxy.scrollTo("bound.rrdex-pokemon", anchor: .top)
+                        case .some(.learnsetSearch), .some(.learnsetMethod(_)):
+                            proxy.scrollTo("learnset", anchor: .top)
+                        case .some(.learnsetSearchInput), nil:
+                            break
+                        }
                     }
                 }
             }
@@ -621,6 +647,8 @@ struct BoundRRDexView: View {
                 .buttonStyle(.plain).foregroundStyle(.primary)
                 .accessibilityLabel(moveSearchVisible ? "Close move search" : "Search moves")
                 .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-learnset-search-toggle")
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(controllerFocusColor(for: .learnsetSearch), lineWidth: 2).padding(2))
+                .accessibilityValue(controllerDexFocus == .learnsetSearch ? "Controller highlighted" : "")
                 Spacer(minLength: 0)
             }
             .id("learnset")
@@ -678,9 +706,14 @@ struct BoundRRDexView: View {
                                 }
                                 .buttonStyle(.plain).foregroundStyle(.primary)
                                 .accessibilityLabel("\(title), \(entries.count) moves")
-                                .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+                                .accessibilityValue(expanded
+                                    ? (controllerDexFocus == .learnsetMethod(controllerMethodIndex(method, pokemon: pokemon)) ? "Expanded, Controller highlighted" : "Expanded")
+                                    : (controllerDexFocus == .learnsetMethod(controllerMethodIndex(method, pokemon: pokemon)) ? "Collapsed, Controller highlighted" : "Collapsed"))
                                 .accessibilityIdentifier("bound.rrdex-layout\(layout.rawValue)-learnset-method-\(method)")
                                 .id("learnset-method-\(method)")
+                                .overlay(RoundedRectangle(cornerRadius: 8)
+                                    .stroke(controllerFocusColor(for: .learnsetMethod(controllerMethodIndex(method, pokemon: pokemon))), lineWidth: 2)
+                                    .padding(1))
                                 if expanded { rows }
                                 Divider()
                             }
@@ -759,15 +792,23 @@ struct BoundRRDexView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(moveSearchVisible ? "Close move search" : "Search all moves")
         .accessibilityIdentifier("bound.rrdex-layout12-learnset-search-toggle")
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(controllerFocusColor(for: .learnsetSearch), lineWidth: 2).padding(2))
+        .accessibilityValue(controllerDexFocus == .learnsetSearch ? "Controller highlighted" : "")
     }
 
     private func layout12LearnsetMethods(pokemon: BoundRRDexSpecies, catalog: BoundRRDexCatalog) -> some View {
         let methods = catalog.learnsetMethods(for: pokemon)
-        return ViewThatFits(in: .horizontal) {
-            layout12MethodButtons(methods, pokemon: pokemon, fillsWidth: true)
-            ScrollView(.horizontal) {
-                layout12MethodButtons(methods, pokemon: pokemon, fillsWidth: false)
-            }.scrollIndicators(.hidden)
+        return ScrollViewReader { proxy in
+            ViewThatFits(in: .horizontal) {
+                layout12MethodButtons(methods, pokemon: pokemon, fillsWidth: true)
+                ScrollView(.horizontal) {
+                    layout12MethodButtons(methods, pokemon: pokemon, fillsWidth: false)
+                }.scrollIndicators(.hidden)
+            }
+            .onChange(of: controllerDexFocus) { _, focus in
+                guard case .learnsetMethod(let index) = focus, methods.indices.contains(index) else { return }
+                proxy.scrollTo("controller-learnset-method-\(index)", anchor: .center)
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("bound.rrdex-layout12-learnset-methods")
@@ -776,7 +817,9 @@ struct BoundRRDexView: View {
     private func layout12MethodButtons(_ methods: [String], pokemon: BoundRRDexSpecies, fillsWidth: Bool) -> some View {
         HStack(spacing: 2) {
             ForEach(methods, id: \.self) { method in
+                let methodIndex = controllerMethodIndex(method, pokemon: pokemon)
                 let selected = layout12LearnsetPresented && expandedLearnsetMethod == method
+                let focused = controllerDexFocus == .learnsetMethod(methodIndex)
                 Button {
                     openLayout12Learnset(method: method)
                 } label: {
@@ -792,8 +835,14 @@ struct BoundRRDexView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(selected ? Color(uiColor: .deltaPurple) : .primary)
                 .accessibilityLabel("\(method == "Level up" ? "Level Up" : method), \(pokemon.learnset.filter { $0.method == method }.count) moves")
-                .accessibilityValue(selected ? "Selected" : "Not selected")
+                .accessibilityValue(selected
+                    ? (focused ? "Selected, Controller highlighted" : "Selected")
+                    : (focused ? "Not selected, Controller highlighted" : "Not selected"))
                 .accessibilityIdentifier("bound.rrdex-layout12-learnset-method-\(method)")
+                .overlay(RoundedRectangle(cornerRadius: 8)
+                    .stroke(controllerFocusColor(for: .learnsetMethod(methodIndex)), lineWidth: 2)
+                    .padding(1))
+                .id("controller-learnset-method-\(methodIndex)")
             }
         }
     }
@@ -1293,6 +1342,9 @@ struct BoundRRDexView: View {
         .buttonStyle(.plain)
         .accessibilityIdentifier(identifier)
         .accessibilityLabel(title)
+        .overlay(RoundedRectangle(cornerRadius: 8)
+            .stroke(identifier == "bound.rrdex-search-open" ? controllerFocusColor(for: .speciesSearch) : .clear, lineWidth: 2)
+            .padding(1))
     }
 
     private func toolbar(catalog: BoundRRDexCatalog, comfortableTargets: Bool = false, bst: Int? = nil) -> some View {
@@ -1315,6 +1367,8 @@ struct BoundRRDexView: View {
                 }
                 .accessibilityLabel("Search Pokémon")
                 .accessibilityIdentifier("bound.rrdex-search-open")
+                .overlay(RoundedRectangle(cornerRadius: 9).stroke(controllerFocusColor(for: .speciesSearch), lineWidth: 2).padding(2))
+                .accessibilityValue(controllerDexFocus == .speciesSearch ? "Controller highlighted" : "")
             }
             Button { importCurrentGameSave() } label: {
                 Label(choice.save == nil ? "Import save" : "Save loaded", systemImage: choice.save == nil ? "square.and.arrow.down" : "checkmark.circle")
@@ -1507,6 +1561,7 @@ struct BoundRRDexView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(pokemon.name).font(.system(size: 19, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.65)
                         .accessibilityIdentifier("bound.rrdex-pokemon")
+                        .id("bound.rrdex-pokemon")
                     HStack(spacing: 5) {
                         ForEach(pokemon.types, id: \.self) { id in
                             if let type = catalog.type(id: id) { BoundRRDexTypePill(type: type, usesFullColor: true) }
@@ -1684,13 +1739,22 @@ struct BoundRRDexView: View {
     }
 
     private func handleControllerNavigation(_ command: BoundControllerNavigationCommand, catalog: BoundRRDexCatalog) {
+        if command == .clearFocus {
+            controllerDexFocus = nil
+            return
+        }
         if hasPresentedSheet && !isControllerSpeciesPickerPresented {
             if case .back = command { sheet = nil }
             return
         }
         switch command {
+        case .clearFocus:
+            controllerDexFocus = nil
         case .scrollUp, .scrollDown, .scrollLeft, .scrollRight:
             return
+        case .focusUp, .focusDown, .focusLeft, .focusRight:
+            guard controllerMultiviewNavigationEnabled else { return }
+            moveControllerDexFocus(command, catalog: catalog)
         case .previousItem:
             moveControllerSpeciesCursor(-1, catalog: catalog)
         case .nextItem:
@@ -1701,7 +1765,13 @@ struct BoundRRDexView: View {
                 guard candidates.indices.contains(controllerSpeciesIndex) else { return }
                 select(candidates[controllerSpeciesIndex])
                 sheet = nil
-            } else if searching, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return
+            }
+            if controllerMultiviewNavigationEnabled, let focus = controllerDexFocus {
+                selectControllerDexFocus(focus, catalog: catalog)
+                return
+            }
+            if searching, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 let candidates = catalog.suggestions(query)
                 guard candidates.indices.contains(controllerSpeciesIndex) else { return }
                 select(candidates[controllerSpeciesIndex])
@@ -1726,10 +1796,104 @@ struct BoundRRDexView: View {
                 sheet = nil
             } else if layout == .layout12 && layout12LearnsetPresented {
                 closeLayout12Learnset()
+                controllerDexFocus = .learnsetSearch
+            } else if moveSearchVisible {
+                moveSearchVisible = false
+                moveSearchFocused = false
+                moveQuery = ""
+                controllerDexFocus = .learnsetSearch
             } else if editingText || !query.isEmpty {
                 query = ""
                 searching = false
                 moveSearchFocused = false
+            } else {
+                controllerDexFocus = nil
+            }
+        }
+    }
+
+    private func controllerFocusColor(for focus: ControllerDexFocus) -> Color {
+        controllerMultiviewNavigationEnabled && controllerDexFocus == focus
+            ? Color(uiColor: .deltaPurple) : .clear
+    }
+
+    private func controllerMethods(catalog: BoundRRDexCatalog) -> [String] {
+        guard let pokemon = catalog.pokemon(id: choice.speciesID) ?? catalog.species.first else { return [] }
+        let available = layout == .layout12 ? catalog.learnsetMethods(for: pokemon) : BoundRRDexLearnset.methods
+        return available.filter { method in pokemon.learnset.contains(where: { $0.method == method }) }
+    }
+
+    private func controllerMethodIndex(_ method: String, pokemon: BoundRRDexSpecies) -> Int {
+        let available = layout == .layout12 ? catalogStore.dex?.learnsetMethods(for: pokemon) ?? [] : BoundRRDexLearnset.methods
+        let methods = available.filter { candidate in pokemon.learnset.contains(where: { $0.method == candidate }) }
+        return methods.firstIndex(of: method) ?? 0
+    }
+
+    private func moveControllerDexFocus(_ command: BoundControllerNavigationCommand, catalog: BoundRRDexCatalog) {
+        if isControllerSpeciesPickerPresented {
+            switch command {
+            case .focusUp, .focusLeft: moveControllerSpeciesCursor(-1, catalog: catalog)
+            case .focusDown, .focusRight: moveControllerSpeciesCursor(1, catalog: catalog)
+            default: break
+            }
+            return
+        }
+        let methods = controllerMethods(catalog: catalog)
+        switch command {
+        case .focusDown:
+            switch controllerDexFocus {
+            case nil: controllerDexFocus = .speciesSearch
+            case .speciesSearch: controllerDexFocus = .learnsetSearch
+            case .learnsetSearch, .learnsetSearchInput:
+                controllerDexFocus = methods.isEmpty ? .learnsetSearch : .learnsetMethod(0)
+            case .learnsetMethod(let index):
+                controllerDexFocus = methods.indices.contains(index) ? .learnsetMethod(index) : .learnsetSearch
+            }
+        case .focusUp:
+            switch controllerDexFocus {
+            case nil, .speciesSearch: controllerDexFocus = .speciesSearch
+            case .learnsetSearch, .learnsetSearchInput: controllerDexFocus = .speciesSearch
+            case .learnsetMethod(_): controllerDexFocus = .learnsetSearch
+            }
+        case .focusLeft, .focusRight:
+            guard case .learnsetMethod(let index) = controllerDexFocus, !methods.isEmpty else { return }
+            let delta = command == .focusRight ? 1 : -1
+            controllerDexFocus = .learnsetMethod((index + delta + methods.count) % methods.count)
+        default:
+            break
+        }
+    }
+
+    private func selectControllerDexFocus(_ focus: ControllerDexFocus, catalog: BoundRRDexCatalog) {
+        switch focus {
+        case .speciesSearch:
+            searching = false
+            controllerSpeciesQuery = ""
+            controllerSpeciesIndex = catalog.species.firstIndex(where: { $0.id == choice.speciesID }) ?? 0
+            awaitingDetailDismissal = true
+            sheet = .controllerSpeciesPicker
+        case .learnsetSearch:
+            if layout == .layout12 {
+                openLayout12Learnset(method: nil, search: true)
+            } else if layout.rawValue >= 9 {
+                moveSearchVisible = true
+                moveSearchFocused = true
+                moveQuery = ""
+                controllerDexFocus = .learnsetSearchInput
+            } else {
+                showDetail(.learnset)
+            }
+        case .learnsetSearchInput:
+            moveSearchFocused = true
+        case .learnsetMethod(let index):
+            let methods = controllerMethods(catalog: catalog)
+            guard methods.indices.contains(index) else { return }
+            if layout == .layout12 {
+                openLayout12Learnset(method: methods[index])
+            } else if layout == .layout11 {
+                expandedLearnsetMethod = methods[index]
+            } else {
+                showDetail(.learnset)
             }
         }
     }
