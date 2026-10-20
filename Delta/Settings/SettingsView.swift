@@ -93,13 +93,9 @@ struct SettingsView: View {
                 Form {
                     Section {
                         NavigationLink {
-                            BoundInterfaceSettings(model: model, gameplay: gameplay)
-                        } label: {
-                            SettingsRow(label: Text("Interface & Companion"), systemImage: "rectangle.3.group", color: .purple)
-                        }.accessibilityIdentifier("bound.settings-interface")
-                        NavigationLink {
                             Form {
                                 ControlsSection()
+                                BoundCompanionControlsSections(model: model, gameplay: gameplay)
                                 if !BoundFeatureVisibility.simplifiedSettings, let edit = gameplay?.editControls {
                                     Section { Button("Button placement") { edit(); close() } }
                                 }
@@ -146,7 +142,6 @@ struct SettingsView: View {
                                 #if DEBUG
                                 Section("Developer") {
                                     NavigationLink("Advanced") { AdvancedSettingsView() }
-                                    NavigationLink("Experimental") { ExperimentalFeaturesView() }
                                 }
                                 #endif
                             }.navigationTitle("About").navigationBarTitleDisplayMode(.inline)

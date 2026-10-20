@@ -13,8 +13,9 @@ keyboard. The content scrolls for larger evolution families and form branches.
 Weaknesses and learnsets open native sheets; editing and presentations use the
 existing input cancellation and emulation pause/resume coordinator.
 
-In **Settings → Interface & Companion**, RR Dex has its own saved choice of
-Layouts 1 through 12. Layout 1 remains the default and preserves the original card.
+RR Dex retains its saved layout independently of Boss View; new installations use
+Layout 12. The layout picker has been removed from settings. Layout 1 preserves
+the original card.
 Layout 2 pins species and tappable ability names while matchup summaries, base
 stats and evolutions scroll below. Layout 3 places Weaknesses and Learnset beside
 the Dynamic Island, compacts the species and abilities, and anchors import/info

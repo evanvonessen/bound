@@ -31,8 +31,8 @@ enum BoundFeatureVisibility {
     static let simplifiedSettings = true
 }
 
-/// Optional controls for customizing Bound's interface. This setting only
-/// controls which preferences are shown; it never gates saved settings at runtime.
+/// Retired customization-visibility preference kept for upgrade/reset compatibility.
+/// It no longer exposes settings or gates saved choices at runtime.
 final class BoundExperimentalSettingsPreferences {
     static let key = "bound.experimental-settings.enabled.v1"
     private let defaults: UserDefaults

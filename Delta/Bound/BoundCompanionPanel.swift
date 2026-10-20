@@ -1352,251 +1352,27 @@ struct BoundRetainedReferenceView<Content: View>: View {
     }
 }
 
-struct BoundUIVersionSettings: View {
-    @AppStorage(BoundUIVersionPreferences.key) private var version = BoundUIVersion.option2
-    var body: some View {
-        Section {
-            Picker("UI Version", selection: Binding(get: { version }, set: { BoundUIVersionPreferences().version = $0 })) {
-                ForEach(BoundUIVersion.allCases, id: \.rawValue) { Text($0.title).tag($0) }
-            }.accessibilityIdentifier("bound.ui-version")
-        } header: { Text("UI Version") } footer: {
-            Text(version == .option1 ? "The current Bound interface."
-                 : "Friend sharing status, layout previews, customizable view order, and clearer reference panels.")
-        }
-    }
-}
-
-struct BoundInterfaceSettings: View {
+/// Settings shared by library and gameplay Controls, preserving their original storage.
+struct BoundCompanionControlsSections: View {
     @ObservedObject var model: BoundCompanionSettingsModel
     var gameplay: BoundSettingsGameplayContext? = nil
-    @AppStorage(BoundExperimentalSettingsPreferences.key) private var experimentalFeaturesEnabled = false
-    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option2
-    @AppStorage(BoundReferenceLayoutPreferences.dexKey) private var dexLayout = BoundReferenceLayout.layout12
-    @AppStorage(BoundReferenceLayoutPreferences.bossKey) private var bossLayout = BoundReferenceLayout.layout12
-    var body: some View {
-        Form {
-            Section {
-                Toggle("Enable experimental features", isOn: $experimentalFeaturesEnabled)
-                    .accessibilityIdentifier("bound.experimental-settings")
-            }
-            BoundControllerModeSettings()
-            BoundGeneralSettingsSections()
-            if experimentalFeaturesEnabled {
-                    BoundUIVersionSettings()
-                    BoundLandscapeOptionsSettings()
-                    Section {
-                        Picker("Button type", selection: Binding(get: { model.buttonType }, set: { model.setButtonType($0) })) {
-                            ForEach(BoundCompanionButtonType.allCases, id: \.rawValue) { type in
-                                Text(String(type.rawValue)).tag(type)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .accessibilityIdentifier("bound.companion-button-type")
-                        Text("\(model.buttonType.title): \(model.buttonType.summary)")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    } header: { Text("Bound button") } footer: {
-                        Text("Choose the portrait Bound button's shape and size. Your choice is saved on this device.")
-                    }
-                    if model.buttonType.splitButtonCount > 0 {
-                        ForEach(0..<model.buttonType.splitButtonCount, id: \.self) { button in
-                            Section {
-                                ForEach(model.preferences.orderedContents, id: \.rawValue) { content in
-                                    Toggle(content.title, isOn: Binding(
-                                        get: { model.preferences.assignedContents(for: button, buttonType: model.buttonType).contains(content) },
-                                        set: { model.setAssigned($0, content: content, for: button) }))
-                                    .accessibilityIdentifier("bound.button-\(button + 1)-view.\(content.rawValue)")
-                                }
-                            } header: {
-                                let positions = model.buttonType == .option4 ? ["Top", "Bottom"] : ["Top", "Middle", "Bottom"]
-                                Text("Button \(button + 1) · \(positions[button])")
-                            } footer: {
-                                Text("Touch to cycle through this button's selected views. Select none to leave it inactive.")
-                            }
-                        }
-                        if uiVersion == .option2 {
-                            Section {
-                                NavigationLink("Reorder views") { BoundViewOrderSettings(model: model) }
-                                    .accessibilityIdentifier("bound.reorder-views")
-                            }
-                        }
-                    } else {
-                    Section {
-                        ForEach(uiVersion == .option2 ? model.preferences.orderedContents : BoundPiPContent.cycleOrder, id: \.rawValue) { content in
-                            Toggle(content.title, isOn: Binding(get: { model.preferences.isEnabled(content) },
-                                                               set: { model.setContentEnabled($0, for: content) }))
-                                .accessibilityIdentifier("bound.companion-enabled.\(content.rawValue)")
-                        }
-                        if uiVersion == .option2 {
-                            NavigationLink("Reorder views") { BoundViewOrderSettings(model: model) }
-                                .accessibilityIdentifier("bound.reorder-views")
-                        }
-                    } header: { Text("Companion views") } footer: {
-                        Text("Choose which views the Bound button cycles through. All are on by default. Turn all off to hide the companion panel.")
-                    }
-                    }
-                    Section {
-                        layoutPicker("RR Dex", selection: $dexLayout, identifier: "bound.rrdex-layout")
-                        layoutPicker("Boss View", selection: $bossLayout, identifier: "bound.boss-layout", layouts: BoundReferenceLayout.bossLayouts)
-                    } header: { Text("Reference layouts") } footer: {
-                        Text("Each choice is saved separately on this device. Layout 12 is the default.")
-                    }
-            }
-
-            BoundAppearanceSettings(includeAbout: false)
-            if !BoundFeatureVisibility.simplifiedSettings {
-                Section("Picture in picture") {
-                    Text("In landscape, drag a panel to move it or pinch to resize. Swipe to an edge to hide it; tap the Bound button to restore it.")
-                    ForEach([BoundPiPContent.friend, .notes], id: \.rawValue) { content in
-                        VStack(alignment: .leading) {
-                            Text("\(content.title) transparency: \(Int(model.preferences.transparency(for: content) * 100))%")
-                            Slider(value: Binding(get: { model.preferences.transparency(for: content) }, set: {
-                                model.preferences.setTransparency($0, for: content); model.refresh()
-                            }), in: 0...1, step: 0.05)
-                        }
-                    }
-                    if let show = gameplay?.showCompanion { Button("Show PiP", action: show) }
-                }
-            }
-        }
-        .navigationTitle("Interface & Companion")
-        .navigationBarTitleDisplayMode(.inline)
-        .onChange(of: uiVersion) { _, _ in model.refresh() }
-    }
-
-    private func layoutPicker(_ title: String, selection: Binding<BoundReferenceLayout>, identifier: String,
-                              layouts: [BoundReferenceLayout] = BoundReferenceLayout.allCases) -> some View {
-        Group {
-        if uiVersion == .option2 {
-            NavigationLink {
-                BoundReferenceLayoutGallery(title: title, selection: selection, layouts: layouts, isBoss: identifier == "bound.boss-layout")
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                    Text("\(selection.wrappedValue.title) · \(selection.wrappedValue.descriptiveName(isBoss: identifier == "bound.boss-layout"))")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                }
-            }
-            .accessibilityIdentifier(identifier)
-        } else {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-            Picker(title, selection: selection) {
-                ForEach(layouts, id: \.rawValue) { layout in
-                    Text(String(layout.rawValue)).tag(layout)
-                }
-            }
-            .pickerStyle(.segmented)
-            .accessibilityLabel("\(title) layout")
-            .accessibilityIdentifier(identifier)
-            Text("\(selection.wrappedValue.title): \(selection.wrappedValue.summary)")
-                .font(.footnote).foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 4)
-        }
-        }
-    }
-}
-
-private struct BoundViewOrderSettings: View {
-    @ObservedObject var model: BoundCompanionSettingsModel
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        List {
-            Section {
-                ForEach(model.preferences.orderedContents, id: \.rawValue) { content in
-                    HStack {
-                        Text(content.title)
-                        Spacer()
-                        if !model.availableContents.contains(content) { Text("Off").foregroundStyle(.secondary) }
-                    }
-                }
-                .onMove { source, destination in
-                    var order = model.preferences.orderedContents
-                    order.move(fromOffsets: source, toOffset: destination)
-                    model.setContentOrder(order)
-                }
-            } footer: { Text("Drag to change the order used by the Bound buttons. Each button skips views that aren't selected for it.") }
-        }
-        .environment(\.editMode, .constant(.active))
-        .navigationTitle("View order")
-        .accessibilityIdentifier("bound.view-order")
-        .onChange(of: model.uiVersion) { _, version in if version != .option2 { dismiss() } }
-    }
-}
-
-private struct BoundReferenceLayoutGallery: View {
-    let title: String
-    @Binding var selection: BoundReferenceLayout
-    let layouts: [BoundReferenceLayout]
-    let isBoss: Bool
-    @State private var previewLayout = BoundReferenceLayout.layout1
-    @Environment(\.dismiss) private var dismiss
-    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option2
 
     var body: some View {
-        GeometryReader { geometry in
-            VStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 6) {
-                Text("\(previewLayout.title) · \(previewLayout.descriptiveName(isBoss: isBoss))")
-                    .font(.subheadline.weight(.semibold))
-                preview(previewLayout)
-                    .frame(height: min(280, geometry.size.height * 0.42)).clipped().allowsHitTesting(false)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("\(previewLayout.title) preview")
-                    .id(previewLayout)
-                }.padding(.horizontal).padding(.vertical, 8)
-                .background(Color(uiColor: .secondarySystemGroupedBackground))
-            List {
-            Section("Layouts") {
-                ForEach(layouts, id: \.rawValue) { layout in
-                    Button {
-                        previewLayout = layout
-                    } label: {
-                        HStack(spacing: 12) {
-                            preview(layout)
-                                .frame(width: 360, height: 280)
-                                .scaleEffect(0.2, anchor: .topLeading)
-                                .frame(width: 72, height: 56, alignment: .topLeading)
-                                .clipped().allowsHitTesting(false).accessibilityHidden(true)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(layout.descriptiveName(isBoss: isBoss)).foregroundStyle(.primary)
-                                Text(layout.title).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if previewLayout == layout { Image(systemName: "checkmark.circle.fill").foregroundStyle(Color(uiColor: .deltaPurple)) }
-                        }.frame(minHeight: 64).contentShape(Rectangle())
+        BoundGeneralSettingsSections()
+        BoundAppearanceSettings(includeAbout: false)
+        if !BoundFeatureVisibility.simplifiedSettings {
+            Section("Picture in picture") {
+                Text("In landscape, drag a panel to move it or pinch to resize. Swipe to an edge to hide it; tap the Bound button to restore it.")
+                ForEach([BoundPiPContent.friend, .notes], id: \.rawValue) { content in
+                    VStack(alignment: .leading) {
+                        Text("\(content.title) transparency: \(Int(model.preferences.transparency(for: content) * 100))%")
+                        Slider(value: Binding(get: { model.preferences.transparency(for: content) }, set: {
+                            model.preferences.setTransparency($0, for: content); model.refresh()
+                        }), in: 0...1, step: 0.05)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("bound.layout-preview.\(layout.rawValue)")
-                    .accessibilityAddTraits(previewLayout == layout ? .isSelected : [])
                 }
+                if let show = gameplay?.showCompanion { Button("Show PiP", action: show) }
             }
-            Section {
-                Text("Example data. Tap Use layout to save your choice.").font(.footnote).foregroundStyle(.secondary)
-            }
-            }
-            }
-        }
-        .navigationTitle("\(title) layout")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Use layout") {
-                    guard uiVersion == .option2 else { return }
-                    selection = previewLayout
-                    dismiss()
-                }.accessibilityIdentifier("bound.use-layout")
-            }
-        }
-        .onAppear { previewLayout = selection }
-        .onChange(of: uiVersion) { _, version in if version != .option2 { dismiss() } }
-    }
-
-    @ViewBuilder private func preview(_ layout: BoundReferenceLayout) -> some View {
-        if isBoss {
-            BoundBossGuideView(gameID: "LAYOUT_PREVIEW", portraitTopInset: 59, previewLayout: layout, presentationChanged: { _ in })
-        } else {
-            BoundRRDexView(gameID: "LAYOUT_PREVIEW", portraitTopInset: 59, previewLayout: layout, presentationChanged: { _ in })
         }
     }
 }

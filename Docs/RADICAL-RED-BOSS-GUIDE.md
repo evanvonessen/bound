@@ -29,9 +29,9 @@ stay separate. Search opens matching groups while keeping their alternatives
 available; the currently selected encounter opens when the picker returns.
 Unlabeled source alternatives retain neutral Team 1/2/3 labels.
 
-**Settings → Interface & Companion → Boss View layout** chooses between twelve saved
-presentations independently of RR Dex. Layout 1 preserves the original card and
-is the default. Layout 2 adds source-derived battle-condition badges, a tappable
+Boss View retains its saved presentation independently of RR Dex; new installations
+use Layout 12. The layout picker has been removed from settings. Layout 1 preserves
+the original card. Layout 2 adds source-derived battle-condition badges, a tappable
 opposing-team strip, ability and item description buttons, a typing-matchup
 shortcut, location/variant context, and the trainer portrait. Layout 3 uses a
 compact arrangement with controls beside the Dynamic Island, flexible scrolling

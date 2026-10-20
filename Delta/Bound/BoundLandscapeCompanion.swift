@@ -192,7 +192,7 @@ final class BoundLandscapeCompanionModel: ObservableObject {
         guard !editing else { return }
         beforeSwitch?()
         guard !referenceContents.isEmpty else {
-            UIAccessibility.post(notification: .announcement, argument: "Choose landscape views in Interface & Companion settings.")
+            UIAccessibility.post(notification: .announcement, argument: "No landscape views are selected.")
             return
         }
         if referenceVisible {
@@ -659,76 +659,5 @@ private struct BoundLandscapeButtonStyle: ButtonStyle {
             .background(Color(uiColor: .deltaPurple).opacity(selected ? 0.85 : 0.55), in: Circle())
             .overlay(Circle().stroke(.white.opacity(0.85), lineWidth: 1.5))
             .opacity(configuration.isPressed ? 0.7 : 1)
-    }
-}
-
-struct BoundLandscapeOptionsSettings: View {
-    @State private var option = BoundLandscapePreferences().option
-    @State private var contents = BoundLandscapePreferences().referenceContents
-    @State private var scale = BoundLandscapePreferences().referenceScale
-    private let preferences = BoundLandscapePreferences()
-    var body: some View {
-        Section {
-            Picker("Landscape Options", selection: Binding(get: { option }, set: {
-                option = $0; preferences.option = $0
-            })) {
-                ForEach(BoundLandscapeOption.allCases, id: \.rawValue) { Text($0.title).tag($0) }
-            }
-            .accessibilityIdentifier("bound.landscape-options")
-        } header: { Text("Landscape Options") } footer: {
-            Text((option == .option1 ? "The existing landscape controls and companion panel. Portrait stays unchanged."
-                 : option == .option7 ? "Use the fixed DEX, DOCS, and TYPES tabs at the top of Multiview. DOCS opens Boss View. The book button under Menu opens Multiview; X hides it. Friend stays separate. Starts with a copy of Option 6 and saves separately. Portrait stays unchanged."
-                 : option == .option6 ? "Swipe left or right in Multiview to switch between RR Dex, Bosses, and Types. The book button under Menu opens it; X hides it. Friend stays separate. Starts with a copy of Option 3 and saves separately. Portrait stays unchanged."
-                 : option == .option5 ? "Open Menu and tap Arrange Views to quickly place a view in a corner, then drag to fine-tune. A compact toolbar stays opposite the selected view. VIEWS shows or hides references; Bound cycles them. Starts with a copy of Option 3 and saves separately. Portrait stays unchanged."
-                 : option == .option4 ? "Open Menu and tap Arrange Views for direct view selection, larger handles for the selected view, and Reset. The eye button shows or hides references. Starts with a copy of Option 3, then saves its own layout. Portrait stays unchanged."
-                 : option == .option3 ? "Friend and the selected reference appear independently. Friend toggles video, X toggles references, and Bound cycles the views selected in Companion settings. In landscape, open Menu and tap Arrange Views to move, resize, or change each view’s opacity. Done locks the layout; references stay interactive."
-                 : "Separate Friend and Views buttons. Hold Friend to position, resize, and lock it. Locked friend video lets touches reach the controls underneath. Portrait stays unchanged.")
-                 + (option.supportsArrangement ? " Arrangements save separately for Controller Mode off, Mode 1, Mode 2, and Mode 3." : ""))
-        }
-        if option == .option2 {
-            Section {
-                ForEach(BoundPiPContent.cycleOrder.filter { $0 != .friend }, id: \.rawValue) { content in
-                    Toggle(content.title, isOn: Binding(get: { contents.contains(content) }, set: { enabled in
-                        contents.removeAll { $0 == content }
-                        if enabled { contents.append(content) }
-                        preferences.referenceContents = contents
-                    })).accessibilityIdentifier("bound.landscape-enabled.\(content.rawValue)")
-                }
-                Slider(value: Binding(get: { scale }, set: { scale = $0; preferences.referenceScale = $0 }), in: 0.8...1.3, step: 0.05) {
-                    Text("Reference size")
-                }.accessibilityIdentifier("bound.landscape-reference-size")
-                Text("Reference size: \(Int(scale * 100))% \u{00b7} fitted to clear space").font(.footnote).foregroundStyle(.secondary)
-            } header: { Text("Landscape Views") } footer: {
-                Text("Views cycles through these selections, separately from Friend. Reference views remain interactive and avoid game controls. These choices apply only to landscape Option 2.")
-            }
-        }
-    }
-}
-
-struct BoundControllerModeSettings: View {
-    @State private var selection: Int = {
-        let preferences = BoundControllerModePreferences()
-        return preferences.isEnabled ? preferences.layout.rawValue : 0
-    }()
-
-    var body: some View {
-        Section {
-            Picker("Controller Mode", selection: Binding(get: { selection }, set: { newValue in
-                selection = newValue
-                let preferences = BoundControllerModePreferences()
-                guard newValue != 0, let layout = BoundControllerModeLayout(rawValue: newValue) else {
-                    preferences.isEnabled = false
-                    return
-                }
-                if preferences.layout != layout { preferences.layout = layout }
-                if !preferences.isEnabled { preferences.isEnabled = true }
-            })) {
-                Text("Off").tag(0)
-                ForEach(BoundControllerModeLayout.allCases, id: \.rawValue) { layout in
-                    Text("Controller Mode \(layout.rawValue)").tag(layout.rawValue)
-                }
-            }
-            .accessibilityIdentifier("bound.controller-mode-layout")
-        }
     }
 }

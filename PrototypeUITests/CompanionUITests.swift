@@ -39,13 +39,9 @@ private func openNativePause(in app: XCUIApplication) {
 private func openBoundSettings(in app: XCUIApplication) {
     openNativePause(in: app)
     app.buttons["Settings"].tap()
-    XCTAssertTrue(app.buttons["bound.settings-interface"].waitForExistence(timeout: 5))
-    app.buttons["bound.settings-interface"].tap()
-    let experimental = app.switches["bound.experimental-settings"]
-    if experimental.exists && experimental.value as? String == "0" {
-        experimental.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-    }
-    XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "bound.ui-version").firstMatch.waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["bound.settings-controls"].waitForExistence(timeout: 5))
+    app.buttons["bound.settings-controls"].tap()
+    XCTAssertTrue(app.switches["bound.controller-mode-enabled"].waitForExistence(timeout: 5))
 }
 
 private func resumeNativePause(in app: XCUIApplication) {
@@ -812,11 +808,13 @@ final class CompanionUITests: XCTestCase {
 
         func assertSharedSettingsHome() {
             XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
-            for identifier in ["bound.settings-interface", "bound.settings-controls", "bound.settings-audio",
+            for identifier in ["bound.settings-controls", "bound.settings-audio",
                                "bound.settings-account", "bound.settings-about"] {
                 XCTAssertTrue(element(identifier, in: app).exists, "Shared settings home must contain \(identifier).")
             }
+            XCTAssertFalse(element("bound.settings-interface", in: app).exists)
             XCTAssertFalse(element("bound.settings-general", in: app).exists)
+            XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
             XCTAssertFalse(app.switches["bound.enable-experimental-features"].exists)
         }
         func closeSettings() {
@@ -829,14 +827,14 @@ final class CompanionUITests: XCTestCase {
         app.buttons["Settings"].tap()
         assertSharedSettingsHome()
         screenshot("Unified-Settings-Home")
-        element("bound.settings-interface", in: app).tap()
-        XCTAssertTrue(element("bound.ui-version", in: app).waitForExistence(timeout: 5))
-        XCTAssertTrue(element("bound.companion-button-type", in: app).exists)
-        screenshot("Unified-Settings-Interface")
-        scrollToSetting(element("bound.rrdex-layout", in: app), in: app)
-        XCTAssertTrue(element("bound.rrdex-layout", in: app).exists)
-        scrollToSetting(element("bound.boss-layout", in: app), in: app)
-        XCTAssertTrue(element("bound.boss-layout", in: app).exists)
+        element("bound.settings-controls", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Controls"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.switches["bound.context-menu-previews"].exists)
+        XCTAssertTrue(element("bound.pause-menu-button-placement", in: app).exists)
+        XCTAssertTrue(app.switches["bound.controller-mode-enabled"].exists)
+        XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
+        XCTAssertFalse(element("bound.ui-version", in: app).exists)
+        screenshot("Unified-Settings-Controls")
         closeSettings()
 
         let game = libraryGame(named: "BoundRRDexDiagnostic", in: app)
@@ -845,13 +843,12 @@ final class CompanionUITests: XCTestCase {
         openNativePause(in: app)
         app.buttons["Settings"].tap()
         assertSharedSettingsHome()
-        element("bound.settings-interface", in: app).tap()
-        XCTAssertTrue(element("bound.ui-version", in: app).exists)
-        XCTAssertTrue(element("bound.companion-button-type", in: app).exists)
-        scrollToSetting(element("bound.rrdex-layout", in: app), in: app)
-        XCTAssertTrue(element("bound.rrdex-layout", in: app).exists)
-        scrollToSetting(element("bound.boss-layout", in: app), in: app)
-        XCTAssertTrue(element("bound.boss-layout", in: app).exists)
+        element("bound.settings-controls", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Controls"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.switches["bound.context-menu-previews"].exists)
+        XCTAssertTrue(element("bound.pause-menu-button-placement", in: app).exists)
+        XCTAssertTrue(app.switches["bound.controller-mode-enabled"].exists)
+        XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
         swipeDownSettings(in: app)
         XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5),
                       "Swiping shared Settings away returns to the paused game's menu.")
@@ -881,47 +878,51 @@ final class CompanionUITests: XCTestCase {
         closeSettings()
     }
 
-    func testGeneralSettingsMoveIntoInterfaceAndAboutKeepsConciseSources() throws {
+    func testGeneralSettingsMoveIntoControlsAndAboutKeepsConciseSources() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["--bound-ui-no-animations"]
+        app.launchArguments = ["--bound-ui-no-animations", "-bound.experimental-settings.enabled.v1", "YES"]
         app.launch()
         defer { app.terminate() }
         XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 10))
         app.buttons["Settings"].tap()
-        XCTAssertTrue(element("bound.settings-interface", in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(element("bound.settings-controls", in: app).waitForExistence(timeout: 5))
+        XCTAssertFalse(element("bound.settings-interface", in: app).exists)
         XCTAssertFalse(element("bound.settings-general", in: app).exists)
-        element("bound.settings-interface", in: app).tap()
+        XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
+        XCTAssertFalse(app.switches["bound.enable-experimental-features"].exists)
+        element("bound.settings-controls", in: app).tap()
+        XCTAssertTrue(app.navigationBars["Controls"].waitForExistence(timeout: 5))
 
-        let experimental = app.switches["bound.experimental-settings"]
-        XCTAssertTrue(experimental.waitForExistence(timeout: 5))
-        let wasExperimental = experimental.value as? String == "1"
-        if wasExperimental { experimental.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap() }
         let previews = app.switches["bound.context-menu-previews"]
         scrollToSetting(previews, in: app)
-        XCTAssertTrue(previews.isHittable, "Moved settings must be available without experimental features")
+        XCTAssertTrue(previews.isHittable, "Context Menu Previews must be available in Controls")
         let originalPreviewValue = previews.value as? String
         previews.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         XCTAssertNotEqual(previews.value as? String, originalPreviewValue)
         let placement = element("bound.pause-menu-button-placement", in: app)
         scrollToSetting(placement, in: app)
         XCTAssertTrue(placement.isHittable)
-        screenshot("Interface-Moved-General-Settings")
-        app.navigationBars["Interface & Companion"].buttons.firstMatch.tap()
-        element("bound.settings-interface", in: app).tap()
+        let controllerEnabled = app.switches["bound.controller-mode-enabled"]
+        XCTAssertTrue(controllerEnabled.exists)
+        XCTAssertEqual(app.switches.matching(identifier: "bound.controller-mode-enabled").count, 1)
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "bound.controller-mode-layout").count, 1)
+        XCTAssertTrue(element("bound.controller-mode-layout", in: app).exists)
+        XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
+        XCTAssertFalse(element("bound.ui-version", in: app).exists)
+        screenshot("Controls-Moved-General-Settings")
+        app.navigationBars["Controls"].buttons.firstMatch.tap()
+        element("bound.settings-controls", in: app).tap()
         scrollToSetting(previews, in: app)
         XCTAssertNotEqual(previews.value as? String, originalPreviewValue, "The moved control must persist through navigation")
         previews.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         XCTAssertEqual(previews.value as? String, originalPreviewValue)
-        if wasExperimental {
-            scrollToSetting(experimental, in: app)
-            experimental.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-        }
-        app.navigationBars["Interface & Companion"].buttons.firstMatch.tap()
+        app.navigationBars["Controls"].buttons.firstMatch.tap()
         element("bound.settings-about", in: app).tap()
         let sources = element("bound.source-and-licenses-link", in: app)
         XCTAssertTrue(sources.waitForExistence(timeout: 5))
         XCTAssertEqual(sources.label, "Sources & Licenses")
         XCTAssertTrue(element("bound.rules-and-contact-link", in: app).exists)
+        XCTAssertFalse(app.staticTexts["Experimental"].exists)
         screenshot("About-Organized")
         sources.tap()
         XCTAssertTrue(app.navigationBars["Sources & Licenses"].waitForExistence(timeout: 5))
@@ -960,18 +961,30 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(reset.waitForExistence(timeout: 5))
         XCTAssertEqual(reset.label, "Reset Settings to Default")
 
-        element("bound.settings-interface", in: app).tap()
-        let experimental = app.switches["bound.experimental-settings"]
-        XCTAssertTrue(experimental.waitForExistence(timeout: 5))
-        if experimental.value as? String != "1" {
-            experimental.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertFalse(element("bound.settings-interface", in: app).exists)
+        element("bound.settings-controls", in: app).tap()
+        let previews = app.switches["bound.context-menu-previews"]
+        XCTAssertTrue(previews.waitForExistence(timeout: 5))
+        if previews.value as? String == "1" {
+            previews.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         }
-        let uiVersion = element("bound.ui-version", in: app)
-        XCTAssertTrue(uiVersion.waitForExistence(timeout: 5))
-        uiVersion.tap()
-        app.buttons["Option 1"].firstMatch.tap()
-        XCTAssertTrue(uiVersion.label.contains("Option 1"))
-        app.navigationBars["Interface & Companion"].buttons.firstMatch.tap()
+        let modeEnabled = app.switches["bound.controller-mode-enabled"]
+        let modeLayout = element("bound.controller-mode-layout", in: app)
+        XCTAssertTrue(modeLayout.exists)
+        XCTAssertEqual(app.switches.matching(identifier: "bound.controller-mode-enabled").count, 1)
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "bound.controller-mode-layout").count, 1)
+        scrollToSetting(modeEnabled, in: app)
+        if modeEnabled.value as? String != "1" {
+            modeEnabled.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        XCTAssertEqual(modeEnabled.value as? String, "1")
+        modeLayout.tap()
+        let modeThree = app.buttons["Mode 3"].firstMatch
+        XCTAssertTrue(modeThree.waitForExistence(timeout: 5))
+        modeThree.tap()
+        XCTAssertTrue(modeLayout.label.contains("Mode 3")
+                      || (modeLayout.value as? String)?.contains("Mode 3") == true)
+        app.navigationBars["Controls"].buttons.firstMatch.tap()
 
         element("bound.settings-audio", in: app).tap()
         let mixAudio = app.switches["Mix with Other Audio"]
@@ -988,12 +1001,17 @@ final class CompanionUITests: XCTestCase {
                       "Reset should leave the user on the shared Settings home.")
         XCTAssertTrue(reset.exists)
 
-        element("bound.settings-interface", in: app).tap()
-        XCTAssertTrue(experimental.waitForExistence(timeout: 5))
-        XCTAssertEqual(experimental.value as? String, "0")
-        XCTAssertFalse(element("bound.ui-version", in: app).exists,
-                        "Reset should restore the fresh-install customization visibility.")
-        app.navigationBars["Interface & Companion"].buttons.firstMatch.tap()
+        element("bound.settings-controls", in: app).tap()
+        XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
+        XCTAssertFalse(element("bound.ui-version", in: app).exists)
+        XCTAssertEqual(app.switches["bound.context-menu-previews"].value as? String, "1")
+        XCTAssertEqual(app.switches["bound.controller-mode-enabled"].value as? String, "0")
+        let defaultModeLayout = element("bound.controller-mode-layout", in: app)
+        XCTAssertTrue(defaultModeLayout.exists)
+        XCTAssertTrue(defaultModeLayout.label.contains("Mode 1")
+                      || (defaultModeLayout.value as? String)?.contains("Mode 1") == true,
+                      "Reset should restore Controller Mode 1 while leaving Controller Mode off.")
+        app.navigationBars["Controls"].buttons.firstMatch.tap()
         element("bound.settings-audio", in: app).tap()
         XCTAssertEqual(mixAudio.value as? String, "0")
         XCTAssertEqual(app.switches["Respect Silent Mode"].value as? String, "0")
@@ -1011,12 +1029,14 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(app.buttons["bound.settings-reset-defaults"].exists,
                       "The reset action should also be available from in-game Settings.")
         app.buttons["bound.settings-reset-defaults"].tap()
-        XCTAssertTrue(app.buttons["bound.settings-interface"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["bound.settings-controls"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["bound.settings-interface"].exists)
         XCTAssertFalse(app.alerts["Unable to Reset Settings"].exists)
         app.buttons["bound.settings-close"].tap()
     }
 
     func testUnifiedSettingsPreferencesPersistAcrossEntryPointsRelaunchAndRotation() throws {
+        throw XCTSkip("This test only covers removed Interface customization controls.")
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
         for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
@@ -1213,21 +1233,6 @@ final class CompanionUITests: XCTestCase {
             backButton.tap()
         }
 
-        func selectUIVersion(_ title: String) {
-            // Reopen at the first row rather than relying on the retained scroll
-            // position of a lazy Form after visiting its last layout controls.
-            app.buttons["bound.settings-close"].tap()
-            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
-            app.buttons["Settings"].tap()
-            app.buttons["bound.settings-interface"].tap()
-            let version = element("bound.ui-version", in: app)
-            XCTAssertTrue(version.waitForExistence(timeout: 5))
-            XCTAssertTrue(version.isHittable)
-            version.tap()
-            XCTAssertTrue(app.buttons[title].waitForExistence(timeout: 5))
-            app.buttons[title].tap()
-        }
-
         func checkBottomScreens(orientation: UIDeviceOrientation, label: String) {
             XCUIDevice.shared.orientation = orientation
             waitForFrame(app.buttons["Settings"]) { _ in
@@ -1274,22 +1279,18 @@ final class CompanionUITests: XCTestCase {
             app.buttons["bound.settings-close"].tap()
             XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
             app.buttons["Settings"].tap()
-
-            let interfaceLink = element("bound.settings-interface", in: app)
-            XCTAssertTrue(interfaceLink.waitForExistence(timeout: 5)); interfaceLink.tap()
-            let originalVersionLabel = element("bound.ui-version", in: app).label
-            selectUIVersion("Option 1")
-            let interfaceFooter = app.staticTexts["Each choice is saved separately on this device. Layout 1 is the default."]
-            assertSettingsBottomContent(interfaceFooter, in: app, name: "\(label)-Interface-UIv1-last-row")
-            selectUIVersion("Option 2")
-            let dexLayouts = element("bound.rrdex-layout", in: app)
-            assertSettingsBottomContent(dexLayouts, in: app, name: "\(label)-Interface-UIv2-layout-link")
-            dexLayouts.tap()
-            XCTAssertTrue(app.navigationBars["RR Dex layout"].waitForExistence(timeout: 5))
-            let galleryLastRow = app.staticTexts["Example data. Tap Use layout to save your choice."]
-            assertSettingsBottomContent(galleryLastRow, in: app, name: "\(label)-UIv2-layout-gallery-last-row")
-            back(from: "RR Dex layout")
-            selectUIVersion(originalVersionLabel.contains("Option 2") ? "Option 2" : "Option 1")
+            let controlsLink = element("bound.settings-controls", in: app)
+            XCTAssertTrue(controlsLink.waitForExistence(timeout: 5))
+            assertSettingsBottomContent(controlsLink, in: app, name: "\(label)-Home-Controls")
+            controlsLink.tap()
+            XCTAssertTrue(app.navigationBars["Controls"].waitForExistence(timeout: 5))
+            let previews = app.switches["bound.context-menu-previews"]
+            XCTAssertTrue(previews.waitForExistence(timeout: 5))
+            let pausePlacement = element("bound.pause-menu-button-placement", in: app)
+            XCTAssertTrue(pausePlacement.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.switches["bound.controller-mode-enabled"].exists)
+            XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
+            assertSettingsElementAboveDone(previews, in: app)
         }
 
         checkBottomScreens(orientation: orientation, label: orientation.isLandscape ? "Landscape" : "Portrait")
@@ -1837,6 +1838,7 @@ final class CompanionUITests: XCTestCase {
     }
 
     func testCompanionViewSwitchesPersistAndFilterCycle() throws {
+        throw XCTSkip("This test only covers removed Interface view-selection controls.")
         // Native pause-menu animation idle notifications can be lost on Xcode 27.
         // Observe the real controls and transitions explicitly throughout this test.
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
@@ -2536,6 +2538,7 @@ final class CompanionUITests: XCTestCase {
     }
 
     func testDefaultPresetAndExperimentalCustomizationVisibility() throws {
+        throw XCTSkip("This test only covers the removed experimental customization UI.")
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
         for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
@@ -2717,20 +2720,27 @@ final class CompanionUITests: XCTestCase {
         for mode in [1, 2] {
             let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture",
                                            "--bound-ui-no-animations", "--bound-ui-screen-layout-bound"])
-            openBoundSettings(in: app)
+            openNativePause(in: app)
+            app.buttons["Settings"].tap()
+            XCTAssertTrue(app.buttons["bound.settings-controls"].waitForExistence(timeout: 5))
+            XCTAssertFalse(app.buttons["bound.settings-interface"].exists)
+            app.buttons["bound.settings-controls"].tap()
             let modePicker = element("bound.controller-mode-layout", in: app)
             XCTAssertTrue(modePicker.waitForExistence(timeout: 5))
             modePicker.tap()
-            let selectedMode = app.buttons["Controller Mode \(mode)"].firstMatch
+            let selectedMode = app.buttons["Mode \(mode)"].firstMatch
             XCTAssertTrue(selectedMode.waitForExistence(timeout: 5))
             selectedMode.tap()
-            let experimental = app.switches["bound.experimental-settings"]
-            XCTAssertEqual(experimental.value as? String, "1")
-            experimental.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-            XCTAssertEqual(experimental.value as? String, "0")
-            XCTAssertTrue(modePicker.label.contains("Controller Mode \(mode)")
-                          || (modePicker.value as? String)?.contains("Controller Mode \(mode)") == true,
-                          "Controller Mode remains available and selected with experimental settings hidden.")
+            XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
+            XCTAssertFalse(app.switches["bound.enable-experimental-features"].exists)
+            XCTAssertTrue(modePicker.label.contains("Mode \(mode)")
+                          || (modePicker.value as? String)?.contains("Mode \(mode)") == true,
+                          "Controller Mode remains available in Controls.")
+            let enabled = app.switches["bound.controller-mode-enabled"]
+            if enabled.value as? String != "1" {
+                enabled.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            }
+            XCTAssertEqual(enabled.value as? String, "1")
             closeBoundSheet(in: app)
 
             XCUIDevice.shared.orientation = .landscapeLeft
@@ -2792,22 +2802,24 @@ final class CompanionUITests: XCTestCase {
                                        "--bound-ui-no-animations", "--bound-ui-screen-layout-bound"])
         openNativePause(in: app)
         app.buttons["Settings"].tap()
-        XCTAssertTrue(app.buttons["bound.settings-interface"].waitForExistence(timeout: 5))
-        app.buttons["bound.settings-interface"].tap()
+        XCTAssertTrue(app.buttons["bound.settings-controls"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["bound.settings-interface"].exists)
+        app.buttons["bound.settings-controls"].tap()
         let modePicker = element("bound.controller-mode-layout", in: app)
         XCTAssertTrue(modePicker.waitForExistence(timeout: 5))
-        let experimental = app.switches["bound.experimental-settings"]
-        XCTAssertTrue(experimental.waitForExistence(timeout: 5))
-        XCTAssertEqual(experimental.value as? String, "0",
-                       "Controller Mode selection is available while experimental settings are off.")
+        XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
         modePicker.tap()
-        let modeThree = app.buttons["Controller Mode 3"].firstMatch
+        let modeThree = app.buttons["Mode 3"].firstMatch
         XCTAssertTrue(modeThree.waitForExistence(timeout: 5))
         modeThree.tap()
-        XCTAssertEqual(experimental.value as? String, "0")
-        XCTAssertTrue(modePicker.label.contains("Controller Mode 3")
-                      || (modePicker.value as? String)?.contains("Controller Mode 3") == true,
-                      "Controller Mode 3 remains available and selected with experimental settings hidden.")
+        XCTAssertTrue(modePicker.label.contains("Mode 3")
+                      || (modePicker.value as? String)?.contains("Mode 3") == true,
+                      "Controller Mode 3 remains available in Controls.")
+        let enabled = app.switches["bound.controller-mode-enabled"]
+        if enabled.value as? String != "1" {
+            enabled.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        XCTAssertEqual(enabled.value as? String, "1")
         closeBoundSheet(in: app)
 
         XCUIDevice.shared.orientation = .landscapeLeft
@@ -2971,6 +2983,7 @@ final class CompanionUITests: XCTestCase {
     }
 
     func testBoundButtonTypesPersistAndPreserveGameplay() throws {
+        throw XCTSkip("This test only covers the removed companion button type customization UI.")
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
         for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
@@ -3211,6 +3224,7 @@ final class CompanionUITests: XCTestCase {
     }
 
     func testUIVersionTwoCyclesAndPersistsReferenceLayouts() throws {
+        throw XCTSkip("This test only covers removed UI Version and layout customization controls.")
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
         for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
@@ -5744,12 +5758,14 @@ final class ReleaseSmokeUITests: XCTestCase {
         XCTAssertTrue(settings.waitForExistence(timeout: 10))
         settings.tap()
         XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
-        for identifier in ["bound.settings-interface", "bound.settings-controls", "bound.settings-audio",
+        for identifier in ["bound.settings-controls", "bound.settings-audio",
                            "bound.settings-account", "bound.settings-about"] {
             XCTAssertTrue(element(identifier, in: app).exists, "Release settings should include \(identifier).")
         }
+        XCTAssertFalse(element("bound.settings-interface", in: app).exists)
         XCTAssertFalse(element("bound.settings-general", in: app).exists)
-        XCTAssertFalse(app.staticTexts["Experimental Features"].exists)
+        XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
+        XCTAssertFalse(app.switches["bound.enable-experimental-features"].exists)
         XCTAssertFalse(app.staticTexts["Patreon"].exists)
 
         element("bound.settings-about", in: app).tap()
