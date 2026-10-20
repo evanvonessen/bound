@@ -905,8 +905,8 @@ final class CompanionUITests: XCTestCase {
         let controllerEnabled = app.switches["bound.controller-mode-enabled"]
         XCTAssertTrue(controllerEnabled.exists)
         XCTAssertEqual(app.switches.matching(identifier: "bound.controller-mode-enabled").count, 1)
-        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "bound.controller-mode-layout").count, 1)
-        XCTAssertTrue(element("bound.controller-mode-layout", in: app).exists)
+        XCTAssertFalse(element("bound.controller-mode-layout", in: app).exists,
+                        "Controller Mode has no layout selector.")
         XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
         XCTAssertFalse(element("bound.ui-version", in: app).exists)
         screenshot("Controls-Moved-General-Settings")
@@ -969,21 +969,13 @@ final class CompanionUITests: XCTestCase {
             previews.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         }
         let modeEnabled = app.switches["bound.controller-mode-enabled"]
-        let modeLayout = element("bound.controller-mode-layout", in: app)
-        XCTAssertTrue(modeLayout.exists)
         XCTAssertEqual(app.switches.matching(identifier: "bound.controller-mode-enabled").count, 1)
-        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "bound.controller-mode-layout").count, 1)
+        XCTAssertFalse(element("bound.controller-mode-layout", in: app).exists)
         scrollToSetting(modeEnabled, in: app)
         if modeEnabled.value as? String != "1" {
             modeEnabled.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         }
         XCTAssertEqual(modeEnabled.value as? String, "1")
-        modeLayout.tap()
-        let modeThree = app.buttons["Mode 3"].firstMatch
-        XCTAssertTrue(modeThree.waitForExistence(timeout: 5))
-        modeThree.tap()
-        XCTAssertTrue(modeLayout.label.contains("Mode 3")
-                      || (modeLayout.value as? String)?.contains("Mode 3") == true)
         app.navigationBars["Controls"].buttons.firstMatch.tap()
 
         element("bound.settings-audio", in: app).tap()
@@ -1006,11 +998,8 @@ final class CompanionUITests: XCTestCase {
         XCTAssertFalse(element("bound.ui-version", in: app).exists)
         XCTAssertEqual(app.switches["bound.context-menu-previews"].value as? String, "1")
         XCTAssertEqual(app.switches["bound.controller-mode-enabled"].value as? String, "0")
-        let defaultModeLayout = element("bound.controller-mode-layout", in: app)
-        XCTAssertTrue(defaultModeLayout.exists)
-        XCTAssertTrue(defaultModeLayout.label.contains("Mode 1")
-                      || (defaultModeLayout.value as? String)?.contains("Mode 1") == true,
-                      "Reset should restore Controller Mode 1 while leaving Controller Mode off.")
+        XCTAssertFalse(element("bound.controller-mode-layout", in: app).exists,
+                        "Reset leaves the single Controller Mode toggle off.")
         app.navigationBars["Controls"].buttons.firstMatch.tap()
         element("bound.settings-audio", in: app).tap()
         XCTAssertEqual(mixAudio.value as? String, "0")
@@ -2672,10 +2661,10 @@ final class CompanionUITests: XCTestCase {
         openNativePause(in: app)
         let tile = app.buttons["bound.controller-mode"]
         XCTAssertTrue(tile.waitForExistence(timeout: 5))
-        XCTAssertEqual(tile.label, "Controller Mode: Off")
-        for state in ["Mode 1", "Mode 2", "Mode 3", "Off", "Mode 1"] {
+        XCTAssertEqual(tile.label, "OFF")
+        for state in ["ON", "OFF", "ON"] {
             tile.tap()
-            let updated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Controller Mode: " + state), object: tile)
+            let updated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", state), object: tile)
             XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 5), .completed)
         }
         app.buttons["Settings"].tap()
@@ -2684,6 +2673,8 @@ final class CompanionUITests: XCTestCase {
         let enabled = app.switches["bound.controller-mode-enabled"]
         let navigation = app.switches["bound.controller-view-navigation"]
         XCTAssertTrue(enabled.waitForExistence(timeout: 5))
+        XCTAssertFalse(element("bound.controller-mode-layout", in: app).exists,
+                        "Controller Mode is a single on/off setting.")
         XCTAssertEqual(enabled.value as? String, "1")
         XCTAssertEqual(navigation.value as? String, "0")
         navigation.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
@@ -2694,7 +2685,7 @@ final class CompanionUITests: XCTestCase {
         XCUIDevice.shared.orientation = .landscapeLeft
         XCTAssertTrue(element("bound.native-r", in: app).waitForExistence(timeout: 8))
         openNativePause(in: app)
-        XCTAssertEqual(tile.label, "Controller Mode: Off")
+        XCTAssertEqual(tile.label, "OFF")
         app.buttons["Settings"].tap()
         XCTAssertTrue(controls.waitForExistence(timeout: 5)); controls.tap()
         XCTAssertEqual(navigation.value as? String, "1", "Navigation preference remains independent of mode enablement")
@@ -2704,88 +2695,42 @@ final class CompanionUITests: XCTestCase {
         app.terminate()
     }
 
-    func testControllerModesOneAndTwoButtonArrangementIsAvailableWithoutExperimentalSettings() throws {
-        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
-        var originals: [(Method, IMP)] = []
-        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
-            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
-            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
-            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
-        }
-        defer {
-            XCUIDevice.shared.orientation = .portrait
-            for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) }
-        }
+    func testGBAGamepadEditorHidesAndRestoresSharedSettingsDoneFooter() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-controller-fixture"]
+        app.launch()
+        defer { app.terminate() }
 
-        for mode in [1, 2] {
-            let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture",
-                                           "--bound-ui-no-animations", "--bound-ui-screen-layout-bound"])
-            openNativePause(in: app)
-            app.buttons["Settings"].tap()
-            XCTAssertTrue(app.buttons["bound.settings-controls"].waitForExistence(timeout: 5))
-            XCTAssertFalse(app.buttons["bound.settings-interface"].exists)
-            app.buttons["bound.settings-controls"].tap()
-            let modePicker = element("bound.controller-mode-layout", in: app)
-            XCTAssertTrue(modePicker.waitForExistence(timeout: 5))
-            modePicker.tap()
-            let selectedMode = app.buttons["Mode \(mode)"].firstMatch
-            XCTAssertTrue(selectedMode.waitForExistence(timeout: 5))
-            selectedMode.tap()
-            XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
-            XCTAssertFalse(app.switches["bound.enable-experimental-features"].exists)
-            XCTAssertTrue(modePicker.label.contains("Mode \(mode)")
-                          || (modePicker.value as? String)?.contains("Mode \(mode)") == true,
-                          "Controller Mode remains available in Controls.")
-            let enabled = app.switches["bound.controller-mode-enabled"]
-            if enabled.value as? String != "1" {
-                enabled.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-            }
-            XCTAssertEqual(enabled.value as? String, "1")
-            closeBoundSheet(in: app)
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 15))
+        app.buttons["Settings"].tap()
+        let controls = app.buttons["bound.settings-controls"]
+        XCTAssertTrue(controls.waitForExistence(timeout: 5)); controls.tap()
+        let controllers = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Controllers")).firstMatch
+        XCTAssertTrue(controllers.waitForExistence(timeout: 5)); controllers.tap()
+        XCTAssertTrue(app.navigationBars["Controllers"].waitForExistence(timeout: 5))
 
-            XCUIDevice.shared.orientation = .landscapeLeft
-            XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 10))
-            func beginArrangement() {
-                openNativePause(in: app)
-                let arrange = app.buttons["bound.menu-arrange-views"]
-                XCTAssertTrue(arrange.waitForExistence(timeout: 5))
-                arrange.tap()
-                XCTAssertTrue(app.buttons["bound.landscape7-done"].waitForExistence(timeout: 8))
-            }
-            func moveButton(_ identifier: String, by offset: CGVector) -> CGRect {
-                let button = element(identifier, in: app)
-                XCTAssertTrue(button.waitForExistence(timeout: 5), "Missing arrangement handle: \(identifier)")
-                let initialFrame = button.frame
-                let start = button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                start.press(forDuration: 0.1, thenDragTo: start.withOffset(offset))
-                XCTAssertNotEqual(button.frame, initialFrame, "Dragging \(identifier) should move its button.")
-                return button.frame
-            }
-            beginArrangement()
-            let movedFrames = [
-                "bound.controller-button-move.friend": moveButton("bound.controller-button-move.friend", by: CGVector(dx: 28, dy: 0)),
-                "bound.controller-button-move.multiview": moveButton("bound.controller-button-move.multiview", by: CGVector(dx: 0, dy: 28)),
-                "bound.controller-button-move.menu": moveButton("bound.controller-button-move.menu", by: CGVector(dx: mode == 1 ? -28 : 28, dy: 0))
-            ]
-            screenshot("Controller-Mode-\(mode)-Buttons-Moved")
-            app.buttons["bound.landscape7-done"].tap()
-            XCTAssertTrue(app.buttons["bound.landscape7-done"].waitForNonExistence(timeout: 5))
+        let player = app.staticTexts["Player 2"].firstMatch
+        XCTAssertTrue(player.waitForExistence(timeout: 5)); player.tap()
+        let connectedController = app.buttons["ExtendedGamepad"]
+        XCTAssertTrue(connectedController.waitForExistence(timeout: 10), "The app-local controller fixture should appear in Player 2.")
+        connectedController.tap()
+        let gba = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Game Boy Advance")).firstMatch
+        XCTAssertTrue(gba.waitForExistence(timeout: 5), "The connected controller exposes its GBA mapping editor.")
+        gba.tap()
+        XCTAssertTrue(app.navigationBars["Game Boy Advance"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["bound.settings-close"].exists,
+                       "GBA mapping uses its Save and navigation Back controls without the shared Done footer.")
+        XCTAssertFalse(element("bound.settings-footer", in: app).exists)
+        XCTAssertTrue(app.buttons["Save"].exists)
+        screenshot("GBA-Controller-Mapping-Without-Shared-Done")
 
-            beginArrangement()
-            for (identifier, expectedFrame) in movedFrames {
-                let button = element(identifier, in: app)
-                XCTAssertTrue(button.waitForExistence(timeout: 5))
-                XCTAssertEqual(button.frame.minX, expectedFrame.minX, accuracy: 2, "Saved position for \(identifier)")
-                XCTAssertEqual(button.frame.minY, expectedFrame.minY, accuracy: 2, "Saved position for \(identifier)")
-            }
-            app.buttons["bound.landscape7-done"].tap()
-            XCUIDevice.shared.orientation = .portrait
-            XCTAssertTrue(element("bound.native-r", in: app).waitForExistence(timeout: 10))
-            app.terminate()
-        }
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.buttons["bound.settings-close"].waitForExistence(timeout: 5),
+                      "Back restores the shared Done footer after leaving GBA mapping.")
+        XCTAssertTrue(element("bound.settings-footer", in: app).exists)
     }
 
-    func testControllerModeThreeShowsOnlyBottomLeftMenuWithoutExperimentalSettings() throws {
+    func testControllerModeArrangeViewsUsesTwoPhasesAndRestoresRemovedButtons() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
         for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
@@ -2803,74 +2748,123 @@ final class CompanionUITests: XCTestCase {
         openNativePause(in: app)
         app.buttons["Settings"].tap()
         XCTAssertTrue(app.buttons["bound.settings-controls"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["bound.settings-interface"].exists)
         app.buttons["bound.settings-controls"].tap()
-        let modePicker = element("bound.controller-mode-layout", in: app)
-        XCTAssertTrue(modePicker.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
-        modePicker.tap()
-        let modeThree = app.buttons["Mode 3"].firstMatch
-        XCTAssertTrue(modeThree.waitForExistence(timeout: 5))
-        modeThree.tap()
-        XCTAssertTrue(modePicker.label.contains("Mode 3")
-                      || (modePicker.value as? String)?.contains("Mode 3") == true,
-                      "Controller Mode 3 remains available in Controls.")
         let enabled = app.switches["bound.controller-mode-enabled"]
+        XCTAssertTrue(enabled.waitForExistence(timeout: 5))
+        XCTAssertFalse(element("bound.controller-mode-layout", in: app).exists)
+        XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
+        XCTAssertFalse(app.switches["bound.enable-experimental-features"].exists)
         if enabled.value as? String != "1" {
             enabled.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         }
         XCTAssertEqual(enabled.value as? String, "1")
         closeBoundSheet(in: app)
 
+        XCTAssertTrue(element("bound.native-r", in: app).waitForExistence(timeout: 5),
+                      "Controller Mode must not hide portrait touch controls.")
         XCUIDevice.shared.orientation = .landscapeLeft
-        let menu = element("bound.native-menu", in: app)
-        XCTAssertTrue(menu.waitForExistence(timeout: 10))
-        XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 10),
-                       "Mode 3 keeps the landscape companion views available.")
-        XCTAssertFalse(app.buttons["bound.landscape7-friend-button"].exists,
-                       "Mode 3 hides the Friend toggle.")
-        XCTAssertFalse(app.buttons["bound.landscape7-views-button"].exists,
-                       "Mode 3 hides the Multiview toggle.")
-        for identifier in ["bound.native-l", "bound.native-r",
-                           "bound.controller-button-move.friend", "bound.controller-button-move.multiview",
-                           "bound.controller-button-move.menu"] {
-            XCTAssertFalse(element(identifier, in: app).exists,
-                           "Only the native Menu control is shown: \(identifier)")
-        }
-        XCTAssertLessThanOrEqual(menu.frame.minX, app.frame.minX + 70,
-                                 "The Menu should sit at the far left of the screen.")
-        XCTAssertGreaterThanOrEqual(menu.frame.maxY, app.frame.maxY - 55,
-                                    "The Menu should sit at the bottom of the screen.")
-        screenshot("Controller-Mode-3-Only-Bottom-Left-Menu")
-
-        menu.tap()
-        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5),
-                      "The bottom-left Menu still opens the pause menu.")
-        let arrange = app.buttons["bound.menu-arrange-views"]
-        XCTAssertTrue(arrange.waitForExistence(timeout: 5))
-        arrange.tap()
-        let done = app.buttons["bound.landscape7-done"]
-        XCTAssertTrue(done.waitForExistence(timeout: 8))
-        XCTAssertLessThanOrEqual(done.frame.minX, app.frame.minX + 70,
-                                 "The arrangement Done control stays with Menu at bottom left.")
-        XCTAssertGreaterThanOrEqual(done.frame.maxY, app.frame.maxY - 55)
-        XCTAssertTrue(element("bound.landscape7-move.dex", in: app).waitForExistence(timeout: 5),
-                       "The panels remain available while arranging in Mode 3.")
-        done.tap()
-        XCTAssertTrue(done.waitForNonExistence(timeout: 5))
-
-        XCUIDevice.shared.orientation = .portrait
-        XCTAssertTrue(element("bound.native-r", in: app).waitForExistence(timeout: 10),
-                       "Portrait restores the normal touch controls while Mode 3 remains selected.")
-        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 5))
-        XCUIDevice.shared.orientation = .landscapeRight
-        XCTAssertTrue(element("bound.native-r", in: app).waitForNonExistence(timeout: 10))
         XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["bound.landscape7-friend-button"].exists,
+                       "The unified Controller Mode starts with only Menu visible.")
+        XCTAssertFalse(app.buttons["bound.landscape7-views-button"].exists)
+
+        let menu = element("bound.native-menu", in: app)
         XCTAssertTrue(menu.waitForExistence(timeout: 10))
         XCTAssertLessThanOrEqual(menu.frame.minX, app.frame.minX + 70)
         XCTAssertGreaterThanOrEqual(menu.frame.maxY, app.frame.maxY - 55)
-        XCTAssertFalse(app.buttons["bound.landscape7-friend-button"].exists)
-        XCTAssertFalse(app.buttons["bound.landscape7-views-button"].exists)
+        menu.tap()
+        let arrange = app.buttons["bound.menu-arrange-views"]
+        XCTAssertTrue(arrange.waitForExistence(timeout: 5)); arrange.tap()
+
+        let gameMove = element("bound.arrange-game.move", in: app)
+        let gameResize = element("bound.arrange-game.resize", in: app)
+        let status = element("bound.arrange-game.status", in: app)
+        let next = app.buttons["bound.landscape7-next"]
+        XCTAssertTrue(gameMove.waitForExistence(timeout: 8), "Arrange Views starts with game-screen placement.")
+        XCTAssertTrue(gameResize.exists)
+        XCTAssertTrue(status.exists)
+        XCTAssertFalse(app.buttons["bound.landscape7-done"].exists,
+                       "Done belongs to the second phase.")
+
+        let beforeMove = gameMove.frame
+        let moveStart = gameMove.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        moveStart.press(forDuration: 0.1, thenDragTo: moveStart.withOffset(CGVector(dx: 30, dy: 0)))
+        XCTAssertNotEqual(gameMove.frame.minX, beforeMove.minX, accuracy: 1,
+                           "The first phase moves the game screen horizontally.")
+        let beforeResize = gameResize.frame
+        let resizeStart = gameResize.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        resizeStart.press(forDuration: 0.1, thenDragTo: resizeStart.withOffset(CGVector(dx: -90, dy: 0)))
+        XCTAssertNotEqual(gameResize.frame, beforeResize,
+                          "The first phase lets users resize the game screen.")
+        XCTAssertTrue(next.waitForExistence(timeout: 5)); next.tap()
+
+        let done = app.buttons["bound.landscape7-done"]
+        let plus = app.buttons["bound.arrange-buttons.plus"]
+        let trash = element("bound.arrange-buttons.trash", in: app)
+        XCTAssertTrue(done.waitForExistence(timeout: 8), "NEXT opens view and button placement.")
+        XCTAssertTrue(plus.exists)
+        XCTAssertTrue(trash.exists)
+        XCTAssertTrue(element("bound.controller-button-move.menu", in: app).exists,
+                       "The Menu button remains present and cannot be removed.")
+
+        func add(_ name: String, byDragging: Bool = false) {
+            if element("bound.controller-button-move.\(name)", in: app).exists { return }
+            plus.tap()
+            let add = element("bound.arrange-buttons.add.\(name)", in: app)
+            XCTAssertTrue(add.waitForExistence(timeout: 5))
+            if byDragging {
+                let start = add.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                start.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.68, dy: 0.55)))
+            } else {
+                add.tap()
+            }
+            XCTAssertTrue(element("bound.controller-button-move.\(name)", in: app).waitForExistence(timeout: 5))
+        }
+        add("friend")
+        add("multiview", byDragging: true)
+
+        let friend = element("bound.controller-button-move.friend", in: app)
+        let friendStart = friend.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let trashCenter = trash.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        friendStart.press(forDuration: 0.1, thenDragTo: trashCenter)
+        XCTAssertTrue(friend.waitForNonExistence(timeout: 5), "Dropping Friend in the trash removes its screen button.")
+        add("friend", byDragging: true)
+        XCTAssertTrue(element("bound.controller-button-move.multiview", in: app).exists)
+        screenshot("Controller-Mode-Unified-Buttons-Restored")
+        let spread = app.buttons["bound.arrange-buttons.spread"]
+        spread.tap()
+        let spreadSlider = app.sliders["bound.arrange-buttons.spread-slider"]
+        XCTAssertTrue(spreadSlider.waitForExistence(timeout: 5))
+        spreadSlider.adjust(toNormalizedSliderPosition: 0.55)
+        let buttonIDs = ["friend", "multiview", "menu"]
+        let row = buttonIDs.map { element("bound.controller-button-move." + $0, in: app).frame }.sorted { $0.midX < $1.midX }
+        XCTAssertEqual(row[1].midX - row[0].midX, row[2].midX - row[1].midX, accuracy: 2)
+        XCTAssertEqual(row[0].midY, row[2].midY, accuracy: 2)
+        app.buttons["Vertical"].tap()
+        spreadSlider.adjust(toNormalizedSliderPosition: 0.45)
+        let column = buttonIDs.map { element("bound.controller-button-move." + $0, in: app).frame }.sorted { $0.midY < $1.midY }
+        XCTAssertEqual(column[1].midY - column[0].midY, column[2].midY - column[1].midY, accuracy: 2)
+        XCTAssertEqual(column[0].midX, column[2].midX, accuracy: 2)
+        spread.tap()
+        screenshot("Controller-Mode-Buttons-Evenly-Spaced")
+        done.tap()
+        XCTAssertTrue(done.waitForNonExistence(timeout: 5))
+
+        menu.tap()
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
+        arrange.tap()
+        XCTAssertTrue(gameMove.waitForExistence(timeout: 8))
+        next.tap()
+        XCTAssertTrue(element("bound.controller-button-move.friend", in: app).waitForExistence(timeout: 5),
+                      "DONE persists the restored Friend button.")
+        XCTAssertTrue(element("bound.controller-button-move.multiview", in: app).exists,
+                       "DONE persists the Multiview button.")
+        done.tap()
+
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(element("bound.native-r", in: app).waitForExistence(timeout: 10),
+                       "Portrait touch controls remain visible while Controller Mode is on.")
+        app.terminate()
     }
 
     func testLibraryAccountSettingsProvidesBoundSignInAndAccountCreation() throws {
@@ -5295,8 +5289,8 @@ final class CompanionUITests: XCTestCase {
         openNativePause(in: app)
         let mode = app.buttons["bound.controller-mode"]
         XCTAssertTrue(mode.waitForExistence(timeout: 5))
-        XCTAssertEqual(mode.label, "Controller Mode: Off")
-        XCTAssertEqual(mode.value as? String, "Off")
+        XCTAssertEqual(mode.label, "OFF")
+        XCTAssertEqual(mode.value as? String, "OFF")
         XCTAssertTrue(app.frame.contains(mode.frame))
         for label in ["Save State", "Load State", "Cheat Codes", "Fast Forward", "Connect", "Settings"] {
             XCTAssertTrue(app.buttons[label].exists)
@@ -5333,189 +5327,6 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(shoulder.waitForExistence(timeout: 5))
         XCTAssertTrue(cycle.exists)
         XCTAssertEqual(game.frame, originalGame)
-    }
-
-    func testControllerModeTwoMovesGameRightAndPlacesFriendAndControlsInLeftRail() throws {
-        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
-        var originals: [(Method, IMP)] = []
-        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
-            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
-            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
-            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
-        }
-        defer {
-            XCUIDevice.shared.orientation = .portrait
-            for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) }
-        }
-
-        let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture",
-                                       "--bound-ui-screen-layout-bound", "--bound-ui-no-animations",
-                                       "-bound.delta.pip.v1.dex.layout", "12"])
-        let game = element("bound.game-screen", in: app)
-        func assertContained(_ frame: CGRect, file: StaticString = #filePath, line: UInt = #line) {
-            XCTAssertTrue(app.frame.contains(frame.insetBy(dx: 0.5, dy: 0.5)),
-                          "View frame must stay within the app bounds: \(frame) / \(app.frame)", file: file, line: line)
-        }
-        func assertFrame(_ actual: CGRect, matches expected: CGRect, accuracy: CGFloat = 2,
-                         file: StaticString = #filePath, line: UInt = #line) {
-            XCTAssertEqual(actual.minX, expected.minX, accuracy: accuracy, file: file, line: line)
-            XCTAssertEqual(actual.minY, expected.minY, accuracy: accuracy, file: file, line: line)
-            XCTAssertEqual(actual.width, expected.width, accuracy: accuracy, file: file, line: line)
-            XCTAssertEqual(actual.height, expected.height, accuracy: accuracy, file: file, line: line)
-        }
-        func chooseLandscapeOption(_ option: Int) {
-            openBoundSettings(in: app)
-            let picker = element("bound.landscape-options", in: app)
-            scrollToSetting(picker, in: app)
-            XCTAssertTrue(picker.waitForExistence(timeout: 5))
-            picker.tap()
-            app.buttons["Option \(option)"].firstMatch.tap()
-            closeBoundSheet(in: app)
-        }
-        func chooseControllerMode(_ mode: Int) {
-            openBoundSettings(in: app)
-            let picker = element("bound.controller-mode-layout", in: app)
-            scrollToSetting(picker, in: app)
-            XCTAssertTrue(picker.waitForExistence(timeout: 5))
-            picker.tap()
-            let label = mode == 0 ? "Off" : "Controller Mode \(mode)"
-            app.buttons[label].firstMatch.tap()
-            closeBoundSheet(in: app)
-        }
-        func assertModeTwoRail(prefix: String, expectedGameSize: CGSize? = nil) {
-            let friend = element(prefix + "-friend", in: app)
-            let menu = element("bound.native-menu", in: app)
-            let toggle = app.buttons[prefix + "-views-button"]
-            XCTAssertTrue(friend.waitForExistence(timeout: 8))
-            XCTAssertTrue(menu.waitForExistence(timeout: 5))
-            XCTAssertTrue(toggle.waitForExistence(timeout: 5))
-            assertContained(game.frame); assertContained(friend.frame)
-            assertContained(menu.frame); assertContained(toggle.frame)
-            XCTAssertLessThan(friend.frame.maxX, game.frame.minX)
-            XCTAssertGreaterThanOrEqual(menu.frame.minY, friend.frame.maxY - 1)
-            XCTAssertGreaterThanOrEqual(toggle.frame.minY, friend.frame.maxY - 1)
-            XCTAssertLessThan(menu.frame.maxX, game.frame.minX)
-            XCTAssertLessThan(toggle.frame.maxX, game.frame.minX)
-            XCTAssertFalse(friend.frame.intersects(game.frame))
-            XCTAssertFalse(element("bound.native-l", in: app).exists, "Mode 2 hides the native L shoulder.")
-            XCTAssertFalse(element("bound.native-r", in: app).exists, "Mode 2 hides the native R shoulder.")
-            XCTAssertFalse(app.buttons["bound.panel-cycle"].exists, "Multiview has no Bound cycle button.")
-            if let expectedGameSize {
-                XCTAssertEqual(game.frame.width, expectedGameSize.width, accuracy: 2)
-                XCTAssertEqual(game.frame.height, expectedGameSize.height, accuracy: 2)
-            }
-        }
-        func openArrangeAndFinish(prefix: String) {
-            openNativePause(in: app)
-            let arrange = app.buttons["bound.menu-arrange-views"]
-            XCTAssertTrue(arrange.waitForExistence(timeout: 5))
-            arrange.tap()
-            let done = app.buttons[prefix + "-done"]
-            XCTAssertTrue(done.waitForExistence(timeout: 8))
-            done.tap()
-            XCTAssertTrue(done.waitForNonExistence(timeout: 5))
-        }
-
-        // Mode 2 supplies Multiview even when the saved landscape choice is Option 1.
-        chooseLandscapeOption(1)
-        chooseControllerMode(1)
-        let portraitGame = game.frame
-        XCTAssertTrue(element("bound.native-r", in: app).waitForExistence(timeout: 5))
-        XCUIDevice.shared.orientation = .landscapeLeft
-        waitForFrame(game) { app.frame.width > app.frame.height && $0.width > $0.height }
-        let modeOneGame = game.frame
-        XCTAssertLessThan(abs(modeOneGame.midX - app.frame.midX), 3,
-                          "Controller Mode 1 keeps the gameplay screen centered.")
-        XCTAssertTrue(app.buttons["bound.panel-cycle"].exists,
-                      "Controller Mode 1 keeps the original Option 1 companion control.")
-        screenshot("Bound-controller-mode1-original-centered")
-
-        chooseControllerMode(2)
-        waitForFrame(game) { $0.minX > modeOneGame.minX + 20 }
-        let modeTwoGame = game.frame
-        XCTAssertGreaterThan(modeTwoGame.minX, modeOneGame.minX + 20,
-                             "Mode 2 shifts gameplay toward the right edge.")
-        XCTAssertEqual(modeTwoGame.width, modeOneGame.width, accuracy: 2,
-                       "This device should fit the Mode 1 gameplay size in Mode 2.")
-        XCTAssertEqual(modeTwoGame.height, modeOneGame.height, accuracy: 2)
-        assertModeTwoRail(prefix: "bound.landscape6", expectedGameSize: modeOneGame.size)
-        screenshot("Bound-controller-mode2-option6-left-rail")
-
-        let toggle6 = app.buttons["bound.landscape6-views-button"]
-        XCTAssertEqual(toggle6.value as? String, "Visible")
-        toggle6.tap()
-        XCTAssertEqual(toggle6.value as? String, "Hidden")
-        toggle6.tap()
-        XCTAssertEqual(toggle6.value as? String, "Visible")
-        openArrangeAndFinish(prefix: "bound.landscape6")
-
-        let modeTwoFriend6 = element("bound.landscape6-friend", in: app).frame
-        chooseLandscapeOption(7)
-        XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 8))
-        let modeTwoFriend7 = element("bound.landscape7-friend", in: app).frame
-        assertFrame(modeTwoFriend7, matches: modeTwoFriend6)
-        assertFrame(game.frame, matches: modeTwoGame)
-        assertModeTwoRail(prefix: "bound.landscape7", expectedGameSize: modeOneGame.size)
-        app.buttons["bound.landscape7-tab-bosses"].tap()
-        XCTAssertEqual(element("bound.landscape7-reference-content", in: app).value as? String, "Bosses")
-        app.buttons["bound.landscape7-tab-types"].tap()
-        XCTAssertEqual(element("bound.landscape7-reference-content", in: app).value as? String, "Types")
-        app.buttons["bound.landscape7-tab-dex"].tap()
-        XCTAssertEqual(element("bound.landscape7-reference-content", in: app).value as? String, "RR Dex")
-        openArrangeAndFinish(prefix: "bound.landscape7")
-
-        XCUIDevice.shared.orientation = .landscapeRight
-        waitForFrame(game) { app.frame.width > app.frame.height && $0.width > $0.height }
-        assertModeTwoRail(prefix: "bound.landscape7", expectedGameSize: modeOneGame.size)
-        openNativePause(in: app) // Exercises the left-rail Menu hit target.
-        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
-        resumeNativePause(in: app)
-
-        XCUIDevice.shared.orientation = .portrait
-        XCTAssertTrue(element("bound.native-r", in: app).waitForExistence(timeout: 8),
-                      "Portrait restores native controller controls while Mode 2 remains selected.")
-        waitForFrame(game) { app.frame.height > app.frame.width && app.frame.contains($0) }
-        assertFrame(game.frame, matches: portraitGame, accuracy: 3)
-        XCTAssertTrue(app.buttons["bound.panel-cycle"].waitForExistence(timeout: 5),
-                      "Portrait restores the normal companion cycle control.")
-
-        // Relaunch in the same landscape orientation and prove the Mode 2 choice and geometry persist.
-        XCUIDevice.shared.orientation = .landscapeRight
-        waitForFrame(game) { app.frame.width > app.frame.height && $0.width > $0.height }
-        let persistedGame = game.frame
-        let persistedFriend = element("bound.landscape7-friend", in: app).frame
-        app.terminate()
-        app.launchArguments = app.launchArguments.filter { $0 != "--bound-ui-reset-layout" }
-        XCUIDevice.shared.orientation = .landscapeRight
-        app.launch()
-        let diagnostic = libraryGame(named: "BoundRRDexDiagnostic", in: app)
-        XCTAssertTrue(diagnostic.waitForExistence(timeout: 20))
-        diagnostic.tap()
-        XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 15))
-        assertFrame(game.frame, matches: persistedGame, accuracy: 3)
-        assertFrame(element("bound.landscape7-friend", in: app).frame, matches: persistedFriend, accuracy: 3)
-        openBoundSettings(in: app)
-        let modePicker = element("bound.controller-mode-layout", in: app)
-        scrollToSetting(modePicker, in: app)
-        XCTAssertTrue(modePicker.label.contains("Controller Mode 2")
-                      || (modePicker.value as? String)?.contains("Controller Mode 2") == true,
-                      "The persisted Controller Mode 2 selection should remain visible in Settings.")
-        closeBoundSheet(in: app)
-
-        XCUIDevice.shared.orientation = .landscapeLeft
-        waitForFrame(game) { app.frame.width > app.frame.height && $0.width > $0.height }
-        chooseControllerMode(1)
-        waitForFrame(game) { abs($0.minX - modeOneGame.minX) < 3 }
-        assertFrame(game.frame, matches: modeOneGame, accuracy: 3)
-        XCTAssertFalse(element("bound.native-r", in: app).exists,
-                       "Controller Mode 1 continues to hide native shoulders in landscape.")
-        screenshot("Bound-controller-mode1-restored-after-mode2")
-
-        chooseControllerMode(0)
-        XCTAssertTrue(element("bound.native-r", in: app).waitForExistence(timeout: 8),
-                      "Controller Mode Off restores native touch controls.")
-        waitForFrame(game) { abs($0.minX - modeOneGame.minX) < 3 }
-        assertFrame(game.frame, matches: modeOneGame, accuracy: 3)
     }
 
     func testBoundNotesPlaceholderAndEditing() throws {

@@ -5,6 +5,7 @@ struct BoundLandscapeArrangementOverlay: View {
     @ObservedObject var model: BoundLandscapeArrangementModel
     var showsEditor = true
     var showsButtons = true
+    @State private var trayButtons: [BoundControllerButton] = []
     private var multiview: Bool { model.multiview }
     private func title(for content: BoundPiPContent) -> String {
         multiview && content != .friend ? "Multiview" : content.title
@@ -12,6 +13,9 @@ struct BoundLandscapeArrangementOverlay: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             if showsEditor && model.editing {
+                if model.editingGameScreen {
+                    gameScreenEditor
+                } else {
                 moveTarget(.friend, frame: model.layout.friend).zIndex(model.selected == .friend ? 1 : 0)
                 if !model.contents.isEmpty { moveTarget(model.referenceContent, frame: model.layout.reference).zIndex(model.selected == .friend ? 0 : 1) }
                 if !multiview {
@@ -24,23 +28,32 @@ struct BoundLandscapeArrangementOverlay: View {
                 }
                 if model.movableControllerButtons {
                     buttonAlignmentGuides.allowsHitTesting(false).zIndex(2)
-                    buttonMoveTarget(.friend).zIndex(4)
-                    buttonMoveTarget(.multiview).zIndex(4)
+                    if let hint = model.buttonAlignmentHint {
+                        Text(hint).font(.caption.weight(.semibold)).foregroundStyle(.cyan)
+                            .padding(8).background(.ultraThinMaterial, in: Capsule())
+                            .frame(maxWidth: .infinity).padding(.top, max(8, model.layout.canvas.minY + 4))
+                            .allowsHitTesting(false).zIndex(5)
+                    }
+                    if model.isButtonVisible(.friend) { buttonMoveTarget(.friend).zIndex(4) }
+                    if model.isButtonVisible(.multiview) { buttonMoveTarget(.multiview).zIndex(4) }
+                    buttonTools.zIndex(6)
                 }
-                Button { model.finish(save: true) } label: {
-                    Text("DONE").font(.system(size: 11, weight: .heavy))
+                }
+                Button { model.advanceArrangement() } label: {
+                    Text(model.editingGameScreen ? "NEXT" : "DONE").font(.system(size: 11, weight: .heavy))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .foregroundStyle(.white)
                         .background(Color(uiColor: .deltaPurple), in: Circle())
                         .overlay(Circle().stroke(.white, lineWidth: 2))
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Done arranging views")
-                .accessibilityIdentifier(model.accessibilityPrefix + "-done")
+                .accessibilityLabel(model.editingGameScreen ? "Next: arrange views and buttons" : "Done arranging views")
+                .accessibilityIdentifier(model.accessibilityPrefix + (model.editingGameScreen ? "-next" : "-done"))
                 .placed(model.layout.doneButton).zIndex(3)
-                if model.movableControllerButtons { buttonMoveTarget(.menu).zIndex(4) }
+                if model.movableControllerButtons && !model.editingGameScreen { buttonMoveTarget(.menu).zIndex(4) }
             }
-            if showsButtons && !model.menuOnlyControllerMode {
+            if showsButtons && !model.editing {
+              if model.isButtonVisible(.friend) {
               Button(action: model.toggleFriend) { Image(systemName: "person.2.fill") }
                 .buttonStyle(ArrangementButtonStyle(selected: model.friendVisible))
                 .accessibilityLabel("Friend")
@@ -49,6 +62,8 @@ struct BoundLandscapeArrangementOverlay: View {
                 .accessibilityIdentifier(model.accessibilityPrefix + "-friend-button")
                 .disabled(model.editing)
                 .placed(model.layout.friendButton).zIndex(3)
+              }
+              if model.isButtonVisible(.multiview) {
             Button(action: model.toggleReference) {
                 if multiview {
                     Image(systemName: model.referenceVisible ? "xmark" : "book")
@@ -65,9 +80,135 @@ struct BoundLandscapeArrangementOverlay: View {
                 .accessibilityIdentifier(model.accessibilityPrefix + "-views-button")
                 .disabled(model.editing || model.contents.isEmpty)
                 .placed(model.layout.viewsButton).zIndex(3)
+              }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var gameScreenEditor: some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(model.gameFullSize ? Color.cyan : Color.white, lineWidth: 2)
+                .overlay {
+                    ArrangementDragTarget(identifier: "bound.arrange-game.move", label: "Move game screen",
+                        select: {}, cancelled: model.cancelGameScreenMove) {
+                            model.moveGameScreen(translation: $0, ended: $1)
+                        }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(Color(uiColor: .deltaPurple), in: RoundedRectangle(cornerRadius: 10))
+                        .overlay {
+                            ArrangementDragTarget(identifier: "bound.arrange-game.resize", label: "Resize game screen",
+                                select: {}, cancelled: model.cancelGameScreenMove) {
+                                    model.resizeGameScreen(translation: $0, ended: $1)
+                                }
+                        }
+                }
+                .placed(model.gameFrame)
+            if model.gameCentered {
+                Path { path in
+                    path.move(to: CGPoint(x: model.gameFrame.midX, y: model.layout.canvas.minY))
+                    path.addLine(to: CGPoint(x: model.gameFrame.midX, y: model.layout.canvas.maxY))
+                }
+                .stroke(Color.cyan, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                .allowsHitTesting(false)
+            }
+            VStack(spacing: 6) {
+                Text("Game Screen").font(.caption.weight(.semibold))
+                HStack(spacing: 8) {
+                    if model.gameFullSize { Label("Full Size", systemImage: "arrow.up.left.and.arrow.down.right") }
+                    if model.gameCentered { Label("Centered", systemImage: "align.horizontal.center") }
+                }
+                .font(.caption2).foregroundStyle(.cyan)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("bound.arrange-game.status")
+            }
+            .padding(8).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .frame(maxWidth: .infinity).padding(.top, max(8, model.layout.canvas.minY + 4))
+            .allowsHitTesting(false)
+            HStack(spacing: 16) {
+                Button("Cancel") { model.finish(save: false) }
+                Button("Reset", action: model.resetGameScreen)
+                    .accessibilityIdentifier("bound.arrange-game.reset")
+            }
+            .font(.caption.weight(.semibold)).padding(.horizontal, 16)
+            .frame(height: 44).background(.regularMaterial, in: Capsule())
+            .placed(model.buttonToolbarFrame)
+        }
+    }
+
+    private var buttonTools: some View {
+        ZStack(alignment: .topLeading) {
+            HStack(spacing: 0) {
+                Button(action: model.editGameScreen) { Image(systemName: "chevron.left") }.frame(width: 44, height: 44)
+                    .accessibilityLabel("Game screen placement")
+                Image(systemName: model.buttonOverTrash ? "trash.fill" : "trash")
+                    .foregroundStyle(model.buttonOverTrash ? .red : .secondary)
+                    .frame(width: 44, height: 44)
+                    .background(model.buttonOverTrash ? Color.red.opacity(0.2) : .clear, in: Circle())
+                    .accessibilityLabel("Remove button drop target")
+                    .accessibilityIdentifier("bound.arrange-buttons.trash")
+                Button {
+                    trayButtons = [.friend, .multiview].filter { !model.isButtonVisible($0) }
+                    model.showingButtonTray.toggle()
+                    model.showingSpread = false
+                } label: { Image(systemName: "plus") }.frame(width: 44, height: 44)
+                    .accessibilityLabel("Add button")
+                    .accessibilityIdentifier("bound.arrange-buttons.plus")
+                Button {
+                    model.showingSpread.toggle()
+                    model.showingButtonTray = false
+                } label: { Image(systemName: "arrow.left.and.right") }.frame(width: 44, height: 44)
+                    .disabled(model.visibleControllerButtons.count < 2)
+                    .accessibilityLabel("Spread buttons evenly")
+                    .accessibilityIdentifier("bound.arrange-buttons.spread")
+            }
+            .font(.system(size: 18, weight: .semibold))
+            .frame(width: 210, height: 44, alignment: .leading)
+            .background(.regularMaterial, in: Capsule())
+            .placed(model.buttonToolbarFrame)
+            if model.showingButtonTray {
+                if trayButtons.isEmpty {
+                    Text("All Buttons Added").font(.caption).padding(10)
+                        .background(.regularMaterial, in: Capsule())
+                        .placed(CGRect(x: model.buttonToolbarFrame.minX, y: model.buttonToolsExpandUpward ? model.buttonToolbarFrame.minY - 48 : model.buttonToolbarFrame.maxY + 8, width: 210, height: 40))
+                }
+                ForEach(trayButtons, id: \.rawValue) { button in
+                    Circle().fill(Color(uiColor: .deltaPurple))
+                        .overlay { Image(systemName: button == .friend ? "person.2.fill" : "book").foregroundStyle(.white) }
+                        .overlay {
+                            ArrangementDragTarget(identifier: "bound.arrange-buttons.add." + button.rawValue,
+                                label: "Add " + (button == .friend ? "Friend" : "Multiview"),
+                                select: { model.restoreControllerButton(button) },
+                                cancelled: model.cancelAddingControllerButton) {
+                                    model.addControllerButton(button, translation: $0, ended: $1)
+                                }
+                        }
+                        .placed(model.buttonTrayFrame(button))
+                }
+            }
+            if model.showingSpread {
+                VStack(spacing: 5) {
+                    Picker("Alignment", selection: $model.spreadVertically) {
+                        Text("Horizontal").tag(false)
+                        Text("Vertical").tag(true)
+                    }.pickerStyle(.segmented)
+                    HStack {
+                        Text("Spread").font(.caption)
+                        Slider(value: Binding(get: { Double(model.buttonSpread) }, set: { model.setButtonSpread(CGFloat($0)) }), in: Double(model.minimumButtonSpread)...1)
+                            .accessibilityLabel("Button spread")
+                            .accessibilityIdentifier("bound.arrange-buttons.spread-slider")
+                    }
+                }
+                .padding(10).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .placed(CGRect(x: model.buttonToolbarFrame.midX - 140, y: model.buttonToolsExpandUpward ? model.buttonToolbarFrame.minY - 96 : model.buttonToolbarFrame.maxY + 8, width: 280, height: 88))
+            }
+        }
+        .tint(Color(uiColor: .deltaPurple))
     }
 
     private var buttonAlignmentGuides: some View {
@@ -93,7 +234,7 @@ struct BoundLandscapeArrangementOverlay: View {
             Circle().stroke(.white, lineWidth: 2)
             ArrangementDragTarget(identifier: "bound.controller-button-move." + button.rawValue,
                 label: "Move " + (button == .friend ? "Friend" : button == .multiview ? "Multiview" : "Menu"),
-                select: { if button == .menu { model.finish(save: true) } },
+                select: { if button == .menu { model.advanceArrangement() } },
                 cancelled: model.cancelControllerButtonMove) {
                     model.moveControllerButton(button, translation: $0, ended: $1)
                 }
@@ -389,7 +530,7 @@ final class BoundLandscapeOpacityGesture: NSObject, UIGestureRecognizerDelegate 
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         let point = touch.location(in: view)
-        guard model.active && model.editing else { return false }
+        guard model.active && model.editing && !model.editingGameScreen else { return false }
         // Multiview has no toolbar: a selected panel can be faded anywhere in
         // the arrangement canvas, including where the old opacity box sat.
         if model.multiview { return model.layout.canvas.contains(point) }
@@ -401,7 +542,7 @@ final class BoundLandscapeOpacityGesture: NSObject, UIGestureRecognizerDelegate 
     }
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         let delta = pan.translation(in: view)
-        return model.active && model.editing && pan.numberOfTouches == 3
+        return model.active && model.editing && !model.editingGameScreen && pan.numberOfTouches == 3
             && (model.multiview || abs(delta.y) > abs(delta.x))
     }
 }

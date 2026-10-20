@@ -7,6 +7,9 @@
 //
 
 import UIKit
+#if DEBUG && targetEnvironment(simulator)
+import GameController
+#endif
 import GoogleSignIn
 
 import DeltaCore
@@ -53,6 +56,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate
         
         // Controllers
         ExternalGameControllerManager.shared.startMonitoring()
+        #if DEBUG && targetEnvironment(simulator)
+        if ProcessInfo.processInfo.arguments.contains("--bound-ui-controller-fixture") {
+            let controller = GCController.withExtendedGamepad()
+            NotificationCenter.default.post(name: .GCControllerDidConnect, object: controller)
+        }
+        #endif
         
         // JIT
         ServerManager.shared.prepare()

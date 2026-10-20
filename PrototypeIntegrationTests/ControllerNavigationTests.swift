@@ -254,11 +254,10 @@ final class ControllerNavigationTests: XCTestCase {
         settings.loadViewIfNeeded()
         let tableView = settings.tableView!
         let modeEnabledPath = IndexPath(row: 4, section: 1)
-        let modeSelectionPath = IndexPath(row: 5, section: 1)
-        let navigationPath = IndexPath(row: 6, section: 1)
+        let navigationPath = IndexPath(row: 5, section: 1)
 
-        XCTAssertEqual(settings.tableView(tableView, numberOfRowsInSection: 1), 7)
-        for indexPath in [modeEnabledPath, modeSelectionPath, navigationPath] {
+        XCTAssertEqual(settings.tableView(tableView, numberOfRowsInSection: 1), 6)
+        for indexPath in [modeEnabledPath, navigationPath] {
             XCTAssertEqual(settings.tableView(tableView, heightForRowAt: indexPath), UITableView.automaticDimension)
             XCTAssertNotNil(settings.tableView(tableView, cellForRowAt: indexPath))
         }

@@ -669,7 +669,7 @@ extension GameViewController
                 preferences.cycle()
                 self.view.setNeedsLayout()
                 self.view.layoutIfNeeded()
-                item.text = "Controller Mode: \(preferences.displayName)"
+                item.text = preferences.displayName
                 item.isSelected = preferences.isEnabled
             }
             if self.emulatorCore?.deltaCore.supportedRates.upperBound == 1
@@ -2803,7 +2803,6 @@ extension GameViewController {
         let layout = BoundControlPlacementStore.shared.read(skin: base.identifier, landscape: view.bounds.width > view.bounds.height)
         let mode = BoundControllerModePreferences.hidesTouchControls(enabled: BoundControllerModePreferences().isEnabled,
             layout: BoundAppearancePreferences().effectiveScreenLayout, landscape: view.bounds.width > view.bounds.height)
-        let modeTwo = boundControllerModeTwoGeometry()
         if boundControllerModeActive != mode {
             cancelBoundTouchInputsPreservingExternalHolds()
             boundControllerModeActive = mode
@@ -2819,7 +2818,7 @@ extension GameViewController {
         let movableMenu = boundControllerModeButtonDefaults()?[.menu].flatMap {
             boundCompanion.controllerMenuFrame(defaultFrame: $0, canvas: view.bounds.inset(by: view.safeAreaInsets))
         }
-        let controllerMenuFrame = movableMenu ?? modeTwo?.menu ?? boundControllerModeThreeGeometry()?.menu
+        let controllerMenuFrame = movableMenu ?? boundControllerModeThreeGeometry()?.menu
         let configuration = BoundControlConfiguration(skin: base.identifier, layout: layout, canvas: view.bounds.size,
             source: source, insets: insets, gutter: gutter, minimal: minimal, controllerMode: mode, controllerMenuFrame: controllerMenuFrame,
             style: traitCollection.userInterfaceStyle, contrast: traitCollection.accessibilityContrast)
@@ -2880,7 +2879,6 @@ extension GameViewController {
     func boundLandscapeControlGutter() -> CGRect? {
         let bounds = view.bounds
         guard BoundAppearancePreferences().effectiveScreenLayout == .bound, bounds.width > bounds.height else { return nil }
-        if boundControllerModeTwoGeometry() != nil { return nil }
         let insets = view.safeAreaInsets
         let horizontal = CGRect(x: bounds.minX+insets.left, y: bounds.minY,
             width: max(1, bounds.width-insets.left-insets.right), height: bounds.height)
@@ -2891,43 +2889,21 @@ extension GameViewController {
         let gutter = CGRect(x: game.maxX, y: safe.minY, width: max(0, safe.maxX-game.maxX), height: safe.height)
         return gutter.width >= 44 && gutter.height >= 44 ? gutter : nil
     }
-    func boundControllerModeTwoGeometry() -> BoundControllerModeTwoGeometry? {
-        let preferences = BoundControllerModePreferences()
-        guard preferences.isEnabled, preferences.layout == .mode2,
-              BoundAppearancePreferences().effectiveScreenLayout == .bound else { return nil }
-        return BoundControllerModeTwoGeometry(bounds: view.bounds, safeArea: view.safeAreaInsets,
-            gameAspect: emulatorCore?.preferredRenderingSize ?? CGSize(width: 3, height: 2))
-    }
+    // Legacy accessors remain for source compatibility; Mode 2 no longer affects layout.
+    func boundControllerModeTwoGeometry() -> BoundControllerModeTwoGeometry? { nil }
     func boundControllerModeThreeGeometry() -> BoundControllerModeThreeGeometry? {
-        let preferences = BoundControllerModePreferences()
-        guard preferences.isEnabled, preferences.layout == .mode3,
+        guard BoundControllerModePreferences().isEnabled,
               BoundAppearancePreferences().effectiveScreenLayout == .bound else { return nil }
         return BoundControllerModeThreeGeometry(bounds: view.bounds, safeArea: view.safeAreaInsets)
     }
-    /// Stable Mode 1-like starting positions, independent of the moved native Menu.
     func boundControllerModeButtonDefaults() -> [BoundControllerButton: CGRect]? {
-        let preferences = BoundControllerModePreferences()
-        guard preferences.isEnabled, preferences.layout != .mode3,
-              view.bounds.width > view.bounds.height,
-              BoundAppearancePreferences().effectiveScreenLayout == .bound,
-              let current = controllerView.controllerSkin, let traits = controllerView.controllerSkinTraits else { return nil }
-        if let modeTwo = boundControllerModeTwoGeometry() {
-            return [.menu: modeTwo.menu, .friend: modeTwo.friendButton, .multiview: modeTwo.views]
-        }
-        let base = unwrappedBoundControllerSkin(current)
-        let source = nativeBoundControllerFrame(base: base)
-        let stock = BoundStockControllerSkin(base: base, canvasSize: source.size,
-            contentInsets: nativeBoundControllerInsets(base: base), boundLandscapeGutter: nativeBoundLandscapeControlGutter(base: base))
-        guard let item = stock.items(for: traits)?.first(where: { $0.inputs.allInputs.contains { $0.stringValue == "menu" } }) else { return nil }
-        let native = item.frame.applying(.init(scaleX: source.width, y: source.height)).offsetBy(dx: source.minX, dy: source.minY)
+        guard let geometry = boundControllerModeThreeGeometry() else { return nil }
         let canvas = view.bounds.inset(by: view.safeAreaInsets)
-        let menu = CGRect(x: native.midX - 22, y: native.midY - 22, width: 44, height: 44)
-        let initial: [BoundControllerButton: CGRect] = [
-            .menu: menu,
-            .friend: CGRect(x: canvas.minX + canvas.maxX - menu.midX - 22, y: menu.minY, width: 44, height: 44),
-            .multiview: menu.offsetBy(dx: 0, dy: 52)
+        return [
+            .menu: geometry.menu,
+            .friend: CGRect(x: canvas.maxX - 44, y: canvas.maxY - 44, width: 44, height: 44),
+            .multiview: CGRect(x: canvas.maxX - 44, y: canvas.minY, width: 44, height: 44)
         ]
-        return initial.mapValues { BoundControllerButtonPlacement().frame(for: .menu, defaultFrame: $0, canvas: canvas) }
     }
     private func nativeBoundLandscapeControlGutter(base: ControllerSkinProtocol) -> CGRect? {
         guard let gutter = boundLandscapeControlGutter() else { return nil }

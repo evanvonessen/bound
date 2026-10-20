@@ -36,6 +36,8 @@ final class SettingsResetTests: XCTestCase {
         defaults.set(Data([1, 2, 3]), forKey: "bound.landscape.controller-mode.buttons.v1")
         defaults.set(Data([4, 5, 6]), forKey: "bound.landscape.controller-mode2.buttons.v1")
         defaults.set(Data([7, 8, 9]), forKey: "bound.landscape.controller-mode3.buttons.v1")
+        defaults.set(Data([10, 11, 12]), forKey: "bound.landscape.controller-unified.buttons.v1")
+        defaults.set(Data([13, 14, 15]), forKey: "bound.landscape.controller-unified.game-screen.v1")
         let companion = BoundCompanionButtonPreferences(defaults: defaults)
         companion.buttonType = .option3
         let pip = BoundPiPPreferences(defaults: defaults)
@@ -84,6 +86,8 @@ final class SettingsResetTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: "bound.landscape.controller-mode.buttons.v1"))
         XCTAssertNil(defaults.object(forKey: "bound.landscape.controller-mode2.buttons.v1"))
         XCTAssertNil(defaults.object(forKey: "bound.landscape.controller-mode3.buttons.v1"))
+        XCTAssertNil(defaults.object(forKey: "bound.landscape.controller-unified.buttons.v1"))
+        XCTAssertNil(defaults.object(forKey: "bound.landscape.controller-unified.game-screen.v1"))
         XCTAssertEqual(companion.buttonType, .option4)
         XCTAssertTrue(pip.isEnabled(.dex))
         XCTAssertEqual(BoundLandscapePreferences(defaults: defaults).option, .option7)
@@ -99,24 +103,25 @@ final class SettingsResetTests: XCTestCase {
         }
     }
 
-    func testControllerModeTileCycleRunsOffThroughModesOneToThreeAndBackOff() throws {
+    func testControllerModeTileTogglesOnAndOffAndPreservesLegacyLayoutForMigration() throws {
         let (defaults, suite) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(BoundControllerModeLayout.mode3.rawValue, forKey: BoundControllerModePreferences.layoutKey)
         let preferences = BoundControllerModePreferences(defaults: defaults)
 
         XCTAssertFalse(preferences.isEnabled)
-        XCTAssertEqual(preferences.displayName, "Off")
+        XCTAssertEqual(preferences.displayName, "OFF")
+        XCTAssertEqual(preferences.layout, .mode1, "The unified runtime exposes only its single mode.")
+        XCTAssertEqual(defaults.integer(forKey: BoundControllerModePreferences.layoutKey), 3,
+                       "The original selected mode remains available to the one-time arrangement migration.")
         preferences.cycle()
         XCTAssertTrue(preferences.isEnabled)
-        XCTAssertEqual(preferences.layout, .mode1)
-        XCTAssertEqual(preferences.displayName, "Mode 1")
-        preferences.cycle()
-        XCTAssertEqual(preferences.layout, .mode2)
-        preferences.cycle()
-        XCTAssertEqual(preferences.layout, .mode3)
+        XCTAssertEqual(preferences.displayName, "ON")
+        XCTAssertEqual(defaults.integer(forKey: BoundControllerModePreferences.layoutKey), 3)
         preferences.cycle()
         XCTAssertFalse(preferences.isEnabled)
-        XCTAssertEqual(preferences.displayName, "Off")
+        XCTAssertEqual(preferences.displayName, "OFF")
+        XCTAssertEqual(defaults.integer(forKey: BoundControllerModePreferences.layoutKey), 3)
     }
 
     func testControllerViewNavigationDefaultsOff() throws {

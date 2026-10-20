@@ -298,7 +298,7 @@ final class BoundCompanionCoordinator {
             UserDefaults.standard.removeObject(forKey: BoundControllerNavigationPreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundExperimentalSettingsPreferences.key)
-            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") || key.hasPrefix("bound.landscape.option5.") || key.hasPrefix("bound.landscape.option6.") || key.hasPrefix("bound.landscape.option7.") || key.hasPrefix("bound.landscape.controller-mode.") || key.hasPrefix("bound.landscape.controller-mode2.") || key.hasPrefix("bound.landscape.controller-mode3.") { UserDefaults.standard.removeObject(forKey: key) }
+            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") || key.hasPrefix("bound.landscape.option5.") || key.hasPrefix("bound.landscape.option6.") || key.hasPrefix("bound.landscape.option7.") || key.hasPrefix("bound.landscape.controller-mode.") || key.hasPrefix("bound.landscape.controller-mode2.") || key.hasPrefix("bound.landscape.controller-mode3.") || key.hasPrefix("bound.landscape.controller-unified.") || key == "bound.landscape.game-screen.v1" { UserDefaults.standard.removeObject(forKey: key) }
         }
         #endif
         #if DEBUG
@@ -402,8 +402,8 @@ final class BoundCompanionCoordinator {
             overlay.yieldsTouch = { [weak self, weak overlay] point in
                 guard let self, let owner = self.owner, let overlay else { return false }
                 if self.arrangementLayers.active {
-                    return !self.landscapeArrangement.layout.friendButton.contains(point)
-                        && !self.landscapeArrangement.layout.viewsButton.contains(point)
+                    return !(self.landscapeArrangement.isButtonVisible(.friend) && self.landscapeArrangement.layout.friendButton.contains(point))
+                        && !(self.landscapeArrangement.isButtonVisible(.multiview) && self.landscapeArrangement.layout.viewsButton.contains(point))
                 }
                 if self.landscapeArrangement.active { return !self.landscapeArrangement.receivesTouch(at: point) }
                 if self.landscapeCompanion.active { return !self.landscapeCompanion.receivesTouch(at: point) }
@@ -558,11 +558,10 @@ final class BoundCompanionCoordinator {
         let landscape = bounds.width > bounds.height
         if state.landscape != landscape { state.landscape = landscape; cancelInteractions() }
         let controllerPreferences = BoundControllerModePreferences()
-        let modeTwo = owner.boundControllerModeTwoGeometry()
         let savedOption = landscapeCompanion.preferences.option
         let controllerModeEnabled = controllerPreferences.isEnabled && screenLayout == .bound && landscape
         // The additional controller modes always pair Friend with Multiview.
-        let usesControllerMultiview = modeTwo != nil || (controllerModeEnabled && controllerPreferences.layout == .mode3)
+        let usesControllerMultiview = controllerModeEnabled
         let arrangementOption = usesControllerMultiview ? (savedOption == .option7 ? .option7 : .option6) : savedOption
         let usesLandscapeOption2 = landscape && arrangementOption == .option2
         let controllerModeLayout = controllerModeEnabled ? controllerPreferences.layout : .mode1
@@ -593,7 +592,9 @@ final class BoundCompanionCoordinator {
         let horizontal = CGRect(x: safeArea.left, y: 0, width: max(1, bounds.width - safeArea.left - safeArea.right), height: bounds.height)
         if landscape {
             // The native game and controls must finish layout before placing PiP.
-            owner.gameScreenLayoutBounds = modeTwo?.game ?? horizontal
+            let fullGame = AVMakeRect(aspectRatio: owner.emulatorCore?.preferredRenderingSize ?? CGSize(width: 3, height: 2), insideRect: horizontal)
+            owner.gameScreenLayoutBounds = usesLandscapeArrangement
+                ? landscapeArrangement.configuredGameFrame(baseFrame: fullGame, canvas: horizontal) : horizontal
             return bounds
         }
         let geometry = BoundPortraitScreenGeometry(bounds: bounds, safeTop: safeArea.top,
@@ -669,13 +670,11 @@ final class BoundCompanionCoordinator {
             defaults[content] = CGRect(x: center.x - pip.size.width / 2, y: center.y - pip.size.height / 2,
                                        width: pip.size.width, height: pip.size.height)
         }
-        let modeTwo = owner.boundControllerModeTwoGeometry()
-        if let modeTwo { defaults[.friend] = modeTwo.friend }
         landscapeArrangement.updateLayout(canvas: canvas, occupied: occupied, menuFrame: menuFrame,
-            boundFrame: landscapeArrangement.menuOnlyControllerMode ? .zero : (buttonDefaults?[.multiview] ?? (!controls.isHidden || landscapeArrangement.multiview ? controls.frame : .zero)), defaults: defaults,
+            boundFrame: buttonDefaults?[.multiview] ?? (!controls.isHidden || landscapeArrangement.multiview ? controls.frame : .zero), defaults: defaults,
             keyboardHeight: max(0, keyboardHeight - owner.view.safeAreaInsets.bottom), screenBounds: owner.view.bounds,
-            friendButtonFrame: buttonDefaults?[.friend] ?? modeTwo?.friendButton,
-            viewsButtonFrame: buttonDefaults?[.multiview] ?? modeTwo?.views)
+            friendButtonFrame: buttonDefaults?[.friend],
+            viewsButtonFrame: buttonDefaults?[.multiview])
         overlay.frame = owner.view.bounds
         overlay.isHidden = false; overlay.alpha = 1
         host?.view.frame = overlay.bounds
@@ -683,7 +682,7 @@ final class BoundCompanionCoordinator {
         owner.view.bringSubviewToFront(controls)
         arrangementEditorOverlay?.frame = owner.view.bounds
         arrangementEditorHost?.view.frame = owner.view.bounds
-        let companionButtonFrames = [landscapeArrangement.layout.friendButton, landscapeArrangement.layout.viewsButton].filter { !$0.isEmpty }
+        let companionButtonFrames = [BoundControllerButton.friend, .multiview].filter { landscapeArrangement.isButtonVisible($0) }.map { landscapeArrangement.buttonFrame($0) }.filter { !$0.isEmpty }
         arrangementLayers.buttonFrames = native + companionButtonFrames
         arrangementLayers.apply()
         #if DEBUG && targetEnvironment(simulator)
@@ -766,7 +765,7 @@ final class BoundCompanionCoordinator {
         let frame = owner.controllerView.convert(local, to: owner.view)
         let menuAccessibility = nativeMenuAccessibility ?? BoundNativeMenuAccessibilityElement(accessibilityContainer: owner.controllerView)
         menuAccessibility.accessibilityIdentifier = "bound.native-menu"
-        menuAccessibility.accessibilityLabel = landscapeArrangement.editing ? "Done arranging views" : "Menu"
+        menuAccessibility.accessibilityLabel = landscapeArrangement.editing ? (landscapeArrangement.editingGameScreen ? "Next: arrange views and buttons" : "Done arranging views") : "Menu"
         menuAccessibility.accessibilityTraits = .button
         menuAccessibility.accessibilityFrameInContainerSpace = local
         menuAccessibility.activate = { [weak owner] in
@@ -805,7 +804,6 @@ final class BoundCompanionCoordinator {
             buttonType: landscapeArrangement.active ? .option1 : BoundCompanionButtonPreferences().effectiveButtonType)
         controls.configureSegments(contents: landscapeArrangement.active ? [] : state.configuration.assignments,
                                    displayedContents: landscapeArrangement.active ? [] : state.displayedButtonContents)
-        if let modeTwo = owner.boundControllerModeTwoGeometry() { controls.frame = modeTwo.views }
         if landscapeArrangement.active {
             // Multiview uses this same position for its X/book toggle, rendered
             // by the arrangement overlay. Keep the measured frame for layout.
@@ -884,7 +882,7 @@ final class BoundCompanionCoordinator {
     }
     func finishLandscapeArrangementIfNeeded() -> Bool {
         guard landscapeArrangement.active, landscapeArrangement.editing else { return false }
-        landscapeArrangement.finish(save: true)
+        landscapeArrangement.advanceArrangement()
         return true
     }
     private func beginMacSheet(from presenter: UIViewController) {

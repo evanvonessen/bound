@@ -29,6 +29,23 @@ struct BoundLandscapeViewPlacement: Codable, Equatable, Sendable {
 @MainActor
 final class BoundLandscapeArrangementModel: ObservableObject {
     enum ResizeAxis { case width, height, scale }
+    enum EditingPhase { case gameScreen, viewsAndButtons }
+    @Published private(set) var editingPhase: EditingPhase = .gameScreen
+    @Published private(set) var gameFrame: CGRect = .zero
+    @Published private(set) var gameCentered = false
+    @Published private(set) var gameFullSize = false
+    @Published private(set) var buttonOverTrash = false
+    @Published var showingButtonTray = false
+    @Published var showingSpread = false
+    @Published var spreadVertically = false
+    private var savedGame = BoundControllerGamePlacement()
+    private var draftGame: BoundControllerGamePlacement?
+    private var gameGestureStart: BoundControllerGamePlacement?
+    private var gameBase: CGRect = .zero
+    private var gameCanvas: CGRect = .zero
+    private var addingButtonStart: BoundControllerButtonPlacement?
+    var editingGameScreen: Bool { editing && editingPhase == .gameScreen }
+
     enum Corner: String, CaseIterable {
         case topLeft, topRight, bottomLeft, bottomRight
         var center: CGPoint {
@@ -128,6 +145,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
 
     @Published private(set) var buttonAlignmentX: CGFloat?
     @Published private(set) var buttonAlignmentY: CGFloat?
+    @Published private(set) var buttonAlignmentHint: String?
     var buttonDidAlign: (() -> Void)?
 
     var needsLayout: (() -> Void)?
@@ -146,7 +164,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     private var gestureStart: (BoundPiPContent, State)?
     private var savedButtons = BoundControllerButtonPlacement()
     private var draftButtons: BoundControllerButtonPlacement?
-    private var buttonDrag: (button: BoundControllerButton, drag: BoundControllerButtonDrag, start: BoundControllerButtonPlacement)?
+    private var buttonDrag: (button: BoundControllerButton, drag: BoundControllerButtonDrag, start: BoundControllerButtonPlacement, frame: CGRect)?
     private var fadeStartOpacity: Double?
     private var boundButtonFrame: CGRect = .zero
     private var selectionBeforeArrangement: BoundPiPContent?
@@ -167,8 +185,8 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     var placementShortcuts: Bool { option == .option5 }
     var focusedHandles: Bool { refined || placementShortcuts }
     var multiview: Bool { option == .option6 || option == .option7 }
-    var movableControllerButtons: Bool { active && controllerModeEnabled && controllerModeLayout != .mode3 && multiview }
-    var menuOnlyControllerMode: Bool { controllerModeEnabled && controllerModeLayout == .mode3 }
+    var movableControllerButtons: Bool { active && controllerModeEnabled && multiview }
+    var menuOnlyControllerMode: Bool { controllerModeEnabled && !isButtonVisible(.friend) && !isButtonVisible(.multiview) }
     var tabbedMultiview: Bool { option == .option7 }
     var accessibilityPrefix: String { "bound.landscape\(option.rawValue)" }
 
@@ -187,14 +205,16 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         self.referenceContent = Self.readContent(self.defaults, key: namespace + ".option3.reference-content", allowed: contents) ?? contents.first ?? .notes
         self.selected = self.referenceContent
         migrateControllerModeArrangements()
+        migrateUnifiedControllerArrangement()
         readPlacements()
+        savedGame = self.defaults.data(forKey: gamePlacementKey).flatMap { try? JSONDecoder().decode(BoundControllerGamePlacement.self, from: $0) } ?? .init()
     }
 
     /// New variants start as an Option 3 snapshot, then save independently. Keeping
     /// one observable session also keeps the live video canvas and gestures mounted.
     func useOption(_ value: BoundLandscapeOption, controllerModeEnabled: Bool = false,
                    controllerModeLayout: BoundControllerModeLayout = .mode1, forceReload: Bool = false) {
-        let effectiveControllerLayout = controllerModeEnabled ? controllerModeLayout : .mode1
+        let effectiveControllerLayout = BoundControllerModeLayout.mode1
         guard value.supportsArrangement,
               forceReload || option != value || self.controllerModeEnabled != controllerModeEnabled
                 || self.controllerModeLayout != effectiveControllerLayout else { return }
@@ -235,6 +255,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         referenceContent = Self.readContent(defaults, key: key("reference-content"), allowed: contents) ?? contents.first ?? .notes
         selected = referenceContent
         readPlacements()
+        savedGame = defaults.data(forKey: gamePlacementKey).flatMap { try? JSONDecoder().decode(BoundControllerGamePlacement.self, from: $0) } ?? .init()
         savedButtons = defaults.data(forKey: buttonPlacementKey).flatMap { try? JSONDecoder().decode(BoundControllerButtonPlacement.self, from: $0) } ?? .init()
         layoutInput = nil
         needsLayout?()
@@ -324,7 +345,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
                 controllerModeLayout: BoundControllerModeLayout = .mode1) {
         finish(save: false, resume: false)
         self.controllerModeEnabled = controllerModeEnabled
-        self.controllerModeLayout = controllerModeEnabled ? controllerModeLayout : .mode1
+        self.controllerModeLayout = .mode1
         // Recreate the same Option 3 source snapshot used by a fresh session.
         // Otherwise a reset of Option 6/7 skips their initialization and derives
         // different geometry from the live frames.
@@ -455,13 +476,6 @@ final class BoundLandscapeArrangementModel: ObservableObject {
             next.viewsButton = CGRect(x: insetCanvas.minX + 8, y: insetCanvas.midY + 6, width: buttonSize, height: buttonSize)
         }
 
-        if menuOnlyControllerMode {
-            // Controller Mode 3 keeps only the native Menu control. Its position
-            // comes from the controller layout and remains fixed while arranging.
-            next.friendButton = .zero
-            next.viewsButton = .zero
-        }
-
         if movableControllerButtons {
             next.friendButton = controllerButtonFrame(.friend, defaultFrame: next.friendButton, canvas: canvas)
             next.viewsButton = controllerButtonFrame(.multiview, defaultFrame: next.viewsButton, canvas: canvas)
@@ -492,8 +506,8 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         let desired = CGSize(width: max(160, referenceCanvas.width * state.widthFraction),
                              height: max(minimumReferenceHeight, referenceCanvas.height * state.heightFraction))
         let initialSeparation = (!persistedContents.contains(referenceContent) && !editing) || avoidFriend
-        let buttonObstacles = menuOnlyControllerMode ? [] : [next.friendButton.insetBy(dx: -4, dy: -4),
-                                                              next.viewsButton.insetBy(dx: -4, dy: -4)]
+        let buttonObstacles = [(BoundControllerButton.friend, next.friendButton), (.multiview, next.viewsButton)]
+            .filter { isButtonVisible($0.0) }.map { $0.1.insetBy(dx: -4, dy: -4) }
         let obstacles = occupied + (initialSeparation ? [next.friend.insetBy(dx: -4, dy: -4)] : []) + buttonObstacles
             + [next.doneButton.insetBy(dx: -2, dy: -2)]
             + (menuOnlyControllerMode || movableControllerButtons ? [] : [boundFrame.insetBy(dx: -2, dy: -2)])
@@ -555,7 +569,12 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         selected = contents.isEmpty ? .friend : referenceContent
         draft = saved
         draftButtons = savedButtons
+        draftGame = savedGame
+        editingPhase = .gameScreen
+        showingButtonTray = false
+        showingSpread = false
         editing = true
+        refreshGameFrame()
         updateEditorAnchor()
         needsLayout?()
     }
@@ -575,13 +594,25 @@ final class BoundLandscapeArrangementModel: ObservableObject {
             savedButtons = draftButtons
             defaults.set(data, forKey: buttonPlacementKey)
         }
+        if save, let draftGame, let data = try? JSONEncoder().encode(draftGame) {
+            savedGame = draftGame
+            defaults.set(data, forKey: gamePlacementKey)
+        }
+        draftGame = nil
+        gameGestureStart = nil
+        showingButtonTray = false
+        showingSpread = false
+        buttonOverTrash = false
+        addingButtonStart = nil
         draftButtons = nil
         buttonDrag = nil
         buttonAlignmentX = nil
         buttonAlignmentY = nil
+        buttonAlignmentHint = nil
         draft = nil
         selectionBeforeArrangement = nil
         editing = false
+        refreshGameFrame()
         gestureStart = nil
         fadeStartOpacity = nil
         endArrangement?(resume)
@@ -589,6 +620,164 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     }
 
     private var buttonPlacementKey: String { arrangementNamespace + ".buttons.v1" }
+    private var gamePlacementKey: String { arrangementNamespace + ".game-screen.v1" }
+
+    func advanceArrangement() {
+        guard editing else { return }
+        if editingPhase == .gameScreen {
+            editingPhase = .viewsAndButtons
+            gameGestureStart = nil
+            needsLayout?()
+        } else { finish(save: true) }
+    }
+
+    func editGameScreen() {
+        guard editing else { return }
+        editingPhase = .gameScreen
+        showingButtonTray = false
+        showingSpread = false
+        needsLayout?()
+    }
+
+    func configuredGameFrame(baseFrame: CGRect, canvas: CGRect) -> CGRect {
+        gameBase = baseFrame
+        gameCanvas = canvas
+        refreshGameFrame()
+        return gameFrame
+    }
+
+    private func refreshGameFrame() {
+        let placement = draftGame ?? savedGame
+        let next = placement.frame(baseFrame: gameBase, canvas: gameCanvas)
+        if gameFrame != next { gameFrame = next }
+        let centered = abs(placement.horizontalPosition - 0.5) < 0.001
+        let full = placement.scale >= 0.999
+        if editingGameScreen, (centered && !gameCentered || full && !gameFullSize) { buttonDidAlign?() }
+        if gameCentered != centered { gameCentered = centered }
+        if gameFullSize != full { gameFullSize = full }
+    }
+
+    func moveGameScreen(translation: CGSize, ended: Bool) {
+        guard editingGameScreen else { return }
+        if gameGestureStart == nil { gameGestureStart = draftGame ?? savedGame }
+        guard let start = gameGestureStart else { return }
+        let startFrame = start.frame(baseFrame: gameBase, canvas: gameCanvas)
+        let travel = max(0, gameCanvas.width - startFrame.width)
+        let center = startFrame.midX + translation.width
+        let centered = abs(center - gameCanvas.midX) <= 7
+        let position: CGFloat = travel > 0 ? (center - gameCanvas.minX - startFrame.width / 2) / travel : 0.5
+        draftGame = BoundControllerGamePlacement(scale: start.scale, horizontalPosition: centered ? 0.5 : position)
+        refreshGameFrame()
+        if ended { gameGestureStart = nil }
+        needsLayout?()
+    }
+
+    func resizeGameScreen(translation: CGSize, ended: Bool) {
+        guard editingGameScreen, gameBase.width > 0 else { return }
+        if gameGestureStart == nil { gameGestureStart = draftGame ?? savedGame }
+        guard let start = gameGestureStart else { return }
+        let scale = start.scale + (translation.width + translation.height) / (gameBase.width + gameBase.height)
+        draftGame = BoundControllerGamePlacement(scale: scale >= 0.975 ? 1 : scale, horizontalPosition: start.horizontalPosition)
+        refreshGameFrame()
+        if ended { gameGestureStart = nil }
+        needsLayout?()
+    }
+
+    func cancelGameScreenMove() {
+        if let gameGestureStart { draftGame = gameGestureStart }
+        gameGestureStart = nil
+        refreshGameFrame()
+        needsLayout?()
+    }
+
+    func resetGameScreen() {
+        guard editingGameScreen else { return }
+        draftGame = .init()
+        gameGestureStart = nil
+        refreshGameFrame()
+        needsLayout?()
+    }
+
+    func isButtonVisible(_ button: BoundControllerButton) -> Bool {
+        !controllerModeEnabled || (draftButtons ?? savedButtons).isVisible(button)
+    }
+
+    var visibleControllerButtons: [BoundControllerButton] { BoundControllerButton.allCases.filter { isButtonVisible($0) } }
+    var buttonToolbarFrame: CGRect {
+        let canvas = layoutInput?.canvas ?? layout.canvas
+        let bottom = CGRect(x: canvas.midX - 105, y: canvas.maxY - 48, width: 210, height: 44)
+        return showingSpread || layout.doneButton.intersects(bottom.insetBy(dx: -6, dy: -6))
+            ? CGRect(x: bottom.minX, y: canvas.minY + 4, width: bottom.width, height: bottom.height) : bottom
+    }
+    var buttonToolsExpandUpward: Bool { buttonToolbarFrame.midY > layout.canvas.midY }
+    var buttonTrashFrame: CGRect {
+        CGRect(x: buttonToolbarFrame.minX + 44, y: buttonToolbarFrame.minY, width: 44, height: 44)
+    }
+    func buttonTrayFrame(_ button: BoundControllerButton) -> CGRect {
+        CGRect(x: buttonToolbarFrame.midX + (button == .friend ? -48 : 4), y: buttonToolsExpandUpward ? buttonToolbarFrame.minY - 56 : buttonToolbarFrame.maxY + 12, width: 44, height: 44)
+    }
+    func restoreControllerButton(_ button: BoundControllerButton) {
+        guard editing, movableControllerButtons, button != .menu else { return }
+        draftButtons?.setVisible(true, for: button)
+        showingButtonTray = false
+        refreshLayout()
+    }
+    func removeControllerButton(_ button: BoundControllerButton) {
+        guard editing, movableControllerButtons, button != .menu else { return }
+        draftButtons?.setVisible(false, for: button)
+        refreshLayout()
+    }
+    func addControllerButton(_ button: BoundControllerButton, translation: CGSize, ended: Bool) {
+        guard editing, movableControllerButtons, let canvas = layoutInput?.canvas else { return }
+        if addingButtonStart == nil { addingButtonStart = draftButtons }
+        draftButtons?.setVisible(true, for: button)
+        let frame = buttonTrayFrame(button).offsetBy(dx: translation.width, dy: translation.height)
+        draftButtons?.set(frame: frame, for: button, canvas: canvas)
+        if ended {
+            if buttonTrashFrame.contains(CGPoint(x: frame.midX, y: frame.midY)) {
+                draftButtons = addingButtonStart
+                draftButtons?.setVisible(false, for: button)
+            }
+            addingButtonStart = nil
+            showingButtonTray = false
+        }
+        refreshLayout()
+    }
+    func cancelAddingControllerButton() {
+        if let addingButtonStart { draftButtons = addingButtonStart }
+        addingButtonStart = nil
+        refreshLayout()
+    }
+    var minimumButtonSpread: CGFloat {
+        let canvas = layoutInput?.canvas ?? layout.canvas
+        let length = spreadVertically ? canvas.height : canvas.width
+        return min(1, max(0.12, CGFloat(max(1, visibleControllerButtons.count - 1)) * 52 / max(1, length - 44)))
+    }
+    var buttonSpread: CGFloat {
+        let frames = visibleControllerButtons.map { buttonFrame($0) }
+        let centers = frames.map { spreadVertically ? $0.midY : $0.midX }
+        let canvas = layoutInput?.canvas ?? layout.canvas
+        let length = spreadVertically ? canvas.height : canvas.width
+        return min(1, max(minimumButtonSpread, ((centers.max() ?? 0) - (centers.min() ?? 0)) / max(1, length - 44)))
+    }
+    func setButtonSpread(_ fraction: CGFloat) {
+        guard editing, movableControllerButtons, let canvas = layoutInput?.canvas else { return }
+        let buttons = visibleControllerButtons.sorted {
+            let a = buttonFrame($0), b = buttonFrame($1)
+            return spreadVertically ? a.midY < b.midY : a.midX < b.midX
+        }
+        guard buttons.count > 1 else { return }
+        let extent = max(0, (spreadVertically ? canvas.height : canvas.width) - 44) * min(1, max(minimumButtonSpread, fraction))
+        let common = buttons.map { spreadVertically ? buttonFrame($0).midX : buttonFrame($0).midY }.reduce(0, +) / CGFloat(buttons.count)
+        let center = spreadVertically ? canvas.midY : canvas.midX
+        for (index, button) in buttons.enumerated() {
+            let axis = center - extent / 2 + extent * CGFloat(index) / CGFloat(buttons.count - 1)
+            let frame = CGRect(x: (spreadVertically ? common : axis) - 22, y: (spreadVertically ? axis : common) - 22, width: 44, height: 44)
+            draftButtons?.set(frame: frame, for: button, canvas: canvas)
+        }
+        refreshLayout()
+    }
+
 
     func controllerButtonFrame(_ button: BoundControllerButton, defaultFrame: CGRect, canvas: CGRect) -> CGRect {
         guard movableControllerButtons else { return defaultFrame }
@@ -607,8 +796,9 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         guard editing, movableControllerButtons, let canvas = layoutInput?.canvas else { return }
         if buttonDrag?.button != button {
             buttonDrag = (button, BoundControllerButtonDrag(startFrame: buttonFrame(button),
-                targets: BoundControllerButton.allCases.filter { $0 != button }.map { buttonFrame($0) }),
-                draftButtons ?? savedButtons)
+                targets: visibleControllerButtons.filter { $0 != button }.map { buttonFrame($0) },
+                canvas: canvas, button: button, otherButtons: Dictionary(uniqueKeysWithValues: visibleControllerButtons.filter { $0 != button }.map { ($0, buttonFrame($0)) })),
+                draftButtons ?? savedButtons, buttonFrame(button))
         }
         guard var gesture = buttonDrag else { return }
         let result = gesture.drag.update(translation: translation, canvas: canvas)
@@ -616,8 +806,21 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         draftButtons?.set(frame: result.frame, for: button, canvas: canvas)
         buttonAlignmentX = ended ? nil : result.snappedX
         buttonAlignmentY = ended ? nil : result.snappedY
+        buttonAlignmentHint = ended ? nil : result.hint
         if result.didSnap { buttonDidAlign?() }
-        if ended { buttonDrag = nil }
+        // Snap release may offset the visual button slightly from the finger.
+        // Drop targets follow the finger, so crossing guides cannot defeat a drop.
+        let dragCenter = CGPoint(x: gesture.frame.midX + translation.width, y: gesture.frame.midY + translation.height)
+        buttonOverTrash = button != .menu && buttonTrashFrame.insetBy(dx: -12, dy: -12).contains(dragCenter)
+        if buttonOverTrash { draftButtons?.set(frame: buttonTrashFrame, for: button, canvas: canvas) }
+        if ended {
+            if buttonOverTrash {
+                draftButtons = gesture.start
+                draftButtons?.setVisible(false, for: button)
+            }
+            buttonOverTrash = false
+            buttonDrag = nil
+        }
         refreshLayout()
     }
 
@@ -626,6 +829,8 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         buttonDrag = nil
         buttonAlignmentX = nil
         buttonAlignmentY = nil
+        buttonAlignmentHint = nil
+        buttonOverTrash = false
         refreshLayout()
     }
 
@@ -781,7 +986,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     func receivesTouch(at point: CGPoint) -> Bool {
         guard active else { return false }
         if editing { return movableControllerButtons || layout.doneButton.contains(point) || !boundButtonFrame.contains(point) }
-        if !menuOnlyControllerMode && (layout.friendButton.contains(point) || layout.viewsButton.contains(point)) { return true }
+        if (isButtonVisible(.friend) && layout.friendButton.contains(point)) || (isButtonVisible(.multiview) && layout.viewsButton.contains(point)) { return true }
         guard !contents.isEmpty else { return false }
         return referenceVisible && !layout.reference.isEmpty && layout.reference.contains(point)
     }
@@ -871,12 +1076,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         defaults.set(data, forKey: key(suffix))
     }
     private var arrangementNamespace: String {
-        guard controllerModeEnabled else { return namespace }
-        switch controllerModeLayout {
-        case .mode1: return namespace + ".controller-mode"
-        case .mode2: return namespace + ".controller-mode2"
-        case .mode3: return namespace + ".controller-mode3"
-        }
+        controllerModeEnabled ? namespace + ".controller-unified" : namespace
     }
 
     /// Keep the existing keys for Controller Mode off. On upgrade, preserve all
@@ -894,6 +1094,18 @@ final class BoundLandscapeArrangementModel: ObservableObject {
                     defaults.set(value, forKey: destinationKey)
                 }
             }
+        }
+        defaults.set(true, forKey: destination + ".initialized")
+    }
+
+    private func migrateUnifiedControllerArrangement() {
+        let destination = namespace + ".controller-unified"
+        guard !defaults.bool(forKey: destination + ".initialized") else { return }
+        let legacy = defaults.integer(forKey: BoundControllerModePreferences.layoutKey)
+        let source = namespace + (legacy == 2 ? ".controller-mode2" : legacy == 3 ? ".controller-mode3" : ".controller-mode")
+        for (key, value) in defaults.dictionaryRepresentation() where key.hasPrefix(source + ".option") {
+            let target = destination + key.dropFirst(source.count)
+            if defaults.object(forKey: target) == nil { defaults.set(value, forKey: target) }
         }
         defaults.set(true, forKey: destination + ".initialized")
     }

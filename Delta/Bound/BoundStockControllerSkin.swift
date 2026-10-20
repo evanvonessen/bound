@@ -330,8 +330,8 @@ enum BoundControllerModeLayout: Int, CaseIterable {
     case mode3 = 3
 }
 
-/// Controller Mode selection; the enabled flag keeps its original key so
-/// existing users retain their setting and resolve to the original layout.
+/// Controller Mode is a single on/off preference. The legacy layout key remains
+/// intact for one-time arrangement migration, but no longer selects a mode.
 final class BoundControllerModePreferences {
     static let key = "bound.controller-mode.v1.enabled"
     static let layoutKey = "bound.controller-mode.v1.layout"
@@ -345,24 +345,15 @@ final class BoundControllerModePreferences {
         }
     }
     var layout: BoundControllerModeLayout {
-        get { BoundControllerModeLayout(rawValue: defaults.integer(forKey: Self.layoutKey)) ?? .mode1 }
+        get { .mode1 }
         set {
-            defaults.set(newValue.rawValue, forKey: Self.layoutKey)
+            defaults.set(BoundControllerModeLayout.mode1.rawValue, forKey: Self.layoutKey)
             NotificationCenter.default.post(name: BoundAppearancePreferences.didChangeNotification, object: nil)
         }
     }
-    var displayName: String { isEnabled ? "Mode \(layout.rawValue)" : "Off" }
+    var displayName: String { isEnabled ? "ON" : "OFF" }
 
-    func cycle() {
-        if !isEnabled {
-            layout = .mode1
-            isEnabled = true
-        } else if layout == .mode3 {
-            isEnabled = false
-        } else {
-            layout = BoundControllerModeLayout(rawValue: layout.rawValue + 1) ?? .mode1
-        }
-    }
+    func cycle() { isEnabled.toggle() }
     static func hidesTouchControls(enabled: Bool, layout: BoundScreenLayout, landscape: Bool) -> Bool {
         enabled && layout == .bound && landscape
     }

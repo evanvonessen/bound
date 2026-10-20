@@ -1099,165 +1099,58 @@ final class LandscapeArrangementTests: XCTestCase {
         XCTAssertLessThanOrEqual(restored.layout.reference.maxX, safe.maxX + 0.001)
     }
 
-    func testControllerModeTwoUsesIndependentNamespaceAndSuppliedSideRailFrames() throws {
+    func testLegacyControllerModesMigrateSelectedPanelsOnceToUnifiedSetup() throws {
+        for mode in BoundControllerModeLayout.allCases {
+            let namespace = "LandscapeArrangementTests.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+            defer { defaults.removePersistentDomain(forName: namespace) }
+            defaults.set(mode.rawValue, forKey: BoundControllerModePreferences.layoutKey)
+            let source = namespace + (mode == .mode1 ? ".controller-mode" : ".controller-mode\(mode.rawValue)")
+            let placement = BoundLandscapeViewPlacement(center: CGPoint(x: 0.2, y: 0.4), widthFraction: 0.2, heightFraction: 0.3)
+            defaults.set(try JSONEncoder().encode(placement), forKey: source + ".option7.placement.reference")
+            defaults.set(true, forKey: source + ".option7.initialized")
+            defaults.set("bosses", forKey: source + ".option7.reference-content")
+            defaults.set(false, forKey: source + ".option7.friend-visible")
+            let model = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+            model.useOption(.option7, controllerModeEnabled: true, controllerModeLayout: mode)
+            XCTAssertEqual(model.controllerModeLayout, .mode1)
+            XCTAssertEqual(model.placement(for: .bosses), placement)
+            XCTAssertEqual(model.referenceContent, .bosses)
+            XCTAssertFalse(model.friendVisible)
+            model.setActive(true)
+            arrangeLayout(model)
+            XCTAssertTrue(model.menuOnlyControllerMode)
+            XCTAssertFalse(model.isButtonVisible(.friend))
+            XCTAssertFalse(model.isButtonVisible(.multiview))
+            model.arrange()
+            model.advanceArrangement()
+            model.restoreControllerButton(.friend)
+            model.finish(save: true)
+            let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+            restored.useOption(.option7, controllerModeEnabled: true)
+            XCTAssertTrue(restored.isButtonVisible(.friend))
+            XCTAssertNotNil(defaults.data(forKey: source + ".option7.placement.reference"), "Migration preserves the source settings")
+        }
+    }
+
+    func testHiddenControllerButtonsDoNotReceiveTouchesOrReserveLayoutSpace() throws {
         let (model, defaults, namespace) = try makeModel()
         defer { defaults.removePersistentDomain(forName: namespace) }
-        model.setContents([.dex, .bosses, .types])
+        model.useOption(.option7, controllerModeEnabled: true)
         model.setActive(true)
-
-        model.useOption(.option6, controllerModeEnabled: true, controllerModeLayout: .mode1)
         arrangeLayout(model)
-        model.arrange()
-        model.move(content: .friend, translation: CGSize(width: -340, height: 70), ended: true)
-        model.finish(save: true)
-        let modeOneFriend = model.placement(for: .friend)
-
-        let screen = CGRect(x: 0, y: 0, width: 1000, height: 600)
-        let safe = CGRect(x: 20, y: 12, width: 960, height: 576)
-        let menu = CGRect(x: 900, y: 20, width: 80, height: 70)
-        let bound = CGRect(x: 900, y: 500, width: 80, height: 70)
-        let friendDefault = CGRect(x: 42, y: 82, width: 230, height: 154)
-        let referenceDefault = CGRect(x: 600, y: 110, width: 300, height: 360)
-        let friendButton = CGRect(x: 82, y: 430, width: 48, height: 48)
-        let viewsButton = CGRect(x: 142, y: 430, width: 48, height: 48)
-
-        model.useOption(.option6, controllerModeEnabled: true, controllerModeLayout: .mode2)
-        XCTAssertEqual(model.controllerModeLayout, .mode2)
-        XCTAssertNotEqual(model.placement(for: .friend), modeOneFriend,
-                          "Mode 2 must not inherit a saved Mode 1 Friend position.")
-        model.updateLayout(canvas: safe, occupied: [], menuFrame: menu, boundFrame: bound,
-                           defaults: [.friend: friendDefault, .dex: referenceDefault,
-                                      .bosses: referenceDefault, .types: referenceDefault],
-                           keyboardHeight: 0, screenBounds: screen,
-                           friendButtonFrame: friendButton, viewsButtonFrame: viewsButton)
-        XCTAssertEqual(model.layout.friend.midX, friendDefault.midX, accuracy: 0.1,
-                       "Mode 2 should honor the supplied Friend position in the left side rail.")
-        XCTAssertEqual(model.layout.friendButton, friendButton)
-        XCTAssertEqual(model.layout.viewsButton, viewsButton)
-        XCTAssertGreaterThan(model.layout.reference.midX, model.layout.friend.midX,
-                             "Mode 2 should place the game companion to the right of Friend.")
-
-        model.useOption(.option6, controllerModeEnabled: false, controllerModeLayout: .mode2)
-        XCTAssertEqual(model.controllerModeLayout, .mode1,
-                       "A remembered Mode 2 preference has no effect while Controller Mode is off.")
-        XCTAssertEqual(model.placement(for: .friend), BoundLandscapeViewPlacement(
-            center: CGPoint(x: 0.75, y: 0.3), widthFraction: 0.28, heightFraction: 0.187, opacity: 1),
-                        "Controller Mode off keeps its existing independent defaults.")
-
-        let modeTwoFriendKey = namespace + ".controller-mode2.option6.placement.friend"
-        XCTAssertNil(defaults.data(forKey: modeTwoFriendKey),
-                     "Mode 2 should not persist the Mode 1 Friend placement under its own namespace.")
-        XCTAssertNotNil(defaults.data(forKey: namespace + ".controller-mode.option6.placement.friend"))
-    }
-
-    func testControllerModeThreeKeepsOnlyTheFixedMenuButton() throws {
-        let (model, defaults, namespace) = try makeModel()
-        defer { defaults.removePersistentDomain(forName: namespace) }
-
-        // A previous Mode 3 build stored movable button positions. They must not
-        // move the new fixed Menu control or restore the Friend and Multiview buttons.
-        struct LegacyControllerButtonPlacement: Encodable {
-            let friend: CGPoint
-            let multiview: CGPoint
-            let menu: CGPoint
+        model.toggleReference()
+        XCTAssertFalse(model.referenceVisible)
+        for button in [BoundControllerButton.friend, .multiview] {
+            let frame = model.buttonFrame(button)
+            XCTAssertFalse(model.receivesTouch(at: CGPoint(x: frame.midX, y: frame.midY)))
         }
-        let legacyPlacement = LegacyControllerButtonPlacement(
-            friend: CGPoint(x: 0.6, y: 0.3), multiview: CGPoint(x: 0.7, y: 0.4),
-            menu: CGPoint(x: 0.8, y: 0.2))
-        defaults.set(try JSONEncoder().encode(legacyPlacement), forKey: namespace + ".controller-mode3.buttons.v1")
-        let optionPrefix = namespace + ".controller-mode3.option6."
-        defaults.set(true, forKey: optionPrefix + "initialized")
-        defaults.set("dex", forKey: optionPrefix + "reference-layout-content")
-        defaults.set("dex", forKey: optionPrefix + "reference-content")
-        defaults.set(false, forKey: optionPrefix + "reference-visible")
-        let referencePlacement = BoundLandscapeViewPlacement(
-            center: CGPoint(x: 0.9, y: 0.25), widthFraction: 0.18, heightFraction: 0.25)
-        defaults.set(try JSONEncoder().encode(referencePlacement), forKey: optionPrefix + "placement.reference")
-        model.useOption(.option6, controllerModeEnabled: true, controllerModeLayout: .mode3)
-        model.setContents([.dex, .bosses, .types])
-        model.setActive(true)
-
-        let canvas = CGRect(x: 0, y: 0, width: 1000, height: 600)
-        let menu = CGRect(x: 100, y: 100, width: 44, height: 44)
-        let bound = CGRect(x: 100, y: 500, width: 44, height: 44)
-        let legacyFriendButton = CGRect(x: 856, y: 100, width: 44, height: 44)
-        model.updateLayout(canvas: canvas, occupied: [], menuFrame: menu, boundFrame: bound,
-            defaults: [.friend: CGRect(x: 60, y: 80, width: 220, height: 146),
-                       .dex: CGRect(x: 820, y: 70, width: 160, height: 132),
-                       .bosses: CGRect(x: 820, y: 70, width: 160, height: 132),
-                       .types: CGRect(x: 820, y: 70, width: 160, height: 132)],
-            keyboardHeight: 0)
-
-        XCTAssertTrue(model.menuOnlyControllerMode)
-        XCTAssertTrue(model.layout.friendButton.isEmpty)
-        XCTAssertTrue(model.layout.viewsButton.isEmpty)
-        XCTAssertEqual(model.layout.doneButton, menu, "The Menu target stays at its supplied screen position.")
-        XCTAssertTrue(model.layout.reference.intersects(legacyFriendButton),
-                      "A hidden legacy Friend button must not remain a layout obstacle.")
-        XCTAssertFalse(model.receivesTouch(at: CGPoint(x: legacyFriendButton.midX, y: legacyFriendButton.midY)),
-                       "Hidden buttons must not leave touch targets behind.")
-    }
-
-    func testControllerModeTwoDefaultFriendTracksSafeColumnRotationUntilManuallyMoved() throws {
-        let (model, defaults, namespace) = try makeModel()
-        defer { defaults.removePersistentDomain(forName: namespace) }
-        model.setContents([.dex, .bosses, .types])
-        model.setActive(true)
-        model.useOption(.option6, controllerModeEnabled: true, controllerModeLayout: .mode2)
-
-        let bounds = CGRect(x: 0, y: 0, width: 852, height: 393)
-        let gameAspect = CGSize(width: 3, height: 2)
-        func update(insets: UIEdgeInsets, model: BoundLandscapeArrangementModel) throws -> BoundControllerModeTwoGeometry {
-            let geometry = try XCTUnwrap(BoundControllerModeTwoGeometry(bounds: bounds, safeArea: insets,
-                                                                        gameAspect: gameAspect))
-            let canvas = bounds.inset(by: insets)
-            let reference = CGRect(x: geometry.game.minX + geometry.game.width * 0.58,
-                                   y: geometry.game.minY + geometry.game.height * 0.15,
-                                   width: geometry.game.width * 0.36,
-                                   height: geometry.game.height * 0.68)
-            model.updateLayout(canvas: canvas, occupied: [], menuFrame: geometry.menu,
-                               boundFrame: geometry.views,
-                               defaults: [.friend: geometry.friend, .dex: reference,
-                                          .bosses: reference, .types: reference],
-                               keyboardHeight: 0, screenBounds: bounds,
-                               friendButtonFrame: geometry.friendButton, viewsButtonFrame: geometry.views)
-            return geometry
-        }
-
-        let leftInsetGeometry = try update(insets: UIEdgeInsets(top: 0, left: 59, bottom: 0, right: 0), model: model)
-        XCTAssertLessThanOrEqual(model.layout.friend.maxX, leftInsetGeometry.game.minX,
-                                 "The fresh Friend default fits the left rail beside gameplay.")
         model.arrange()
-        model.select(.friend) // Selecting without dragging must retain the automatic placement.
-        model.setOpacity(0.72, for: .friend)
-        model.setAboveButtons(false, for: .dex)
+        model.advanceArrangement()
+        model.restoreControllerButton(.friend)
         model.finish(save: true)
-
-        let rightInsetGeometry = try update(insets: UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 59), model: model)
-        XCTAssertLessThanOrEqual(model.layout.friend.maxX, rightInsetGeometry.game.minX,
-                                 "An untouched saved default recomputes when the safe left column changes sides.")
-
-        model.useOption(.option7, controllerModeEnabled: true, controllerModeLayout: .mode2)
-        try update(insets: UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 59), model: model)
-        XCTAssertLessThanOrEqual(model.layout.friend.maxX, rightInsetGeometry.game.minX,
-                                 "Option 7 inherits the automatic Friend placement behavior from Option 6.")
-
-        let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
-        restored.setContents([.dex, .bosses, .types])
-        restored.setActive(true)
-        restored.useOption(.option7, controllerModeEnabled: true, controllerModeLayout: .mode2)
-        try update(insets: UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 59), model: restored)
-        XCTAssertLessThanOrEqual(restored.layout.friend.maxX, rightInsetGeometry.game.minX,
-                                 "The automatic placement marker survives relaunch.")
-
-        restored.arrange()
-        restored.select(.friend)
-        restored.move(content: .friend, translation: CGSize(width: 24, height: 8), ended: true)
-        restored.finish(save: true)
-        let manuallyMoved = restored.layout.friend
-        try update(insets: UIEdgeInsets(top: 0, left: 59, bottom: 0, right: 0), model: restored)
-        XCTAssertEqual(restored.layout.friend, manuallyMoved,
-                       "An explicit Friend move remains at its full-screen position after rotation.")
+        let friend = model.buttonFrame(.friend)
+        XCTAssertTrue(model.receivesTouch(at: CGPoint(x: friend.midX, y: friend.midY)))
     }
 
     func testThreeFingerFadeChangesOnlySelectedViewAndKeepsZeroRecoverable() throws {

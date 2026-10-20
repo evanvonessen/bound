@@ -74,8 +74,13 @@ final class BoundSettingsHostingController: UIHostingController<SettingsView>, U
     }
 }
 
+final class BoundSettingsFooterVisibility: ObservableObject {
+    @Published var isVisible = true
+}
+
 struct SettingsView: View {
     @StateObject private var model: BoundCompanionSettingsModel
+    @StateObject private var footerVisibility = BoundSettingsFooterVisibility()
     @State private var resetting = false
     @State private var resetFailed = false
     @State private var resetRevision = 0
@@ -171,6 +176,7 @@ struct SettingsView: View {
                 .navigationTitle("Settings")
                 .accessibilityIdentifier("bound.settings-root")
             }
+            .environmentObject(footerVisibility)
             .id(resetRevision)
             .alert("Unable to Reset Settings", isPresented: $resetFailed) {
                 Button("OK", role: .cancel) {}
@@ -182,17 +188,19 @@ struct SettingsView: View {
             .ignoresSafeArea(.container, edges: .horizontal)
             // Reserve real layout space for Done. UIKit destinations that ignore
             // safe areas must still end above the footer, including after rotation.
-            HStack {
-                Spacer()
-                Button("Done", action: close)
-                    .font(.body.weight(.semibold))
-                    .frame(minWidth: 64, minHeight: 44)
-                    .accessibilityIdentifier("bound.settings-close")
+            if footerVisibility.isVisible {
+                HStack {
+                    Spacer()
+                    Button("Done", action: close)
+                        .font(.body.weight(.semibold))
+                        .frame(minWidth: 64, minHeight: 44)
+                        .accessibilityIdentifier("bound.settings-close")
+                }
+                .padding(.horizontal, 16)
+                .background(.bar)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("bound.settings-footer")
             }
-            .padding(.horizontal, 16)
-            .background(.bar)
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("bound.settings-footer")
         }
     }
 }
@@ -206,7 +214,6 @@ private struct ControlsSection: View
 
     @SwiftUI.State private var opacity = Double(Settings.translucentControllerSkinOpacity)
     @SwiftUI.State private var controllerModeEnabled = BoundControllerModePreferences().isEnabled
-    @SwiftUI.State private var controllerModeLayout = BoundControllerModePreferences().layout
     @SwiftUI.State private var controllerNavigationEnabled = BoundControllerNavigationPreferences().isEnabled
 
     var body: some View {
@@ -216,16 +223,6 @@ private struct ControlsSection: View
                 .onChange(of: controllerModeEnabled) { _, enabled in
                     BoundControllerModePreferences().isEnabled = enabled
                 }
-
-            Picker("Controller Mode", selection: $controllerModeLayout) {
-                ForEach(BoundControllerModeLayout.allCases, id: \.self) { layout in
-                    Text("Mode \(layout.rawValue)").tag(layout)
-                }
-            }
-            .accessibilityIdentifier("bound.controller-mode-layout")
-            .onChange(of: controllerModeLayout) { _, layout in
-                BoundControllerModePreferences().layout = layout
-            }
 
             Toggle("Controller View Navigation", isOn: $controllerNavigationEnabled)
                 .accessibilityIdentifier("bound.controller-view-navigation")
@@ -268,7 +265,6 @@ private struct ControlsSection: View
         }
         .onReceive(NotificationCenter.default.publisher(for: BoundAppearancePreferences.didChangeNotification)) { _ in
             controllerModeEnabled = BoundControllerModePreferences().isEnabled
-            controllerModeLayout = BoundControllerModePreferences().layout
             controllerNavigationEnabled = BoundControllerNavigationPreferences().isEnabled
         }
     }

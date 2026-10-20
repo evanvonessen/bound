@@ -124,6 +124,9 @@ struct ControlsEditorView: View
     
     @Environment(\.dismiss)
     private var dismiss
+
+    @EnvironmentObject
+    private var settingsFooterVisibility: BoundSettingsFooterVisibility
     
     init(controller: GameController, system: System, playerIndex: Int)
     {
@@ -156,9 +159,16 @@ struct ControlsEditorView: View
         }
         .navigationTitle(editor.system.localizedDisplayName)
         .navigationBarTitleDisplayMode(.inline)
+
         // NavigationLink keeps this view alive after navigating back, so re-fetch the mapping whenever it appears.
         // (Only safe because this screen never pushes another view.)
-        .onAppear(perform: editor.loadMapping)
+        .onAppear {
+            if editor.system.gameType == .gba { settingsFooterVisibility.isVisible = false }
+            editor.loadMapping()
+        }
+        .onDisappear {
+            if editor.system.gameType == .gba { settingsFooterVisibility.isVisible = true }
+        }
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {

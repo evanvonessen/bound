@@ -16,26 +16,33 @@ preference keys are inert and cannot reveal the removed settings.
 New installations use UI Option 2, Landscape Option 7, Bound button Option 4,
 and Layout 12 for both RR Dex and Boss View. Button 1 (top) contains only Friend;
 Button 2 (bottom) contains only Types, Bosses and RR Dex. Controller Mode remains
-off by default, with Mode 1 preselected when enabled. Controller Mode 3 shows only
-the Menu button at the bottom-left of the landscape screen. It retains the
-landscape companion views and Arrange Views access through Menu. Existing saved
-preferences take priority over these defaults.
+off by default. When enabled, it starts with only Menu at the bottom-left of the
+landscape screen. Friend and Multiview remain available through their controller
+bindings, and their touch buttons can be added in Arrange Views.
 
-In landscape Controller Modes 1 and 2, open **Menu → Arrange Views** to drag
-the Friend, Multiview, and Menu buttons in Options 6/7, then tap **Done**.
-Horizontal and vertical alignment gives a brief snap and haptic feedback;
-continuing the drag releases the snap. Button positions save separately for
-each controller mode. Mode 3 keeps its Menu button fixed at the bottom-left.
-Controller-mode choices and button positions do not apply while the mode is
-off or in portrait. Bound retains normal touch controls in those states even
-with a wireless controller assigned. Reset Settings to Default clears these
-positions and returns Controller Mode to Off with Mode 1 preselected.
-The portrait pause menu also shows **Arrange Views**. Tapping it displays
-**Rotate your phone**; arranging still starts in landscape.
+**Menu → Arrange Views** has two steps. First, move the game screen horizontally
+or resize it using its corner handle. Full Size and Centered snaps show a cyan
+guide or label with haptic feedback. **Next** opens companion view and button
+placement; **Done** saves both steps. Cancel or an interrupted editing session
+discards both steps. Controller Mode on and off retain separate arrangements.
 
-Controller Mode is also available in **Settings → Controls**. The pause-menu
-Controller Mode tile shows its current state and cycles **Off → Mode 1 → Mode 2
-→ Mode 3 → Off**. Turning it on from Off always starts at Mode 1.
+In Controller Mode, drag Friend or Multiview onto the trash target to remove its
+button. The adjacent **+** opens a tray: tap a button to restore its position or
+drag it directly onto the screen. Menu can move but cannot be removed. All three
+buttons support repeatable horizontal/vertical alignment, mirrored placement,
+and equal-spacing snaps. The **Spread** control arranges the visible buttons
+symmetrically with equal spacing, horizontally or vertically. Continuing a drag
+releases a snap; crossing the same guide again can snap again.
+
+The previous controller modes have been consolidated into this one setup. Saved
+companion panel placements migrate from the previously selected mode once. Reset
+Settings to Default clears game placement, button positions and button visibility,
+and restores Controller Mode Off. Portrait and mode-off touch controls remain
+available even with a wireless controller assigned. The portrait pause menu also
+shows **Arrange Views**; tapping it displays **Rotate your phone**.
+
+Controller Mode is available in **Settings → Controls** as one toggle. Its
+pause-menu tile displays **ON** or **OFF** and switches on each press.
 
 **Controller View Navigation** is a non-experimental, default-off setting in
 Settings → Controls. Enabling it adds view actions to the controller mapping
@@ -74,8 +81,7 @@ use scoped controller-event hosts so UIKit does not independently scroll or move
 focus with the left stick. Touch scrolling remains available.
 
 Controller mapping includes **Toggle Friend** and **Toggle Multiview** as normal
-Game Actions, alongside the existing **Menu** mapping. In landscape Controller Mode
-1, 2 or 3, Toggle Friend shows/hides the friend screen; Toggle Multiview
+Game Actions, alongside the existing **Menu** mapping. In landscape Controller Mode, Toggle Friend shows/hides the friend screen; Toggle Multiview
 shows/hides the Option 6/7 panel without changing its selected view. The new
 toggles are inactive in portrait, with Controller Mode off, or while arranging views.
 Menu retains its existing pause/resume behavior. Bindings use the existing
@@ -96,7 +102,8 @@ Context Menu Previews and Pause Menu Button Placement are in Controls. About use
 source labels in Sources & Licenses while retaining attribution and bundled
 license documents. Audio opens its controls directly; About includes the Game
 Boy Advance core information. The shared screen has one navigation stack and one Done
-action. Done and swipe dismissal run cleanup and close-time sync once; opening
+action. The Game Boy Advance controller mapping editor hides this footer while
+its Save and Back controls are available. Done and swipe dismissal run cleanup and close-time sync once; opening
 a detail page does neither. In-game Settings returns to the paused menu.
 The navigation area ends above the Done bar so long forms and embedded UIKit
 menus can scroll their last content fully into view in either orientation.
@@ -176,3 +183,13 @@ verify Audio, the About core destination, the last source notice, the final line
 of the embedded license text, the Interface footer, and the layout gallery footer
 are reachable above Done. An unsigned Release iPhone build passed. Physical-device
 and live network/service behavior were not exercised by this follow-up.
+
+## Unified controller arrangement validation — October 19, 2026
+
+Focused validation passed 65 integration tests and three Simulator UI flows.
+Coverage includes the ON/OFF toggle, two-step editing, game resizing and placement,
+drag-to-trash and drag-from-add, repeated snaps, horizontal and vertical equal
+spacing, saved layouts, reset behavior, and portrait touch controls. The GBA
+mapping editor keeps Save and Back while hiding the shared Done footer.
+An unsigned Release iPhone build passed. Physical controller behavior and haptic
+feel were not tested on a device; live network services were not exercised.

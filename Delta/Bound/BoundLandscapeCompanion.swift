@@ -305,8 +305,8 @@ final class BoundLandscapePanelLayers {
             if changesParent { host.didMove(toParent: parent) }
             if active {
                 view.frame = panel == .friend ? model.layout.friend : model.layout.reference
-                view.isHidden = panel == .friend ? !(model.friendVisible || model.editing)
-                    : !(model.referenceVisible || model.editing) || model.layout.reference.isEmpty
+                view.isHidden = model.editingGameScreen || (panel == .friend ? !(model.friendVisible || model.editing)
+                    : !(model.referenceVisible || model.editing) || model.layout.reference.isEmpty)
             } else {
                 view.frame = placeholder.bounds
                 view.isHidden = false
@@ -415,10 +415,10 @@ struct BoundCompanionPresentation: View {
 
     private var legacyFriend: Bool { !state.availableContents.isEmpty && state.content == .friend }
     private var showsFriend: Bool {
-        arrangement.active ? (arrangement.friendVisible || arrangement.editing) : landscape.active ? landscape.friendVisible : legacyFriend
+        arrangement.active ? (!arrangement.editingGameScreen && (arrangement.friendVisible || arrangement.editing)) : landscape.active ? landscape.friendVisible : legacyFriend
     }
     private var showsArrangementReference: Bool {
-        (arrangement.referenceVisible || arrangement.editing) && !arrangement.contents.isEmpty && !arrangement.layout.reference.isEmpty
+        !arrangement.editingGameScreen && (arrangement.referenceVisible || arrangement.editing) && !arrangement.contents.isEmpty && !arrangement.layout.reference.isEmpty
     }
     private var showsReference: Bool {
         landscape.referenceVisible && !landscape.referenceContents.isEmpty && !landscape.layout.reference.isEmpty

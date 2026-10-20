@@ -60,7 +60,7 @@ extension Settings {
             "bound.landscape.option6.", "bound.landscape.option7.",
             // Match every controller-mode placement namespace, including new
             // modes added after this reset implementation was introduced.
-            "bound.landscape.controller-mode"]
+            "bound.landscape.controller-mode", "bound.landscape.controller-unified.", "bound.landscape.game-screen.v1"]
         keys.formUnion(defaults.dictionaryRepresentation().keys.filter { key in
             layoutPrefixes.contains { key.hasPrefix($0) }
         })
