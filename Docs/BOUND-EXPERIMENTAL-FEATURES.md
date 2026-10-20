@@ -32,19 +32,14 @@ the previous placement.
 
 In landscape with Controller Mode on or off, drag Friend or Multiview onto the trash target to remove its
 button. The adjacent **+** opens a tray: tap a button to restore its position or
-drag it directly onto the screen. Menu can move but cannot be removed. All three
-buttons move freely with **Distance Snapping** off. It is on by default in both
-modes; an explicitly saved off choice is preserved. With it on, their centers
-snap to a square grid anchored at the screen center, so equal offsets on either
-side are symmetric. **Settings → Controls → Button Grid Spacing** adjusts the
-increment from 6 to 48 points; the default is 18 points (roughly 3 mm on iPhones).
-The same spacing slider is also visible in a small translucent control inside
-Arrange Views. It stays fixed above the bottom toolbar area, and overlapping
-placement handles take touch priority. A faint, noninteractive grid appears when
-Distance Snapping is on and updates with the spacing slider.
-This grid applies only to Menu, Friend and Multiview buttons. Changing its settings
-does not move existing buttons; dragging applies the grid. Their saved placements
-and the grid settings are included in **Export All Config**.
+drag it directly onto the screen. Menu can move but cannot be removed. Menu,
+Friend and Multiview always snap to the fixed 18-point grid (roughly 3 mm on
+iPhones) while arranging. The faint grid is centered on the full screen; button
+frames clamp at the horizontal screen edges while retaining the safe-area height.
+There is no grid toggle or spacing control. Controller Mode on and off keep
+independent button layouts. New placements use full horizontal screen width;
+older saved placements keep their safe-area coordinates until moved. Export All
+Config includes the grid and per-button canvas information.
 
 The previous controller modes have been consolidated into this one setup. Saved
 companion panel placements migrate from the previously selected mode once. Reset
@@ -56,16 +51,18 @@ shows **Arrange Views**; tapping it displays **Rotate your phone**.
 Controller Mode is available in **Settings → Controls** as one toggle. Its
 pause-menu tile displays **ON** or **OFF** and switches on each press.
 
-**Controller View Navigation** is a non-experimental, default-off setting in
-Settings → Controls. Enabling it adds view actions to the controller mapping
-editor: four-way scrolling, previous/next Pokémon or item, Select/Choose, Back,
-Details, direct Dex/Bosses/Types selection, and explicit
-Hide Friend/Hide Multiview actions. Existing toggle actions remain available.
-These actions apply only to the active landscape controller view; disabled
-Controller Mode, portrait, settings and arrangement editors do not receive them.
-Select opens a Pokémon or boss chooser, previous/next changes its highlighted
-candidate, and Select confirms it. Back closes the chooser or detail view.
-Reset Settings to Default turns navigation off and resets custom mappings.
+Controller View Navigation is permanently enabled; its Settings → Controls
+switch has been removed. The controller mapping editor includes four-way
+scrolling, previous/next Pokémon or item, Select/Choose, Back, Details, direct
+Dex/Bosses/Types selection, and Hide Friend/Hide Multiview actions. Existing
+toggle actions remain available. These bindings act only in landscape while a
+controller companion arrangement is active and either Controller Mode or
+**Allow Controller to Control Multiview** is enabled; portrait, settings and
+arrangement editors do not receive them. View navigation requires that view to be visible.
+Select opens a Pokémon or boss chooser, previous/next changes its
+highlighted candidate, and Select confirms it. Back closes the chooser or detail
+view. Reset Settings to Default resets custom mappings but does not disable
+navigation.
 
 With **Allow Controller to Control Multiview** enabled, B backs out of open Dex
 and Boss subviews first, then hides Multiview from the main Dex, Docs, or Types
@@ -73,9 +70,8 @@ screen and immediately returns controller input to gameplay. This behavior is
 limited to the visible landscape Multiview.
 
 **Previous Multiview Tab** and **Next Multiview Tab** are separate controller
-bindings available alongside Toggle Multiview, without enabling Controller View
-Navigation. They follow the visible tab order and wrap from either end to the
-other. Existing saved previous/next bindings retain their identifiers. An open
+bindings available alongside Toggle Multiview. They follow the visible tab order
+and wrap from either end to the other. Existing saved previous/next bindings retain their identifiers. An open
 Dex or Boss sheet dismisses before the tab changes so gameplay resumes normally.
 
 Controller mapping exposes Xbox Share and left/right thumbstick clicks (L3/R3).

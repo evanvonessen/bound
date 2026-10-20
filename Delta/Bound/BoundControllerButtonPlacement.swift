@@ -12,39 +12,22 @@ enum BoundControllerButton: String, CaseIterable, Codable, Sendable {
 enum BoundControllerButtonGridPreferences {
     static let enabledKey = "bound.controller-button-grid.enabled"
     static let spacingKey = "bound.controller-button-grid.spacing"
-    static let defaultEnabled = true
     static let defaultSpacing: CGFloat = 18
-    static let minimumSpacing: CGFloat = 6
-    static let maximumSpacing: CGFloat = 48
 
-    /// Unset installs use the grid. An explicit saved false remains an opt-out.
-    static func isEnabled(in defaults: UserDefaults = .standard) -> Bool {
-        (defaults.object(forKey: enabledKey) as? Bool) ?? defaultEnabled
-    }
+    // Retain legacy keys for reset/export, but retired preferences cannot alter
+    // the permanent arrangement grid.
+    static func isEnabled(in defaults: UserDefaults = .standard) -> Bool { true }
+    static func spacing(in defaults: UserDefaults = .standard) -> CGFloat { defaultSpacing }
 
-    static func spacing(in defaults: UserDefaults = .standard) -> CGFloat {
-        let stored = defaults.object(forKey: spacingKey) as? NSNumber
-        return normalized(stored.map { CGFloat($0.doubleValue) } ?? defaultSpacing)
-    }
-
-    static func setSpacing(_ spacing: CGFloat, in defaults: UserDefaults = .standard) {
-        defaults.set(Double(normalized(spacing)), forKey: spacingKey)
-    }
-
-    static func normalized(_ spacing: CGFloat) -> CGFloat {
-        min(maximumSpacing, max(minimumSpacing, spacing.isFinite ? spacing : defaultSpacing))
-    }
 }
 
 enum BoundControllerButtonGrid {
     static func quantize(_ coordinate: CGFloat, centeredAt center: CGFloat, spacing: CGFloat,
                          minimum: CGFloat, maximum: CGFloat) -> CGFloat {
-        let step = BoundControllerButtonGridPreferences.normalized(spacing)
-        let first = center + ceil((minimum - center) / step) * step
-        let last = center + floor((maximum - center) / step) * step
-        guard first <= last else { return min(maximum, max(minimum, coordinate)) }
+        let step = spacing.isFinite && spacing > 0 ? spacing : BoundControllerButtonGridPreferences.defaultSpacing
         let nearest = center + ((coordinate - center) / step).rounded() * step
-        return min(last, max(first, nearest))
+        // The screen edge is reachable even when it falls between grid lines.
+        return min(maximum, max(minimum, nearest))
     }
 }
 
@@ -53,12 +36,14 @@ enum BoundControllerButtonGrid {
 struct BoundControllerButtonPlacement: Codable, Equatable, Sendable {
     private(set) var positions: [BoundControllerButton: CGPoint]
     private(set) var visibleButtons: Set<BoundControllerButton>
+    private(set) var screenWidthButtons: Set<BoundControllerButton>
 
     init(positions: [BoundControllerButton: CGPoint] = [:],
          visibleButtons: Set<BoundControllerButton> = [.menu]) {
         self.positions = positions.filter { $0.value.x.isFinite && $0.value.y.isFinite }
             .mapValues { CGPoint(x: Self.unit($0.x), y: Self.unit($0.y)) }
         self.visibleButtons = visibleButtons.union([.menu])
+        self.screenWidthButtons = Set(self.positions.keys)
     }
 
     func isVisible(_ button: BoundControllerButton) -> Bool {
@@ -89,6 +74,7 @@ struct BoundControllerButtonPlacement: Codable, Equatable, Sendable {
     mutating func set(frame: CGRect, for button: BoundControllerButton, canvas: CGRect) {
         guard canvas.isUsable, frame.isUsable else { return }
         let safeFrame = Self.clamped(frame, in: canvas)
+        screenWidthButtons.insert(button)
         positions[button] = CGPoint(
             x: Self.unit((safeFrame.midX - canvas.minX - safeFrame.width / 2)
                             / max(1, canvas.width - safeFrame.width)),
@@ -98,7 +84,7 @@ struct BoundControllerButtonPlacement: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case friend, multiview, menu, visibleButtons
+        case friend, multiview, menu, visibleButtons, screenWidthButtons
     }
 
     init(from decoder: Decoder) throws {
@@ -110,6 +96,9 @@ struct BoundControllerButtonPlacement: Codable, Equatable, Sendable {
             decoded[button] = CGPoint(x: Self.unit(value.x), y: Self.unit(value.y))
         }
         positions = decoded
+        // Old positions remain relative to the safe canvas until that button moves.
+        screenWidthButtons = Set((try? container.decode([BoundControllerButton].self, forKey: .screenWidthButtons)) ?? [])
+            .intersection(decoded.keys)
         // Older placement payloads have no visibility field. The unified editor
         // starts with just the non-removable Menu button visible.
         let stored = (try? container.decode([BoundControllerButton].self, forKey: .visibleButtons)) ?? [.menu]
@@ -124,6 +113,7 @@ struct BoundControllerButtonPlacement: Codable, Equatable, Sendable {
             }
         }
         try container.encode(BoundControllerButton.allCases.filter(isVisible), forKey: .visibleButtons)
+        try container.encode(BoundControllerButton.allCases.filter { screenWidthButtons.contains($0) }, forKey: .screenWidthButtons)
     }
 
     private static func unit(_ value: CGFloat) -> CGFloat { min(1, max(0, value)) }
@@ -197,17 +187,12 @@ struct BoundControllerButtonDrag {
     }
 
     private let startFrame: CGRect
-    private let distanceSnapping: Bool
-    private let spacing: CGFloat
+    private let spacing = BoundControllerButtonGridPreferences.defaultSpacing
     private let gridCenter: CGPoint
     private var lastGridCenter: CGPoint?
 
-    init(startFrame: CGRect, distanceSnapping: Bool = false,
-         spacing: CGFloat = BoundControllerButtonGridPreferences.defaultSpacing,
-         gridCenter: CGPoint) {
+    init(startFrame: CGRect, gridCenter: CGPoint) {
         self.startFrame = startFrame
-        self.distanceSnapping = distanceSnapping
-        self.spacing = BoundControllerButtonGridPreferences.normalized(spacing)
         self.gridCenter = gridCenter
     }
 
@@ -222,27 +207,17 @@ struct BoundControllerButtonDrag {
         let upperX = canvas.maxX - startFrame.width / 2
         let lowerY = canvas.minY + startFrame.height / 2
         let upperY = canvas.maxY - startFrame.height / 2
-        let centerX: CGFloat
-        let centerY: CGFloat
-        if distanceSnapping {
-            centerX = BoundControllerButtonGrid.quantize(rawX, centeredAt: gridCenter.x, spacing: spacing,
+        let centerX = BoundControllerButtonGrid.quantize(rawX, centeredAt: gridCenter.x, spacing: spacing,
                                                           minimum: lowerX, maximum: upperX)
-            centerY = BoundControllerButtonGrid.quantize(rawY, centeredAt: gridCenter.y, spacing: spacing,
+        let centerY = BoundControllerButtonGrid.quantize(rawY, centeredAt: gridCenter.y, spacing: spacing,
                                                           minimum: lowerY, maximum: upperY)
-        } else {
-            centerX = min(upperX, max(lowerX, rawX))
-            centerY = min(upperY, max(lowerY, rawY))
-        }
         let frame = CGRect(x: centerX - startFrame.width / 2,
                            y: centerY - startFrame.height / 2,
                            width: startFrame.width, height: startFrame.height)
         let previousGridCenter = lastGridCenter ?? CGPoint(x: startFrame.midX, y: startFrame.midY)
-        let didSnap = distanceSnapping
-            && (abs(centerX - previousGridCenter.x) > 0.001 || abs(centerY - previousGridCenter.y) > 0.001)
-        if distanceSnapping { lastGridCenter = CGPoint(x: centerX, y: centerY) }
-        return Result(frame: frame, snappedX: distanceSnapping ? centerX : nil,
-                      snappedY: distanceSnapping ? centerY : nil,
-                      didSnap: didSnap, hint: distanceSnapping ? "Grid" : nil)
+        let didSnap = abs(centerX - previousGridCenter.x) > 0.001 || abs(centerY - previousGridCenter.y) > 0.001
+        lastGridCenter = CGPoint(x: centerX, y: centerY)
+        return Result(frame: frame, snappedX: centerX, snappedY: centerY, didSnap: didSnap, hint: "Grid")
     }
 }
 

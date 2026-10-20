@@ -46,7 +46,7 @@ enum ActionInput: String
     static var configurableActions: [Self] {
         [.none, .quickSave, .quickLoad, .fastForward, .screenshot, .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview]
             + multiviewTabActions
-            + (BoundControllerNavigationPreferences().isEnabled ? viewNavigationActions : [])
+            + viewNavigationActions
     }
     var isAutomaticFocusAction: Bool { [.boundFocusUp, .boundFocusDown, .boundFocusLeft, .boundFocusRight].contains(self) }
     var isViewNavigationAction: Bool { Self.viewNavigationActions.contains(self) || isAutomaticFocusAction }

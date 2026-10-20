@@ -499,7 +499,8 @@ final class StockControlAndGestureTests: XCTestCase {
         let oldModeLayout = modePreferences.layout
         let oldLocalPlayerIndex = Settings.localControllerPlayerIndex
         let navigationPreferences = BoundControllerNavigationPreferences()
-        let oldNavigationEnabled = navigationPreferences.isEnabled
+        let defaults = UserDefaults.standard
+        let oldNavigationValue = defaults.object(forKey: BoundControllerNavigationPreferences.key)
         let automaticMultiview = BoundControllerMultiviewPreferences()
         let oldAutomaticMultiview = automaticMultiview.isEnabled
         automaticMultiview.isEnabled = false
@@ -541,7 +542,11 @@ final class StockControlAndGestureTests: XCTestCase {
             Settings.localControllerPlayerIndex = oldLocalPlayerIndex
             modePreferences.isEnabled = oldModeEnabled
             modePreferences.layout = oldModeLayout
-            navigationPreferences.isEnabled = oldNavigationEnabled
+            if let oldNavigationValue {
+                defaults.set(oldNavigationValue, forKey: BoundControllerNavigationPreferences.key)
+            } else {
+                defaults.removeObject(forKey: BoundControllerNavigationPreferences.key)
+            }
             automaticMultiview.isEnabled = oldAutomaticMultiview
             landscapePreferences.option = oldLandscapeOption
             appearance.screenLayout = oldScreenLayout
@@ -615,6 +620,9 @@ final class StockControlAndGestureTests: XCTestCase {
             userInfo: [Settings.NotificationUserInfoKey.name: Settings.Name.resetToDefaults])
         setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
         assertTouchControls(landscapeTraits)
+        XCTAssertTrue(navigationPreferences.isEnabled, "Reset keeps controller navigation permanently enabled")
+        XCTAssertNil(defaults.object(forKey: BoundControllerNavigationPreferences.key),
+                     "Reset clears the retired navigation preference")
 
         // Even an enabled Mode 3 cannot remove portrait GBA buttons.
         modePreferences.isEnabled = true
@@ -631,7 +639,8 @@ final class StockControlAndGestureTests: XCTestCase {
 
         // Drive mapped actions through the same live receiver used by a pad.
         landscapePreferences.option = .option7
-        navigationPreferences.isEnabled = true
+        defaults.set(false, forKey: BoundControllerNavigationPreferences.key)
+        XCTAssertTrue(navigationPreferences.isEnabled, "Legacy stored false values must not disable navigation")
         setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
         let core = try XCTUnwrap(gameController.emulatorCore)
         if core.state == .stopped { core.start() }
@@ -652,10 +661,6 @@ final class StockControlAndGestureTests: XCTestCase {
         press(.boundNextItem)
         XCTAssertEqual(events.count, 1, "The connected pad must reach the visible Dex through GameViewController")
         XCTAssertEqual(BoundControllerNavigationEvent.command(from: try XCTUnwrap(events.last), gameID: game.identifier, content: .dex), .nextItem)
-        navigationPreferences.isEnabled = false
-        press(.boundNextItem)
-        XCTAssertEqual(events.count, 1, "Opting out disables navigation without removing mappings")
-        navigationPreferences.isEnabled = true
         modePreferences.isEnabled = false
         setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
         press(.boundNextItem)
@@ -715,16 +720,14 @@ final class StockControlAndGestureTests: XCTestCase {
             }
         }
 
-        // Previous/next tab bindings remain active with detailed navigation
-        // disabled, and wrap across the three fixed multiview tabs.
-        navigationPreferences.isEnabled = true
+        // Previous/next tab bindings wrap across the three fixed multiview tabs,
+        // even while the retired preference is stored as false.
         modePreferences.isEnabled = true
         landscapePreferences.option = .option7
         setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
         press(.boundShowDex)
         let companion = gameController.boundCompanionForTesting
         XCTAssertEqual(companion.controllerReferenceContent, .dex)
-        navigationPreferences.isEnabled = false
         press(.boundPreviousView)
         XCTAssertEqual(companion.controllerReferenceContent, .types, "Previous from the first tab must wrap to the last")
         press(.boundNextView)
@@ -737,21 +740,18 @@ final class StockControlAndGestureTests: XCTestCase {
         XCTAssertEqual(companion.controllerReferenceContent, .dex, "Next must continue cycling rather than stop at the last tab")
 
         // A tab action also dismisses the Boss selector and returns gameplay
-        // from its pause when detailed navigation is disabled.
-        navigationPreferences.isEnabled = true
+        // from its pause.
         press(.boundShowBosses)
         try await Task.sleep(nanoseconds: 150_000_000)
         press(.boundSelect)
         for _ in 0..<30 where core.state != .paused { try await Task.sleep(nanoseconds: 50_000_000) }
         XCTAssertEqual(core.state, .paused)
         try await Task.sleep(nanoseconds: 500_000_000)
-        navigationPreferences.isEnabled = false
         press(.boundNextView)
         for _ in 0..<30 where core.state != .running { try await Task.sleep(nanoseconds: 50_000_000) }
         XCTAssertEqual(core.state, .running, "A tab action must dismiss the Boss selector and resume gameplay")
         XCTAssertEqual(companion.controllerReferenceContent, .types, "The paused tab action must advance from Bosses to Types")
 
-        navigationPreferences.isEnabled = true
         press(.boundShowDex)
         XCTAssertEqual(companion.controllerReferenceContent, .dex)
 
@@ -848,7 +848,6 @@ final class StockControlAndGestureTests: XCTestCase {
 
         // The automatic switch works independently of Controller Mode and
         // transfers physical input without waiting for another layout frame.
-        navigationPreferences.isEnabled = false
         modePreferences.isEnabled = false
         automaticMultiview.isEnabled = true
         setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
@@ -884,7 +883,7 @@ final class StockControlAndGestureTests: XCTestCase {
         companion.navigateControllerView(.boundShowDex)
         automaticMultiview.isEnabled = false
         external.activate(MFiGameController.Input.a)
-        XCTAssertNotEqual(try nativeInputs(), 0, "Opting out restores normal game buttons even with Multiview visible")
+        XCTAssertNotEqual(try nativeInputs(), 0, "Disabling Allow Controller to Control Multiview restores normal game buttons")
         external.deactivate(MFiGameController.Input.a)
         automaticMultiview.isEnabled = true
         setViewport(CGSize(width: 390, height: 844), traits: portraitTraits)
@@ -917,16 +916,20 @@ final class StockControlAndGestureTests: XCTestCase {
         XCTAssertTrue(gameController.didRequestPauseMenu, "A button bound to Menu must request Bound's pause menu")
     }
 
-    func testViewNavigationMappingsRoundTripAndRequireOptInInBothEditors() throws {
-        let preferences = BoundControllerNavigationPreferences()
-        let original = preferences.isEnabled
-        defer { preferences.isEnabled = original }
-        preferences.isEnabled = false
-        for action in ActionInput.viewNavigationActions {
-            XCTAssertFalse(ActionInput.configurableActions.contains(action))
-            XCTAssertFalse(ControlsEditorView.actionInputs.contains(AnyInput(action)))
+    func testViewNavigationMappingsRemainAvailableWhenLegacyPreferenceIsFalse() throws {
+        let defaults = UserDefaults.standard
+        let previousValue = defaults.object(forKey: BoundControllerNavigationPreferences.key)
+        defer {
+            if let previousValue { defaults.set(previousValue, forKey: BoundControllerNavigationPreferences.key) }
+            else { defaults.removeObject(forKey: BoundControllerNavigationPreferences.key) }
         }
-        preferences.isEnabled = true
+        defaults.set(false, forKey: BoundControllerNavigationPreferences.key)
+        XCTAssertTrue(BoundControllerNavigationPreferences().isEnabled)
+
+        for action in ActionInput.viewNavigationActions {
+            XCTAssertTrue(ActionInput.configurableActions.contains(action))
+            XCTAssertTrue(ControlsEditorView.actionInputs.contains(AnyInput(action)))
+        }
         let transformer = GameControllerInputMappingTransformer()
         for action in ActionInput.viewNavigationActions {
             var mapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: .mfi)

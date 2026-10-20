@@ -107,9 +107,7 @@ class SettingsViewController: UITableViewController
 {
     private enum BoundControllerSettingsRow: Int {
         case enabled = 4
-        case navigation = 5
-        case multiview = 6
-        case gridSpacing = 7
+        case multiview = 5
     }
     @IBOutlet private var controllerOpacityLabel: UILabel!
     @IBOutlet private var controllerOpacitySlider: UISlider!
@@ -307,10 +305,6 @@ private extension SettingsViewController
 
     @objc func controllerMultiviewSettingChanged(_ sender: UISwitch) {
         BoundControllerMultiviewPreferences().isEnabled = sender.isOn
-    }
-
-    @objc func controllerNavigationSettingChanged(_ sender: UISwitch) {
-        BoundControllerNavigationPreferences().isEnabled = sender.isOn
     }
 
     func updateControllerOpacityLabel()
@@ -671,7 +665,7 @@ extension SettingsViewController
         if section == .cores && BoundFeatureVisibility.simplifiedSettings { return 1 }
         switch section
         {
-        case .controllers: return 8
+        case .controllers: return 6
         case .controllerSkins: return System.registeredSystems.count
         case .airPlay:
             var numberOfRows = 1
@@ -724,11 +718,6 @@ extension SettingsViewController
         if indexPath.section == Section.controllers.rawValue,
            let row = BoundControllerSettingsRow(rawValue: indexPath.row) {
             switch row {
-            case .gridSpacing:
-                let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-                cell.selectionStyle = .none
-                cell.contentConfiguration = UIHostingConfiguration { BoundButtonGridSpacingSetting() }
-                return cell
             case .enabled:
                 let toggle = UISwitch()
                 toggle.isOn = BoundControllerModePreferences().isEnabled
@@ -741,12 +730,6 @@ extension SettingsViewController
                 toggle.accessibilityIdentifier = "bound.controller-multiview"
                 toggle.addTarget(self, action: #selector(controllerMultiviewSettingChanged(_:)), for: .valueChanged)
                 return controllerSettingsCell(title: "Allow Controller to Control Multiview", identifier: "bound.controller-multiview-row", toggle: toggle)
-            case .navigation:
-                let toggle = UISwitch()
-                toggle.isOn = BoundControllerNavigationPreferences().isEnabled
-                toggle.accessibilityIdentifier = "bound.controller-view-navigation"
-                toggle.addTarget(self, action: #selector(controllerNavigationSettingChanged(_:)), for: .valueChanged)
-                return controllerSettingsCell(title: "Controller View Navigation", identifier: "bound.controller-view-navigation-row", toggle: toggle)
             }
         }
         let cell = super.tableView(tableView, cellForRowAt: indexPath)

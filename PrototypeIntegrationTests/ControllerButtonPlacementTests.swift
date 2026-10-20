@@ -29,16 +29,17 @@ final class ControllerButtonPlacementTests: XCTestCase {
                            boundFrame: bound, defaults: defaults, keyboardHeight: 0)
     }
 
-    func testDistanceSnappingOffKeepsFreeMovementWithoutAlignmentSnap() {
+    func testFixedGridSnapsButtonMovementOnBothAxes() {
         let canvas = CGRect(x: 0, y: 0, width: 320, height: 240)
         let start = CGRect(x: 0, y: 0, width: 44, height: 44)
-        var drag = BoundControllerButtonDrag(startFrame: start, gridCenter: CGPoint(x: canvas.midX, y: canvas.midY))
+        var drag = BoundControllerButtonDrag(startFrame: start,
+                                             gridCenter: CGPoint(x: canvas.midX, y: canvas.midY))
         let result = drag.update(translation: CGSize(width: 136, height: 96), canvas: canvas)
-        XCTAssertEqual(result.frame.midX, 158, accuracy: 0.001)
-        XCTAssertEqual(result.frame.midY, 118, accuracy: 0.001)
-        XCTAssertNil(result.snappedX)
-        XCTAssertNil(result.snappedY)
-        XCTAssertFalse(result.didSnap)
+        XCTAssertEqual(result.frame.midX, 160, accuracy: 0.001)
+        XCTAssertEqual(result.frame.midY, 120, accuracy: 0.001)
+        XCTAssertEqual(result.snappedX ?? -1, 160)
+        XCTAssertEqual(result.snappedY ?? -1, 120)
+        XCTAssertTrue(result.didSnap)
     }
 
     func testDistanceGridIsCenteredAndSymmetricOnBothAxes() {
@@ -52,36 +53,46 @@ final class ControllerButtonPlacementTests: XCTestCase {
                                                            minimum: 22, maximum: 218), 48)
     }
 
-    func testDistanceGridKeepsButtonCentersOnLatticeAtScreenEdges() {
+    func testFixedGridPreservesInteriorLatticeAndAllowsExactBounds() {
         let canvas = CGRect(x: 0, y: 18, width: 320, height: 222) // Safe canvas is offset from screen center.
         let screenCenter = CGPoint(x: 160, y: 120)
-        let start = CGRect(x: 0, y: 0, width: 44, height: 44)
-        var drag = BoundControllerButtonDrag(startFrame: start,
-                                             distanceSnapping: true, spacing: 18,
+        XCTAssertEqual(BoundControllerButtonGrid.quantize(150, centeredAt: screenCenter.x,
+                                                           spacing: 18, minimum: 22, maximum: 298), 142)
+        XCTAssertEqual(BoundControllerButtonGrid.quantize(-300, centeredAt: screenCenter.x,
+                                                           spacing: 18, minimum: 22, maximum: 298), 22)
+        XCTAssertEqual(BoundControllerButtonGrid.quantize(500, centeredAt: screenCenter.x,
+                                                           spacing: 18, minimum: 22, maximum: 298), 298)
+
+        var drag = BoundControllerButtonDrag(startFrame: CGRect(x: 150, y: 100, width: 44, height: 44),
                                              gridCenter: screenCenter)
         let result = drag.update(translation: CGSize(width: -300, height: -300), canvas: canvas)
-        XCTAssertEqual(result.frame.midX, 34, accuracy: 0.001)
-        XCTAssertEqual(result.frame.midY, 48, accuracy: 0.001)
-        XCTAssertEqual(((result.frame.midX - 160) / 18).rounded(), (result.frame.midX - 160) / 18, accuracy: 0.001)
-        XCTAssertEqual(((result.frame.midY - 120) / 18).rounded(), (result.frame.midY - 120) / 18, accuracy: 0.001)
+        XCTAssertEqual(result.frame.minX, canvas.minX, accuracy: 0.001)
+        XCTAssertEqual(result.frame.minY, canvas.minY, accuracy: 0.001)
+        XCTAssertEqual(result.frame.maxX, canvas.minX + 44, accuracy: 0.001)
+        XCTAssertEqual(result.frame.maxY, canvas.minY + 44, accuracy: 0.001)
     }
 
     func testGridHapticOnlyFiresWhenMovingBetweenCellsAndOnRecrossing() {
         let canvas = CGRect(x: 0, y: 0, width: 320, height: 240)
-        var drag = BoundControllerButtonDrag(startFrame: CGRect(x: 0, y: 0, width: 44, height: 44),
-                                             distanceSnapping: true, spacing: 18,
+        var drag = BoundControllerButtonDrag(startFrame: CGRect(x: 138, y: 98, width: 44, height: 44),
                                              gridCenter: CGPoint(x: 160, y: 120))
-        XCTAssertTrue(drag.update(translation: CGSize(width: 1, height: 0), canvas: canvas).didSnap)
-        XCTAssertFalse(drag.update(translation: CGSize(width: 3, height: 0), canvas: canvas).didSnap)
-        XCTAssertTrue(drag.update(translation: CGSize(width: 22, height: 0), canvas: canvas).didSnap)
+        XCTAssertFalse(drag.update(translation: CGSize(width: 1, height: 0), canvas: canvas).didSnap)
+        XCTAssertTrue(drag.update(translation: CGSize(width: 10, height: 0), canvas: canvas).didSnap)
+        XCTAssertFalse(drag.update(translation: CGSize(width: 12, height: 0), canvas: canvas).didSnap)
         XCTAssertTrue(drag.update(translation: CGSize(width: 3, height: 0), canvas: canvas).didSnap)
     }
 
-    func testGridSpacingPreferenceClampsAndUsesFiniteDefault() {
-        XCTAssertEqual(BoundControllerButtonGridPreferences.normalized(.nan), 18)
-        XCTAssertEqual(BoundControllerButtonGridPreferences.normalized(.infinity), 18)
-        XCTAssertEqual(BoundControllerButtonGridPreferences.normalized(1), 6)
-        XCTAssertEqual(BoundControllerButtonGridPreferences.normalized(100), 48)
+    func testGridPreferencesAlwaysUseFixedDefaultsAndIgnoreLegacyValues() {
+        let namespace = "ControllerButtonPlacementTests.legacy-grid.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: namespace)!
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        defaults.set(false, forKey: BoundControllerButtonGridPreferences.enabledKey)
+        defaults.set(48, forKey: BoundControllerButtonGridPreferences.spacingKey)
+
+        XCTAssertTrue(BoundControllerButtonGridPreferences.isEnabled(in: defaults))
+        XCTAssertEqual(BoundControllerButtonGridPreferences.spacing(in: defaults), 18)
+        XCTAssertEqual(BoundControllerButtonGridPreferences.enabledKey, "bound.controller-button-grid.enabled")
+        XCTAssertEqual(BoundControllerButtonGridPreferences.spacingKey, "bound.controller-button-grid.spacing")
     }
 
     func testPlacementPersistsNormalizedPositionsAndClampsFramesToCanvas() throws {
@@ -97,6 +108,102 @@ final class ControllerButtonPlacementTests: XCTestCase {
         XCTAssertEqual(frame.maxY, canvas.maxY, accuracy: 0.001)
         XCTAssertEqual(decoded.positions[.friend]?.x, 0)
         XCTAssertEqual(decoded.positions[.friend]?.y, 1)
+        XCTAssertTrue(decoded.screenWidthButtons.contains(.friend),
+                      "Newly edited positions are saved with the full-width canvas marker.")
+    }
+
+    func testLegacyButtonPositionUsesSafeCanvasUntilDraggedThenPersistsFullWidthInBothModes() throws {
+        let safeCanvas = CGRect(x: 120, y: 40, width: 760, height: 520)
+        let screenBounds = CGRect(x: 0, y: 0, width: 1000, height: 600)
+        let menu = CGRect(x: 820, y: 50, width: 44, height: 44)
+        let bound = CGRect(x: 820, y: 500, width: 44, height: 44)
+        let defaultsFrames: [BoundPiPContent: CGRect] = [
+            .friend: CGRect(x: 620, y: 80, width: 200, height: 140),
+            .bosses: CGRect(x: 400, y: 120, width: 240, height: 360),
+            .dex: CGRect(x: 400, y: 120, width: 240, height: 360),
+            .types: CGRect(x: 400, y: 120, width: 240, height: 360),
+            .notes: CGRect(x: 400, y: 120, width: 240, height: 360)
+        ]
+
+        for controllerModeEnabled in [false, true] {
+            let (model, defaults, namespace) = try makeModel()
+            defer { defaults.removePersistentDomain(forName: namespace) }
+            let legacyData = try JSONEncoder().encode(LegacyControllerButtonPlacementPayload(
+                friend: CGPoint(x: 0.25, y: 0.5)))
+            let key = namespace + (controllerModeEnabled ? ".controller-unified" : "") + ".buttons.v1"
+            defaults.set(legacyData, forKey: key)
+
+            model.useOption(.option7, controllerModeEnabled: controllerModeEnabled, controllerModeLayout: .mode1)
+            model.setActive(true)
+            model.updateLayout(canvas: safeCanvas, occupied: [menu, bound], menuFrame: menu,
+                               boundFrame: bound, defaults: defaultsFrames, keyboardHeight: 0,
+                               screenBounds: screenBounds)
+            XCTAssertTrue(model.movableControllerButtons)
+            XCTAssertFalse(model.hasButtonPlacement(.menu))
+
+            let decodedLegacy = try JSONDecoder().decode(BoundControllerButtonPlacement.self, from: legacyData)
+            XCTAssertFalse(decodedLegacy.screenWidthButtons.contains(.friend),
+                           "A legacy position is interpreted in the original safe canvas.")
+            let oldSafeFrame = decodedLegacy.frame(for: .friend, defaultFrame: model.buttonFrame(.friend),
+                                                   canvas: safeCanvas)
+            XCTAssertEqual(model.controllerButtonFrame(.friend, defaultFrame: model.buttonFrame(.friend),
+                                                       canvas: safeCanvas, screenBounds: screenBounds), oldSafeFrame)
+
+            model.arrange()
+            model.advanceArrangement()
+            model.restoreControllerButton(.friend)
+            let preservedFrame = model.buttonFrame(.friend)
+            XCTAssertEqual(preservedFrame, oldSafeFrame,
+                           "Loading an old layout must not move its Friend button when the screen-width canvas becomes available.")
+
+            let leftTarget = CGPoint(x: screenBounds.minX + preservedFrame.width / 2, y: safeCanvas.midY)
+            model.moveControllerButton(.friend,
+                translation: CGSize(width: leftTarget.x - preservedFrame.midX,
+                                    height: leftTarget.y - preservedFrame.midY), ended: true)
+            XCTAssertEqual(model.buttonFrame(.friend).minX, screenBounds.minX, accuracy: 0.001)
+            XCTAssertGreaterThanOrEqual(model.buttonFrame(.friend).minY, safeCanvas.minY)
+            XCTAssertLessThanOrEqual(model.buttonFrame(.friend).maxY, safeCanvas.maxY)
+            model.finish(save: true)
+
+            let savedData = try XCTUnwrap(defaults.data(forKey: key))
+            let saved = try JSONDecoder().decode(BoundControllerButtonPlacement.self, from: savedData)
+            XCTAssertTrue(saved.screenWidthButtons.contains(.friend),
+                          "Dragging the legacy button marks only that position as full-width.")
+
+            let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+            restored.useOption(.option7, controllerModeEnabled: controllerModeEnabled, controllerModeLayout: .mode1)
+            restored.setActive(true)
+            restored.updateLayout(canvas: safeCanvas, occupied: [menu, bound], menuFrame: menu,
+                                  boundFrame: bound, defaults: defaultsFrames, keyboardHeight: 0,
+                                  screenBounds: screenBounds)
+            XCTAssertEqual(restored.buttonFrame(.friend).minX, screenBounds.minX, accuracy: 0.001)
+            XCTAssertGreaterThanOrEqual(restored.buttonFrame(.friend).minY, safeCanvas.minY)
+            XCTAssertLessThanOrEqual(restored.buttonFrame(.friend).maxY, safeCanvas.maxY)
+
+            restored.arrange()
+            restored.advanceArrangement()
+            let restoredLeftFrame = restored.buttonFrame(.friend)
+            let rightTarget = CGPoint(x: screenBounds.maxX - restoredLeftFrame.width / 2,
+                                      y: safeCanvas.midY)
+            restored.moveControllerButton(.friend,
+                translation: CGSize(width: rightTarget.x - restoredLeftFrame.midX,
+                                    height: rightTarget.y - restoredLeftFrame.midY), ended: true)
+            XCTAssertEqual(restored.buttonFrame(.friend).maxX, screenBounds.maxX, accuracy: 0.001)
+            XCTAssertGreaterThanOrEqual(restored.buttonFrame(.friend).minY, safeCanvas.minY)
+            XCTAssertLessThanOrEqual(restored.buttonFrame(.friend).maxY, safeCanvas.maxY)
+            restored.finish(save: true)
+
+            let final = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+            final.useOption(.option7, controllerModeEnabled: controllerModeEnabled, controllerModeLayout: .mode1)
+            final.setActive(true)
+            final.updateLayout(canvas: safeCanvas, occupied: [menu, bound], menuFrame: menu,
+                               boundFrame: bound, defaults: defaultsFrames, keyboardHeight: 0,
+                               screenBounds: screenBounds)
+            XCTAssertEqual(final.buttonFrame(.friend).maxX, screenBounds.maxX, accuracy: 0.001,
+                           "The exact right edge persists across reloads in both controller modes.")
+            XCTAssertGreaterThanOrEqual(final.buttonFrame(.friend).minY, safeCanvas.minY)
+            XCTAssertLessThanOrEqual(final.buttonFrame(.friend).maxY, safeCanvas.maxY)
+        }
     }
 
     func testInvalidStoredPositionsAreIgnoredAndOutOfRangeValuesAreNormalized() throws {
@@ -183,7 +290,6 @@ final class ControllerButtonPlacementTests: XCTestCase {
     func testUnifiedPlacementSavesReloadsCancelsAndResets() throws {
         let (model, defaults, namespace) = try makeModel()
         defer { defaults.removePersistentDomain(forName: namespace) }
-        model.setDistanceSnappingEnabled(false)
         let key = namespace + ".controller-unified.buttons.v1"
         model.useOption(.option7, controllerModeEnabled: true, controllerModeLayout: .mode1)
         model.setActive(true)
@@ -213,16 +319,20 @@ final class ControllerButtonPlacementTests: XCTestCase {
         let alignTranslation = CGSize(width: menuFrame.midX - friendStart.midX,
                                       height: menuFrame.midY - friendStart.midY)
         model.moveControllerButton(.friend, translation: alignTranslation, ended: false)
-        model.moveControllerButton(.friend, translation: CGSize(width: alignTranslation.width + 2,
+        model.moveControllerButton(.friend, translation: CGSize(width: alignTranslation.width + 0.5,
                                                                  height: alignTranslation.height), ended: false)
-        XCTAssertEqual(alignmentHaptics, 0, "Free movement must not soft-snap to nearby controls.")
+        XCTAssertEqual(alignmentHaptics, 1, "Moving into a new grid cell gives one brief alignment haptic.")
         model.moveControllerButton(.friend, translation: alignTranslation, ended: true)
         model.advanceArrangement()
         XCTAssertNotNil(defaults.data(forKey: key))
         XCTAssertNotNil(defaults.data(forKey: namespace + ".controller-unified.game-screen.v1"))
         let savedFrame = model.buttonFrame(.friend)
-        XCTAssertEqual(savedFrame.midX, menuFrame.midX, accuracy: 0.001)
-        XCTAssertEqual(savedFrame.midY, menuFrame.midY, accuracy: 0.001)
+        XCTAssertEqual(savedFrame.midX,
+                       BoundControllerButtonGrid.quantize(menuFrame.midX, centeredAt: 500, spacing: 18,
+                                                          minimum: 22, maximum: 978), accuracy: 0.001)
+        XCTAssertEqual(savedFrame.midY,
+                       BoundControllerButtonGrid.quantize(menuFrame.midY, centeredAt: 300, spacing: 18,
+                                                          minimum: 22, maximum: 578), accuracy: 0.001)
 
         let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
         restored.useOption(.option7, controllerModeEnabled: true, controllerModeLayout: .mode1)
@@ -282,36 +392,6 @@ final class ControllerButtonPlacementTests: XCTestCase {
         XCTAssertNotEqual(model.controllerButtonFrame(.menu, defaultFrame: original, canvas: canvas), original)
     }
 
-    func testArrangementGridTogglePersistsWithoutMovingButtonsUntilDragged() throws {
-        let (model, defaults, namespace) = try makeModel()
-        defer { defaults.removePersistentDomain(forName: namespace) }
-        model.setDistanceSnappingEnabled(false)
-        model.useOption(.option7, controllerModeEnabled: true)
-        model.setActive(true)
-        arrangeLayout(model)
-        model.arrange()
-        model.advanceArrangement()
-        model.restoreControllerButton(.friend)
-        model.restoreControllerButton(.multiview)
-        let before = model.buttonFrame(.friend)
-
-        model.setDistanceSnappingEnabled(true)
-        XCTAssertTrue(model.distanceSnappingEnabled)
-        XCTAssertTrue(defaults.bool(forKey: BoundControllerButtonGridPreferences.enabledKey))
-        XCTAssertEqual(model.buttonFrame(.friend), before,
-                       "Enabling the grid must not silently reposition saved buttons.")
-
-        let target = CGPoint(x: 700, y: 300)
-        let translation = CGSize(width: target.x - before.midX, height: target.y - before.midY)
-        model.moveControllerButton(.friend, translation: translation, ended: true)
-        let moved = model.buttonFrame(.friend)
-        XCTAssertEqual((moved.midX - 500).truncatingRemainder(dividingBy: 18), 0, accuracy: 0.001)
-        XCTAssertEqual((moved.midY - 300).truncatingRemainder(dividingBy: 18), 0, accuracy: 0.001)
-
-        model.setDistanceSnappingEnabled(false)
-        XCTAssertFalse(defaults.bool(forKey: BoundControllerButtonGridPreferences.enabledKey))
-    }
-
     func testLandscapeButtonsUseDefaultGridInBothModesAndSaveIndependently() throws {
         let (model, defaults, namespace) = try makeModel()
         defer { defaults.removePersistentDomain(forName: namespace) }
@@ -322,8 +402,8 @@ final class ControllerButtonPlacementTests: XCTestCase {
             arrangeLayout(model)
             model.arrange()
             model.advanceArrangement()
-            XCTAssertTrue(model.distanceSnappingEnabled)
-            XCTAssertEqual(model.buttonGridSpacing, 18)
+            XCTAssertTrue(BoundControllerButtonGridPreferences.isEnabled(in: defaults))
+            XCTAssertEqual(BoundControllerButtonGridPreferences.spacing(in: defaults), 18)
             for (index, button) in BoundControllerButton.allCases.enumerated() {
                 model.restoreControllerButton(button)
                 let before = model.buttonFrame(button)

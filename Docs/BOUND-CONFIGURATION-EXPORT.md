@@ -18,13 +18,20 @@ export time, screen dimensions in points, and device model family. It contains:
 
 - `preferences.settings`: global controls, opacity, audio/display preferences,
   UI/layout choices, companion button assignments, and each PiP view's settings.
-  This includes Distance Snapping and Button Grid Spacing (in screen points).
+  This records the permanent 18-point button grid and the always-enabled
+  Controller View Navigation behavior; retired toggle and spacing values do
+  not affect the exported effective settings. Controller navigation routes to
+  companion views in landscape when Controller Mode or Allow Controller to
+  Control Multiview is enabled.
 - `preferences.touchControlLayouts`: every saved skin's portrait and landscape
   button positions and sizes.
 - `preferences.landscapeCommon`: landscape option and common companion settings.
 - `preferences.controllerModeOff` and `preferences.controllerModeOn`: separate
   game screen placement, saved options, view placements, opacities, layer order,
   button positions and visibility. The on namespace is `controller-unified`.
+  Button positions are independent between modes. Each placement records which
+  buttons use full screen width; older placements without that marker retain
+  their safe-area canvas until moved.
 - `preferences.legacyControllerLayouts`: retained old mode arrangements, kept
   distinct from the current active namespace.
 - `controllerMappings`: complete custom bindings, grouped by zero-based player,
@@ -41,9 +48,10 @@ This preserves placement structures without requiring opaque archives to be
 decoded by hand. Positions, size fractions, opacity, overlap and canvas flags
 remain unchanged. Shared implicit defaults are materialized; missing option
 placement keys still refer to that app build's bundled geometry defaults.
-Menu, Friend and Multiview button positions retain their exact saved normalized
-centers whether placed freely or snapped. The optional grid is anchored to the
-full screen center; its default increment is 18 points (roughly 3 mm on iPhones).
+Menu, Friend and Multiview use a permanent 18-point grid centered on the full
+screen while arranging. Button frames clamp at the horizontal screen edges and
+retain the safe-area height. New or moved placements use full horizontal screen
+width; older placements remain on their safe-area canvas until moved.
 
 The export uses a settings allowlist, not a full UserDefaults or database dump.
 It excludes accounts, credentials, ROMs, saves, notes, per-ROM progress, service

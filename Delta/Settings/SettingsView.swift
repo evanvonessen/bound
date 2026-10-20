@@ -267,7 +267,6 @@ private struct ControlsSection: View
 
     @SwiftUI.State private var opacity = Double(Settings.translucentControllerSkinOpacity)
     @SwiftUI.State private var controllerModeEnabled = BoundControllerModePreferences().isEnabled
-    @SwiftUI.State private var controllerNavigationEnabled = BoundControllerNavigationPreferences().isEnabled
     @SwiftUI.State private var controllerMultiviewEnabled = BoundControllerMultiviewPreferences().isEnabled
 
     var body: some View {
@@ -283,14 +282,6 @@ private struct ControlsSection: View
                 .onChange(of: controllerMultiviewEnabled) { _, enabled in
                     BoundControllerMultiviewPreferences().isEnabled = enabled
                 }
-
-            Toggle("Controller View Navigation", isOn: $controllerNavigationEnabled)
-                .accessibilityIdentifier("bound.controller-view-navigation")
-                .onChange(of: controllerNavigationEnabled) { _, enabled in
-                    BoundControllerNavigationPreferences().isEnabled = enabled
-                }
-
-            BoundButtonGridSpacingSetting()
 
             NavigationLink {
                 ControllerSettingsView().boundSettingsPage()
@@ -327,34 +318,11 @@ private struct ControlsSection: View
         }
         .onReceive(NotificationCenter.default.publisher(for: BoundAppearancePreferences.didChangeNotification)) { _ in
             controllerModeEnabled = BoundControllerModePreferences().isEnabled
-            controllerNavigationEnabled = BoundControllerNavigationPreferences().isEnabled
             controllerMultiviewEnabled = BoundControllerMultiviewPreferences().isEnabled
         }
     }
 }
 
-struct BoundButtonGridSpacingSetting: View {
-    @State private var spacing = Double(BoundControllerButtonGridPreferences.spacing())
-
-    var body: some View {
-        VStack(alignment: .leading) {
-            LabeledContent("Button Grid Spacing", value: "\(Int(spacing)) pt")
-            Slider(value: Binding(get: { spacing }, set: { value in
-                spacing = value
-                BoundControllerButtonGridPreferences.setSpacing(CGFloat(value))
-            }),
-                   in: Double(BoundControllerButtonGridPreferences.minimumSpacing)...Double(BoundControllerButtonGridPreferences.maximumSpacing),
-                   step: 2)
-                .accessibilityLabel("Button Grid Spacing")
-                .accessibilityValue("\(Int(spacing)) points")
-                .accessibilityIdentifier("bound.button-grid-spacing")
-        }
-        .onAppear { spacing = Double(BoundControllerButtonGridPreferences.spacing()) }
-        .onReceive(NotificationCenter.default.publisher(for: Settings.didResetNotification)) { _ in
-            spacing = Double(BoundControllerButtonGridPreferences.spacing())
-        }
-    }
-}
 
 // MARK: - Online Multiplayer
 

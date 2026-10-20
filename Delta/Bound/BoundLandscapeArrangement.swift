@@ -36,8 +36,8 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     @Published private(set) var gameFullSize = false
     @Published private(set) var buttonOverTrash = false
     @Published var showingButtonTray = false
-    @Published private(set) var distanceSnappingEnabled = true
-    @Published private(set) var buttonGridSpacing: CGFloat = BoundControllerButtonGridPreferences.defaultSpacing
+    let distanceSnappingEnabled = true
+    let buttonGridSpacing: CGFloat = BoundControllerButtonGridPreferences.defaultSpacing
     private var savedGame = BoundControllerGamePlacement()
     private var draftGame: BoundControllerGamePlacement?
     private var gameGestureStart: BoundControllerGamePlacement?
@@ -204,8 +204,6 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         self.referenceVisible = self.defaults.object(forKey: namespace + ".option3.reference-visible") as? Bool ?? true
         self.referenceContent = Self.readContent(self.defaults, key: namespace + ".option3.reference-content", allowed: contents) ?? contents.first ?? .notes
         self.selected = self.referenceContent
-        self.distanceSnappingEnabled = BoundControllerButtonGridPreferences.isEnabled(in: self.defaults)
-        self.buttonGridSpacing = BoundControllerButtonGridPreferences.spacing(in: self.defaults)
         migrateControllerModeArrangements()
         migrateUnifiedControllerArrangement()
         readPlacements()
@@ -349,8 +347,6 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         finish(save: false, resume: false)
         self.controllerModeEnabled = controllerModeEnabled
         self.controllerModeLayout = .mode1
-        distanceSnappingEnabled = BoundControllerButtonGridPreferences.isEnabled(in: defaults)
-        buttonGridSpacing = BoundControllerButtonGridPreferences.spacing(in: defaults)
         // Recreate the same Option 3 source snapshot used by a fresh session.
         // Otherwise a reset of Option 6/7 skips their initialization and derives
         // different geometry from the live frames.
@@ -568,8 +564,6 @@ final class BoundLandscapeArrangementModel: ObservableObject {
 
     func arrange() {
         guard active, !editing, beginArrangement?() ?? true else { return }
-        distanceSnappingEnabled = BoundControllerButtonGridPreferences.isEnabled(in: defaults)
-        buttonGridSpacing = BoundControllerButtonGridPreferences.spacing(in: defaults)
         beforeSwitch?()
         selectionBeforeArrangement = referenceContent
         selected = contents.isEmpty ? .friend : referenceContent
@@ -585,7 +579,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         draftButtons = savedButtons
         // Freeze every button's current fallback before any drag can change
         // the native Menu/cycle-button layout used to derive those defaults.
-        if movableControllerButtons, let canvas = layoutInput?.canvas {
+        if movableControllerButtons, let canvas = buttonPlacementCanvas {
             for button in BoundControllerButton.allCases where draftButtons?.positions[button] == nil {
                 draftButtons?.set(frame: buttonFrame(button), for: button, canvas: canvas)
             }
@@ -723,17 +717,11 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     var visibleControllerButtons: [BoundControllerButton] { BoundControllerButton.allCases.filter { isButtonVisible($0) } }
     var buttonToolbarFrame: CGRect {
         let canvas = layoutInput?.canvas ?? layout.canvas
-        let bottom = CGRect(x: canvas.midX - 88, y: canvas.maxY - 48, width: 176, height: 44)
+        let bottom = CGRect(x: canvas.midX - 66, y: canvas.maxY - 48, width: 132, height: 44)
         return layout.doneButton.intersects(bottom.insetBy(dx: -6, dy: -6))
             ? CGRect(x: bottom.minX, y: canvas.minY + 4, width: bottom.width, height: bottom.height) : bottom
     }
     var buttonToolsExpandUpward: Bool { buttonToolbarFrame.midY > layout.canvas.midY }
-    /// Editor chrome stays fixed and never participates in object placement.
-    var buttonGridSpacingFrame: CGRect {
-        let canvas = layoutInput?.canvas ?? layout.canvas
-        let width = min(220, canvas.width)
-        return CGRect(x: canvas.midX - width / 2, y: canvas.maxY - 90, width: width, height: 36)
-    }
     var buttonTrashFrame: CGRect {
         CGRect(x: buttonToolbarFrame.minX + 44, y: buttonToolbarFrame.minY, width: 44, height: 44)
     }
@@ -747,23 +735,6 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         refreshLayout()
     }
 
-    func setDistanceSnappingEnabled(_ enabled: Bool) {
-        guard distanceSnappingEnabled != enabled else { return }
-        distanceSnappingEnabled = enabled
-        defaults.set(enabled, forKey: BoundControllerButtonGridPreferences.enabledKey)
-        needsLayout?()
-    }
-
-    func setButtonGridSpacing(_ spacing: CGFloat) {
-        let bounded = BoundControllerButtonGridPreferences.normalized(spacing)
-        let stepped = BoundControllerButtonGridPreferences.minimumSpacing
-            + ((bounded - BoundControllerButtonGridPreferences.minimumSpacing) / 2).rounded() * 2
-        let value = BoundControllerButtonGridPreferences.normalized(stepped)
-        guard buttonGridSpacing != value else { return }
-        buttonGridSpacing = value
-        BoundControllerButtonGridPreferences.setSpacing(value, in: defaults)
-    }
-
     var buttonGridBounds: CGRect { layoutInput?.screenBounds ?? layoutInput?.canvas ?? layout.canvas }
 
     var buttonGridCenter: CGPoint {
@@ -772,7 +743,6 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     }
 
     private func buttonFrameOnGrid(_ frame: CGRect, canvas: CGRect) -> CGRect {
-        guard distanceSnappingEnabled else { return frame }
         let lowerX = canvas.minX + frame.width / 2
         let upperX = canvas.maxX - frame.width / 2
         let lowerY = canvas.minY + frame.height / 2
@@ -791,7 +761,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         refreshLayout()
     }
     func addControllerButton(_ button: BoundControllerButton, translation: CGSize, ended: Bool) {
-        guard editing, movableControllerButtons, let canvas = layoutInput?.canvas else { return }
+        guard editing, movableControllerButtons, let canvas = buttonPlacementCanvas else { return }
         if addingButtonStart == nil { addingButtonStart = draftButtons }
         draftButtons?.setVisible(true, for: button)
         let fingerFrame = buttonTrayFrame(button).offsetBy(dx: translation.width, dy: translation.height)
@@ -812,9 +782,23 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         addingButtonStart = nil
         refreshLayout()
     }
-    func controllerButtonFrame(_ button: BoundControllerButton, defaultFrame: CGRect, canvas: CGRect) -> CGRect {
+    private func fullWidthButtonCanvas(_ canvas: CGRect, screenBounds: CGRect?) -> CGRect {
+        guard let screen = screenBounds, screen.width > 0 else { return canvas }
+        return CGRect(x: screen.minX, y: canvas.minY, width: screen.width, height: canvas.height)
+    }
+
+    private var buttonPlacementCanvas: CGRect? {
+        guard let input = layoutInput else { return nil }
+        return fullWidthButtonCanvas(input.canvas, screenBounds: input.screenBounds)
+    }
+
+    func controllerButtonFrame(_ button: BoundControllerButton, defaultFrame: CGRect, canvas: CGRect,
+                               screenBounds: CGRect? = nil) -> CGRect {
         guard movableControllerButtons else { return defaultFrame }
-        return (draftButtons ?? savedButtons).frame(for: button, defaultFrame: defaultFrame, canvas: canvas)
+        let placement = draftButtons ?? savedButtons
+        let placementCanvas = placement.screenWidthButtons.contains(button)
+            ? fullWidthButtonCanvas(canvas, screenBounds: screenBounds ?? layoutInput?.screenBounds) : canvas
+        return placement.frame(for: button, defaultFrame: defaultFrame, canvas: placementCanvas)
     }
 
     func hasButtonPlacement(_ button: BoundControllerButton) -> Bool {
@@ -830,10 +814,9 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     }
 
     func moveControllerButton(_ button: BoundControllerButton, translation: CGSize, ended: Bool) {
-        guard editing, movableControllerButtons, let canvas = layoutInput?.canvas else { return }
+        guard editing, movableControllerButtons, let canvas = buttonPlacementCanvas else { return }
         if buttonDrag?.button != button {
             buttonDrag = (button, BoundControllerButtonDrag(startFrame: buttonFrame(button),
-                distanceSnapping: distanceSnappingEnabled, spacing: buttonGridSpacing,
                 gridCenter: buttonGridCenter),
                 draftButtons ?? savedButtons, buttonFrame(button))
         }
@@ -843,7 +826,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         draftButtons?.set(frame: result.frame, for: button, canvas: canvas)
         buttonAlignmentX = ended ? nil : result.snappedX
         buttonAlignmentY = ended ? nil : result.snappedY
-        buttonAlignmentHint = ended ? nil : (distanceSnappingEnabled ? "\(Int(buttonGridSpacing)) pt grid" : result.hint)
+        buttonAlignmentHint = ended ? nil : "18 pt grid"
         if result.didSnap { buttonDidAlign?() }
         // Grid placement may offset the visual button from the finger. Drop
         // targets still follow the finger so users can reach the trash freely.

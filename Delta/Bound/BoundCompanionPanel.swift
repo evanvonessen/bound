@@ -701,7 +701,7 @@ final class BoundCompanionCoordinator {
     func controllerMenuFrame(defaultFrame: CGRect, canvas: CGRect) -> CGRect? {
         guard landscapeArrangement.movableControllerButtons,
               landscapeArrangement.controllerModeEnabled || landscapeArrangement.hasButtonPlacement(.menu) else { return nil }
-        return landscapeArrangement.controllerButtonFrame(.menu, defaultFrame: defaultFrame, canvas: canvas)
+        return landscapeArrangement.controllerButtonFrame(.menu, defaultFrame: defaultFrame, canvas: canvas, screenBounds: owner?.view.bounds)
     }
 
     private func layoutLandscapeArrangement() {
@@ -1006,7 +1006,7 @@ final class BoundCompanionCoordinator {
     }
     var controllerNavigationAvailable: Bool {
         controllerCompanionAvailable && (BoundControllerMultiviewPreferences().isEnabled
-            || (BoundControllerNavigationPreferences().isEnabled && BoundControllerModePreferences().isEnabled))
+            || BoundControllerModePreferences().isEnabled)
     }
     var automaticControllerMultiviewAvailable: Bool {
         BoundControllerMultiviewPreferences().isEnabled && controllerCompanionAvailable

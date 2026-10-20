@@ -27,11 +27,7 @@ struct BoundLandscapeArrangementOverlay: View {
                     .placed(arrangementEditorFrame(for: model)).zIndex(2)
                 }
                 if model.movableControllerButtons {
-                    if model.distanceSnappingEnabled {
-                        buttonDistanceGrid.allowsHitTesting(false).accessibilityHidden(true).zIndex(-2)
-                    }
-                    // Placement handles take precedence even when they overlap the slider.
-                    gridSpacingControl.zIndex(-1)
+                    buttonDistanceGrid.allowsHitTesting(false).accessibilityHidden(true).zIndex(-2)
                     buttonAlignmentGuides.allowsHitTesting(false).zIndex(2)
                     if let hint = model.buttonAlignmentHint {
                         Text(hint).font(.caption.weight(.semibold)).foregroundStyle(.cyan)
@@ -163,19 +159,10 @@ struct BoundLandscapeArrangementOverlay: View {
                 } label: { Image(systemName: "plus") }.frame(width: 44, height: 44)
                     .accessibilityLabel("Add button")
                     .accessibilityIdentifier("bound.arrange-buttons.plus")
-                Button {
-                    model.setDistanceSnappingEnabled(!model.distanceSnappingEnabled)
-                    model.showingButtonTray = false
-                } label: {
-                    Image(systemName: "circle.grid.3x3.fill")
-                        .foregroundStyle(model.distanceSnappingEnabled ? Color(uiColor: .deltaPurple) : Color.primary)
-                }.frame(width: 44, height: 44)
-                    .accessibilityLabel("Distance Snapping")
-                    .accessibilityValue(model.distanceSnappingEnabled ? "On" : "Off")
-                    .accessibilityIdentifier("bound.arrange-buttons.distance-snapping")
+
             }
             .font(.system(size: 18, weight: .semibold))
-            .frame(width: 176, height: 44, alignment: .leading)
+            .frame(width: 132, height: 44, alignment: .leading)
             .background(.regularMaterial, in: Capsule())
             .placed(model.buttonToolbarFrame)
             if model.showingButtonTray {
@@ -200,29 +187,6 @@ struct BoundLandscapeArrangementOverlay: View {
             }
         }
         .tint(Color(uiColor: .deltaPurple))
-    }
-
-    private var gridSpacingControl: some View {
-        let frame = model.buttonGridSpacingFrame
-        return HStack(spacing: 7) {
-            Text("\(Int(model.buttonGridSpacing)) pt")
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                .monospacedDigit()
-                .accessibilityHidden(true)
-            Slider(value: Binding(get: { Double(model.buttonGridSpacing) },
-                                  set: { model.setButtonGridSpacing(CGFloat($0)) }),
-                   in: Double(BoundControllerButtonGridPreferences.minimumSpacing)...Double(BoundControllerButtonGridPreferences.maximumSpacing),
-                   step: 2)
-                .accessibilityLabel("Distance grid spacing")
-                .accessibilityValue("\(Int(model.buttonGridSpacing)) points")
-                .accessibilityIdentifier("bound.arrange-buttons.grid-spacing")
-        }
-        .padding(.horizontal, 10)
-        .frame(width: frame.width, height: frame.height)
-        .background(.ultraThinMaterial, in: Capsule())
-        .opacity(0.86)
-        .tint(Color(uiColor: .deltaPurple))
-        .placed(frame)
     }
 
     private var buttonDistanceGrid: some View {

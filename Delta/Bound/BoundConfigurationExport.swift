@@ -125,7 +125,11 @@ enum BoundConfigurationExport {
         let all = defaults.dictionaryRepresentation()
         let keys = preferenceKeys(in: all)
         let saved = all.filter { keys.contains($0.key) }
-        let effective = try effectivePreferences(defaults: defaults).merging(saved) { _, saved in saved }
+        var effective = try effectivePreferences(defaults: defaults).merging(saved) { _, saved in saved }
+        // Retired stored preferences must not describe behavior the app no longer uses.
+        effective[BoundControllerButtonGridPreferences.enabledKey] = true
+        effective[BoundControllerButtonGridPreferences.spacingKey] = Double(BoundControllerButtonGridPreferences.defaultSpacing)
+        effective[BoundControllerNavigationPreferences.key] = true
         let sections = [
             "settings": effective.filter { !$0.key.hasPrefix("bound.landscape.") && !$0.key.hasPrefix("bound.controls.v1.") },
             "touchControlLayouts": effective.filter { $0.key.hasPrefix("bound.controls.v1.") },
@@ -157,7 +161,7 @@ enum BoundConfigurationExport {
                 "missingLayoutKeys": "Use the bundled defaults from this app version and build.",
                 "controllerMappings": "Complete saved maps, including disconnected controllers. Player indices are zero-based; missing inputs are unbound. None and Overlay remain distinct actions.",
                 "coordinates": "Placements retain their original normalized coordinates, sizes, opacity, layering and canvas flags.",
-                "buttonGrid": "Only Menu, Friend and Multiview button centers use the optional grid. Spacing is in screen points and the grid origin is the full screen center. Saved placements include free or snapped positions separately for Controller Mode on and off.",
+                "buttonGrid": "Menu, Friend and Multiview always use the 18-point grid centered on the full screen while arranging. Screen edges clamp the final button frame. Positions save independently for Controller Mode on and off. Buttons listed in screenWidthButtons use full screen width and safe-area height; older positions retain the safe-area canvas until moved.",
                 "excluded": "Accounts, credentials, ROMs, saves, notes, per-ROM progress and developer-tool state."
             ]
         ]

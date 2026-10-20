@@ -191,7 +191,7 @@ final class ControllerNavigationTests: XCTestCase {
         }
     }
 
-    func testMultiviewTabBindingsRemainAvailableWhenDetailedNavigationIsOff() {
+    func testViewNavigationBindingsRemainAvailableWhenLegacyPreferenceIsFalse() {
         let defaults = UserDefaults.standard
         let previousValue = defaults.object(forKey: BoundControllerNavigationPreferences.key)
         defer {
@@ -199,11 +199,13 @@ final class ControllerNavigationTests: XCTestCase {
             else { defaults.removeObject(forKey: BoundControllerNavigationPreferences.key) }
         }
 
-        BoundControllerNavigationPreferences().isEnabled = false
+        defaults.set(false, forKey: BoundControllerNavigationPreferences.key)
+        XCTAssertTrue(BoundControllerNavigationPreferences().isEnabled)
         let actions = ActionInput.configurableActions
         XCTAssertTrue(actions.contains(.boundPreviousView))
         XCTAssertTrue(actions.contains(.boundNextView))
-        XCTAssertFalse(actions.contains(.boundScrollUp))
+        XCTAssertTrue(actions.contains(.boundScrollUp))
+        XCTAssertTrue(actions.contains(.boundSelect))
         XCTAssertTrue(ActionInput.boundPreviousView.isMultiviewTabAction)
         XCTAssertTrue(ActionInput.boundNextView.isMultiviewTabAction)
     }
@@ -349,12 +351,12 @@ final class ControllerNavigationTests: XCTestCase {
         let priorMode = defaults.object(forKey: BoundControllerModePreferences.key)
         let priorNavigation = defaults.object(forKey: BoundControllerNavigationPreferences.key)
         defer {
+            if let priorNavigation { defaults.set(priorNavigation, forKey: BoundControllerNavigationPreferences.key) }
+            else { defaults.removeObject(forKey: BoundControllerNavigationPreferences.key) }
             if let priorMultiview { defaults.set(priorMultiview, forKey: BoundControllerMultiviewPreferences.key) }
             else { defaults.removeObject(forKey: BoundControllerMultiviewPreferences.key) }
             if let priorMode { defaults.set(priorMode, forKey: BoundControllerModePreferences.key) }
             else { defaults.removeObject(forKey: BoundControllerModePreferences.key) }
-            if let priorNavigation { defaults.set(priorNavigation, forKey: BoundControllerNavigationPreferences.key) }
-            else { defaults.removeObject(forKey: BoundControllerNavigationPreferences.key) }
         }
 
         let storyboard = UIStoryboard(name: "Settings", bundle: Bundle(for: SettingsViewController.self))
@@ -363,17 +365,16 @@ final class ControllerNavigationTests: XCTestCase {
         settings.loadViewIfNeeded()
         let tableView = settings.tableView!
         let modeEnabledPath = IndexPath(row: 4, section: 1)
-        let navigationPath = IndexPath(row: 5, section: 1)
+        let multiviewPath = IndexPath(row: 5, section: 1)
 
-        XCTAssertEqual(settings.tableView(tableView, numberOfRowsInSection: 1), 8)
-        for indexPath in [modeEnabledPath, navigationPath, IndexPath(row: 6, section: 1), IndexPath(row: 7, section: 1)] {
+        XCTAssertEqual(settings.tableView(tableView, numberOfRowsInSection: 1), 6)
+        for indexPath in [modeEnabledPath, multiviewPath] {
             XCTAssertEqual(settings.tableView(tableView, heightForRowAt: indexPath), UITableView.automaticDimension)
             XCTAssertNotNil(settings.tableView(tableView, cellForRowAt: indexPath))
         }
-
-        let gridCell = try XCTUnwrap(settings.tableView(tableView, cellForRowAt: IndexPath(row: 7, section: 1)))
-        XCTAssertTrue(gridCell.contentConfiguration is UIHostingConfiguration<BoundButtonGridSpacingSetting, EmptyView>,
-                      "The eighth Controls row must host the Button Grid Spacing slider.")
+        defaults.set(false, forKey: BoundControllerNavigationPreferences.key)
+        XCTAssertTrue(BoundControllerNavigationPreferences().isEnabled,
+                      "Legacy stored false values must not disable controller navigation.")
 
         let modeCell = try XCTUnwrap(settings.tableView(tableView, cellForRowAt: modeEnabledPath))
         let modeSwitch = try XCTUnwrap(modeCell.accessoryView as? UISwitch)
@@ -382,14 +383,7 @@ final class ControllerNavigationTests: XCTestCase {
         modeSwitch.sendActions(for: .valueChanged)
         XCTAssertEqual(BoundControllerModePreferences().isEnabled, !oldMode)
 
-        let navigationCell = try XCTUnwrap(settings.tableView(tableView, cellForRowAt: navigationPath))
-        let navigationSwitch = try XCTUnwrap(navigationCell.accessoryView as? UISwitch)
-        let oldNavigation = BoundControllerNavigationPreferences().isEnabled
-        navigationSwitch.isOn = !oldNavigation
-        navigationSwitch.sendActions(for: .valueChanged)
-        XCTAssertEqual(BoundControllerNavigationPreferences().isEnabled, !oldNavigation)
-
-        let multiviewCell = settings.tableView(tableView, cellForRowAt: IndexPath(row: 6, section: 1))
+        let multiviewCell = settings.tableView(tableView, cellForRowAt: multiviewPath)
         XCTAssertEqual(multiviewCell.textLabel?.text, "Allow Controller to Control Multiview")
         let multiviewSwitch = try XCTUnwrap(multiviewCell.accessoryView as? UISwitch)
         let oldMultiview = BoundControllerMultiviewPreferences().isEnabled

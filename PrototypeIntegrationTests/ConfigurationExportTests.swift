@@ -27,7 +27,7 @@ final class ConfigurationExportTests: XCTestCase {
         defaults.set(true, forKey: BoundControllerModePreferences.key)
         defaults.set(0.43, forKey: "translucentControllerSkinOpacity")
         defaults.set(true, forKey: BoundControllerButtonGridPreferences.enabledKey)
-        BoundControllerButtonGridPreferences.setSpacing(24, in: defaults)
+        defaults.set(24, forKey: BoundControllerButtonGridPreferences.spacingKey)
         defaults.set(true, forKey: Settings.Name.respectSilentMode.rawValue)
         defaults.set(true, forKey: Settings.Name.mixWithOtherAudio.rawValue)
         defaults.set(true, forKey: Settings.Name.pauseOtherAudio.rawValue)
@@ -84,7 +84,7 @@ final class ConfigurationExportTests: XCTestCase {
         XCTAssertEqual((roundTrip["effectiveInterface"] as? [String: Any])?["controllerModeEnabled"] as? Bool, true)
         XCTAssertEqual(preferences["settings"]?["translucentControllerSkinOpacity"] as? Double, 0.43)
         XCTAssertEqual(preferences["settings"]?[BoundControllerButtonGridPreferences.enabledKey] as? Bool, true)
-        XCTAssertEqual(preferences["settings"]?[BoundControllerButtonGridPreferences.spacingKey] as? Double, 24)
+        XCTAssertEqual(preferences["settings"]?[BoundControllerButtonGridPreferences.spacingKey] as? Double, 18)
         for key in [Settings.Name.respectSilentMode, .mixWithOtherAudio, .pauseOtherAudio] {
             XCTAssertEqual(preferences["settings"]?[key.rawValue] as? Bool, true)
         }
@@ -163,7 +163,7 @@ final class ConfigurationExportTests: XCTestCase {
         XCTAssertEqual(defaults.dictionaryRepresentation() as NSDictionary, before as NSDictionary)
     }
 
-    func testGridExportDefaultsToEnabledAndHonorsExplicitOffPreference() throws {
+    func testExportUsesPermanentGridAndNavigationDespiteLegacyPreferences() throws {
         let (defaults, suite) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
 
@@ -176,8 +176,16 @@ final class ConfigurationExportTests: XCTestCase {
 
         XCTAssertEqual(try exportedGridValue(), true)
         defaults.set(false, forKey: BoundControllerButtonGridPreferences.enabledKey)
-        XCTAssertEqual(try exportedGridValue(), false)
-        XCTAssertFalse(BoundControllerButtonGridPreferences.isEnabled(in: defaults))
+        defaults.set(48, forKey: BoundControllerButtonGridPreferences.spacingKey)
+        defaults.set(false, forKey: BoundControllerNavigationPreferences.key)
+        let before = defaults.dictionaryRepresentation()
+        XCTAssertEqual(try exportedGridValue(), true)
+        XCTAssertTrue(BoundControllerButtonGridPreferences.isEnabled(in: defaults))
+        let snapshot = try BoundConfigurationExport.snapshot(defaults: defaults, mappings: [])
+        let settings = try XCTUnwrap((snapshot["preferences"] as? [String: [String: Any]])?["settings"])
+        XCTAssertEqual(settings[BoundControllerButtonGridPreferences.spacingKey] as? Double, 18)
+        XCTAssertEqual(settings[BoundControllerNavigationPreferences.key] as? Bool, true)
+        XCTAssertEqual(defaults.dictionaryRepresentation() as NSDictionary, before as NSDictionary)
     }
 
     func testControllerMappingsExportAllSavedPlayersAndControllerTypesWithoutDatabaseIdentifiers() throws {

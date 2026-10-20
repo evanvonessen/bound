@@ -359,18 +359,15 @@ final class BoundControllerModePreferences {
     }
 }
 
-/// Optional controller navigation for Bound's Dex, Boss, and Types views.
-/// Kept independent from Controller Mode so it can be configured in advance.
+/// Compatibility facade for the retired navigation toggle. Dex, Boss, and
+/// Types controller navigation is now always enabled; the legacy stored value
+/// is intentionally ignored.
 final class BoundControllerNavigationPreferences {
     static let key = "bound.controller-navigation.v1.enabled"
-    private let defaults: UserDefaults
-    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    init(defaults: UserDefaults = .standard) {}
     var isEnabled: Bool {
-        get { defaults.bool(forKey: Self.key) }
-        set {
-            defaults.set(newValue, forKey: Self.key)
-            NotificationCenter.default.post(name: BoundAppearancePreferences.didChangeNotification, object: nil)
-        }
+        get { true }
+        set { }
     }
 }
 
