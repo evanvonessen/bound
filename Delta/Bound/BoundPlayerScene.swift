@@ -18,6 +18,8 @@ struct BoundPlayerSprite: Hashable, Sendable {
     let flipX: Bool
     let flipY: Bool
     let priority: Int
+    // ROM-only frame reference for presence. Tile graphics stay on this device.
+    var romAddress: Int? = nil
 
     func colorIndex(x: Int, y: Int) -> Int {
         guard x >= 0, x < width, y >= 0, y < height else { return 0 }
@@ -141,7 +143,8 @@ enum BoundPlayerSceneDecoder {
               let palette = memory.bytes(at: 0x020375F8 + 512 + (BoundSceneBytes.half(raw, 4) >> 12) * 32, count: 32) else { return nil }
         return .init(width: width, height: height, tiles: Data(tiles), palette: Data(palette),
                      flipX: raw[3] & 0x10 != 0, flipY: raw[3] & 0x20 != 0,
-                     priority: (BoundSceneBytes.half(raw, 4) >> 10) & 3)
+                     priority: (BoundSceneBytes.half(raw, 4) >> 10) & 3,
+                     romAddress: BoundSceneBytes.word(image))
     }
 
     static func camera(save: BoundPlayerState.Point, residual: BoundPlayerState.Point,

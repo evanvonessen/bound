@@ -130,13 +130,16 @@ final class BoundPlayerStateHUD: UIView {
     }
 }
 
-/// Local display and recorded-player playback; no RAM writes or networking.
+/// Read-only VBA-M scenes feed the local HUD, recording and presence renderer.
 @MainActor
 final class BoundPlayerStateDisplay {
     let probe = BoundVBAPlayerStateProbe()
     let hud = BoundPlayerStateHUD()
     let recordingSession = BoundRecordedPlayerSession()
     let recordedPlayerOverlay = BoundRecordedPlayerOverlay(frame: .zero)
+    let livePlayerOverlay = BoundRecordedPlayerOverlay(frame: .zero)
+    private weak var presence: BoundLivePresenceSession?
+    private var currentReading: BoundPlayerStateReading?
     private weak var owner: UIViewController?
     private weak var core: EmulatorCore?
     private var profile: BoundPlayerROMProfile?
@@ -153,7 +156,9 @@ final class BoundPlayerStateDisplay {
         for name in [BoundPlayerStatePreferences.didChange, Settings.didResetNotification] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    if name == Settings.didResetNotification { self?.recordingSession.clear() }
+                    if name == Settings.didResetNotification {
+                        self?.recordingSession.clear(); self?.presence?.setEnabled(false)
+                    }
                     self?.refreshPreference()
                 }
             })
@@ -165,6 +170,7 @@ final class BoundPlayerStateDisplay {
             MainActor.assumeIsolated { self?.suspended = false; self?.refreshState() }
         })
         recordingSession.demandChanged = { [weak self] in self?.refreshPreference() }
+        livePlayerOverlay.accessibilityIdentifier = "bound.live-player"
     }
     deinit {
         timer?.invalidate(); loadTask?.cancel()
@@ -176,10 +182,20 @@ final class BoundPlayerStateDisplay {
         owner.view.addSubview(hud)
         refreshPreference()
     }
+    func attachPresence(_ session: BoundLivePresenceSession) {
+        presence?.demandChanged = nil; presence?.presentationChanged = nil
+        presence = session
+        session.setROMVerified(profile != nil && supportsCore)
+        session.demandChanged = { [weak self] in self?.refreshPreference() }
+        session.presentationChanged = { [weak self] in self?.livePlayerOverlay.show(pose: nil, scene: nil) }
+        refreshPreference()
+    }
     func bind(core: EmulatorCore?) {
         guard self.core !== core else { return }
         loadTask?.cancel(); loadTask = nil; stateObservation = nil
         self.core = core; profile = nil; profileStatus = .checkingROM
+        presence?.setROMVerified(false)
+        currentReading = nil; presence?.invalidateLocal()
         recordingSession.clear()
         profileDetail = "Checking the loaded ROM"
         lastFrameAt = nil
@@ -200,13 +216,14 @@ final class BoundPlayerStateDisplay {
     private var enabled: Bool { UserDefaults.standard.bool(forKey: BoundPlayerStatePreferences.key) }
     private var supportsCore: Bool { core?.deltaCore.identifier == "com.rileytestut.GBADeltaCore" }
     var supportsRecording: Bool { supportsCore }
+    private var needsScene: Bool { recordingSession.needsReader || presence?.needsReader == true }
 
     private func refreshPreference() {
         hud.isHidden = !enabled || !supportsCore
         timer?.invalidate(); timer = nil
-        if enabled || recordingSession.needsReader, supportsCore {
+        if enabled || needsScene, supportsCore {
             if profile == nil, loadTask == nil, profileStatus == .checkingROM { loadProfile() }
-            let timer = Timer(timeInterval: recordingSession.needsReader ? 1.0 / 60 : 0.1, repeats: true) { [weak self] _ in
+            let timer = Timer(timeInterval: needsScene ? 1.0 / 60 : 0.1, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.refreshDisplay() }
             }
             RunLoop.main.add(timer, forMode: .common); self.timer = timer
@@ -235,9 +252,10 @@ final class BoundPlayerStateDisplay {
     }
 
     private func refreshState() {
+        presence?.setROMVerified(profile != nil && supportsCore)
         let status: BoundPlayerStateReading.Status, detail: String
         var active = false
-        if !enabled && !recordingSession.needsReader { status = .disabled; detail = "Player state display is off" }
+        if !enabled && !needsScene { status = .disabled; detail = "Player state display is off" }
         else if !supportsCore { status = .unavailable; detail = "Requires the VBA-M GBA core" }
         else if suspended { status = .paused; detail = "App is inactive" }
         else if core?.state == .paused { status = .paused; detail = "Playback is paused" }
@@ -249,26 +267,36 @@ final class BoundPlayerStateDisplay {
             recordingSession.unavailable(detail)
         }
         probe.configure(coreID: core.map(ObjectIdentifier.init), profile: profile, active: active, status: status, detail: detail,
-                        sceneEnabled: recordingSession.needsReader)
+                        sceneEnabled: needsScene)
         lastFrameAt = nil
         refreshDisplay()
     }
 
-    func didLoadSaveState() { recordingSession.suspend(); recordingSession.stop(); refreshState() }
+    func didLoadSaveState() {
+        recordingSession.suspend(); recordingSession.stop(); presence?.invalidateLocal(); refreshState()
+    }
 
     func refreshDisplay() {
         if let reading = probe.takeLatest() {
+            currentReading = reading
             let changed = hud.update(reading)
             recordingSession.consume(reading)
+            presence?.consume(reading)
             recordedPlayerOverlay.show(pose: recordingSession.pose, scene: reading.player?.scene)
             lastFrameAt = reading.frame > 0 ? ProcessInfo.processInfo.systemUptime : nil
             if changed { owner?.view.setNeedsLayout() }
         } else if let lastFrameAt, ProcessInfo.processInfo.systemUptime - lastFrameAt > 0.5 {
             let stale = BoundPlayerStateReading.inactive(.waiting, "No recent emulated frames")
+            currentReading = stale; presence?.consume(stale)
             if hud.update(stale) { owner?.view.setNeedsLayout() }
             recordingSession.consume(stale); recordedPlayerOverlay.show(pose: nil, scene: nil)
             self.lastFrameAt = nil
         }
+        let now = ProcessInfo.processInfo.systemUptime
+        if let presence, let reading = currentReading, reading.status == .live,
+           let lastFrameAt, now - lastFrameAt <= 0.5, let profile, let viewer = reading.player {
+            livePlayerOverlay.show(pose: presence.pose(at: now)?.rendered(profile: profile, viewer: viewer), scene: viewer.scene)
+        } else { livePlayerOverlay.show(pose: nil, scene: nil) }
     }
 
     func layout(in owner: UIViewController, gameView: UIView) {
@@ -278,6 +306,12 @@ final class BoundPlayerStateDisplay {
         }
         recordedPlayerOverlay.frame = gameView.bounds
         gameView.bringSubviewToFront(recordedPlayerOverlay)
+        if livePlayerOverlay.superview !== gameView {
+            livePlayerOverlay.removeFromSuperview(); gameView.addSubview(livePlayerOverlay)
+            livePlayerOverlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        }
+        livePlayerOverlay.frame = gameView.bounds
+        gameView.bringSubviewToFront(livePlayerOverlay)
         guard !hud.isHidden else { return }
         let safe = owner.view.bounds.inset(by: owner.view.safeAreaInsets)
         let game = gameView.convert(gameView.bounds, to: owner.view).intersection(safe)
@@ -291,6 +325,9 @@ final class BoundPlayerStateDisplay {
         timer?.invalidate(); timer = nil
         loadTask?.cancel(); loadTask = nil
         stateObservation = nil; core = nil; profile = nil
+        presence?.setROMVerified(false)
+        currentReading = nil; presence?.invalidateLocal(); presence?.consume(.inactive(.stopped, "Playback is stopped"))
+        livePlayerOverlay.show(pose: nil, scene: nil)
         recordingSession.clear(); recordedPlayerOverlay.show(pose: nil, scene: nil)
         probe.configure(coreID: nil, profile: nil, active: false, status: .stopped, detail: "Playback is stopped")
         hud.update(.inactive(.stopped, "Playback is stopped")); hud.isHidden = true

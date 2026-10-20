@@ -48,8 +48,8 @@ Bound's SHA-1 game identifier is not used as a substitute for this check.
   task or unbounded capture queue is created. If frames stop arriving, the card
   drops coordinates and reports **Waiting**.
 
-The reader never writes game RAM or exports a battery save. It does not send
-network packets. Disabled capture performs no RAM
+The reader never writes game RAM or exports a battery save. Networking is owned
+by the opt-in live presence session below. Disabled capture performs no RAM
 reads. The full bank-copy approach establishes a simple coherent-frame contract;
 physical-device cost still needs profiling before claiming a performance bound.
 
@@ -116,6 +116,73 @@ rules, large/affine/subsprite objects and image-warping video filters need
 additional support and gameplay fixtures. Device performance and exact visual
 timing relative to presented Metal frames still require device validation.
 
+## Live friend sprites
+
+Connect to the same friend using Bound's existing **Friends** flow. Enable
+**Live player sprites → Show friend on map** on both instances, then resume
+supported GBA gameplay. This control also appears in **Settings → Controls**
+while a GBA game is open. It starts off and is held in memory for the current
+coordinator; it is not exported as account or gameplay data. Reset Settings
+turns it off. The diagnostic player-state card can stay off.
+
+The production transport uses a data stream in the existing authenticated
+Agora room. Presence requires that friend connection, so its current video
+sharing still runs. No new server, database change or credential is introduced.
+Only the room's expected peer UID is admitted. The SDK callback copies at most
+one bounded pending packet, polled on main even when friend video is hidden.
+
+Each JSON packet is at most 768 bytes, sent at most 20 times per second during
+normal operation. It contains protocol/ROM identity, sender and acknowledged
+receiver session UUIDs, increasing sequence and monotonic send time, plus an
+optional pose: map, elevation, world feet, facing, ROM sprite-frame address,
+flip/priority and 32 palette bytes. Each instance SHA-256 verifies its own ROM;
+unknown or incompatible profiles cannot advertise a live pose. Sprite tile
+artwork is resolved from the receiver's local ROM. No RAM bank, framebuffer,
+controller input, save, story flag or progression state is sent or applied.
+
+Before displaying poses, both peers acknowledge the other's current session.
+An unacknowledged hello cannot replace a verified peer; incompatible ROM changes
+also invalidate queued poses. Ordinary video sessions publish no presence while
+live sprites are opted out.
+The receiver keeps at most eight samples, uses a 100 ms interpolation delay,
+rejects duplicate/out-of-order/old-session and excessively delayed packets,
+and never interpolates across maps, elevations, warps or large sample gaps.
+It holds the latest position only briefly, with no extrapolation. A 750 ms
+receive timeout clears the peer and starts a fresh handshake. A received
+unavailable pose clears immediately. Pause, battle, locked/unsupported scenes,
+stale reader frames, app inactivity, core/ROM changes and restored-state
+invalidation withdraw local coordinates and hide the local overlay. Transport
+recovery, sign-out, room changes and stop clear session state.
+
+Both emulators keep running their own games. The remote sprite uses the local
+camera and existing foreground/object masking. This milestone retains the
+validated on-foot/16×32/exact-ROM limits documented above.
+
+`LivePresenceTests` covers wire bounds, handshake, clocks, ordering, jitter,
+warp/elevation discontinuities, stale/retired sessions, opt-out and friend-session
+recovery. `LivePresenceRuntimeTests` is opt-in and runs two separate Bound test
+hosts with actual VBA-M cores, separate disposable batteries, independent walks,
+and production readers, presence sessions and overlays. Its bounded loopback
+HTTP transport substitutes for Agora; it does not prove the Agora data path,
+Internet service, physical-device behavior or full-app navigation.
+
+After building `BoundIntegrationQA` with `build-for-testing`, stage the private
+ROM and seed in each dedicated Simulator's app container as described below.
+Run the paired acceptance harness with unique output paths:
+
+```sh
+python3 PrototypeTools/live-presence-relay.py \
+  --xctestrun /absolute/path/to/BoundIntegrationQA_iphonesimulator27.0-arm64.xctestrun \
+  --sim-a <dedicated-A-UDID> --sim-b <dedicated-B-UDID> \
+  --output /absolute/path/to/new-run-directory
+```
+
+The harness checks independent walking, A pausing while B keeps playing,
+resume, network outage/recovery, and restored-state admission invalidation.
+It writes only metadata; test screenshots and disposable saves remain private
+in the Simulator. Actual save-state loading and Internet friend sessions need
+their own validation.
+
 ## Checks
 
 Use the `BoundIntegrationQA` scheme with `BoundIntegrationTests/PlayerStateTests`
@@ -180,12 +247,30 @@ The recorded-player milestone was also validated on October 20, 2026:
   simulator evidence; full-app UI navigation and device performance remain
   separate validation work.
 
+The live-presence milestone was validated on October 20, 2026:
+
+- All 42 focused hosted tests passed without failures or skips, including the
+  private actual-ROM VBA-M reader/replay cases, ten presence tests, settings
+  export/reset and seven existing video-sharing/recovery checks.
+- The paired runtime case passed in two separate Bound hosts with actual VBA-M
+  cores and separate disposable batteries. A/B displayed 62/59 distinct remote
+  positions and 83/89 camera positions. Each capture showed two independently
+  positioned sprites. The largest relayed packet was 426 bytes.
+- A paused while B continued playing; both overlays cleared appropriately.
+  Resume, transport outage/recovery, restored-state admission invalidation and
+  stop passed. ROM, seed and each disposable battery hash remained unchanged.
+  The diagnostic card stayed off during the live exchange.
+- Source integrity verified 17,060 pinned files and the unsigned `Bound` Release
+  build for generic iOS succeeded. Runtime proof uses the test-only loopback
+  transport and hosted game canvas. Authenticated Agora data-stream delivery,
+  Internet sessions, full-app navigation, actual save-state loading and physical
+  device performance/presentation remain separate acceptance work.
+
 ## Following milestones
 
 Additional fixtures are needed for doors, connected maps, bike/surf/ledge
 movement, late-game scripts and save-state restoration in actual VBA-M gameplay.
-The next milestone is a two-instance presence transport feeding this renderer.
-It needs a session/ROM handshake, peer identity, sequence/timestamps, bounded
-receive interpolation and disconnect timeouts, while keeping each player's
-local progress independent. Recorded playback is the local renderer proof;
-networking and actual friend sessions are not implemented here.
+The live presence implementation now feeds this renderer through the existing
+friend room. Next acceptance work includes real authenticated Agora sessions
+across networks, physical-device cost/presentation timing and broader world
+fixtures. Keep each player's local progress independent.

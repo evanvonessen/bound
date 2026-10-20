@@ -293,6 +293,7 @@ final class BoundCompanionCoordinator {
     func install(in owner: GameViewController) {
         guard host == nil, macHost == nil else { return }
         self.owner = owner
+        playerStateDisplay.attachPresence(sharing.livePresence)
         playerStateDisplay.install(in: owner)
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-reset-layout") {
@@ -899,7 +900,8 @@ final class BoundCompanionCoordinator {
         let context = BoundSettingsGameplayContext(emulationDetails: state.emulationDetails,
             editControls: { [weak self] in self?.state.pendingControlEditor = true },
             showCompanion: { [weak self] in self?.state.hidden = false; self?.state.refresh() },
-            recordedPlayer: playerStateDisplay.supportsRecording ? playerStateDisplay.recordingSession : nil)
+            recordedPlayer: playerStateDisplay.supportsRecording ? playerStateDisplay.recordingSession : nil,
+            livePresence: playerStateDisplay.supportsRecording ? sharing.livePresence : nil)
         let host = BoundSettingsHostingController(model: state.settings, gameplay: context, closed: { [weak self] in
             guard let self else { return }; self.state.showingSettings = false
             self.cancelInteractions()
@@ -1703,6 +1705,7 @@ struct BoundFriendsSheet: View {
                 }
                 .id(usesUpdatedUI)
                 if account.session != nil {
+                    BoundLivePresenceControls(session: sharing.livePresence)
                     Section("Friends") {
                         if !onboarding.message.isEmpty {
                             Text(onboarding.message).font(.caption)

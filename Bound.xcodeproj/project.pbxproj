@@ -458,7 +458,10 @@
 		87214F8B08E34E1699AB1A1A /* PlayerStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DB42D13CD4642F59F46B8EE /* PlayerStateTests.swift */; };
 		18BC10A8D7EF4D1397B91702 /* BoundPlayerScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BC10A8D7EF4D1397B91701 /* BoundPlayerScene.swift */; };
 		18BC10A8D7EF4D1397B91704 /* BoundRecordedPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BC10A8D7EF4D1397B91703 /* BoundRecordedPlayer.swift */; };
+		A15E00000000000000000002 /* BoundLivePresence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000001 /* BoundLivePresence.swift */; };
 		18BC10A8D7EF4D1397B91706 /* RecordedPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */; };
+		A15E00000000000000000004 /* LivePresenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000003 /* LivePresenceTests.swift */; };
+		A15E00000000000000000006 /* LivePresenceRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000005 /* LivePresenceRuntimeTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1277,7 +1280,10 @@
 		3DB42D13CD4642F59F46B8EE /* PlayerStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerStateTests.swift; sourceTree = "<group>"; };
 		18BC10A8D7EF4D1397B91701 /* BoundPlayerScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPlayerScene.swift; sourceTree = "<group>"; };
 		18BC10A8D7EF4D1397B91703 /* BoundRecordedPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundRecordedPlayer.swift; sourceTree = "<group>"; };
+		A15E00000000000000000001 /* BoundLivePresence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLivePresence.swift; sourceTree = "<group>"; };
 		18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordedPlayerTests.swift; sourceTree = "<group>"; };
+		A15E00000000000000000003 /* LivePresenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePresenceTests.swift; sourceTree = "<group>"; };
+		A15E00000000000000000005 /* LivePresenceRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePresenceRuntimeTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1394,6 +1400,8 @@
 				E519E2BAF174403DB37DB3A5 /* PlaybackSharingTests.swift */,
 				3DB42D13CD4642F59F46B8EE /* PlayerStateTests.swift */,
 				18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */,
+				A15E00000000000000000003 /* LivePresenceTests.swift */,
+				A15E00000000000000000005 /* LivePresenceRuntimeTests.swift */,
 				35733EA11CCE9FF25284EFB8 /* AppearanceIntegrationTests.swift */,
 				79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */,
 				C1D82587FA554BF8B7A9E409 /* MultiviewDexNavigationTests.swift */,
@@ -1502,6 +1510,7 @@
 				E11EC3B5F0FA4653A65DA9F6 /* BoundPlayerState.swift */,
 				18BC10A8D7EF4D1397B91701 /* BoundPlayerScene.swift */,
 				18BC10A8D7EF4D1397B91703 /* BoundRecordedPlayer.swift */,
+				A15E00000000000000000001 /* BoundLivePresence.swift */,
 				E875C2DEF127D860254648FA /* BoundFrameCaptureGate.swift */,
 				9F35BC570DB6B8BA023B9B53 /* BoundCompanionCycleButton.swift */,
 				6D75D15A8F3B6F2793C7F56D /* BoundPortraitScreenGeometry.swift */,
@@ -3183,6 +3192,8 @@
 				074EAD7F7AE78C628F0977A8 /* PlaybackSharingTests.swift in Sources */,
 				87214F8B08E34E1699AB1A1A /* PlayerStateTests.swift in Sources */,
 				18BC10A8D7EF4D1397B91706 /* RecordedPlayerTests.swift in Sources */,
+				A15E00000000000000000004 /* LivePresenceTests.swift in Sources */,
+				A15E00000000000000000006 /* LivePresenceRuntimeTests.swift in Sources */,
 				273B677E21CFB932EFA82ACD /* AppearanceIntegrationTests.swift in Sources */,
 				0DCC5A17E990440B949F4582 /* ConfigurationExportTests.swift in Sources */,
 				4C2097EAF620479EAF50EA68 /* MultiviewDexNavigationTests.swift in Sources */,
@@ -3490,6 +3501,7 @@
 				92A220783C5444D8894C0EFC /* BoundPlayerState.swift in Sources */,
 				18BC10A8D7EF4D1397B91702 /* BoundPlayerScene.swift in Sources */,
 				18BC10A8D7EF4D1397B91704 /* BoundRecordedPlayer.swift in Sources */,
+				A15E00000000000000000002 /* BoundLivePresence.swift in Sources */,
 				A5AAF6B64EA97D56F73A4A9D /* BoundFrameCaptureGate.swift in Sources */,
 				9EE1E66A051751E201D09F44 /* BoundCompanionCycleButton.swift in Sources */,
 				086D5B30CBE1065AE9A6C9AA /* BoundPortraitScreenGeometry.swift in Sources */,

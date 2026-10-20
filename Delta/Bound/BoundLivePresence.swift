@@ -1,0 +1,258 @@
+import Foundation
+import SwiftUI
+
+/// Small presence-only wire format. No RAM banks, input, save, camera, image or
+/// progression payload. The receiver resolves the frame from its verified ROM.
+struct BoundPresencePose: Codable, Equatable, Sendable {
+    let mapGroup: Int
+    let mapNumber: Int
+    let elevation: Int
+    var x: Double
+    var y: Double
+    let facing: Int
+    let frameAddress: Int
+    let palette: Data
+    let flipX: Bool
+    let flipY: Bool
+    let priority: Int
+
+    init?(reading: BoundPlayerStateReading) {
+        guard reading.status == .live, let player = reading.player,
+              let scene = player.scene, let address = scene.appearance.romAddress,
+              scene.appearance.width == 16, scene.appearance.height == 32 else { return nil }
+        mapGroup = player.mapGroup; mapNumber = player.mapNumber; elevation = player.elevation
+        x = Double(scene.worldFoot.x); y = Double(scene.worldFoot.y)
+        facing = ["South": 1, "North": 2, "West": 3, "East": 4][player.facing] ?? 0
+        frameAddress = address; palette = scene.appearance.palette
+        flipX = scene.appearance.flipX; flipY = scene.appearance.flipY; priority = scene.appearance.priority
+    }
+
+    var isValid: Bool {
+        (0...255).contains(mapGroup) && (0...255).contains(mapNumber) && (0...15).contains(elevation)
+        && x.isFinite && y.isFinite && (0...1_048_592).contains(x) && (0...1_048_592).contains(y)
+        && (1...4).contains(facing) && (0...3).contains(priority) && palette.count == 32
+        && (0x08000000...0x09FFFF00).contains(frameAddress)
+    }
+
+    func rendered(profile: BoundPlayerROMProfile, viewer: BoundPlayerState) -> BoundRecordedPlayerPose? {
+        guard isValid, viewer.scene != nil, viewer.mapGroup == mapGroup,
+              viewer.mapNumber == mapNumber, viewer.elevation == elevation,
+              let tiles = profile.bytes(at: frameAddress, count: 256) else { return nil }
+        return .init(mapGroup: mapGroup, mapNumber: mapNumber, elevation: elevation, x: x, y: y,
+            appearance: .init(width: 16, height: 32, tiles: Data(tiles), palette: palette,
+                              flipX: flipX, flipY: flipY, priority: priority, romAddress: frameAddress))
+    }
+}
+
+struct BoundPresencePacket: Codable, Equatable, Sendable {
+    static let maximumBytes = 768
+    let version: Int
+    let rom: String
+    let sender: UUID
+    let receiver: UUID?
+    let sequence: UInt64
+    let time: TimeInterval
+    let pose: BoundPresencePose?
+
+    func encoded() -> Data? {
+        guard let data = try? JSONEncoder().encode(self), data.count <= Self.maximumBytes else { return nil }
+        return data
+    }
+    static func decode(_ data: Data) -> Self? {
+        guard !data.isEmpty, data.count <= maximumBytes,
+              let packet = try? JSONDecoder().decode(Self.self, from: data), packet.version == 1,
+              packet.rom.count == 64, packet.sequence > 0, packet.time.isFinite,
+              packet.time >= 0, packet.pose?.isValid ?? true else { return nil }
+        return packet
+    }
+}
+
+/// Main-actor, bounded receive buffer driven by a monotonic wall clock, never by
+/// the viewer's emulated frame counter. Each transport/binding/restore gets a new
+/// challenge; packets must acknowledge it before their poses can be displayed.
+@MainActor
+final class BoundLivePresenceSession: ObservableObject {
+    static let interval: TimeInterval = 0.05
+    static let timeout: TimeInterval = 0.75
+    @Published private(set) var enabled = false
+    @Published private(set) var connected = false
+    @Published private(set) var status = "Connect to a friend, then enable live sprites on both devices."
+    private(set) var epoch = UUID()
+    private(set) var receivedPackets = 0
+    private(set) var sentPackets = 0
+    private(set) var rejectedPackets = 0
+    private(set) var peerEpoch: UUID?
+    private(set) var bufferedSamples = 0
+    var demandChanged: (() -> Void)?
+    var presentationChanged: (() -> Void)?
+    var needsReader: Bool { enabled && connected }
+    private var send: ((Data) -> Bool)?
+    private var sequence: UInt64 = 0
+    private var lastSent: TimeInterval?
+    private var lastReceived: TimeInterval?
+    private var lastSequence: UInt64 = 0
+    private var lastSenderTime: TimeInterval?
+    private var clockOffset: TimeInterval?
+    private var retired: [UUID] = []
+    private var proposedPeer: UUID?
+    private var proposalAt: TimeInterval?
+    private var localPose: BoundPresencePose?
+    private var romVerified = false
+    private var localAt: TimeInterval?
+    private struct Sample { let time: TimeInterval; let pose: BoundPresencePose }
+    private var samples: [Sample] = []
+
+    func setEnabled(_ value: Bool) {
+        guard value != enabled else { return }
+        enabled = value; resetTimeline()
+        updateStatus(); demandChanged?(); presentationChanged?()
+        // Disabled peers explicitly withdraw their last sprite, best effort.
+        if !value { publish(at: ProcessInfo.processInfo.systemUptime, force: true) }
+    }
+    func start(send: @escaping (Data) -> Bool) {
+        self.send = send; connected = true; resetTimeline()
+        updateStatus(); demandChanged?(); presentationChanged?()
+    }
+    func stop() {
+        localPose = nil
+        if connected && enabled { publish(at: ProcessInfo.processInfo.systemUptime, force: true) }
+        connected = false; send = nil; resetTimeline()
+        updateStatus(); demandChanged?(); presentationChanged?()
+    }
+    func invalidateLocal() {
+        resetTimeline(); updateStatus(); presentationChanged?()
+    }
+    func peerGone() {
+        resetTimeline(); updateStatus(); presentationChanged?()
+    }
+    private func resetTimeline() {
+        epoch = UUID(); sequence = 0; lastSent = nil
+        localPose = nil; localAt = nil
+        peerEpoch = nil; proposedPeer = nil; proposalAt = nil; clearPeer()
+    }
+    private func clearPeer() {
+        samples.removeAll(keepingCapacity: true); bufferedSamples = 0
+        lastReceived = nil; lastSequence = 0; lastSenderTime = nil; clockOffset = nil
+    }
+    private func restartHandshakeKeepingLocal() {
+        let local = localPose, at = localAt
+        resetTimeline(); localPose = local; localAt = at
+    }
+
+    func consume(_ reading: BoundPlayerStateReading, at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        localPose = needsReader && romVerified ? BoundPresencePose(reading: reading) : nil
+        localAt = now
+        if localPose == nil { presentationChanged?() }
+    }
+    func setROMVerified(_ value: Bool) {
+        guard value != romVerified else { return }
+        romVerified = value; invalidateLocal()
+    }
+
+    func tick(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard connected, now.isFinite, now >= 0 else { return }
+        if let proposalAt, now - proposalAt > 0.3 { proposedPeer = nil; self.proposalAt = nil }
+        if let lastReceived, now - lastReceived > Self.timeout {
+            // A new challenge prevents queued pre-timeout poses reviving a peer.
+            restartHandshakeKeepingLocal()
+            setStatus("Waiting for fresh friend presence"); presentationChanged?()
+        }
+        guard enabled else { return }
+        publish(at: now)
+    }
+    private func publish(at now: TimeInterval, force: Bool = false) {
+        guard connected, let send, force || lastSent.map({ now - $0 >= Self.interval - 0.0001 }) ?? true else { return }
+        lastSent = now; sequence &+= 1
+        let fresh = enabled && localAt.map { now - $0 <= 0.5 } ?? false
+        let packet = BoundPresencePacket(version: 1,
+            rom: romVerified ? BoundPlayerROMProfile.supportedSHA256 : String(repeating: "0", count: 64),
+            sender: epoch, receiver: proposedPeer ?? peerEpoch, sequence: sequence, time: now, pose: fresh ? localPose : nil)
+        guard let data = packet.encoded() else { return }
+        if send(data) { sentPackets += 1 }
+        else { setStatus("Live sprite transport unavailable") }
+    }
+
+    func receive(_ data: Data, at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard enabled, connected, now.isFinite, now >= 0,
+              let packet = BoundPresencePacket.decode(data) else { rejectedPackets += 1; return }
+        guard packet.sender != epoch, packet.receiver == nil || packet.receiver == epoch,
+              !retired.contains(packet.sender) else { rejectedPackets += 1; return }
+        guard packet.rom == BoundPlayerROMProfile.supportedSHA256 else {
+            if packet.receiver == nil, peerEpoch != nil, packet.sender != peerEpoch {
+                rejectedPackets += 1; return
+            }
+            restartHandshakeKeepingLocal()
+            setStatus(packet.rom == String(repeating: "0", count: 64) ? "Friend reader is not ready" : "Friend ROM is incompatible")
+            presentationChanged?(); return
+        }
+        if packet.receiver == nil {
+            // A delayed hello must not retire an already verified live peer.
+            // Acknowledge one short-lived proposal; replace the peer only after
+            // that sender acknowledges our current challenge in return.
+            if packet.sender != peerEpoch, proposedPeer == nil {
+                proposedPeer = packet.sender; proposalAt = now
+            }
+            if samples.isEmpty { setStatus("Checking friend session") }
+            return
+        }
+        if peerEpoch != packet.sender {
+            if let peerEpoch { retired.append(peerEpoch); if retired.count > 16 { retired.removeFirst() } }
+            peerEpoch = packet.sender; clearPeer()
+        }
+        if proposedPeer == packet.sender { proposedPeer = nil; proposalAt = nil }
+        guard packet.sequence > lastSequence, lastSenderTime.map({ packet.time > $0 }) ?? true else {
+            rejectedPackets += 1; return
+        }
+        let offset = min(clockOffset ?? (now - packet.time), now - packet.time)
+        guard now - packet.time - offset <= 0.3 else { rejectedPackets += 1; return }
+        clockOffset = offset; lastSequence = packet.sequence; lastSenderTime = packet.time; lastReceived = now
+        receivedPackets += 1
+        guard let pose = packet.pose else {
+            samples.removeAll(keepingCapacity: true); bufferedSamples = 0
+            setStatus("Friend sprite unavailable or paused"); presentationChanged?(); return
+        }
+        if let previous = samples.last, !Self.continuous(previous.pose, pose)
+            || packet.time - previous.time > 0.2 { samples.removeAll(keepingCapacity: true) }
+        samples.append(.init(time: packet.time, pose: pose))
+        if samples.count > 8 { samples.removeFirst(samples.count - 8) }
+        bufferedSamples = samples.count; setStatus("Receiving live friend sprite")
+    }
+
+    func pose(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundPresencePose? {
+        guard needsReader, let lastReceived, now - lastReceived <= Self.timeout,
+              let offset = clockOffset, let first = samples.first, let last = samples.last else { return nil }
+        let target = now - offset - 0.1
+        if target <= first.time { return first.pose }
+        for index in 1..<samples.count where target <= samples[index].time {
+            let a = samples[index - 1], b = samples[index]
+            guard Self.continuous(a.pose, b.pose), b.time - a.time <= 0.2 else { return nil }
+            var pose = a.pose
+            let fraction = (target - a.time) / (b.time - a.time)
+            pose.x += (b.pose.x - pose.x) * fraction; pose.y += (b.pose.y - pose.y) * fraction
+            return pose
+        }
+        return target - last.time <= 0.25 ? last.pose : nil
+    }
+    private static func continuous(_ a: BoundPresencePose, _ b: BoundPresencePose) -> Bool {
+        a.mapGroup == b.mapGroup && a.mapNumber == b.mapNumber && a.elevation == b.elevation
+        && abs(a.x - b.x) + abs(a.y - b.y) <= 32
+    }
+    private func updateStatus() {
+        setStatus(!enabled ? "Live sprites are off" : connected ? "Waiting for friend presence" : "Connect to your friend in Friends")
+    }
+    private func setStatus(_ value: String) { if status != value { status = value } }
+}
+
+struct BoundLivePresenceControls: View {
+    @ObservedObject var session: BoundLivePresenceSession
+    var body: some View {
+        Section("Live player sprites") {
+            Toggle("Show friend on map", isOn: Binding(get: { session.enabled }, set: { session.setEnabled($0) }))
+                .accessibilityIdentifier("bound.live-presence-enabled")
+            Text(session.status).font(.footnote).foregroundStyle(.secondary)
+                .accessibilityIdentifier("bound.live-presence-status")
+            Text("Connect in Friends and enable this on both devices. Requires the supported Radical Red ROM and on-foot gameplay. Each player keeps their own save and progress.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+}
