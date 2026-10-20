@@ -667,7 +667,8 @@ final class BoundCompanionCoordinator {
         if let controls { owner.view.bringSubviewToFront(controls) }
     }
     func controllerMenuFrame(defaultFrame: CGRect, canvas: CGRect) -> CGRect? {
-        guard landscapeArrangement.movableControllerButtons else { return nil }
+        guard landscapeArrangement.movableControllerButtons,
+              landscapeArrangement.controllerModeEnabled || landscapeArrangement.hasButtonPlacement(.menu) else { return nil }
         return landscapeArrangement.controllerButtonFrame(.menu, defaultFrame: defaultFrame, canvas: canvas)
     }
 
@@ -678,8 +679,8 @@ final class BoundCompanionCoordinator {
         geometry = nil
         let canvas = owner.view.bounds.inset(by: owner.view.safeAreaInsets)
         let native = owner.controllerView.controlHitFrames.map { owner.controllerView.convert($0, to: owner.view) }
-        let buttonDefaults = landscapeArrangement.movableControllerButtons ? owner.boundControllerModeButtonDefaults() : nil
-        let menuFrame = buttonDefaults?[.menu] ?? owner.controllerView.convert(menu.frame.applying(.init(scaleX: owner.controllerView.bounds.width,
+        let buttonDefaults = landscapeArrangement.controllerModeEnabled ? owner.boundControllerModeButtonDefaults() : nil
+        let menuFrame = buttonDefaults?[.menu] ?? owner.boundLandscapeTouchMenuDefaultFrame() ?? owner.controllerView.convert(menu.frame.applying(.init(scaleX: owner.controllerView.bounds.width,
                                                                               y: owner.controllerView.bounds.height)), to: owner.view)
         let occupied = native + (controls.isHidden ? [] : [controls.frame])
         let game = owner.gameView.convert(owner.gameView.bounds, to: owner.view).intersection(canvas)

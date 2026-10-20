@@ -1040,6 +1040,49 @@ final class StockControlAndGestureTests: XCTestCase {
         XCTAssertEqual(mode2Menu.extendedFrame, customFrame)
     }
 
+    func testPlacedLandscapeMenuFrameMovesOnlyMenuArtworkAndTouchTarget() throws {
+        let base = try XCTUnwrap(DeltaCore.ControllerSkin.standardControllerSkin(for: System.gba.gameType))
+        let traits = DeltaCore.ControllerSkin.Traits(device: .iphone, displayType: .edgeToEdge, orientation: .landscape)
+        let size = CGSize(width: 844, height: 390)
+        let source = CGRect(origin: .zero, size: size)
+        let original = try XCTUnwrap(base.items(for: traits))
+        let menu = try XCTUnwrap(original.first { $0.inputs.allInputs.contains { $0.stringValue == "menu" } })
+        let aButton = try XCTUnwrap(original.first { $0.inputs.allInputs.contains { $0.stringValue == "a" } })
+        let placement = BoundControlLayout(positions: [
+            aButton.id: .init(x: 0.22, y: 0.72, scale: 1.1),
+            menu.id: .init(x: 0.92, y: 0.15, scale: 1.2)
+        ])
+        let normallyPlaced = BoundPlacedControllerSkin(base: base, layout: placement, canvasSize: size, sourceFrame: source)
+        let destination = CGRect(x: 118, y: 286, width: 44, height: 44)
+        let withMovedMenu = BoundPlacedControllerSkin(base: base, layout: placement, canvasSize: size,
+            sourceFrame: source, menuFrame: destination)
+        let normalItems = try XCTUnwrap(normallyPlaced.items(for: traits))
+        let movedItems = try XCTUnwrap(withMovedMenu.items(for: traits))
+        let movedMenu = try XCTUnwrap(movedItems.first { $0.id == menu.id })
+        let normalizedDestination = destination.applying(.init(scaleX: 1 / size.width, y: 1 / size.height))
+
+        XCTAssertEqual(movedMenu.frame, normalizedDestination)
+        XCTAssertEqual(movedMenu.extendedFrame, normalizedDestination)
+        XCTAssertEqual(movedMenu.inputs.allInputs.map(\.stringValue), menu.inputs.allInputs.map(\.stringValue))
+        for item in normalItems where item.id != menu.id {
+            let actual = try XCTUnwrap(movedItems.first { $0.id == item.id })
+            XCTAssertEqual(actual.frame, item.frame, "Only Menu artwork should move.")
+            XCTAssertEqual(actual.extendedFrame, item.extendedFrame, "Other touch targets should keep their placement.")
+            XCTAssertEqual(actual.inputs.allInputs.map(\.stringValue), item.inputs.allInputs.map(\.stringValue))
+        }
+        XCTAssertNotEqual(normallyPlaced.identifier, withMovedMenu.identifier,
+                          "The menu override must participate in the controller skin identity.")
+
+        let controller = ControllerView(frame: CGRect(origin: .zero, size: size))
+        controller.overrideControllerSkinTraits = traits
+        controller.usesControlOnlyHitTesting = true
+        controller.controllerSkin = withMovedMenu
+        XCTAssertTrue(controller.controlHitFrames.contains {
+            abs($0.minX - destination.minX) < 0.001 && abs($0.minY - destination.minY) < 0.001
+                && abs($0.width - destination.width) < 0.001 && abs($0.height - destination.height) < 0.001
+        }, "The moved menu hit target must follow its native artwork destination.")
+    }
+
     func testControllerModeRetainsActualMenuAndRestoresNativeTreeAfterRotationAndOff() throws {
         let base = try XCTUnwrap(DeltaCore.ControllerSkin.standardControllerSkin(for: System.gba.gameType))
         let landscape = DeltaCore.ControllerSkin.Traits(device: .iphone, displayType: .edgeToEdge, orientation: .landscape)

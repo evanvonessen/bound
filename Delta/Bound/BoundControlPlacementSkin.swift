@@ -8,13 +8,19 @@ final class BoundPlacedControllerSkin: ControllerSkinProtocol {
     let canvasSize: CGSize
     /// Original native controller rectangle inside the full customization canvas.
     let sourceFrame: CGRect
+    /// Optional Menu artwork and touch target in screen points within `canvasSize`.
+    let menuFrame: CGRect?
     let identifier: String
-    init(base: ControllerSkinProtocol, layout: BoundControlLayout, canvasSize: CGSize, sourceFrame: CGRect? = nil) {
+    init(base: ControllerSkinProtocol, layout: BoundControlLayout, canvasSize: CGSize,
+         sourceFrame: CGRect? = nil, menuFrame: CGRect? = nil) {
         self.base = base; self.layout = layout; self.canvasSize = canvasSize
         self.sourceFrame = sourceFrame ?? CGRect(origin: .zero, size: canvasSize)
+        self.menuFrame = menuFrame
         let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
         let encoded = (try? encoder.encode(layout))?.base64EncodedString() ?? "default"
-        self.identifier = base.identifier + ".bound-placement." + encoded + "." + String(describing: canvasSize) + "." + String(describing: self.sourceFrame)
+        let placementIdentity = base.identifier + ".bound-placement." + encoded + "." + String(describing: canvasSize)
+            + "." + String(describing: self.sourceFrame)
+        self.identifier = placementIdentity + (menuFrame.map { ".menu." + String(describing: $0) } ?? "")
     }
     var name: String { base.name }
     var gameType: GameType { base.gameType }
@@ -23,10 +29,16 @@ final class BoundPlacedControllerSkin: ControllerSkinProtocol {
     func supportedTraits(for traits: DeltaCore.ControllerSkin.Traits) -> DeltaCore.ControllerSkin.Traits? { base.supportedTraits(for: traits) }
     func items(for traits: DeltaCore.ControllerSkin.Traits) -> [DeltaCore.ControllerSkin.Item]? {
         guard canvasSize.width > 0, canvasSize.height > 0 else { return base.items(for: traits) }
-        if layout.positions.isEmpty && sourceFrame == CGRect(origin: .zero, size: canvasSize) { return base.items(for: traits) }
+        if layout.positions.isEmpty && menuFrame == nil && sourceFrame == CGRect(origin: .zero, size: canvasSize) { return base.items(for: traits) }
         return base.items(for: traits)?.map { item in
             guard item.kind == .button || item.kind == .dPad else { return item }
             var result = item
+            if Self.isMenu(item), let menuFrame {
+                let normalized = menuFrame.applying(.init(scaleX: 1 / canvasSize.width, y: 1 / canvasSize.height))
+                result.frame = normalized
+                result.extendedFrame = normalized
+                return result
+            }
             let source = item.frame.applying(.init(scaleX: sourceFrame.width, y: sourceFrame.height)).offsetBy(dx: sourceFrame.minX, dy: sourceFrame.minY)
             let destination = layout.frame(id: item.id, base: source, canvas: canvasSize, directional: item.kind == .dPad)
             result.frame = destination.applying(.init(scaleX: 1 / canvasSize.width, y: 1 / canvasSize.height))
@@ -38,9 +50,12 @@ final class BoundPlacedControllerSkin: ControllerSkinProtocol {
             return result
         }
     }
+    private static func isMenu(_ item: DeltaCore.ControllerSkin.Item) -> Bool {
+        item.inputs.allInputs.contains { $0.stringValue == "menu" }
+    }
     private func composite(_ source: UIImage?, traits: DeltaCore.ControllerSkin.Traits, size: DeltaCore.ControllerSkin.Size) -> UIImage? {
         guard let source, let original = base.items(for: traits), let moved = items(for: traits) else { return source }
-        if layout.positions.isEmpty && sourceFrame == CGRect(origin: .zero, size: canvasSize) { return source }
+        if layout.positions.isEmpty && menuFrame == nil && sourceFrame == CGRect(origin: .zero, size: canvasSize) { return source }
         guard canvasSize.width > 0, canvasSize.height > 0 else { return source }
         // Render a transparent full viewport; native PDF controls are drawn separately
         // by ControllerView. Flat artwork gets the identical item-frame transform.

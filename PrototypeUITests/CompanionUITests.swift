@@ -2860,6 +2860,133 @@ final class CompanionUITests: XCTestCase {
         assertSettingsCloseAtTop(in: app)
     }
 
+    func testLandscapeArrangeViewsUsesTheDefaultGridWithControllerModeOff() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer {
+            XCUIDevice.shared.orientation = .portrait
+            for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) }
+        }
+
+        let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture",
+                                       "--bound-ui-no-animations", "--bound-ui-screen-layout-bound"])
+        defer { app.terminate() }
+
+        openBoundSettings(in: app)
+        let controllerMode = app.switches["bound.controller-mode-enabled"]
+        XCTAssertEqual(controllerMode.value as? String, "0", "Controller Mode starts Off in the reset fixture.")
+        let settingsSpacing = app.sliders["bound.button-grid-spacing"]
+        scrollToSetting(settingsSpacing, in: app)
+        XCTAssertTrue(settingsSpacing.waitForExistence(timeout: 5))
+        settingsSpacing.adjust(toNormalizedSliderPosition: 1)
+        XCTAssertEqual(settingsSpacing.value as? String, "48 points")
+        closeBoundSheet(in: app)
+
+        XCTAssertTrue(element("bound.native-r", in: app).waitForExistence(timeout: 5),
+                      "Landscape arrangement settings do not disable portrait touch controls.")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(element("bound.landscape7-tabs", in: app).waitForExistence(timeout: 10))
+        openNativePause(in: app)
+        let arrange = app.buttons["bound.menu-arrange-views"]
+        XCTAssertTrue(arrange.waitForExistence(timeout: 5)); arrange.tap()
+
+        let next = app.buttons["bound.landscape7-next"]
+        if next.waitForExistence(timeout: 8) { next.tap() }
+        let done = app.buttons["bound.landscape7-done"]
+        let snapping = app.buttons["bound.arrange-buttons.distance-snapping"]
+        let spacing = app.sliders["bound.arrange-buttons.grid-spacing"]
+        XCTAssertTrue(done.waitForExistence(timeout: 8), "Arrange Views exposes the common button placement phase while Controller Mode is Off.")
+        XCTAssertTrue(snapping.waitForExistence(timeout: 5))
+        XCTAssertEqual(snapping.value as? String, "On", "The distance grid is enabled by default in Controller Mode Off.")
+        XCTAssertTrue(spacing.waitForExistence(timeout: 5), "Controller Mode Off uses the same visible spacing slider.")
+        XCTAssertEqual(spacing.value as? String, "48 points", "The arrange window uses the spacing configured in Controls.")
+
+        let buttonNames = ["menu", "friend", "multiview"]
+        let gridSpacing: CGFloat = 48
+        var savedFrames: [String: CGRect] = [:]
+        for (index, name) in buttonNames.enumerated() {
+            let button = element("bound.controller-button-move." + name, in: app)
+            XCTAssertTrue(button.waitForExistence(timeout: 5), "The \(name) button can be moved with Controller Mode Off.")
+            let start = button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let target = app.coordinate(withNormalizedOffset: CGVector(dx: CGFloat(index + 1) * 0.25, dy: 0.72))
+            start.press(forDuration: 0.1, thenDragTo: target)
+            let moved = element("bound.controller-button-move." + name, in: app)
+            savedFrames[name] = moved.frame
+            XCTAssertTrue(moved.frame.midY.isFinite)
+            for offset in [moved.frame.midX - app.frame.midX, moved.frame.midY - app.frame.midY] {
+                XCTAssertEqual(offset / gridSpacing, (offset / gridSpacing).rounded(), accuracy: 0.08,
+                               "The \(name) button snaps to the center-aligned grid.")
+            }
+        }
+        done.tap()
+        XCTAssertTrue(done.waitForNonExistence(timeout: 5))
+
+        // Change the Controller Mode On arrangement, then make sure those edits
+        // do not replace the placements saved above with Controller Mode Off.
+        openNativePause(in: app)
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(app.buttons["bound.settings-controls"].waitForExistence(timeout: 5))
+        app.buttons["bound.settings-controls"].tap()
+        XCTAssertTrue(controllerMode.waitForExistence(timeout: 5))
+        controllerMode.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(controllerMode.value as? String, "1")
+        closeBoundSheet(in: app)
+        openNativePause(in: app)
+        XCTAssertTrue(app.buttons["bound.menu-arrange-views"].waitForExistence(timeout: 5))
+        app.buttons["bound.menu-arrange-views"].tap()
+        if next.waitForExistence(timeout: 8) { next.tap() }
+        XCTAssertTrue(done.waitForExistence(timeout: 8))
+        XCTAssertEqual(snapping.value as? String, "On")
+        let plus = app.buttons["bound.arrange-buttons.plus"]
+        for name in ["friend", "multiview"] where !element("bound.controller-button-move." + name, in: app).exists {
+            plus.tap()
+            let addButton = element("bound.arrange-buttons.add." + name, in: app)
+            XCTAssertTrue(addButton.waitForExistence(timeout: 5))
+            addButton.tap()
+            XCTAssertTrue(element("bound.controller-button-move." + name, in: app).waitForExistence(timeout: 5))
+        }
+        for (index, name) in buttonNames.enumerated() {
+            let button = element("bound.controller-button-move." + name, in: app)
+            let start = button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let target = app.coordinate(withNormalizedOffset: CGVector(dx: CGFloat(index + 1) * 0.25, dy: 0.38))
+            start.press(forDuration: 0.1, thenDragTo: target)
+        }
+        for name in buttonNames {
+            XCTAssertTrue(element("bound.controller-button-move." + name, in: app).exists)
+        }
+        done.tap()
+
+        openNativePause(in: app)
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(app.buttons["bound.settings-controls"].waitForExistence(timeout: 5))
+        app.buttons["bound.settings-controls"].tap()
+        XCTAssertTrue(controllerMode.waitForExistence(timeout: 5))
+        controllerMode.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertEqual(controllerMode.value as? String, "0")
+        closeBoundSheet(in: app)
+        openNativePause(in: app)
+        app.buttons["bound.menu-arrange-views"].tap()
+        if next.waitForExistence(timeout: 8) { next.tap() }
+        XCTAssertTrue(done.waitForExistence(timeout: 8))
+        XCTAssertEqual(snapping.value as? String, "On")
+        for name in buttonNames {
+            let button = element("bound.controller-button-move." + name, in: app)
+            let savedFrame = try XCTUnwrap(savedFrames[name])
+            XCTAssertEqual(button.frame.midX, savedFrame.midX, accuracy: 1,
+                           "Controller Mode On keeps a separate layout from the saved Off \(name) placement.")
+            XCTAssertEqual(button.frame.midY, savedFrame.midY, accuracy: 1)
+        }
+        done.tap()
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(element("bound.native-r", in: app).waitForExistence(timeout: 10),
+                      "Controller Mode Off leaves portrait touch controls visible after landscape editing.")
+    }
+
     func testControllerModeArrangeViewsUsesTwoPhasesAndRestoresRemovedButtons() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
@@ -2981,11 +3108,7 @@ final class CompanionUITests: XCTestCase {
         XCTAssertFalse(app.buttons["bound.arrange-buttons.spread"].exists)
         let snapping = app.buttons["bound.arrange-buttons.distance-snapping"]
         XCTAssertTrue(snapping.waitForExistence(timeout: 5))
-        XCTAssertEqual(snapping.value as? String, "Off")
-        let beforeToggle = friend.frame
-        snapping.tap()
-        XCTAssertEqual(snapping.value as? String, "On")
-        XCTAssertEqual(friend.frame, beforeToggle, "Enabling the grid does not move existing buttons.")
+        XCTAssertEqual(snapping.value as? String, "On", "The distance grid is enabled by default in Controller Mode On.")
         let buttonIDs = ["friend", "multiview", "menu"]
         for (index, name) in buttonIDs.enumerated() {
             let button = element("bound.controller-button-move." + name, in: app)

@@ -212,7 +212,7 @@ enum BoundConfigurationExport {
         values[BoundControllerModePreferences.key] = BoundControllerModePreferences(defaults: defaults).isEnabled
         values[BoundControllerNavigationPreferences.key] = BoundControllerNavigationPreferences(defaults: defaults).isEnabled
         values[BoundControllerMultiviewPreferences.key] = BoundControllerMultiviewPreferences(defaults: defaults).isEnabled
-        values[BoundControllerButtonGridPreferences.enabledKey] = defaults.bool(forKey: BoundControllerButtonGridPreferences.enabledKey)
+        values[BoundControllerButtonGridPreferences.enabledKey] = BoundControllerButtonGridPreferences.isEnabled(in: defaults)
         values[BoundControllerButtonGridPreferences.spacingKey] = Double(BoundControllerButtonGridPreferences.spacing(in: defaults))
         values[BoundCompanionButtonPreferences.key] = BoundCompanionButtonPreferences(defaults: defaults).buttonType.rawValue
         values[BoundReferenceLayoutPreferences.bossKey] = 12
@@ -243,7 +243,8 @@ enum BoundConfigurationExport {
         values["bound.landscape.v1.friend-placement"] = try JSONEncoder().encode(landscape.friendPlacement)
         for namespace in ["bound.landscape", "bound.landscape.controller-unified"] {
             values[namespace + ".game-screen.v1"] = try JSONEncoder().encode(BoundControllerGamePlacement())
-            values[namespace + ".buttons.v1"] = try JSONEncoder().encode(BoundControllerButtonPlacement())
+            let visibleButtons: Set<BoundControllerButton> = namespace == "bound.landscape" ? Set(BoundControllerButton.allCases) : [.menu]
+            values[namespace + ".buttons.v1"] = try JSONEncoder().encode(BoundControllerButtonPlacement(visibleButtons: visibleButtons))
         }
         return values
     }

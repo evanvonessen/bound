@@ -26,10 +26,11 @@ guide or label with haptic feedback. **Next** opens companion view and button
 placement; **Done** saves both steps. Cancel or an interrupted editing session
 discards both steps. Controller Mode on and off retain separate arrangements.
 
-In Controller Mode, drag Friend or Multiview onto the trash target to remove its
+In landscape with Controller Mode on or off, drag Friend or Multiview onto the trash target to remove its
 button. The adjacent **+** opens a tray: tap a button to restore its position or
 drag it directly onto the screen. Menu can move but cannot be removed. All three
-buttons move freely with **Distance Snapping** off. With it on, their centers
+buttons move freely with **Distance Snapping** off. It is on by default in both
+modes; an explicitly saved off choice is preserved. With it on, their centers
 snap to a square grid anchored at the screen center, so equal offsets on either
 side are symmetric. **Settings → Controls → Button Grid Spacing** adjusts the
 increment from 6 to 48 points; the default is 18 points (roughly 3 mm on iPhones).

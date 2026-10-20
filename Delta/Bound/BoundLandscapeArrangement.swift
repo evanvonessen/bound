@@ -36,7 +36,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     @Published private(set) var gameFullSize = false
     @Published private(set) var buttonOverTrash = false
     @Published var showingButtonTray = false
-    @Published private(set) var distanceSnappingEnabled = false
+    @Published private(set) var distanceSnappingEnabled = true
     @Published private(set) var buttonGridSpacing: CGFloat = BoundControllerButtonGridPreferences.defaultSpacing
     private var savedGame = BoundControllerGamePlacement()
     private var draftGame: BoundControllerGamePlacement?
@@ -185,7 +185,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     var placementShortcuts: Bool { option == .option5 }
     var focusedHandles: Bool { refined || placementShortcuts }
     var multiview: Bool { option == .option6 || option == .option7 }
-    var movableControllerButtons: Bool { active && controllerModeEnabled && multiview }
+    var movableControllerButtons: Bool { active && multiview }
     var menuOnlyControllerMode: Bool { controllerModeEnabled && !isButtonVisible(.friend) && !isButtonVisible(.multiview) }
     var tabbedMultiview: Bool { option == .option7 }
     var accessibilityPrefix: String { "bound.landscape\(option.rawValue)" }
@@ -204,7 +204,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         self.referenceVisible = self.defaults.object(forKey: namespace + ".option3.reference-visible") as? Bool ?? true
         self.referenceContent = Self.readContent(self.defaults, key: namespace + ".option3.reference-content", allowed: contents) ?? contents.first ?? .notes
         self.selected = self.referenceContent
-        self.distanceSnappingEnabled = self.defaults.bool(forKey: BoundControllerButtonGridPreferences.enabledKey)
+        self.distanceSnappingEnabled = BoundControllerButtonGridPreferences.isEnabled(in: self.defaults)
         self.buttonGridSpacing = BoundControllerButtonGridPreferences.spacing(in: self.defaults)
         migrateControllerModeArrangements()
         migrateUnifiedControllerArrangement()
@@ -258,7 +258,8 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         selected = referenceContent
         readPlacements()
         savedGame = defaults.data(forKey: gamePlacementKey).flatMap { try? JSONDecoder().decode(BoundControllerGamePlacement.self, from: $0) } ?? .init()
-        savedButtons = defaults.data(forKey: buttonPlacementKey).flatMap { try? JSONDecoder().decode(BoundControllerButtonPlacement.self, from: $0) } ?? .init()
+        savedButtons = defaults.data(forKey: buttonPlacementKey).flatMap { try? JSONDecoder().decode(BoundControllerButtonPlacement.self, from: $0) }
+            ?? BoundControllerButtonPlacement(visibleButtons: controllerModeEnabled ? [.menu] : Set(BoundControllerButton.allCases))
         layoutInput = nil
         needsLayout?()
     }
@@ -348,7 +349,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         finish(save: false, resume: false)
         self.controllerModeEnabled = controllerModeEnabled
         self.controllerModeLayout = .mode1
-        distanceSnappingEnabled = defaults.bool(forKey: BoundControllerButtonGridPreferences.enabledKey)
+        distanceSnappingEnabled = BoundControllerButtonGridPreferences.isEnabled(in: defaults)
         buttonGridSpacing = BoundControllerButtonGridPreferences.spacing(in: defaults)
         // Recreate the same Option 3 source snapshot used by a fresh session.
         // Otherwise a reset of Option 6/7 skips their initialization and derives
@@ -568,13 +569,20 @@ final class BoundLandscapeArrangementModel: ObservableObject {
 
     func arrange() {
         guard active, !editing, beginArrangement?() ?? true else { return }
-        distanceSnappingEnabled = defaults.bool(forKey: BoundControllerButtonGridPreferences.enabledKey)
+        distanceSnappingEnabled = BoundControllerButtonGridPreferences.isEnabled(in: defaults)
         buttonGridSpacing = BoundControllerButtonGridPreferences.spacing(in: defaults)
         beforeSwitch?()
         selectionBeforeArrangement = referenceContent
         selected = contents.isEmpty ? .friend : referenceContent
         draft = saved
         draftButtons = savedButtons
+        // Freeze every button's current fallback before any drag can change
+        // the native Menu/cycle-button layout used to derive those defaults.
+        if movableControllerButtons, let canvas = layoutInput?.canvas {
+            for button in BoundControllerButton.allCases where draftButtons?.positions[button] == nil {
+                draftButtons?.set(frame: buttonFrame(button), for: button, canvas: canvas)
+            }
+        }
         draftGame = savedGame
         editingPhase = .gameScreen
         showingButtonTray = false
@@ -702,7 +710,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     }
 
     func isButtonVisible(_ button: BoundControllerButton) -> Bool {
-        !controllerModeEnabled || (draftButtons ?? savedButtons).isVisible(button)
+        !multiview || (draftButtons ?? savedButtons).isVisible(button)
     }
 
     var visibleControllerButtons: [BoundControllerButton] { BoundControllerButton.allCases.filter { isButtonVisible($0) } }
@@ -800,6 +808,10 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     func controllerButtonFrame(_ button: BoundControllerButton, defaultFrame: CGRect, canvas: CGRect) -> CGRect {
         guard movableControllerButtons else { return defaultFrame }
         return (draftButtons ?? savedButtons).frame(for: button, defaultFrame: defaultFrame, canvas: canvas)
+    }
+
+    func hasButtonPlacement(_ button: BoundControllerButton) -> Bool {
+        movableControllerButtons && (draftButtons ?? savedButtons).positions[button] != nil
     }
 
     func buttonFrame(_ button: BoundControllerButton) -> CGRect {

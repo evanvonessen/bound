@@ -12,9 +12,15 @@ enum BoundControllerButton: String, CaseIterable, Codable, Sendable {
 enum BoundControllerButtonGridPreferences {
     static let enabledKey = "bound.controller-button-grid.enabled"
     static let spacingKey = "bound.controller-button-grid.spacing"
+    static let defaultEnabled = true
     static let defaultSpacing: CGFloat = 18
     static let minimumSpacing: CGFloat = 6
     static let maximumSpacing: CGFloat = 48
+
+    /// Unset installs use the grid. An explicit saved false remains an opt-out.
+    static func isEnabled(in defaults: UserDefaults = .standard) -> Bool {
+        (defaults.object(forKey: enabledKey) as? Bool) ?? defaultEnabled
+    }
 
     static func spacing(in defaults: UserDefaults = .standard) -> CGFloat {
         let stored = defaults.object(forKey: spacingKey) as? NSNumber

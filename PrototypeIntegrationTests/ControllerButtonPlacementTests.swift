@@ -183,6 +183,7 @@ final class ControllerButtonPlacementTests: XCTestCase {
     func testUnifiedPlacementSavesReloadsCancelsAndResets() throws {
         let (model, defaults, namespace) = try makeModel()
         defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setDistanceSnappingEnabled(false)
         let key = namespace + ".controller-unified.buttons.v1"
         model.useOption(.option7, controllerModeEnabled: true, controllerModeLayout: .mode1)
         model.setActive(true)
@@ -254,7 +255,7 @@ final class ControllerButtonPlacementTests: XCTestCase {
         XCTAssertTrue(restored.isButtonVisible(.menu))
     }
 
-    func testUnifiedButtonPlacementOnlyAppliesWhenControllerModeAndLandscapeAreActive() throws {
+    func testControllerButtonPlacementsStaySeparateAndNeverApplyInPortrait() throws {
         let (model, defaults, namespace) = try makeModel()
         defer { defaults.removePersistentDomain(forName: namespace) }
         let moved = BoundControllerButtonPlacement(positions: [.menu: CGPoint(x: 0.1, y: 0.9)],
@@ -266,7 +267,9 @@ final class ControllerButtonPlacementTests: XCTestCase {
         model.useOption(.option7, controllerModeEnabled: false)
         model.setActive(true)
         arrangeLayout(model)
-        XCTAssertFalse(model.movableControllerButtons)
+        XCTAssertTrue(model.movableControllerButtons)
+        XCTAssertEqual(Set(model.visibleControllerButtons), Set(BoundControllerButton.allCases))
+        XCTAssertFalse(model.hasButtonPlacement(.menu), "Controller Mode On positions must not leak into Off.")
         XCTAssertEqual(model.controllerButtonFrame(.menu, defaultFrame: original, canvas: canvas), original)
         model.useOption(.option7, controllerModeEnabled: true)
         model.setActive(false) // Portrait must not apply saved landscape button geometry.
@@ -282,6 +285,7 @@ final class ControllerButtonPlacementTests: XCTestCase {
     func testArrangementGridTogglePersistsWithoutMovingButtonsUntilDragged() throws {
         let (model, defaults, namespace) = try makeModel()
         defer { defaults.removePersistentDomain(forName: namespace) }
+        model.setDistanceSnappingEnabled(false)
         model.useOption(.option7, controllerModeEnabled: true)
         model.setActive(true)
         arrangeLayout(model)
@@ -306,6 +310,59 @@ final class ControllerButtonPlacementTests: XCTestCase {
 
         model.setDistanceSnappingEnabled(false)
         XCTAssertFalse(defaults.bool(forKey: BoundControllerButtonGridPreferences.enabledKey))
+    }
+
+    func testLandscapeButtonsUseDefaultGridInBothModesAndSaveIndependently() throws {
+        let (model, defaults, namespace) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        var modeFrames: [Bool: [BoundControllerButton: CGRect]] = [:]
+        for enabled in [false, true] {
+            model.useOption(.option7, controllerModeEnabled: enabled)
+            model.setActive(true)
+            arrangeLayout(model)
+            model.arrange()
+            model.advanceArrangement()
+            XCTAssertTrue(model.distanceSnappingEnabled)
+            XCTAssertEqual(model.buttonGridSpacing, 18)
+            for (index, button) in BoundControllerButton.allCases.enumerated() {
+                model.restoreControllerButton(button)
+                let before = model.buttonFrame(button)
+                let target = CGPoint(x: 250 + CGFloat(index) * 150, y: enabled ? 160 : 250)
+                model.moveControllerButton(button, translation: CGSize(width: target.x - before.midX,
+                    height: target.y - before.midY), ended: true)
+                let frame = model.buttonFrame(button)
+                for offset in [frame.midX - 500, frame.midY - 300] {
+                    XCTAssertEqual(offset / 18, (offset / 18).rounded(), accuracy: 0.001)
+                }
+            }
+            modeFrames[enabled] = Dictionary(uniqueKeysWithValues: BoundControllerButton.allCases.map { ($0, model.buttonFrame($0)) })
+            model.finish(save: true)
+        }
+        let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+        for enabled in [false, true] {
+            restored.useOption(.option7, controllerModeEnabled: enabled)
+            restored.setActive(true)
+            arrangeLayout(restored)
+            for button in BoundControllerButton.allCases {
+                XCTAssertEqual(restored.buttonFrame(button), modeFrames[enabled]?[button])
+            }
+        }
+        restored.useOption(.option7, controllerModeEnabled: false)
+        arrangeLayout(restored)
+        restored.arrange()
+        restored.advanceArrangement()
+        restored.removeControllerButton(.friend)
+        restored.removeControllerButton(.menu)
+        XCTAssertFalse(restored.isButtonVisible(.friend))
+        XCTAssertTrue(restored.isButtonVisible(.menu))
+        restored.finish(save: true)
+        restored.reload(option: .option7, controllerModeEnabled: false)
+        XCTAssertFalse(restored.isButtonVisible(.friend))
+        restored.useOption(.option7, controllerModeEnabled: true)
+        XCTAssertTrue(restored.isButtonVisible(.friend))
+        restored.setActive(false)
+        XCTAssertFalse(restored.movableControllerButtons)
+        XCTAssertFalse(restored.hasButtonPlacement(.menu))
     }
 
     func testTrashRemovalPreservesButtonPlacementAndCannotRemoveMenu() throws {

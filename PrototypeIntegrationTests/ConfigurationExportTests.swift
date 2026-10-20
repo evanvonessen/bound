@@ -141,8 +141,16 @@ final class ConfigurationExportTests: XCTestCase {
         XCTAssertEqual(interface["landscapeOption"] as? Int, BoundLandscapeOption.option7.rawValue)
         XCTAssertEqual(interface["controllerModeEnabled"] as? Bool, false)
         XCTAssertEqual(settings["translucentControllerSkinOpacity"] as? Double, 0.7)
-        XCTAssertEqual(settings[BoundControllerButtonGridPreferences.enabledKey] as? Bool, false)
+        XCTAssertEqual(settings[BoundControllerButtonGridPreferences.enabledKey] as? Bool, true)
         XCTAssertEqual(settings[BoundControllerButtonGridPreferences.spacingKey] as? Double, 18)
+        for (group, namespace, visible) in [
+            ("controllerModeOff", "bound.landscape", Set(BoundControllerButton.allCases)),
+            ("controllerModeOn", "bound.landscape.controller-unified", Set([BoundControllerButton.menu]))
+        ] {
+            let buttons = try XCTUnwrap(preferences[group]?[namespace + ".buttons.v1"] as? [String: Any])
+            let placement = try JSONDecoder().decode(BoundControllerButtonPlacement.self, from: decodedData(buttons))
+            XCTAssertEqual(placement.visibleButtons, visible)
+        }
         XCTAssertEqual(settings["bound.delta.pip.v1.bosses.layout"] as? Int, 12)
         XCTAssertEqual(settings["bound.delta.pip.v1.dex.layout"] as? Int, 12)
         for content in BoundPiPContent.allCases {
@@ -153,6 +161,23 @@ final class ConfigurationExportTests: XCTestCase {
         XCTAssertEqual(defaults.dictionaryRepresentation().count, before.count,
                        "Reading fresh-install values for the export must not persist defaults into the user suite.")
         XCTAssertEqual(defaults.dictionaryRepresentation() as NSDictionary, before as NSDictionary)
+    }
+
+    func testGridExportDefaultsToEnabledAndHonorsExplicitOffPreference() throws {
+        let (defaults, suite) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        func exportedGridValue() throws -> Bool? {
+            let snapshot = try BoundConfigurationExport.snapshot(defaults: defaults, mappings: [])
+            let preferences = try XCTUnwrap(snapshot["preferences"] as? [String: [String: Any]])
+            let settings = try XCTUnwrap(preferences["settings"])
+            return settings[BoundControllerButtonGridPreferences.enabledKey] as? Bool
+        }
+
+        XCTAssertEqual(try exportedGridValue(), true)
+        defaults.set(false, forKey: BoundControllerButtonGridPreferences.enabledKey)
+        XCTAssertEqual(try exportedGridValue(), false)
+        XCTAssertFalse(BoundControllerButtonGridPreferences.isEnabled(in: defaults))
     }
 
     func testControllerMappingsExportAllSavedPlayersAndControllerTypesWithoutDatabaseIdentifiers() throws {
