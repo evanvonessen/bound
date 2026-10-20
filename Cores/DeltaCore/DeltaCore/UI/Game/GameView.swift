@@ -281,10 +281,8 @@ private extension GameView
             return CIContext(options: [.workingColorSpace: NSNull()])
         }
         
-        // Each emulated frame supplies new pixels. Retaining intermediates from
-        // previous frames adds memory pressure without helping the next render.
         let options: [CIContextOption: Any] = [.workingColorSpace: NSNull(),
-                                               .cacheIntermediates: false,
+                                               .cacheIntermediates: true,
                                                .name: "GameView Context"]
                 
         let context = CIContext(mtlCommandQueue: metalCommandQueue, options: options)

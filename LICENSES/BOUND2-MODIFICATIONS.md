@@ -13,7 +13,6 @@ Modifications include:
 - Native haptic preferences, Classic/Minimal appearance choices, accessibility/settings/import refinements and runtime core identity display.
 - Pinned, tracked dependency snapshots and generated build inputs, so ordinary Xcode Run does not require submodule initialization, Homebrew, pod install, preparation scripts or mogenerator.
 - Local build compatibility patches listed in PrototypePatches, including dependency framework signing separation. Dependencies build unsigned; the containing app signs embedded frameworks with the selected existing app team.
-- Streaming rendering disables Core Image intermediate caching for changing game frames; Friend capture resources initialize only when a frame is accepted for sharing.
 
 These modifications do not claim authorship of Delta, emulator engines, controller artwork or third-party SDKs. The source repository is public at https://github.com/evanvonessen/bound (verified 2026-10-04), following the user's visibility change. The app has not been certified for public/App Store distribution. Source/permission provenance, proprietary SDK compatibility, asset permissions and exact source-to-binary release matching/completeness remain review gates described in COMPLIANCE-READINESS.md and LICENSES/DEPENDENCY-INVENTORY.md.
 

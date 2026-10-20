@@ -99,10 +99,6 @@
     {
       "path": "PrototypePatches/rcheevos-30848fc5-build-cleanup.patch",
       "purpose": "Keep the pinned achievements package local, separate public headers from compile sources, exclude Windows-only integration from the Apple module, and validate uint32 game IDs."
-    },
-    {
-      "path": "PrototypePatches/deltacore-streaming-render-cache.patch",
-      "purpose": "Disable Core Image intermediate caching for continuously changing game frames; preserve upstream revisions and emulator algorithms."
     }
   ],
   "sha256": {
@@ -174,7 +170,7 @@
     "Cores/DeltaCore/DeltaCore/UI/Controller/ThumbstickInputView.swift": "1ffe2444f8297c0556b28b2a05f916aadb65df23f44372c8824ba61040b031ee",
     "Cores/DeltaCore/DeltaCore/UI/Controller/TouchControllerSkin.swift": "d62931f0142c85a7393ce5a1b32bba49c5af46abbd6d2e0dc2a0e46c07e7ac5c",
     "Cores/DeltaCore/DeltaCore/UI/Controller/TouchInputView.swift": "8cbf657f1caf3e32b3f8bbeea6a1e7caf9c4b1bf6e02fa54d2ad19b514eb9aa1",
-    "Cores/DeltaCore/DeltaCore/UI/Game/GameView.swift": "0df9b55093c437e6cd94d6f8c57a415834b8337d660093a7fad822fe69a427ce",
+    "Cores/DeltaCore/DeltaCore/UI/Game/GameView.swift": "de0af13f0d0e6aab5ed9a22a993173034f0a13d91cbec21d5982479b1e99ad9e",
     "Cores/DeltaCore/DeltaCore/UI/Game/GameViewController.swift": "1834da413eb1a47ddd9c6bd389437bfd2a7f1f6e0c574a984db6e811ca75e4cc",
     "Cores/DeltaCore/DeltaCore/UI/Game/GameWindow.swift": "86ff9b8f58276460ac75fdcf9dcfcde215b1e57679bbfc44f5f4b5131a146c4f",
     "Cores/DeltaCore/DeltaCore/include/DLTAMuteSwitchMonitor.h": "e9a1c981d8f71683e02f99670462cd4e5cc14ebce31c5f1ac3ddb772327249b7",
