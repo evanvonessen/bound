@@ -73,10 +73,6 @@ class WhatsNewViewController: UICollectionViewController
     override func viewDidLoad()
     {
         super.viewDidLoad()
-
-        self.registerForTraitChanges([UITraitVerticalSizeClass.self]) { (self: WhatsNewViewController, _) in
-            self.update()
-        }
         
         let layout = self.makeLayout()
         self.collectionView.collectionViewLayout = layout
@@ -185,6 +181,15 @@ class WhatsNewViewController: UICollectionViewController
         }
     }
     
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?)
+    {
+        super.traitCollectionDidChange(previousTraitCollection)
+        
+        if previousTraitCollection?.verticalSizeClass != self.traitCollection.verticalSizeClass
+        {
+            self.update()
+        }
+    }
 }
 
 private extension WhatsNewViewController

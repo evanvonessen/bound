@@ -383,41 +383,26 @@ private extension PreferredControllerSkinsViewController
         self.portraitTraits = portraitTraits
         self.landscapeTraits = landscapeTraits
         
-        // Snapshot the UI/context values before moving image decoding to the
-        // background context. DeltaCore's traits are reconstructed on that queue.
-        let portraitSkinID = portraitControllerSkin?.objectID
-        let landscapeSkinID = landscapeControllerSkin?.objectID
-        let portraitValues = (device: portraitTraits.device.rawValue, display: portraitTraits.displayType.rawValue, orientation: portraitTraits.orientation.rawValue)
-        let landscapeValues = (device: landscapeTraits.device.rawValue, display: landscapeTraits.displayType.rawValue, orientation: landscapeTraits.orientation.rawValue)
-        let preferredSizeValue = UIScreen.main.defaultControllerSkinSize.rawValue
-
         self.loadingTask = Task<Void, Never> {
             let (portraitImage, landscapeImage) = await withCheckedContinuation { continuation in
                 DatabaseManager.shared.performBackgroundTask { context in
                     let portraitImage: UIImage?
                     let landscapeImage: UIImage?
-                    let preferredSize = DeltaCore.ControllerSkin.Size(rawValue: preferredSizeValue)!
                     
-                    if let portraitSkinID
+                    if let portraitControllerSkin = self.portraitControllerSkin
                     {
-                        let skin = context.object(with: portraitSkinID) as! ControllerSkin
-                        let traits = DeltaCore.ControllerSkin.Traits(device: .init(rawValue: portraitValues.device)!,
-                                                                   displayType: .init(rawValue: portraitValues.display)!,
-                                                                   orientation: .init(rawValue: portraitValues.orientation)!)
-                        portraitImage = skin.image(for: traits, preferredSize: preferredSize)
+                        let skin = context.object(with: portraitControllerSkin.objectID) as! ControllerSkin
+                        portraitImage = skin.image(for: portraitTraits, preferredSize: UIScreen.main.defaultControllerSkinSize)
                     }
                     else
                     {
                         portraitImage = nil
                     }
                     
-                    if let landscapeSkinID
+                    if let landscapeControllerSkin = self.landscapeControllerSkin
                     {
-                        let skin = context.object(with: landscapeSkinID) as! ControllerSkin
-                        let traits = DeltaCore.ControllerSkin.Traits(device: .init(rawValue: landscapeValues.device)!,
-                                                                   displayType: .init(rawValue: landscapeValues.display)!,
-                                                                   orientation: .init(rawValue: landscapeValues.orientation)!)
-                        landscapeImage = skin.image(for: traits, preferredSize: preferredSize)
+                        let skin = context.object(with: landscapeControllerSkin.objectID) as! ControllerSkin
+                        landscapeImage = skin.image(for: landscapeTraits, preferredSize: UIScreen.main.defaultControllerSkinSize)
                     }
                     else
                     {

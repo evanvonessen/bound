@@ -33,12 +33,6 @@ class LicensesViewController: UIViewController
     private var _didAppear = false
     
     @IBOutlet private var textView: UITextView!
-
-    override func viewDidLoad()
-    {
-        super.viewDidLoad()
-        self.textView.accessibilityIdentifier = "bound.software-licenses-text"
-    }
     
     override func viewWillAppear(_ animated: Bool)
     {
@@ -62,10 +56,8 @@ class LicensesViewController: UIViewController
     {
         super.viewDidLayoutSubviews()
         
-        // The text view already starts inside the safe area. Apply only the
-        // remaining margin so landscape does not count the side insets twice.
-        self.textView.textContainerInset.left = max(0, self.view.layoutMargins.left - self.textView.frame.minX)
-        self.textView.textContainerInset.right = max(0, self.view.layoutMargins.right - (self.view.bounds.maxX - self.textView.frame.maxX))
+        self.textView.textContainerInset.left = self.view.layoutMargins.left
+        self.textView.textContainerInset.right = self.view.layoutMargins.right
         self.textView.textContainer.lineFragmentPadding = 0
         
         if !_didAppear

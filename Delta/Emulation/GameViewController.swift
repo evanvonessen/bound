@@ -22,54 +22,12 @@ import SwiftUI
 
 private var kvoContext = 0
 
-/// Bound keeps a virtual controller receiver alongside a wireless pad so its
-/// touch controls remain available. Controller Mode only changes the skin's
-/// landscape artwork; it never changes whether this receiver is shown.
-struct BoundControllerViewAssignment {
-    let isVisible: Bool
-    let playerIndex: Int
-
-    static func resolve(localPlayerIndex: Int?, externalPlayerIndex: Int?, menuOnly: Bool) -> Self {
-        let playerIndex = (menuOnly ? externalPlayerIndex : nil) ?? localPlayerIndex ?? externalPlayerIndex ?? 0
-        return Self(isVisible: true, playerIndex: playerIndex)
-    }
-}
-
 private extension DeltaCore.ControllerSkin
 {
     func hasTouchScreen(for traits: DeltaCore.ControllerSkin.Traits) -> Bool
     {
         let hasTouchScreen = self.items(for: traits)?.contains(where: { $0.kind == .touchScreen }) ?? false
         return hasTouchScreen
-    }
-}
-/// Reuses the stock Menu hit frame while UIKit repeats layout for unchanged skin geometry.
-struct BoundStockMenuDefaultFrameCache {
-    struct Key: Equatable {
-        let skinIdentity: ObjectIdentifier?
-        let skinIdentifier: String
-        let skinName: String
-        let gameType: String
-        let debugMode: Bool
-        let traits: DeltaCore.ControllerSkin.Traits
-        let sourceFrame: CGRect
-        let contentInsets: UIEdgeInsets
-        let gutter: CGRect?
-        let controlLayout: BoundControlLayout
-        let canvasSize: CGSize
-    }
-
-    private var cachedKey: Key?
-    private var cachedFrame: CGRect?
-    private var hasCachedValue = false
-
-    mutating func frame(for key: Key, compute: () -> CGRect?) -> CGRect? {
-        if hasCachedValue, cachedKey == key { return cachedFrame }
-        let frame = compute()
-        cachedKey = key
-        cachedFrame = frame
-        hasCachedValue = true
-        return frame
     }
 }
 
@@ -92,16 +50,6 @@ private extension GameViewController
     struct DefaultInputMapping: GameControllerInputMappingProtocol
     {
         let gameController: GameController
-        let defaultMapping: GameControllerInputMappingProtocol?
-
-        init(gameController: GameController, gameType: GameType) {
-            self.gameController = gameController
-            if gameController.inputType == .mfi, gameType == .gba {
-                self.defaultMapping = BoundMultiviewDefaultMapping.mapping(for: gameController, gameType: gameType)
-            } else {
-                self.defaultMapping = gameController.defaultInputMapping
-            }
-        }
         
         var gameControllerInputType: GameControllerInputType {
             return self.gameController.inputType
@@ -109,7 +57,7 @@ private extension GameViewController
         
         func input(forControllerInput controllerInput: Input) -> Input?
         {
-            if let mappedInput = self.defaultMapping?.input(forControllerInput: controllerInput)
+            if let mappedInput = self.gameController.defaultInputMapping?.input(forControllerInput: controllerInput)
             {
                 return mappedInput
             }
@@ -121,32 +69,30 @@ private extension GameViewController
             return actionInput
         }
     }
+    
+    struct SustainInputsMapping: GameControllerInputMappingProtocol
+    {
+        let gameController: GameController
+        
+        var gameControllerInputType: GameControllerInputType {
+            return self.gameController.inputType
+        }
+        
+        func input(forControllerInput controllerInput: Input) -> Input?
+        {
+            if let mappedInput = self.gameController.defaultInputMapping?.input(forControllerInput: controllerInput), mappedInput == StandardGameControllerInput.menu
+            {
+                return mappedInput
+            }
+            
+            return controllerInput
+        }
+    }
 }
 
 class GameViewController: DeltaCore.GameViewController
 {
     private let boundCompanion = BoundCompanionCoordinator()
-    var boundCompanionForTesting: BoundCompanionCoordinator { boundCompanion }
-    func refreshBoundControllerPreferences() {
-        updateControllers()
-        refreshBoundMultiviewInputRouting()
-    }
-    private(set) var boundRRDexSaveCache = BoundRRDexSaveCache()
-    func boundRRDexDidLoadSaveState(core: EmulatorCore) {
-        guard core === emulatorCore, core.game.type == .gba else { return }
-        boundRRDexSaveCache.invalidate(restoredState: true)
-        guard let game = game as? Game else { return }
-        // Save-state RAM can differ from the battery file. Read it while the
-        // caller already has the core paused, so there is no second pause cycle.
-        if core.state == .paused {
-            _ = try? boundRRDexSaveCache.value(completedSave: {
-                throw BoundRRDexSave.ImportError.currentGameUnavailable
-            }, restoredSave: {
-                try BoundRRDexCurrentSaveImport.capture { core.deltaCore.emulatorBridge.saveGameSave(to: $0) }
-            })
-        }
-        BoundRRDexSaveRefreshEvent.post(gameID: game.identifier)
-    }
     private var boundControllerModeActive = false
     private struct BoundControlConfiguration: Equatable {
         let skin: String
@@ -157,18 +103,12 @@ class GameViewController: DeltaCore.GameViewController
         let gutter: CGRect?
         let minimal: Bool
         let controllerMode: Bool
-        let controllerMenuFrame: CGRect?
         let style: UIUserInterfaceStyle
         let contrast: UIAccessibilityContrast
     }
     private var boundControlConfiguration: BoundControlConfiguration?
-    private var boundStockMenuDefaultFrameCache = BoundStockMenuDefaultFrameCache()
     private var boundAppliedSkinIdentifier: String?
     private let boundPanelActions = BoundPanelActionRouter()
-    private let boundMultiviewRepeater = BoundMultiviewInputRepeater()
-    private var boundMultiviewCapturing = false
-    private var updatingBoundMultiviewRouting = false
-    var boundFastForwardPreferences = BoundFastForwardPreferences()
     /// Assumed to be Delta.Game instance
     override var game: GameProtocol? {
         willSet {
@@ -183,19 +123,7 @@ class GameViewController: DeltaCore.GameViewController
             let game = self.game as? Game
             NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.managedObjectContextDidChange(with:)), name: .NSManagedObjectContextObjectsDidChange, object: game?.managedObjectContext)
             
-            let gameIdentifier = game?.identifier
-            let gameSaveURL = game?.gameSaveURL
-            let isGBA = game?.type == .gba
-            let dexSaveCache = BoundRRDexSaveCache()
-            self.boundRRDexSaveCache = dexSaveCache
-            self.emulatorCore?.saveHandler = { [weak self, gameIdentifier, gameSaveURL, dexSaveCache] _ in
-                self?.updateGameSave()
-                guard isGBA, let gameIdentifier, let gameSaveURL,
-                      !BoundRRDexSaveRefreshEvent.isSuppressed(gameID: gameIdentifier) else { return }
-                if dexSaveCache.completedSave(read: { try BoundRRDexCurrentSaveImport.readCompletedSave(at: gameSaveURL) }) {
-                    BoundRRDexSaveRefreshEvent.post(gameID: gameIdentifier)
-                }
-            }
+            self.emulatorCore?.saveHandler = { [weak self] _ in self?.updateGameSave() }
             
             if oldValue?.fileURL != game?.fileURL
             {
@@ -209,7 +137,6 @@ class GameViewController: DeltaCore.GameViewController
             
             self.startTrackingAchievements()
             boundCompanion.bind(core: emulatorCore, gameID: game?.identifier ?? "")
-            self.restoreBoundFastForward()
         }
     }
     
@@ -267,6 +194,9 @@ class GameViewController: DeltaCore.GameViewController
     
     // Gestures
     private var isMenuButtonHeldDown = false
+    private var ignoreNextMenuInput = false
+    private lazy var menuButtonGestureRecognizers = self.makeMenuButtonGestureRecognizers()
+    private lazy var menuButtonKeyboardGestureRecognizers = self.makeMenuButtonGestureRecognizers()
 
     private lazy var gameScreenRepositionGestureRecognizer: UILongPressGestureRecognizer = {
         let gestureRecognizer = UILongPressGestureRecognizer(target: self, action: #selector(GameViewController.handleGameScreenRepositionGesture(_:)))
@@ -288,8 +218,16 @@ class GameViewController: DeltaCore.GameViewController
     private var repositionResetButton: UIButton!
     private var repositionResetButtonTimer: Timer?
     
+    // Sustain Buttons
+    private var isSelectingSustainedButtons = false
+    private var sustainInputsMapping: SustainInputsMapping?
     private var shouldResetSustainedInputs = false
-
+    
+    private var sustainButtonsContentView: UIView!
+    private var sustainButtonsBlurView: UIVisualEffectView!
+    private var sustainButtonsBackgroundView: RSTPlaceholderView!
+    private var inputsToSustain = [AnyInput: Double]()
+    
     private var isGyroActive = false
     private var presentedGyroAlert = false
     
@@ -375,6 +313,8 @@ class GameViewController: DeltaCore.GameViewController
         NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.sceneSessionWillQuit(with:)), name: UISceneSession.willQuitNotification, object: nil)
         
         NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.sceneKeyboardFocusDidChange(with:)), name: UIScene.keyboardFocusDidChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.keyboardDidShow(with:)), name: UIResponder.keyboardDidShowNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(GameViewController.keyboardDidChangeFrame(with:)), name: UIResponder.keyboardDidChangeFrameNotification, object: nil)
         
         self.automaticallyPausesWhileInactive = Settings.pauseWhileInactive
     }
@@ -388,38 +328,58 @@ class GameViewController: DeltaCore.GameViewController
     override func gameController(_ gameController: GameController, didActivate input: Input, value: Double)
     {
         super.gameController(gameController, didActivate: input, value: value)
-        if let action = ActionInput(input: input), action.isBoundPanelAction {
-            self.receiveBoundPanelAction(action, from: gameController, pressed: value >= 0.5)
+        if ActionInput(input: input) == .cycleBoundPanels {
+            self.receiveBoundPanelAction(from: gameController, pressed: true)
             return
         }
         
         // Ignore unless we're the active scene.
         guard self.view.window?.windowScene?.hasKeyboardFocus == true else { return }
         
-        if let standardInput = StandardGameControllerInput(input: input), standardInput == .menu, gameController.inputType == .controllerSkin
+        if self.isSelectingSustainedButtons
         {
-            // Menu only opens the pause menu; other buttons keep their normal mapping.
+            guard let pausingGameController = self.pausingGameController, gameController == pausingGameController else { return }
+            
+            if input != StandardGameControllerInput.menu
+            {
+                self.inputsToSustain[AnyInput(input)] = value
+            }
+        }
+        else if let standardInput = StandardGameControllerInput(input: input), standardInput == .menu, gameController.inputType == .controllerSkin
+        {
             self.isMenuButtonHeldDown = true
+            
+            let sustainInputsMapping = SustainInputsMapping(gameController: gameController)
+            gameController.addReceiver(self, inputMapping: sustainInputsMapping)
         }
         else if let actionInput = ActionInput(input: input), let emulatorCore = self.emulatorCore, emulatorCore.state == .running
         {
             switch actionInput
             {
-            case .none, .systemOverlay: break
             case .quickSave: self.performQuickSaveAction()
             case .quickLoad: self.performQuickLoadAction()
-            case .fastForward: self.performFastForwardAction(activate: true, remember: false)
+            case .fastForward: self.performFastForwardAction(activate: true)
             case .reverseScreens: self.performReverseScreensAction()
             case .screenshot: self.performScreenshotAction()
-            case .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview,
-                 .boundScrollUp, .boundScrollDown, .boundScrollLeft, .boundScrollRight,
-                 .boundFocusUp, .boundFocusDown, .boundFocusLeft, .boundFocusRight,
-                 .boundPreviousItem, .boundNextItem, .boundSelect, .boundBack, .boundDetails,
-                 .boundPreviousView, .boundNextView, .boundHideFriend, .boundHideMultiview,
-                 .boundShowDex, .boundShowBosses, .boundShowTypes: break // Handled independently above; never emulated inputs.
+            case .cycleBoundPanels: break // Handled independently above; never an emulated B input.
             case .toggleFastForward:
                 let isFastForwarding = (emulatorCore.rate != emulatorCore.deltaCore.supportedRates.lowerBound)
                 self.performFastForwardAction(activate: !isFastForwarding)
+            }
+        }
+        else if self.isMenuButtonHeldDown
+        {
+            self.ignoreNextMenuInput = true
+            
+            if gameController.sustainedInputs.keys.contains(AnyInput(input))
+            {
+                DispatchQueue.main.async {
+                    gameController.unsustain(input)
+                }
+            }
+            else
+            {                
+                gameController.sustain(input, value: value)
             }
         }
     }
@@ -427,95 +387,61 @@ class GameViewController: DeltaCore.GameViewController
     override func gameController(_ gameController: GameController, didDeactivate input: Input)
     {
         super.gameController(gameController, didDeactivate: input)
-        if let action = ActionInput(input: input), action.isBoundPanelAction {
-            self.receiveBoundPanelAction(action, from: gameController, pressed: false)
+        if ActionInput(input: input) == .cycleBoundPanels {
+            self.receiveBoundPanelAction(from: gameController, pressed: false)
             return
         }
         
         // Ignore unless we're the active scene.
         guard self.view.window?.windowScene?.hasKeyboardFocus == true else { return }
         
-        if let standardInput = StandardGameControllerInput(input: input), standardInput == .menu, gameController.inputType == .controllerSkin
+        if self.isSelectingSustainedButtons
+        {
+            if input.isContinuous
+            {
+                self.inputsToSustain[AnyInput(input)] = nil
+            }
+        }
+        else if let standardInput = StandardGameControllerInput(input: input), standardInput == .menu, gameController.inputType == .controllerSkin
         {
             self.isMenuButtonHeldDown = false
+            
+            // Reset controller mapping back to what it should be.
+            self.updateControllers()
         }
         else if let actionInput = ActionInput(input: input)
         {
             switch actionInput
             {
-            case .none, .systemOverlay: break
             case .quickSave: break
             case .quickLoad: break
-            case .fastForward: self.performFastForwardAction(activate: false, remember: false)
+            case .fastForward: self.performFastForwardAction(activate: false)
             case .toggleFastForward: break
             case .reverseScreens: break
             case .screenshot: break
-            case .cycleBoundPanels, .toggleBoundFriend, .toggleBoundMultiview,
-                 .boundScrollUp, .boundScrollDown, .boundScrollLeft, .boundScrollRight,
-                 .boundFocusUp, .boundFocusDown, .boundFocusLeft, .boundFocusRight,
-                 .boundPreviousItem, .boundNextItem, .boundSelect, .boundBack, .boundDetails,
-                 .boundPreviousView, .boundNextView, .boundHideFriend, .boundHideMultiview,
-                 .boundShowDex, .boundShowBosses, .boundShowTypes: break
+            case .cycleBoundPanels: break
             }
         }
     }
-    private func receiveBoundPanelAction(_ action: ActionInput, from controller: GameController, pressed: Bool) {
+    private func receiveBoundPanelAction(from controller: GameController, pressed: Bool) {
         let expectedCore = emulatorCore
         let apply = { [weak self, weak controller] in
             guard let self, let controller else { return }
-            if !pressed {
-                self.boundPanelActions.release(controller: controller, action: action)
-                self.boundMultiviewRepeater.end(controller: controller, action: action)
-                return
-            }
-            let navigationIsAllowedWhilePaused = action.isMultiviewTabAction
-                ? self.boundCompanion.allowsControllerTabCyclingWhilePaused
-                : self.boundCompanion.allowsControllerNavigationWhilePaused
-            let navigatingReference = (action.isViewNavigationAction || action.isMultiviewTabAction || action == .toggleBoundMultiview || action == .toggleBoundFriend)
-                && navigationIsAllowedWhilePaused
-            let eligible = self.emulatorCore === expectedCore
-                && (expectedCore?.state == .running || (navigatingReference && expectedCore?.state == .paused))
-                // Consume landscape companion bindings in portrait without
-                // changing a panel or falling back to the button's game input.
-                && self.view.bounds.width > self.view.bounds.height
+            if !pressed { self.boundPanelActions.release(controller: controller); return }
+            let eligible = self.emulatorCore === expectedCore && expectedCore?.state == .running
                 && controller.inputType != .controllerSkin && controller.playerIndex != nil
                 && ExternalGameControllerManager.shared.connectedControllers.contains(where: { $0 === controller })
                 && self.view.window?.windowScene?.hasKeyboardFocus == true
-                && UIApplication.shared.applicationState == .active
-                && (self.presentedViewController == nil || (navigatingReference && !(self.presentedViewController is PauseViewController)))
-                && (!self.boundCompanion.isEditingNotes || navigatingReference)
+                && UIApplication.shared.applicationState == .active && self.presentedViewController == nil
+                && !self.isSelectingSustainedButtons && !self.boundCompanion.isEditingNotes
                 && !self.boundCompanion.state.showingFriends && !self.boundCompanion.state.showingSettings
-            self.boundPanelActions.activate(controller: controller, action: action, eligible: eligible) {
-                if action.isViewNavigationAction || action.isMultiviewTabAction { self.boundCompanion.navigateControllerView(action) }
-                else if action == .cycleBoundPanels { self.boundCompanion.cyclePanels() }
-                else { self.boundCompanion.toggleControllerPanel(action) }
-                if self.boundMultiviewCapturing,
-                   action.isAutomaticFocusAction || [.boundScrollUp, .boundScrollDown, .boundScrollLeft, .boundScrollRight].contains(action) {
-                    self.boundMultiviewRepeater.begin(controller: controller, action: action) { [weak self, weak controller] in
-                        guard let self, let controller, self.boundMultiviewCapturing,
-                              self.boundCompanion.automaticControllerMultiviewAvailable,
-                              self.emulatorCore === expectedCore,
-                              expectedCore?.state == .running || (expectedCore?.state == .paused && self.boundCompanion.allowsControllerNavigationWhilePaused),
-                              self.presentedViewController == nil || self.boundCompanion.allowsControllerNavigationWhilePaused,
-                              controller.playerIndex != nil,
-                              self.view.window?.windowScene?.hasKeyboardFocus == true,
-                              UIApplication.shared.applicationState == .active else { return false }
-                        self.boundCompanion.navigateControllerView(action)
-                        return true
-                    }
-                }
-            }
+            self.boundPanelActions.activate(controller: controller, eligible: eligible) { self.boundCompanion.cyclePanels() }
         }
         if Thread.isMainThread { apply() } else { DispatchQueue.main.async(execute: apply) }
     }
     @objc private func boundControllerDisconnected(with notification: Notification) {
         guard let controller = notification.object as? GameController else { return }
-        let release = { [weak self, weak controller] in
-            guard let self, let controller else { return }
-            self.boundPanelActions.release(controller: controller)
-            self.boundMultiviewRepeater.end(controller: controller)
-        }
-        if Thread.isMainThread { release() } else { DispatchQueue.main.async(execute: release) }
+        receiveBoundPanelAction(from: controller, pressed: false)
     }
 }
 
@@ -527,15 +453,41 @@ extension GameViewController
     override func viewDidLoad()
     {
         super.viewDidLoad()
-
-        self.registerForTraitChanges([UITraitUserInterfaceStyle.self, UITraitAccessibilityContrast.self]) { (self: GameViewController, _) in
-            self.view.setNeedsLayout()
-        }
         boundCompanion.install(in: self)
         
+        // Lays out self.gameView, so we can pin self.sustainButtonsContentView to it without resulting in a temporary "cannot satisfy constraints".
         self.view.layoutIfNeeded()
         
         self.controllerView.translucentControllerSkinOpacity = Settings.translucentControllerSkinOpacity
+        
+        // Sustain Button
+        self.sustainButtonsContentView = UIView(frame: CGRect(x: 0, y: 0, width: self.gameView.bounds.width, height: self.gameView.bounds.height))
+        self.sustainButtonsContentView.translatesAutoresizingMaskIntoConstraints = false
+        self.sustainButtonsContentView.isHidden = true
+        self.view.insertSubview(self.sustainButtonsContentView, aboveSubview: self.gameView)
+        
+        let blurEffect = UIBlurEffect(style: .dark)
+        let vibrancyEffect = UIVibrancyEffect(blurEffect: blurEffect)
+        
+        self.sustainButtonsBlurView = UIVisualEffectView(effect: blurEffect)
+        self.sustainButtonsBlurView.frame = CGRect(x: 0, y: 0, width: self.sustainButtonsContentView.bounds.width, height: self.sustainButtonsContentView.bounds.height)
+        self.sustainButtonsBlurView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        self.sustainButtonsContentView.addSubview(self.sustainButtonsBlurView)
+        
+        let vibrancyView = UIVisualEffectView(effect: vibrancyEffect)
+        vibrancyView.frame = CGRect(x: 0, y: 0, width: self.sustainButtonsBlurView.contentView.bounds.width, height: self.sustainButtonsBlurView.contentView.bounds.height)
+        vibrancyView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        self.sustainButtonsBlurView.contentView.addSubview(vibrancyView)
+        
+        self.sustainButtonsBackgroundView = RSTPlaceholderView(frame: CGRect(x: 0, y: 0, width: vibrancyView.contentView.bounds.width, height: vibrancyView.contentView.bounds.height))
+        self.sustainButtonsBackgroundView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        self.sustainButtonsBackgroundView.textLabel.text = NSLocalizedString("Select Buttons to Hold Down", comment: "")
+        self.sustainButtonsBackgroundView.textLabel.numberOfLines = 1
+        self.sustainButtonsBackgroundView.textLabel.minimumScaleFactor = 0.5
+        self.sustainButtonsBackgroundView.textLabel.adjustsFontSizeToFitWidth = true
+        self.sustainButtonsBackgroundView.detailTextLabel.text = NSLocalizedString("Press the Menu button when finished.", comment: "")
+        self.sustainButtonsBackgroundView.alpha = 0.0
+        vibrancyView.contentView.addSubview(self.sustainButtonsBackgroundView)
         
         // Handoff
         self.handoffPlaceholderView = RSTPlaceholderView(frame: CGRect(x: 0, y: 0, width: self.view.bounds.width, height: self.view.bounds.height))
@@ -576,6 +528,12 @@ extension GameViewController
         self.repositionResetButton.isHidden = true
         self.view.addSubview(self.repositionResetButton)
 
+        // Gestures
+        for gestureRecognizer in self.menuButtonGestureRecognizers
+        {
+            self.view.addGestureRecognizer(gestureRecognizer)
+        }
+        
         self.view.addGestureRecognizer(self.gameScreenRepositionGestureRecognizer)
 
         // Auto Layout
@@ -583,6 +541,11 @@ extension GameViewController
             self.repositionResetButton.topAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.topAnchor, constant: 8),
             self.repositionResetButton.trailingAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
 
+            self.sustainButtonsContentView.leadingAnchor.constraint(equalTo: self.gameView.leadingAnchor),
+            self.sustainButtonsContentView.trailingAnchor.constraint(equalTo: self.gameView.trailingAnchor),
+            self.sustainButtonsContentView.topAnchor.constraint(equalTo: self.gameView.topAnchor),
+            self.sustainButtonsContentView.bottomAnchor.constraint(equalTo: self.gameView.bottomAnchor),
+            
             self.handoffPlaceholderView.leadingAnchor.constraint(equalTo: self.gameView.leadingAnchor),
             self.handoffPlaceholderView.trailingAnchor.constraint(equalTo: self.gameView.trailingAnchor),
             self.handoffPlaceholderView.topAnchor.constraint(equalTo: self.gameView.topAnchor),
@@ -632,6 +595,11 @@ extension GameViewController
         }
     }
 
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if traitCollection.hasDifferentColorAppearance(comparedTo: previousTraitCollection) || traitCollection.accessibilityContrast != previousTraitCollection?.accessibilityContrast { view.setNeedsLayout() }
+    }
+
     override func viewDidLayoutSubviews()
     {
         gameplayLayoutBounds = boundCompanion.layout(in: view.bounds, safeArea: view.safeAreaInsets, controllerSize: nativeBoundControllerSize())
@@ -641,10 +609,15 @@ extension GameViewController
         // Native layout can change the controller bounds after rotation or Reset.
         // Refresh companion/Menu geometry only after those real frames settle.
         boundCompanion.bringControlsToFront()
-        pauseViewController?.showsArrangeViews = boundCompanion.canArrangeLandscapeViews
         gameView.accessibilityIdentifier = "bound.game-screen"
         gameView.isAccessibilityElement = true
         gameView.accessibilityLabel = "Your gameplay screen"
+        
+        if let sustainButtonsBackgroundView
+        {
+            // Fixes Hold Button description laying out vertically after orientation change.
+            sustainButtonsBackgroundView.detailTextLabel.preferredMaxLayoutWidth = sustainButtonsBackgroundView.bounds.width
+        }
     }
     
     // MARK: - Segues
@@ -706,39 +679,22 @@ extension GameViewController
             pauseViewController.fastForwardItem?.action = { [unowned self] item in
                 self.performFastForwardAction(activate: item.isSelected)
             }
-            pauseViewController.friendsItem = MenuItem(text: boundCompanion.account.session == nil ? "Connect" : "Friends", image: UIImage(systemName: "person.2.fill")) { [weak self, weak pauseViewController] item in
+            pauseViewController.sustainButtonsItem = MenuItem(text: boundCompanion.account.session == nil ? "Connect" : "Friends", image: UIImage(systemName: "person.2.fill")) { [weak self, weak pauseViewController] item in
                 item.isSelected = false
                 guard let self, let presenter = pauseViewController else { return }
                 self.boundCompanion.presentFriends(from: presenter)
             }
-            pauseViewController.screenshotItem = MenuItem(text: "Settings", image: UIImage(systemName: "gearshape.fill")) { [weak self, weak pauseViewController] item in
+            pauseViewController.screenshotItem = MenuItem(text: "Bound Settings", image: UIImage(systemName: "gearshape.fill")) { [weak self, weak pauseViewController] item in
                 item.isSelected = false
                 guard let self, let presenter = pauseViewController else { return }
                 self.boundCompanion.presentSettings(from: presenter)
             }
-            pauseViewController.arrangeViewsItem = MenuItem(text: "Arrange Views", image: UIImage(systemName: "arrow.up.and.down.and.arrow.left.and.right")?.withRenderingMode(.alwaysTemplate)) { [weak self, weak pauseViewController] item in
-                item.isSelected = false
-                guard let self else { return }
-                guard self.view.bounds.width > self.view.bounds.height else {
-                    let alert = UIAlertController(title: nil, message: "Rotate your phone", preferredStyle: .alert)
-                    alert.addAction(UIAlertAction(title: NSLocalizedString("OK", comment: ""), style: .default))
-                    pauseViewController?.present(alert, animated: true)
-                    return
-                }
-                self.boundCompanion.beginLandscapeArrangementFromMenu()
-            }
-            pauseViewController.arrangeViewsItem?.accessibilityIdentifier = "bound.menu-arrange-views"
-            pauseViewController.showsArrangeViews = boundCompanion.canArrangeLandscapeViews
             pauseViewController.controllerModeItem?.isSelected = BoundControllerModePreferences().isEnabled
             pauseViewController.controllerModeItem?.action = { [weak self] item in
                 guard let self else { return }
-                self.cancelBoundTouchInputsPreservingExternalHolds()
-                let preferences = BoundControllerModePreferences()
-                preferences.cycle()
-                self.view.setNeedsLayout()
-                self.view.layoutIfNeeded()
-                item.text = preferences.displayName
-                item.isSelected = preferences.isEnabled
+                let enabled = !BoundControllerModePreferences().isEnabled
+                self.setBoundControllerModeEnabled(enabled)
+                item.isSelected = enabled
             }
             if self.emulatorCore?.deltaCore.supportedRates.upperBound == 1
             {
@@ -869,7 +825,6 @@ extension GameViewController
             do
             {
                 try emulatorCore.load(saveState)
-                self.boundRRDexDidLoadSaveState(core: emulatorCore)
             }
             catch
             {
@@ -940,31 +895,6 @@ private extension GameViewController
 //MARK: - Controllers -
 private extension GameViewController
 {
-    private func installBoundInputMapping(_ mapping: BoundControllerInputMapping,
-                                         controller: GameController, core: EmulatorCore) {
-        let old = controller.inputMapping(for: self)
-        let held = controller.activatedInputs
-        // Release the OLD mapped game input before swapping. Otherwise holding
-        // a direction while opening Multiview can leave the emulator latched.
-        for (physical, _) in held {
-            guard let previous = old?.input(forControllerInput: physical),
-                  AnyInput(previous) != mapping.input(forControllerInput: physical).map(AnyInput.init) else { continue }
-            self.gameController(controller, didDeactivate: previous)
-            core.gameController(controller, didDeactivate: previous)
-        }
-        controller.addReceiver(self, inputMapping: mapping)
-        controller.addReceiver(core, inputMapping: mapping)
-        for (physical, value) in held {
-            guard let target = mapping.input(forControllerInput: physical),
-                  ActionInput(input: target) == nil,
-                  StandardGameControllerInput(input: target) != .menu,
-                  old?.input(forControllerInput: physical).map(AnyInput.init) != AnyInput(target) else { continue }
-            // Resume a still-held gameplay direction immediately on hiding the panel.
-            self.gameController(controller, didActivate: target, value: value)
-            core.gameController(controller, didActivate: target, value: value)
-        }
-    }
-
     @objc func updateControllers()
     {
         let firstActiveController = ExternalGameControllerManager.shared.connectedControllers.first(where: { $0.playerIndex != nil })
@@ -982,25 +912,9 @@ private extension GameViewController
         // normally hides the virtual controller for an assigned external pad.
         let menuOnly = BoundControllerModePreferences.hidesTouchControls(enabled: BoundControllerModePreferences().isEnabled,
             layout: BoundAppearancePreferences().effectiveScreenLayout, landscape: view.bounds.width > view.bounds.height)
-        let usesBoundController = !BoundMacWorkspacePlatform.isEnabled &&
-            BoundAppearancePreferences().effectiveScreenLayout == .bound
         if menuOnly, let firstActiveController {
-            let assignment = BoundControllerViewAssignment.resolve(
-                localPlayerIndex: Settings.localControllerPlayerIndex,
-                externalPlayerIndex: firstActiveController.playerIndex,
-                menuOnly: true)
-            self.controllerView.playerIndex = assignment.playerIndex
+            self.controllerView.playerIndex = firstActiveController.playerIndex
             self.controllerView.isHidden = false
-        }
-        else if usesBoundController {
-            // Bound always keeps its touch controller available. The mode skin
-            // filters it to Menu only in enabled landscape mode.
-            let assignment = BoundControllerViewAssignment.resolve(
-                localPlayerIndex: Settings.localControllerPlayerIndex,
-                externalPlayerIndex: firstActiveController?.playerIndex,
-                menuOnly: false)
-            self.controllerView.playerIndex = assignment.playerIndex
-            self.controllerView.isHidden = !assignment.isVisible
         }
         else if let index = Settings.localControllerPlayerIndex
         {
@@ -1035,12 +949,6 @@ private extension GameViewController
         self.view.setNeedsLayout()
         self.view.layoutIfNeeded()
         
-        if BoundMacWorkspacePlatform.isEnabled {
-            // Keep Delta's keyboard receiver and DS touchscreen available.
-            self.controllerView.isHidden = false
-            self.controllerView.playerIndex = Settings.localControllerPlayerIndex ?? firstActiveController?.playerIndex ?? 0
-        }
-
         // Roundabout way of combining arrays to prevent rare runtime crash in + operator :(
         var controllers = [GameController]()
         controllers.append(self.controllerView)
@@ -1053,27 +961,18 @@ private extension GameViewController
                 if gameController.playerIndex != nil
                 {
                     let inputMapping: GameControllerInputMappingProtocol
-                    let multiviewDefaults: DeltaCore.GameControllerInputMapping?
                     
                     if let mapping = GameControllerInputMapping.inputMapping(forPlayer: gameController.playerIndex, gameType: game.type, controllerType: gameController.inputType, in: DatabaseManager.shared.viewContext)
                     {
                         inputMapping = mapping
-                        multiviewDefaults = nil
                     }
                     else
                     {
-                        inputMapping = DefaultInputMapping(gameController: gameController, gameType: game.type)
-                        multiviewDefaults = BoundControllerMultiviewPreferences().isEnabled
-                            ? BoundMultiviewDefaultMapping.mapping(for: gameController, gameType: game.type) : nil
+                        inputMapping = DefaultInputMapping(gameController: gameController)
                     }
                     
-                    if let controller = gameController as? MFiGameController {
-                        BoundControllerSystemGestures.apply(to: controller, mapping: inputMapping)
-                    }
-                    let gameplayMapping = BoundControllerInputMapping(base: inputMapping,
-                        multiviewActive: gameController.inputType != .controllerSkin && boundMultiviewCapturing,
-                        multiviewDefaults: multiviewDefaults)
-                    installBoundInputMapping(gameplayMapping, controller: gameController, core: emulatorCore)
+                    gameController.addReceiver(self, inputMapping: inputMapping)
+                    gameController.addReceiver(emulatorCore, inputMapping: inputMapping)
                 }
                 else
                 {
@@ -1105,36 +1004,11 @@ private extension GameViewController
     func updateControllerSkin()
     {
         guard let game = self.game as? Game, let window = self.view.window else { return }
-
-        if BoundMacWorkspacePlatform.isEnabled,
-           let base = DeltaCore.ControllerSkin.standardControllerSkin(for: game.type) {
-            if !(controllerView.controllerSkin is TouchControllerSkin) || controllerView.controllerSkin?.gameType != game.type {
-                controllerView.cancelTouchInputs()
-                controllerView.controllerSkin = TouchControllerSkin(controllerSkin: base)
-            }
-            controllerView.usesControlOnlyHitTesting = true
-            gameScreenOffset = .zero
-            updateExternalDisplay()
-            view.setNeedsLayout()
-            return
-        }
         
         let traits = DeltaCore.ControllerSkin.Traits.defaults(for: window)
         let isExternalControllerConnected = ExternalGameControllerManager.shared.connectedControllers.contains(where: { $0.playerIndex != nil })
-
-        if BoundAppearancePreferences().effectiveScreenLayout == .bound
-        {
-            // A wireless pad's optional external skin may have no on-screen
-            // controls. Bound uses the regular touch skin in every mode and
-            // lets BoundControllerModeSkin hide gameplay buttons only when
-            // Controller Mode is enabled in landscape.
-            if let controllerSkin = Settings.preferredControllerSkin(for: game, traits: traits, forExternalController: false) {
-                self.controllerView.controllerSkin = controllerSkin
-            } else {
-                self.controllerView.controllerSkin = DeltaCore.ControllerSkin.standardControllerSkin(for: game.type)
-            }
-        }
-        else if Settings.localControllerPlayerIndex != nil
+        
+        if Settings.localControllerPlayerIndex != nil
         {
             // If there is both a local player and a connected controller with a controller skin, we prioritize local player's skin.
             // Even if the skin doesn't exist, we'll fall back to standard skin for local player.
@@ -1458,7 +1332,7 @@ extension GameViewController: SaveStatesViewControllerDelegate
         }
     }
     
-    @discardableResult private func load(_ saveState: SaveStateProtocol) -> Bool
+    private func load(_ saveState: SaveStateProtocol)
     {
         let isRunning = (self.emulatorCore?.state == .running)
         
@@ -1488,26 +1362,17 @@ extension GameViewController: SaveStatesViewControllerDelegate
         
         self.updateAutoSaveState()
         
-        var didLoad = false
         do
         {
             if let temporarySaveState = temporarySaveState
             {
-                if let core = self.emulatorCore {
-                    try core.load(temporarySaveState)
-                    self.boundRRDexDidLoadSaveState(core: core)
-                }
+                try self.emulatorCore?.load(temporarySaveState)
                 try FileManager.default.removeItem(at: temporarySaveState.fileURL)
             }
             else
             {
-                if let core = self.emulatorCore {
-                    try core.load(saveState)
-                    self.boundRRDexDidLoadSaveState(core: core)
-                }
+                try self.emulatorCore?.load(saveState)
             }
-
-            didLoad = true
             
             if ExperimentalFeatures.shared.toastNotifications.stateLoadEnabled
             {
@@ -1529,8 +1394,6 @@ extension GameViewController: SaveStatesViewControllerDelegate
         {
             self.resumeEmulation()
         }
-
-        return didLoad
     }
     
     //MARK: - SaveStatesViewControllerDelegate
@@ -1583,6 +1446,60 @@ private extension GameViewController
         self.emulatorCore?.audioManager.respectsSilentMode = Settings.respectSilentMode
         self.emulatorCore?.audioManager.mixesWithOtherAudio = Settings.mixWithOtherAudio
         self.emulatorCore?.audioManager.pausesOtherAudio = Settings.pauseOtherAudio
+    }
+}
+
+//MARK: - Sustain Buttons -
+private extension GameViewController
+{
+    func showSustainButtonView()
+    {
+        guard let gameController = self.pausingGameController else { return }
+        
+        self.isSelectingSustainedButtons = true
+        
+        let sustainInputsMapping = SustainInputsMapping(gameController: gameController)
+        gameController.addReceiver(self, inputMapping: sustainInputsMapping)
+        
+        let blurEffect = self.sustainButtonsBlurView.effect
+        self.sustainButtonsBlurView.effect = nil
+        
+        self.sustainButtonsContentView.isHidden = false
+        
+        UIView.animate(withDuration: 0.4) {
+            self.sustainButtonsBlurView.effect = blurEffect
+            self.sustainButtonsBackgroundView.alpha = 1.0
+        } completion: { _ in
+            self.controllerView.becomeFirstResponder()
+        }
+    }
+    
+    func hideSustainButtonView()
+    {
+        guard let gameController = self.pausingGameController else { return }
+        
+        self.isSelectingSustainedButtons = false
+        
+        self.updateControllers()
+        self.sustainInputsMapping = nil
+        
+        // Activate all sustained inputs, since they will now be mapped to game inputs.
+        for (input, value) in self.inputsToSustain
+        {
+            gameController.sustain(input, value: value)
+        }
+        
+        let blurEffect = self.sustainButtonsBlurView.effect
+        
+        UIView.animate(withDuration: 0.4, animations: {
+            self.sustainButtonsBlurView.effect = nil
+            self.sustainButtonsBackgroundView.alpha = 0.0
+        }) { (finished) in
+            self.sustainButtonsContentView.isHidden = true
+            self.sustainButtonsBlurView.effect = blurEffect
+        }
+        
+        self.inputsToSustain = [:]
     }
 }
 
@@ -1648,34 +1565,38 @@ extension GameViewController
         }
     }
     
-    private var boundFastForwardGameID: String? {
-        guard let game = self.game else { return nil }
-        // Library ROM filenames and identifiers are stable across sandbox moves.
-        return (game as? Game)?.identifier ?? game.fileURL.lastPathComponent
-    }
-
-    private func restoreBoundFastForward() {
-        guard let gameID = boundFastForwardGameID else { return }
-        performFastForwardAction(activate: boundFastForwardPreferences.isEnabled(for: gameID), remember: false, showToast: false)
-    }
-
-    func performFastForwardAction(activate: Bool, remember: Bool = true, showToast: Bool = true)
+    func performFastForwardAction(activate: Bool)
     {
         guard let emulatorCore = self.emulatorCore, !emulatorCore.isWirelessMultiplayerActive else { return }
-
-        if remember {
-            if let gameID = boundFastForwardGameID {
-                boundFastForwardPreferences.setEnabled(activate, for: gameID)
-            }
-        }
         
         if activate
         {
-            // Use Delta's default for this core (3x for GBA), regardless of
-            // legacy per-game, per-system, or unrestricted-speed preferences.
-            emulatorCore.rate = emulatorCore.deltaCore.supportedRates.upperBound
+            // Per-game speed > system-wide per-system speed > maximum supported
+            let speed: Double
+            if let game = emulatorCore.game as? Game,
+               let speedValue = game.settings[.fastForwardSpeed] as? Double
+            {
+                speed = speedValue
+            }
+            else if let preferredSpeed = Settings.features.customFastForward[emulatorCore.game.type]
+            {
+                speed = preferredSpeed.rawValue
+            }
+            else
+            {
+                speed = emulatorCore.deltaCore.supportedRates.upperBound
+            }
 
-            if showToast && ExperimentalFeatures.shared.toastNotifications.fastForwardEnabled
+            if speed <= emulatorCore.deltaCore.supportedRates.upperBound || Settings.features.customFastForward.allowUnrestrictedSpeeds
+            {
+                emulatorCore.rate = speed
+            }
+            else
+            {
+                emulatorCore.rate = emulatorCore.deltaCore.supportedRates.upperBound
+            }
+
+            if ExperimentalFeatures.shared.toastNotifications.fastForwardEnabled
             {
                 self.presentExperimentalToastView(NSLocalizedString("Fast Forward Enabled", comment: ""))
             }
@@ -1684,7 +1605,7 @@ extension GameViewController
         {
             emulatorCore.rate = emulatorCore.deltaCore.supportedRates.lowerBound
 
-            if showToast && ExperimentalFeatures.shared.toastNotifications.fastForwardEnabled
+            if ExperimentalFeatures.shared.toastNotifications.fastForwardEnabled
             {
                 self.presentExperimentalToastView(NSLocalizedString("Fast Forward Disabled", comment: ""))
             }
@@ -1863,14 +1784,23 @@ extension GameViewController: GameViewControllerDelegate
     func gameViewController(_ gameViewController: DeltaCore.GameViewController, handleMenuInputFrom gameController: GameController)
     {
         guard gameViewController == self else { return }
-        if self.boundCompanion.finishLandscapeArrangementIfNeeded() { return }
+        
+        guard !self.ignoreNextMenuInput else {
+            self.ignoreNextMenuInput = false
+            return
+        }
         
         if let pausingGameController = self.pausingGameController
         {
             guard pausingGameController == gameController else { return }
         }
         
-        if let pauseViewController = self.pauseViewController
+        if self.isSelectingSustainedButtons
+        {
+            self.hideSustainButtonView()
+        }
+        
+        if let pauseViewController = self.pauseViewController, !self.isSelectingSustainedButtons
         {
             pauseViewController.dismiss()
         }
@@ -1905,8 +1835,7 @@ extension GameViewController: GameViewControllerDelegate
         var result = false
         
         rst_dispatch_sync_on_main_thread {
-            let macSheet = BoundMacWorkspacePlatform.isEnabled && (self.boundCompanion.state.showingFriends || self.boundCompanion.state.showingSettings)
-            result = !self.boundCompanion.isEditingNotes && !macSheet && (self.presentedViewController == nil || self.presentedViewController?.isDisappearing == true) && self.view.window != nil
+            result = !self.boundCompanion.isEditingNotes && (self.presentedViewController == nil || self.presentedViewController?.isDisappearing == true) && !self.isSelectingSustainedButtons && self.view.window != nil
         }
         
         return result
@@ -1928,11 +1857,6 @@ extension GameViewController: GameViewControllerDelegate
     
     func gameViewController(_ gameViewController: DeltaCore.GameViewController, optionsFor game: GameProtocol) -> [EmulatorCore.Option: Any]
     {
-        Self.emulatorCoreOptions(for: game)
-    }
-
-    static func emulatorCoreOptions(for game: GameProtocol) -> [EmulatorCore.Option: Any]
-    {
         if let game = game as? Game, game.type == .n64
         {
             if let useOpenGLES2 = game.settings[.openGLES2] as? Bool, useOpenGLES2
@@ -1947,11 +1871,9 @@ extension GameViewController: GameViewControllerDelegate
         else
         {
             var options: [EmulatorCore.Option: Any] = [.metal: ExperimentalFeatures.shared.metal.isEnabled]
+            // Use Delta's existing Metal bitmap path for the resizable GBA companion layout.
             // The Simulator GL driver crashes when keyboard/layout resize races a resumed draw.
-            // Physical devices keep Delta's existing Metal preference for GBA.
-            #if targetEnvironment(simulator)
-            if game.type == .gba { options[.metal] = true }
-            #endif
+            if let game = game as? Game, game.type == .gba { options[.metal] = true }
             
             if #available(iOS 18, macOS 15, *), ProcessInfo.processInfo.isiOSAppOnMac
             {
@@ -1969,6 +1891,29 @@ extension GameViewController: GameViewControllerDelegate
 /// Gestures
 extension GameViewController
 {
+    private func makeMenuButtonGestureRecognizers() -> Set<UIGestureRecognizer>
+    {
+        var gestureRecognizers = Set<UIGestureRecognizer>()
+        
+        let fastForwardSwipeGestureRecognizer = UISwipeGestureRecognizer(target: self, action: #selector(GameViewController.handleSwipeGesture(_:)))
+        fastForwardSwipeGestureRecognizer.delegate = self
+        fastForwardSwipeGestureRecognizer.direction = [.left, .right]
+        gestureRecognizers.insert(fastForwardSwipeGestureRecognizer)
+        
+        let quickLoadGestureRecognizer = UILongPressGestureRecognizer(target: self, action: #selector(GameViewController.handleQuickLoadGesture(_:)))
+        quickLoadGestureRecognizer.delegate = self
+        quickLoadGestureRecognizer.numberOfTapsRequired = 0
+        gestureRecognizers.insert(quickLoadGestureRecognizer)
+        
+        let quickSaveGestureRecognizer = UITapGestureRecognizer(target: self, action: #selector(GameViewController.handleQuickSaveGesture(_:)))
+        quickSaveGestureRecognizer.delegate = self
+        quickSaveGestureRecognizer.numberOfTapsRequired = 2
+        quickSaveGestureRecognizer.require(toFail: quickLoadGestureRecognizer)
+        gestureRecognizers.insert(quickSaveGestureRecognizer)
+        
+        return gestureRecognizers
+    }
+    
     override func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool
     {
         guard super.gestureRecognizer(gestureRecognizer, shouldReceive: touch) else { return false }
@@ -2000,10 +1945,42 @@ extension GameViewController
             return true
         }
 
+        if self.menuButtonGestureRecognizers.contains(gestureRecognizer) || self.menuButtonKeyboardGestureRecognizers.contains(gestureRecognizer)
+        {
+            let shouldBegin = self.isMenuButtonHeldDown && Settings.isQuickGesturesEnabled
+            return shouldBegin
+        }
+        
         // Default to true, as if this method wasn't overridden.
         return true
     }
     
+    @objc private func handleSwipeGesture(_ gestureRecognizer: UISwipeGestureRecognizer)
+    {
+        guard let emulatorCore = self.emulatorCore else { return }
+        
+        let isFastForwarding = (emulatorCore.rate != emulatorCore.deltaCore.supportedRates.lowerBound)
+        self.performFastForwardAction(activate: !isFastForwarding)
+        
+        self.ignoreNextMenuInput = true
+    }
+    
+    @objc private func handleQuickSaveGesture(_ gestureRecognizer: UITapGestureRecognizer)
+    {
+        self.performQuickSaveAction()
+        self.ignoreNextMenuInput = true
+    }
+    
+    @objc private func handleQuickLoadGesture(_ gestureRecognizer: UILongPressGestureRecognizer)
+    {
+        self.performQuickLoadAction()
+        self.ignoreNextMenuInput = true
+        
+        // Cancel gesture to prevent additional callbacks
+        gestureRecognizer.isEnabled = false
+        gestureRecognizer.isEnabled = true
+    }
+
     @objc private func handleGameScreenRepositionGesture(_ gestureRecognizer: UILongPressGestureRecognizer)
     {
         guard let traits = self.controllerView.controllerSkinTraits else { return }
@@ -2056,7 +2033,6 @@ private extension GameViewController
     // True when on-screen controls are hidden (for DS, via TouchControllerSkin).
     var canRepositionGameScreen: Bool
     {
-        if BoundMacWorkspacePlatform.isEnabled { return false }
         return self.controllerView.isHidden || self.controllerView.controllerSkin is TouchControllerSkin
     }
 
@@ -2435,12 +2411,6 @@ private extension GameViewController
         
         switch settingsName
         {
-        case .resetToDefaults:
-            self.restoreBoundFastForward()
-            self.updateControllers()
-            self.controllerView.translucentControllerSkinOpacity = Settings.translucentControllerSkinOpacity
-            self.view.setNeedsLayout()
-
         case .localControllerPlayerIndex, .isButtonHapticFeedbackEnabled, .isThumbstickHapticFeedbackEnabled:
             self.updateControllers()
 
@@ -2477,7 +2447,7 @@ private extension GameViewController
             // May return nil if Settings.supportsExternalDisplays is false
             // guard let externalDisplayScene = UIApplication.shared.externalDisplayScene else { break }
             
-            guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? ExternalDisplayScene }).first(where: { $0.session.role == .windowExternalDisplayNonInteractive }) else { break }
+            guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? ExternalDisplayScene }).first(where: { $0.session.role == .windowExternalDisplay }) else { break }
             
             if Settings.supportsExternalDisplays /*, scene.hasKeyboardFocus */ // Connect all scenes, not just one with keyboard focus.
             {
@@ -2551,6 +2521,31 @@ private extension GameViewController
         }
     }
     
+    internal func returnToGameViewController(completion: (() -> Void)? = nil)
+    {
+        if let pauseViewController = self.pauseViewController
+        {
+            let segue = UIStoryboardSegue(identifier: "unwindFromPauseMenu", source: pauseViewController, destination: self)
+            self.unwindFromPauseViewController(segue)
+        }
+        else if
+            let navigationController = self.presentedViewController as? UINavigationController,
+            let pageViewController = navigationController.topViewController?.children.first as? UIPageViewController,
+            let gameCollectionViewController = pageViewController.viewControllers?.first as? GameCollectionViewController
+        {
+            let segue = UIStoryboardSegue(identifier: "unwindFromGames", source: gameCollectionViewController, destination: self)
+            self.unwindFromGamesViewController(with: segue)
+        }
+        
+        if let presentedViewController = self.presentedViewController
+        {
+            presentedViewController.dismiss(animated: true, completion: completion)
+        }
+        else
+        {
+            completion?()
+        }
+    }
     
     @objc func didActivateGyro(with notification: Notification)
     {
@@ -2808,6 +2803,22 @@ private extension GameViewController
             // DON'T disconnect, only connect when active (so it stays connected to last active scene)
         }
     }
+    
+    @objc func keyboardDidShow(with notification: Notification)
+    {
+        guard let inputView = self.controllerView.inputView else { return }
+        
+        // Using keyboard game controller, so add gesture recognizers to keyboard.
+        for gestureRecognizer in self.menuButtonKeyboardGestureRecognizers
+        {
+            inputView.addGestureRecognizer(gestureRecognizer)
+        }
+    }
+    
+    @objc func keyboardDidChangeFrame(with notification: Notification)
+    {
+        self.keyboardDidShow(with: notification)
+    }
 }
 
 private extension UserDefaults
@@ -2842,16 +2853,7 @@ private extension UserDefaults
 
 // Bound's editing operates on native Delta artwork and item hit frames together.
 extension GameViewController {
-    func showBoundMacLibrary() {
-        guard BoundMacWorkspacePlatform.isEnabled, presentedViewController == nil else { return }
-        view.endEditing(true)
-        pauseEmulation()
-        controllerView.resignFirstResponder()
-        performSegue(withIdentifier: "showGamesViewController", sender: nil)
-    }
-
     func applyBoundControlPlacement() {
-        guard !BoundMacWorkspacePlatform.isEnabled else { return }
         guard let current = controllerView.controllerSkin else { return }
         let base = unwrappedBoundControllerSkin(current)
         let layout = BoundControlPlacementStore.shared.read(skin: base.identifier, landscape: view.bounds.width > view.bounds.height)
@@ -2869,34 +2871,20 @@ extension GameViewController {
         let source = nativeBoundControllerFrame(base: base)
         let insets = nativeBoundControllerInsets(base: base)
         let gutter = nativeBoundLandscapeControlGutter(base: base)
-        let defaultMenu = boundControllerModeButtonDefaults()?[.menu]
-            ?? cachedBoundTouchMenuFrame(base: base, layout: layout, source: source, insets: insets, gutter: gutter)
-        let movableMenu = defaultMenu.flatMap {
-            boundCompanion.controllerMenuFrame(defaultFrame: $0, canvas: view.bounds.inset(by: view.safeAreaInsets))
-        }
-        let controllerMenuFrame = movableMenu ?? boundControllerModeThreeGeometry()?.menu
         let configuration = BoundControlConfiguration(skin: base.identifier, layout: layout, canvas: view.bounds.size,
-            source: source, insets: insets, gutter: gutter, minimal: minimal, controllerMode: mode, controllerMenuFrame: controllerMenuFrame,
+            source: source, insets: insets, gutter: gutter, minimal: minimal, controllerMode: mode,
             style: traitCollection.userInterfaceStyle, contrast: traitCollection.accessibilityContrast)
         // A settled layout must not recreate wrappers or serialize placements.
         // Also verify the applied identity, because upstream may replace the skin.
         if configuration == boundControlConfiguration,
            controllerView.controllerSkin?.identifier == boundAppliedSkinIdentifier { return }
-        controllerView.usesControlOnlyHitTesting = mode || controllerMenuFrame != nil || !layout.positions.isEmpty
-        controllerLayoutBounds = controllerMenuFrame != nil || !layout.positions.isEmpty ? view.bounds : nil
-        controllerLayoutSize = controllerMenuFrame != nil ? view.bounds.size : layout.positions.isEmpty && !minimal ? nil : nativeBoundControllerSize()
-        let placesTouchControls = !layout.positions.isEmpty || (!mode && controllerMenuFrame != nil)
+        controllerView.usesControlOnlyHitTesting = mode || !layout.positions.isEmpty
+        controllerLayoutBounds = layout.positions.isEmpty ? nil : view.bounds
+        controllerLayoutSize = layout.positions.isEmpty && !minimal ? nil : nativeBoundControllerSize()
         let stock = BoundStockControllerSkin(base: base, canvasSize: source.size, contentInsets: insets, boundLandscapeGutter: gutter)
-        var proposed: ControllerSkinProtocol = placesTouchControls
-            ? BoundPlacedControllerSkin(base: stock, layout: layout, canvasSize: view.bounds.size, sourceFrame: source,
-                                        menuFrame: mode ? nil : controllerMenuFrame)
-            : stock
-        if minimal { proposed = BoundMinimalControllerSkin(base: proposed, canvasSize: placesTouchControls ? view.bounds.size : source.size, traits: traitCollection) }
-        if mode {
-            let menuFrame = controllerMenuFrame?.offsetBy(dx: -view.bounds.minX, dy: -view.bounds.minY)
-                .applying(.init(scaleX: 1 / view.bounds.width, y: 1 / view.bounds.height))
-            proposed = BoundControllerModeSkin(base: proposed, menuFrame: menuFrame)
-        }
+        var proposed: ControllerSkinProtocol = layout.positions.isEmpty ? stock : BoundPlacedControllerSkin(base: stock, layout: layout, canvasSize: view.bounds.size, sourceFrame: source)
+        if minimal { proposed = BoundMinimalControllerSkin(base: proposed, canvasSize: layout.positions.isEmpty ? source.size : view.bounds.size, traits: traitCollection) }
+        if mode { proposed = BoundControllerModeSkin(base: proposed) }
         let identifier = proposed.identifier
         if controllerView.controllerSkin?.identifier != identifier { controllerView.cancelTouchInputs(); controllerView.controllerSkin = proposed }
         boundControlConfiguration = configuration
@@ -2949,58 +2937,6 @@ extension GameViewController {
         let gutter = CGRect(x: game.maxX, y: safe.minY, width: max(0, safe.maxX-game.maxX), height: safe.height)
         return gutter.width >= 44 && gutter.height >= 44 ? gutter : nil
     }
-    // Legacy accessors remain for source compatibility; Mode 2 no longer affects layout.
-    func boundControllerModeTwoGeometry() -> BoundControllerModeTwoGeometry? { nil }
-    func boundControllerModeThreeGeometry() -> BoundControllerModeThreeGeometry? {
-        guard BoundControllerModePreferences().isEnabled,
-              BoundAppearancePreferences().effectiveScreenLayout == .bound else { return nil }
-        return BoundControllerModeThreeGeometry(bounds: view.bounds, safeArea: view.safeAreaInsets)
-    }
-    func boundControllerModeButtonDefaults() -> [BoundControllerButton: CGRect]? {
-        guard let geometry = boundControllerModeThreeGeometry() else { return nil }
-        let canvas = view.bounds.inset(by: view.safeAreaInsets)
-        return [
-            .menu: geometry.menu,
-            .friend: CGRect(x: canvas.maxX - 44, y: canvas.maxY - 44, width: 44, height: 44),
-            .multiview: CGRect(x: canvas.maxX - 44, y: canvas.minY, width: 44, height: 44)
-        ]
-    }
-    /// Use the unmodified touch-menu slot as the arrangement fallback. Reading
-    /// the already moved skin would also shift the mirrored Friend default.
-    func boundLandscapeTouchMenuDefaultFrame() -> CGRect? {
-        guard !BoundControllerModePreferences().isEnabled,
-              BoundAppearancePreferences().effectiveScreenLayout == .bound,
-              view.bounds.width > view.bounds.height,
-              let current = controllerView.controllerSkin else { return nil }
-        let base = unwrappedBoundControllerSkin(current)
-        let source = nativeBoundControllerFrame(base: base)
-        let insets = nativeBoundControllerInsets(base: base)
-        let gutter = nativeBoundLandscapeControlGutter(base: base)
-        let layout = BoundControlPlacementStore.shared.read(skin: base.identifier, landscape: true)
-        return cachedBoundTouchMenuFrame(base: base, layout: layout, source: source, insets: insets, gutter: gutter)
-    }
-    private func cachedBoundTouchMenuFrame(base: ControllerSkinProtocol, layout: BoundControlLayout,
-                                           source: CGRect, insets: UIEdgeInsets, gutter: CGRect?) -> CGRect? {
-        guard let traits = controllerView.controllerSkinTraits else { return nil }
-        let isKnownValueSkin = base is DeltaCore.ControllerSkin || base is DeltaCore.TouchControllerSkin
-        let identity: ObjectIdentifier? = isKnownValueSkin ? nil : ObjectIdentifier(base as AnyObject)
-        let key = BoundStockMenuDefaultFrameCache.Key(skinIdentity: identity, skinIdentifier: base.identifier,
-            skinName: base.name, gameType: String(describing: base.gameType), debugMode: base.isDebugModeEnabled,
-            traits: traits, sourceFrame: source, contentInsets: insets, gutter: gutter,
-            controlLayout: layout, canvasSize: view.bounds.size)
-        return boundStockMenuDefaultFrameCache.frame(for: key) {
-            let stock = BoundStockControllerSkin(base: base, canvasSize: source.size,
-                contentInsets: insets, boundLandscapeGutter: gutter)
-            return boundTouchMenuFrame(stock: stock, layout: layout, source: source)
-        }
-    }
-    private func boundTouchMenuFrame(stock: ControllerSkinProtocol, layout: BoundControlLayout, source: CGRect) -> CGRect? {
-        guard let traits = controllerView.controllerSkinTraits,
-              let menu = stock.items(for: traits)?.first(where: { $0.inputs.allInputs.contains { $0.stringValue == "menu" } }) else { return nil }
-        let frame = menu.frame.applying(.init(scaleX: source.width, y: source.height))
-            .offsetBy(dx: source.minX, dy: source.minY)
-        return layout.frame(id: menu.id, base: frame, canvas: view.bounds.size, directional: false)
-    }
     private func nativeBoundLandscapeControlGutter(base: ControllerSkinProtocol) -> CGRect? {
         guard let gutter = boundLandscapeControlGutter() else { return nil }
         let source = nativeBoundControllerFrame(base: base)
@@ -3022,55 +2958,5 @@ extension GameViewController {
         let navigation = UINavigationController(rootViewController: editor)
         navigation.modalPresentationStyle = .fullScreen
         presenting.present(navigation, animated: true)
-    }
-}
-
-extension GameViewController
-{
-    /// Change only receiver mappings when a panel opens/closes. No controller
-    /// reconnect, database fetch, or next-frame delay is needed for this handoff.
-    internal func refreshBoundMultiviewInputRouting()
-    {
-        guard !updatingBoundMultiviewRouting, let core = emulatorCore else { return }
-        let capture = boundCompanion.automaticControllerMultiviewAvailable
-            && view.bounds.width > view.bounds.height
-        guard capture != boundMultiviewCapturing else { return }
-        updatingBoundMultiviewRouting = true
-        boundMultiviewCapturing = capture
-        boundMultiviewRepeater.endAll()
-        for controller in ExternalGameControllerManager.shared.connectedControllers {
-            guard controller.playerIndex != nil,
-                  let old = controller.inputMapping(for: self) as? BoundControllerInputMapping else { continue }
-            let mapping = BoundControllerInputMapping(base: old.base, multiviewActive: capture,
-                                                       multiviewDefaults: old.multiviewDefaults)
-            installBoundInputMapping(mapping, controller: controller, core: core)
-        }
-        updatingBoundMultiviewRouting = false
-    }
-
-    internal func returnToGameViewController(completion: (() -> Void)? = nil)
-    {
-        if let pauseViewController = self.pauseViewController
-        {
-            let segue = UIStoryboardSegue(identifier: "unwindFromPauseMenu", source: pauseViewController, destination: self)
-            self.unwindFromPauseViewController(segue)
-        }
-        else if
-            let navigationController = self.presentedViewController as? UINavigationController,
-            let pageViewController = navigationController.topViewController?.children.first as? UIPageViewController,
-            let gameCollectionViewController = pageViewController.viewControllers?.first as? GameCollectionViewController
-        {
-            let segue = UIStoryboardSegue(identifier: "unwindFromGames", source: gameCollectionViewController, destination: self)
-            self.unwindFromGamesViewController(with: segue)
-        }
-
-        if let presentedViewController = self.presentedViewController
-        {
-            presentedViewController.dismiss(animated: true, completion: completion)
-        }
-        else
-        {
-            completion?()
-        }
     }
 }

@@ -158,7 +158,7 @@ private extension CheatsViewController
             do
             {
                 let cheatBase = try CheatBase()
-                let cheats = try await cheatBase.cheats(forGameIdentifier: self.game.identifier) ?? []
+                let cheats = try await cheatBase.cheats(for: self.game) ?? []
                 self.cheatBaseCheats = cheats
                 
                 self.updateAddCheatMenu()

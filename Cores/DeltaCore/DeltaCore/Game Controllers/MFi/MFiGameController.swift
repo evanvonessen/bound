@@ -44,16 +44,11 @@ extension MFiGameController
         case leftThumbstickDown
         case leftThumbstickLeft
         case leftThumbstickRight
-
-        // Physical thumbstick clicks are separate from the stick axes.
-        case leftThumbstickButton
         
         case rightThumbstickUp
         case rightThumbstickDown
         case rightThumbstickLeft
         case rightThumbstickRight
-
-        case rightThumbstickButton
         
         case a
         case b
@@ -68,9 +63,6 @@ extension MFiGameController
         
         case start
         case select
-
-        // Xbox Share is a physical input distinct from Menu and Home.
-        case share
     }
 }
 
@@ -125,42 +117,6 @@ public class MFiGameController: NSObject, GameController
     }
     
     public let inputType: GameControllerInputType = .mfi
-
-    /// The MFi input used by a physical Home/Logo button, when this controller has one.
-    /// Some controllers without a Home button use `.menu` for their only menu button.
-    public var physicalHomeInput: Input? {
-        return self.controller.physicalInputProfile.buttons[GCInputButtonHome] == nil ? nil : .menu
-    }
-
-    /// Returns the physical button represented by an input when GameController exposes one.
-    /// Axis inputs and controller profiles without that button return nil.
-    public func physicalButton(for input: Input) -> GCControllerButtonInput? {
-        let profile = self.controller.physicalInputProfile
-
-        switch input
-        {
-        case .menu:
-            return profile.buttons[GCInputButtonHome] ?? profile.buttons[GCInputButtonMenu]
-        case .start:
-            return profile.buttons[GCInputButtonMenu]
-        case .select:
-            return profile.buttons[GCInputButtonOptions]
-        case .a: return profile.buttons[GCInputButtonA]
-        case .b: return profile.buttons[GCInputButtonB]
-        case .x: return profile.buttons[GCInputButtonX]
-        case .y: return profile.buttons[GCInputButtonY]
-        case .leftShoulder: return profile.buttons[GCInputLeftShoulder]
-        case .leftTrigger: return profile.buttons[GCInputLeftTrigger]
-        case .rightShoulder: return profile.buttons[GCInputRightShoulder]
-        case .rightTrigger: return profile.buttons[GCInputRightTrigger]
-        case .leftThumbstickButton: return profile.buttons[GCInputLeftThumbstickButton]
-        case .rightThumbstickButton: return profile.buttons[GCInputRightThumbstickButton]
-        case .share:
-            return (self.controller.extendedGamepad as? GCXboxGamepad)?.buttonShare
-        default:
-            return nil
-        }
-    }
         
     public private(set) lazy var defaultInputMapping: GameControllerInputMappingProtocol? = {
         guard let fileURL = Bundle.resources.url(forResource: "MFiGameController", withExtension: "deltamapping") else {
@@ -226,14 +182,6 @@ public class MFiGameController: NSObject, GameController
         profile.buttons[GCInputLeftTrigger]?.pressedChangedHandler = { (button, value, pressed) in inputChangedHandler(.leftTrigger, pressed) }
         profile.buttons[GCInputRightShoulder]?.pressedChangedHandler = { (button, value, pressed) in inputChangedHandler(.rightShoulder, pressed) }
         profile.buttons[GCInputRightTrigger]?.pressedChangedHandler = { (button, value, pressed) in inputChangedHandler(.rightTrigger, pressed) }
-
-        profile.buttons[GCInputLeftThumbstickButton]?.pressedChangedHandler = { (button, value, pressed) in inputChangedHandler(.leftThumbstickButton, pressed) }
-        profile.buttons[GCInputRightThumbstickButton]?.pressedChangedHandler = { (button, value, pressed) in inputChangedHandler(.rightThumbstickButton, pressed) }
-
-        if let xboxGamepad = self.controller.extendedGamepad as? GCXboxGamepad
-        {
-            xboxGamepad.buttonShare?.pressedChangedHandler = { (button, value, pressed) in inputChangedHandler(.share, pressed) }
-        }
         
         // Menu = Primary menu button (Start/+/Menu)
         let menuButton = profile.buttons[GCInputButtonMenu]

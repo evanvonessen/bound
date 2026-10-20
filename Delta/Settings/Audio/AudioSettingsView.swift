@@ -11,42 +11,39 @@ import SwiftUI
 struct AudioSettingsView: View
 {
     @AppStorage(Settings.Name.respectSilentMode.rawValue)
-    private var respectSilentMode = false
-
+    private var respectSilentMode: Bool = false
+    
     @AppStorage(Settings.Name.mixWithOtherAudio.rawValue)
-    private var mixWithOtherAudio = false
+    private var mixWithOtherAudio: Bool = false
 
     @AppStorage(Settings.Name.pauseOtherAudio.rawValue)
-    private var pauseOtherAudio = false
+    private var pauseOtherAudio: Bool = false
 
     var body: some View {
         Form {
             Section {
-                Toggle("Respect Silent Mode", isOn: Binding(
-                    get: { respectSilentMode },
-                    set: { Settings.respectSilentMode = $0 }
-                ))
-                .accessibilityIdentifier("bound.audio.respect-silent-mode")
+                Toggle("Respect Silent Mode", isOn: $respectSilentMode)
+                    .onChange(of: respectSilentMode) { _, newValue in
+                        Settings.respectSilentMode = newValue
+                    }
             } footer: {
                 Text("When enabled, Delta will only play game audio if your device isn't silenced.")
             }
             
             Section {
-                Toggle("Mix with Other Audio", isOn: Binding(
-                    get: { mixWithOtherAudio },
-                    set: { Settings.mixWithOtherAudio = $0 }
-                ))
-                .accessibilityIdentifier("bound.audio.mix-with-other-audio")
+                Toggle("Mix with Other Audio", isOn: $mixWithOtherAudio)
+                    .onChange(of: mixWithOtherAudio) { _, newValue in
+                        Settings.mixWithOtherAudio = newValue
+                    }
             } footer: {
                 Text("When enabled, game audio will play alongside other audio on your device.")
             }
 
             Section {
-                Toggle("Pause Other Audio", isOn: Binding(
-                    get: { pauseOtherAudio },
-                    set: { Settings.pauseOtherAudio = $0 }
-                ))
-                .accessibilityIdentifier("bound.audio.pause-other-audio")
+                Toggle("Pause Other Audio", isOn: $pauseOtherAudio)
+                    .onChange(of: pauseOtherAudio) { _, newValue in
+                        Settings.pauseOtherAudio = newValue
+                    }
             } footer: {
                 Text("When enabled, starting a game pauses audio from other apps.")
             }

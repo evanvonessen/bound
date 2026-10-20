@@ -15,7 +15,7 @@ final class BoundStockControllerSkin: ControllerSkinProtocol {
     }
     private var stock: Bool { ["gba", "gbc", "nes", "snes", "n64", "genesis", "ds"].contains { base.identifier == "com.delta." + $0 + ".standard" } }
     var name: String { base.name }
-    var identifier: String { base.identifier + ".bound-stock.v5." + String(describing: canvasSize) + String(describing: contentInsets) + String(describing: boundLandscapeGutter) }
+    var identifier: String { base.identifier + ".bound-stock.v4." + String(describing: canvasSize) + String(describing: contentInsets) + String(describing: boundLandscapeGutter) }
     var gameType: GameType { base.gameType }
     var isDebugModeEnabled: Bool { base.isDebugModeEnabled }
     func supports(_ traits: DeltaCore.ControllerSkin.Traits) -> Bool { base.supports(traits) }
@@ -284,10 +284,7 @@ final class BoundStockControllerSkin: ControllerSkinProtocol {
     func drawPortraitWordmark(in context: CGContext, size: CGSize,
                               traits: DeltaCore.ControllerSkin.Traits, color: UIColor? = nil) {
         guard let frame = portraitWordmarkFrame(size: size, traits: traits) else { return }
-        // Inset the ink inside the existing casing slot instead of starting it
-        // flush with the controller's top edge. Native artwork and inputs stay put.
-        let scale = size.width / 320
-        drawWordmark(in: context, frame: frame.insetBy(dx: 6 * scale, dy: 2 * scale),
+        drawWordmark(in: context, frame: CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: 10 * size.width / 320),
                      color: color ?? (base.identifier == "com.delta.nes.standard" ? .black : .white))
     }
     private func drawWordmark(in context: CGContext, frame: CGRect, color: UIColor) {
@@ -324,17 +321,9 @@ final class BoundStockControllerSkin: ControllerSkinProtocol {
     func menuInsets(for traits: DeltaCore.ControllerSkin.Traits) -> UIEdgeInsets? { base.menuInsets(for: traits) }
 }
 
-enum BoundControllerModeLayout: Int, CaseIterable {
-    case mode1 = 1
-    case mode2 = 2
-    case mode3 = 3
-}
-
-/// Controller Mode is a single on/off preference. The legacy layout key remains
-/// intact for one-time arrangement migration, but no longer selects a mode.
+/// Isolated user preference; OFF until explicitly enabled, retained across launches.
 final class BoundControllerModePreferences {
     static let key = "bound.controller-mode.v1.enabled"
-    static let layoutKey = "bound.controller-mode.v1.layout"
     private let defaults: UserDefaults
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
     var isEnabled: Bool {
@@ -344,93 +333,8 @@ final class BoundControllerModePreferences {
             NotificationCenter.default.post(name: BoundAppearancePreferences.didChangeNotification, object: nil)
         }
     }
-    var layout: BoundControllerModeLayout {
-        get { .mode1 }
-        set {
-            defaults.set(BoundControllerModeLayout.mode1.rawValue, forKey: Self.layoutKey)
-            NotificationCenter.default.post(name: BoundAppearancePreferences.didChangeNotification, object: nil)
-        }
-    }
-    var displayName: String { isEnabled ? "ON" : "OFF" }
-
-    func cycle() { isEnabled.toggle() }
     static func hidesTouchControls(enabled: Bool, layout: BoundScreenLayout, landscape: Bool) -> Bool {
         enabled && layout == .bound && landscape
-    }
-}
-
-/// Compatibility facade for the retired navigation toggle. Dex, Boss, and
-/// Types controller navigation is now always enabled; the legacy stored value
-/// is intentionally ignored.
-final class BoundControllerNavigationPreferences {
-    static let key = "bound.controller-navigation.v1.enabled"
-    init(defaults: UserDefaults = .standard) {}
-    var isEnabled: Bool {
-        get { true }
-        set { }
-    }
-}
-
-/// Automatic controls default on and apply only while landscape Multiview is visible.
-final class BoundControllerMultiviewPreferences {
-    static let key = "bound.controller-multiview.v1.enabled"
-    private let defaults: UserDefaults
-    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
-    var isEnabled: Bool {
-        get { defaults.object(forKey: Self.key) as? Bool ?? true }
-        set {
-            defaults.set(newValue, forKey: Self.key)
-            NotificationCenter.default.post(name: BoundAppearancePreferences.didChangeNotification, object: nil,
-                                            userInfo: [Self.key: newValue])
-        }
-    }
-}
-
-/// Right-aligns the same fitted gameplay size used by Modes 1 and 3.
-/// Friend and touch controls use the left column without reducing gameplay.
-struct BoundControllerModeTwoGeometry {
-    let game: CGRect
-    let friend: CGRect
-    let menu: CGRect
-    let views: CGRect
-    let friendButton: CGRect
-
-    init?(bounds: CGRect, safeArea: UIEdgeInsets, gameAspect: CGSize) {
-        guard bounds.width.isFinite, bounds.height.isFinite, bounds.width > bounds.height,
-              gameAspect.width.isFinite, gameAspect.height.isFinite,
-              gameAspect.width > 0, gameAspect.height > 0 else { return nil }
-        let safe = bounds.inset(by: safeArea)
-        let gap: CGFloat = 8
-        let minimumColumn: CGFloat = 104
-        guard safe.width > minimumColumn + gap, safe.height >= 160 else { return nil }
-        let ratio = gameAspect.width / gameAspect.height
-        guard ratio.isFinite, ratio > 0 else { return nil }
-        let width = min(bounds.height * ratio, safe.width)
-        let height = width / ratio
-        game = CGRect(x: safe.maxX - width, y: bounds.midY - height / 2, width: width, height: height)
-        // On screens without a wide enough gutter, keep controls reachable over
-        // the game's left edge instead of shrinking the game to make room.
-        let column = CGRect(x: safe.minX, y: safe.minY,
-                            width: max(minimumColumn, game.minX - gap - safe.minX), height: safe.height)
-        let friendWidth = min(column.width, max(0, column.height - 112) * 1.5)
-        friend = CGRect(x: column.midX - friendWidth / 2, y: column.minY,
-                        width: friendWidth, height: friendWidth / 1.5)
-        let buttonY = friend.maxY + 12
-        menu = CGRect(x: column.midX - 48, y: buttonY, width: 44, height: 44)
-        views = CGRect(x: column.midX + 4, y: buttonY, width: 44, height: 44)
-        friendButton = CGRect(x: column.midX - 22, y: menu.maxY + 8, width: 44, height: 44)
-    }
-}
-
-/// Mode 3 keeps its only touch control at the bottom-left safe edge.
-struct BoundControllerModeThreeGeometry {
-    let menu: CGRect
-
-    init?(bounds: CGRect, safeArea: UIEdgeInsets) {
-        let safe = bounds.inset(by: safeArea)
-        guard bounds.width > bounds.height, safe.minX.isFinite, safe.maxY.isFinite,
-              safe.width.isFinite, safe.height.isFinite, safe.width >= 44, safe.height >= 44 else { return nil }
-        menu = CGRect(x: safe.minX, y: safe.maxY - 44, width: 44, height: 44)
     }
 }
 
@@ -438,41 +342,19 @@ struct BoundControllerModeThreeGeometry {
 /// touchscreen skin's gameplay controls disappear; its real Menu remains.
 final class BoundControllerModeSkin: ControllerSkinProtocol {
     let base: ControllerSkinProtocol
-    private let menuFrame: CGRect?
-    init(base: ControllerSkinProtocol, menuFrame: CGRect? = nil) {
-        self.base = base; self.menuFrame = menuFrame
-    }
+    init(base: ControllerSkinProtocol) { self.base = base }
     var name: String { base.name }
-    var identifier: String { base.identifier + ".bound-controller-mode" + (menuFrame.map { String(describing: $0) } ?? "") }
+    var identifier: String { base.identifier + ".bound-controller-mode" }
     var gameType: GameType { base.gameType }
     var isDebugModeEnabled: Bool { base.isDebugModeEnabled }
     private func isMenu(_ item: DeltaCore.ControllerSkin.Item) -> Bool { item.inputs.allInputs.contains { $0.stringValue == "menu" } }
     func items(for traits: DeltaCore.ControllerSkin.Traits) -> [DeltaCore.ControllerSkin.Item]? {
         guard traits.orientation == .landscape else { return base.items(for: traits) }
-        return base.items(for: traits)?.filter(isMenu).map { item in
-            guard let menuFrame else { return item }
-            var moved = item
-            moved.frame = menuFrame
-            moved.extendedFrame = menuFrame
-            return moved
-        }
+        return base.items(for: traits)?.filter(isMenu)
     }
     private func artwork(_ image: UIImage?, traits: DeltaCore.ControllerSkin.Traits) -> UIImage? {
         guard traits.orientation == .landscape, let image else { return image }
         return UIGraphicsImageRenderer(size: image.size).image { context in
-            if menuFrame != nil, let menu = items(for: traits)?.first {
-                let frame = menu.frame.applying(.init(scaleX: image.size.width, y: image.size.height))
-                let path = UIBezierPath(ovalIn: frame.insetBy(dx: 1, dy: 1))
-                UIColor.deltaPurple.withAlphaComponent(0.85).setFill(); path.fill()
-                UIColor.white.withAlphaComponent(0.85).setStroke(); path.lineWidth = 1.5; path.stroke()
-                let label = "MENU" as NSString
-                let attributes: [NSAttributedString.Key: Any] = [
-                    .font: UIFont.systemFont(ofSize: frame.height * 0.22, weight: .bold),
-                    .foregroundColor: UIColor.white]
-                let size = label.size(withAttributes: attributes)
-                label.draw(at: CGPoint(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2), withAttributes: attributes)
-                return
-            }
             for item in items(for: traits) ?? [] {
                 context.cgContext.saveGState()
                 context.cgContext.clip(to: item.extendedFrame.applying(.init(scaleX: image.size.width, y: image.size.height)))

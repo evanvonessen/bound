@@ -1,5 +1,0 @@
-{
-  "tasks": {
-    "test": "node --test handler.test.mjs"
-  }
-}

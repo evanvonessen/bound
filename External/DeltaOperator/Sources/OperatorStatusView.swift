@@ -99,9 +99,6 @@ public final class OperatorStatusView: UIView {
         self.activateConstraints()
         self.updateFont()
         self.configure(with: .connected)
-        self.registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: OperatorStatusView, _) in
-            self.updateFont()
-        }
     }
 
     /// Creates the stored constraint references.
@@ -144,6 +141,16 @@ public final class OperatorStatusView: UIView {
     public override func layoutSubviews() {
         super.layoutSubviews()
         self.updateBorderLayers()
+    }
+
+    /// Updates the title font when the horizontal size class changes.
+    ///
+    /// - Parameter previousTraitCollection: The previous trait collection before the change.
+    public override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if self.traitCollection.horizontalSizeClass != previousTraitCollection?.horizontalSizeClass {
+            self.updateFont()
+        }
     }
 
     /// Selects the title font based on the current size class with monospaced digits.
@@ -255,8 +262,6 @@ public final class OperatorStatusView: UIView {
         case .transferring(let progress):
             if !self.configureTransferring(progress, from: previousState) { return }
         case .disconnected, .imported:
-            self.configureIdle()
-        @unknown default:
             self.configureIdle()
         }
 

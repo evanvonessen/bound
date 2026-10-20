@@ -1,4 +1,0 @@
-recording_demo.mp4 filter=lfs diff=lfs merge=lfs -text
-
-# Preserve original license notice bytes, including upstream whitespace.
-LICENSES/* -whitespace

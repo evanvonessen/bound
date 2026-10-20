@@ -31,6 +31,7 @@ private extension SettingsViewController
         case multitasking
         case hapticFeedback
         case syncing
+        case gestures
         case airPlay
         case hapticTouch
         case cores
@@ -105,10 +106,6 @@ private extension SettingsViewController
 
 class SettingsViewController: UITableViewController
 {
-    private enum BoundControllerSettingsRow: Int {
-        case enabled = 4
-        case multiview = 5
-    }
     @IBOutlet private var controllerOpacityLabel: UILabel!
     @IBOutlet private var controllerOpacitySlider: UISlider!
     
@@ -120,6 +117,7 @@ class SettingsViewController: UITableViewController
     @IBOutlet private var buttonHapticFeedbackEnabledSwitch: UISwitch!
     @IBOutlet private var thumbstickHapticFeedbackEnabledSwitch: UISwitch!
     @IBOutlet private var previewsEnabledSwitch: UISwitch!
+    @IBOutlet private var quickGesturesSwitch: UISwitch!
     @IBOutlet private var opensGamesInNewWindowSwitch: UISwitch!
     
     @IBOutlet private var versionLabel: UILabel!
@@ -161,10 +159,6 @@ class SettingsViewController: UITableViewController
     override func viewDidLoad()
     {
         super.viewDidLoad()
-
-        self.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: SettingsViewController, _) in
-            self.tableView.reloadData()
-        }
         
         if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         {
@@ -246,6 +240,15 @@ class SettingsViewController: UITableViewController
         }
     }
     
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?)
+    {
+        super.traitCollectionDidChange(previousTraitCollection)
+        
+        if self.traitCollection.userInterfaceStyle != previousTraitCollection?.userInterfaceStyle
+        {
+            self.tableView.reloadData()
+        }
+    }
 }
 
 private extension SettingsViewController
@@ -279,34 +282,11 @@ private extension SettingsViewController
         self.buttonHapticFeedbackEnabledSwitch.isOn = Settings.isButtonHapticFeedbackEnabled
         self.thumbstickHapticFeedbackEnabledSwitch.isOn = Settings.isThumbstickHapticFeedbackEnabled
         self.previewsEnabledSwitch.isOn = Settings.isPreviewsEnabled
+        self.quickGesturesSwitch.isOn = Settings.isQuickGesturesEnabled
         
         self.tableView.reloadData()
     }
-
-    func controllerSettingsCell(title: String, detail: String? = nil, identifier: String,
-                                toggle: UISwitch? = nil) -> UITableViewCell {
-        let cell = UITableViewCell(style: .value1, reuseIdentifier: nil)
-        cell.textLabel?.text = NSLocalizedString(title, comment: "")
-        cell.textLabel?.numberOfLines = 0
-        cell.detailTextLabel?.text = detail
-        cell.accessibilityIdentifier = identifier
-        if let toggle {
-            cell.selectionStyle = .none
-            cell.accessoryView = toggle
-        } else {
-            cell.accessoryType = .disclosureIndicator
-        }
-        return cell
-    }
-
-    @objc func controllerModeSettingChanged(_ sender: UISwitch) {
-        BoundControllerModePreferences().isEnabled = sender.isOn
-    }
-
-    @objc func controllerMultiviewSettingChanged(_ sender: UISwitch) {
-        BoundControllerMultiviewPreferences().isEnabled = sender.isOn
-    }
-
+    
     func updateControllerOpacityLabel()
     {
         let percentage = String(format: "%.f", Settings.translucentControllerSkinOpacity * 100) + "%"
@@ -318,8 +298,8 @@ private extension SettingsViewController
         if BoundFeatureVisibility.simplifiedSettings && [.controllerSkins, .hapticFeedback, .hapticTouch, .airPlay, .credits].contains(section) { return true }
         switch section
         {
-        // Patreon and app-icon management are not part of Bound's settings surface.
-        case .patreon, .display: return true
+        // This app uses Bound's friend service; upstream subscription/sync is inactive.
+        case .patreon, .syncing, .display: return true
         #if !DEBUG
         case .advanced: return true
         #endif
@@ -459,6 +439,11 @@ private extension SettingsViewController
         Settings.features.dsAirPlay.layoutAxis = sender.isOn ? .horizontal : .vertical
         
         self.tableView.reloadSections([Section.airPlay.rawValue], with: .none)
+    }
+    
+    @IBAction func toggleQuickGesturesEnabled(_ sender: UISwitch)
+    {
+        Settings.isQuickGesturesEnabled = sender.isOn
     }
     
     @IBAction func toggleOpensGamesInNewWindow(_ sender: UISwitch)
@@ -665,7 +650,7 @@ extension SettingsViewController
         if section == .cores && BoundFeatureVisibility.simplifiedSettings { return 1 }
         switch section
         {
-        case .controllers: return 6
+        case .controllers: return 4
         case .controllerSkins: return System.registeredSystems.count
         case .airPlay:
             var numberOfRows = 1
@@ -715,23 +700,6 @@ extension SettingsViewController
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell
     {
         let indexPath = (BoundFeatureVisibility.simplifiedSettings && indexPath.section == Section.cores.rawValue) ? IndexPath(row: CoresRow.gba.rawValue, section: indexPath.section) : indexPath
-        if indexPath.section == Section.controllers.rawValue,
-           let row = BoundControllerSettingsRow(rawValue: indexPath.row) {
-            switch row {
-            case .enabled:
-                let toggle = UISwitch()
-                toggle.isOn = BoundControllerModePreferences().isEnabled
-                toggle.accessibilityIdentifier = "bound.controller-mode-enabled"
-                toggle.addTarget(self, action: #selector(controllerModeSettingChanged(_:)), for: .valueChanged)
-                return controllerSettingsCell(title: "Controller Mode", identifier: "bound.controller-mode-enabled-row", toggle: toggle)
-            case .multiview:
-                let toggle = UISwitch()
-                toggle.isOn = BoundControllerMultiviewPreferences().isEnabled
-                toggle.accessibilityIdentifier = "bound.controller-multiview"
-                toggle.addTarget(self, action: #selector(controllerMultiviewSettingChanged(_:)), for: .valueChanged)
-                return controllerSettingsCell(title: "Allow Controller to Control Multiview", identifier: "bound.controller-multiview-row", toggle: toggle)
-            }
-        }
         let cell = super.tableView(tableView, cellForRowAt: indexPath)
 
         let section = Section(rawValue: indexPath.section)!
@@ -823,7 +791,7 @@ extension SettingsViewController
             case .exportLog: break
             }
             
-        case .controllerOpacity, .display, .gameAudio, .multitasking, .hapticFeedback, .airPlay, .hapticTouch, .credits, .support: break
+        case .controllerOpacity, .display, .gameAudio, .multitasking, .hapticFeedback, .gestures, .airPlay, .hapticTouch, .credits, .support: break
         }
 
         return cell
@@ -836,12 +804,10 @@ extension SettingsViewController
 
         switch section
         {
-        case .controllers:
-            if BoundControllerSettingsRow(rawValue: indexPath.row) != nil { return }
-            self.performSegue(withIdentifier: Segue.controllers.rawValue, sender: cell)
+        case .controllers: self.performSegue(withIdentifier: Segue.controllers.rawValue, sender: cell)
         case .controllerSkins: self.performSegue(withIdentifier: Segue.controllerSkins.rawValue, sender: cell)
         case .display: self.performSegue(withIdentifier: Segue.altAppIcons.rawValue, sender: cell)
-        case .patreon, .controllerOpacity, .gameAudio, .multitasking, .hapticFeedback, .airPlay, .hapticTouch, .syncing: break
+        case .patreon, .controllerOpacity, .gameAudio, .multitasking, .hapticFeedback, .gestures, .airPlay, .hapticTouch, .syncing: break
         case .cores:
             let hostingController: UIViewController
             
@@ -923,8 +889,6 @@ extension SettingsViewController
     
     override func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat
     {
-        if indexPath.section == Section.controllers.rawValue,
-           BoundControllerSettingsRow(rawValue: indexPath.row) != nil { return UITableView.automaticDimension }
     primary:
         switch Section(rawValue: indexPath.section)!
         {

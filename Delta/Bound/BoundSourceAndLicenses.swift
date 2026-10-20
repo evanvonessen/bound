@@ -4,8 +4,6 @@ import SwiftUI
 enum BoundSourceNotices {
     static let availability = "Bound source, build instructions, and modification notices are available in its source repository."
     static let sourceRepository = URL(string: "https://github.com/evanvonessen/bound")!
-    static let radicalRedPokedex = URL(string: "https://dex.radicalred.net/")!
-    static let radicalRedBossDocumentation = URL(string: "https://docs.google.com/spreadsheets/d/1ES8L4OzeJ8rCuMWFNvrDaZKArqR7Vys2ytFxjx2pbwE/edit")!
     static func version(in bundle: Bundle = .main) -> String {
         let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
         let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
@@ -16,10 +14,10 @@ enum BoundSourceNotices {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .agpl: return "GNU AGPL Version 3"
-            case .modifications: return "Bound Modifications"
-            case .dependencies: return "Dependency Inventory"
-            case .notesFont: return "Notes Font License"
+            case .agpl: return "GNU AGPL version 3"
+            case .modifications: return "Bound modifications"
+            case .dependencies: return "Dependency inventory"
+            case .notesFont: return "Notes font license"
             }
         }
         var resource: String {
@@ -44,36 +42,29 @@ enum BoundSourceNotices {
 struct BoundSourceAndLicenses: View {
     var body: some View {
         Form {
-            Section("Bound") {
+            Section("This build") {
                 LabeledContent("Version", value: BoundSourceNotices.version())
                     .accessibilityIdentifier("bound.source-version")
-                Link("Source", destination: BoundSourceNotices.sourceRepository)
+                Text(BoundSourceNotices.availability)
+                    .accessibilityIdentifier("bound.source-availability")
+                Link("Bound source repository", destination: BoundSourceNotices.sourceRepository)
                     .accessibilityIdentifier("bound.source-repository")
             }
-            Section("Delta") {
-                Link("Source", destination: URL(string: "https://github.com/rileytestut/Delta")!)
+            Section("Upstream") {
+                Text("Built on Delta. Delta and its emulator dependencies retain their original copyright and license notices.")
+                Link("Delta upstream source", destination: URL(string: "https://github.com/rileytestut/Delta")!)
             }
-            Section {
-                Link("Pokédex", destination: BoundSourceNotices.radicalRedPokedex)
-                    .accessibilityIdentifier("bound.source-radical-red-pokedex")
-                Link("Trainer Data", destination: BoundSourceNotices.radicalRedBossDocumentation)
-                    .accessibilityIdentifier("bound.source-radical-red-docs")
-            } header: {
-                Text("Radical Red")
-            } footer: {
-                Text("Pokédex by JwowSquared.")
-            }
-            Section("Licenses") {
-                NavigationLink("Software Licenses") {
-                    LicensesViewController.ViewRepresentable().ignoresSafeArea(.container, edges: [.top, .horizontal]).boundSettingsPage()
+            Section("Bundled notices") {
+                NavigationLink("Software licenses") {
+                    LicensesViewController.ViewRepresentable().ignoresSafeArea()
                 }
                 ForEach(BoundSourceNotices.Document.allCases) { document in
-                    NavigationLink(document.title) { BoundLicenseDocumentView(document: document).boundSettingsPage() }
+                    NavigationLink(document.title) { BoundLicenseDocumentView(document: document) }
                         .accessibilityIdentifier("bound.license-" + document.rawValue)
                 }
             }
         }
-        .navigationTitle("Sources & Licenses")
+        .navigationTitle("Source and licenses")
         .navigationBarTitleDisplayMode(.inline)
         .accessibilityIdentifier("bound.source-and-licenses")
     }

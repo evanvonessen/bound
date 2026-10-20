@@ -11,7 +11,7 @@ import CoreData
 
 import DeltaCore
 
-// Assigns a controller to a player and offers GBA controls for external controllers.
+// Assigns a controller to a player and, for external controllers, lists each system's controls to customize.
 struct PlayerControllerView: View
 {
     let playerIndex: Int
@@ -71,7 +71,7 @@ struct PlayerControllerView: View
             if let controller = selectedController, !controller.isLocalDevice
             {
                 Section {
-                    ForEach(System.registeredSystems.filter { $0 == .gba }, id: \.self) { system in
+                    ForEach(System.registeredSystems, id: \.self) { system in
                         let isCustomized = customMappings.contains { $0.gameType == system.gameType && $0.gameControllerInputType == controller.inputType }
                         
                         NavigationLink {

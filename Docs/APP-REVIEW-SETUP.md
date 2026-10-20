@@ -55,11 +55,8 @@ by this work.
   email. Cancel before submitting when demonstrating the UI with a real account.
   An authenticated successful deletion needs the deployed endpoint and disposable
   QA; interrupted deletion can be retried by its saved operation capability.
-- Settings: Library → Settings and Menu → Settings open the same settings home.
-  Controls contains controller mode, controller mappings/opacity, Context Menu
-  Previews, and Pause Menu Button Placement.
-  Audio opens the sound settings directly. About contains Game Boy Advance core
-  information and Sources & Licenses.
+- Settings: Library Settings exposes controller opacity and GBA core settings;
+  Menu → Bound Settings contains About Bound and Source and licenses.
 
 ## Reply draft — use only after the preceding checks
 

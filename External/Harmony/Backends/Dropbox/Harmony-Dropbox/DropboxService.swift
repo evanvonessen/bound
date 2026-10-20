@@ -8,7 +8,6 @@
 
 import Foundation
 import CoreData
-import UIKit
 
 import Harmony
 
@@ -59,73 +58,6 @@ extension DropboxService
 
 public class DropboxService: NSObject, Service
 {
-    final class OAuthValidationAttempt
-    {
-        private let lock = NSLock()
-        private var active = true
-        private var handlers = [(Result<Account, AuthenticationError>) -> Void]()
-        private var cancellationHandlers = [() -> Void]()
-
-        init(handler: @escaping (Result<Account, AuthenticationError>) -> Void) { handlers.append(handler) }
-
-        func append(_ handler: @escaping (Result<Account, AuthenticationError>) -> Void) -> Bool
-        {
-            lock.lock(); defer { lock.unlock() }
-            guard active else { return false }
-            handlers.append(handler)
-            return true
-        }
-
-        var isActive: Bool
-        {
-            lock.lock(); defer { lock.unlock() }
-            return active
-        }
-
-        func performIfActive(_ action: () -> Void) -> Bool
-        {
-            lock.lock(); defer { lock.unlock() }
-            guard active else { return false }
-            action()
-            return true
-        }
-
-        func track(_ cancellationHandler: @escaping () -> Void)
-        {
-            lock.lock()
-            let shouldCancel = !active
-            if !shouldCancel { cancellationHandlers.append(cancellationHandler) }
-            lock.unlock()
-            if shouldCancel { cancellationHandler() }
-        }
-
-        func finish(_ result: Result<Account, AuthenticationError>)
-        {
-            lock.lock()
-            guard active else { lock.unlock(); return }
-            active = false
-            let handlers = self.handlers
-            self.handlers.removeAll()
-            cancellationHandlers.removeAll()
-            lock.unlock()
-            handlers.forEach { $0(result) }
-        }
-
-        func cancel()
-        {
-            lock.lock()
-            guard active else { lock.unlock(); return }
-            active = false
-            let handlers = self.handlers
-            let cancellations = cancellationHandlers
-            self.handlers.removeAll()
-            cancellationHandlers.removeAll()
-            lock.unlock()
-            cancellations.forEach { $0() }
-            handlers.forEach { $0(.failure(.notAuthenticated)) }
-        }
-    }
-
     public static let shared = DropboxService()
     
     public let localizedName = NSLocalizedString("Dropbox", comment: "")
@@ -139,18 +71,11 @@ public class DropboxService: NSObject, Service
     }
     
     public var preferredDirectoryName: String?
-
-    /// Optional app-owned OAuth implementation. When set, Harmony delegates
-    /// authorization to it instead of using the pinned SDK's implicit flow.
-    public var accessTokenProvider: ((UIViewController?, @escaping (Result<String, AuthenticationError>) -> Void) -> Void)?
-    public var deauthenticationHandler: (() -> Void)?
     
     internal private(set) var dropboxClient: DropboxClient?
     internal let responseQueue = DispatchQueue(label: "com.rileytestut.Harmony.Dropbox.responseQueue")
     
     private var authorizationCompletionHandlers = [(Result<Account, AuthenticationError>) -> Void]()
-    private let oauthValidationLock = NSLock()
-    private var oauthValidationAttempt: OAuthValidationAttempt?
     
     private var accountID: String? {
         get {
@@ -171,32 +96,8 @@ public class DropboxService: NSObject, Service
 
 public extension DropboxService
 {
-    /// Cancels Bound's in-flight Dropbox account and metadata validation while
-    /// preserving the saved refresh credential and legacy Harmony behavior.
-    func cancelPendingAuthenticationValidation()
-    {
-        guard self.accessTokenProvider != nil else { return }
-        self.cancelPendingOAuthValidation()
-    }
-
     func authenticate(withPresentingViewController viewController: UIViewController, completionHandler: @escaping (Result<Account, AuthenticationError>) -> Void)
     {
-        if let accessTokenProvider {
-            guard let (attempt, shouldBegin) = self.beginOAuthValidation(completionHandler) else { return }
-            guard shouldBegin else { return }
-            accessTokenProvider(viewController) { result in
-                guard attempt.isActive else { return }
-                switch result {
-                case .success(let token):
-                    let accepted = attempt.performIfActive { DropboxClientsManager.authorizedClient = DropboxClient(accessToken: token) }
-                    if accepted { self.finishAuthentication(attempt: attempt) }
-                case .failure(let error):
-                    self.completeOAuthValidation(attempt, result: .failure(error))
-                }
-            }
-            return
-        }
-
         self.authorizationCompletionHandlers.append(completionHandler)
         
         DropboxClientsManager.authorizeFromController(UIApplication.shared, controller: viewController) { (url) in
@@ -206,22 +107,6 @@ public extension DropboxService
     
     func authenticateInBackground(completionHandler: @escaping (Result<Account, AuthenticationError>) -> Void)
     {
-        if let accessTokenProvider {
-            guard let (attempt, shouldBegin) = self.beginOAuthValidation(completionHandler) else { return }
-            guard shouldBegin else { return }
-            accessTokenProvider(nil) { result in
-                guard attempt.isActive else { return }
-                switch result {
-                case .success(let token):
-                    let accepted = attempt.performIfActive { DropboxClientsManager.authorizedClient = DropboxClient(accessToken: token) }
-                    if accepted { self.finishAuthentication(attempt: attempt) }
-                case .failure(let error):
-                    self.completeOAuthValidation(attempt, result: .failure(error))
-                }
-            }
-            return
-        }
-
         guard let accountID = self.accountID else { return completionHandler(.failure(.noSavedCredentials)) }
         
         self.authorizationCompletionHandlers.append(completionHandler)
@@ -233,15 +118,7 @@ public extension DropboxService
     
     func deauthenticate(completionHandler: @escaping (Result<Void, DeauthenticationError>) -> Void)
     {
-        self.cancelPendingOAuthValidation()
-        if let deauthenticationHandler {
-            deauthenticationHandler()
-            DropboxClientsManager.authorizedClient = nil
-            self.dropboxClient = nil
-            self.propertyGroupTemplate = nil
-        } else {
-            DropboxClientsManager.unlinkClients()
-        }
+        DropboxClientsManager.unlinkClients()
         
         self.accountID = nil
         completionHandler(.success)
@@ -249,9 +126,6 @@ public extension DropboxService
     
     func handleDropboxURL(_ url: URL) -> Bool
     {
-        // The app-owned PKCE flow is completed by ASWebAuthenticationSession.
-        // Do not pass its `?code=` callback to the legacy SDK's fragment parser.
-        guard self.accessTokenProvider == nil else { return false }
         guard let result = DropboxClientsManager.handleRedirectURL(url) else { return false }
         
         switch result
@@ -273,94 +147,6 @@ public extension DropboxService
         }
         
         return true
-    }
-}
-
-private extension DropboxService
-{
-    func beginOAuthValidation(_ handler: @escaping (Result<Account, AuthenticationError>) -> Void) -> (OAuthValidationAttempt, Bool)?
-    {
-        oauthValidationLock.lock(); defer { oauthValidationLock.unlock() }
-        if let attempt = oauthValidationAttempt {
-            if !attempt.append(handler) {
-                let replacement = OAuthValidationAttempt(handler: handler)
-                oauthValidationAttempt = replacement
-                return (replacement, true)
-            }
-            return (attempt, false)
-        }
-        let attempt = OAuthValidationAttempt(handler: handler)
-        oauthValidationAttempt = attempt
-        return (attempt, true)
-    }
-
-    func clearOAuthValidation(_ attempt: OAuthValidationAttempt)
-    {
-        oauthValidationLock.lock(); defer { oauthValidationLock.unlock() }
-        if oauthValidationAttempt === attempt { oauthValidationAttempt = nil }
-    }
-
-    func cancelPendingOAuthValidation()
-    {
-        oauthValidationLock.lock()
-        let attempt = oauthValidationAttempt
-        oauthValidationAttempt = nil
-        oauthValidationLock.unlock()
-        attempt?.cancel()
-        guard attempt != nil else { return }
-
-        oauthValidationLock.lock()
-        if oauthValidationAttempt == nil {
-            DropboxClientsManager.authorizedClient = nil
-            self.dropboxClient = nil
-        }
-        oauthValidationLock.unlock()
-    }
-
-    func finishAuthentication(attempt: OAuthValidationAttempt)
-    {
-        guard attempt.isActive else { return }
-        guard let dropboxClient = DropboxClientsManager.authorizedClient else {
-            completeOAuthValidation(attempt, result: .failure(.notAuthenticated)); return
-        }
-
-        let request = dropboxClient.users.getCurrentAccount()
-        attempt.track { request.cancel() }
-        request.response { account, error in
-            guard attempt.isActive else { return }
-            do {
-                let account = try self.process(Result(account, error))
-                self.createSyncDirectoryIfNeeded(attempt: attempt) { result in
-                    guard attempt.isActive else { return }
-                    switch result {
-                    case .success:
-                        let metadata = HarmonyMetadataKey.allHarmonyKeys.reduce(into: [:], { $0[$1] = $1.rawValue as Any })
-                        self.validateMetadata(metadata, attempt: attempt) { result in
-                            guard attempt.isActive else { return }
-                            switch result {
-                            case .success:
-                                let stored = attempt.performIfActive {
-                                    self.dropboxClient = dropboxClient
-                                    self.accountID = account.accountId
-                                }
-                                if stored { self.completeOAuthValidation(attempt, result: .success(Account(name: account.name.displayName, emailAddress: account.email))) }
-                            case .failure(let error): self.completeOAuthValidation(attempt, result: .failure(AuthenticationError(error)))
-                            }
-                        }
-                    case .failure(let error):
-                        self.completeOAuthValidation(attempt, result: .failure(AuthenticationError(error)))
-                    }
-                }
-            } catch {
-                self.completeOAuthValidation(attempt, result: .failure(AuthenticationError(error)))
-            }
-        }
-    }
-
-    func completeOAuthValidation(_ attempt: OAuthValidationAttempt, result: Result<Account, AuthenticationError>)
-    {
-        self.clearOAuthValidation(attempt)
-        attempt.finish(result)
     }
 }
 
@@ -420,28 +206,20 @@ private extension DropboxService
         }
     }
     
-    func createSyncDirectoryIfNeeded(attempt: OAuthValidationAttempt? = nil, completionHandler: @escaping (Result<Void, Error>) -> Void)
+    func createSyncDirectoryIfNeeded(completionHandler: @escaping (Result<Void, Error>) -> Void)
     {
         do
         {
-            guard attempt?.isActive ?? true else { return }
             guard let dropboxClient = DropboxClientsManager.authorizedClient else { throw AuthenticationError.notAuthenticated }
             
             let path = try self.remotePath(filename: nil)
-            let metadataRequest = dropboxClient.files.getMetadata(path: path)
-            attempt?.track { metadataRequest.cancel() }
-            metadataRequest.response(queue: self.responseQueue) { (metadata, error) in
-                guard attempt?.isActive ?? true else { return }
+            dropboxClient.files.getMetadata(path: path).response(queue: self.responseQueue) { (metadata, error) in
                 // Retrieved metadata successfully, which means folder exists, so no need to do anything else.
                 guard let error = error else { return completionHandler(.success) }
                 
                 if case .routeError(let error, _, _, _) = error, case .path(.notFound) = error.unboxed
                 {
-                    guard attempt?.isActive ?? true else { return }
-                    let createRequest = dropboxClient.files.createFolderV2(path: path)
-                    attempt?.track { createRequest.cancel() }
-                    createRequest.response(queue: self.responseQueue) { (result, error) in
-                        guard attempt?.isActive ?? true else { return }
+                    dropboxClient.files.createFolderV2(path: path).response(queue: self.responseQueue) { (result, error) in
                         do
                         {
                             try self.process(Result(error))
@@ -567,9 +345,8 @@ extension DropboxService
         }
     }
     
-    func validateMetadata<T>(_ metadata: [HarmonyMetadataKey: T], attempt: OAuthValidationAttempt? = nil, completionHandler: @escaping (Result<String, Error>) -> Void)
+    func validateMetadata<T>(_ metadata: [HarmonyMetadataKey: T], completionHandler: @escaping (Result<String, Error>) -> Void)
     {
-        guard attempt?.isActive ?? true else { return }
         let fields = metadata.keys.map { FileProperties.PropertyFieldTemplate(name: $0.rawValue, description_: $0.rawValue, type: .string_) }
         
         do
@@ -583,18 +360,13 @@ extension DropboxService
                 let addedFields = fields.filter { !existingFields.contains($0.name) }
                 guard !addedFields.isEmpty else { return completionHandler(.success(templateID)) }
                 
-                guard attempt?.isActive ?? true else { return }
-                let updateRequest = dropboxClient.file_properties.templatesUpdateForUser(templateId: templateID, name: nil, description_: nil, addFields: addedFields)
-                attempt?.track { updateRequest.cancel() }
-                updateRequest.response(queue: self.responseQueue) { (result, error) in
-                    guard attempt?.isActive ?? true else { return }
+                dropboxClient.file_properties.templatesUpdateForUser(templateId: templateID, name: nil, description_: nil, addFields: addedFields).response(queue: self.responseQueue) { (result, error) in
                     do
                     {
                         let result = try self.process(Result(result, error))
                         
                         let templateID = result.templateId
-                        self.fetchPropertyGroupTemplate(forTemplateID: templateID, attempt: attempt) { (result) in
-                            guard attempt?.isActive ?? true else { return }
+                        self.fetchPropertyGroupTemplate(forTemplateID: templateID) { (result) in
                             switch result
                             {
                             case .success: completionHandler(.success(templateID))
@@ -610,39 +382,30 @@ extension DropboxService
             }
             else
             {
-                let listRequest = dropboxClient.file_properties.templatesListForUser()
-                attempt?.track { listRequest.cancel() }
-                listRequest.response(queue: self.responseQueue) { (result, error) in
-                    guard attempt?.isActive ?? true else { return }
+                dropboxClient.file_properties.templatesListForUser().response(queue: self.responseQueue) { (result, error) in
                     do
                     {
                         let result = try self.process(Result(result, error))
                         
                         if let templateID = result.templateIds.first
                         {
-                            self.fetchPropertyGroupTemplate(forTemplateID: templateID, attempt: attempt) { (result) in
-                                guard attempt?.isActive ?? true else { return }
+                            self.fetchPropertyGroupTemplate(forTemplateID: templateID) { (result) in
                                 switch result
                                 {
-                                case .success: self.validateMetadata(metadata, attempt: attempt, completionHandler: completionHandler)
+                                case .success: self.validateMetadata(metadata, completionHandler: completionHandler)
                                 case .failure(let error): completionHandler(.failure(error))
                                 }
                             }
                         }
                         else
                         {
-                            guard attempt?.isActive ?? true else { return }
-                            let addRequest = dropboxClient.file_properties.templatesAddForUser(name: "Harmony", description_: "Harmony syncing metadata.", fields: fields)
-                            attempt?.track { addRequest.cancel() }
-                            addRequest.response(queue: self.responseQueue) { (result, error) in
-                                guard attempt?.isActive ?? true else { return }
+                            dropboxClient.file_properties.templatesAddForUser(name: "Harmony", description_: "Harmony syncing metadata.", fields: fields).response(queue: self.responseQueue) { (result, error) in
                                 do
                                 {
                                     let result = try self.process(Result(result, error))
                                     
                                     let templateID = result.templateId
-                                    self.fetchPropertyGroupTemplate(forTemplateID: templateID, attempt: attempt) { (result) in
-                                        guard attempt?.isActive ?? true else { return }
+                                    self.fetchPropertyGroupTemplate(forTemplateID: templateID) { (result) in
                                         switch result
                                         {
                                         case .success: completionHandler(.success(templateID))
@@ -670,25 +433,17 @@ extension DropboxService
         }
     }
     
-    func fetchPropertyGroupTemplate(forTemplateID templateID: String, attempt: OAuthValidationAttempt? = nil, completionHandler: @escaping (Result<FileProperties.PropertyGroupTemplate, Error>) -> Void)
+    func fetchPropertyGroupTemplate(forTemplateID templateID: String, completionHandler: @escaping (Result<FileProperties.PropertyGroupTemplate, Error>) -> Void)
     {
         do
         {
-            guard attempt?.isActive ?? true else { return }
             guard let dropboxClient = DropboxClientsManager.authorizedClient else { throw AuthenticationError.notAuthenticated }
             
-            let getRequest = dropboxClient.file_properties.templatesGetForUser(templateId: templateID)
-            attempt?.track { getRequest.cancel() }
-            getRequest.response(queue: self.responseQueue) { (result, error) in
-                guard attempt?.isActive ?? true else { return }
+            dropboxClient.file_properties.templatesGetForUser(templateId: templateID).response(queue: self.responseQueue) { (result, error) in
                 do
                 {
                     let result = try self.process(Result(result, error))
-                    if let attempt {
-                        guard attempt.performIfActive({ self.propertyGroupTemplate = (templateID, result) }) else { return }
-                    } else {
-                        self.propertyGroupTemplate = (templateID, result)
-                    }
+                    self.propertyGroupTemplate = (templateID, result)
                     
                     completionHandler(.success(result))
                 }

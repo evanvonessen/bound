@@ -22,7 +22,6 @@ struct ControllerSettingsView: View
                 NavigationLink {
                     PlayerControllerView(playerIndex: playerIndex)
                         .environment(\.managedObjectContext, DatabaseManager.shared.viewContext)
-                        .boundSettingsPage()
                 } label: {
                     LabeledContent("Player \(playerIndex + 1)", value: controllerNames[playerIndex] ?? "")
                 }

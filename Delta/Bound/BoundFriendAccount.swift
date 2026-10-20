@@ -54,10 +54,6 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
     }
     fileprivate func invalidate() { snapshot.update(token: nil, expiry: .distantPast) }
     func credentials() throws { _ = try validToken() }
-    func isSameSession(as other: AppCloudSession?) -> Bool {
-        guard let other else { return false }
-        return owner == other.owner && snapshot === other.snapshot && (try? credentials()) != nil
-    }
     private func validToken() throws -> String {
         let value = snapshot.read()
         guard let token = value.token, value.expiry > Date() else { throw BoundFriendError.signIn }
@@ -75,12 +71,6 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
     }
     func friendOnboardingRequest(action: String, payload: [String: String]) throws -> URLRequest {
         try request(path: "/rest/v1/rpc/cup050_friends", body: ["action": action, "payload": payload])
-    }
-    func friendSocialRequest(action: String, payload: [String: String]) throws -> URLRequest {
-        try request(path: "/rest/v1/rpc/bound_social_v2", body: ["action": action, "payload": payload])
-    }
-    func friendJiggleRequest(roomID: String, requestID: String) throws -> URLRequest {
-        try request(path: "/functions/v1/bound-jiggle", body: ["roomID": roomID, "requestID": requestID])
     }
     func friendSharingRequest(roomID: String) throws -> URLRequest {
         try request(path: "/functions/v1/agora-token", body: ["roomID": roomID])
@@ -215,7 +205,6 @@ final class BoundFriendAccount: ObservableObject {
     nonisolated static let origin = "https://qevnxhngdtlyihhmvnjv.supabase.co"
     // All production game coordinators share one owner of the rotating refresh token.
     static let shared = BoundFriendAccount()
-    static let willSignOutNotification = Notification.Name("BoundFriendAccountWillSignOut")
     @Published private(set) var session: AppCloudSession?
     @Published private(set) var busy = false
     @Published private(set) var status = "Sign in with your existing Bound account."
@@ -360,7 +349,6 @@ final class BoundFriendAccount: ObservableObject {
         }
     }
     func signOut() {
-        if session != nil { NotificationCenter.default.post(name: Self.willSignOutNotification, object: self) }
         generation = UUID(); refreshTask?.cancel(); refreshTask = nil; timer?.cancel(); timer = nil
         session?.invalidate(); session = nil; saved = nil; busy = false
         deletionEmail = nil; deletionIdentityOwner = nil
@@ -390,16 +378,11 @@ final class BoundFriendAccount: ObservableObject {
         return request
     }
 
-    enum SignupResult: Equatable { case signedIn, checkEmail, usernameTaken, failed, cancelled }
-    func createAccount(email: String, password: String, username: String) async -> SignupResult {
+    enum SignupResult { case signedIn, checkEmail, failed, cancelled }
+    func createAccount(email: String, password: String) async -> SignupResult {
         guard !busy, session == nil, !deletionPending else { return .failed }
         guard let email = Self.normalizedEmail(email), !password.isEmpty else {
             status = "Enter a valid email and a password."; return .failed
-        }
-        let normalizedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard BoundSocialAPI.validUsername(normalizedUsername) else {
-            status = "Choose a username with 1–40 characters. Links, email addresses and unsafe names aren't allowed."
-            return .failed
         }
         signOut()
         guard !removalPending else { return .failed }
@@ -408,23 +391,11 @@ final class BoundFriendAccount: ObservableObject {
         var receivedSession = false
         do {
             let key = try configuration()
-            let available = try await checkUsernameAvailability(normalizedUsername, key: key)
-            guard generation == run, !Task.isCancelled else { return .cancelled }
-            guard available else {
-                status = Self.usernameTakenMessage
-                return .usernameTaken
-            }
-            let request = try Self.signupRequest(email: email, password: password,
-                                                 username: normalizedUsername, key: key)
+            var request = try tokenRequest(grant: "password", key: key, body: ["email": email, "password": password])
+            request.url = URL(string: Self.origin + "/auth/v1/signup")!
             let response = try await transport(request)
             guard generation == run, !Task.isCancelled else { return .cancelled }
             guard (200..<300).contains(response.status) else {
-                if (try? await checkUsernameAvailability(normalizedUsername, key: key)) == false {
-                    guard generation == run, !Task.isCancelled else { return .cancelled }
-                    status = Self.usernameTakenMessage
-                    return .usernameTaken
-                }
-                guard generation == run, !Task.isCancelled else { return .cancelled }
                 status = Self.signupError(response); return .failed
             }
             guard let object = try JSONSerialization.jsonObject(with: response.data) as? [String: Any] else { throw BoundFriendError.unavailable }
@@ -445,49 +416,9 @@ final class BoundFriendAccount: ObservableObject {
             return .checkEmail
         } catch {
             guard generation == run, !Task.isCancelled else { return .cancelled }
-            if let socialError = error as? BoundSocialError {
-                status = socialError.localizedDescription
-            } else {
-                status = receivedSession ? "Your account responded, but sign-in could not be saved securely. Unlock your device, then sign in." : "Could not finish account creation. Check your connection, then try signing in or creating an account again."
-            }
+            status = receivedSession ? "Your account responded, but sign-in could not be saved securely. Unlock your device, then sign in." : "Could not finish account creation. Check your connection, then try signing in or creating an account again."
             return .failed
         }
-    }
-    private static let usernameTakenMessage = "That username is already taken. Choose another."
-
-    /// Builds a username-based request using only the configured publishable key.
-    static func signupRequest(email: String, password: String, username: String, key: String) throws -> URLRequest {
-        var request = URLRequest(url: URL(string: origin + "/auth/v1/signup")!)
-        request.httpMethod = "POST"; request.timeoutInterval = 10
-        request.setValue(key, forHTTPHeaderField: "apikey")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: Any] = ["email": email, "password": password]
-        body["data"] = ["bound_username_v1": username]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        return request
-    }
-
-    static func usernameAvailabilityRequest(username: String, key: String) throws -> URLRequest {
-        var request = URLRequest(url: URL(string: origin + "/rest/v1/rpc/bound_username_available")!)
-        request.httpMethod = "POST"; request.timeoutInterval = 10
-        request.setValue(key, forHTTPHeaderField: "apikey")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["username": username])
-        return request
-    }
-
-    private func checkUsernameAvailability(_ username: String, key: String) async throws -> Bool {
-        let request = try Self.usernameAvailabilityRequest(username: username, key: key)
-        let response = try await transport(request)
-        guard (200..<300).contains(response.status),
-              let object = try JSONSerialization.jsonObject(with: response.data) as? [String: Any],
-              let ok = object["ok"] as? Bool else { throw BoundFriendError.unavailable }
-        if !ok {
-            if object["error"] as? String == "name_not_allowed" { throw BoundSocialError.rejected("name_not_allowed") }
-            throw BoundFriendError.unavailable
-        }
-        guard let available = object["available"] as? Bool else { throw BoundFriendError.unavailable }
-        return available
     }
     private static func signupError(_ response: BoundAuthTransport.Response) -> String {
         let object = (try? JSONSerialization.jsonObject(with: response.data)) as? [String: Any]

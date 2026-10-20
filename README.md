@@ -1,4 +1,4 @@
-# Bound
+# Bound 2
 
 A Delta-based Bound development app with friend video, notes and a type chart. This repository contains one app foundation; the original Bound/mGBA checkout is untouched.
 

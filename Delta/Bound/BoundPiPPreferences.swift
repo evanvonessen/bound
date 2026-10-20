@@ -5,219 +5,20 @@ import CoreGraphics
 enum BoundPiPCorner: String, CaseIterable, Sendable {
     case topLeft, topRight, bottomLeft, bottomRight
 }
-enum BoundPiPContent: String, CaseIterable, Sendable {
-    case friend, types, notes, bosses, dex
-    var title: String { self == .dex ? "RR Dex" : rawValue.capitalized }
-    static let cycleOrder: [Self] = [.friend, .notes, .types, .bosses, .dex]
-}
+enum BoundPiPContent: String, CaseIterable, Sendable { case friend, types, notes }
 enum BoundPiPHiddenSide: String, Sendable { case left, right }
-
-enum BoundUIVersion: Int, CaseIterable, Sendable {
-    case option1 = 1, option2 = 2
-    var title: String { "Option \(rawValue)" }
-}
-
-final class BoundUIVersionPreferences {
-    static let key = "bound.ui.version.v1"
-    static let didChangeNotification = Notification.Name("BoundUIVersionDidChange")
-    private let defaults: UserDefaults
-    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
-    var version: BoundUIVersion {
-        get { BoundUIVersion(rawValue: defaults.integer(forKey: Self.key)) ?? .option2 }
-        set {
-            guard version != newValue else { return }
-            defaults.set(newValue.rawValue, forKey: Self.key)
-            NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
-        }
-    }
-    var effectiveVersion: BoundUIVersion {
-        version
-    }
-}
-
-enum BoundReferenceLayout: Int, CaseIterable, Sendable {
-    case layout1 = 1, layout2 = 2, layout3 = 3, layout4 = 4, layout5 = 5, layout6 = 6, layout7 = 7, layout8 = 8, layout9 = 9, layout10 = 10, layout11 = 11, layout12 = 12
-    static var bossLayouts: [Self] { allCases }
-    var title: String { "Layout \(rawValue)" }
-    var descriptiveName: String {
-        switch self {
-        case .layout1: "Original"
-        case .layout2: "Quick reference"
-        case .layout3: "Full portrait"
-        case .layout4: "Expandable details"
-        case .layout5: "At a glance"
-        case .layout6: "Priority stats"
-        case .layout7: "Detailed classic"
-        case .layout8: "Island controls"
-        case .layout9: "Inline learnset"
-        case .layout10: "Compact matchups"
-        case .layout11: "Trainer navigation"
-        case .layout12: "Expanded reference"
-        }
-    }
-    func descriptiveName(isBoss: Bool) -> String {
-        if isBoss {
-            return switch self {
-            case .layout5: "Moves or stats"
-            case .layout6: "Moves and stats"
-            case .layout7: "Speed reference"
-            case .layout9: "Team focus"
-            case .layout12: "Expanded team"
-            default: descriptiveName
-            }
-        }
-        return self == .layout11 ? "Collapsible learnset" : descriptiveName
-    }
-    var summary: String {
-        switch self {
-        case .layout1: "The original reference view."
-        case .layout2: "More reference details and quick shortcuts."
-        case .layout3: "Uses the full portrait space around the Dynamic Island."
-        case .layout4: "Larger controls with expandable secondary details."
-        case .layout5: "More information at a glance, with quick access to details."
-        case .layout6: "Keeps key stats in view and makes secondary details easier to reach."
-        case .layout7: "The original reference view with colored stats, more detail, and compact shortcuts."
-        case .layout8: "More room for details, with Island controls and larger reference shortcuts."
-        case .layout9: "Layout 8's design; RR Dex adds an inline, searchable learnset."
-        case .layout10: "Layout 9 with compact matchup summaries and nature effects."
-        case .layout11: "Layout 10 with a larger Boss View trainer icon and an inset trainer picker."
-        case .layout12: "Layout 11 with full-color matchups, wider boss team icons, and shorter move labels."
-        }
-    }
-}
-
-enum BoundReferenceLayoutPreferences {
-    // Separate, device-local choices. Existing saved choices always take precedence.
-    static let bossKey = "bound.delta.pip.v1.bosses.layout"
-    static let dexKey = "bound.delta.pip.v1.dex.layout"
-}
-
-enum BoundCompanionButtonType: Int, CaseIterable, Sendable {
-    case option1 = 1, option2 = 2, option3 = 3, option4 = 4
-    var title: String { "Option \(rawValue)" }
-    var splitButtonCount: Int {
-        switch self {
-        case .option1, .option2: 0
-        case .option3: 3
-        case .option4: 2
-        }
-    }
-    var summary: String {
-        switch self {
-        case .option1: "The original round button and placement."
-        case .option2: "A tall rounded rectangle."
-        case .option3: "Three separate buttons in the tall button's space."
-        case .option4: "Two separate buttons in the tall button's space."
-        }
-    }
-}
-
-final class BoundCompanionButtonPreferences {
-    // v2 separates the newly usable Option 4 value from legacy rawValue 4,
-    // which older builds treated as an alias for Option 3.
-    static let key = "bound.delta.pip.v2.button-type"
-    static let legacyKey = "bound.delta.pip.v1.button-type"
-    static let didChangeNotification = Notification.Name("BoundCompanionButtonDidChange")
-    private let defaults: UserDefaults
-    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
-    var buttonType: BoundCompanionButtonType {
-        get {
-            if let saved = defaults.object(forKey: Self.key) as? Int {
-                return BoundCompanionButtonType(rawValue: saved) ?? .option1
-            }
-            guard defaults.object(forKey: Self.legacyKey) != nil else { return .option4 }
-            let legacy = defaults.integer(forKey: Self.legacyKey)
-            return legacy == 4 ? .option3 : BoundCompanionButtonType(rawValue: legacy) ?? .option1
-        }
-        set {
-            guard buttonType != newValue else { return }
-            defaults.set(newValue.rawValue, forKey: Self.key)
-            NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
-        }
-    }
-    var effectiveButtonType: BoundCompanionButtonType {
-        buttonType
-    }
-}
 
 @MainActor
 final class BoundPiPPreferences {
-    static let didChangeNotification = Notification.Name("BoundPiPPreferencesDidChange")
     private let defaults: UserDefaults
     private let namespace: String
     init(defaults: UserDefaults = .standard, namespace: String = "bound.delta.pip.v1") {
         self.defaults = defaults; self.namespace = namespace
     }
     private func key(_ suffix: String) -> String { namespace + "." + suffix }
-    func isEnabled(_ content: BoundPiPContent) -> Bool {
-        defaults.object(forKey: key(content.rawValue + ".enabled")) as? Bool ?? true
-    }
-    func setEnabled(_ enabled: Bool, for content: BoundPiPContent) {
-        guard isEnabled(content) != enabled else { return }
-        defaults.set(enabled, forKey: key(content.rawValue + ".enabled"))
-        notifyChange()
-    }
-    var uiVersion: BoundUIVersion { BoundUIVersionPreferences(defaults: defaults).version }
-    var buttonType: BoundCompanionButtonType {
-        get { BoundCompanionButtonPreferences(defaults: defaults).buttonType }
-        set { BoundCompanionButtonPreferences(defaults: defaults).buttonType = newValue }
-    }
-    /// Each segment keeps its own choices, including an intentionally empty set.
-    /// Option 3 keeps its original storage and defaults; Option 4 has an independent namespace.
-    func assignedContents(for button: Int, buttonType: BoundCompanionButtonType? = nil) -> [BoundPiPContent] {
-        let type = buttonType ?? self.buttonType
-        guard (0..<type.splitButtonCount).contains(button) else { return [] }
-        let fallback: [[BoundPiPContent]] = type == .option4
-            ? [[.friend], [.types, .bosses, .dex]]
-            : [[.friend], [.bosses], [.types]]
-        let suffix = type == .option3 ? "button.\(button + 1).views" : "button.option4.\(button + 1).views"
-        guard let saved = defaults.stringArray(forKey: key(suffix)) else { return fallback[button] }
-        let selected = Set(saved.compactMap(BoundPiPContent.init(rawValue:)))
-        return orderedContents.filter { selected.contains($0) }
-    }
-    func setAssignedContents(_ contents: [BoundPiPContent], for button: Int, buttonType: BoundCompanionButtonType? = nil) {
-        let type = buttonType ?? self.buttonType
-        guard (0..<type.splitButtonCount).contains(button) else { return }
-        let selected = Set(contents)
-        let normalized = orderedContents.filter { selected.contains($0) }.map(\.rawValue)
-        let suffix = type == .option3 ? "button.\(button + 1).views" : "button.option4.\(button + 1).views"
-        let preferenceKey = key(suffix)
-        guard defaults.stringArray(forKey: preferenceKey) != normalized else { return }
-        defaults.set(normalized, forKey: preferenceKey)
-        notifyChange()
-    }
-    var orderedContents: [BoundPiPContent] {
-        let saved = defaults.stringArray(forKey: key("view-order")) ?? []
-        return Self.normalizedOrder(saved.compactMap(BoundPiPContent.init(rawValue:)))
-    }
-    private static func normalizedOrder(_ contents: [BoundPiPContent]) -> [BoundPiPContent] {
-        var result: [BoundPiPContent] = []
-        for content in contents + BoundPiPContent.cycleOrder where !result.contains(content) {
-            result.append(content)
-        }
-        return result
-    }
-    func setContentOrder(_ contents: [BoundPiPContent]) {
-        let normalized = Self.normalizedOrder(contents).map(\.rawValue)
-        let preferenceKey = key("view-order")
-        guard defaults.stringArray(forKey: preferenceKey) != normalized else { return }
-        defaults.set(normalized, forKey: preferenceKey)
-        notifyChange()
-    }
-    func enabledContents(uiVersion: BoundUIVersion = .option2) -> [BoundPiPContent] {
-        let contents = uiVersion == .option2 ? orderedContents : BoundPiPContent.cycleOrder
-        return contents.filter { isEnabled($0) }
-    }
-    private func notifyChange() {
-        NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
-    }
     var corner: BoundPiPCorner {
         get { BoundPiPCorner(rawValue: defaults.string(forKey: key("corner")) ?? "") ?? .topRight }
-        set {
-            guard corner != newValue else { return }
-            defaults.set(newValue.rawValue, forKey: key("corner"))
-            notifyChange()
-        }
+        set { defaults.set(newValue.rawValue, forKey: key("corner")) }
     }
     func corner(for content: BoundPiPContent) -> BoundPiPCorner {
         let name = key(content.rawValue + ".corner")
@@ -227,10 +28,7 @@ final class BoundPiPPreferences {
         return inherited
     }
     func setCorner(_ value: BoundPiPCorner, for content: BoundPiPContent) {
-        let preferenceKey = key(content.rawValue + ".corner")
-        guard defaults.string(forKey: preferenceKey) != value.rawValue else { return }
-        defaults.set(value.rawValue, forKey: preferenceKey)
-        notifyChange()
+        defaults.set(value.rawValue, forKey: key(content.rawValue + ".corner"))
     }
     func scale(for content: BoundPiPContent) -> Double {
         validNumber(key(content.rawValue + ".scale"), range: 0.65...1.4)
@@ -245,17 +43,11 @@ final class BoundPiPPreferences {
     }
     func setScale(_ value: Double, for content: BoundPiPContent) {
         guard value.isFinite else { return }
-        let normalized = min(1.4, max(0.65, value))
-        guard scale(for: content) != normalized else { return }
-        defaults.set(normalized, forKey: key(content.rawValue + ".scale"))
-        notifyChange()
+        defaults.set(min(1.4, max(0.65, value)), forKey: key(content.rawValue + ".scale"))
     }
     func setOpacity(_ value: Double, for content: BoundPiPContent) {
         guard content != .types, value.isFinite else { return }
-        let normalized = min(1, max(0, value))
-        guard opacity(for: content) != normalized else { return }
-        defaults.set(normalized, forKey: key(content.rawValue + ".opacity"))
-        notifyChange()
+        defaults.set(min(1, max(0, value)), forKey: key(content.rawValue + ".opacity"))
     }
     func transparency(for content: BoundPiPContent) -> Double { 1 - opacity(for: content) }
     func setTransparency(_ value: Double, for content: BoundPiPContent) { setOpacity(1 - value, for: content) }

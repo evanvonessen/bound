@@ -7,10 +7,6 @@
 //
 
 import UIKit
-#if DEBUG && targetEnvironment(simulator)
-import GameController
-#endif
-import GoogleSignIn
 
 import DeltaCore
 import Harmony
@@ -48,7 +44,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate
         }
         #endif
         Settings.registerDefaults()
-        BoundJiggleNotifications.shared.start()
         
         self.registerCores()
         self.configureAppearance()
@@ -56,12 +51,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate
         
         // Controllers
         ExternalGameControllerManager.shared.startMonitoring()
-        #if DEBUG && targetEnvironment(simulator)
-        if ProcessInfo.processInfo.arguments.contains("--bound-ui-controller-fixture") {
-            let controller = GCController.withExtendedGamepad()
-            NotificationCenter.default.post(name: .GCControllerDidConnect, object: controller)
-        }
-        #endif
         
         // JIT
         ServerManager.shared.prepare()
@@ -94,13 +83,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate
         self.startOperator()
 
         return true
-    }
-
-    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        BoundJiggleNotifications.shared.registered(token: deviceToken)
-    }
-    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        BoundJiggleNotifications.shared.registrationFailed()
     }
 
     func applicationWillResignActive(_ application: UIApplication)
@@ -141,7 +123,7 @@ extension AppDelegate
         // Called when a new scene session is being created.
         // Use this method to select a configuration to create the new scene with.
         
-        if connectingSceneSession.role == .windowExternalDisplayNonInteractive
+        if connectingSceneSession.role == .windowExternalDisplay
         {
             // External Display
             return UISceneConfiguration(name: "External Display", sessionRole: connectingSceneSession.role)
@@ -234,7 +216,6 @@ extension AppDelegate
     
     @discardableResult private func openURL(_ url: URL) -> Bool
     {
-        if GIDSignIn.sharedInstance.handle(url) { return true }
         if url.isFileURL
         {
             if GameType(fileExtension: url.pathExtension) != nil || url.pathExtension.lowercased() == "zip"
@@ -248,7 +229,6 @@ extension AppDelegate
         }
         else if url.scheme?.hasPrefix("db-") == true
         {
-            guard DropboxService.shared.clientID != nil else { return false }
             return DropboxService.shared.handleDropboxURL(url)
         }
         else if url.scheme?.lowercased() == "delta"

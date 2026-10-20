@@ -7,10 +7,8 @@ struct BoundAppearanceSettings: View {
     @AppStorage(Settings.Name.isButtonHapticFeedbackEnabled.rawValue) private var buttons = true
     @AppStorage(Settings.Name.isThumbstickHapticFeedbackEnabled.rawValue) private var sticks = true
     var emulationDetails: BoundEmulationDetails? = nil
-    var includeAppearance = true
-    var includeAbout = true
     var body: some View {
-        if includeAppearance && !BoundFeatureVisibility.simplifiedSettings {
+        if !BoundFeatureVisibility.simplifiedSettings {
         Section("Screen layout") {
             Picker("Screen arrangement", selection: Binding(get: {
                 BoundScreenLayout(rawValue: screenLayoutRaw) ?? BoundAppearancePreferences.defaultScreenLayout
@@ -38,37 +36,36 @@ struct BoundAppearanceSettings: View {
             Text("Uses native touch feedback. Both are on by default. Physical controllers do not trigger touch feedback; this device may not support vibration.")
         }
         }
-        if includeAbout {
-        Section {
+        Section("About Bound") {
             LabeledContent("Version", value: (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") + " (" + (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") + ")")
-            if let details = emulationDetails {
-            DisclosureGroup("Emulation") {
-                        LabeledContent("Package", value: details.packageName).accessibilityIdentifier("bound.emulation-package")
+            Text("Bound is built on Delta. Delta and its emulator dependencies retain their original copyright and license notices.").font(.footnote).foregroundStyle(.secondary)
+            DisclosureGroup("Emulation backend") {
+                    if let details = emulationDetails {
+                        LabeledContent("Active package", value: details.packageName).accessibilityIdentifier("bound.emulation-package")
                         #if DEBUG
-                        LabeledContent("Package Identifier", value: details.packageIdentifier).font(.caption)
-                        LabeledContent("Package Build", value: details.packageBuild).accessibilityIdentifier("bound.emulation-package-build")
+                        LabeledContent("Package identifier", value: details.packageIdentifier).font(.caption)
+                        LabeledContent("Package build", value: details.packageBuild).accessibilityIdentifier("bound.emulation-package-build")
                         #else
-                        LabeledContent("Package Version", value: details.packageVersion ?? "Source Build").accessibilityIdentifier("bound.emulation-package-build")
+                        LabeledContent("Package version", value: details.packageVersion ?? "Source build").accessibilityIdentifier("bound.emulation-package-build")
                         #endif
                         if let engine = details.engineName {
-                            LabeledContent("Engine", value: engine).accessibilityIdentifier("bound.emulation-engine")
+                            LabeledContent("Emulator engine", value: engine).accessibilityIdentifier("bound.emulation-engine")
                             #if DEBUG
                             if let revision = details.engineRevision {
-                                LabeledContent("Engine Source", value: String(revision.prefix(12))).accessibilityIdentifier("bound.emulation-engine-build")
+                                LabeledContent("Engine source", value: "Pinned " + String(revision.prefix(12))).accessibilityIdentifier("bound.emulation-engine-build")
                             }
                             #endif
                         }
                         #if DEBUG
-                        LabeledContent("DeltaCore Source", value: String(BoundEmulationDetails.deltaCoreRevision.prefix(12))).font(.caption)
-                        LabeledContent("Delta Source", value: String(BoundEmulationDetails.deltaUpstreamRevision.prefix(12))).font(.caption)
+                        Text("DeltaCore pinned source " + String(BoundEmulationDetails.deltaCoreRevision.prefix(12))).font(.caption)
+                        Text("Delta upstream source " + String(BoundEmulationDetails.deltaUpstreamRevision.prefix(12))).font(.caption)
                         #endif
+                    } else { Text("No emulation package is active.") }
             }
-            }
-            NavigationLink("Sources & Licenses") { BoundSourceAndLicenses().boundSettingsPage() }
+            NavigationLink("Source and licenses") { BoundSourceAndLicenses() }
                 .accessibilityIdentifier("bound.source-and-licenses-link")
         }
-        }
-        if includeAppearance && !BoundFeatureVisibility.simplifiedSettings {
+        if !BoundFeatureVisibility.simplifiedSettings {
         Section {
             Button("Reset appearance and feedback to defaults") {
                 BoundAppearancePreferences().reset()

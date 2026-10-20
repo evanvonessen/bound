@@ -20,14 +20,7 @@ class PauseViewController: UIViewController, PauseInfoProviding
     }
     
     var pauseItems: [MenuItem] {
-        return [self.saveStateItem, self.loadStateItem, self.cheatCodesItem, self.fastForwardItem, self.friendsItem, self.screenshotItem, self.showsArrangeViews ? self.arrangeViewsItem : nil, self.controllerModeItem, self.askLuItem].compactMap { $0 }
-    }
-
-    var showsArrangeViews = false {
-        didSet {
-            guard showsArrangeViews != oldValue else { return }
-            refreshVisiblePauseItems()
-        }
+        return [self.saveStateItem, self.loadStateItem, self.cheatCodesItem, self.fastForwardItem, self.sustainButtonsItem, self.screenshotItem, self.controllerModeItem, self.askLuItem].compactMap { $0 }
     }
     
     var closeButtonTitle: String = NSLocalizedString("Main Menu", comment: "")
@@ -48,9 +41,8 @@ class PauseViewController: UIViewController, PauseInfoProviding
     var loadStateItem: MenuItem?
     var cheatCodesItem: MenuItem?
     var fastForwardItem: MenuItem?
-    var friendsItem: MenuItem?
+    var sustainButtonsItem: MenuItem?
     var screenshotItem: MenuItem?
-    var arrangeViewsItem: MenuItem?
     var controllerModeItem: MenuItem?
     var askLuItem: MenuItem?
     
@@ -241,22 +233,12 @@ extension PauseViewController: UINavigationControllerDelegate
 
 private extension PauseViewController
 {
-    func refreshVisiblePauseItems() {
-        guard isViewLoaded, let root = pauseNavigationController?.viewControllers.first else { return }
-        if #available(iOS 26, *), let host = root as? PauseView.HostingController {
-            host.items = pauseItems
-        } else if let grid = root as? GridMenuViewController {
-            (grid.collectionViewLayout as? GridCollectionViewLayout)?.centersIncompleteRows = pauseItems.count == 7
-            grid.reloadItems(pauseItems)
-        }
-    }
-
     func updatePauseItems()
     {
         self.saveStateItem = nil
         self.loadStateItem = nil
         self.cheatCodesItem = nil
-        self.friendsItem = nil
+        self.sustainButtonsItem = nil
         self.fastForwardItem = nil
         self.screenshotItem = nil
         self.controllerModeItem = nil
@@ -302,20 +284,23 @@ private extension PauseViewController
         })
         
         self.fastForwardItem = MenuItem(text: NSLocalizedString("Fast Forward", comment: ""), image: #imageLiteral(resourceName: "FastForward"), action: { _ in })
-        self.friendsItem = MenuItem(text: NSLocalizedString("Connect", comment: ""), image: UIImage(systemName: "person.2.fill"), action: { _ in })
-        self.screenshotItem = MenuItem(text: NSLocalizedString("Settings", comment: ""), image: #imageLiteral(resourceName: "Screenshot"), action: { _ in })
+        self.sustainButtonsItem = MenuItem(text: NSLocalizedString("Connect", comment: ""), image: #imageLiteral(resourceName: "SustainButtons"), action: { _ in })
+        self.screenshotItem = MenuItem(text: NSLocalizedString("Bound Settings", comment: ""), image: #imageLiteral(resourceName: "Screenshot"), action: { _ in })
         
-        let controllerMode = BoundControllerModePreferences()
-        self.controllerModeItem = MenuItem(text: controllerMode.displayName, image: UIImage(systemName: "gamecontroller.fill"), action: { item in
+        self.controllerModeItem = MenuItem(text: "Controller Mode", image: UIImage(systemName: "gamecontroller.fill"), action: { item in
             let preferences = BoundControllerModePreferences()
-            preferences.cycle()
-            item.text = preferences.displayName
+            preferences.isEnabled = !preferences.isEnabled
             item.isSelected = preferences.isEnabled
         })
         self.controllerModeItem?.isSelected = BoundControllerModePreferences().isEnabled
         self.controllerModeItem?.preservesSelectionOnReturn = true
         self.controllerModeItem?.accessibilityIdentifier = "bound.controller-mode"
 
+        if let game = emulatorCore.game as? Game
+        {
+            let menuOptions = self.makeFastForwardMenuOptions(for: game)
+            self.fastForwardItem?.menuOptions = menuOptions ?? []
+        }
         // Add Lu menu item if enabled
         if ExperimentalFeatures.shared.Lu.isEnabled {
             self.askLuItem = self.configureLuMenuItem()
@@ -351,6 +336,63 @@ private extension PauseViewController
         {
             self.additionalSafeAreaInsets = .zero
         }
+    }
+    
+    func makeFastForwardMenuOptions(for game: Game) -> [Action]?
+    {
+        guard let deltaCore = Delta.core(for: game.type) else { return nil }
+        
+        let preferredSpeed = game.settings[.fastForwardSpeed] as? Double
+        
+        let supportedSpeeds = FastForwardSpeed.speeds(in: deltaCore.supportedRates)
+        var menuOptions = zip(0..., supportedSpeeds).map { (index, speed) in
+            
+            let style: Action.Style = (speed.rawValue == preferredSpeed) ? .selected : .default
+            var action = Action(title: speed.description, style: style) { [weak self] action in
+                DatabaseManager.shared.performBackgroundTask { context in
+                    let temporaryGame = context.object(with: game.objectID) as! Game
+                    temporaryGame.settings[.fastForwardSpeed] = speed.rawValue
+                    context.saveWithErrorLogging()
+                }
+                
+                if let fastForwardItem = self?.fastForwardItem
+                {
+                    fastForwardItem.isSelected = true // Always enable FF after selecting speed.
+                    fastForwardItem.action(fastForwardItem)
+                    
+                    // Update selected state for menu options
+                    fastForwardItem.menuOptions = self?.makeFastForwardMenuOptions(for: game) ?? []
+                }
+            }
+            
+            let configuration = UIImage.SymbolConfiguration(hierarchicalColor: .deltaPurple)
+            
+            let percentage = Double(index + 1) / Double(supportedSpeeds.count)
+            action.image = UIImage(systemName: "timelapse", variableValue: percentage, configuration: configuration)
+            
+            return action
+        }
+        
+        let style: Action.Style = (preferredSpeed == nil) ? .selected : .default
+        let action = Action(title: NSLocalizedString("Default", comment: ""), style: style) { [weak self] action in
+            DatabaseManager.shared.performBackgroundTask { context in
+                let temporaryGame = context.object(with: game.objectID) as! Game
+                temporaryGame.settings[.fastForwardSpeed] = nil
+                context.saveWithErrorLogging()
+            }
+            
+            if let fastForwardItem = self?.fastForwardItem
+            {
+                fastForwardItem.isSelected = true // Always enable FF after selecting speed.
+                fastForwardItem.action(fastForwardItem)
+                
+                // Update selected state for menu options
+                fastForwardItem.menuOptions = self?.makeFastForwardMenuOptions(for: game) ?? []
+            }
+        }
+        menuOptions.append(action)
+        
+        return menuOptions
     }
     
     func openNewMainWindow()

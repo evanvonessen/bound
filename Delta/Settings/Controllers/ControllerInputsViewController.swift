@@ -21,7 +21,7 @@ class ControllerInputsViewController: UIViewController
         }
     }
     
-    var system: System = .gba {
+    var system: System = System.allCases[0] {
         didSet {
             guard self.system != oldValue else { return }
             self.updateSystem()
@@ -31,14 +31,7 @@ class ControllerInputsViewController: UIViewController
     private lazy var managedObjectContext: NSManagedObjectContext = DatabaseManager.shared.newBackgroundContext()
     private var inputMappings = [System: GameControllerInputMapping]()
     
-    private var supportedActionInputs: [ActionInput] {
-        var actions = ActionInput.configurableActions
-        if let controller = self.gameController as? MFiGameController, controller.physicalHomeInput != nil
-        {
-            actions.append(.systemOverlay)
-        }
-        return actions
-    }
+    private let supportedActionInputs: [ActionInput] = [.quickSave, .quickLoad, .fastForward, .screenshot, .cycleBoundPanels]
     
     private var gameViewController: DeltaCore.GameViewController!
     private var actionsMenuViewController: GridMenuViewController!
@@ -46,8 +39,6 @@ class ControllerInputsViewController: UIViewController
     private var calloutViews = [AnyInput: InputCalloutView]()
     
     private var activeCalloutView: InputCalloutView?
-
-    private var savedCurrentMapping = false
     
     private var _didLayoutSubviews = false
     
@@ -90,15 +81,6 @@ class ControllerInputsViewController: UIViewController
         
         self.preparePopoverMenuController()
         self.updateSystem()
-
-        if #available(iOS 27, *),
-           let controller = self.gameController as? MFiGameController,
-           controller.physicalHomeInput != nil
-        {
-            var rightItems = self.navigationItem.rightBarButtonItems ?? []
-            rightItems.append(UIBarButtonItem(title: NSLocalizedString("Home Button Settings", comment: ""), style: .plain, target: self, action: #selector(self.openHomeButtonSettings)))
-            self.navigationItem.rightBarButtonItems = rightItems
-        }
     }
     
     override func viewDidLayoutSubviews()
@@ -139,46 +121,6 @@ class ControllerInputsViewController: UIViewController
         
         // controllerView must be first responder to receive keyboard presses.
         self.gameViewController.controllerView.becomeFirstResponder()
-
-        if let controller = self.gameController as? MFiGameController,
-           let mapping = self.inputMappings[self.system]
-        {
-            BoundControllerSystemGestures.apply(to: controller, mapping: mapping, capturing: true)
-        }
-    }
-
-    override func viewDidDisappear(_ animated: Bool)
-    {
-        super.viewDidDisappear(animated)
-
-        guard let controller = self.gameController as? MFiGameController else { return }
-
-        let mapping: GameControllerInputMappingProtocol
-        if savedCurrentMapping, let currentMapping = self.inputMappings[self.system]
-        {
-            mapping = currentMapping
-        }
-        else if let storedMapping = GameControllerInputMapping.inputMapping(forPlayer: controller.playerIndex,
-                                                                             gameType: self.system.gameType,
-                                                                             controllerType: controller.inputType,
-                                                                             in: DatabaseManager.shared.viewContext)
-        {
-            mapping = storedMapping
-        }
-        else if self.system.gameType == .gba
-        {
-            mapping = BoundMultiviewDefaultMapping.mapping(for: controller, gameType: self.system.gameType)
-        }
-        else if let defaultMapping = controller.defaultInputMapping as? DeltaCore.GameControllerInputMapping
-        {
-            mapping = defaultMapping
-        }
-        else
-        {
-            mapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: controller.inputType)
-        }
-
-        BoundControllerSystemGestures.apply(to: controller, mapping: mapping, capturing: false)
     }
 }
 
@@ -200,22 +142,8 @@ extension ControllerInputsViewController
             self.managedObjectContext.performAndWait {
                 self.managedObjectContext.saveWithErrorLogging()
             }
-            self.savedCurrentMapping = true
             
         default: break
-        }
-    }
-
-    @objc private func openHomeButtonSettings()
-    {
-        guard #available(iOS 27, *) else { return }
-
-        ControllerHomeButtonSettings.open { [weak self] error in
-            let alert = UIAlertController(title: NSLocalizedString("Unable to Open Home Button Settings", comment: ""),
-                                          message: error.localizedDescription,
-                                          preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: NSLocalizedString("OK", comment: ""), style: .default))
-            self?.present(alert, animated: true)
         }
     }
 }
@@ -224,7 +152,7 @@ private extension ControllerInputsViewController
 {
     func makeDefaultInputMapping() -> GameControllerInputMapping
     {
-        let deltaCoreInputMapping = BoundMultiviewDefaultMapping.mapping(for: self.gameController, gameType: self.system.gameType)
+        let deltaCoreInputMapping = self.gameController.defaultInputMapping as? DeltaCore.GameControllerInputMapping ?? DeltaCore.GameControllerInputMapping(gameControllerInputType: gameController.inputType)
         
         let inputMapping = GameControllerInputMapping(inputMapping: deltaCoreInputMapping, context: self.managedObjectContext)
         inputMapping.gameControllerInputType = gameController.inputType
@@ -293,7 +221,7 @@ private extension ControllerInputsViewController
         let popoverMenuController = PopoverMenuController(popoverViewController: navigationController)
         self.navigationItem.popoverMenuController = popoverMenuController
         
-        let items = [System.gba].filter { Delta.core(for: $0.gameType) != nil }.map { [unowned self, weak popoverMenuController, weak listMenuViewController] system -> MenuItem in
+        let items = System.allCases.filter { Delta.core(for: $0.gameType) != nil }.map { [unowned self, weak popoverMenuController, weak listMenuViewController] system -> MenuItem in
             let item = MenuItem(text: system.localizedShortName, image: #imageLiteral(resourceName: "CheatCodes")) { [weak popoverMenuController, weak listMenuViewController] item in
                 listMenuViewController?.items.forEach { $0.isSelected = ($0 == item) }
                 popoverMenuController?.isActive = false
@@ -316,14 +244,29 @@ private extension ControllerInputsViewController
             let image: UIImage
             let text: String
             
-            switch input {
-            case .quickSave: image = #imageLiteral(resourceName: "SaveSaveState")
-            case .quickLoad: image = #imageLiteral(resourceName: "LoadSaveState")
-            case .fastForward: image = #imageLiteral(resourceName: "FastForward")
-            case .screenshot: image = #imageLiteral(resourceName: "Screenshot")
-            default: image = UIImage(systemName: input.sfSymbolName) ?? #imageLiteral(resourceName: "Screenshot")
+            switch input
+            {
+            case .quickSave:
+                image = #imageLiteral(resourceName: "SaveSaveState")
+                text = NSLocalizedString("Quick Save", comment: "")
+                
+            case .quickLoad:
+                image = #imageLiteral(resourceName: "LoadSaveState")
+                text = NSLocalizedString("Quick Load", comment: "")
+                
+            case .fastForward:
+                image = #imageLiteral(resourceName: "FastForward")
+                text = NSLocalizedString("Fast Forward", comment: "")
+                
+            case .screenshot:
+                image = #imageLiteral(resourceName: "Screenshot")
+                text = NSLocalizedString("Screenshot", comment: "")
+                
+            case .toggleFastForward, .reverseScreens: continue
+            case .cycleBoundPanels:
+                image = UIImage(systemName: "rectangle.2.swap") ?? #imageLiteral(resourceName: "Screenshot")
+                text = NSLocalizedString("Cycle Friend/Notes/Types", comment: "")
             }
-            text = input.localizedDisplayName
             
             let item = MenuItem(text: text, image: image) { [unowned self] (item) in
                 guard let calloutView = self.calloutViews[AnyInput(input)] else { return }
@@ -414,27 +357,6 @@ private extension ControllerInputsViewController
         guard let activeCalloutView = self.activeCalloutView else { return }
         
         guard let input = self.calloutViews.first(where: { $0.value == activeCalloutView })?.key else { return }
-
-        if let controllerInput,
-           let action = ActionInput(input: input)
-        {
-            if BoundControllerInputMapping.isLeftStickDirection(controllerInput), action.isBoundPanelAction
-            {
-                self.showMappingFeedback(NSLocalizedString("Use the right thumbstick for view controls.", comment: ""))
-                return
-            }
-
-            if action == .systemOverlay
-            {
-                guard let controller = self.gameController as? MFiGameController,
-                      controller.physicalHomeInput?.stringValue == controllerInput.stringValue
-                else
-                {
-                    self.showMappingFeedback(NSLocalizedString("Overlay can only be assigned to the Home button.", comment: ""))
-                    return
-                }
-            }
-        }
         
         if let controllerInput = controllerInput
         {
@@ -452,19 +374,14 @@ private extension ControllerInputsViewController
         }
         
         self.managedObjectContext.performAndWait {
-            let isNoneAction = ActionInput(input: input) == Optional(ActionInput.none)
-
-            if !isNoneAction
+            for supportedInput in inputMapping.supportedControllerInputs
             {
-                for supportedInput in inputMapping.supportedControllerInputs
+                let mappedInput = self.mappedInput(for: supportedInput)
+                
+                if mappedInput == input
                 {
-                    let mappedInput = self.mappedInput(for: supportedInput)
-
-                    if mappedInput == input
-                    {
-                        // Keep ordinary actions one-to-one. None may be assigned to several physical buttons.
-                        inputMapping.set(nil, forControllerInput: supportedInput)
-                    }
+                    // Set all existing controller inputs that currently map to "input" to instead map to nil.
+                    inputMapping.set(nil, forControllerInput: supportedInput)
                 }
             }
             
@@ -473,21 +390,10 @@ private extension ControllerInputsViewController
                 inputMapping.set(input, forControllerInput: controllerInput)
             }
         }
-
-        if let controller = self.gameController as? MFiGameController
-        {
-            BoundControllerSystemGestures.apply(to: controller, mapping: inputMapping, capturing: true)
-        }
         
         activeCalloutView.input = controllerInput
         
         self.toggle(activeCalloutView)
-    }
-
-    func showMappingFeedback(_ message: String)
-    {
-        let toast = RSTToastView(text: message, detailText: nil)
-        toast.show(in: self.navigationController?.view ?? self.view, duration: 2.5)
     }
     
     func toggle(_ calloutView: InputCalloutView)

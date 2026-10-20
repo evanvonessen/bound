@@ -2,40 +2,16 @@ import XCTest
 import UIKit
 import SwiftUI
 import CoreVideo
-import CoreData
 import MetalKit
 import ObjectiveC
 import DeltaCore
-import DeltaFeatures
 @testable import Delta
-@testable import class Delta.Game
 @testable import class Delta.GameViewController
 
 private struct FixtureGame: GameProtocol {
     let fileURL: URL
     let gameSaveURL: URL
     var type: GameType { System.gba.gameType }
-}
-
-private func rrDexBatteryFixture(trainerID: UInt32, randomAbilities: Bool, randomLearnset: Bool) -> Data {
-    var bytes = [UInt8](repeating: 0, count: 0x20000)
-    func put(_ value: UInt32, at offset: Int, count: Int = 4) {
-        for index in 0..<count { bytes[offset + index] = UInt8(truncatingIfNeeded: value >> (index * 8)) }
-    }
-    for slot in 0..<2 {
-        for physical in 0..<14 {
-            let sector = (physical + (slot == 1 ? 11 : 0)) % 14
-            let offset = slot * 0xe000 + physical * 0x1000
-            put(UInt32(sector), at: offset + 0xff4, count: 2)
-            put(0x08012025, at: offset + 0xff8)
-            put(UInt32(slot + 10), at: offset + 0xffc)
-            if sector == 0 {
-                put(trainerID, at: offset + 0xa)
-                bytes[offset + 0xf2c] = (randomAbilities ? 4 : 0) | (randomLearnset ? 2 : 0)
-            }
-        }
-    }
-    return Data(bytes)
 }
 private final class FrameProbe: @unchecked Sendable {
     private let lock = NSLock()
@@ -120,101 +96,10 @@ private final class TransitionCount: @unchecked Sendable {
 }
 
 @MainActor final class PlaybackSharingTests: XCTestCase {
-    private let fastForwardRenderer = AppPacingNativeDelegate(metal: true)
     private func configuration() -> FriendSharingConfiguration {
         .init(appID: String(repeating: "0", count: 32), channel: "offline-fixture", uid: 1, remoteUID: 2, token: "offline-not-an-RTC-token")
     }
     private func wait(_ seconds: Double) async throws { try await Task.sleep(nanoseconds: UInt64(seconds * 1e9)) }
-
-    func testCurrentRRDexCaptureExportsLiveGBABatteryAndCleansTemporaryFiles() throws {
-        let fixtureROM = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let exportDirectory = directory.appendingPathComponent("exports", isDirectory: true)
-        try FileManager.default.createDirectory(at: exportDirectory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let rom = directory.appendingPathComponent("fixture-flash1m.gba")
-        try FileManager.default.copyItem(at: fixtureROM, to: rom)
-        let romHandle = try FileHandle(forWritingTo: rom)
-        try romHandle.seekToEnd()
-        let romAttributes = try FileManager.default.attributesOfItem(atPath: rom.path)
-        let romSize = try XCTUnwrap((romAttributes[.size] as? NSNumber)?.intValue)
-        let alignmentPadding = (4 - romSize % 4) % 4
-        if alignmentPadding > 0 { try romHandle.write(contentsOf: Data(repeating: 0, count: alignmentPadding)) }
-        try romHandle.write(contentsOf: Data("FLASH1M_V103".utf8))
-        try romHandle.close()
-
-        let staleBatteryURL = directory.appendingPathComponent("fixture.sav")
-        let staleBattery = rrDexBatteryFixture(trainerID: 42, randomAbilities: false, randomLearnset: false)
-        try staleBattery.write(to: staleBatteryURL)
-        let core = try XCTUnwrap(EmulatorCore(game: FixtureGame(fileURL: rom, gameSaveURL: staleBatteryURL), options: [.metal: true]))
-        defer { _ = core.stop() }
-        XCTAssertTrue(core.start())
-        XCTAssertTrue(core.pause())
-        XCTAssertEqual(core.state, .paused)
-        let cache = BoundRRDexSaveCache()
-        let diskSettings = try cache.value(completedSave: {
-            try BoundRRDexCurrentSaveImport.readCompletedSave(at: staleBatteryURL)
-        }, restoredSave: { XCTFail("A completed battery save needs no live export"); throw BoundRRDexSave.ImportError.currentGameUnavailable })
-        XCTAssertEqual(diskSettings.trainerID, 42)
-
-        // Change the GBA bridge's battery-backed RAM after startup so a copy of
-        // the original on-disk .sav would be observably stale.
-        let liveBatteryURL = directory.appendingPathComponent("live.sav")
-        let liveBattery = rrDexBatteryFixture(trainerID: 123456789, randomAbilities: true, randomLearnset: true)
-        try liveBattery.write(to: liveBatteryURL)
-        core.deltaCore.emulatorBridge.loadGameSave(from: liveBatteryURL)
-        let sourceAfterPause = try Data(contentsOf: staleBatteryURL)
-
-        cache.invalidate(restoredState: true)
-        let captured = try cache.value(completedSave: {
-            XCTFail("A restored state must not read the older battery file")
-            return diskSettings
-        }, restoredSave: {
-            try BoundRRDexCurrentSaveImport.capture(temporaryDirectory: exportDirectory) { url in
-                core.deltaCore.emulatorBridge.saveGameSave(to: url)
-            }
-        })
-        XCTAssertEqual(captured, BoundRRDexSave(trainerID: 123456789, randomAbilities: true, randomLearnset: true))
-        XCTAssertEqual(core.state, .paused, "Capturing the bridge battery must not change core playback state")
-        XCTAssertEqual(try Data(contentsOf: staleBatteryURL), sourceAfterPause, "Export must not replace the ROM's managed battery file")
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: exportDirectory.path), [], "Successful capture must remove its temporary .sav and directory")
-        var completedCallbacks = 0
-        core.saveHandler = { _ in
-            completedCallbacks += 1
-            XCTAssertFalse(cache.completedSave { try BoundRRDexCurrentSaveImport.readCompletedSave(at: staleBatteryURL) },
-                           "The completed write has the same settings as the restored state")
-        }
-        core.save()
-        XCTAssertEqual(completedCallbacks, 1, "Inspecting a completed save must not schedule another core save")
-        XCTAssertEqual(try cache.value(completedSave: { XCTFail(); return diskSettings }, restoredSave: {
-            XCTFail("Reopening the Dex must reuse its configuration"); return diskSettings
-        }), captured)
-        core.saveHandler = nil
-
-        XCTAssertThrowsError(try BoundRRDexCurrentSaveImport.capture(temporaryDirectory: exportDirectory) { url in
-            try Data(repeating: 0, count: 123).write(to: url)
-        }) { error in
-            guard let error = error as? BoundRRDexSave.ImportError else {
-                XCTFail("Expected unsupported battery format, got \(error)")
-                return
-            }
-            if case .format = error { } else { XCTFail("Expected unsupported battery format, got \(error)") }
-        }
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: exportDirectory.path), [], "Invalid capture must also remove temporary files")
-
-        XCTAssertThrowsError(try BoundRRDexCurrentSaveImport.capture(temporaryDirectory: exportDirectory) { _ in
-            throw CocoaError(.fileWriteUnknown)
-        }) { error in
-            guard let error = error as? BoundRRDexSave.ImportError else {
-                XCTFail("Expected current-game export failure, got \(error)")
-                return
-            }
-            if case .currentGameUnavailable = error { } else { XCTFail("Expected current-game export failure, got \(error)") }
-        }
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: exportDirectory.path), [], "Exporter failure must remove temporary files")
-    }
-
     func testMalformedCanvasPreservesValidFrame() throws {
         let presenter = FriendSharingCanvasPresenter(), host = UIView()
         XCTAssertFalse(presenter.present(Data(count: 1), in: host)); XCTAssertTrue(host.subviews.isEmpty)
@@ -223,32 +108,6 @@ private final class TransitionCount: @unchecked Sendable {
         XCTAssertFalse(presenter.present(Data(count: 12), in: host))
         XCTAssertTrue((host.subviews.first as? UIImageView)?.image === image)
         presenter.clear(); XCTAssertTrue(host.subviews.isEmpty)
-    }
-    func testReusableFramePixelsKeepSnapshotsAndReuseUniqueStorage() {
-        var storage = BoundFramePixelStorage()
-        func fill(_ value: UInt8) {
-            storage.withMutableBytes { bytes in
-                for index in 0..<bytes.count { bytes[index] = value }
-            }
-        }
-        func address() -> Int {
-            storage.withBytes { Int(bitPattern: $0.baseAddress!) }
-        }
-        func allBytes(_ frame: GameFrame, equal value: UInt8) -> Bool {
-            frame.rgba.allSatisfy { $0 == value }
-        }
-
-        fill(0x11)
-        var first: GameFrame? = storage.frame(number: 1)
-        fill(0x22) // Must detach storage while the first frame remains retained.
-        XCTAssertTrue(allBytes(first!, equal: 0x11), "An emitted frame must not change during the next render")
-        var second: GameFrame? = storage.frame(number: 2)
-        XCTAssertTrue(allBytes(second!, equal: 0x22))
-
-        first = nil; second = nil
-        let before = address()
-        fill(0x33)
-        XCTAssertEqual(address(), before, "A unique same-sized scratch buffer should be reused in place")
     }
     func testActualI420ConversionAndStaleCallbackFence() async throws {
         let callbacks = AgoraSharingCallbacks(remoteUID: 2) { _, _ in }
@@ -543,280 +402,6 @@ extension PlaybackSharingTests {
 
 
 extension PlaybackSharingTests {
-    func testMenuChordsReleaseActualGBAInputsWithEitherGesturePreference() async throws {
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
-        let priorWindow = scene.windows.first(where: \.isKeyWindow)
-        let owner = GameViewController(), menu = BoundMenuInputDelegate()
-        owner.delegate = menu
-        owner.loadViewIfNeeded()
-        owner.game = FixtureGame(fileURL: fixture, gameSaveURL: directory.appendingPathComponent("fixture.sav"))
-        let window = UIWindow(windowScene: scene)
-        window.rootViewController = owner
-        window.makeKeyAndVisible()
-        let core = try XCTUnwrap(owner.emulatorCore)
-        let touch = try XCTUnwrap(owner.controllerView)
-        touch.playerIndex = 0
-        let savedGestures = Settings.isQuickGesturesEnabled
-        defer {
-            for input in Array(touch.sustainedInputs.keys) { touch.unsustain(input) }
-            for input in Array(touch.activatedInputs.keys) { touch.deactivate(input) }
-            _ = owner.pauseEmulation()
-            _ = core.stop()
-            owner.game = nil
-            window.isHidden = true
-            priorWindow?.makeKeyAndVisible()
-            Settings.isQuickGesturesEnabled = savedGestures
-        }
-        for _ in 0..<40 where core.state != .running { try await wait(0.05) }
-        XCTAssertEqual(core.state, .running)
-        XCTAssertTrue(scene.hasKeyboardFocus)
-        core.audioManager.isEnabled = false
-        let bridge = try XCTUnwrap(core.deltaCore.emulatorBridge as? NSObject)
-        func nativeInputs() throws -> UInt32 {
-            // This is the real GBA bridge mask read by the emulator's KEYINPUT callback.
-            try XCTUnwrap(bridge.value(forKey: "activatedInputs") as? NSNumber).uint32Value
-        }
-        func input(_ name: String) -> AnyInput {
-            AnyInput(stringValue: name, intValue: nil, type: .controller(.controllerSkin))
-        }
-        for gesturesEnabled in [false, true] {
-            Settings.isQuickGesturesEnabled = gesturesEnabled
-            for direction in ["up", "down", "left", "right", "a", "b", "l", "r", "start", "select"] {
-                for releaseMenuFirst in [false, true] {
-                    let directionInput = input(direction), menuInput = input("menu")
-                    core.deltaCore.emulatorBridge.resetInputs()
-                    let previousMenus = menu.releases
-                    touch.activate(menuInput)
-                    touch.activate(directionInput)
-                    // Sustained inputs pulse off for two emulated frames before
-                    // reactivation. Observe the running core after that transition.
-                    try await wait(0.08)
-                    XCTAssertNotEqual(try nativeInputs(), 0, "Game buttons still reach the actual GBA core while Menu is held")
-                    if releaseMenuFirst { touch.deactivate(menuInput) }
-                    touch.deactivate(directionInput)
-                    if !releaseMenuFirst { touch.deactivate(menuInput) }
-                    try await wait(0.08)
-                    XCTAssertTrue(touch.sustainedInputs.isEmpty, "Menu + \(direction) must never enable Hold Buttons (gestures: \(gesturesEnabled))")
-                    XCTAssertTrue(touch.activatedInputs.isEmpty, "Lifting both fingers must release every touch input")
-                    XCTAssertEqual(try nativeInputs(), 0, "Actual GBA input must release without loading a save state")
-                    XCTAssertEqual(menu.releases, previousMenus + 1, "A chord must preserve the normal Menu release")
-                    // Keep a failing pre-fix case from contaminating the next direction.
-                    for held in Array(touch.sustainedInputs.keys) { touch.unsustain(held) }
-                }
-            }
-        }
-    }
-
-    func testGameplayDoesNotInstallInheritedMenuQuickGestures() {
-        let savedGestures = Settings.isQuickGesturesEnabled
-        defer { Settings.isQuickGesturesEnabled = savedGestures }
-        for gesturesEnabled in [false, true] {
-            Settings.isQuickGesturesEnabled = gesturesEnabled
-            let owner = GameViewController()
-            owner.loadViewIfNeeded()
-            let gestures = owner.view.gestureRecognizers ?? []
-            XCTAssertFalse(gestures.contains { $0 is UISwipeGestureRecognizer }, "Menu swipes must not toggle Fast Forward")
-            XCTAssertFalse(gestures.contains { ($0 as? UITapGestureRecognizer)?.numberOfTapsRequired == 2 }, "Menu double taps must not save state")
-            XCTAssertEqual(gestures.filter { $0 is UILongPressGestureRecognizer }.count, 1, "Only the existing game-screen reposition gesture remains; Menu long press must not load state")
-        }
-    }
-
-    private func fastForwardOwner(for fixture: URL, defaults: UserDefaults) -> GameViewController {
-        let owner = GameViewController()
-        // Match the app's GBA Metal path; the synthetic GameProtocol fixture
-        // otherwise selects Simulator OpenGL and crashes on context teardown.
-        owner.delegate = fastForwardRenderer
-        owner.boundFastForwardPreferences = BoundFastForwardPreferences(defaults: defaults)
-        owner.loadViewIfNeeded()
-        owner.game = FixtureGame(fileURL: fixture,
-                                 gameSaveURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sav"))
-        return owner
-    }
-
-    private func isolatedFastForwardDefaults() -> (UserDefaults, String) {
-        let suite = "BoundFastForwardTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
-        return (defaults, suite)
-    }
-
-    func testFastForwardTogglePersistsPerFixtureAndRestoresOnGameRecreation() async throws {
-        let (defaults, suite) = isolatedFastForwardDefaults()
-        defer {
-            defaults.removePersistentDomain(forName: suite)
-        }
-
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
-        let owner = fastForwardOwner(for: fixture, defaults: defaults)
-        defer { owner.game = nil }
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
-        let priorWindow = scene.windows.first(where: \.isKeyWindow)
-        let window = UIWindow(windowScene: scene)
-        window.rootViewController = owner
-        window.makeKeyAndVisible()
-        defer {
-            _ = owner.pauseEmulation()
-            window.isHidden = true
-            window.rootViewController = nil
-            priorWindow?.makeKeyAndVisible()
-        }
-        let firstCore = try XCTUnwrap(owner.emulatorCore)
-        let gameID = fixture.lastPathComponent
-        for _ in 0..<40 where firstCore.state != .running { try await wait(0.05) }
-        XCTAssertEqual(firstCore.state, .running)
-        firstCore.audioManager.isEnabled = false
-
-        owner.performFastForwardAction(activate: true, showToast: false)
-        XCTAssertTrue(BoundFastForwardPreferences(defaults: defaults).isEnabled(for: gameID))
-        XCTAssertEqual(firstCore.deltaCore.supportedRates.upperBound, 3)
-        XCTAssertEqual(firstCore.rate, 3)
-
-        // Replacing the core for the same ROM models a fresh app/game session.
-        owner.game = nil
-        owner.game = FixtureGame(fileURL: fixture,
-                                 gameSaveURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sav"))
-        let restoredCore = try XCTUnwrap(owner.emulatorCore)
-        XCTAssertEqual(restoredCore.rate, 3)
-        XCTAssertTrue(owner.resumeEmulation())
-        for _ in 0..<40 where restoredCore.state != .running { try await wait(0.05) }
-        XCTAssertEqual(restoredCore.state, .running)
-        XCTAssertEqual(restoredCore.rate, 3, "Starting the recreated GBA core must preserve the default fast-forward rate")
-        _ = owner.pauseEmulation()
-
-        owner.performFastForwardAction(activate: false, showToast: false)
-        XCTAssertFalse(BoundFastForwardPreferences(defaults: defaults).isEnabled(for: gameID))
-        XCTAssertEqual(restoredCore.rate, restoredCore.deltaCore.supportedRates.lowerBound)
-
-        let fixtureDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: fixtureDirectory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: fixtureDirectory) }
-        let secondFixture = fixtureDirectory.appendingPathComponent("BoundDiagnostic-second.gba")
-        try FileManager.default.copyItem(at: fixture, to: secondFixture)
-        defer { try? FileManager.default.removeItem(at: secondFixture) }
-        BoundFastForwardPreferences(defaults: defaults).setEnabled(true, for: gameID)
-        owner.game = FixtureGame(fileURL: secondFixture,
-                                 gameSaveURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sav"))
-        let secondCore = try XCTUnwrap(owner.emulatorCore)
-        XCTAssertEqual(secondCore.rate, secondCore.deltaCore.supportedRates.lowerBound,
-                       "A different ROM filename must not inherit the first ROM's saved toggle")
-    }
-
-    func testFastForwardMomentaryActionsAndWirelessRestrictionsDoNotPersist() throws {
-        let (defaults, suite) = isolatedFastForwardDefaults()
-        defer {
-            defaults.removePersistentDomain(forName: suite)
-        }
-
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
-        let gameID = fixture.lastPathComponent
-        let owner = fastForwardOwner(for: fixture, defaults: defaults)
-        defer { owner.game = nil }
-        let core = try XCTUnwrap(owner.emulatorCore)
-        let preferences = BoundFastForwardPreferences(defaults: defaults)
-
-        owner.performFastForwardAction(activate: true, remember: false, showToast: false)
-        XCTAssertEqual(core.rate, 3)
-        XCTAssertFalse(preferences.isEnabled(for: gameID), "A held fast-forward action must not become a saved toggle")
-        owner.performFastForwardAction(activate: false, remember: false, showToast: false)
-        XCTAssertEqual(core.rate, 1)
-        XCTAssertFalse(preferences.isEnabled(for: gameID))
-
-        core.isWirelessMultiplayerActive = true
-        owner.performFastForwardAction(activate: true, showToast: false)
-        XCTAssertFalse(preferences.isEnabled(for: gameID), "Wireless multiplayer must reject and not remember fast-forward")
-        XCTAssertEqual(core.rate, core.deltaCore.supportedRates.lowerBound)
-    }
-
-    func testFastForwardRestoresForEveryLegacyExperimentalPreference() throws {
-        let legacyKey = BoundLegacyPreferences.experimentalFeaturesKey
-        let previous = UserDefaults.standard.object(forKey: legacyKey)
-        defer {
-            if let previous { UserDefaults.standard.set(previous, forKey: legacyKey) }
-            else { UserDefaults.standard.removeObject(forKey: legacyKey) }
-        }
-        let (defaults, suite) = isolatedFastForwardDefaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
-        let gameID = fixture.lastPathComponent
-        let preferences = BoundFastForwardPreferences(defaults: defaults)
-        preferences.setEnabled(true, for: gameID)
-        for legacy: Bool? in [nil, false, true] {
-            if let legacy { UserDefaults.standard.set(legacy, forKey: legacyKey) }
-            else { UserDefaults.standard.removeObject(forKey: legacyKey) }
-            let owner = fastForwardOwner(for: fixture, defaults: defaults)
-            let core = try XCTUnwrap(owner.emulatorCore)
-            XCTAssertEqual(core.rate, 3, "Saved fast-forward must restore independently of the retired opt-in")
-            XCTAssertTrue(preferences.isEnabled(for: gameID))
-            owner.game = nil
-        }
-    }
-
-    func testFastForwardIgnoresLegacySpeedOverrides() throws {
-        // DeltaFeatures persisted options as "<feature>_<option>". Seed the
-        // original keys directly to model upgrading with custom speeds saved.
-        let legacyKeys = ["customFastForward_gba", "customFastForward_allowUnrestrictedSpeeds"]
-        let standardDefaults = UserDefaults.standard
-        let previousValues = legacyKeys.map { standardDefaults.object(forKey: $0) }
-        defer {
-            for (key, value) in zip(legacyKeys, previousValues) {
-                if let value { standardDefaults.set(value, forKey: key) }
-                else { standardDefaults.removeObject(forKey: key) }
-            }
-        }
-        let (defaults, suite) = isolatedFastForwardDefaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let preferences = BoundFastForwardPreferences(defaults: defaults)
-
-        // An unsaved library Game exercises the old per-game override path
-        // without adding a ROM or preferences to the user's library.
-        let modelURL = try XCTUnwrap(Bundle(for: DatabaseManager.self).url(forResource: "Delta", withExtension: "momd"))
-        let model = try XCTUnwrap(NSManagedObjectModel(contentsOf: modelURL))
-        let entity = try XCTUnwrap(model.entitiesByName["Game"])
-        let context = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
-        context.persistentStoreCoordinator = NSPersistentStoreCoordinator(managedObjectModel: model)
-        defer { context.reset() }
-        let game = Game(entity: entity, insertInto: context)
-        game.type = .gba
-        game.filename = "default-fast-forward-fixture.gba"
-        game.identifier = UUID().uuidString
-        game.name = "Default Fast Forward Fixture"
-
-        let scenarios: [(system: Double, game: Double?, unrestricted: Bool)] = [
-            (2, nil, false), (8, nil, true), (2, 2, false), (8, 8, true)
-        ]
-        for scenario in scenarios {
-            standardDefaults.set(scenario.system, forKey: legacyKeys[0])
-            standardDefaults.set(scenario.unrestricted, forKey: legacyKeys[1])
-            game.settings = scenario.game.map { [.fastForwardSpeed: $0] } ?? [:]
-            preferences.setEnabled(true, for: game.identifier)
-
-            let owner = GameViewController()
-            owner.delegate = fastForwardRenderer
-            owner.boundFastForwardPreferences = preferences
-            owner.loadViewIfNeeded()
-            owner.game = game
-            defer { owner.game = nil }
-            let core = try XCTUnwrap(owner.emulatorCore)
-            XCTAssertEqual(core.rate, 3, "A restored toggle must ignore all legacy speed overrides")
-
-            owner.performFastForwardAction(activate: false, showToast: false)
-            XCTAssertEqual(core.rate, 1)
-            owner.performFastForwardAction(activate: true, showToast: false)
-            XCTAssertEqual(core.rate, 3, "Manual activation must use the same default as restoration")
-            XCTAssertTrue(preferences.isEnabled(for: game.identifier))
-
-            let pauseController = PauseViewController()
-            pauseController.emulatorCore = core
-            XCTAssertTrue(try XCTUnwrap(pauseController.fastForwardItem).menuOptions.isEmpty)
-            XCTAssertEqual(game.settings[.fastForwardSpeed] as? Double, scenario.game)
-        }
-        XCTAssertFalse(Settings.features.allFeatures.contains { $0.key == "customFastForward" })
-    }
-
     func testControllerModeCancellationPreservesActualNativeExternalHeldAndSustainedA() async throws {
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -961,141 +546,6 @@ extension PlaybackSharingTests {
     }
 }
 
-@MainActor
-private final class ForegroundReconnectFixture {
-    var owner = UUID()
-    var room = "friend-room"
-    var tokenRequests = 0
-    var failNextTokenRequest = false
-
-    func identity() throws -> AppCloudSession {
-        let claims = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
-        let payload = claims.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
-        return try AppCloudSession(owner: owner, key: "fixture-public-key", token: "fixture.\(payload).signature")
-    }
-
-    func lease(room: String, owner: UUID, request: Int) -> FriendSharingTokenLease {
-        FriendSharingTokenLease(roomID: room, ownerID: owner,
-            appID: String(repeating: "0", count: 32), channel: "fresh-\(request)", uid: 1, remoteUID: 2,
-            token: "server-issued-fixture-\(request)", issuedAt: Date().timeIntervalSince1970,
-            expiresAt: Date().timeIntervalSince1970 + 90)
-    }
-}
-
-extension PlaybackSharingTests {
-    private func authenticatedReconnectSession(_ fixture: ForegroundReconnectFixture,
-                                               transport: OfflineVideoTransport? = nil) -> FriendSharingSession {
-        FriendSharingSession(configuration: nil, transport: transport ?? OfflineVideoTransport(), authenticatedMode: true,
-            roomProvider: { fixture.room },
-            tokenFetcher: { room, identity in
-                fixture.tokenRequests += 1
-                if fixture.failNextTokenRequest {
-                    fixture.failNextTokenRequest = false
-                    throw FriendSharingTokenError.unavailable
-                }
-                return fixture.lease(room: room, owner: identity.owner, request: fixture.tokenRequests)
-            })
-    }
-
-    func testAuthenticatedSharingRestoresWithFreshTokenAfterForegroundOnlyWhenPreviouslyActive() async throws {
-        let fixture = ForegroundReconnectFixture()
-        let transport = OfflineVideoTransport()
-        let session = authenticatedReconnectSession(fixture, transport: transport)
-        session.configureAuthenticatedRoom(fixture.room, identity: { try? fixture.identity() })
-
-        session.background(); session.foreground()
-        try await wait(0.05)
-        XCTAssertEqual(fixture.tokenRequests, 0, "Foreground must not start sharing that was not active before backgrounding")
-        session.start()
-        try await wait(0.05)
-        XCTAssertTrue(session.joined)
-        XCTAssertEqual(session.configuration?.channel, "fresh-1")
-
-        session.background()
-        XCTAssertFalse(session.active)
-        session.foreground()
-        try await wait(0.05)
-        XCTAssertTrue(session.joined)
-        XCTAssertEqual(fixture.tokenRequests, 2)
-        XCTAssertEqual(session.configuration?.channel, "fresh-2", "Reconnect must fetch a fresh server-issued lease")
-
-        session.stop()
-        session.background(); session.foreground()
-        try await wait(0.05)
-        XCTAssertEqual(fixture.tokenRequests, 2, "A manual stop cancels remembered reconnect intent")
-        session.stop()
-    }
-
-    func testForegroundReconnectRequiresSameRoomAndOwner() async throws {
-        for changed in ["room", "owner"] {
-            let fixture = ForegroundReconnectFixture()
-            let transport = OfflineVideoTransport()
-            let session = authenticatedReconnectSession(fixture, transport: transport)
-            session.configureAuthenticatedRoom(fixture.room, identity: { try? fixture.identity() })
-            session.start(); try await wait(0.05)
-            XCTAssertTrue(session.joined)
-            session.background()
-            switch changed {
-            case "room":
-                fixture.room = "different-room"
-                session.configureAuthenticatedRoom(fixture.room, identity: { try? fixture.identity() })
-            case "owner": fixture.owner = UUID()
-            default: break
-            }
-            session.foreground(); try await wait(0.05)
-            XCTAssertEqual(fixture.tokenRequests, 1, "Reconnect must be fenced when \(changed) changes")
-            XCTAssertFalse(session.active)
-            session.stop()
-        }
-    }
-
-    func testForegroundReconnectRetriesTransientAuthorizationFailureWithBackoff() async throws {
-        let fixture = ForegroundReconnectFixture()
-        let session = authenticatedReconnectSession(fixture)
-        session.configureAuthenticatedRoom(fixture.room, identity: { try? fixture.identity() })
-        session.start(); try await wait(0.05)
-        XCTAssertTrue(session.joined)
-
-        session.background()
-        fixture.failNextTokenRequest = true
-        session.foreground(); try await wait(0.1)
-        XCTAssertFalse(session.active)
-        XCTAssertEqual(fixture.tokenRequests, 2)
-        session.foreground(); try await wait(0.1)
-        XCTAssertEqual(fixture.tokenRequests, 2, "Duplicate foreground notifications must not bypass retry backoff")
-        try await wait(0.5)
-        XCTAssertEqual(fixture.tokenRequests, 2, "Retry must wait for backoff instead of rapidly repeating token requests")
-        try await wait(1.2)
-        XCTAssertTrue(session.joined)
-        XCTAssertEqual(fixture.tokenRequests, 3)
-        XCTAssertEqual(session.configuration?.channel, "fresh-3")
-        session.stop()
-    }
-
-    func testFalseLegacyPreferenceDoesNotStartInactiveSharingOrBlockRestoration() async throws {
-        let key = BoundLegacyPreferences.experimentalFeaturesKey
-        let previous = UserDefaults.standard.object(forKey: key)
-        UserDefaults.standard.set(false, forKey: key)
-        defer {
-            if let previous { UserDefaults.standard.set(previous, forKey: key) }
-            else { UserDefaults.standard.removeObject(forKey: key) }
-        }
-        let fixture = ForegroundReconnectFixture()
-        let session = authenticatedReconnectSession(fixture)
-        session.configureAuthenticatedRoom(fixture.room, identity: { try? fixture.identity() })
-        session.background(); session.foreground(); try await wait(0.05)
-        XCTAssertFalse(session.active, "A legacy preference cannot start an inactive share")
-        XCTAssertEqual(fixture.tokenRequests, 0)
-
-        session.start(); try await wait(0.05)
-        XCTAssertTrue(session.joined)
-        session.background(); session.foreground(); try await wait(0.05)
-        XCTAssertTrue(session.active, "A legacy false value cannot block reconnect after an explicit share")
-        XCTAssertEqual(fixture.tokenRequests, 2)
-        session.stop()
-    }
-}
-
 /// This baseline is DeltaCore's native controller, not the original Delta app.
 /// The app cases instantiate the shipping Bound GameViewController/coordinator.
 /// Keep the distinction in every exported result and never infer phone parity.
@@ -1146,12 +596,6 @@ private final class AppPacingNativeDelegate: GameViewControllerDelegate {
     func gameViewController(_ gameViewController: DeltaCore.GameViewController, optionsFor game: GameProtocol) -> [EmulatorCore.Option: Any] { [.metal: metal] }
 }
 
-private final class BoundMenuInputDelegate: GameViewControllerDelegate {
-    var releases = 0
-    func gameViewController(_ gameViewController: DeltaCore.GameViewController, handleMenuInputFrom gameController: GameController) { releases += 1 }
-    func gameViewController(_ gameViewController: DeltaCore.GameViewController, optionsFor game: GameProtocol) -> [EmulatorCore.Option: Any] { [.metal: true] }
-}
-
 extension PlaybackSharingTests {
     func testNativeControllerPortraitGeometry() async throws {
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
@@ -1192,11 +636,8 @@ extension PlaybackSharingTests {
 
     /// Opt-in because other UI/build work on the shared host invalidates timing.
     /// Set BOUND_APP_PACING=1 in the generated xctestrun EnvironmentVariables.
-    /// Rates default to 1x and 3x; optional ROM/state paths must be disposable
-    /// fixtures accessible to the test host, never the user's live library.
     func testActualAppAndNativeControllerPacing() async throws {
-        let environment = ProcessInfo.processInfo.environment
-        let runMode = environment["BOUND_APP_PACING"]
+        let runMode = ProcessInfo.processInfo.environment["BOUND_APP_PACING"]
         guard runMode == "1" || runMode == "smoke" else {
             throw XCTSkip("Requires an exclusive host timing slot and explicit opt-in")
         }
@@ -1207,29 +648,11 @@ extension PlaybackSharingTests {
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             }
         }
-        let bundledFixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
-        let fixture = environment["BOUND_APP_PACING_ROM"].map { URL(fileURLWithPath: $0) } ?? bundledFixture
-        let initialState = environment["BOUND_APP_PACING_STATE"].map { URL(fileURLWithPath: $0) }
-        let rates = try (environment["BOUND_APP_PACING_RATES"] ?? "1,3").split(separator: ",").map {
-            try XCTUnwrap(Double($0), "Invalid pacing rate: \($0)")
-        }
-        guard !rates.isEmpty, rates.allSatisfy({ $0.isFinite && System.gba.deltaCore.supportedRates.contains($0) }) else {
-            XCTFail("Pacing rates must be finite and within the GBA core's supported range")
-            return
-        }
-        let moveDuringMeasurement = environment["BOUND_APP_PACING_MOVE"] == "1"
-        // Import consumes its source URL, including when the game already exists.
-        // Keep the bundled cartridge available for the other playback tests.
-        let importDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: importDirectory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: importDirectory) }
-        let importURL = importDirectory.appendingPathComponent(fixture.lastPathComponent)
-        try FileManager.default.copyItem(at: fixture, to: importURL)
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
         let imported = await withCheckedContinuation { continuation in
-            DatabaseManager.shared.importGames(at: [importURL]) { continuation.resume(returning: ($0, $1)) }
+            DatabaseManager.shared.importGames(at: [fixture]) { continuation.resume(returning: ($0, $1)) }
         }
         XCTAssertTrue(imported.1.isEmpty)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.path), "Import must preserve the shared test cartridge")
         let game = try XCTUnwrap(imported.0.first)
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         let controllers = ExternalGameControllerManager.shared
@@ -1271,19 +694,17 @@ extension PlaybackSharingTests {
         var rows: [[String: Any]] = []
         // Reverse the order on every other repeat to expose order effects.
         let standardModes = ["native-controller-gl", "native-controller-metal", "bound-classic", "bound-arrangement"]
-        let requestedModes = environment["BOUND_APP_PACING_MODES"]?.split(separator: ",").map(String.init)
+        let requestedModes = ProcessInfo.processInfo.environment["BOUND_APP_PACING_MODES"]?.split(separator: ",").map(String.init)
         let modes = requestedModes ?? standardModes
         XCTAssertFalse(modes.isEmpty)
         XCTAssertTrue(modes.allSatisfy { standardModes.contains($0) })
-        let cases = rates.flatMap { rate in modes.map { (mode: $0, rate: rate) } }
-        let repeats = environment["BOUND_APP_PACING_REPEATS"] == "1" ? 1 : (smoke ? 1 : 3)
+        let repeats = ProcessInfo.processInfo.environment["BOUND_APP_PACING_REPEATS"] == "1" ? 1 : (smoke ? 1 : 3)
         for repeatIndex in 0..<repeats {
-            for testCase in repeatIndex.isMultiple(of: 2) ? cases : Array(cases.reversed()) {
-                let mode = testCase.mode, rate = testCase.rate
-                let native = mode.hasPrefix("native-")
+            for mode in repeatIndex.isMultiple(of: 2) ? modes : Array(modes.reversed()) {
+                let native = mode.hasPrefix("native-"), usesMetal = mode != "native-controller-gl"
                 preferences.screenLayout = mode == "bound-arrangement" ? .bound : .delta
                 let owner: DeltaCore.GameViewController = native ? DeltaCore.GameViewController() : GameViewController()
-                let nativeDelegate = AppPacingNativeDelegate(metal: mode != "native-controller-gl")
+                let nativeDelegate = AppPacingNativeDelegate(metal: usesMetal)
                 if native { owner.delegate = nativeDelegate }
                 owner.automaticallyPausesWhileInactive = false
                 owner.loadViewIfNeeded(); owner.game = game
@@ -1296,9 +717,6 @@ extension PlaybackSharingTests {
                     userInfo: [Settings.NotificationUserInfoKey.name: Settings.Name.localControllerPlayerIndex])
                 owner.view.layoutIfNeeded()
                 let core = try XCTUnwrap(owner.emulatorCore)
-                // Read the core's resolved option: the physical app may use
-                // upstream OpenGL while Simulator requires its Metal workaround.
-                let usesMetal = core.videoManager.options[.metal] as? Bool ?? false
                 let prior = core.updateHandler, callbacks = FrameProbe(), presentations = FrameProbe(), ticks = AppPacingTicks()
                 core.updateHandler = { core in
                     let start = ProcessInfo.processInfo.systemUptime
@@ -1307,50 +725,25 @@ extension PlaybackSharingTests {
                 }
                 // Let the controller's native appearance queue own startup.
                 // Starting here too can race that queue's synchronous main hop.
-                try await wait(0.5)
-                XCTAssertEqual(core.state, .running)
-                if let initialState {
-                    XCTAssertTrue(core.pause())
-                    do {
-                        try core.load(DeltaCore.SaveState(fileURL: initialState, gameType: game.type))
-                    } catch {
-                        _ = core.resume()
-                        throw error
-                    }
-                    XCTAssertTrue(core.resume())
-                }
-                core.rate = rate
                 try await wait(warmup) // Equal warmup, excluded from every distribution.
                 XCTAssertEqual(core.state, .running)
-                XCTAssertEqual(core.rate, rate)
+                XCTAssertEqual(core.rate, 1)
                 XCTAssertFalse(controllers.connectedControllers.contains { $0.playerIndex != nil })
                 XCTAssertFalse(owner.controllerView.isHidden)
                 XCTAssertNotNil(owner.controllerView.controllerSkin)
                 XCTAssertNotNil(owner.controllerView.controllerSkinTraits)
                 XCTAssertNotNil(owner.gameView.outputImage)
                 XCTAssertEqual(owner.controllerView.playerIndex, 0)
-                let layer = usesMetal ? metalLayer(owner.gameView.layer) : nil
+                let layer = metalLayer(owner.gameView.layer)
                 if usesMetal { XCTAssertNotNil(layer) }
                 AppPacingDrawableObserver.shared.observe(layer, probe: presentations)
                 let measurementStartedAt = Date().timeIntervalSince1970
                 callbacks.reset(); ticks.start()
-                if moveDuringMeasurement {
-                    let right = try XCTUnwrap(StandardGameControllerInput.right.input(for: game.type))
-                    let left = try XCTUnwrap(StandardGameControllerInput.left.input(for: game.type))
-                    for step in 0..<Int(duration * 2) {
-                        let input = step.isMultiple(of: 2) ? right : left
-                        owner.controllerView.activate(input)
-                        try await wait(0.5)
-                        owner.controllerView.deactivate(input)
-                    }
-                } else {
-                    try await wait(duration)
-                }
+                try await wait(duration)
                 ticks.stop(); AppPacingDrawableObserver.shared.observe(nil, probe: nil)
                 // Freeze callback observations before any post-measurement layout work.
                 callbacks.stop(); core.updateHandler = prior
                 let measurementEndedAt = Date().timeIntervalSince1970
-                XCTAssertEqual(core.rate, rate, "The measured rate must remain stable throughout the sample")
                 let callbackSummary = summary(callbacks), presentationSummary = summary(presentations), tickSummary = summary(ticks.probe)
                 XCTAssertGreaterThan(callbacks.snapshot().0.count, smoke ? 10 : 500)
                 if usesMetal { XCTAssertGreaterThan(presentations.snapshot().0.count, smoke ? 3 : 100) }
@@ -1364,8 +757,6 @@ extension PlaybackSharingTests {
                 var row: [String: Any] = ["mode": mode, "repeat": repeatIndex, "configuration": _isDebugAssertConfiguration() ? "Debug" : "Release",
                     "baselineScope": native ? "DeltaCore native controller; not original Delta app" : "actual Bound app controller and companion coordinator",
                     "renderer": usesMetal ? "Metal" : "OpenGL", "sharing": "off", "speed": core.rate,
-                    "cartridge": fixture.lastPathComponent, "loadedInitialState": initialState != nil,
-                    "alternatingMovement": moveDuringMeasurement,
                     "measurementStartUnix": measurementStartedAt, "measurementEndUnix": measurementEndedAt,
                     "smokeOnly": smoke, "warmupSeconds": warmup, "sampleSeconds": duration, "screenPoints": [window.bounds.width, window.bounds.height],
                     "gameFramePoints": [frame.minX, frame.minY, frame.width, frame.height],
@@ -1376,7 +767,7 @@ extension PlaybackSharingTests {
                     "externalControllerCount": ExternalGameControllerManager.shared.connectedControllers.count,
                     "drawablePixels": layer.map { [$0.drawableSize.width, $0.drawableSize.height] } ?? [],
                     "coreCallbacks": callbackSummary, "metalDrawableObservations": presentationSummary,
-                    "metalMetric": !usesMetal ? "not measured for OpenGL" : (environment["SIMULATOR_UDID"] == nil ? "actual presented timestamps" : "drawable acquisitions; presentation timestamps unavailable in Simulator SDK"),
+                    "metalMetric": ProcessInfo.processInfo.environment["SIMULATOR_UDID"] == nil ? "actual presented timestamps" : "drawable acquisitions; presentation timestamps unavailable in Simulator SDK",
                     "mainRunLoopTicks": tickSummary,
                     "settledLayoutMeanMs": layoutCosts.reduce(0, +) / Double(layoutCosts.count)]
                 print("BOUND_APP_PACING \(row)")
@@ -1388,7 +779,7 @@ extension PlaybackSharingTests {
                     window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
                 }
                 let screenshot = XCTAttachment(image: image)
-                screenshot.name = "pacing-\(mode)-\(rate)x-\(repeatIndex)"; screenshot.lifetime = .keepAlways; add(screenshot)
+                screenshot.name = "pacing-\(mode)-\(repeatIndex)"; screenshot.lifetime = .keepAlways; add(screenshot)
                 _ = core.stop(); core.updateHandler = prior
                 owner.game = nil; window.isHidden = true; window.rootViewController = nil
                 withExtendedLifetime(nativeDelegate) {}

@@ -69,8 +69,9 @@ struct Settings
 {
     static let features = Features.shared
     
-    private static var platformDefaultPreferences: [String: Any] {
-        [#keyPath(UserDefaults.translucentControllerSkinOpacity): 0.7,
+    static func registerDefaults()
+    {
+        var defaults = [#keyPath(UserDefaults.translucentControllerSkinOpacity): 0.7,
                         #keyPath(UserDefaults.gameShortcutsMode): GameShortcutsMode.recent.rawValue,
                         #keyPath(UserDefaults.isButtonHapticFeedbackEnabled): true,
                         #keyPath(UserDefaults.isThumbstickHapticFeedbackEnabled): true,
@@ -87,31 +88,10 @@ struct Settings
                         #keyPath(UserDefaults.opensGamesInNewWindow): false,
                         #keyPath(UserDefaults.cheatSorting): "name",
                         #keyPath(UserDefaults.cheatSortDescending): false,
-                        Settings.preferredCoreSettingsKey(for: .ds): MelonDS.core.identifier]
-    }
-
-    static var defaultPreferences: [String: Any] {
-        platformDefaultPreferences.merging(BoundDefaultConfiguration.preferences) { _, configured in configured }
-    }
-
-    static func preferenceDefaults(in defaults: UserDefaults) -> [String: Any] {
-        platformDefaultPreferences.merging(BoundDefaultConfiguration.registrationPreferences(in: defaults)) { _, configured in configured }
-    }
-
-    static func registerPreferenceDefaults(in defaults: UserDefaults) {
-        let values = preferenceDefaults(in: defaults)
-        if BoundDefaultConfiguration.usesBundledLayouts(in: defaults) {
-            // Keep using this profile after lazy layout migrations write keys.
-            defaults.set(true, forKey: BoundDefaultConfiguration.profileKey)
-        }
-        defaults.register(defaults: values)
-    }
-
-    static func registerDefaults()
-    {
-        registerPreferenceDefaults(in: .standard)
+                        Settings.preferredCoreSettingsKey(for: .ds): MelonDS.core.identifier] as [String : Any]
+        
         #if BETA
-        UserDefaults.standard.register(defaults: [ExperimentalFeatures.shared.showWhatsNew.settingsKey.rawValue: true]) // Re-show What's New even if user previously saw it in 1.7b5
+        defaults[ExperimentalFeatures.shared.showWhatsNew.settingsKey.rawValue] = true // Re-show What's New even if user previously saw it in 1.7b5
         #else
         // Manually set MelonDS as preferred DS core in case DeSmuME is cached from a previous version.
         UserDefaults.standard.set(MelonDS.core.identifier, forKey: Settings.preferredCoreSettingsKey(for: .ds))
@@ -119,6 +99,8 @@ struct Settings
         // Manually disable AltJIT for public builds.
         UserDefaults.standard.isAltJITEnabled = false
         #endif
+        
+        UserDefaults.standard.register(defaults: defaults)
         
         if ExperimentalFeatures.shared.repairDatabase.isEnabled
         {

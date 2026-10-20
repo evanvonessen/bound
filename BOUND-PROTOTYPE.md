@@ -95,7 +95,7 @@ Normal Release opens the Library directly, labels the app Bound 2, hides inactiv
 
 Bound-2 now includes the pinned, patched dependency source files directly. Ordinary clone/open/Run does not execute preparation, initialize submodules or require Git LFS/mogenerator. Earlier preparation and mixed-repository instructions above describe historical milestones only. Dependency provenance and file integrity are recorded in PrototypeConfiguration/vendored-sources.json, with licenses and compatibility patches retained. Optional prepare.sh validates those sources offline and preserves edits.
 
-The companion toolbar is replaced by one panel-cycle button. Friend Login/Friends and Settings use the native pause menu. Settings shares its grouped home and saved preferences with the library entry point. Bound portrait preserves stock controls and gives the main game full width; portrait Types has internal chart zoom/pan, while landscape gestures manipulate the whole companion panel. Physical touch, smoothness and live Internet sharing still require device testing.
+The companion toolbar is replaced by one panel-cycle button. Friend Login/Friends and Bound Settings use the native pause menu. Bound portrait preserves stock controls and gives the main game full width; portrait Types has internal chart zoom/pan, while landscape gestures manipulate the whole companion panel. Physical touch, smoothness and live Internet sharing still require device testing.
 
 ## 0.5.3 validation checkpoint
 

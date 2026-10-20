@@ -17,26 +17,11 @@ existing public `developer@evanvonessen.com` address.
 
 ## Approved icon
 
-`Resources/AppIcon.icon/Assets/BoundIcon.png` restores the handwritten gray b
-artwork, byte-for-byte from `Artwork/AppIcons/BoundIcon-handwritten.png`. Its original
-supplied reference is also restored at `Artwork/BoundIcon-reference.png`. The same
-opaque 1024 × 1024 artwork is used for both light and dark in-app primary-icon
-previews. Icon Composer uses a matching white fill with glass, shadow,
-and translucency disabled; iOS applies the Home Screen mask. Existing Xcode asset
-wiring and website artwork are preserved.
+`Resources/AppIcon.icon/Assets/BoundIcon.png` is the approved glass artwork,
+resampled without creative changes to an opaque 1024 × 1024 PNG. The site uses the
+same image. Existing Icon Composer settings and Xcode asset wiring are preserved.
 
-Active app asset SHA-256:
-`72f1ac342c042c2aea880b8f1fa08d8cfbd3c1abb8bba6527d8ba349aae3eeec`.
-
-The handwritten gray b icon is preserved unchanged at
-`Artwork/AppIcons/BoundIcon-handwritten.png`, and the exact supplied
-`Untitled_Artwork.png` is archived at
-`Artwork/AppIcons/BoundIcon-handwritten-reference.png`.
-The orange pixel B remains archived unchanged at
-`Artwork/AppIcons/BoundIcon-red-pixel.png`, with its original reference at
-`Artwork/AppIcons/BoundIcon-red-pixel-reference.png`.
-Archived orange app asset SHA-256:
-`c1a0fb65767430b231e18497cc3593188ce5a3ee52742f9305777f969dbf1046`.
+SHA-256: `2c95344af26c9600e30c37aa7cd8c4bc4fa8b92cb214d1619730ccc70ebd12af`.
 
 ## Privacy source checks
 

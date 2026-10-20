@@ -18,7 +18,6 @@ extension PauseView
     {
         var resumeHandler: () -> Void = {}
         var stopHandler: () -> Void = {}
-        var items: [MenuItem]
         
         fileprivate private(set) var isHidden: Bool = true
         fileprivate private(set) var isAnimated: Bool = true
@@ -37,11 +36,10 @@ extension PauseView
         {
             self.resumeHandler = resumeHandler
             self.stopHandler = stopHandler
-            self.items = items
             
             super.init(rootView: AnyView(EmptyView()))
             
-            let pauseView = PauseView(resumeHandler: resumeHandler, stopHandler: stopHandler).environment(self)
+            let pauseView = PauseView(items: items, resumeHandler: resumeHandler, stopHandler: stopHandler).environment(self)
             self.rootView = AnyView(pauseView)
         }
         
@@ -70,7 +68,7 @@ extension PauseView
 @available(iOS 26, *)
 struct PauseView: View
 {
-    private var items: [MenuItem] { hostingViewController.items }
+    var items: [MenuItem] = []
     
     var resumeHandler: () -> Void = {}
     var stopHandler: () -> Void = {}
@@ -181,7 +179,7 @@ struct PauseView: View
     let loadStateItem = MenuItem(text: NSLocalizedString("Load State", comment: ""), image: #imageLiteral(resourceName: "LoadSaveState"), action: { $0.isSelected.toggle() })
     let cheatCodesItem = MenuItem(text: NSLocalizedString("Cheat Codes", comment: ""), image: #imageLiteral(resourceName: "CheatCodes"), action: { $0.isSelected.toggle() })
     let fastForwardItem = MenuItem(text: NSLocalizedString("Fast Forward", comment: ""), image: #imageLiteral(resourceName: "FastForward"), action: { $0.isSelected.toggle() })
-    let friendsItem = MenuItem(text: NSLocalizedString("Friends", comment: ""), image: UIImage(systemName: "person.2.fill"), action: { _ in })
+    let sustainButtonsItem = MenuItem(text: NSLocalizedString("Hold Buttons", comment: ""), image: #imageLiteral(resourceName: "SustainButtons"), action: { $0.isSelected.toggle() })
     let screenshotItem = MenuItem(text: NSLocalizedString("Screenshot", comment: ""), image: #imageLiteral(resourceName: "Screenshot"), action: { $0.isSelected.toggle() })
     
     let optionA = MenuItem(text: NSLocalizedString("Option A", comment: ""), image: #imageLiteral(resourceName: "Screenshot"), action: { $0.isSelected.toggle() })
@@ -193,7 +191,7 @@ struct PauseView: View
     let optionG = MenuItem(text: NSLocalizedString("Option G", comment: ""), image: #imageLiteral(resourceName: "Screenshot"), action: { $0.isSelected.toggle() })
     let optionH = MenuItem(text: NSLocalizedString("Option H", comment: ""), image: #imageLiteral(resourceName: "Screenshot"), action: { $0.isSelected.toggle() })
     
-    let menuItems = [saveStateItem, loadStateItem, cheatCodesItem, fastForwardItem, friendsItem, screenshotItem, optionA, optionB, optionC, optionD, optionE, optionF, optionG, optionH]
+    let menuItems = [saveStateItem, loadStateItem, cheatCodesItem, fastForwardItem, sustainButtonsItem, screenshotItem, optionA, optionB, optionC, optionD, optionE, optionF, optionG, optionH]
     
     let hostingController = PauseView.HostingController(items: menuItems)
     hostingController.view.backgroundColor = .systemMint

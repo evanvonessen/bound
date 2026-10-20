@@ -26,236 +26,47 @@ private struct SettingsBadge: View
     }
 }
 
-/// Optional actions and information that belong to an already-running game.
-struct BoundSettingsGameplayContext {
-    let emulationDetails: BoundEmulationDetails?
-    var editControls: (() -> Void)? = nil
-    var showCompanion: (() -> Void)? = nil
-}
-
-/// Both entry points use this owner so closing and interactive dismissal share
-/// one completion. Navigating to a detail page never runs presentation cleanup.
-final class BoundSettingsHostingController: UIHostingController<SettingsView>, UIAdaptivePresentationControllerDelegate {
-    private let closed: () -> Void
-    private let syncOnClose: () -> Void
-    private var finished = false
-    private var closing = false
-
-    init(model: BoundCompanionSettingsModel? = nil, gameplay: BoundSettingsGameplayContext? = nil,
-         syncOnClose: @escaping () -> Void = { SyncManager.shared.sync() },
-         closed: @escaping () -> Void = {}) {
-        self.closed = closed
-        self.syncOnClose = syncOnClose
-        super.init(rootView: SettingsView(model: model, gameplay: gameplay))
-        rootView.close = { [weak self] in self?.closeSettings() }
-    }
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("Use the shared Settings initializer") }
-
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        presentationController?.delegate = self
-    }
-    override func viewDidDisappear(_ animated: Bool) {
-        super.viewDidDisappear(animated)
-        if isBeingDismissed || presentingViewController == nil { finishPresentation() }
-    }
-    func closeSettings() {
-        guard !closing, !finished else { return }
-        closing = true
-        dismiss(animated: true) { [weak self] in self?.finishPresentation() }
-    }
-    func presentationControllerDidDismiss(_ presentationController: UIPresentationController) { finishPresentation() }
-    func finishPresentation() {
-        guard !finished else { return }
-        finished = true
-        syncOnClose()
-        closed()
-    }
-}
-
-private struct BoundSettingsCloseActionKey: EnvironmentKey {
-    static let defaultValue: (() -> Void)? = nil
-}
-
-extension EnvironmentValues {
-    var boundSettingsCloseAction: (() -> Void)? {
-        get { self[BoundSettingsCloseActionKey.self] }
-        set { self[BoundSettingsCloseActionKey.self] = newValue }
-    }
-}
-
-private struct BoundSettingsPageModifier: ViewModifier {
-    @Environment(\.boundSettingsCloseAction) private var close
-
-    func body(content: Content) -> some View {
-        content.toolbar {
-            if let close {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done", action: close)
-                        .accessibilityIdentifier("bound.settings-close")
-                }
-            }
-        }
-    }
-}
-
-extension View {
-    /// Each pushed page owns its native toolbar. Standalone screens keep their
-    /// existing dismissal controls when there is no shared Settings presenter.
-    func boundSettingsPage() -> some View { modifier(BoundSettingsPageModifier()) }
-}
-
-struct SettingsView: View {
-    @StateObject private var model: BoundCompanionSettingsModel
-    @State private var resetting = false
-    @State private var resetFailed = false
-    @State private var resetRevision = 0
-    @AppStorage(BoundDeveloperFeatures.key) private var developerFeaturesEnabled = false
-    @State private var configurationExportFile: BoundConfigurationFile?
-    @State private var pendingConfigurationExportFile: BoundConfigurationFile?
-    @State private var exportingConfiguration = false
-    @State private var configurationExportFailed = false
-    var gameplay: BoundSettingsGameplayContext?
-    var close: () -> Void = {}
-
-    init(model: BoundCompanionSettingsModel? = nil, gameplay: BoundSettingsGameplayContext? = nil) {
-        _model = StateObject(wrappedValue: model ?? BoundCompanionSettingsModel())
-        self.gameplay = gameplay
-    }
+struct SettingsView: View
+{
+    @Environment(\.dismiss)
+    private var dismiss
 
     var body: some View {
-        VStack(spacing: 0) {
-            NavigationStack {
-                Form {
-                    Section {
-                        NavigationLink {
-                            Form {
-                                ControlsSection()
-                                BoundCompanionControlsSections(model: model, gameplay: gameplay)
-                                if !BoundFeatureVisibility.simplifiedSettings, let edit = gameplay?.editControls {
-                                    Section { Button("Button placement") { edit(); close() } }
-                                }
-                            }.navigationTitle("Controls").navigationBarTitleDisplayMode(.inline)
-                                .boundSettingsPage()
-                        } label: {
-                            SettingsRow(label: Text("Controls"), systemImage: "gamecontroller", color: .pink)
-                        }.accessibilityIdentifier("bound.settings-controls")
-                        NavigationLink {
-                            AudioSettingsView().boundSettingsPage()
-                        } label: {
-                            SettingsRow(label: Text("Audio"), systemImage: "speaker.wave.2", color: .green)
-                        }.accessibilityIdentifier("bound.settings-audio")
-                        NavigationLink {
-                            Form { BoundAccountSocialSettings(); DeltaSyncSettingsSection() }
-                                .navigationTitle("Account & Sync").navigationBarTitleDisplayMode(.inline)
-                                .boundSettingsPage()
-                        } label: {
-                            SettingsRow(label: Text("Account & Sync"), systemImage: "person.crop.circle", color: .indigo)
-                        }.accessibilityIdentifier("bound.settings-account")
-                        NavigationLink {
-                            Form {
-                                BoundAppearanceSettings(emulationDetails: gameplay?.emulationDetails, includeAppearance: false)
-                                Section("Cores") { CoreSettingsLinks() }
-                                Section("Links") {
-                                    Link(destination: URL(string: "https://evanvonessen.github.io/bound/moderation.html")!) {
-                                        SettingsRow(label: Text("Rules & Contact"), systemImage: "book.closed", color: .orange) {
-                                            Image(systemName: "arrow.up.right")
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    .accessibilityIdentifier("bound.rules-and-contact-link")
-                                }
-                                if !BoundFeatureVisibility.simplifiedSettings {
-                                    Section("Emulation") {
-                                        NavigationLink {
-                                            VideoSettingsView().boundSettingsPage()
-                                        } label: {
-                                            SettingsRow(label: Text("Video"), systemImage: "display", color: .teal)
-                                        }
-                                    }
-                                    OnlineMultiplayerSection()
-                                }
-                                if !BoundFeatureVisibility.simplifiedSettings { CreditsSection() }
-                                #if DEBUG
-                                Section("Developer") {
-                                    NavigationLink("Advanced") { AdvancedSettingsView().boundSettingsPage() }
-                                }
-                                #endif
-                            }.navigationTitle("About").navigationBarTitleDisplayMode(.inline)
-                                .boundSettingsPage()
-                        } label: {
-                            SettingsRow(label: Text("About"), systemImage: "info.circle", color: .cyan)
-                        }.accessibilityIdentifier("bound.settings-about")
-                    }
-                    Section {
-                        Button("Reset Settings to Default") {
-                            resetting = true
-                            Task { @MainActor in
-                                do {
-                                    try await Settings.resetToDefaults()
-                                    model.refresh()
-                                    resetRevision += 1
-                                } catch {
-                                    resetFailed = true
-                                }
-                                resetting = false
-                            }
-                        }
-                        .disabled(resetting)
-                        .accessibilityIdentifier("bound.settings-reset-defaults")
-
-                        Toggle("Enable Developer Features", isOn: $developerFeaturesEnabled)
-                            .accessibilityIdentifier("bound.settings-developer-features")
-
-                        if developerFeaturesEnabled {
-                            Button("Export All Config") {
-                                exportingConfiguration = true
-                                Task { @MainActor in
-                                    do {
-                                        let file = try await BoundConfigurationExport.file()
-                                        pendingConfigurationExportFile = file
-                                        configurationExportFile = file
-                                    } catch {
-                                        exportingConfiguration = false
-                                        configurationExportFailed = true
-                                    }
-                                }
-                            }
-                            .disabled(exportingConfiguration)
-                            .accessibilityIdentifier("bound.settings-export-all-config")
+        NavigationStack {
+            Form {
+                ControlsSection()
+                EmulationSection()
+                if !BoundFeatureVisibility.simplifiedSettings { OnlineMultiplayerSection() }
+                MiscellaneousSection()
+                if !BoundFeatureVisibility.simplifiedSettings { CreditsSection() }
+                Section { NavigationLink("Source and licenses") { BoundSourceAndLicenses() } }
+            }
+            .safeAreaPadding(.top, 8)
+            .navigationTitle("Settings")
+            .toolbar {
+                if #available(iOS 26, *)
+                {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(role: .close) {
+                            // dismiss() skips presentationControllerDidDismiss, so explicitly sync on close.
+                            SyncManager.shared.sync()
+                            dismiss()
                         }
                     }
                 }
-                .safeAreaPadding(.top, 8)
-                .navigationTitle("Settings")
-                .accessibilityIdentifier("bound.settings-root")
-                .boundSettingsPage()
-            }
-            .environment(\.boundSettingsCloseAction, close)
-            .id(resetRevision)
-            .alert("Unable to Reset Settings", isPresented: $resetFailed) {
-                Button("OK", role: .cancel) {}
-            }
-            .alert("Unable to Export Configuration", isPresented: $configurationExportFailed) {
-                Button("OK", role: .cancel) {}
-            }
-            .sheet(item: $configurationExportFile, onDismiss: {
-                pendingConfigurationExportFile?.removeTemporaryFile()
-                pendingConfigurationExportFile = nil
-                exportingConfiguration = false
-            }) { file in
-                BoundConfigurationFilePicker(file: file) {
-                    configurationExportFile = nil
+                else
+                {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            // dismiss() skips presentationControllerDidDismiss, so explicitly sync on close.
+                            SyncManager.shared.sync()
+                            dismiss()
+                        }
+                    }
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Let navigation bars and backgrounds fill the side safe areas in landscape.
-            .ignoresSafeArea(.container, edges: .horizontal)
         }
     }
-
 }
 
 // MARK: - Controls
@@ -266,25 +77,11 @@ private struct ControlsSection: View
     private var gameControllerManager: ExternalGameControllerManager = .shared
 
     @SwiftUI.State private var opacity = Double(Settings.translucentControllerSkinOpacity)
-    @SwiftUI.State private var controllerModeEnabled = BoundControllerModePreferences().isEnabled
-    @SwiftUI.State private var controllerMultiviewEnabled = BoundControllerMultiviewPreferences().isEnabled
 
     var body: some View {
         Section("Controls") {
-            Toggle("Controller Mode", isOn: $controllerModeEnabled)
-                .accessibilityIdentifier("bound.controller-mode-enabled")
-                .onChange(of: controllerModeEnabled) { _, enabled in
-                    BoundControllerModePreferences().isEnabled = enabled
-                }
-
-            Toggle("Allow Controller to Control Multiview", isOn: $controllerMultiviewEnabled)
-                .accessibilityIdentifier("bound.controller-multiview")
-                .onChange(of: controllerMultiviewEnabled) { _, enabled in
-                    BoundControllerMultiviewPreferences().isEnabled = enabled
-                }
-
             NavigationLink {
-                ControllerSettingsView().boundSettingsPage()
+                ControllerSettingsView()
             } label: {
                 SettingsRow(label: Text("Controllers"), systemImage: "gamecontroller", color: .purple) {
                     if !gameControllerManager.connectedControllers.isEmpty
@@ -297,13 +94,13 @@ private struct ControlsSection: View
 
             if !BoundFeatureVisibility.simplifiedSettings {
             NavigationLink {
-                SkinSettingsView().boundSettingsPage()
+                SkinSettingsView()
             } label: {
                 SettingsRow(label: Text("Skins"), systemImage: "paintpalette", color: .pink)
             }
 
             NavigationLink {
-                TouchHapticsView().boundSettingsPage()
+                TouchHapticsView()
             } label: {
                 SettingsRow(label: Text("Touch & Haptics"), systemImage: "hand.tap", color: .red)
             }
@@ -316,13 +113,37 @@ private struct ControlsSection: View
                 }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: BoundAppearancePreferences.didChangeNotification)) { _ in
-            controllerModeEnabled = BoundControllerModePreferences().isEnabled
-            controllerMultiviewEnabled = BoundControllerMultiviewPreferences().isEnabled
-        }
     }
 }
 
+// MARK: - Emulation
+
+private struct EmulationSection: View
+{
+    var body: some View {
+        Section("Emulation") {
+            NavigationLink {
+                AudioSettingsView()
+            } label: {
+                SettingsRow(label: Text("Audio"), systemImage: "speaker.wave.2", color: .green)
+            }
+
+            if !BoundFeatureVisibility.simplifiedSettings {
+            NavigationLink {
+                VideoSettingsView()
+            } label: {
+                SettingsRow(label: Text("Video"), systemImage: "display", color: .teal)
+            }
+            }
+
+            NavigationLink {
+                CoresListView()
+            } label: {
+                SettingsRow(label: Text("Cores"), systemImage: "cpu", color: .cyan)
+            }
+        }
+    }
+}
 
 // MARK: - Online Multiplayer
 
@@ -331,7 +152,7 @@ private struct OnlineMultiplayerSection: View
     var body: some View {
         Section {
             NavigationLink {
-                OnlineMultiplayerView().boundSettingsPage()
+                OnlineMultiplayerView()
             } label: {
                 SettingsRow(label: Text("Online Multiplayer"), systemImage: "globe", color: .orange)
             }
@@ -353,7 +174,7 @@ struct OnlineMultiplayerView: View
         Form {
             Section {
                 NavigationLink {
-                    WFCServersView().boundSettingsPage()
+                    WFCServersView()
                 } label: {
                     LabeledContent {
                         if let serverName = preferredServerName
@@ -411,10 +232,10 @@ struct OnlineMultiplayerView: View
 
 // MARK: - Services
 
-private struct DeltaSyncSettingsSection: View
+private struct ServicesSection: View
 {
     @SwiftUI.State
-    private var syncingServiceName: String? = SyncManager.currentBoundService?.localizedName
+    private var syncingServiceName: String? = Settings.syncingService?.localizedName
     
     @SwiftUI.State
     private var syncConflictsCount: Int = 0
@@ -422,12 +243,14 @@ private struct DeltaSyncSettingsSection: View
     @SwiftUI.State
     private var isAccountConnected: Bool = SyncManager.shared.coordinator?.account != nil
 
+    @SwiftUI.State
+    private var retroAchievementsUsername: String? = Keychain.shared.retroAchievementsUsername
+
     var body: some View {
         Section {
             NavigationLink {
                 SyncingServicesViewController.ViewRepresentable()
-                    .ignoresSafeArea(.container, edges: [.top, .horizontal])
-                    .boundSettingsPage()
+                    .ignoresSafeArea()
             } label: {
                 SettingsRow(label: Text("Delta Sync"), systemImage: "arrow.triangle.2.circlepath", color: .indigo) {
                     if let name = syncingServiceName {
@@ -435,14 +258,12 @@ private struct DeltaSyncSettingsSection: View
                     }
                 }
             }
-            .accessibilityIdentifier("bound.delta-sync-settings")
 
             if isAccountConnected
             {
                 NavigationLink {
                     SyncStatusViewController.ViewRepresentable()
-                        .ignoresSafeArea(.container, edges: [.top, .horizontal])
-                        .boundSettingsPage()
+                        .ignoresSafeArea()
                 } label: {
                     SettingsRow(label: Text("Sync Status"), systemImage: "checkmark.icloud", color: .indigo) {
                         if syncConflictsCount > 0
@@ -457,28 +278,37 @@ private struct DeltaSyncSettingsSection: View
                 }
             }
 
-        } header: {
-            Text("Cloud Sync")
+            NavigationLink {
+                AchievementAccount()
+            } label: {
+                SettingsRow(label: Text("RetroAchievements"), systemImage: "medal", color: .indigo) {
+                    if let username = retroAchievementsUsername {
+                        Text(username).foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: Settings.didChangeNotification)) { notification in
             guard let name = notification.userInfo?[Settings.NotificationUserInfoKey.name] as? Settings.Name,
                   name == .syncingService else { return }
             
-            refreshSyncStatus()
+            syncingServiceName = Settings.syncingService?.localizedName
+            isAccountConnected = SyncManager.shared.coordinator?.account != nil
+            refreshSyncConflicts()
         }
         .onReceive(NotificationCenter.default.publisher(for: SyncCoordinator.didFinishSyncingNotification).receive(on: DispatchQueue.main)) { _ in
-            refreshSyncStatus()
+            refreshSyncConflicts()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AchievementsManager.didFinishAuthenticatingNotification).receive(on: DispatchQueue.main)) { _ in
+            retroAchievementsUsername = Keychain.shared.retroAchievementsUsername
         }
         .onAppear {
-            refreshSyncStatus()
+            refreshSyncConflicts()
         }
     }
 
-    private func refreshSyncStatus()
+    private func refreshSyncConflicts()
     {
-        syncingServiceName = SyncManager.currentBoundService?.localizedName
-        isAccountConnected = SyncManager.shared.coordinator?.account != nil
-
         do {
             let records = try SyncManager.shared.recordController?.fetchConflictedRecords() ?? []
             syncConflictsCount = records.count
@@ -498,8 +328,7 @@ private struct PatreonSection: View
             Section {
                 NavigationLink {
                     PatreonViewController.ViewRepresentable()
-                        .ignoresSafeArea(.container, edges: [.top, .horizontal])
-                        .boundSettingsPage()
+                        .ignoresSafeArea()
                 } label: {
                     SettingsRow(
                         label: Text(PurchaseManager.shared.isActivePatron
@@ -524,11 +353,41 @@ private struct DisplaySection: View
             NavigationLink {
                 AltAppIconsViewController.ViewRepresentable()
                     .navigationBarTitleDisplayMode(.large)
-                    .ignoresSafeArea(.container, edges: [.top, .horizontal])
-                    .boundSettingsPage()
+                    .ignoresSafeArea()
             } label: {
                 SettingsRow(label: Text("App Icon"), systemImage: "square.grid.2x2", color: .blue)
             }
+        }
+    }
+}
+
+// MARK: - Experimental, Minor, & Advanced
+
+private struct MiscellaneousSection: View
+{
+    var body: some View {
+        Section {
+            NavigationLink {
+                MinorSettingsView()
+            } label: {
+                SettingsRow(label: Text("Minor"), systemImage: "slider.horizontal.3", color: .gray)
+            }
+
+            #if DEBUG
+            NavigationLink {
+                AdvancedSettingsView()
+            } label: {
+                SettingsRow(label: Text("Advanced"), systemImage: "gearshape", color: .gray)
+            }
+            
+            NavigationLink {
+                ExperimentalFeaturesView()
+            } label: {
+                SettingsRow(label: Text("Experimental"), systemImage: "flask", color: .gray) {
+                    SettingsBadge(text: "Patrons")
+                }
+            }
+            #endif
         }
     }
 }
@@ -540,15 +399,14 @@ private struct CreditsSection: View
     var body: some View {
         Section("Credits") {
             NavigationLink {
-                ContributorsView().boundSettingsPage()
+                ContributorsView()
             } label: {
                 Text("Contributors")
             }
 
             NavigationLink {
                 LicensesViewController.ViewRepresentable()
-                    .ignoresSafeArea(.container, edges: [.top, .horizontal])
-                    .boundSettingsPage()
+                    .ignoresSafeArea()
             } label: {
                 Text("Software Licenses")
             }

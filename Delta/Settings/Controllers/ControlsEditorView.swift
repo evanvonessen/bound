@@ -8,8 +8,6 @@
 
 import SwiftUI
 import CoreData
-import GameController
-import UIKit
 
 import DeltaCore
 
@@ -37,7 +35,7 @@ private class ControlsEditor
         self.system = system
         self.playerIndex = playerIndex
         
-        self.defaultMapping = BoundMultiviewDefaultMapping.mapping(for: controller, gameType: system.gameType)
+        self.defaultMapping = controller.defaultInputMapping as? DeltaCore.GameControllerInputMapping ?? DeltaCore.GameControllerInputMapping(gameControllerInputType: controller.inputType)
         
         self.inputMapping = self.defaultMapping
         self.loadMapping()
@@ -60,11 +58,6 @@ private class ControlsEditor
         
         var inputMapping = self.inputMapping
         inputMapping.name = String.localizedStringWithFormat("Custom %@", self.controller.name)
-
-        if let controller = self.controller as? MFiGameController
-        {
-            BoundControllerSystemGestures.apply(to: controller, mapping: inputMapping)
-        }
         
         DatabaseManager.shared.performBackgroundTask { context in
             let existingMapping = GameControllerInputMapping.inputMapping(forPlayer: self.playerIndex, gameType: self.system.gameType, controllerType: self.controller.inputType, in: context)
@@ -95,8 +88,7 @@ private class ControlsEditor
         }
     }
     
-    // Normalize standard actions to this system's game buttons for comparison and display.
-    // A nil input remains nil so callers can distinguish an unassigned mapping from a default.
+    // Resolve standard inputs to the system's game input before comparing or displaying. (Returns AnyInput so the Picker can use it for selection.)
     func normalizedInput(_ input: Input?) -> AnyInput?
     {
         guard let input else { return nil }
@@ -113,19 +105,16 @@ private class ControlsEditor
 // Edits the input mapping for one player + system + controller type.
 struct ControlsEditorView: View
 {
-    static var actionInputs: [AnyInput] { ActionInput.configurableActions.map(AnyInput.init) }
+    static let actionInputs: [AnyInput] = [ActionInput.quickSave, .quickLoad, .fastForward, .screenshot, .cycleBoundPanels].map(AnyInput.init)
     @SwiftUI.State
     private var editor: ControlsEditor
     
     @SwiftUI.State
     private var isConfirmingReset = false
-
-    @SwiftUI.State
-    private var homeButtonSettingsError: String?
     
     @Environment(\.dismiss)
     private var dismiss
-
+    
     init(controller: GameController, system: System, playerIndex: Int)
     {
         self._editor = SwiftUI.State(initialValue: ControlsEditor(controller: controller, system: system, playerIndex: playerIndex))
@@ -133,19 +122,6 @@ struct ControlsEditorView: View
     
     var body: some View {
         Form {
-            if let controller = editor.controller as? MFiGameController,
-               controller.physicalHomeInput != nil,
-               #available(iOS 27, *)
-            {
-                Section {
-                    Button("Home Button Settings") {
-                        ControllerHomeButtonSettings.open { error in
-                            homeButtonSettingsError = error.localizedDescription
-                        }
-                    }
-                }
-            }
-
             if editor.controller.inputType == .keyboard
             {
                 KeyboardMappingSections(editor: editor)
@@ -157,12 +133,9 @@ struct ControlsEditorView: View
         }
         .navigationTitle(editor.system.localizedDisplayName)
         .navigationBarTitleDisplayMode(.inline)
-
         // NavigationLink keeps this view alive after navigating back, so re-fetch the mapping whenever it appears.
         // (Only safe because this screen never pushes another view.)
-        .onAppear {
-            editor.loadMapping()
-        }
+        .onAppear(perform: editor.loadMapping)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
@@ -183,14 +156,6 @@ struct ControlsEditorView: View
                     }
                 }
             }
-        }
-        .alert("Unable to Open Home Button Settings", isPresented: Binding(
-            get: { homeButtonSettingsError != nil },
-            set: { if !$0 { homeButtonSettingsError = nil } }
-        )) {
-            Button("OK") { homeButtonSettingsError = nil }
-        } message: {
-            Text(homeButtonSettingsError ?? "")
         }
     }
 }
@@ -213,15 +178,6 @@ private struct MFiMappingSections: View
 }
 
 // MARK: - Keyboard -
-
-enum ControllerBindingDisplayLabel {
-    static func value(selected: AnyInput?, defaultInput: AnyInput?, unassignedLabel: String? = nil) -> String {
-        selected?.localizedDisplayName
-            ?? defaultInput?.localizedDisplayName
-            ?? unassignedLabel
-            ?? ActionInput.none.localizedDisplayName
-    }
-}
 
 private struct KeyboardMappingSections: View
 {
@@ -286,9 +242,9 @@ private struct InputSection
     let inputs: [Input]
     
     static let mfiSections: [InputSection] = [
-        InputSection(name: String(localized: "Buttons"), inputs: [MFiGameController.Input.a, .b, .x, .y, .up, .down, .left, .right, .leftShoulder, .leftTrigger, .rightShoulder, .rightTrigger, .start, .select, .menu, .share]),
-        InputSection(name: String(localized: "Left Thumbstick"), inputs: [MFiGameController.Input.leftThumbstickUp, .leftThumbstickDown, .leftThumbstickLeft, .leftThumbstickRight, .leftThumbstickButton]),
-        InputSection(name: String(localized: "Right Thumbstick"), inputs: [MFiGameController.Input.rightThumbstickUp, .rightThumbstickDown, .rightThumbstickLeft, .rightThumbstickRight, .rightThumbstickButton])
+        InputSection(name: String(localized: "Buttons"), inputs: [MFiGameController.Input.a, .b, .x, .y, .up, .down, .left, .right, .leftShoulder, .leftTrigger, .rightShoulder, .rightTrigger, .start, .select, .menu]),
+        InputSection(name: String(localized: "Left Thumbstick"), inputs: [MFiGameController.Input.leftThumbstickUp, .leftThumbstickDown, .leftThumbstickLeft, .leftThumbstickRight]),
+        InputSection(name: String(localized: "Right Thumbstick"), inputs: [MFiGameController.Input.rightThumbstickUp, .rightThumbstickDown, .rightThumbstickLeft, .rightThumbstickRight])
     ]
     
     static let keyboardSections: [InputSection] = [
@@ -307,72 +263,15 @@ private struct InputMappingRow: View
     let controllerInput: Input
     
     // AnyInput because the picker requires a Hashable type.
-    static var actionInputs: [AnyInput] { ControlsEditorView.actionInputs }
+    static let actionInputs = ControlsEditorView.actionInputs
     
     // The inputs that can be mapped to: this system's game inputs, plus Menu (pause).
     var mappableInputs: [AnyInput] {
         editor.system.editorInputs.map(AnyInput.init) + [AnyInput(StandardGameControllerInput.menu)]
     }
-
-    private var isPhysicalHomeButton: Bool {
-        guard let controller = editor.controller as? MFiGameController,
-              let physicalHome = controller.physicalHomeInput
-        else { return false }
-        return physicalHome.stringValue == controllerInput.stringValue
-    }
-
-    private var isLeftThumbstickDirection: Bool {
-        switch controllerInput.type
-        {
-        case .controller(.standard):
-            guard let input = StandardGameControllerInput(input: controllerInput) else { return false }
-            return [.leftThumbstickUp, .leftThumbstickDown, .leftThumbstickLeft, .leftThumbstickRight].contains(input)
-        case .controller(.mfi):
-            guard let input = MFiGameController.Input(input: controllerInput) else { return false }
-            return [.leftThumbstickUp, .leftThumbstickDown, .leftThumbstickLeft, .leftThumbstickRight].contains(input)
-        default: return false
-        }
-    }
-
-    private var availableActions: [ActionInput] {
-        Self.actionInputs.compactMap(ActionInput.init(input:)).filter { action in
-            action != .none && (!isLeftThumbstickDirection || !action.isBoundPanelAction)
-        }
-    }
     
     var defaultInput: Input? {
         editor.defaultMapping.input(forControllerInput: controllerInput)
-    }
-
-    private var normalizedDefaultInput: AnyInput? {
-        editor.normalizedInput(defaultInput)
-    }
-
-    private var unassignedBindingName: String? {
-        guard controllerInput.type == .controller(.mfi),
-              controllerInput.stringValue == MFiGameController.Input.share.stringValue
-        else { return nil }
-        return String(localized: "System Capture")
-    }
-
-    private var defaultBindingName: String {
-        ControllerBindingDisplayLabel.value(
-            selected: nil,
-            defaultInput: normalizedDefaultInput,
-            unassignedLabel: unassignedBindingName
-        )
-    }
-
-    private var effectiveBindingName: String {
-        ControllerBindingDisplayLabel.value(
-            selected: mappedInput.wrappedValue,
-            defaultInput: normalizedDefaultInput,
-            unassignedLabel: unassignedBindingName
-        )
-    }
-
-    private var controllerInputName: String {
-        isPhysicalHomeButton ? String(localized: "Home / Overlay") : controllerInput.localizedDisplayName
     }
     
     var body: some View {
@@ -384,9 +283,9 @@ private struct InputMappingRow: View
                 Picker(selection: mappedInput) {
                     pickerOptions
                 } label: {
-                    Label(controllerInputName, systemImage: controllerInput.sfSymbolName)
+                    Label(controllerInput.localizedDisplayName, systemImage: controllerInput.sfSymbolName)
                 } currentValueLabel: {
-                    Text(effectiveBindingName)
+                    Text(mappedInput.wrappedValue?.localizedDisplayName ?? String(localized: defaultInput == nil ? "Remove" : "Default"))
                 }
             }
             else
@@ -394,23 +293,18 @@ private struct InputMappingRow: View
                 Picker(selection: mappedInput) {
                     pickerOptions
                 } label: {
-                    Label(controllerInputName, systemImage: controllerInput.sfSymbolName)
+                    Label(controllerInput.localizedDisplayName, systemImage: controllerInput.sfSymbolName)
                 }
             }
         }
         .pickerStyle(.menu)
         .tint(isCustomized ? .accentColor : .secondary)
-        .accessibilityIdentifier("bound.controller-mapping.\(controllerInput.stringValue)")
-        .accessibilityValue(Text(effectiveBindingName))
     }
     
     @ViewBuilder
     var pickerOptions: some View {
-        Text("Default (\(defaultBindingName))")
+        Text(defaultInput == nil ? "Remove" : "Default")
             .tag(AnyInput?.none)
-
-        Label("None", systemImage: ActionInput.none.sfSymbolName)
-            .tag(AnyInput?.some(AnyInput(ActionInput.none)))
         
         Section {
             ForEach(mappableInputs, id: \.self) { input in
@@ -421,18 +315,10 @@ private struct InputMappingRow: View
         }
         
         Section("Game Actions") {
-            ForEach(availableActions.map(AnyInput.init), id: \.self) { input in
+            ForEach(Self.actionInputs, id: \.self) { input in
                 Label(input.localizedDisplayName, systemImage: input.sfSymbolName)
                     .tint(.accentColor)
                     .tag(AnyInput?.some(input))
-            }
-        }
-
-        if isPhysicalHomeButton
-        {
-            Section("System") {
-                Label(ActionInput.systemOverlay.localizedDisplayName, systemImage: ActionInput.systemOverlay.sfSymbolName)
-                    .tag(AnyInput?.some(AnyInput(ActionInput.systemOverlay)))
             }
         }
     }
@@ -442,7 +328,7 @@ private struct InputMappingRow: View
             get: {
                 let current = editor.normalizedInput(editor.inputMapping.input(forControllerInput: controllerInput))
                 
-                // nil is the Default menu sentinel: keep following the controller's effective mapping when it is unchanged.
+                // Keyboard rows always show their mapped input; controller rows collapse to "Default" when unchanged.
                 if controllerInput.type != .controller(.keyboard), current == editor.normalizedInput(defaultInput)
                 {
                     return nil
@@ -454,24 +340,6 @@ private struct InputMappingRow: View
                 editor.inputMapping.set(newValue ?? defaultInput, forControllerInput: controllerInput)
             }
         )
-    }
-}
-
-@MainActor
-enum ControllerHomeButtonSettings
-{
-    static func open(onFailure: (Error) -> Void)
-    {
-        guard #available(iOS 27, *) else { return }
-
-        do
-        {
-            try GCControllerHomeButtonSettingsManager().openControllerHomeButtonSettings(for: .customizeInAppAction)
-        }
-        catch
-        {
-            onFailure(error)
-        }
     }
 }
 

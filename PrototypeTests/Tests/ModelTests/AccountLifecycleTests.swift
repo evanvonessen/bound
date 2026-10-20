@@ -21,22 +21,16 @@ final class AccountLifecycleTests: XCTestCase {
     private func make(_ store: Store = Store(), deletion: Store = Store(), transport: @escaping @MainActor (URLRequest) async throws -> BoundAuthTransport.Response) -> BoundFriendAccount {
         BoundFriendAccount(storage: store, deletionStorage: deletion, automaticRefresh: false, configuration: { "fixture-key" }, transport: transport)
     }
-    func testSignupChecksAndSendsUsernameAndPersistsSessionBeforePublishing() async throws {
+    func testSignupSendsOnlyEmailPasswordAndPersistsSessionBeforePublishing() async throws {
         let store = Store(); let result = try login(); var requests: [URLRequest] = []
-        let account = make(store) { request in
-            requests.append(request)
-            return request.url?.path == "/rest/v1/rpc/bound_username_available" ? try self.usernameAvailable() : result
-        }
-        let outcome = await account.createAccount(email: " Fixture@Example.invalid \n", password: "synthetic-password", username: "River")
+        let account = make(store) { request in requests.append(request); return result }
+        let outcome = await account.createAccount(email: " Fixture@Example.invalid \n", password: "synthetic-password")
         XCTAssertTrue(outcome == .signedIn)
         XCTAssertEqual(account.session?.owner, owner); XCTAssertEqual(store.writes, 1)
-        XCTAssertEqual(requests.first?.url?.path, "/rest/v1/rpc/bound_username_available")
-        let request = try XCTUnwrap(requests.last)
+        let request = try XCTUnwrap(requests.first)
         XCTAssertEqual(request.url?.path, "/auth/v1/signup")
-        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
-        XCTAssertEqual(body["email"] as? String, "fixture@example.invalid")
-        XCTAssertEqual(body["password"] as? String, "synthetic-password")
-        XCTAssertEqual(body["data"] as? [String: String], ["bound_username_v1": "River"])
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: String])
+        XCTAssertEqual(body, ["email": "fixture@example.invalid", "password": "synthetic-password"])
         let persisted = String(decoding: try XCTUnwrap(store.data), as: UTF8.self)
         XCTAssertFalse(persisted.contains("password")); XCTAssertFalse(persisted.contains("example.invalid"))
     }
@@ -44,10 +38,8 @@ final class AccountLifecycleTests: XCTestCase {
         for nested in [false, true] {
             let store = Store(); let user: [String: Any] = ["id": owner.uuidString, "identities": []]
             let result = try reply(nested ? ["user": user] : user)
-            let account = make(store) { request in
-                request.url?.path == "/rest/v1/rpc/bound_username_available" ? try self.usernameAvailable() : result
-            }
-            let outcome1 = await account.createAccount(email: "fixture@example.invalid", password: "synthetic-password", username: "River"); XCTAssertTrue(outcome1 == .checkEmail)
+            let account = make(store) { _ in result }
+            let outcome1 = await account.createAccount(email: "fixture@example.invalid", password: "synthetic-password"); XCTAssertTrue(outcome1 == .checkEmail)
             XCTAssertNil(account.session); XCTAssertNil(store.data)
             XCTAssertTrue(account.status.contains("If you already have an account"))
         }
@@ -55,34 +47,27 @@ final class AccountLifecycleTests: XCTestCase {
     func testSignupRejectsMalformedRepliesAndDoesNotEchoServerSecrets() async throws {
         for body: [String: Any] in [["access_token": "broken"], [:], ["code": "weak_password", "msg": "synthetic-private-password"]] {
             let result = try reply(body, body["code"] == nil ? 200 : 422)
-            let account = make { request in
-                request.url?.path == "/rest/v1/rpc/bound_username_available" ? try self.usernameAvailable() : result
-            }
-            let outcome2 = await account.createAccount(email: "fixture@example.invalid", password: "synthetic-password", username: "River"); XCTAssertTrue(outcome2 == .failed)
+            let account = make { _ in result }
+            let outcome2 = await account.createAccount(email: "fixture@example.invalid", password: "synthetic-password"); XCTAssertTrue(outcome2 == .failed)
             XCTAssertNil(account.session); XCTAssertFalse(account.status.contains("synthetic-private-password"))
         }
     }
     func testInvalidSignupDoesNotMakeRequestAndConcurrentSubmissionIsSingleFlight() async throws {
         let network = Network(); let account = make(transport: network.perform)
-        let outcome3 = await account.createAccount(email: "bad", password: "fixture", username: "River"); XCTAssertTrue(outcome3 == .failed)
+        let outcome3 = await account.createAccount(email: "bad", password: "fixture"); XCTAssertTrue(outcome3 == .failed)
         XCTAssertEqual(network.requests.count, 0)
-        let first = Task { await account.createAccount(email: "fixture@example.invalid", password: "fixture", username: "River") }
+        let first = Task { await account.createAccount(email: "fixture@example.invalid", password: "fixture") }
         for _ in 0..<1000 { if !network.requests.isEmpty { break }; await Task.yield() }
-        let outcome4 = await account.createAccount(email: "fixture@example.invalid", password: "fixture", username: "River"); XCTAssertTrue(outcome4 == .failed)
+        let outcome4 = await account.createAccount(email: "fixture@example.invalid", password: "fixture"); XCTAssertTrue(outcome4 == .failed)
         await account.signIn(email: "other@example.invalid", password: "fixture")
         XCTAssertEqual(network.requests.count, 1)
-        first.cancel(); network.finish(try usernameAvailable())
+        first.cancel(); network.finish(try login())
         let outcome5 = await first.value; XCTAssertTrue(outcome5 == .cancelled); XCTAssertNil(account.session); XCTAssertFalse(account.busy)
     }
     func testSignupKeychainFailureNeverPublishesUnpersistedLogin() async throws {
         let store = Store(); let result = try login()
-        var requests = 0
-        let account = make(store) { _ in
-            requests += 1
-            if requests == 1 { return try self.usernameAvailable() }
-            store.locked = true; return result
-        }
-        let outcome6 = await account.createAccount(email: "fixture@example.invalid", password: "fixture", username: "River"); XCTAssertTrue(outcome6 == .failed)
+        let account = make(store) { _ in store.locked = true; return result }
+        let outcome6 = await account.createAccount(email: "fixture@example.invalid", password: "fixture"); XCTAssertTrue(outcome6 == .failed)
         XCTAssertNil(account.session); XCTAssertTrue(account.status.contains("could not be saved securely"))
     }
     func testDeletionRequiresServerVerifiedMatchingIdentityAndTypedEmail() async throws {
@@ -152,9 +137,5 @@ final class AccountLifecycleTests: XCTestCase {
     func testEmailNormalizationRejectsControlsAndAmbiguousIdentities() {
         XCTAssertEqual(BoundFriendAccount.normalizedEmail(" USER@EXAMPLE.INVALID\r\n"), "user@example.invalid")
         for email in ["a@@b", "@b", "a@", "a b@c", "a@b\u{0000}", "ä@b"] { XCTAssertNil(BoundFriendAccount.normalizedEmail(email)) }
-    }
-
-    private func usernameAvailable() throws -> BoundAuthTransport.Response {
-        try reply(["ok": true, "available": true])
     }
 }

@@ -166,15 +166,6 @@
 		<dict>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>$(BOUND_GOOGLE_REVERSED_CLIENT_ID)</string>
-				<string>db-$(BOUND_DROPBOX_APP_KEY)</string>
-			</array>
-		</dict>
-		<dict>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
 			<key>CFBundleURLName</key>
 			<string>Delta</string>
 			<key>CFBundleURLSchemes</key>
@@ -185,12 +176,6 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>BOUND_GOOGLE_CLIENT_ID</key>
-	<string>$(BOUND_GOOGLE_CLIENT_ID)</string>
-	<key>BOUND_GOOGLE_REVERSED_CLIENT_ID</key>
-	<string>$(BOUND_GOOGLE_REVERSED_CLIENT_ID)</string>
-	<key>BOUND_DROPBOX_APP_KEY</key>
-	<string>$(BOUND_DROPBOX_APP_KEY)</string>
 	<key>DLTAVersion</key>
 	<string>2.0b5</string>
 	<key>GCSupportedGameControllers</key>

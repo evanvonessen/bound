@@ -13,7 +13,7 @@ final class SourceAndLicenseTests: XCTestCase {
     func testBundledInventoryAndFontNoticeMatchCurrentSources() throws {
         let inventory = try XCTUnwrap(BoundSourceNotices.Document.dependencies.data())
         let digest = SHA256.hash(data: inventory).map { String(format: "%02x", $0) }.joined()
-        XCTAssertEqual(digest, "98e629bbc706e821814f662da5954d6254230debf1793b18f0ac2053af66ef0c")
+        XCTAssertEqual(digest, "7eb44ba141bc644bb7910099d648abb8a70abbc5de54c77127c427b737c32db5")
         let url = try XCTUnwrap(Bundle.main.url(forResource: "EARLY-GAMEBOY-LICENSE", withExtension: "txt"))
         let notice = try String(contentsOf: url, encoding: .utf8)
         XCTAssertTrue(notice.contains("Copyright LDEJRuff 2012"))
@@ -25,8 +25,6 @@ final class SourceAndLicenseTests: XCTestCase {
     func testSourceAvailabilityAndVersionDescribeCurrentBundle() throws {
         XCTAssertEqual(BoundSourceNotices.availability, "Bound source, build instructions, and modification notices are available in its source repository.")
         XCTAssertEqual(BoundSourceNotices.sourceRepository.absoluteString, "https://github.com/evanvonessen/bound")
-        XCTAssertEqual(BoundSourceNotices.radicalRedPokedex.absoluteString, "https://dex.radicalred.net/")
-        XCTAssertEqual(BoundSourceNotices.radicalRedBossDocumentation.absoluteString, "https://docs.google.com/spreadsheets/d/1ES8L4OzeJ8rCuMWFNvrDaZKArqR7Vys2ytFxjx2pbwE/edit")
         let version = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
         let build = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
         XCTAssertEqual(BoundSourceNotices.version(), "\(version) (\(build))")

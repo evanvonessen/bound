@@ -1,6 +1,5 @@
 import SwiftUI
 import UIKit
-import Combine
 
 struct FriendRoom: Decodable, Equatable, Identifiable, Sendable {
     let roomID: String
@@ -19,7 +18,6 @@ struct FriendResponse: Decodable, Sendable {
     var blocks: [FriendBlock]? = nil
     var reportID: UUID? = nil
     var error: String? = nil
-    var username: String? = nil
 }
 
 struct FriendBlock: Decodable, Equatable, Identifiable, Sendable {
@@ -53,49 +51,28 @@ final class FriendOnboarding: ObservableObject {
     @Published private(set) var blocks: [FriendBlock] = []
     @Published private(set) var selected: FriendRoom?
     @Published private(set) var inviteCode: String?
-    @Published private(set) var accountUsername: String?
     @Published private(set) var managesFlow = false
     private var permitsRTC = true
     private var ownerID: UUID?
     private var observation: (any SharingCancellation)?
-    private var sharingObservation: AnyCancellable?
     private var isOpen = false
-    private var lastProfileRefresh = Date.distantPast
     private let observeAccount: @MainActor (@escaping @MainActor () -> Void) -> any SharingCancellation
     private var reusedSession: (() -> AppCloudSession?)?
     private weak var sharing: FriendSharingSession?
     private var generation = UUID()
     private var task: Task<Void, Never>?
-    private var jiggleGeneration = UUID()
-    private var jiggleTask: Task<Void, Never>?
     private let call: @MainActor (AppCloudSession, String, [String: String]) async throws -> FriendResponse
-    private let sendJiggle: @MainActor (FriendRoom, AppCloudSession) async throws -> String
 
     init(call: @escaping @MainActor (AppCloudSession, String, [String: String]) async throws -> FriendResponse = { session, action, payload in
-        let request: URLRequest
-        if ["list", "create", "accept", "add"].contains(action) {
-            let socialPayload: [String: String]
-            switch action {
-            case "accept": socialPayload = ["code": payload["code"] ?? ""]
-            case "add": socialPayload = ["username": payload["username"] ?? ""]
-            default: socialPayload = [:]
-            }
-            request = try session.friendSocialRequest(action: action, payload: socialPayload)
-        } else {
-            request = try session.friendOnboardingRequest(action: action, payload: payload)
-        }
-        let bytes = try await FriendSharingTokens.perform(request)
+        let bytes = try await FriendSharingTokens.perform(try session.friendOnboardingRequest(action: action, payload: payload))
         let response = try JSONDecoder().decode(FriendResponse.self, from: bytes)
         return response
-    }, sendJiggle: @escaping @MainActor (FriendRoom, AppCloudSession) async throws -> String = {
-        try await BoundJiggleNotifications.send(to: $0, session: $1)
     }, observeAccount: @escaping @MainActor (@escaping @MainActor () -> Void) -> any SharingCancellation = {
         FriendSharingTimer(after: 1, repeating: true, action: $0)
-    }) { self.call = call; self.sendJiggle = sendJiggle; self.observeAccount = observeAccount }
+    }) { self.call = call; self.observeAccount = observeAccount }
 
     deinit {
         task?.cancel()
-        jiggleTask?.cancel()
         let observation = observation
         BoundMainActorDisposal.enqueue { observation?.cancel() }
     }
@@ -122,15 +99,9 @@ final class FriendOnboarding: ObservableObject {
         guard isOpen else { return }
         let candidate = reusedSession?()
         let current = candidate.flatMap { (try? $0.credentials()) == nil ? nil : $0 }
-        guard current?.owner != ownerID else {
-            // Names come from account profiles. Refresh an open Friends list so
-            // a rename made on another device appears without reconnecting.
-            if current != nil, !busy,
-               Date().timeIntervalSince(lastProfileRefresh) >= 30 { refresh() }
-            return
-        }
+        guard current?.owner != ownerID else { return }
         let hadAccount = ownerID != nil
-        cancelPendingRequest(); cancelPendingJiggle(); ownerID = nil; signedIn = false; rooms = []; blocks = []; selected = nil; accountUsername = nil
+        cancelPendingRequest(); ownerID = nil; signedIn = false; rooms = []; blocks = []; selected = nil
         if hadAccount || current != nil || managesFlow {
             managesFlow = true
             sharing?.configureAuthenticatedRoom(nil, identity: { [weak self] in self?.sharingIdentity() })
@@ -143,23 +114,13 @@ final class FriendOnboarding: ObservableObject {
         isOpen = false
         observation?.cancel(); observation = nil
         cancelPendingRequest()
-        // Keep the selected room, live identity provider and tap notification:
-        // closing Friends must not terminate sharing or its pending Jiggle.
+        // Keep the selected room and live identity provider: closing Friends
+        // must not terminate an active sharing session.
     }
     private func cancelPendingRequest() {
         generation = UUID(); task?.cancel(); task = nil; busy = false; inviteCode = nil
     }
-    private func cancelPendingJiggle() {
-        jiggleGeneration = UUID(); jiggleTask?.cancel(); jiggleTask = nil
-        sharingObservation?.cancel(); sharingObservation = nil
-    }
-    private func sharingIdentity() -> AppCloudSession? {
-        // Keep account ownership available while an expired token is refreshing.
-        // Request construction still rejects invalid credentials; restoration can
-        // then retry after the account's foreground refresh succeeds.
-        guard permitsRTC, let ownerID, let identity = reusedSession?(), identity.owner == ownerID else { return nil }
-        return identity
-    }
+    private func sharingIdentity() -> AppCloudSession? { permitsRTC ? currentIdentity() : nil }
     static func mockNamespace(arguments: [String]) -> UUID? {
         #if DEBUG && targetEnvironment(simulator)
         guard arguments.contains("--friend-onboarding-mock"), let index = arguments.firstIndex(of: "--preservation-test"),
@@ -186,49 +147,27 @@ final class FriendOnboarding: ObservableObject {
         return current
     }
     func signOut() {
-        cancelPendingRequest(); cancelPendingJiggle(); ownerID = nil; signedIn = false; managesFlow = true
-        rooms = []; blocks = []; selected = nil; accountUsername = nil; message = "Sign in above to add a friend."
+        cancelPendingRequest(); ownerID = nil; signedIn = false; managesFlow = true
+        rooms = []; blocks = []; selected = nil; message = "Sign in above to add a friend."
         sharing?.configureAuthenticatedRoom(nil, identity: { nil })
     }
-    func select(_ room: FriendRoom, startSharing: Bool = false) {
-        guard !busy, room.valid, rooms.contains(room), let identity = currentIdentity() else { return }
-        let startsImmediately = startSharing
-        // Repeated taps on the current friend must not interrupt a live session.
-        if startsImmediately, selected?.roomID == room.roomID, sharing?.active == true {
-            message = ""
-            return
-        }
-        cancelPendingJiggle()
+    func select(_ room: FriendRoom) {
+        guard !busy, room.valid, rooms.contains(room), currentIdentity() != nil else { return }
         selected = room
         sharing?.configureAuthenticatedRoom(room.roomID, identity: { [weak self] in self?.sharingIdentity() })
-        message = startsImmediately ? "" : "Ready to share with \(room.displayName)."
-        if startsImmediately && permitsRTC, let sharing {
-            sharing.start()
-            if sharing.active { notifyFriendOfSharing(room, identity: identity) }
-        }
+        message = "Ready to share with \(room.displayName)."
     }
-    func refresh() {
-        guard !busy else { return }
-        lastProfileRefresh = Date()
-        request("list", payload: [:])
-    }
+    func refresh() { request("list", payload: [:]) }
     func create(name: String) { request("create", payload: ["displayName": name.trimmingCharacters(in: .whitespacesAndNewlines)]) }
     func accept(code: String, name: String) { request("accept", payload: ["code": code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(), "displayName": name.trimmingCharacters(in: .whitespacesAndNewlines)]) }
-    func add(username: String) {
-        guard !busy else { return }
-        let username = username.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard BoundSocialAPI.validUsername(username) else { message = "Enter your friend's username."; return }
-        request("add", payload: ["username": username])
-    }
     func remove(_ room: FriendRoom) {
-        guard !busy, rooms.contains(where: { $0.roomID == room.roomID }) else { return }
-        if selected?.roomID == room.roomID { cancelPendingJiggle(); selected = nil; sharing?.configureAuthenticatedRoom(nil, identity: { [weak self] in self?.sharingIdentity() }) }
+        guard !busy else { return }
+        if selected?.roomID == room.roomID { selected = nil; sharing?.configureAuthenticatedRoom(nil, identity: { [weak self] in self?.sharingIdentity() }) }
         request("remove", payload: ["roomID": room.roomID])
     }
     func block(_ room: FriendRoom) {
         guard !busy, rooms.contains(room) else { return }
         if selected?.roomID == room.roomID {
-            cancelPendingJiggle()
             selected = nil
             sharing?.configureAuthenticatedRoom(nil, identity: { [weak self] in self?.sharingIdentity() })
         }
@@ -241,42 +180,6 @@ final class FriendOnboarding: ObservableObject {
     func report(_ room: FriendRoom, reason: FriendReportReason) {
         guard rooms.contains(room) else { return }
         request("report", payload: ["roomID": room.roomID, "reason": reason.rawValue])
-    }
-    private func notifyFriendOfSharing(_ room: FriendRoom, identity: AppCloudSession) {
-        let run = jiggleGeneration
-        let sendJiggle = sendJiggle
-        if let sharing {
-            sharingObservation?.cancel()
-            sharingObservation = sharing.$active.dropFirst().sink { [weak self] active in
-                guard !active, let self, self.jiggleGeneration == run else { return }
-                self.cancelPendingJiggle()
-            }
-        }
-        // Only an explicit friend tap sends this notification. Sharing starts
-        // immediately; a slow or failed notification never blocks its controls.
-        jiggleTask = Task { [weak self] in
-            defer {
-                if self?.jiggleGeneration == run {
-                    self?.jiggleTask = nil
-                    self?.sharingObservation?.cancel(); self?.sharingObservation = nil
-                }
-            }
-            guard !Task.isCancelled,
-                  self?.jiggleGeneration == run, self?.selected?.roomID == room.roomID,
-                  self?.sharing?.active == true,
-                  identity.isSameSession(as: self?.currentIdentity()) else { return }
-            let result: String
-            do {
-                result = try await sendJiggle(room, identity)
-            } catch {
-                result = (error as? BoundSocialError)?.localizedDescription ?? "Couldn't notify your friend."
-            }
-            guard let self, !Task.isCancelled, self.jiggleGeneration == run,
-                  identity.isSameSession(as: self.currentIdentity()),
-                  self.selected?.roomID == room.roomID, self.sharing?.active == true,
-                  !self.busy else { return }
-            self.message = result
-        }
     }
     private func request(_ action: String, payload: [String: String]) {
         guard !busy else { return }
@@ -295,35 +198,24 @@ final class FriendOnboarding: ObservableObject {
                     case "rate_limited": self.message = "Too many attempts. Try again later."
                     case "block_limit": self.message = "Your block list is full. Remove a block before adding another."
                     case "name_not_allowed": self.message = "Choose a different display name."
-                    case "friend_not_found": self.message = "No friend found with that username."
-                    case "cannot_add_self": self.message = "Enter a friend's username, not your own."
-                    case "friend_limit": self.message = "One of you has reached the 20-friend limit."
                     default: self.message = "Could not update friends. Try again."
                     }
                     return
                 }
-                if let username = response.username {
-                    guard BoundSocialAPI.validUsername(username) else { throw FriendSharingTokenError.unavailable }
-                    self.accountUsername = username
-                }
                 if action == "list" {
                     guard let rooms = response.rooms, rooms.count <= 20, rooms.allSatisfy(\.valid), Set(rooms.map(\.roomID)).count == rooms.count else { throw FriendSharingTokenError.unavailable }
                     self.rooms = rooms
-                    if let selected = self.selected, let refreshed = rooms.first(where: { $0.roomID == selected.roomID }) {
-                        self.selected = refreshed
-                    }
                     if let blocks = response.blocks {
                         guard blocks.count <= 100, blocks.allSatisfy(\.valid), Set(blocks.map(\.blockID)).count == blocks.count else { throw FriendSharingTokenError.unavailable }
                         self.blocks = blocks
                     }
                     if let selected = self.selected, !rooms.contains(where: { $0.roomID == selected.roomID }) {
-                        self.cancelPendingJiggle()
                         self.selected = nil; self.sharing?.configureAuthenticatedRoom(nil, identity: { [weak self] in self?.sharingIdentity() })
                     }
                 } else if action == "create" {
                     guard let code = response.code, code.range(of: "^[0-9A-F]{16}$", options: .regularExpression) != nil else { throw FriendSharingTokenError.unavailable }
                     self.inviteCode = code
-                } else if action == "accept" || action == "add" {
+                } else if action == "accept" {
                     guard let room = response.room, room.valid else { throw FriendSharingTokenError.unavailable }
                     self.rooms.removeAll { $0.roomID == room.roomID }; self.rooms.append(room); self.busy = false; self.select(room)
                 } else if action == "remove" || action == "block" {
@@ -338,8 +230,7 @@ final class FriendOnboarding: ObservableObject {
                     self.blocks = blocks
                 }
                 if action == "report" { guard response.reportID != nil else { throw FriendSharingTokenError.unavailable } }
-                self.busy = false; self.task = nil
-                self.message = action == "report" ? "Report sent." : action == "add" ? "Friend added." : ""
+                self.busy = false; self.task = nil; self.message = action == "report" ? "Report sent." : ""
             } catch {
                 guard let self, self.generation == run else { return }
                 self.busy = false; self.task = nil; self.message = "Could not update friends. Check the code or try again."
@@ -356,12 +247,12 @@ private final class FriendOnboardingFixture {
     init(namespace: UUID) { self.namespace = namespace }
     func call(_ action: String, payload: [String: String]) throws -> FriendResponse {
         switch action {
-        case "list": return .init(ok: true, rooms: rooms, username: "Fixture Player")
-        case "create": return .init(ok: true, code: "0123456789ABCDEF", username: "Fixture Player")
+        case "list": return .init(ok: true, rooms: rooms)
+        case "create": return .init(ok: true, code: "0123456789ABCDEF")
         case "accept":
             guard payload["code"] == "0123456789ABCDEF" else { throw FriendSharingTokenError.unavailable }
             let room = FriendRoom(roomID: namespace.uuidString.lowercased(), displayName: "Fixture Friend")
-            rooms = [room]; return .init(ok: true, room: room, username: "Fixture Player")
+            rooms = [room]; return .init(ok: true, room: room)
         case "remove": rooms = []; return .init(ok: true)
         default: throw FriendSharingTokenError.unavailable
         }

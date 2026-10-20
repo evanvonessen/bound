@@ -238,13 +238,6 @@ final class FriendSharingSession: ObservableObject {
     private var largestDisplayGap: TimeInterval = 0
     private var generation = UUID()
     private var backgrounded = false
-    private struct ForegroundReconnectIntent: Equatable {
-        let room: String
-        let owner: UUID
-    }
-    private var foregroundReconnectIntent: ForegroundReconnectIntent?
-    private var foregroundReconnectRetry: (any SharingCancellation)?
-    private var foregroundReconnectAttempts = 0
 
     init(configuration: FriendSharingConfiguration? = .load(), transport: (any FriendSharingTransport)? = nil,
          scheduler: (any SharingScheduler)? = nil,
@@ -271,13 +264,11 @@ final class FriendSharingSession: ObservableObject {
         // off-main; all actor-owned cancellation/RTC cleanup is explicitly enqueued.
         tokenTask?.cancel()
         let tokenDeadline = tokenDeadline, receiverDisplayLink = receiverDisplayLink
-        let recoveryDeadline = recoveryDeadline, foregroundReconnectRetry = foregroundReconnectRetry
-        let sharing = sharing, transport = transport
+        let recoveryDeadline = recoveryDeadline, sharing = sharing, transport = transport
         BoundMainActorDisposal.enqueue {
             tokenDeadline?.cancel()
             receiverDisplayLink?.cancel()
             recoveryDeadline?.cancel()
-            foregroundReconnectRetry?.cancel()
             sharing.stop()
             transport.stop()
         }
@@ -294,11 +285,6 @@ final class FriendSharingSession: ObservableObject {
 
     func start() {
         BoundMainActorDisposal.drainPending()
-        clearForegroundReconnectIntent()
-        beginStart()
-    }
-
-    private func beginStart() {
         guard !active, !backgrounded else { return }
         if authenticatedMode {
             guard let room = roomProvider(), let identity = authenticatedSession?() else {
@@ -351,7 +337,8 @@ final class FriendSharingSession: ObservableObject {
                 else { self.stop(); self.status = "Sharing unavailable · Retry" }
             case .connection: break
             case .failed:
-                self.handleForegroundReconnectFailure(run: run, status: "Sharing unavailable · Retrying")
+                self.stop()
+                self.status = "Sharing unavailable · Retry"
             }
             self.writeEvidence()
         }
@@ -382,10 +369,10 @@ final class FriendSharingSession: ObservableObject {
             sourceButtons = frame.buttons
             sourceFramesAccepted += 1
             if case .failed = sharing.state {
-                handleForegroundReconnectFailure(run: generation, status: "Sharing unavailable · Retrying")
+                stop(); status = "Sharing unavailable · Retry"; writeEvidence()
             }
         } catch {
-            handleForegroundReconnectFailure(run: generation, status: "Sharing unavailable · Retrying")
+            stop(); status = "Sharing unavailable · Retry"; writeEvidence()
         }
     }
 
@@ -427,8 +414,7 @@ final class FriendSharingSession: ObservableObject {
                 }
             } catch {
                 guard let self, self.generation == run, self.active else { return }
-                self.tokenTask = nil
-                self.handleForegroundReconnectFailure(run: run, status: "Sharing authorization unavailable · Retrying")
+                self.tokenTask = nil; self.stop(); self.status = "Sharing authorization unavailable"
             }
         }
     }
@@ -444,7 +430,9 @@ final class FriendSharingSession: ObservableObject {
             guard let self, self.active, self.generation == run, self.recoveryID == id, self.reconnecting else { return }
             self.recoveryTimeouts += 1
             self.transport.recordRecoveryTimeout()
-            self.handleForegroundReconnectFailure(run: run, status: "Connection lost · Retrying")
+            self.stop()
+            self.status = "Connection lost · Retry"
+            self.writeEvidence()
         }
     }
 
@@ -482,12 +470,8 @@ final class FriendSharingSession: ObservableObject {
         }
     }
 
-    func stop() { stop(clearReconnectIntent: true) }
-
-    private func stop(clearReconnectIntent: Bool) {
+    func stop() {
         BoundMainActorDisposal.drainPending()
-        foregroundReconnectRetry?.cancel(); foregroundReconnectRetry = nil
-        if clearReconnectIntent { foregroundReconnectIntent = nil; foregroundReconnectAttempts = 0 }
         generation = UUID()
         tokenTask?.cancel(); tokenTask = nil
         tokenDeadline?.cancel(); tokenDeadline = nil
@@ -507,88 +491,12 @@ final class FriendSharingSession: ObservableObject {
     }
 
     func background() {
-        if authenticatedMode && active,
-           let room = authRoom, let owner = tokenOwner {
-            foregroundReconnectIntent = ForegroundReconnectIntent(room: room, owner: owner)
-            foregroundReconnectAttempts = 0
-        } else if !hasValidForegroundReconnectIntent {
-            clearForegroundReconnectIntent()
-        }
         backgrounded = true
         sharing.enterBackground()
-        stop(clearReconnectIntent: false)
+        stop()
     }
 
-    func foreground() {
-        let returnedFromBackground = backgrounded
-        backgrounded = false; sharing.enterForeground()
-        guard returnedFromBackground else { return }
-        guard foregroundReconnectIntent != nil else { return }
-        guard hasValidForegroundReconnectIntent else { clearForegroundReconnectIntent(); return }
-        attemptForegroundReconnect()
-    }
-
-    private var hasValidForegroundReconnectIntent: Bool {
-        guard authenticatedMode,
-              let intent = foregroundReconnectIntent,
-              roomProvider() == intent.room,
-              authenticatedSession?()?.owner == intent.owner else { return false }
-        return true
-    }
-
-    private func clearForegroundReconnectIntent() {
-        foregroundReconnectIntent = nil
-        foregroundReconnectAttempts = 0
-        foregroundReconnectRetry?.cancel(); foregroundReconnectRetry = nil
-    }
-
-    private func attemptForegroundReconnect() {
-        guard !backgrounded, !active, let intent = foregroundReconnectIntent,
-              hasValidForegroundReconnectIntent,
-              let identity = authenticatedSession?(), identity.owner == intent.owner else {
-            if !hasValidForegroundReconnectIntent { clearForegroundReconnectIntent() }
-            return
-        }
-        foregroundReconnectRetry?.cancel(); foregroundReconnectRetry = nil
-        generation = UUID(); active = true; status = "Restoring sharing"
-        authRoom = intent.room; tokenOwner = intent.owner; tokenRenewals = 0
-        requestToken(initial: true)
-    }
-
-    private func handleForegroundReconnectFailure(run: UUID, status failureStatus: String) {
-        guard generation == run, active else { return }
-        guard foregroundReconnectIntent != nil, !backgrounded, hasValidForegroundReconnectIntent else {
-            stop(); status = failureStatus.replacingOccurrences(of: " · Retrying", with: " · Retry"); writeEvidence(); return
-        }
-        generation = UUID()
-        tokenTask?.cancel(); tokenTask = nil
-        tokenDeadline?.cancel(); tokenDeadline = nil
-        tokenOwner = nil; authRoom = nil; tokenExpiry = nil
-        configuration = nil
-        receiverDisplayLink?.cancel(); receiverDisplayLink = nil
-        recoveryID = nil; recoveryDeadline?.cancel(); recoveryDeadline = nil
-        reconnecting = false; sharing.stop(); publicationToken = nil
-        sourceFrameNumber = 0; sourceButtons = 0; transport.stop()
-        active = false; joined = false; remoteVisible = false; receivedFrames = 0
-        status = failureStatus
-        scheduleForegroundReconnectRetry()
-        writeEvidence()
-    }
-
-    private func scheduleForegroundReconnectRetry() {
-        guard !backgrounded, foregroundReconnectIntent != nil, hasValidForegroundReconnectIntent,
-              foregroundReconnectRetry == nil else { return }
-        foregroundReconnectAttempts += 1
-        let delay = min(30.0, pow(2.0, Double(min(foregroundReconnectAttempts - 1, 5))))
-        let retryGeneration = generation
-        foregroundReconnectRetry = scheduler.schedule(at: scheduler.now + delay) { [weak self] in
-            guard let self, self.generation == retryGeneration,
-                  self.foregroundReconnectIntent != nil, !self.backgrounded else { return }
-            self.foregroundReconnectRetry = nil
-            guard self.hasValidForegroundReconnectIntent else { self.clearForegroundReconnectIntent(); return }
-            self.attemptForegroundReconnect()
-        }
-    }
+    func foreground() { backgrounded = false; sharing.enterForeground() }
 
     private func logFrameTiming() {
         #if DEBUG

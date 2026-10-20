@@ -26,23 +26,9 @@ struct BoundEmulationDetails: Equatable {
     static let deltaUpstreamRevision = "c1d3d068e019e6493eed45654569db3cc5beb86a"
 }
 
-/// Bound keeps its compact settings visibility rules independent of UI Version.
+/// Restore this exact feature set by changing one flag; stored preferences remain intact.
 enum BoundFeatureVisibility {
     static let simplifiedSettings = true
-}
-
-/// Retired customization-visibility preference kept for upgrade/reset compatibility.
-/// It no longer exposes settings or gates saved choices at runtime.
-final class BoundExperimentalSettingsPreferences {
-    static let key = "bound.experimental-settings.enabled.v1"
-    private let defaults: UserDefaults
-
-    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
-
-    var enabled: Bool {
-        get { defaults.object(forKey: Self.key) as? Bool ?? false }
-        set { defaults.set(newValue, forKey: Self.key) }
-    }
 }
 
 /// Appearance and screen arrangement are independent preferences. Touch feedback uses Delta's existing settings.

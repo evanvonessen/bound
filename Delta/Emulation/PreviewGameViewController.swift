@@ -18,21 +18,7 @@ class PreviewGameViewController: DeltaCore.GameViewController
     var overridePreviewActionItems: [UIPreviewActionItem]?
     
     // Save state to be loaded upon preview
-    var previewSaveState: SaveStateProtocol? {
-        didSet {
-            // Resolve managed objects before entering the emulation queue. A
-            // synchronous shutdown must never wait on the main Core Data context.
-            self.previewStateSnapshot = nil
-            if let saveState = self.previewSaveState as? SaveState {
-                saveState.managedObjectContext?.performAndWait {
-                    self.previewStateSnapshot = DeltaCore.SaveState(fileURL: saveState.fileURL, gameType: saveState.gameType)
-                }
-            } else {
-                self.previewStateSnapshot = self.previewSaveState
-            }
-        }
-    }
-    private var previewStateSnapshot: SaveStateProtocol?
+    var previewSaveState: SaveStateProtocol?
     
     // Initial image to be shown while loading
     var previewImage: UIImage? {
@@ -42,19 +28,8 @@ class PreviewGameViewController: DeltaCore.GameViewController
     }
     
     var isLivePreview: Bool = true
-    var onPreviewStopped: (() -> Void)?
     
     private var emulatorCoreQueue = DispatchQueue(label: "com.rileytestut.Delta.PreviewGameViewController.emulatorCoreQueue", qos: .userInitiated)
-    // Accessed only on emulatorCoreQueue.
-    private var hasPreparedPreview = false
-    private var hasRestoredSaveFiles = false
-    private let lifecycleLock = NSLock()
-    private var isStoppingPreview = false
-    private var canRunPreview: Bool {
-        self.lifecycleLock.lock()
-        defer { self.lifecycleLock.unlock() }
-        return !self.isStoppingPreview
-    }
     private var copiedSaveFiles = [(originalURL: URL, copyURL: URL)]()
     
     private lazy var temporaryDirectoryURL: URL = {
@@ -126,26 +101,59 @@ extension PreviewGameViewController
     
     override func viewWillAppear(_ animated: Bool)
     {
-        // The superclass queues startup, which may immediately write a save.
-        if self.canRunPreview { self.copySaveFiles() }
         super.viewWillAppear(animated)
+        
+        self.copySaveFiles()
     }
 
+    override func viewDidAppear(_ animated: Bool)
+    {
+        super.viewDidAppear(animated)
+        
+        self.emulatorCoreQueue.async {
+            self.startEmulation()
+        }
+    }
+    
     override func viewWillDisappear(_ animated: Bool)
     {
         super.viewWillDisappear(animated)
         
         // Pause in viewWillDisappear and not viewDidDisappear like DeltaCore.GameViewController so the audio cuts off earlier if being dismissed
-        self.emulatorCoreQueue.sync { _ = self.pauseEmulation() }
+        self.emulatorCore?.pause()
     }
     
     override func viewDidDisappear(_ animated: Bool)
     {
         super.viewDidDisappear(animated)
         
-        self.stopPreview {
-            // Release renderers only after both emulation queues have drained.
-            self.game = nil
+        func reset()
+        {
+            // Assign game to nil to ensure we deallocate emulatorCore + audio/video managers.
+            // Otherwise, we may crash when opening N64 games in new window due to race condition.
+            // Also dispatch to main queue because we update self.preferredContentSize.
+            DispatchQueue.main.async {
+                self.game = nil
+            }
+        }
+        
+        // Already stopped = we've already restored save files and removed directory.
+        if self.emulatorCore?.state != .stopped
+        {
+            // Pre-emptively restore save files in case something goes wrong while stopping emulation.
+            // This also ensures if the core is never stopped (for some reason), saves are still restored.
+            self.restoreSaveFiles(removeCopyDirectory: false)
+            
+            self.emulatorCoreQueue.async {
+                // Explicitly stop emulatorCore _before_ we remove ourselves as observer
+                // so we can wait until stopped before restoring save files (again).
+                self.emulatorCore?.stop()
+                reset()
+            }
+        }
+        else
+        {
+            reset()
         }
     }
     
@@ -161,41 +169,6 @@ extension PreviewGameViewController
     {
         super.didReceiveMemoryWarning()
         // Dispose of any resources that can be recreated.
-    }
-
-    func stopPreview(completion: @escaping () -> Void)
-    {
-        self.stopPreview()
-        completion()
-    }
-
-    @discardableResult
-    func stopPreview(savingTo fileURL: URL? = nil) -> SaveStateProtocol?
-    {
-        precondition(Thread.isMainThread)
-        self.lifecycleLock.lock()
-        self.isStoppingPreview = true
-        self.lifecycleLock.unlock()
-
-        let core = self.emulatorCore
-        let saveState: SaveStateProtocol? = self.emulatorCoreQueue.sync {
-            // Drain superclass lifecycle work as well as preview preparation.
-            // The terminal flag prevents later UIKit callbacks from restarting
-            // this core after gameplay takes ownership of the shared bridge.
-            self.pauseEmulation()
-            var saveState: SaveStateProtocol?
-            if let core, core.state != .stopped, let fileURL,
-               self.hasPreparedPreview || self.previewStateSnapshot == nil {
-                saveState = core.saveSaveState(to: fileURL)
-            }
-            core?.stop()
-            self.restoreSaveFiles()
-            return saveState
-        }
-        let onStopped = self.onPreviewStopped
-        self.onPreviewStopped = nil
-        onStopped?()
-        return saveState
     }
     
     override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?)
@@ -216,6 +189,11 @@ extension PreviewGameViewController
                 self.emulatorCore?.pause()
                 self.preparePreview()
             }
+            
+        case .stopped:
+            // Emulation has stopped, so we can safely restore save files,
+            // and also remove the directory they were copied to.
+            self.restoreSaveFiles(removeCopyDirectory: true)
             
         default: break
         }
@@ -239,15 +217,20 @@ private extension PreviewGameViewController
     
     func preparePreview()
     {
-        // Startup's KVO callback can enqueue this work after a stop was requested.
-        // A stopped preview must not load into the bridge now owned by gameplay.
-        guard self.canRunPreview, let emulatorCore = self.emulatorCore, emulatorCore.state != .stopped else { return }
+        var previewSaveState = self.previewSaveState
         
-        if let saveState = self.previewStateSnapshot
+        if let saveState = self.previewSaveState as? SaveState
+        {
+            saveState.managedObjectContext?.performAndWait {
+                previewSaveState = DeltaCore.SaveState(fileURL: saveState.fileURL, gameType: saveState.gameType)
+            }
+        }
+        
+        if let saveState = previewSaveState
         {
             do
             {
-                try emulatorCore.load(saveState)
+                try self.emulatorCore?.load(saveState)
             }
             catch EmulatorCore.SaveStateError.doesNotExist
             {
@@ -259,13 +242,12 @@ private extension PreviewGameViewController
             }
         }
         
-        emulatorCore.updateCheats()
+        self.emulatorCore?.updateCheats()
         
         // Re-enable emulatorCore to update gameView again
-        emulatorCore.add(self.gameView)
-        self.hasPreparedPreview = true
+        self.emulatorCore?.add(self.gameView)
         
-        if self.canRunPreview { emulatorCore.resume() }
+        self.emulatorCore?.resume()
     }
     
     func copySaveFiles()
@@ -292,12 +274,8 @@ private extension PreviewGameViewController
         }
     }
     
-    func restoreSaveFiles()
+    func restoreSaveFiles(removeCopyDirectory: Bool)
     {
-        // A screenshot-only preview may never start, so there need not be a
-        // stopped-state KVO notification. Terminal shutdown owns cleanup once.
-        guard !self.hasRestoredSaveFiles else { return }
-        self.hasRestoredSaveFiles = true
         for (originalURL, copyURL) in self.copiedSaveFiles
         {
             do
@@ -311,14 +289,16 @@ private extension PreviewGameViewController
             }
         }
         
-        self.copiedSaveFiles.removeAll()
-        do
+        if removeCopyDirectory
         {
-            try FileManager.default.removeItem(at: self.temporaryDirectoryURL)
-        }
-        catch
-        {
-            print("Failed to remove preview temporary directory.", error)
+            do
+            {
+                try FileManager.default.removeItem(at: self.temporaryDirectoryURL)
+            }
+            catch
+            {
+                print("Failed to remove preview temporary directory.", error)
+            }
         }
     }
 }
@@ -327,13 +307,20 @@ extension PreviewGameViewController: GameViewControllerDelegate
 {
     func gameViewControllerShouldResumeEmulation(_ gameViewController: DeltaCore.GameViewController) -> Bool
     {
-        return self.isLivePreview && self.canRunPreview
+        return self.isLivePreview
     }
     
     func gameViewController(_ gameViewController: DeltaCore.GameViewController, optionsFor game: GameProtocol) -> [EmulatorCore.Option: Any]
     {
-        // Context-menu previews need gameplay's renderer, including the Metal
-        // GBA path that avoids OpenGL crashes while attaching the preview view.
-        GameViewController.emulatorCoreOptions(for: game)
+        guard let game = game as? Game, game.type == .n64 else { return [:] }
+        
+        if let useOpenGLES2 = game.settings[.openGLES2] as? Bool, useOpenGLES2
+        {
+            return [.openGLES2: true]
+        }
+        else
+        {
+            return [:]
+        }
     }
 }

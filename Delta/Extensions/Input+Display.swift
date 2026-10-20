@@ -129,9 +129,6 @@ extension Input
             case .rightTrigger: return NSLocalizedString("R2", comment: "")
             case .start: return NSLocalizedString("Start", comment: "")
             case .select: return NSLocalizedString("Select", comment: "")
-            case .leftThumbstickButton: return NSLocalizedString("L3", comment: "")
-            case .rightThumbstickButton: return NSLocalizedString("R3", comment: "")
-            case .share: return NSLocalizedString("Share", comment: "")
             }
             
         case .controller(.keyboard):
@@ -252,9 +249,6 @@ extension Input
             case .rightTrigger: return NSLocalizedString("R2 Button", comment: "")
             case .start: return NSLocalizedString("Start", comment: "")
             case .select: return NSLocalizedString("Select", comment: "")
-            case .leftThumbstickButton: return NSLocalizedString("L3 Button", comment: "")
-            case .rightThumbstickButton: return NSLocalizedString("R3 Button", comment: "")
-            case .share: return NSLocalizedString("Share Button", comment: "")
             }
             
         case .controller(.keyboard):
@@ -281,8 +275,6 @@ extension Input
             let input = ActionInput(input: self)!
             switch input
             {
-            case .none: return NSLocalizedString("None", comment: "")
-            case .systemOverlay: return NSLocalizedString("Overlay", comment: "")
             case .quickSave: return NSLocalizedString("Quick Save", comment: "")
             case .quickLoad: return NSLocalizedString("Quick Load", comment: "")
             case .fastForward: return NSLocalizedString("Fast Forward", comment: "")
@@ -290,28 +282,6 @@ extension Input
             case .reverseScreens: return NSLocalizedString("Reverse Screens", comment: "")
             case .screenshot: return NSLocalizedString("Screenshot", comment: "")
             case .cycleBoundPanels: return NSLocalizedString("Cycle Friend/Notes/Types", comment: "")
-            case .toggleBoundFriend: return NSLocalizedString("Toggle Friend", comment: "")
-            case .toggleBoundMultiview: return NSLocalizedString("Toggle Multiview", comment: "")
-            case .boundScrollUp: return NSLocalizedString("View: Scroll Up", comment: "")
-            case .boundScrollDown: return NSLocalizedString("View: Scroll Down", comment: "")
-            case .boundScrollLeft: return NSLocalizedString("View: Scroll Left", comment: "")
-            case .boundScrollRight: return NSLocalizedString("View: Scroll Right", comment: "")
-            case .boundPreviousItem: return NSLocalizedString("View: Previous Pokémon / Item", comment: "")
-            case .boundNextItem: return NSLocalizedString("View: Next Pokémon / Item", comment: "")
-            case .boundFocusUp: return "View: Focus Up"
-            case .boundFocusDown: return "View: Focus Down"
-            case .boundFocusLeft: return "View: Focus Left"
-            case .boundFocusRight: return "View: Focus Right"
-            case .boundSelect: return NSLocalizedString("View: Select / Choose", comment: "")
-            case .boundBack: return NSLocalizedString("View: Back", comment: "")
-            case .boundDetails: return NSLocalizedString("View: Details", comment: "")
-            case .boundPreviousView: return NSLocalizedString("Previous Multiview Tab", comment: "")
-            case .boundNextView: return NSLocalizedString("Next Multiview Tab", comment: "")
-            case .boundHideFriend: return NSLocalizedString("Hide Friend", comment: "")
-            case .boundHideMultiview: return NSLocalizedString("Hide Multiview", comment: "")
-            case .boundShowDex: return NSLocalizedString("Show Dex", comment: "")
-            case .boundShowBosses: return NSLocalizedString("Show Bosses", comment: "")
-            case .boundShowTypes: return NSLocalizedString("Show Types", comment: "")
             }
             
         default: break
@@ -411,9 +381,6 @@ extension Input
             case .rightTrigger: return "r2.button.roundedtop.horizontal"
             case .start: return "plus.circle"
             case .select: return "minus.circle"
-            case .leftThumbstickButton: return "l.joystick.press.down"
-            case .rightThumbstickButton: return "r.joystick.press.down"
-            case .share: return "square.and.arrow.up"
             }
             
         case .controller(.keyboard):
@@ -451,8 +418,6 @@ extension Input
             let input = ActionInput(input: self)!
             switch input
             {
-            case .none: return "slash.circle"
-            case .systemOverlay: return "rectangle.on.rectangle"
             case .quickSave: return "square.and.arrow.down"
             case .quickLoad: return "square.and.arrow.up"
             case .fastForward: return "forward"
@@ -460,30 +425,8 @@ extension Input
             case .reverseScreens: return "rectangle.2.swap"
             case .screenshot: return "camera"
             case .cycleBoundPanels: return "rectangle.2.swap"
-            case .toggleBoundFriend: return "person.2.fill"
-            case .toggleBoundMultiview: return "book.closed"
-            case .boundScrollUp: return "arrow.up"
-            case .boundScrollDown: return "arrow.down"
-            case .boundScrollLeft: return "arrow.left"
-            case .boundScrollRight: return "arrow.right"
-            case .boundPreviousItem: return "chevron.left"
-            case .boundNextItem: return "chevron.right"
-            case .boundFocusUp: return "arrow.up"
-            case .boundFocusDown: return "arrow.down"
-            case .boundFocusLeft: return "arrow.left"
-            case .boundFocusRight: return "arrow.right"
-            case .boundSelect: return "checkmark.circle"
-            case .boundBack: return "arrow.uturn.backward"
-            case .boundDetails: return "list.bullet.rectangle"
-            case .boundPreviousView: return "rectangle.lefthalf.inset.filled"
-            case .boundNextView: return "rectangle.righthalf.inset.filled"
-            case .boundHideFriend: return "person.2.slash"
-            case .boundHideMultiview: return "eye.slash"
-            case .boundShowDex: return "book"
-            case .boundShowBosses: return "person.crop.rectangle"
-            case .boundShowTypes: return "square.grid.3x3"
             }
-
+            
         default: return "questionmark.circle"
         }
     }
