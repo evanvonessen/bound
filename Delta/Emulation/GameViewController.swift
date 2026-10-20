@@ -94,9 +94,13 @@ private extension GameViewController
         let gameController: GameController
         let defaultMapping: GameControllerInputMappingProtocol?
 
-        init(gameController: GameController) {
+        init(gameController: GameController, gameType: GameType) {
             self.gameController = gameController
-            self.defaultMapping = gameController.defaultInputMapping
+            if gameController.inputType == .mfi, gameType == .gba {
+                self.defaultMapping = BoundMultiviewDefaultMapping.mapping(for: gameController, gameType: gameType)
+            } else {
+                self.defaultMapping = gameController.defaultInputMapping
+            }
         }
         
         var gameControllerInputType: GameControllerInputType {
@@ -1058,9 +1062,9 @@ private extension GameViewController
                     }
                     else
                     {
-                        inputMapping = DefaultInputMapping(gameController: gameController)
+                        inputMapping = DefaultInputMapping(gameController: gameController, gameType: game.type)
                         multiviewDefaults = BoundControllerMultiviewPreferences().isEnabled
-                            ? BoundMultiviewDefaultMapping.mapping(for: gameController) : nil
+                            ? BoundMultiviewDefaultMapping.mapping(for: gameController, gameType: game.type) : nil
                     }
                     
                     if let controller = gameController as? MFiGameController {

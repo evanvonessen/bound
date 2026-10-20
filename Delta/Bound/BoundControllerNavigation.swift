@@ -343,12 +343,46 @@ enum BoundControllerNavigationScrollTarget {
 /// Default trigger shortcuts are supplied only for an uncustomized mapping.
 /// Saved maps remain authoritative, including explicit None assignments.
 enum BoundMultiviewDefaultMapping {
-    static func mapping(for controller: GameController, enabled: Bool = BoundControllerMultiviewPreferences().isEnabled) -> DeltaCore.GameControllerInputMapping {
+    /// Returns the app's default map for a controller and game. GBA MFi
+    /// defaults are intentionally explicit so unassigned physical inputs stay
+    /// unbound and saved user maps can continue to take precedence.
+    static func mapping(for controller: GameController, gameType: GameType? = nil,
+                        enabled: Bool = BoundControllerMultiviewPreferences().isEnabled) -> DeltaCore.GameControllerInputMapping {
+        if controller.inputType == .mfi, gameType == .gba {
+            return gbaMFiMapping()
+        }
+
         var mapping = controller.defaultInputMapping as? DeltaCore.GameControllerInputMapping
             ?? DeltaCore.GameControllerInputMapping(gameControllerInputType: controller.inputType)
         guard enabled, controller.inputType == .mfi else { return mapping }
         mapping.set(ActionInput.boundPreviousView, forControllerInput: MFiGameController.Input.leftTrigger)
         mapping.set(ActionInput.boundNextView, forControllerInput: MFiGameController.Input.rightTrigger)
+        return mapping
+    }
+
+    private static func gbaMFiMapping() -> DeltaCore.GameControllerInputMapping {
+        var mapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: .mfi)
+        guard let defaults = BoundDefaultConfiguration.controllerMappings.first(where: {
+            $0.gameType == GameType.gba.rawValue && $0.controllerType == GameControllerInputType.mfi.rawValue
+        }) else {
+            return mapping
+        }
+
+        for (physicalIdentifier, binding) in defaults.bindings {
+            guard let physicalInput = MFiGameController.Input(rawValue: physicalIdentifier) else { continue }
+            let target: Input?
+            switch binding.type {
+            case GameControllerInputType.standard.rawValue:
+                target = AnyInput(stringValue: binding.identifier, intValue: nil,
+                                  type: .controller(.standard), isContinuous: binding.isContinuous)
+            case GameControllerInputType.action.rawValue:
+                target = AnyInput(stringValue: binding.identifier, intValue: nil,
+                                  type: .controller(.action), isContinuous: binding.isContinuous)
+            default:
+                target = nil
+            }
+            mapping.set(target, forControllerInput: physicalInput)
+        }
         return mapping
     }
 }

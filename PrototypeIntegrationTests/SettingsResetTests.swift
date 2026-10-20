@@ -5,6 +5,22 @@ import DeltaCore
 
 @MainActor
 final class SettingsResetTests: XCTestCase {
+    private var priorRegistrationDomain: [String: Any]?
+
+    override func setUp() {
+        super.setUp()
+        priorRegistrationDomain = UserDefaults.standard.volatileDomain(forName: UserDefaults.registrationDomain)
+        UserDefaults.standard.setVolatileDomain([:], forName: UserDefaults.registrationDomain)
+    }
+
+    override func tearDown() {
+        if let priorRegistrationDomain {
+            UserDefaults.standard.setVolatileDomain(priorRegistrationDomain, forName: UserDefaults.registrationDomain)
+        }
+        priorRegistrationDomain = nil
+        super.tearDown()
+    }
+
     private func makeDefaults() throws -> (UserDefaults, String) {
         let name = "SettingsResetTests.\(UUID().uuidString)"
         return (try XCTUnwrap(UserDefaults(suiteName: name)), name)
@@ -86,26 +102,38 @@ final class SettingsResetTests: XCTestCase {
         XCTAssertFalse(controllerMode.isEnabled)
         XCTAssertEqual(controllerMode.layout, .mode1)
         XCTAssertTrue(controllerNavigation.isEnabled)
-        XCTAssertNil(defaults.object(forKey: "bound.landscape.controller-mode.buttons.v1"))
-        XCTAssertNil(defaults.object(forKey: "bound.landscape.controller-mode2.buttons.v1"))
-        XCTAssertNil(defaults.object(forKey: "bound.landscape.controller-mode3.buttons.v1"))
-        XCTAssertNil(defaults.object(forKey: "bound.landscape.controller-unified.buttons.v1"))
-        XCTAssertNil(defaults.object(forKey: "bound.landscape.buttons.v1"))
+        let persistent = try XCTUnwrap(defaults.persistentDomain(forName: suite))
+        for key in ["bound.landscape.controller-mode.buttons.v1", "bound.landscape.controller-mode2.buttons.v1",
+                    "bound.landscape.controller-mode3.buttons.v1", "bound.landscape.controller-unified.buttons.v1",
+                    "bound.landscape.buttons.v1"] {
+            XCTAssertNil(persistent[key], "Reset removes the saved value for \(key); bundled values remain registered defaults.")
+        }
         XCTAssertTrue(BoundControllerButtonGridPreferences.isEnabled(in: defaults))
-        XCTAssertNil(defaults.object(forKey: BoundControllerNavigationPreferences.key),
+        XCTAssertNil(persistent[BoundControllerNavigationPreferences.key],
                      "Reset clears the retired toggle value; navigation remains enabled by default.")
-        XCTAssertNil(defaults.object(forKey: BoundControllerButtonGridPreferences.enabledKey),
+        XCTAssertNil(persistent[BoundControllerButtonGridPreferences.enabledKey],
                      "Reset should restore the default without pinning it as a saved preference.")
         XCTAssertEqual(BoundControllerButtonGridPreferences.spacing(in: defaults), 18)
-        XCTAssertNil(defaults.object(forKey: "bound.landscape.controller-unified.game-screen.v1"))
+        XCTAssertNil(persistent["bound.landscape.controller-unified.game-screen.v1"])
         XCTAssertEqual(companion.buttonType, .option4)
         XCTAssertTrue(pip.isEnabled(.dex))
         XCTAssertEqual(BoundLandscapePreferences(defaults: defaults).option, .option7)
+        XCTAssertFalse(controllerMode.isEnabled)
+        XCTAssertEqual(defaults.data(forKey: "bound.landscape.option7.placement.friend"),
+                       BoundDefaultConfiguration.preferences["bound.landscape.option7.placement.friend"] as? Data,
+                       "Reset must restore the exported Controller Mode off layout.")
+        XCTAssertEqual(defaults.data(forKey: "bound.landscape.controller-unified.option7.placement.friend"),
+                       BoundDefaultConfiguration.preferences["bound.landscape.controller-unified.option7.placement.friend"] as? Data,
+                       "Reset must restore the separately exported Controller Mode on layout.")
+        XCTAssertEqual(defaults.stringArray(forKey: "bound.delta.pip.v1.button.option4.2.views"), ["types", "bosses", "dex"])
+        XCTAssertEqual(defaults.double(forKey: "bound.delta.pip.v1.dex.opacity"), 1)
+        XCTAssertEqual(defaults.double(forKey: "bound.delta.pip.v1.bosses.opacity"), 1)
         XCTAssertEqual(BoundControlPlacementStore(defaults: defaults).read(skin: "test-skin", landscape: true), .init())
         XCTAssertNil(defaults.object(forKey: "preferredWFCServer"))
         XCTAssertNil(defaults.object(forKey: "customWFCServer"))
         XCTAssertNil(defaults.object(forKey: "preferredGBColorPalette"))
-        XCTAssertNil(defaults.object(forKey: "gba-landscape-standard-controller"))
+        XCTAssertNil(persistent["gba-landscape-standard-controller"],
+                     "The controller selection returns to its registered default without becoming a saved override.")
 
         for (key, expected) in protectedValues {
             XCTAssertEqual(defaults.object(forKey: key) as? NSObject, expected as? NSObject,
@@ -145,11 +173,11 @@ final class SettingsResetTests: XCTestCase {
         let (defaults, suite) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
 
-        BoundLandscapePreferences(defaults: defaults).option = .option7
+        Settings.registerPreferenceDefaults(in: defaults)
         let model = BoundLandscapeArrangementModel(defaults: defaults)
+        model.useOption(.option7)
         model.setContents([.dex, .bosses, .types])
         model.setActive(true)
-        model.useOption(.option7)
 
         let canvas = CGRect(x: 0, y: 0, width: 1000, height: 600)
         let menu = CGRect(x: 900, y: 20, width: 80, height: 70)
@@ -170,8 +198,8 @@ final class SettingsResetTests: XCTestCase {
         model.select(.bosses)
         model.move(content: .bosses, translation: CGSize(width: -120, height: 55), ended: true)
         model.finish(save: true)
-        XCTAssertEqual(model.friendVisible, false)
-        XCTAssertEqual(model.referenceVisible, false)
+        XCTAssertTrue(model.friendVisible)
+        XCTAssertTrue(model.referenceVisible)
         XCTAssertEqual(model.referenceContent, .bosses)
         XCTAssertNotEqual(model.layout.reference, freshReferenceFrame)
 
@@ -182,9 +210,9 @@ final class SettingsResetTests: XCTestCase {
                            boundFrame: bound, defaults: frames, keyboardHeight: 0)
 
         XCTAssertEqual(model.option, .option7)
-        XCTAssertTrue(model.friendVisible)
-        XCTAssertTrue(model.referenceVisible)
-        XCTAssertEqual(model.referenceContent, .dex)
+        XCTAssertFalse(model.friendVisible)
+        XCTAssertFalse(model.referenceVisible)
+        XCTAssertEqual(model.referenceContent, .bosses)
         XCTAssertEqual(model.layout.reference, freshReferenceFrame,
                        "Reset should discard cached Option 7 placement and restore its fresh geometry.")
 

@@ -67,6 +67,7 @@ extension Settings {
             layoutPrefixes.contains { key.hasPrefix($0) }
         })
         for key in keys { defaults.removeObject(forKey: key) }
+        defaults.set(true, forKey: BoundDefaultConfiguration.profileKey)
         defaults.register(defaults: defaultPreferences)
     }
 

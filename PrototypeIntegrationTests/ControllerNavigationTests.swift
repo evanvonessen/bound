@@ -19,17 +19,29 @@ final class ControllerNavigationTests: XCTestCase {
     }
 
     func testAutomaticMultiviewDefaultsCaptureAndOptOut() throws {
+        let standardDefaults = UserDefaults.standard
+        let previousRegistrationDomain = standardDefaults.volatileDomain(forName: UserDefaults.registrationDomain)
+        standardDefaults.setVolatileDomain([:], forName: UserDefaults.registrationDomain)
+        defer {
+            standardDefaults.setVolatileDomain(previousRegistrationDomain, forName: UserDefaults.registrationDomain)
+        }
+
         let name = "MultiviewPreferenceTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
+        Settings.registerPreferenceDefaults(in: defaults)
         let preference = BoundControllerMultiviewPreferences(defaults: defaults)
-        XCTAssertFalse(preference.isEnabled)
-        preference.isEnabled = true
-        let export = try BoundConfigurationExport.snapshot(defaults: defaults, mappings: [])
-        let sections = try XCTUnwrap(export["preferences"] as? [String: [String: Any]])
-        XCTAssertEqual(sections["settings"]?[BoundControllerMultiviewPreferences.key] as? Bool, true)
+        XCTAssertTrue(preference.isEnabled)
+
+        preference.isEnabled = false
+        XCTAssertFalse(preference.isEnabled, "A saved false value opts out of controller multiview controls.")
+        XCTAssertEqual(defaults.persistentDomain(forName: name)?[BoundControllerMultiviewPreferences.key] as? Bool, false)
+        let disabledExport = try BoundConfigurationExport.snapshot(defaults: defaults, mappings: [])
+        let disabledSections = try XCTUnwrap(disabledExport["preferences"] as? [String: [String: Any]])
+        XCTAssertEqual(disabledSections["settings"]?[BoundControllerMultiviewPreferences.key] as? Bool, false)
+
         Settings.resetPreferenceValues(in: defaults)
-        XCTAssertFalse(preference.isEnabled)
+        XCTAssertTrue(preference.isEnabled, "Reset restores the bundled enabled default.")
 
         let controller = MFiGameController(controller: GCController.withExtendedGamepad())
         let stock = BoundMultiviewDefaultMapping.mapping(for: controller, enabled: false)
@@ -64,6 +76,45 @@ final class ControllerNavigationTests: XCTestCase {
         XCTAssertEqual(ActionInput(input: try XCTUnwrap(customCapture.input(forControllerInput: MFiGameController.Input.b))), .toggleBoundMultiview)
         XCTAssertEqual(StandardGameControllerInput(input: try XCTUnwrap(customCapture.input(forControllerInput: MFiGameController.Input.x))), .menu)
         XCTAssertEqual(ActionInput(input: try XCTUnwrap(customCapture.input(forControllerInput: MFiGameController.Input.leftTrigger))), .boundShowTypes)
+    }
+
+    func testGBAMFiDefaultMappingMatchesBundledConfigAndLeavesOmittedInputsUnbound() throws {
+        let controller = MFiGameController(controller: GCController.withExtendedGamepad())
+        let config = try XCTUnwrap(BoundDefaultConfiguration.controllerMappings.first {
+            $0.gameType == GameType.gba.rawValue && $0.controllerType == GameControllerInputType.mfi.rawValue
+        })
+        let mapping = BoundMultiviewDefaultMapping.mapping(for: controller, gameType: .gba, enabled: true)
+
+        XCTAssertEqual(Set(mapping.supportedControllerInputs.map(\.stringValue)), Set(config.bindings.keys))
+        for (physicalIdentifier, binding) in config.bindings {
+            let physicalInput = try XCTUnwrap(MFiGameController.Input(rawValue: physicalIdentifier))
+            let expected: Input?
+            switch binding.type {
+            case GameControllerInputType.standard.rawValue:
+                expected = AnyInput(stringValue: binding.identifier, intValue: nil,
+                                    type: .controller(.standard), isContinuous: binding.isContinuous)
+            case GameControllerInputType.action.rawValue:
+                expected = AnyInput(stringValue: binding.identifier, intValue: nil,
+                                    type: .controller(.action), isContinuous: binding.isContinuous)
+            default:
+                expected = nil
+            }
+            XCTAssertEqual(mapping.input(forControllerInput: physicalInput).map(AnyInput.init), expected.map(AnyInput.init), physicalIdentifier)
+        }
+
+        XCTAssertNil(mapping.input(forControllerInput: MFiGameController.Input.leftThumbstickButton))
+        XCTAssertNil(mapping.input(forControllerInput: MFiGameController.Input.rightThumbstickButton))
+        let multiviewDisabled = BoundMultiviewDefaultMapping.mapping(for: controller, gameType: .gba, enabled: false)
+        XCTAssertEqual(Set(multiviewDisabled.supportedControllerInputs.map(\.stringValue)), Set(config.bindings.keys))
+        for (physicalIdentifier, _) in config.bindings {
+            let physicalInput = try XCTUnwrap(MFiGameController.Input(rawValue: physicalIdentifier))
+            XCTAssertEqual(multiviewDisabled.input(forControllerInput: physicalInput).map(AnyInput.init),
+                           mapping.input(forControllerInput: physicalInput).map(AnyInput.init), physicalIdentifier)
+        }
+        XCTAssertEqual(ActionInput(input: try XCTUnwrap(multiviewDisabled.input(forControllerInput: MFiGameController.Input.leftTrigger))), .boundPreviousView)
+        XCTAssertEqual(ActionInput(input: try XCTUnwrap(multiviewDisabled.input(forControllerInput: MFiGameController.Input.rightTrigger))), .boundNextView)
+        XCTAssertEqual(ActionInput(input: try XCTUnwrap(multiviewDisabled.input(forControllerInput: MFiGameController.Input.share))), .toggleBoundFriend)
+        XCTAssertEqual(ActionInput(input: try XCTUnwrap(multiviewDisabled.input(forControllerInput: MFiGameController.Input.y))), .toggleBoundMultiview)
     }
 
     func testAutomaticMultiviewHeldNavigationStopsOnReleaseAndEligibilityLoss() async throws {

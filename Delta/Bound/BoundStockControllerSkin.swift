@@ -371,13 +371,13 @@ final class BoundControllerNavigationPreferences {
     }
 }
 
-/// Automatic controls are opt-in and apply only while landscape Multiview is visible.
+/// Automatic controls default on and apply only while landscape Multiview is visible.
 final class BoundControllerMultiviewPreferences {
     static let key = "bound.controller-multiview.v1.enabled"
     private let defaults: UserDefaults
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
     var isEnabled: Bool {
-        get { defaults.bool(forKey: Self.key) }
+        get { defaults.object(forKey: Self.key) as? Bool ?? true }
         set {
             defaults.set(newValue, forKey: Self.key)
             NotificationCenter.default.post(name: BoundAppearancePreferences.didChangeNotification, object: nil,

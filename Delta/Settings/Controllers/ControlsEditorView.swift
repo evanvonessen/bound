@@ -37,7 +37,7 @@ private class ControlsEditor
         self.system = system
         self.playerIndex = playerIndex
         
-        self.defaultMapping = BoundMultiviewDefaultMapping.mapping(for: controller)
+        self.defaultMapping = BoundMultiviewDefaultMapping.mapping(for: controller, gameType: system.gameType)
         
         self.inputMapping = self.defaultMapping
         self.loadMapping()

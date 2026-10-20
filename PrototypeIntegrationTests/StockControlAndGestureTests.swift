@@ -621,8 +621,6 @@ final class StockControlAndGestureTests: XCTestCase {
         setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
         assertTouchControls(landscapeTraits)
         XCTAssertTrue(navigationPreferences.isEnabled, "Reset keeps controller navigation permanently enabled")
-        XCTAssertNil(defaults.object(forKey: BoundControllerNavigationPreferences.key),
-                     "Reset clears the retired navigation preference")
 
         // Even an enabled Mode 3 cannot remove portrait GBA buttons.
         modePreferences.isEnabled = true

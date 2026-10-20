@@ -94,8 +94,9 @@ enum BoundConfigurationExport {
         // without requiring the same physical controller to be connected later.
         snapshot["connectedControllerDefaults"] = ExternalGameControllerManager.shared.connectedControllers.map { controller in
             ["controllerType": controller.inputType.rawValue,
+             "gameType": GameType.gba.rawValue,
              "playerIndex": controller.playerIndex.map { $0 as Any } ?? NSNull(),
-             "bindings": (try? json(bindings(in: BoundMultiviewDefaultMapping.mapping(for: controller)))) ?? [:]] as [String: Any]
+             "bindings": (try? json(bindings(in: BoundMultiviewDefaultMapping.mapping(for: controller, gameType: .gba)))) ?? [:]] as [String: Any]
         }
         return BoundConfigurationDocument(data: try JSONSerialization.data(withJSONObject: snapshot, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]))
     }
@@ -121,10 +122,14 @@ enum BoundConfigurationExport {
         })
     }
 
-    static func snapshot(defaults: UserDefaults, mappings: [ControllerMapping], date: Date = Date()) throws -> [String: Any] {
+    static func snapshot(defaults: UserDefaults, mappings: [ControllerMapping], date: Date = Date(),
+                         domainName: String? = Bundle.main.bundleIdentifier) throws -> [String: Any] {
         let all = defaults.dictionaryRepresentation()
         let keys = preferenceKeys(in: all)
         let saved = all.filter { keys.contains($0.key) }
+        // Registered defaults are effective settings, but are not user overrides.
+        let persistent = domainName.flatMap { defaults.persistentDomain(forName: $0) } ?? [:]
+        let storedKeys = persistent.keys.filter { keys.contains($0) }.sorted()
         var effective = try effectivePreferences(defaults: defaults).merging(saved) { _, saved in saved }
         // Retired stored preferences must not describe behavior the app no longer uses.
         effective[BoundControllerButtonGridPreferences.enabledKey] = true
@@ -146,7 +151,7 @@ enum BoundConfigurationExport {
                     "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
                     "bundleIdentifier": Bundle.main.bundleIdentifier ?? "unknown"],
             "preferences": try sections.mapValues { try $0.mapValues(portableValue) },
-            "storedPreferenceKeys": saved.keys.sorted(),
+            "storedPreferenceKeys": storedKeys,
             "controllerMappings": try json(mappings),
             "effectiveInterface": [
                 "uiVersion": BoundUIVersionPreferences(defaults: defaults).effectiveVersion.rawValue,
@@ -209,7 +214,7 @@ enum BoundConfigurationExport {
     /// Materialize implicit defaults as well as explicit settings. Do not call
     /// migration-backed getters that write to the user's preferences during export.
     private static func effectivePreferences(defaults: UserDefaults) throws -> [String: Any] {
-        var values = Settings.defaultPreferences
+        var values = Settings.preferenceDefaults(in: defaults)
         values[BoundUIVersionPreferences.key] = BoundUIVersionPreferences(defaults: defaults).version.rawValue
         values[BoundAppearancePreferences.screenLayoutKey] = BoundAppearancePreferences(defaults: defaults).screenLayout.rawValue
         values[BoundAppearancePreferences.themeKey] = BoundAppearancePreferences(defaults: defaults).theme.rawValue
@@ -246,9 +251,13 @@ enum BoundConfigurationExport {
         values["bound.landscape.v1.reference-scale"] = landscape.referenceScale
         values["bound.landscape.v1.friend-placement"] = try JSONEncoder().encode(landscape.friendPlacement)
         for namespace in ["bound.landscape", "bound.landscape.controller-unified"] {
-            values[namespace + ".game-screen.v1"] = try JSONEncoder().encode(BoundControllerGamePlacement())
+            if values[namespace + ".game-screen.v1"] == nil {
+                values[namespace + ".game-screen.v1"] = try JSONEncoder().encode(BoundControllerGamePlacement())
+            }
             let visibleButtons: Set<BoundControllerButton> = namespace == "bound.landscape" ? Set(BoundControllerButton.allCases) : [.menu]
-            values[namespace + ".buttons.v1"] = try JSONEncoder().encode(BoundControllerButtonPlacement(visibleButtons: visibleButtons))
+            if values[namespace + ".buttons.v1"] == nil {
+                values[namespace + ".buttons.v1"] = try JSONEncoder().encode(BoundControllerButtonPlacement(visibleButtons: visibleButtons))
+            }
         }
         return values
     }

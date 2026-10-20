@@ -5,6 +5,22 @@ import DeltaCore
 
 @MainActor
 final class ConfigurationExportTests: XCTestCase {
+    private var priorRegistrationDomain: [String: Any]?
+
+    override func setUp() {
+        super.setUp()
+        priorRegistrationDomain = UserDefaults.standard.volatileDomain(forName: UserDefaults.registrationDomain)
+        UserDefaults.standard.setVolatileDomain([:], forName: UserDefaults.registrationDomain)
+    }
+
+    override func tearDown() {
+        if let priorRegistrationDomain {
+            UserDefaults.standard.setVolatileDomain(priorRegistrationDomain, forName: UserDefaults.registrationDomain)
+        }
+        priorRegistrationDomain = nil
+        super.tearDown()
+    }
+
     private func makeDefaults() throws -> (UserDefaults, String) {
         let suite = "ConfigurationExportTests.\(UUID().uuidString)"
         return (try XCTUnwrap(UserDefaults(suiteName: suite)), suite)
@@ -73,7 +89,11 @@ final class ConfigurationExportTests: XCTestCase {
         let before = defaults.dictionaryRepresentation()
 
         let exportedAt = Date(timeIntervalSince1970: 1_729_000_000)
-        let snapshot = try BoundConfigurationExport.snapshot(defaults: defaults, mappings: [], date: exportedAt)
+        let snapshot = try BoundConfigurationExport.snapshot(defaults: defaults, mappings: [], date: exportedAt,
+                                                             domainName: suite)
+        let storedKeys = try XCTUnwrap(snapshot["storedPreferenceKeys"] as? [String])
+        XCTAssertTrue(storedKeys.contains("translucentControllerSkinOpacity"))
+        XCTAssertFalse(storedKeys.contains(BoundUIVersionPreferences.key))
         let data = try JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys])
         let roundTrip = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let preferences = try XCTUnwrap(roundTrip["preferences"] as? [String: [String: Any]])
@@ -131,7 +151,8 @@ final class ConfigurationExportTests: XCTestCase {
         let before = defaults.dictionaryRepresentation()
 
         let snapshot = try BoundConfigurationExport.snapshot(defaults: defaults, mappings: [],
-                                                             date: Date(timeIntervalSince1970: 1_729_000_000))
+                                                             date: Date(timeIntervalSince1970: 1_729_000_000),
+                                                             domainName: suite)
         let preferences = try XCTUnwrap(snapshot["preferences"] as? [String: [String: Any]])
         let settings = try XCTUnwrap(preferences["settings"])
         let interface = try XCTUnwrap(snapshot["effectiveInterface"] as? [String: Any])
@@ -145,7 +166,7 @@ final class ConfigurationExportTests: XCTestCase {
         XCTAssertEqual(settings[BoundControllerButtonGridPreferences.spacingKey] as? Double, 18)
         for (group, namespace, visible) in [
             ("controllerModeOff", "bound.landscape", Set(BoundControllerButton.allCases)),
-            ("controllerModeOn", "bound.landscape.controller-unified", Set([BoundControllerButton.menu]))
+            ("controllerModeOn", "bound.landscape.controller-unified", Set(BoundControllerButton.allCases))
         ] {
             let buttons = try XCTUnwrap(preferences[group]?[namespace + ".buttons.v1"] as? [String: Any])
             let placement = try JSONDecoder().decode(BoundControllerButtonPlacement.self, from: decodedData(buttons))
@@ -168,7 +189,7 @@ final class ConfigurationExportTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
 
         func exportedGridValue() throws -> Bool? {
-            let snapshot = try BoundConfigurationExport.snapshot(defaults: defaults, mappings: [])
+            let snapshot = try BoundConfigurationExport.snapshot(defaults: defaults, mappings: [], domainName: suite)
             let preferences = try XCTUnwrap(snapshot["preferences"] as? [String: [String: Any]])
             let settings = try XCTUnwrap(preferences["settings"])
             return settings[BoundControllerButtonGridPreferences.enabledKey] as? Bool
@@ -181,7 +202,7 @@ final class ConfigurationExportTests: XCTestCase {
         let before = defaults.dictionaryRepresentation()
         XCTAssertEqual(try exportedGridValue(), true)
         XCTAssertTrue(BoundControllerButtonGridPreferences.isEnabled(in: defaults))
-        let snapshot = try BoundConfigurationExport.snapshot(defaults: defaults, mappings: [])
+        let snapshot = try BoundConfigurationExport.snapshot(defaults: defaults, mappings: [], domainName: suite)
         let settings = try XCTUnwrap((snapshot["preferences"] as? [String: [String: Any]])?["settings"])
         XCTAssertEqual(settings[BoundControllerButtonGridPreferences.spacingKey] as? Double, 18)
         XCTAssertEqual(settings[BoundControllerNavigationPreferences.key] as? Bool, true)

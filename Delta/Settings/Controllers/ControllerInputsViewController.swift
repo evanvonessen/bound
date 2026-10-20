@@ -165,6 +165,10 @@ class ControllerInputsViewController: UIViewController
         {
             mapping = storedMapping
         }
+        else if self.system.gameType == .gba
+        {
+            mapping = BoundMultiviewDefaultMapping.mapping(for: controller, gameType: self.system.gameType)
+        }
         else if let defaultMapping = controller.defaultInputMapping as? DeltaCore.GameControllerInputMapping
         {
             mapping = defaultMapping
@@ -220,7 +224,7 @@ private extension ControllerInputsViewController
 {
     func makeDefaultInputMapping() -> GameControllerInputMapping
     {
-        let deltaCoreInputMapping = BoundMultiviewDefaultMapping.mapping(for: self.gameController)
+        let deltaCoreInputMapping = BoundMultiviewDefaultMapping.mapping(for: self.gameController, gameType: self.system.gameType)
         
         let inputMapping = GameControllerInputMapping(inputMapping: deltaCoreInputMapping, context: self.managedObjectContext)
         inputMapping.gameControllerInputType = gameController.inputType

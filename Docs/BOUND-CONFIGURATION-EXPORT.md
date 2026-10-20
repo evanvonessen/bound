@@ -6,10 +6,31 @@ Export opens the system Files save picker with a `Bound-Config-<timestamp>.json`
 document. The user chooses the destination. Canceling allows another export;
 resetting settings turns Developer Features off again.
 
-Export is read-only. It does not apply a new default profile, change mappings,
-perform an import, or alter the current layouts. Saved controller mappings are
-included even when the controller is disconnected. Finish Arrange Views with
-Done and save binding edits before exporting.
+Export is read-only. It does not apply a new default profile, perform an import,
+or alter the current layouts. Saved controller mappings are included even when
+the controller is disconnected. Finish Arrange Views with Done and save binding
+edits before exporting.
+
+## Promoting an export to app defaults
+
+An exported file can be reviewed and used to prepare the app's bundled first
+install defaults. Only explicitly selected portable preference values are
+promoted; device metadata and private or per-ROM data are excluded. Controller
+maps use the app's separate default-mapping path.
+
+The shipped profile is `Delta/Bound/Resources/BoundDefaultConfiguration-v1.json`.
+It contains the active settings and GBA/MFi bindings from the reviewed export,
+without the retired controller-mode layouts or device metadata.
+
+Bundled preferences register as defaults, so a saved value on an existing install
+continues to take precedence. Landscape layouts for Controller Mode on and off
+are kept in their separate exported namespaces. When an existing install has
+saved landscape arrangements, startup omits the bundled landscape defaults so
+legacy layout migrations can still run. A profile marker keeps the bundled
+defaults enabled after first-install migrations. Reset removes saved preference
+values and re-registers the bundled profile, restoring the same settings and
+layouts that a fresh install receives. Accounts, ROMs, saves and per-ROM data
+remain outside preference reset.
 
 ## JSON schema 1
 
@@ -56,8 +77,9 @@ width; older placements remain on their safe-area canvas until moved.
 The export uses a settings allowlist, not a full UserDefaults or database dump.
 It excludes accounts, credentials, ROMs, saves, notes, per-ROM progress, service
 state, developer-tool state, and database record identifiers. The file is a
-reviewable input for preparing future bundled defaults, not an automatic import
-format. Confirm the intended preset before promoting values to shipping defaults.
+reviewable input for preparing bundled defaults, not an automatic import format.
+Values promoted from it become the app's defaults for new installs and for users
+who reset their settings.
 
 ## Validation
 
