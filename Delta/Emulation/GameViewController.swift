@@ -130,6 +130,7 @@ class GameViewController: DeltaCore.GameViewController
     private(set) var boundRRDexSaveCache = BoundRRDexSaveCache()
     func boundRRDexDidLoadSaveState(core: EmulatorCore) {
         guard core === emulatorCore, core.game.type == .gba else { return }
+        boundCompanion.playerStateDisplay.didLoadSaveState()
         boundRRDexSaveCache.invalidate(restoredState: true)
         guard let game = game as? Game else { return }
         // Save-state RAM can differ from the battery file. Read it while the
@@ -591,6 +592,7 @@ extension GameViewController
     override func viewDidAppear(_ animated: Bool)
     {
         super.viewDidAppear(animated)
+        boundCompanion.playerStateDisplay.bind(core: emulatorCore)
         
         if self.emulatorCore?.deltaCore == MelonDS.core, ProcessInfo.processInfo.isJITAvailable
         {

@@ -23,6 +23,7 @@ extension Settings {
             BoundAppearancePreferences.screenLayoutKey, BoundAppearancePreferences.themeKey,
             BoundControllerModePreferences.key, BoundControllerModePreferences.layoutKey,
             BoundControllerNavigationPreferences.key, BoundControllerMultiviewPreferences.key,
+            BoundPlayerStatePreferences.key,
             BoundControllerButtonGridPreferences.enabledKey, BoundControllerButtonGridPreferences.spacingKey,
             "bound.landscape.buttons.v1",
             BoundCompanionButtonPreferences.key, BoundCompanionButtonPreferences.legacyKey,

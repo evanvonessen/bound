@@ -289,9 +289,11 @@ final class BoundCompanionCoordinator {
     private let fixturePresenter = FriendSharingCanvasPresenter()
     #endif
     private lazy var tap = BoundDeltaFrameTap { [weak self] frame in self?.sharing.receivePlaybackFrame(frame) }
+    let playerStateDisplay = BoundPlayerStateDisplay()
     func install(in owner: GameViewController) {
         guard host == nil, macHost == nil else { return }
         self.owner = owner
+        playerStateDisplay.install(in: owner)
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-reset-layout") {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.key)
@@ -571,6 +573,7 @@ final class BoundCompanionCoordinator {
         macHost = host
     }
     func bind(core: EmulatorCore?, gameID: String) {
+        playerStateDisplay.bind(core: core)
         guard boundCore !== core || self.gameID != gameID else { return }
         notesDismissalTask?.cancel(); notesDismissalTask = nil; pendingControllerReferenceAction = nil
         cancelInteractions(); tap.setEnabled(false); sharing.stop(); notesPaused = false; isEditingNotes = false; isEditingText = false; owner?.controllerView.isUserInteractionEnabled = true; self.gameID = gameID
@@ -580,8 +583,12 @@ final class BoundCompanionCoordinator {
         guard let core else { boundCore = nil; state.emulationDetails = nil; return }
         state.emulationDetails = BoundEmulationDetails(packageName: core.deltaCore.name, packageIdentifier: core.deltaCore.identifier, packageVersion: core.deltaCore.version)
         boundCore = core
-        let previous = core.updateHandler, tap = self.tap
-        core.updateHandler = { [weak tap] core in previous?(core); tap?.receive(core) }
+        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe
+        core.updateHandler = { [weak tap, weak reader] core in
+            previous?(core)
+            reader?.receive(core)
+            tap?.receive(core)
+        }
         #if DEBUG && targetEnvironment(simulator)
         if usesLocalPairedFixture { sharing.start() }
         #endif
@@ -675,6 +682,7 @@ final class BoundCompanionCoordinator {
     }
     func bringControlsToFront() {
         guard let owner else { return }
+        defer { playerStateDisplay.layout(in: owner, gameView: owner.gameView) }
         if !arrangementLayers.active { arrangementLayers.apply() }
         if macHost != nil, let overlay {
             owner.view.bringSubviewToFront(overlay)
@@ -1205,6 +1213,7 @@ final class BoundCompanionCoordinator {
         tap.setEnabled(false); sharing.background(); onboarding.close()
     }
     func stop() {
+        playerStateDisplay.stop()
         foregroundTask?.cancel(); foregroundTask = nil
         notesDismissalTask?.cancel(); notesDismissalTask = nil; pendingControllerReferenceAction = nil
         macSheetPaused = false; macSheetCore = nil

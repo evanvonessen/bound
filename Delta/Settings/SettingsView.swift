@@ -132,6 +132,7 @@ struct SettingsView: View {
                         NavigationLink {
                             Form {
                                 ControlsSection()
+                                BoundPlayerStateSetting()
                                 BoundCompanionControlsSections(model: model, gameplay: gameplay)
                                 if !BoundFeatureVisibility.simplifiedSettings, let edit = gameplay?.editControls {
                                     Section { Button("Button placement") { edit(); close() } }

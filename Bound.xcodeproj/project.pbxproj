@@ -453,6 +453,9 @@
 		6D3165E003A5490495F2064E /* BoundConfigurationExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B71EC63FAFA4C8A8C29BCB8 /* BoundConfigurationExport.swift */; };
 		0DCC5A17E990440B949F4582 /* ConfigurationExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */; };
 		4C2097EAF620479EAF50EA68 /* MultiviewDexNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1D82587FA554BF8B7A9E409 /* MultiviewDexNavigationTests.swift */; };
+		92A220783C5444D8894C0EFC /* BoundPlayerState.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11EC3B5F0FA4653A65DA9F6 /* BoundPlayerState.swift */; };
+		DC679C3395174FE38794C79A /* BoundPlayerStateDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 604D0B88F2BD4127A7AC9266 /* BoundPlayerStateDisplay.swift */; };
+		87214F8B08E34E1699AB1A1A /* PlayerStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DB42D13CD4642F59F46B8EE /* PlayerStateTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1266,6 +1269,9 @@
 		79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigurationExportTests.swift; sourceTree = "<group>"; };
 		C1D82587FA554BF8B7A9E409 /* MultiviewDexNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiviewDexNavigationTests.swift; sourceTree = "<group>"; };
 		417B39D1AEE64F0997986F55 /* AudioSettingsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSettingsUITests.swift; sourceTree = "<group>"; };
+		E11EC3B5F0FA4653A65DA9F6 /* BoundPlayerState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPlayerState.swift; sourceTree = "<group>"; };
+		604D0B88F2BD4127A7AC9266 /* BoundPlayerStateDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPlayerStateDisplay.swift; sourceTree = "<group>"; };
+		3DB42D13CD4642F59F46B8EE /* PlayerStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerStateTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1380,6 +1386,7 @@
 			children = (
 				5DD465FEC61E429CA4EAC9AB /* SourceAndLicenseTests.swift */,
 				E519E2BAF174403DB37DB3A5 /* PlaybackSharingTests.swift */,
+				3DB42D13CD4642F59F46B8EE /* PlayerStateTests.swift */,
 				35733EA11CCE9FF25284EFB8 /* AppearanceIntegrationTests.swift */,
 				79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */,
 				C1D82587FA554BF8B7A9E409 /* MultiviewDexNavigationTests.swift */,
@@ -1484,6 +1491,8 @@
 				8469AA17D6924083971A9ECF /* BoundPiPGestures.swift */,
 				DBC28B362D94E4127E8A7166 /* BoundPiPPreferences.swift */,
 				06F079A697C7C561C356F7E9 /* BoundDeltaFrameTap.swift */,
+				604D0B88F2BD4127A7AC9266 /* BoundPlayerStateDisplay.swift */,
+				E11EC3B5F0FA4653A65DA9F6 /* BoundPlayerState.swift */,
 				E875C2DEF127D860254648FA /* BoundFrameCaptureGate.swift */,
 				9F35BC570DB6B8BA023B9B53 /* BoundCompanionCycleButton.swift */,
 				6D75D15A8F3B6F2793C7F56D /* BoundPortraitScreenGeometry.swift */,
@@ -3163,6 +3172,7 @@
 			files = (
 				59CF946CE2E3410795B06A0E /* SourceAndLicenseTests.swift in Sources */,
 				074EAD7F7AE78C628F0977A8 /* PlaybackSharingTests.swift in Sources */,
+				87214F8B08E34E1699AB1A1A /* PlayerStateTests.swift in Sources */,
 				273B677E21CFB932EFA82ACD /* AppearanceIntegrationTests.swift in Sources */,
 				0DCC5A17E990440B949F4582 /* ConfigurationExportTests.swift in Sources */,
 				4C2097EAF620479EAF50EA68 /* MultiviewDexNavigationTests.swift in Sources */,
@@ -3466,6 +3476,8 @@
 				A9D0C8D83FBEE28FB2158E9B /* BoundPiPGestures.swift in Sources */,
 				0BCD0BD062911305B3322273 /* BoundPiPPreferences.swift in Sources */,
 				108629E5695D84AE84FD49AA /* BoundDeltaFrameTap.swift in Sources */,
+				DC679C3395174FE38794C79A /* BoundPlayerStateDisplay.swift in Sources */,
+				92A220783C5444D8894C0EFC /* BoundPlayerState.swift in Sources */,
 				A5AAF6B64EA97D56F73A4A9D /* BoundFrameCaptureGate.swift in Sources */,
 				9EE1E66A051751E201D09F44 /* BoundCompanionCycleButton.swift in Sources */,
 				086D5B30CBE1065AE9A6C9AA /* BoundPortraitScreenGeometry.swift in Sources */,
