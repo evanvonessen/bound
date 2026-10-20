@@ -2670,7 +2670,7 @@
 				D5AE76C02C2B59240086471B /* XCRemoteSwiftPackageReference "KeychainAccess" */,
 				D5E76AAB2BE199890078C0C5 /* XCRemoteSwiftPackageReference "ShowTouches" */,
 				D52CB8C42CE2B7B600B04458 /* XCLocalSwiftPackageReference "RevenueCat" */,
-				D5EF1A1E2D84BD59001B06E6 /* XCRemoteSwiftPackageReference "rcheevos" */,
+				D5EF1A1E2D84BD59001B06E6 /* XCLocalSwiftPackageReference "rcheevos" */,
 				268FB5785DF38527736E6488 /* XCRemoteSwiftPackageReference "AgoraRtcEngine_iOS" */,
 			);
 			productRefGroup = BFFA71D81AAC406100EE9DD1 /* Products */;
@@ -4241,6 +4241,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		D5EF1A1E2D84BD59001B06E6 /* XCLocalSwiftPackageReference "rcheevos" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/rcheevos;
+		};
 		D52CB8C42CE2B7B600B04458 /* XCLocalSwiftPackageReference "RevenueCat" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/RevenueCat;
@@ -4280,14 +4284,6 @@
 				kind = branch;
 			};
 		};
-		D5EF1A1E2D84BD59001B06E6 /* XCRemoteSwiftPackageReference "rcheevos" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/rileytestut/rcheevos.git";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -4323,7 +4319,7 @@
 		};
 		D5EF1A1F2D84BD59001B06E6 /* rcheevos */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = D5EF1A1E2D84BD59001B06E6 /* XCRemoteSwiftPackageReference "rcheevos" */;
+			package = D5EF1A1E2D84BD59001B06E6 /* XCLocalSwiftPackageReference "rcheevos" */;
 			productName = rcheevos;
 		};
 /* End XCSwiftPackageProductDependency section */

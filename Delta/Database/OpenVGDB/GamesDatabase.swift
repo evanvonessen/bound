@@ -151,6 +151,11 @@ class GamesDatabase
     
     func metadata(for game: Game) -> GameMetadata?
     {
+        self.metadata(forGameIdentifier: game.identifier)
+    }
+
+    func metadata(forGameIdentifier identifier: String) -> GameMetadata?
+    {
         let releaseID = Expression<Any>.releaseID
         let name = Expression<Any>.name
         let artworkAddress = Expression<Any>.artworkAddress
@@ -158,7 +163,7 @@ class GamesDatabase
         let sha1Hash = Expression<Any>.sha1Hash
         let romID = Expression<Any>.romID
         
-        let gameHash = game.identifier.uppercased()
+        let gameHash = identifier.uppercased()
         let query = Table.roms.select(releaseID, name, artworkAddress, Table.roms[romID]).filter(sha1Hash == gameHash).join(Table.releases, on: Table.roms[romID] == Table.releases[romID])
         
         do

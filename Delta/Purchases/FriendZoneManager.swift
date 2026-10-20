@@ -113,12 +113,11 @@ private extension FriendZoneManager
         let context = DatabaseManager.shared.newBackgroundContext()
         
         async let patreonPatrons = self.fetchPatreonPatrons(in: context)
-        async let revenueCatPatrons: [ManagedPatron] = [] //TODO: Re-enable fetching RevenueCat patrons once we can effectively fetch Friend Zone customers at scale.
+        async let revenueCatPatrons: [String] = [] //TODO: Re-enable fetching RevenueCat patrons once we can effectively fetch Friend Zone customers at scale.
         
-        let allPatrons = try await revenueCatPatrons + patreonPatrons
+        let patronIDs = try await revenueCatPatrons + patreonPatrons
         
         try await context.perform {
-            let patronIDs = allPatrons.map(\.identifier)
             let nonFriendZonePredicate = NSPredicate(format: "NOT (%K IN %@)", #keyPath(ManagedPatron.identifier), patronIDs)
             
             let nonFriendZonePatrons = ManagedPatron.instancesWithPredicate(nonFriendZonePredicate, inManagedObjectContext: context, type: ManagedPatron.self)
@@ -136,39 +135,40 @@ private extension FriendZoneManager
         Logger.main.notice("Updated all Friend Zone patrons! Refresh ID: \(response.refreshID, privacy: .public)")
     }
     
-    func fetchPatreonPatrons(in context: NSManagedObjectContext) async throws -> [ManagedPatron]
+    func fetchPatreonPatrons(in context: NSManagedObjectContext) async throws -> [String]
     {
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[ManagedPatron], Error>) in
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String], Error>) in
             PatreonAPI.shared.fetchPatrons { (result) in
-                context.perform {
-                    do
-                    {
-                        let patrons = try result.get()
-                        
+                do
+                {
+                    // Transfer only values to the database queue, and keep managed
+                    // objects on that queue when returning the imported identifiers.
+                    let patrons = try result.get().map { (name: $0.name, identifier: $0.identifier) }
+                    context.perform {
                         let managedPatrons = patrons.compactMap { ManagedPatron(name: $0.name, identifier: $0.identifier, isPatreonPatron: true, context: context) }
-                        continuation.resume(returning: managedPatrons)
+                        continuation.resume(returning: managedPatrons.map(\.identifier))
                     }
-                    catch let error as NSError
-                    {
-                        Logger.main.error("Failed to update Patreon Friend Zone patrons. \(error.localizedDescription, privacy: .public)")
-                        continuation.resume(throwing: error)
-                    }
+                }
+                catch let error as NSError
+                {
+                    Logger.main.error("Failed to update Patreon Friend Zone patrons. \(error.localizedDescription, privacy: .public)")
+                    continuation.resume(throwing: error)
                 }
             }
         }
     }
     
-    func fetchRevenueCatPatrons(in context: NSManagedObjectContext) async throws -> [ManagedPatron]
+    func fetchRevenueCatPatrons(in context: NSManagedObjectContext) async throws -> [String]
     {
         do
         {
             let users = try await RevenueCatManager.shared.fetchFriendZoneUsers()
             
-            let managedPatrons = await context.perform {
-                return users.compactMap { ManagedPatron(name: $0.name, identifier: $0.id, isPatreonPatron: false, context: context) }
+            let patronIDs = await context.perform {
+                return users.map { ManagedPatron(name: $0.name, identifier: $0.id, isPatreonPatron: false, context: context).identifier }
             }
             
-            return managedPatrons
+            return patronIDs
         }
         catch
         {

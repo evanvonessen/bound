@@ -217,7 +217,7 @@ final class BoundDropboxOAuth: NSObject, ASWebAuthenticationPresentationContextP
 
     private func beginInteractiveAuthorization(appKey: String, presenter: UIViewController?, generation: UUID) {
         guard generation == activeGeneration,
-              let presenter,
+              presenter != nil,
               let verifierData = Self.randomData(count: 32),
               let stateData = Self.randomData(count: 32) else {
             complete(.failure(.invalidClientID), generation: generation)

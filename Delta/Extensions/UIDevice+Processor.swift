@@ -22,7 +22,7 @@ extension UIDevice
     
     var hasA11ProcessorOrBetter: Bool {
         guard let mtlDevice = UIDevice.mtlDevice else { return false }
-        return mtlDevice.supportsFeatureSet(.iOS_GPUFamily4_v1) // iOS GPU Family 4 = A11 GPU
+        return mtlDevice.supportsFamily(.apple4) // iOS GPU Family 4 = A11 GPU
     }
     
     var hasA15ProcessorOrBetter: Bool {

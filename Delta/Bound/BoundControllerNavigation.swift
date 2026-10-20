@@ -363,11 +363,15 @@ final class BoundMultiviewInputRepeater {
     func begin(controller: GameController, action: ActionInput, perform: @escaping () -> Bool) {
         let key = Hold(controller: ObjectIdentifier(controller), action: action)
         guard timers[key] == nil else { return }
+        // This timer is installed on RunLoop.main below, so its callback is synchronous
+        // main-actor work and can safely keep the repeat handoff immediate.
         let timer = Timer(timeInterval: 0.18, repeats: true) { [weak self] timer in
-            guard perform() else {
-                timer.invalidate()
-                self?.timers[key] = nil
-                return
+            MainActor.assumeIsolated {
+                guard perform() else {
+                    timer.invalidate()
+                    self?.timers[key] = nil
+                    return
+                }
             }
         }
         timer.fireDate = Date(timeIntervalSinceNow: 0.35)

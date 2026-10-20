@@ -56,10 +56,10 @@ final class BoundAccountProfile: ObservableObject {
     private var owner: UUID?
     private var generation = UUID()
 
-    init(account: BoundFriendAccount = .shared,
+    init(account: BoundFriendAccount? = nil,
          perform: @escaping @MainActor (AppCloudSession, String, [String: String]) async throws -> BoundSocialResponse = BoundSocialAPI.call) {
-        self.account = account; self.perform = perform
-        subscription = account.$session.sink { [weak self] session in
+        self.account = account ?? BoundFriendAccount.shared; self.perform = perform
+        subscription = self.account.$session.sink { [weak self] session in
             guard let self, self.owner != session?.owner else { return }
             self.generation = UUID(); self.owner = session?.owner
             self.username = nil; self.busy = false; self.status = ""
@@ -132,7 +132,7 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
     func start() {
         guard !started else { return }
         started = true; center.delegate = self
-        subscription = account.$session.sink { [weak self] session in self?.accountChanged(session) }
+        subscription = self.account.$session.sink { [weak self] session in self?.accountChanged(session) }
         observations.append(NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in await self?.reconcile() }
         })

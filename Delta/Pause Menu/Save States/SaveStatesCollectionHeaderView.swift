@@ -89,8 +89,9 @@ class SaveStatesCollectionHeaderView: UICollectionReusableView
 
 extension SaveStatesCollectionHeaderView: UITextViewDelegate
 {
-    func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool
+    @available(iOS 17.0, *)
+    func textView(_ textView: UITextView, primaryActionFor textItem: UITextItem, defaultAction: UIAction) -> UIAction?
     {
-        return true
+        return defaultAction
     }
 }

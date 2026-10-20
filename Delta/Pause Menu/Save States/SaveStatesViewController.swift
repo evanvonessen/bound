@@ -8,7 +8,7 @@
 
 import UIKit
 import CoreData
-import MobileCoreServices
+import UniformTypeIdentifiers
 
 import DeltaCore
 import MelonDSDeltaCore
@@ -474,57 +474,6 @@ private extension SaveStatesViewController
         self.optionsButton.menu = optionsMenu
     }
     
-    internal override func setEditing(_ editing: Bool, animated: Bool)
-    {
-        super.setEditing(editing, animated: animated)
-
-        if editing
-        {
-            // Use a title-based UIBarButtonItem so iOS 26's toolbar capsule sizes to fit the text.
-            let countItem = UIBarButtonItem(title: NSLocalizedString("0 Selected", comment: ""), style: .plain, target: nil, action: nil)
-            self.selectionCountItem = countItem
-
-            let flexSpace = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
-
-            let deleteButton = UIBarButtonItem(title: NSLocalizedString("Delete", comment: ""),
-                                               style: .plain, target: self,
-                                               action: #selector(deleteSelectedSaveStates))
-            deleteButton.tintColor = UIColor.systemRed
-            deleteButton.isEnabled = false
-            self.deleteSelectionItem = deleteButton
-
-            self.toolbarItems = [countItem, flexSpace, deleteButton]
-            self.navigationController?.setToolbarHidden(false, animated: animated)
-        }
-        else
-        {
-            self.collectionView.indexPathsForSelectedItems?.forEach {
-                self.collectionView.deselectItem(at: $0, animated: false)
-            }
-
-            self.navigationController?.setToolbarHidden(true, animated: animated)
-            self.toolbarItems = nil
-            self.selectionCountItem = nil
-            self.deleteSelectionItem = nil
-        }
-
-        // Update selection appearance without discarding the current selection.
-        for indexPath in self.collectionView.indexPathsForVisibleItems
-        {
-            guard let cell = self.collectionView.cellForItem(at: indexPath) as? GridCollectionViewCell else { continue }
-
-            if editing
-            {
-                let section = self.correctedSectionForSectionIndex(indexPath.section)
-                cell.isInSelectionMode = section != .auto && section != .info && section != .locked
-            }
-            else
-            {
-                cell.isInSelectionMode = false
-            }
-        }
-    }
-
     @objc private func deleteSelectedSaveStates()
     {
         let indexPaths = self.collectionView.indexPathsForSelectedItems ?? []
@@ -1003,7 +952,7 @@ private extension SaveStatesViewController
     {
         self._importingSaveState = saveState
         
-        let importController = ImportController(documentTypes: [kUTTypeItem as String])
+        let importController = ImportController(documentTypes: [UTType.item.identifier])
         importController.delegate = self
         self.present(importController, animated: true, completion: nil)
     }
@@ -1559,4 +1508,58 @@ private extension UserDefaults
         }
     }
     @NSManaged @objc(preferredSaveStatesSorting) private var _preferredSaveStatesSorting: String?
+}
+
+extension SaveStatesViewController
+{
+    override func setEditing(_ editing: Bool, animated: Bool)
+    {
+        super.setEditing(editing, animated: animated)
+
+        if editing
+        {
+            // Use a title-based UIBarButtonItem so iOS 26's toolbar capsule sizes to fit the text.
+            let countItem = UIBarButtonItem(title: NSLocalizedString("0 Selected", comment: ""), style: .plain, target: nil, action: nil)
+            self.selectionCountItem = countItem
+
+            let flexSpace = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+
+            let deleteButton = UIBarButtonItem(title: NSLocalizedString("Delete", comment: ""),
+                                               style: .plain, target: self,
+                                               action: #selector(deleteSelectedSaveStates))
+            deleteButton.tintColor = UIColor.systemRed
+            deleteButton.isEnabled = false
+            self.deleteSelectionItem = deleteButton
+
+            self.toolbarItems = [countItem, flexSpace, deleteButton]
+            self.navigationController?.setToolbarHidden(false, animated: animated)
+        }
+        else
+        {
+            self.collectionView.indexPathsForSelectedItems?.forEach {
+                self.collectionView.deselectItem(at: $0, animated: false)
+            }
+
+            self.navigationController?.setToolbarHidden(true, animated: animated)
+            self.toolbarItems = nil
+            self.selectionCountItem = nil
+            self.deleteSelectionItem = nil
+        }
+
+        // Update selection appearance without discarding the current selection.
+        for indexPath in self.collectionView.indexPathsForVisibleItems
+        {
+            guard let cell = self.collectionView.cellForItem(at: indexPath) as? GridCollectionViewCell else { continue }
+
+            if editing
+            {
+                let section = self.correctedSectionForSectionIndex(indexPath.section)
+                cell.isInSelectionMode = section != .auto && section != .info && section != .locked
+            }
+            else
+            {
+                cell.isInSelectionMode = false
+            }
+        }
+    }
 }

@@ -39,7 +39,7 @@ struct GBCCoreSettingsView: CoreSettingsView
                     .tag(palette)
                 }
             }
-            .onChange(of: selectedColorPalette) { newPalette in
+            .onChange(of: selectedColorPalette) { _, newPalette in
                 Settings.preferredGBColorPalette = newPalette
             }
         } header: {

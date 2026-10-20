@@ -67,18 +67,15 @@ final class AttributedHeaderFooterView: UITableViewHeaderFooterView
     }
 }
 
-@available(iOS 15, *)
+@available(iOS 17, *)
 extension AttributedHeaderFooterView: UITextViewDelegate
 {
-    func textView(_ textView: UITextView, shouldInteractWith url: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool
+    func textView(_ textView: UITextView, primaryActionFor textItem: UITextItem, defaultAction: UIAction) -> UIAction?
     {
-        if let urlHandler
-        {
-            // Specified custom handler, so return false and perform urlHandler instead.
+        guard case .link(let url) = textItem.content, let urlHandler else { return defaultAction }
+
+        return UIAction(title: defaultAction.title, image: defaultAction.image) { _ in
             urlHandler(url)
-            return false
         }
-        
-        return true
     }
 }

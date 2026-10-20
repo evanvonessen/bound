@@ -84,8 +84,9 @@ struct AchievementNotification: View
             
             // Create new hide timer
             let duration = isExpanded ? 8.0 : 4.0
-            hostingView._timer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak hostingView] _ in
-                hostingView?.hide()
+            let timerOwner = hostingView
+            timerOwner._timer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak timerOwner] _ in
+                timerOwner?.hide()
             }
         }
     }

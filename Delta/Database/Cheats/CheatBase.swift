@@ -92,22 +92,11 @@ class CheatBase: GamesDatabase
         UserDefaults.standard.previousCheatBaseVersion = CheatBase.cheatsVersion
     }
     
-    func cheats(for game: Game) async throws -> [CheatMetadata]?
+    func cheats(forGameIdentifier identifier: String) async throws -> [CheatMetadata]?
     {
-        let metadata = await withCheckedContinuation { continuation in
-            if let context = game.managedObjectContext
-            {
-                context.perform {
-                    let metadata = self.metadata(for: game)
-                    continuation.resume(returning: metadata)
-                }
-            }
-            else
-            {
-                let metadata = self.metadata(for: game)
-                continuation.resume(returning: metadata)
-            }
-        }
+        // Callers snapshot the identifier on the game's context before this async
+        // lookup. SQLite work does not need to access the managed object.
+        let metadata = self.metadata(forGameIdentifier: identifier)
         
         guard let romIDValue = metadata?.romID else { return nil }
         

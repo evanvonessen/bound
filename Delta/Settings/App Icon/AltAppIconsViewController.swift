@@ -120,6 +120,10 @@ class AltAppIconsViewController: UICollectionViewController
     override func viewDidLoad()
     {
         super.viewDidLoad()
+
+        self.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: AltAppIconsViewController, _) in
+            self.resetIconStyle()
+        }
         
         self.title = NSLocalizedString("Change App Icon", comment: "")
         
@@ -213,15 +217,6 @@ class AltAppIconsViewController: UICollectionViewController
         self.resetIconStyle()
     }
     
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?)
-    {
-        super.traitCollectionDidChange(previousTraitCollection)
-        
-        if previousTraitCollection?.userInterfaceStyle != self.traitCollection.userInterfaceStyle
-        {
-            self.resetIconStyle()
-        }
-    }
 }
 
 private extension AltAppIconsViewController
@@ -283,15 +278,13 @@ private extension AltAppIconsViewController
                 {
                     if let overrideStyle = self.overrideStyle
                     {
-                        let overrideTraits = UITraitCollection(userInterfaceStyle: overrideStyle)
-                        traitCollection = UITraitCollection(traitsFrom: [traitCollection, overrideTraits])
+                        traitCollection = traitCollection.modifyingTraits { $0.userInterfaceStyle = overrideStyle }
                     }
                 }
                 else
                 {
                     // Always show light mode icons on pre-iOS 18.
-                    let overrideTraits = UITraitCollection(userInterfaceStyle: .light)
-                    traitCollection = UITraitCollection(traitsFrom: [traitCollection, overrideTraits])
+                    traitCollection = traitCollection.modifyingTraits { $0.userInterfaceStyle = .light }
                 }
                 
                 var image = UIImage(named: icon.imageName, in: Bundle(for: AltAppIconsViewController.self), compatibleWith: traitCollection)

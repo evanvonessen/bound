@@ -15,14 +15,14 @@ extension UIApplication
     var isExternalDisplayConnected: Bool {
         guard Settings.supportsExternalDisplays else { return false }
         
-        let scene = UIApplication.shared.connectedScenes.first { $0.session.role == .windowExternalDisplay }
+        let scene = UIApplication.shared.connectedScenes.first { $0.session.role == .windowExternalDisplayNonInteractive }
         return scene != nil
     }
     
     var externalDisplayScene: ExternalDisplayScene? {
         guard Settings.supportsExternalDisplays else { return nil }
         
-        let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? ExternalDisplayScene }).first(where: { $0.session.role == .windowExternalDisplay })
+        let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? ExternalDisplayScene }).first(where: { $0.session.role == .windowExternalDisplayNonInteractive })
         return scene
     }
 }

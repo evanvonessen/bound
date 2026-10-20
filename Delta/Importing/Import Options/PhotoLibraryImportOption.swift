@@ -7,7 +7,7 @@
 //
 
 import UIKit
-import MobileCoreServices
+import UniformTypeIdentifiers
 
 class PhotoLibraryImportOption: NSObject, ImportOption
 {
@@ -32,7 +32,7 @@ class PhotoLibraryImportOption: NSObject, ImportOption
         imagePickerController.delegate = self
         imagePickerController.modalPresentationStyle = .fullScreen
         imagePickerController.sourceType = .photoLibrary
-        imagePickerController.mediaTypes = [kUTTypeImage as String]
+        imagePickerController.mediaTypes = [UTType.image.identifier]
         imagePickerController.view.backgroundColor = .white
         self.presentingViewController.present(imagePickerController, animated: true, completion: nil)
     }

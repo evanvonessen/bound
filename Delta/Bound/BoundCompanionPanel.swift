@@ -317,56 +317,79 @@ final class BoundCompanionCoordinator {
         state.editControls = { [weak self] in self?.editControls() }
         state.selectionChanged = { [weak self] in self?.cancelInteractions() }
         state.sharingChanged = { [weak self] in self?.tap.setEnabled($0) }
+        // Every observer below explicitly requests OperationQueue.main. The main-queue
+        // contract is synchronous, so assume MainActor isolation inside the callback
+        // to preserve immediate controller handoffs and lifecycle updates.
         observers.append(NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] notification in
-            guard let self, let owner = self.owner, let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
-            let local = owner.view.convert(frame, from: nil)
-            self.keyboardHeight = owner.presentedViewController == nil ? max(0, owner.view.bounds.maxY - local.minY) : 0
-            owner.view.setNeedsLayout()
+            MainActor.assumeIsolated {
+                guard let self, let owner = self.owner, let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+                let local = owner.view.convert(frame, from: nil)
+                self.keyboardHeight = owner.presentedViewController == nil ? max(0, owner.view.bounds.maxY - local.minY) : 0
+                owner.view.setNeedsLayout()
+            }
         })
         observers.append(NotificationCenter.default.addObserver(forName: BoundAppearancePreferences.didChangeNotification, object: nil, queue: .main) { [weak self, weak owner] notification in
-            self?.cancelInteractions()
-            owner?.view.setNeedsLayout()
-            if notification.userInfo?[BoundControllerMultiviewPreferences.key] != nil {
-                owner?.refreshBoundControllerPreferences()
+            MainActor.assumeIsolated {
+                self?.cancelInteractions()
+                owner?.view.setNeedsLayout()
+                if notification.userInfo?[BoundControllerMultiviewPreferences.key] != nil {
+                    owner?.refreshBoundControllerPreferences()
+                }
+                self?.refreshControllerMultiviewRouting()
             }
-            self?.refreshControllerMultiviewRouting()
         })
         observers.append(NotificationCenter.default.addObserver(forName: BoundControllerNavigationEvent.hideMultiviewNotificationName, object: nil, queue: .main) { [weak self] notification in
-            guard let self, let content = self.controllerReferenceContent,
-                  BoundControllerNavigationEvent.hideMultiviewRequestMatches(
-                    notification, gameID: self.gameID, content: content,
-                    available: self.automaticControllerMultiviewAvailable
-                  ) else { return }
-            if self.landscapeArrangement.active { self.landscapeArrangement.toggleReference() }
-            else if self.landscapeCompanion.active { self.landscapeCompanion.hideReference() }
+            MainActor.assumeIsolated {
+                guard let self, let content = self.controllerReferenceContent,
+                      BoundControllerNavigationEvent.hideMultiviewRequestMatches(
+                        notification, gameID: self.gameID, content: content,
+                        available: self.automaticControllerMultiviewAvailable
+                      ) else { return }
+                if self.landscapeArrangement.active { self.landscapeArrangement.toggleReference() }
+                else if self.landscapeCompanion.active { self.landscapeCompanion.hideReference() }
+            }
         })
         observers.append(NotificationCenter.default.addObserver(forName: Settings.didResetNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self else { return }
-            self.cancelInteractions()
-            let controllerMode = BoundControllerModePreferences()
-            self.landscapeArrangement.reload(option: self.landscapeCompanion.preferences.option,
-                controllerModeEnabled: controllerMode.isEnabled, controllerModeLayout: controllerMode.layout)
-            self.landscapeCompanion.reload()
-            self.state.resetPresentation()
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.cancelInteractions()
+                let controllerMode = BoundControllerModePreferences()
+                self.landscapeArrangement.reload(option: self.landscapeCompanion.preferences.option,
+                    controllerModeEnabled: controllerMode.isEnabled, controllerModeLayout: controllerMode.layout)
+                self.landscapeCompanion.reload()
+                self.state.resetPresentation()
+            }
         })
         observers.append(NotificationCenter.default.addObserver(forName: BoundCompanionButtonPreferences.didChangeNotification, object: nil, queue: .main) { [weak self, weak owner] _ in
-            self?.cancelInteractions()
-            self?.controls?.isHighlighted = false
-            self?.state.updateButtonType()
-            owner?.view.setNeedsLayout()
+            MainActor.assumeIsolated {
+                self?.cancelInteractions()
+                self?.controls?.isHighlighted = false
+                self?.state.updateButtonType()
+                owner?.view.setNeedsLayout()
+            }
         })
         observers.append(NotificationCenter.default.addObserver(forName: BoundUIVersionPreferences.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.cancelInteractions()
-            self?.state.updateUIVersion()
+            MainActor.assumeIsolated {
+                self?.cancelInteractions()
+                self?.state.updateUIVersion()
+            }
         })
         observers.append(NotificationCenter.default.addObserver(forName: BoundAccountSocialSettings.stopSharingNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.sharing.stop()
-            self?.onboarding.signOut()
+            MainActor.assumeIsolated {
+                self?.sharing.stop()
+                self?.onboarding.signOut()
+            }
         })
-        observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.background() })
+        observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.background() }
+        })
         // The sharing session restores only a previously active connection.
-        observers.append(NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in self?.foreground() })
-        observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.scheduleNotesDismissalIfNeeded() })
+        observers.append(NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.foreground() }
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scheduleNotesDismissalIfNeeded() }
+        })
         if BoundMacWorkspacePlatform.isEnabled {
             installMacWorkspace(in: owner)
         } else {
@@ -790,39 +813,39 @@ final class BoundCompanionCoordinator {
         owner.view.bringSubviewToFront(overlay)
     }
     private func layoutCycleButton(bounds: CGRect, safeArea: UIEdgeInsets) {
-        guard let owner, let controls, let skin = owner.controllerView.controllerSkin,
-              let traits = owner.controllerView.controllerSkinTraits,
+        guard let owner, let controls, let controllerView = owner.controllerView, let skin = controllerView.controllerSkin,
+              let traits = controllerView.controllerSkinTraits,
               let menu = skin.items(for: traits)?.first(where: { $0.inputs.allInputs.contains(where: { $0.stringValue == "menu" }) }) else { controls?.isHidden = true; return }
-        let local = menu.frame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height))
-        let frame = owner.controllerView.convert(local, to: owner.view)
-        let menuAccessibility = nativeMenuAccessibility ?? BoundNativeMenuAccessibilityElement(accessibilityContainer: owner.controllerView)
+        let local = menu.frame.applying(.init(scaleX: controllerView.bounds.width, y: controllerView.bounds.height))
+        let frame = controllerView.convert(local, to: owner.view)
+        let menuAccessibility = nativeMenuAccessibility ?? BoundNativeMenuAccessibilityElement(accessibilityContainer: controllerView)
         menuAccessibility.accessibilityIdentifier = "bound.native-menu"
         menuAccessibility.accessibilityLabel = landscapeArrangement.editing ? (landscapeArrangement.editingGameScreen ? "Next: arrange views and buttons" : "Done arranging views") : "Menu"
         menuAccessibility.accessibilityTraits = .button
         menuAccessibility.accessibilityFrameInContainerSpace = local
-        menuAccessibility.activate = { [weak owner] in
-            guard let owner else { return false }
-            owner.controllerView.cancelTouchInputs()
-            owner.gameViewController(owner, handleMenuInputFrom: owner.controllerView)
+        menuAccessibility.activate = { [weak owner, weak controllerView] in
+            guard let owner, let controllerView else { return false }
+            controllerView.cancelTouchInputs()
+            owner.gameViewController(owner, handleMenuInputFrom: controllerView)
             return true
         }
         var accessibleControls: [UIAccessibilityElement] = [menuAccessibility]
         for input in ["l", "r"] {
             guard let item = skin.items(for: traits)?.first(where: { $0.inputs.allInputs.contains(where: { $0.stringValue == input }) }) else { continue }
-            let element = UIAccessibilityElement(accessibilityContainer: owner.controllerView)
+            let element = UIAccessibilityElement(accessibilityContainer: controllerView)
             element.accessibilityIdentifier = "bound.native-" + input
             element.accessibilityLabel = input.uppercased() + " shoulder control"
-            element.accessibilityFrameInContainerSpace = item.frame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height))
+            element.accessibilityFrameInContainerSpace = item.frame.applying(.init(scaleX: controllerView.bounds.width, y: controllerView.bounds.height))
             accessibleControls.append(element)
         }
-        owner.controllerView.accessibilityElements = accessibleControls
+        controllerView.accessibilityElements = accessibleControls
         nativeMenuAccessibility = menuAccessibility
-        let controller = owner.controllerView.convert(owner.controllerView.bounds, to: owner.view)
-        let occupied = owner.controllerView.controlHitFrames.map { owner.controllerView.convert($0, to: owner.view) }
+        let controller = controllerView.convert(controllerView.bounds, to: owner.view)
+        let occupied = controllerView.controlHitFrames.map { controllerView.convert($0, to: owner.view) }
         controls.isHidden = false
         let right = skin.items(for: traits)?.first(where: { $0.inputs.allInputs.contains(where: { $0.stringValue == "r" }) })
-        let rightFrame = right.map { owner.controllerView.convert($0.extendedFrame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height)), to: owner.view) }
-        let menuHitSize = menu.extendedFrame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height)).size
+        let rightFrame = right.map { controllerView.convert($0.extendedFrame.applying(.init(scaleX: controllerView.bounds.width, y: controllerView.bounds.height)), to: owner.view) }
+        let menuHitSize = menu.extendedFrame.applying(.init(scaleX: controllerView.bounds.width, y: controllerView.bounds.height)).size
         let boundPortrait = !state.landscape && BoundAppearancePreferences().effectiveScreenLayout == .bound
         let select = skin.items(for: traits)?.first { $0.inputs.allInputs.contains { $0.stringValue == "select" } }
         let selectArtwork = boundPortrait && BoundAppearancePreferences().effectiveTheme != .minimal
@@ -832,7 +855,7 @@ final class BoundCompanionCoordinator {
             content: landscapeArrangement.active ? landscapeArrangement.referenceContent : state.content,
             canvas: bounds.inset(by: safeArea), occupied: occupied, rightShoulderFrame: rightFrame, menuHitSize: menuHitSize, boundPortrait: boundPortrait, selectArtwork: selectArtwork,
             rightControlGutter: owner.boundLandscapeControlGutter(),
-            menuHitFrame: owner.controllerView.convert(menu.extendedFrame.applying(.init(scaleX: owner.controllerView.bounds.width, y: owner.controllerView.bounds.height)), to: owner.view),
+            menuHitFrame: controllerView.convert(menu.extendedFrame.applying(.init(scaleX: controllerView.bounds.width, y: controllerView.bounds.height)), to: owner.view),
             buttonType: landscapeArrangement.active ? .option1 : BoundCompanionButtonPreferences().effectiveButtonType)
         controls.configureSegments(contents: landscapeArrangement.active ? [] : state.configuration.assignments,
                                    displayedContents: landscapeArrangement.active ? [] : state.displayedButtonContents)
@@ -928,7 +951,7 @@ final class BoundCompanionCoordinator {
         let shouldResume = macSheetPaused
         macSheetPaused = false
         macSheetCore = nil
-        let finish = { [weak owner, weak core] in
+        let finish: @MainActor @Sendable () -> Void = { [weak owner, weak core] in
             guard let owner, let core, owner.emulatorCore === core,
                   owner.view.window != nil, UIApplication.shared.applicationState == .active,
                   owner.gameViewControllerShouldResumeEmulation(owner) else { return }
@@ -1367,7 +1390,7 @@ struct BoundCompanionPanel: View {
         .onChange(of: presentationEnabled) { _, enabled in
             if !enabled { textEditingChanged(false); editingChanged(false) }
         }
-        .onChange(of: sharing.joined) { _ in state.refresh() }
+        .onChange(of: sharing.joined) { _, _ in state.refresh() }
     }
 }
 
@@ -1497,14 +1520,14 @@ struct BoundNotesEditor: View {
             do { text = try store.read(game: gameID); readable = true }
             catch { status = "Could not read notes. Existing notes are kept." }
         }
-        .onChange(of: text) { next in
+        .onChange(of: text) { _, next in
             guard readable else { return }
             do { try store.write(next, game: gameID); status = "" }
             catch { status = "Could not save notes (16 KB limit)." }
         }
-        .onChange(of: classicEditing) { if !usesBoundArrangement { editing = $0 } }
-        .onChange(of: screenLayoutRaw) { _ in editing = false; classicEditing = false }
-        .onChange(of: editing) { editingChanged($0) }
+        .onChange(of: classicEditing) { _, next in if !usesBoundArrangement { editing = next } }
+        .onChange(of: screenLayoutRaw) { _, _ in editing = false; classicEditing = false }
+        .onChange(of: editing) { _, next in editingChanged(next) }
         .onDisappear { editingChanged(false) }
     }
 }
@@ -1751,7 +1774,7 @@ struct BoundFriendsSheet: View {
             catch { return }
             showingUsernameHelp = false
         }
-        .onChange(of: scenePhase) { phase in
+        .onChange(of: scenePhase) { _, phase in
             if phase == .active { onboarding.open(sharing: sharing, existing: { account.session }) }
             else { showingUsernameHelp = false; onboarding.close() }
         }

@@ -13,7 +13,7 @@ final class SourceAndLicenseTests: XCTestCase {
     func testBundledInventoryAndFontNoticeMatchCurrentSources() throws {
         let inventory = try XCTUnwrap(BoundSourceNotices.Document.dependencies.data())
         let digest = SHA256.hash(data: inventory).map { String(format: "%02x", $0) }.joined()
-        XCTAssertEqual(digest, "7eb44ba141bc644bb7910099d648abb8a70abbc5de54c77127c427b737c32db5")
+        XCTAssertEqual(digest, "98e629bbc706e821814f662da5954d6254230debf1793b18f0ac2053af66ef0c")
         let url = try XCTUnwrap(Bundle.main.url(forResource: "EARLY-GAMEBOY-LICENSE", withExtension: "txt"))
         let notice = try String(contentsOf: url, encoding: .utf8)
         XCTAssertTrue(notice.contains("Copyright LDEJRuff 2012"))

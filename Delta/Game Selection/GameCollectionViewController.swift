@@ -8,7 +8,7 @@
 
 import UIKit
 import SwiftUI
-import MobileCoreServices
+import UniformTypeIdentifiers
 import AVFoundation
 import RegexBuilder
 
@@ -25,12 +25,24 @@ import SDWebImage
 
 extension GameCollectionViewController
 {
+    private struct RunningGameSnapshot: Sendable, Equatable
+    {
+        let identifier: String
+        let name: String
+
+        init(game: Game)
+        {
+            self.identifier = game.identifier
+            self.name = game.name
+        }
+    }
+
     private enum LaunchError: LocalizedError
     {
         case alreadyRunning
         case downloadingGameSave
         case biosNotFound
-        case systemAlreadyRunning(Game?, UISceneSession)
+        case systemAlreadyRunning(RunningGameSnapshot?, UISceneSession)
         case multiplayerSessionActive(EmulatorCore?)
         
         var errorTitle: String? {
@@ -51,11 +63,7 @@ extension GameCollectionViewController
             case .downloadingGameSave: return NSLocalizedString("Please wait until after this game's save file has been downloaded before playing to prevent losing save data.", comment: "")
             case .biosNotFound: return NSLocalizedString("Please import the required files in Delta's settings to play DS games.", comment: "")
             case .systemAlreadyRunning(let game, _):
-                var gameNamePhrase = ""
-                if let game
-                {
-                    gameNamePhrase = String(format: " (“%@”)", game.name)
-                }
+                let gameNamePhrase = game.map { String(format: " (“%@”)", $0.name) } ?? ""
                 
                 let message = String(format: NSLocalizedString("Delta can only play one game per system at a time.\n\nPlease quit the other game%@, or choose another game for a different system.", comment: ""), gameNamePhrase)
                 return message
@@ -196,6 +204,10 @@ extension GameCollectionViewController
         {
             self.collectionView?.topEdgeEffect.style = .soft
         }
+
+        self.registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: GameCollectionViewController, _) in
+            self.update()
+        }
         
         self.update()
     }
@@ -225,12 +237,6 @@ extension GameCollectionViewController
         // Dispose of any resources that can be recreated.
     }
     
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?)
-    {
-        super.traitCollectionDidChange(previousTraitCollection)
-        
-        self.update()
-    }
 }
 
 //MARK: - Segues -
@@ -714,7 +720,7 @@ private extension GameCollectionViewController
                 if let otherGame = delegate.game, otherGame.type == game.type
                 {
                     // Can't emulate multiple games from same system simultaneously.
-                    throw LaunchError.systemAlreadyRunning(otherGame, mainScene.session)
+                    throw LaunchError.systemAlreadyRunning(RunningGameSnapshot(game: otherGame), mainScene.session)
                 }
             }
             
@@ -730,7 +736,7 @@ private extension GameCollectionViewController
                     }
                     
                     // Can't emulate multiple games from same system simultaneously.
-                    throw LaunchError.systemAlreadyRunning(otherGame, session)
+                    throw LaunchError.systemAlreadyRunning(otherGame.map(RunningGameSnapshot.init(game:)), session)
                 }
             }
         }
@@ -1003,7 +1009,7 @@ private extension GameCollectionViewController
         
         let gamesDatabaseImportOption = GamesDatabaseImportOption(searchText: sanitizedGameName, presentingViewController: self)
         
-        let importController = ImportController(documentTypes: [kUTTypeImage as String])
+        let importController = ImportController(documentTypes: [UTType.image.identifier])
         importController.delegate = self
         importController.importOptions = [clipboardImportOption, photoLibraryImportOption, gamesDatabaseImportOption]
         importController.sourceView = self._popoverSourceView
@@ -1163,7 +1169,7 @@ private extension GameCollectionViewController
     {
         self._importingSaveFileGame = game
         
-        let importController = ImportController(documentTypes: [kUTTypeItem as String])
+        let importController = ImportController(documentTypes: [UTType.item.identifier])
         importController.delegate = self
         self.present(importController, animated: true, completion: nil)
     }
@@ -1451,7 +1457,7 @@ extension GameCollectionViewController
         {
             try self.validateLaunchingGame(game, ignoringErrors: [LaunchError.alreadyRunning])
         }
-        catch LaunchError.systemAlreadyRunning(let activeGame?, _) where activeGame == game
+        catch LaunchError.systemAlreadyRunning(let activeGame?, _) where activeGame.identifier == game.identifier
         {
             // Selected game is currently running in background/another window, so don't show context menu.
             Logger.main.info("Game \(activeGame.identifier, privacy: .public) is currently running, hiding context menu.")

@@ -64,7 +64,7 @@ The pinned package manifests specify these active binary archive locations and S
 
 ## Resolved Swift packages
 
-The actual Xcode lockfile is `Bound.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`. Package URLs and revisions below are exact lockfile values. Resolved build checkout licenses are not included in the 16,879-file vendored-source hash set; retain their matching notices when packaging source or a binary.
+The actual Xcode lockfile is `Bound.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`. Remote package URLs and revisions below are exact lockfile values. rcheevos uses the same pinned revision as a local package under `Vendor/rcheevos`, with its MIT license and compatibility patch retained. Remote build checkout licenses are not included in the vendored-source hash set; retain their matching notices when packaging source or a binary.
 
 | Package | Version/branch | Exact revision | Notice/status |
 | --- | --- | --- | --- |
@@ -72,7 +72,7 @@ The actual Xcode lockfile is `Bound.xcodeproj/project.xcworkspace/xcshareddata/s
 | agorartcengine_ios | 4.6.4 | `00b614b1ff1135565e45e9e4bf7d4ec33da7b67f` | MIT package wrapper; binary SDK permissions unresolved. |
 | altkit | revision-pinned | `2fd376df1c79ec06a5c80cc8933da027f65b3148` | No root LICENSE in inspected checkout; permission provenance unresolved. |
 | keychainaccess | 4.2.2 | `84e546727d66f1adc5439debad16270d0fdd04e7` | MIT LICENSE in matching checkout. |
-| rcheevos | main | `30848fc5a6ed563dc2c5abac6a750c6d3ba51c6b` | MIT LICENSE in matching checkout; nested component notices also retained. |
+| rcheevos | local pinned snapshot | `30848fc5a6ed563dc2c5abac6a750c6d3ba51c6b` | MIT LICENSE retained in `Vendor/rcheevos`; nested component notices also retained. |
 | showtouches | master | `1c32407861e20ee2b046e1119c36e9d6385b4ab0` | MIT LICENSE.md in matching checkout; contents include further notices. |
 
 ## CocoaPods and bundled assets
@@ -83,9 +83,9 @@ The supplied Pokémon chart is `Delta/Assets.xcassets/PokemonTypeChart.imageset/
 
 ## Snapshot evidence and changes
 
-`PrototypeConfiguration/vendored-sources.json` records **16,879** dependency file hashes: 11,807 under Cores, 2,594 under External, and 2,478 under Vendor. The manifest's source URLs/revisions and exclusion lists are authoritative; these counts do not claim all 16,879 files are source code or that app/Pods/Swift-package files are hashed there. Run `python3 PrototypeTools/verify_sources.py` for an offline comparison that preserves local edits.
+`PrototypeConfiguration/vendored-sources.json` records **17,060** dependency file hashes: 11,807 under Cores, 2,594 under External, and 2,659 under Vendor. The manifest's source URLs/revisions and exclusion lists are authoritative; these counts do not claim all 17,060 files are source code or that app/Pods/Swift-package files are hashed there. Run `python3 PrototypeTools/verify_sources.py` for an offline comparison that preserves local edits.
 
-The snapshots contain reviewed local compatibility changes; they are not claimed to be byte-for-byte unmodified upstream checkouts. `PrototypePatches` contains the native framework/controller hooks, SNES comparator, RevenueCat compiler compatibility, N64/GLide snapshot metadata/resource changes, GPGX/melonDS native builds, ZIPFoundation target adjustment and dependency-signing patch. Upstream revisions remain the origin pins; individual file hashes identify the modified snapshot.
+The snapshots contain reviewed local compatibility changes; they are not claimed to be byte-for-byte unmodified upstream checkouts. `PrototypePatches` contains the native framework/controller hooks, SNES comparator, RevenueCat compiler compatibility, N64/GLide snapshot metadata/resource changes, GPGX/melonDS native builds, ZIPFoundation target adjustment, dependency signing, modern Operator UI APIs, and rcheevos package/header and game-ID parsing fixes. Upstream revisions remain the origin pins; individual file hashes identify the modified snapshot.
 
 | Source snapshot path | Origin revision | Upstream URL |
 | --- | --- | --- |
@@ -123,6 +123,7 @@ The snapshots contain reviewed local compatibility changes; they are not claimed
 | `External/Harmony/External/CwlPreconditionTesting` | `e717563a609f1c875a9b14d957ea9b0d0321cbc1` | https://github.com/rileytestut/CwlPreconditionTesting.git |
 | `External/Harmony/External/Roxas` | `a4f2e9f2ebaede881eef6fee12e1e5289ae12766` | https://github.com/rileytestut/Roxas.git |
 | `External/Roxas` | `d07c467b6f65cbd08ba296d630986efafb830f95` | https://github.com/rileytestut/Roxas.git |
+| `Vendor/rcheevos` | `30848fc5a6ed563dc2c5abac6a750c6d3ba51c6b` | https://github.com/rileytestut/rcheevos.git |
 | `Vendor/RevenueCat` | `3dd291434fd63594b8ada87bca960e001b708241` | https://github.com/RevenueCat/purchases-ios-spm.git |
 | `External/ZIPFoundation` | `b979e8b52c7ae7f3f39fa0182e738e9e7257eb78` | https://github.com/weichsel/ZIPFoundation.git |
 

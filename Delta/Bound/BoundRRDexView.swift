@@ -184,7 +184,7 @@ struct BoundRRDexView: View {
                         case .learnset: BoundRRDexLearnset(pokemon: pokemon, catalog: catalog, save: choice.save)
                         case .evolution: evolutionDetail(pokemon: pokemon, catalog: catalog)
                         case .controllerSpeciesPicker: controllerSpeciesPicker(catalog: catalog)
-                        case let .ability(name, description):
+                        case let .ability(_, description):
                             ScrollView { Text(description).frame(maxWidth: .infinity, alignment: .leading).padding() }
                                 .accessibilityIdentifier("bound.rrdex-ability-description")
                         }

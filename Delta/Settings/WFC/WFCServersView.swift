@@ -109,13 +109,13 @@ struct WFCServersView: View
         .listStyle(.insetGrouped)
         .navigationTitle(localizedTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .onChange(of: viewModel.customDNS) { newValue in
+        .onChange(of: viewModel.customDNS) { _, newValue in
             Settings.customWFCServer = newValue
             
             // Automatically update preferredDNS to customDNS whenever it's changed.
             viewModel.preferredDNS = newValue
         }
-        .onChange(of: viewModel.preferredDNS) { newValue in
+        .onChange(of: viewModel.preferredDNS) { _, newValue in
             guard newValue != Settings.preferredWFCServer else { return }
             
             if !viewModel.isInitialSetup && UserDefaults.standard.object(forKey: MelonDS.wfcIDUserDefaultsKey) != nil

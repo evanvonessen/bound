@@ -136,9 +136,9 @@ final class OperatorCollectionCoordinator {
         if case .disconnected = state { return false }
         if case .imported = state { return false }
         if case .transferring(let progress) = state, progress >= 1.0 { return false }
-        guard let gameCollectionIdentifier else { return false }
+        guard self.gameCollectionIdentifier != nil else { return false }
 
-        if let signature {
+        if signature != nil {
             guard case .transferring = state else { return false }
         }
 
@@ -267,6 +267,8 @@ final class OperatorOverlayCoordinator {
         case .connected, .transferring:
             return self.isPlaceholderVisible
         case .disconnected, .imported:
+            return false
+        @unknown default:
             return false
         }
     }

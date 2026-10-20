@@ -523,6 +523,10 @@ extension GameViewController
     override func viewDidLoad()
     {
         super.viewDidLoad()
+
+        self.registerForTraitChanges([UITraitUserInterfaceStyle.self, UITraitAccessibilityContrast.self]) { (self: GameViewController, _) in
+            self.view.setNeedsLayout()
+        }
         boundCompanion.install(in: self)
         
         self.view.layoutIfNeeded()
@@ -622,11 +626,6 @@ extension GameViewController
         if isBeingDismissed || isMovingFromParent || navigationController?.isBeingDismissed == true {
             boundCompanion.stop()
         }
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        if traitCollection.hasDifferentColorAppearance(comparedTo: previousTraitCollection) || traitCollection.accessibilityContrast != previousTraitCollection?.accessibilityContrast { view.setNeedsLayout() }
     }
 
     override func viewDidLayoutSubviews()
@@ -937,26 +936,6 @@ private extension GameViewController
 //MARK: - Controllers -
 private extension GameViewController
 {
-    /// Change only receiver mappings when a panel opens/closes. No controller
-    /// reconnect, database fetch, or next-frame delay is needed for this handoff.
-    internal func refreshBoundMultiviewInputRouting() {
-        guard !updatingBoundMultiviewRouting, let core = emulatorCore else { return }
-        let capture = boundCompanion.automaticControllerMultiviewAvailable
-            && view.bounds.width > view.bounds.height
-        guard capture != boundMultiviewCapturing else { return }
-        updatingBoundMultiviewRouting = true
-        boundMultiviewCapturing = capture
-        boundMultiviewRepeater.endAll()
-        for controller in ExternalGameControllerManager.shared.connectedControllers {
-            guard controller.playerIndex != nil,
-                  let old = controller.inputMapping(for: self) as? BoundControllerInputMapping else { continue }
-            let mapping = BoundControllerInputMapping(base: old.base, multiviewActive: capture,
-                                                       multiviewDefaults: old.multiviewDefaults)
-            installBoundInputMapping(mapping, controller: controller, core: core)
-        }
-        updatingBoundMultiviewRouting = false
-    }
-
     private func installBoundInputMapping(_ mapping: BoundControllerInputMapping,
                                          controller: GameController, core: EmulatorCore) {
         let old = controller.inputMapping(for: self)
@@ -2513,7 +2492,7 @@ private extension GameViewController
             // May return nil if Settings.supportsExternalDisplays is false
             // guard let externalDisplayScene = UIApplication.shared.externalDisplayScene else { break }
             
-            guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? ExternalDisplayScene }).first(where: { $0.session.role == .windowExternalDisplay }) else { break }
+            guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? ExternalDisplayScene }).first(where: { $0.session.role == .windowExternalDisplayNonInteractive }) else { break }
             
             if Settings.supportsExternalDisplays /*, scene.hasKeyboardFocus */ // Connect all scenes, not just one with keyboard focus.
             {
@@ -2587,31 +2566,6 @@ private extension GameViewController
         }
     }
     
-    internal func returnToGameViewController(completion: (() -> Void)? = nil)
-    {
-        if let pauseViewController = self.pauseViewController
-        {
-            let segue = UIStoryboardSegue(identifier: "unwindFromPauseMenu", source: pauseViewController, destination: self)
-            self.unwindFromPauseViewController(segue)
-        }
-        else if
-            let navigationController = self.presentedViewController as? UINavigationController,
-            let pageViewController = navigationController.topViewController?.children.first as? UIPageViewController,
-            let gameCollectionViewController = pageViewController.viewControllers?.first as? GameCollectionViewController
-        {
-            let segue = UIStoryboardSegue(identifier: "unwindFromGames", source: gameCollectionViewController, destination: self)
-            self.unwindFromGamesViewController(with: segue)
-        }
-        
-        if let presentedViewController = self.presentedViewController
-        {
-            presentedViewController.dismiss(animated: true, completion: completion)
-        }
-        else
-        {
-            completion?()
-        }
-    }
     
     @objc func didActivateGyro(with notification: Notification)
     {
@@ -3083,5 +3037,55 @@ extension GameViewController {
         let navigation = UINavigationController(rootViewController: editor)
         navigation.modalPresentationStyle = .fullScreen
         presenting.present(navigation, animated: true)
+    }
+}
+
+extension GameViewController
+{
+    /// Change only receiver mappings when a panel opens/closes. No controller
+    /// reconnect, database fetch, or next-frame delay is needed for this handoff.
+    internal func refreshBoundMultiviewInputRouting()
+    {
+        guard !updatingBoundMultiviewRouting, let core = emulatorCore else { return }
+        let capture = boundCompanion.automaticControllerMultiviewAvailable
+            && view.bounds.width > view.bounds.height
+        guard capture != boundMultiviewCapturing else { return }
+        updatingBoundMultiviewRouting = true
+        boundMultiviewCapturing = capture
+        boundMultiviewRepeater.endAll()
+        for controller in ExternalGameControllerManager.shared.connectedControllers {
+            guard controller.playerIndex != nil,
+                  let old = controller.inputMapping(for: self) as? BoundControllerInputMapping else { continue }
+            let mapping = BoundControllerInputMapping(base: old.base, multiviewActive: capture,
+                                                       multiviewDefaults: old.multiviewDefaults)
+            installBoundInputMapping(mapping, controller: controller, core: core)
+        }
+        updatingBoundMultiviewRouting = false
+    }
+
+    internal func returnToGameViewController(completion: (() -> Void)? = nil)
+    {
+        if let pauseViewController = self.pauseViewController
+        {
+            let segue = UIStoryboardSegue(identifier: "unwindFromPauseMenu", source: pauseViewController, destination: self)
+            self.unwindFromPauseViewController(segue)
+        }
+        else if
+            let navigationController = self.presentedViewController as? UINavigationController,
+            let pageViewController = navigationController.topViewController?.children.first as? UIPageViewController,
+            let gameCollectionViewController = pageViewController.viewControllers?.first as? GameCollectionViewController
+        {
+            let segue = UIStoryboardSegue(identifier: "unwindFromGames", source: gameCollectionViewController, destination: self)
+            self.unwindFromGamesViewController(with: segue)
+        }
+
+        if let presentedViewController = self.presentedViewController
+        {
+            presentedViewController.dismiss(animated: true, completion: completion)
+        }
+        else
+        {
+            completion?()
+        }
     }
 }

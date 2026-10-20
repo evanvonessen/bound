@@ -52,7 +52,7 @@ extension CheatBaseView
             do
             {
                 let database = try CheatBase()                
-                let cheats = try await database.cheats(for: game) ?? []
+                let cheats = try await database.cheats(forGameIdentifier: game.identifier) ?? []
                 self.allCheats = cheats
             }
             catch

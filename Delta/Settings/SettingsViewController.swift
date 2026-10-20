@@ -163,6 +163,10 @@ class SettingsViewController: UITableViewController
     override func viewDidLoad()
     {
         super.viewDidLoad()
+
+        self.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: SettingsViewController, _) in
+            self.tableView.reloadData()
+        }
         
         if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         {
@@ -244,15 +248,6 @@ class SettingsViewController: UITableViewController
         }
     }
     
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?)
-    {
-        super.traitCollectionDidChange(previousTraitCollection)
-        
-        if self.traitCollection.userInterfaceStyle != previousTraitCollection?.userInterfaceStyle
-        {
-            self.tableView.reloadData()
-        }
-    }
 }
 
 private extension SettingsViewController

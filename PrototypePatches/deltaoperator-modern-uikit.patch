@@ -1,0 +1,65 @@
+diff --git a/External/DeltaOperator/Sources/OperatorStatusView.swift b/External/DeltaOperator/Sources/OperatorStatusView.swift
+index 313f8120..ba2f941d 100644
+--- a/External/DeltaOperator/Sources/OperatorStatusView.swift
++++ b/External/DeltaOperator/Sources/OperatorStatusView.swift
+@@ -99,6 +99,9 @@ public final class OperatorStatusView: UIView {
+         self.activateConstraints()
+         self.updateFont()
+         self.configure(with: .connected)
++        self.registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: OperatorStatusView, _) in
++            self.updateFont()
++        }
+     }
+ 
+     /// Creates the stored constraint references.
+@@ -143,16 +146,6 @@ public final class OperatorStatusView: UIView {
+         self.updateBorderLayers()
+     }
+ 
+-    /// Updates the title font when the horizontal size class changes.
+-    ///
+-    /// - Parameter previousTraitCollection: The previous trait collection before the change.
+-    public override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+-        super.traitCollectionDidChange(previousTraitCollection)
+-        if self.traitCollection.horizontalSizeClass != previousTraitCollection?.horizontalSizeClass {
+-            self.updateFont()
+-        }
+-    }
+-
+     /// Selects the title font based on the current size class with monospaced digits.
+     private func updateFont() {
+         let style: UIFont.TextStyle = self.traitCollection.horizontalSizeClass == .regular ? .subheadline : .caption1
+@@ -263,6 +256,8 @@ public final class OperatorStatusView: UIView {
+             if !self.configureTransferring(progress, from: previousState) { return }
+         case .disconnected, .imported:
+             self.configureIdle()
++        @unknown default:
++            self.configureIdle()
+         }
+ 
+         self.needsBorderRebuild = true
+diff --git a/External/DeltaOperator/Sources/OperatorUICoordinators.swift b/External/DeltaOperator/Sources/OperatorUICoordinators.swift
+index 32ff6fde..318a71db 100644
+--- a/External/DeltaOperator/Sources/OperatorUICoordinators.swift
++++ b/External/DeltaOperator/Sources/OperatorUICoordinators.swift
+@@ -136,9 +136,9 @@ final class OperatorCollectionCoordinator {
+         if case .disconnected = state { return false }
+         if case .imported = state { return false }
+         if case .transferring(let progress) = state, progress >= 1.0 { return false }
+-        guard let gameCollectionIdentifier else { return false }
++        guard self.gameCollectionIdentifier != nil else { return false }
+ 
+-        if let signature {
++        if signature != nil {
+             guard case .transferring = state else { return false }
+         }
+ 
+@@ -268,6 +268,8 @@ final class OperatorOverlayCoordinator {
+             return self.isPlaceholderVisible
+         case .disconnected, .imported:
+             return false
++        @unknown default:
++            return false
+         }
+     }
+ 

@@ -141,7 +141,7 @@ extension AppDelegate
         // Called when a new scene session is being created.
         // Use this method to select a configuration to create the new scene with.
         
-        if connectingSceneSession.role == .windowExternalDisplay
+        if connectingSceneSession.role == .windowExternalDisplayNonInteractive
         {
             // External Display
             return UISceneConfiguration(name: "External Display", sessionRole: connectingSceneSession.role)

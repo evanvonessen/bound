@@ -8,7 +8,7 @@
 
 import UIKit
 import CoreData
-import MobileCoreServices
+import UniformTypeIdentifiers
 
 import DeltaCore
 
@@ -532,7 +532,7 @@ extension GamesViewController: ImportControllerDelegate
     private func makeImportController() -> ImportController
     {
         var documentTypes = Set(System.registeredSystems.map { $0.gameType.rawValue })
-        documentTypes.insert(kUTTypeZipArchive as String)
+        documentTypes.insert(UTType.zip.identifier)
         documentTypes.insert("com.rileytestut.delta.skin")
         
         #if BETA
@@ -542,7 +542,7 @@ extension GamesViewController: ImportControllerDelegate
         
         // Providers or another emulator can classify ROMs as generic/alternate data.
         // Accept regular data here; DatabaseManager still validates the extension/core.
-        documentTypes.insert(kUTTypeData as String)
+        documentTypes.insert(UTType.data.identifier)
 
         // Add GBA4iOS's exported UTIs in case user has GBA4iOS installed (which may override Delta's UTI declarations)
         documentTypes.insert("com.rileytestut.gba")
