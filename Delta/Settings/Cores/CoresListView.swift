@@ -23,7 +23,7 @@ struct CoresListView: View
 struct CoreSettingsLinks: View {
     var body: some View {
         ForEach(System.registeredSystems.filter { !BoundFeatureVisibility.simplifiedSettings || $0 == .gba }, id: \.self) { system in
-            NavigationLink(destination: coreSettingsDestination(for: system)) {
+            NavigationLink(destination: coreSettingsDestination(for: system).boundSettingsPage()) {
                 LabeledContent(system.localizedName) {
                     Text(coreName(for: system))
                         .foregroundStyle(.secondary)

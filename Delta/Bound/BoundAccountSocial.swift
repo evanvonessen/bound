@@ -271,7 +271,7 @@ struct BoundAccountSocialSettings: View {
                 .accessibilityIdentifier("bound.account-delete-retry")
             } else if account.session != nil {
                 NavigationLink {
-                    BoundUsernameSettings()
+                    BoundUsernameSettings().boundSettingsPage()
                 } label: {
                     LabeledContent("Username", value: profile.username ?? "Loading…")
                 }.accessibilityIdentifier("bound.account-username")

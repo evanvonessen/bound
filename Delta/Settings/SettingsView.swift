@@ -74,13 +74,40 @@ final class BoundSettingsHostingController: UIHostingController<SettingsView>, U
     }
 }
 
-final class BoundSettingsFooterVisibility: ObservableObject {
-    @Published var isVisible = true
+private struct BoundSettingsCloseActionKey: EnvironmentKey {
+    static let defaultValue: (() -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var boundSettingsCloseAction: (() -> Void)? {
+        get { self[BoundSettingsCloseActionKey.self] }
+        set { self[BoundSettingsCloseActionKey.self] = newValue }
+    }
+}
+
+private struct BoundSettingsPageModifier: ViewModifier {
+    @Environment(\.boundSettingsCloseAction) private var close
+
+    func body(content: Content) -> some View {
+        content.toolbar {
+            if let close {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", action: close)
+                        .accessibilityIdentifier("bound.settings-close")
+                }
+            }
+        }
+    }
+}
+
+extension View {
+    /// Each pushed page owns its native toolbar. Standalone screens keep their
+    /// existing dismissal controls when there is no shared Settings presenter.
+    func boundSettingsPage() -> some View { modifier(BoundSettingsPageModifier()) }
 }
 
 struct SettingsView: View {
     @StateObject private var model: BoundCompanionSettingsModel
-    @StateObject private var footerVisibility = BoundSettingsFooterVisibility()
     @State private var resetting = false
     @State private var resetFailed = false
     @State private var resetRevision = 0
@@ -110,17 +137,19 @@ struct SettingsView: View {
                                     Section { Button("Button placement") { edit(); close() } }
                                 }
                             }.navigationTitle("Controls").navigationBarTitleDisplayMode(.inline)
+                                .boundSettingsPage()
                         } label: {
                             SettingsRow(label: Text("Controls"), systemImage: "gamecontroller", color: .pink)
                         }.accessibilityIdentifier("bound.settings-controls")
                         NavigationLink {
-                            AudioSettingsView()
+                            AudioSettingsView().boundSettingsPage()
                         } label: {
                             SettingsRow(label: Text("Audio"), systemImage: "speaker.wave.2", color: .green)
                         }.accessibilityIdentifier("bound.settings-audio")
                         NavigationLink {
                             Form { BoundAccountSocialSettings(); DeltaSyncSettingsSection() }
                                 .navigationTitle("Account & Sync").navigationBarTitleDisplayMode(.inline)
+                                .boundSettingsPage()
                         } label: {
                             SettingsRow(label: Text("Account & Sync"), systemImage: "person.crop.circle", color: .indigo)
                         }.accessibilityIdentifier("bound.settings-account")
@@ -141,7 +170,7 @@ struct SettingsView: View {
                                 if !BoundFeatureVisibility.simplifiedSettings {
                                     Section("Emulation") {
                                         NavigationLink {
-                                            VideoSettingsView()
+                                            VideoSettingsView().boundSettingsPage()
                                         } label: {
                                             SettingsRow(label: Text("Video"), systemImage: "display", color: .teal)
                                         }
@@ -151,10 +180,11 @@ struct SettingsView: View {
                                 if !BoundFeatureVisibility.simplifiedSettings { CreditsSection() }
                                 #if DEBUG
                                 Section("Developer") {
-                                    NavigationLink("Advanced") { AdvancedSettingsView() }
+                                    NavigationLink("Advanced") { AdvancedSettingsView().boundSettingsPage() }
                                 }
                                 #endif
                             }.navigationTitle("About").navigationBarTitleDisplayMode(.inline)
+                                .boundSettingsPage()
                         } label: {
                             SettingsRow(label: Text("About"), systemImage: "info.circle", color: .cyan)
                         }.accessibilityIdentifier("bound.settings-about")
@@ -201,8 +231,9 @@ struct SettingsView: View {
                 .safeAreaPadding(.top, 8)
                 .navigationTitle("Settings")
                 .accessibilityIdentifier("bound.settings-root")
+                .boundSettingsPage()
             }
-            .environmentObject(footerVisibility)
+            .environment(\.boundSettingsCloseAction, close)
             .id(resetRevision)
             .alert("Unable to Reset Settings", isPresented: $resetFailed) {
                 Button("OK", role: .cancel) {}
@@ -220,25 +251,8 @@ struct SettingsView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-            // NavigationStack draws its bars and backgrounds into the side safe
-            // areas. Include those areas in its clipping bounds in landscape.
+            // Let navigation bars and backgrounds fill the side safe areas in landscape.
             .ignoresSafeArea(.container, edges: .horizontal)
-            // Reserve real layout space for Done. UIKit destinations that ignore
-            // safe areas must still end above the footer, including after rotation.
-            if footerVisibility.isVisible {
-                HStack {
-                    Spacer()
-                    Button("Done", action: close)
-                        .font(.body.weight(.semibold))
-                        .frame(minWidth: 64, minHeight: 44)
-                        .accessibilityIdentifier("bound.settings-close")
-                }
-                .padding(.horizontal, 16)
-                .background(.bar)
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("bound.settings-footer")
-            }
         }
     }
 
@@ -279,7 +293,7 @@ private struct ControlsSection: View
             BoundButtonGridSpacingSetting()
 
             NavigationLink {
-                ControllerSettingsView()
+                ControllerSettingsView().boundSettingsPage()
             } label: {
                 SettingsRow(label: Text("Controllers"), systemImage: "gamecontroller", color: .purple) {
                     if !gameControllerManager.connectedControllers.isEmpty
@@ -292,13 +306,13 @@ private struct ControlsSection: View
 
             if !BoundFeatureVisibility.simplifiedSettings {
             NavigationLink {
-                SkinSettingsView()
+                SkinSettingsView().boundSettingsPage()
             } label: {
                 SettingsRow(label: Text("Skins"), systemImage: "paintpalette", color: .pink)
             }
 
             NavigationLink {
-                TouchHapticsView()
+                TouchHapticsView().boundSettingsPage()
             } label: {
                 SettingsRow(label: Text("Touch & Haptics"), systemImage: "hand.tap", color: .red)
             }
@@ -349,7 +363,7 @@ private struct OnlineMultiplayerSection: View
     var body: some View {
         Section {
             NavigationLink {
-                OnlineMultiplayerView()
+                OnlineMultiplayerView().boundSettingsPage()
             } label: {
                 SettingsRow(label: Text("Online Multiplayer"), systemImage: "globe", color: .orange)
             }
@@ -371,7 +385,7 @@ struct OnlineMultiplayerView: View
         Form {
             Section {
                 NavigationLink {
-                    WFCServersView()
+                    WFCServersView().boundSettingsPage()
                 } label: {
                     LabeledContent {
                         if let serverName = preferredServerName
@@ -445,6 +459,7 @@ private struct DeltaSyncSettingsSection: View
             NavigationLink {
                 SyncingServicesViewController.ViewRepresentable()
                     .ignoresSafeArea(.container, edges: [.top, .horizontal])
+                    .boundSettingsPage()
             } label: {
                 SettingsRow(label: Text("Delta Sync"), systemImage: "arrow.triangle.2.circlepath", color: .indigo) {
                     if let name = syncingServiceName {
@@ -459,6 +474,7 @@ private struct DeltaSyncSettingsSection: View
                 NavigationLink {
                     SyncStatusViewController.ViewRepresentable()
                         .ignoresSafeArea(.container, edges: [.top, .horizontal])
+                        .boundSettingsPage()
                 } label: {
                     SettingsRow(label: Text("Sync Status"), systemImage: "checkmark.icloud", color: .indigo) {
                         if syncConflictsCount > 0
@@ -515,6 +531,7 @@ private struct PatreonSection: View
                 NavigationLink {
                     PatreonViewController.ViewRepresentable()
                         .ignoresSafeArea(.container, edges: [.top, .horizontal])
+                        .boundSettingsPage()
                 } label: {
                     SettingsRow(
                         label: Text(PurchaseManager.shared.isActivePatron
@@ -540,6 +557,7 @@ private struct DisplaySection: View
                 AltAppIconsViewController.ViewRepresentable()
                     .navigationBarTitleDisplayMode(.large)
                     .ignoresSafeArea(.container, edges: [.top, .horizontal])
+                    .boundSettingsPage()
             } label: {
                 SettingsRow(label: Text("App Icon"), systemImage: "square.grid.2x2", color: .blue)
             }
@@ -554,7 +572,7 @@ private struct CreditsSection: View
     var body: some View {
         Section("Credits") {
             NavigationLink {
-                ContributorsView()
+                ContributorsView().boundSettingsPage()
             } label: {
                 Text("Contributors")
             }
@@ -562,6 +580,7 @@ private struct CreditsSection: View
             NavigationLink {
                 LicensesViewController.ViewRepresentable()
                     .ignoresSafeArea(.container, edges: [.top, .horizontal])
+                    .boundSettingsPage()
             } label: {
                 Text("Software Licenses")
             }

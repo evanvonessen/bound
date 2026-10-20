@@ -65,10 +65,10 @@ struct BoundSourceAndLicenses: View {
             }
             Section("Licenses") {
                 NavigationLink("Software Licenses") {
-                    LicensesViewController.ViewRepresentable().ignoresSafeArea(.container, edges: [.top, .horizontal])
+                    LicensesViewController.ViewRepresentable().ignoresSafeArea(.container, edges: [.top, .horizontal]).boundSettingsPage()
                 }
                 ForEach(BoundSourceNotices.Document.allCases) { document in
-                    NavigationLink(document.title) { BoundLicenseDocumentView(document: document) }
+                    NavigationLink(document.title) { BoundLicenseDocumentView(document: document).boundSettingsPage() }
                         .accessibilityIdentifier("bound.license-" + document.rawValue)
                 }
             }

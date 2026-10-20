@@ -108,12 +108,12 @@ home: Controls, Audio, Account & Sync, and About.
 Context Menu Previews and Pause Menu Button Placement are in Controls. About uses concise
 source labels in Sources & Licenses while retaining attribution and bundled
 license documents. Audio opens its controls directly; About includes the Game
-Boy Advance core information. The shared screen has one navigation stack and one Done
-action. The Game Boy Advance controller mapping editor hides this footer while
-its Save and Back controls are available. Done and swipe dismissal run cleanup and close-time sync once; opening
-a detail page does neither. In-game Settings returns to the paused menu.
-The navigation area ends above the Done bar so long forms and embedded UIKit
-menus can scroll their last content fully into view in either orientation.
+Boy Advance core information. The shared screen has one navigation stack, with
+Done in each page's native top navigation bar. The Game Boy Advance controller
+mapping editor uses its own Save and Back controls without a duplicate Done.
+Done and swipe dismissal run cleanup and close-time sync once; opening a detail
+page does neither. In-game Settings returns to the paused menu. There is no
+bottom Done bar; long forms and embedded UIKit menus retain the full content area.
 
 `BoundCompanionSettingsModel` observes the existing preference stores without
 creating an emulator or sharing session. Library edits update an existing
@@ -197,6 +197,6 @@ Focused validation passed 65 integration tests and three Simulator UI flows.
 Coverage includes the ON/OFF toggle, two-step editing, game resizing and placement,
 drag-to-trash and drag-from-add, repeated snaps, horizontal and vertical equal
 spacing, saved layouts, reset behavior, and portrait touch controls. The GBA
-mapping editor keeps Save and Back while hiding the shared Done footer.
+mapping editor keeps Save and Back while hiding the shared Done button.
 An unsigned Release iPhone build passed. Physical controller behavior and haptic
 feel were not tested on a device; live network services were not exercised.

@@ -1294,24 +1294,28 @@ final class CompanionUITests: XCTestCase {
         XCUIDevice.shared.orientation = .landscapeLeft
         waitForFrame(app.buttons["bound.settings-close"]) { _ in app.frame.width > app.frame.height }
         assertLandscapeEdges("Settings")
+        assertSettingsCloseAtTop(in: app, navigationTitle: "Settings")
 
         element("bound.settings-audio", in: app).tap()
         XCTAssertTrue(app.navigationBars["Audio"].waitForExistence(timeout: 5))
         checkBackButton("Audio")
+        assertSettingsCloseAtTop(in: app, navigationTitle: "Audio")
         app.navigationBars["Audio"].buttons.firstMatch.tap()
 
         let about = element("bound.settings-about", in: app)
-        assertSettingsBottomContent(about, in: app, name: "Settings-edges-About-link")
+        assertSettingsContentVisible(about, in: app, name: "Settings-edges-About-link")
         about.tap()
         XCTAssertTrue(app.navigationBars["About"].waitForExistence(timeout: 5))
         checkBackButton("About")
+        assertSettingsCloseAtTop(in: app, navigationTitle: "About")
         XCUIDevice.shared.orientation = .landscapeRight
         waitForFrame(app.navigationBars["About"]) { _ in app.frame.width > app.frame.height }
         checkBackButton("About")
+        assertSettingsCloseAtTop(in: app, navigationTitle: "About")
         app.navigationBars["About"].buttons.firstMatch.tap()
 
         let audio = element("bound.settings-audio", in: app)
-        assertSettingsBottomContent(audio, in: app, name: "Settings-edges-Audio-link", searchTowardTop: true)
+        assertSettingsContentVisible(audio, in: app, name: "Settings-edges-Audio-link", searchTowardTop: true)
         audio.tap()
         XCTAssertTrue(app.navigationBars["Audio"].waitForExistence(timeout: 5))
         checkBackButton("Audio")
@@ -1340,20 +1344,24 @@ final class CompanionUITests: XCTestCase {
             }
 
             app.buttons["Settings"].tap()
+            assertSettingsCloseAtTop(in: app, navigationTitle: "Settings")
             let audioLink = element("bound.settings-audio", in: app)
             XCTAssertTrue(audioLink.waitForExistence(timeout: 5))
             audioLink.tap()
             XCTAssertTrue(app.navigationBars["Audio"].waitForExistence(timeout: 5),
                           "Audio should open directly from the Settings home.")
+            assertSettingsCloseAtTop(in: app, navigationTitle: "Audio")
             let pauseOtherAudio = app.switches["Pause Other Audio"]
-            assertSettingsBottomContent(pauseOtherAudio, in: app, name: "\(label)-Audio-last-row")
+            assertSettingsContentVisible(pauseOtherAudio, in: app, name: "\(label)-Audio-last-row")
             back(from: "Audio")
 
             let aboutLink = element("bound.settings-about", in: app)
-            assertSettingsBottomContent(aboutLink, in: app, name: "\(label)-Home-About")
+            assertSettingsContentVisible(aboutLink, in: app, name: "\(label)-Home-About")
             aboutLink.tap()
+            XCTAssertTrue(app.navigationBars["About"].waitForExistence(timeout: 5))
+            assertSettingsCloseAtTop(in: app, navigationTitle: "About")
             let gbaCore = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Game Boy Advance")).firstMatch
-            assertSettingsBottomContent(gbaCore, in: app, name: "\(label)-About-GBA-core")
+            assertSettingsContentVisible(gbaCore, in: app, name: "\(label)-About-GBA-core")
             gbaCore.tap()
             XCTAssertTrue(app.navigationBars["Game Boy Advance"].waitForExistence(timeout: 5),
                           "About should link directly to the Game Boy Advance core information.")
@@ -1361,36 +1369,36 @@ final class CompanionUITests: XCTestCase {
             back(from: "Game Boy Advance")
 
             let rulesLink = element("bound.rules-and-contact-link", in: app)
-            assertSettingsBottomContent(rulesLink, in: app, name: "\(label)-About-Rules-and-Contact")
+            assertSettingsContentVisible(rulesLink, in: app, name: "\(label)-About-Rules-and-Contact")
 
             let sourceLink = element("bound.source-and-licenses-link", in: app)
-            assertSettingsBottomContent(sourceLink, in: app, name: "\(label)-About-source-link", searchTowardTop: true)
+            assertSettingsContentVisible(sourceLink, in: app, name: "\(label)-About-source-link", searchTowardTop: true)
             sourceLink.tap()
             let lastNotice = element("bound.license-notesFont", in: app)
-            assertSettingsBottomContent(lastNotice, in: app, name: "\(label)-Source-last-notice")
-            let softwareLicenses = app.buttons["Software licenses"]
-            assertSettingsBottomContent(softwareLicenses, in: app, name: "\(label)-Software-Licenses-link", searchTowardTop: true)
+            assertSettingsContentVisible(lastNotice, in: app, name: "\(label)-Source-last-notice")
+            let softwareLicenses = app.buttons["Software Licenses"]
+            assertSettingsContentVisible(softwareLicenses, in: app, name: "\(label)-Software-Licenses-link", searchTowardTop: true)
             softwareLicenses.tap()
             let licenseText = app.textViews["bound.software-licenses-text"]
             XCTAssertTrue(licenseText.waitForExistence(timeout: 10))
             let lastLicenseLine = licenseText.textViews["Delta uses OpenVGDB to provide automatic artwork for imported games."]
-            assertSettingsBottomContent(lastLicenseLine, in: app, name: "\(label)-UIKit-Software-Licenses-bottom")
-            assertSettingsElementAboveDone(licenseText, in: app)
+            assertSettingsContentVisible(lastLicenseLine, in: app, name: "\(label)-UIKit-Software-Licenses-bottom")
+            assertSettingsCloseAtTop(in: app)
             app.buttons["bound.settings-close"].tap()
             XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
             app.buttons["Settings"].tap()
             let controlsLink = element("bound.settings-controls", in: app)
             XCTAssertTrue(controlsLink.waitForExistence(timeout: 5))
-            assertSettingsBottomContent(controlsLink, in: app, name: "\(label)-Home-Controls")
+            assertSettingsContentVisible(controlsLink, in: app, name: "\(label)-Home-Controls")
             controlsLink.tap()
             XCTAssertTrue(app.navigationBars["Controls"].waitForExistence(timeout: 5))
-            let previews = app.switches["bound.context-menu-previews"]
-            XCTAssertTrue(previews.waitForExistence(timeout: 5))
-            let pausePlacement = element("bound.pause-menu-button-placement", in: app)
-            XCTAssertTrue(pausePlacement.waitForExistence(timeout: 5))
+            assertSettingsCloseAtTop(in: app, navigationTitle: "Controls")
             XCTAssertTrue(app.switches["bound.controller-mode-enabled"].exists)
             XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
-            assertSettingsElementAboveDone(previews, in: app)
+            let previews = app.switches["bound.context-menu-previews"]
+            assertSettingsContentVisible(previews, in: app, name: "\(label)-Controls-Context-Menu-Previews")
+            let pausePlacement = element("bound.pause-menu-button-placement", in: app)
+            assertSettingsContentVisible(pausePlacement, in: app, name: "\(label)-Controls-Pause-Menu-Placement")
         }
 
         checkBottomScreens(orientation: orientation, label: orientation.isLandscape ? "Landscape" : "Portrait")
@@ -2669,10 +2677,9 @@ final class CompanionUITests: XCTestCase {
         }
         func reveal(_ target: XCUIElement, towardTop: Bool = false) {
             for _ in 0..<24 {
-                let footer = element("bound.settings-footer", in: app)
                 let navigation = app.navigationBars["Interface & Companion"]
                 if target.exists && target.isHittable && target.frame.minY >= navigation.frame.maxY &&
-                    target.frame.maxY <= footer.frame.minY { return }
+                    target.frame.maxY <= app.frame.maxY - 8 { return }
                 dragSettingsContent(towardTop: towardTop, in: app)
             }
             XCTAssertTrue(target.isHittable)
@@ -2817,7 +2824,7 @@ final class CompanionUITests: XCTestCase {
         app.terminate()
     }
 
-    func testGBAGamepadEditorHidesAndRestoresSharedSettingsDoneFooter() throws {
+    func testGBAGamepadEditorHidesAndRestoresSharedTopSettingsDone() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--bound-ui-no-animations", "--bound-ui-controller-fixture"]
         app.launch()
@@ -2830,6 +2837,7 @@ final class CompanionUITests: XCTestCase {
         let controllers = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Controllers")).firstMatch
         XCTAssertTrue(controllers.waitForExistence(timeout: 5)); controllers.tap()
         XCTAssertTrue(app.navigationBars["Controllers"].waitForExistence(timeout: 5))
+        assertSettingsCloseAtTop(in: app, navigationTitle: "Controllers")
 
         let player = app.staticTexts["Player 2"].firstMatch
         XCTAssertTrue(player.waitForExistence(timeout: 5)); player.tap()
@@ -2841,15 +2849,15 @@ final class CompanionUITests: XCTestCase {
         gba.tap()
         XCTAssertTrue(app.navigationBars["Game Boy Advance"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["bound.settings-close"].exists,
-                       "GBA mapping uses its Save and navigation Back controls without the shared Done footer.")
+                       "GBA mapping uses its Save and navigation Back controls without a redundant shared Done.")
         XCTAssertFalse(element("bound.settings-footer", in: app).exists)
         XCTAssertTrue(app.buttons["Save"].exists)
         screenshot("GBA-Controller-Mapping-Without-Shared-Done")
 
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(app.buttons["bound.settings-close"].waitForExistence(timeout: 5),
-                      "Back restores the shared Done footer after leaving GBA mapping.")
-        XCTAssertTrue(element("bound.settings-footer", in: app).exists)
+                      "Back restores the shared top-bar Done after leaving GBA mapping.")
+        assertSettingsCloseAtTop(in: app)
     }
 
     func testControllerModeArrangeViewsUsesTwoPhasesAndRestoresRemovedButtons() throws {
@@ -3063,6 +3071,7 @@ final class CompanionUITests: XCTestCase {
             XCTAssertTrue(accountSettings.waitForExistence(timeout: 10))
             accountSettings.tap()
             XCTAssertTrue(app.navigationBars["Account & Sync"].waitForExistence(timeout: 5))
+            assertSettingsCloseAtTop(in: app, navigationTitle: "Account & Sync")
 
             // This QA check must never sign out a saved account or alter its state.
             if app.descendants(matching: .any).matching(identifier: "bound.account-username").firstMatch.exists ||
@@ -4547,28 +4556,46 @@ final class CompanionUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 
-    private func assertSettingsBottomContent(_ target: XCUIElement, in app: XCUIApplication, name: String,
-                                             searchTowardTop: Bool = false) {
+    private func assertSettingsCloseAtTop(in app: XCUIApplication, navigationTitle: String? = nil,
+                                          file: StaticString = #filePath, line: UInt = #line) {
         let close = app.buttons["bound.settings-close"]
-        XCTAssertTrue(close.waitForExistence(timeout: 5))
-        let footer = element("bound.settings-footer", in: app)
-        XCTAssertTrue(footer.waitForExistence(timeout: 5))
+        XCTAssertTrue(close.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertFalse(element("bound.settings-footer", in: app).exists,
+                        "Settings should not render a bottom Done footer.", file: file, line: line)
+
+        let navigationBar: XCUIElement
+        if let navigationTitle {
+            navigationBar = app.navigationBars[navigationTitle]
+        } else {
+            navigationBar = app.navigationBars.allElementsBoundByIndex
+                .filter { $0.isHittable }.last ?? app.navigationBars.firstMatch
+        }
+        XCTAssertTrue(navigationBar.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(close.isHittable, "Top-bar Done must remain tappable.", file: file, line: line)
+        XCTAssertTrue(navigationBar.frame.intersects(close.frame),
+                      "Done belongs in the active native navigation bar.", file: file, line: line)
+        XCTAssertLessThan(close.frame.midY, app.frame.minY + app.frame.height * 0.20,
+                          "Done should remain at the top of the settings window.", file: file, line: line)
+    }
+
+    private func assertSettingsContentVisible(_ target: XCUIElement, in app: XCUIApplication, name: String,
+                                              searchTowardTop: Bool = false) {
+        assertSettingsCloseAtTop(in: app)
         for _ in 0..<30 {
             let navigationBottom = app.navigationBars.allElementsBoundByIndex
                 .filter { $0.isHittable }.map { $0.frame.maxY }.max() ?? app.frame.minY
             if target.exists && target.isHittable && target.frame.minY >= navigationBottom &&
-                target.frame.maxY <= min(app.frame.maxY, footer.frame.minY) { break }
+                target.frame.maxY <= app.frame.maxY - 8 { break }
             dragSettingsContent(towardTop: target.exists ? target.frame.minY < navigationBottom : searchTowardTop, in: app)
         }
         screenshot(name)
-        assertSettingsElementAboveDone(target, in: app)
+        assertSettingsElementVisible(target, in: app)
     }
 
     private func dragSettingsContent(towardTop: Bool, in app: XCUIApplication) {
-        // Form uses different accessibility container types across OS versions.
-        // Drag the visible content between its navigation bar and Done instead.
+        // Drag the visible content between the native navigation bar and the screen's bottom safe area.
         let frame = app.frame
-        let bottom = element("bound.settings-footer", in: app).frame.minY
+        let bottom = frame.maxY - 16
         let navigationBottom = app.navigationBars.allElementsBoundByIndex
             .filter { $0.frame.intersects(frame) }.map { $0.frame.maxY }.max() ?? frame.minY
         let top = min(navigationBottom, bottom - 44)
@@ -4580,25 +4607,22 @@ final class CompanionUITests: XCTestCase {
         start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
     }
 
-    private func assertSettingsElementAboveDone(_ target: XCUIElement, in app: XCUIApplication,
-                                                 file: StaticString = #filePath, line: UInt = #line) {
-        let close = app.buttons["bound.settings-close"]
-        let footer = element("bound.settings-footer", in: app)
-        XCTAssertTrue(close.exists, file: file, line: line)
-        XCTAssertTrue(footer.exists, file: file, line: line)
+    private func assertSettingsElementVisible(_ target: XCUIElement, in app: XCUIApplication,
+                                              file: StaticString = #filePath, line: UInt = #line) {
+        let navigationBottom = app.navigationBars.allElementsBoundByIndex
+            .filter { $0.isHittable }.map { $0.frame.maxY }.max() ?? app.frame.minY
         XCTAssertTrue(target.exists, file: file, line: line)
-        XCTAssertTrue(target.isHittable, "The last Settings content must remain hittable above Done.", file: file, line: line)
-        XCTAssertGreaterThanOrEqual(target.frame.minY, app.frame.minY, file: file, line: line)
-        XCTAssertLessThanOrEqual(target.frame.maxY, min(app.frame.maxY, footer.frame.minY),
-                                 "The last Settings content must fit entirely above the Done footer.", file: file, line: line)
+        XCTAssertTrue(target.isHittable, "Settings content must remain hittable below the navigation bar.", file: file, line: line)
+        XCTAssertGreaterThanOrEqual(target.frame.minY, navigationBottom - 1, file: file, line: line)
+        XCTAssertLessThanOrEqual(target.frame.maxY, app.frame.maxY,
+                                 "Settings content must remain inside the app window.", file: file, line: line)
     }
 
     // Short Form drags avoid jumping past a lazily materialized row in landscape.
     private func scrollToSetting(_ target: XCUIElement, in app: XCUIApplication, fullyVisible: Bool = true) {
         let form = app.collectionViews.firstMatch
         for _ in 0..<40 {
-            let close = app.buttons["bound.settings-close"]
-            let bottom = close.exists ? min(form.frame.maxY - 24, close.frame.minY - 8) : form.frame.maxY - 24
+            let bottom = form.frame.maxY - 24
             if target.exists && target.isHittable && (!fullyVisible ||
                 target.frame.minY >= form.frame.minY + 8 && target.frame.maxY <= bottom) { return }
             let scrollDown = target.exists && target.frame.midY < form.frame.midY

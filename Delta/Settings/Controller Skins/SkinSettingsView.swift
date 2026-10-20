@@ -23,7 +23,7 @@ struct SkinSettingsView: View
         Form {
             Section {
                 ForEach(System.registeredSystems, id: \.self) { system in
-                    NavigationLink(destination: PreferredControllerSkinsViewController.ViewRepresentable(system: system).ignoresSafeArea()) {
+                    NavigationLink(destination: PreferredControllerSkinsViewController.ViewRepresentable(system: system).ignoresSafeArea().boundSettingsPage()) {
                         Text(system.localizedName)
                     }
                 }

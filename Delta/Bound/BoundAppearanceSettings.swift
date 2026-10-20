@@ -64,7 +64,7 @@ struct BoundAppearanceSettings: View {
                         #endif
             }
             }
-            NavigationLink("Sources & Licenses") { BoundSourceAndLicenses() }
+            NavigationLink("Sources & Licenses") { BoundSourceAndLicenses().boundSettingsPage() }
                 .accessibilityIdentifier("bound.source-and-licenses-link")
         }
         }
