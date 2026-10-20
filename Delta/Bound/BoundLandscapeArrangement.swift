@@ -550,8 +550,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     func aboveButtons(for content: BoundPiPContent) -> Bool { state(for: content).aboveButtons }
 
     /// Layer selection is available only while arranging Options 6 and 7.
-    /// Choosing either layer also allows the shared reference panel to overlap
-    /// native and companion controls instead of being moved away by the solver.
+    /// Layer arrows only choose whether a panel draws above or below controls.
     func setAboveButtons(_ above: Bool, for content: BoundPiPContent) {
         guard editing, multiview else { return }
         var value = displayedState(for: content)
@@ -575,6 +574,14 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         selectionBeforeArrangement = referenceContent
         selected = contents.isEmpty ? .friend : referenceContent
         draft = saved
+        if multiview {
+            // Editing is an explicit placement choice. Keep the displayed
+            // geometry, but allow dragging/resizing over controls immediately,
+            // without requiring a layer change first.
+            var reference = displayedState(for: referenceContent)
+            reference.allowsButtonOverlap = true
+            setDraft(reference, for: referenceContent)
+        }
         draftButtons = savedButtons
         // Freeze every button's current fallback before any drag can change
         // the native Menu/cycle-button layout used to derive those defaults.

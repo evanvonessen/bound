@@ -102,6 +102,7 @@ enum BoundControllerNavigationCommand: String, CaseIterable, Sendable {
 
 struct BoundControllerNavigationEvent {
     static let notificationName = Notification.Name("BoundControllerNavigationCommand")
+    static let hideMultiviewNotificationName = Notification.Name("BoundControllerNavigationHideMultiview")
     static let gameIDKey = "gameID"
     static let contentKey = "content"
     static let commandKey = "command"
@@ -129,6 +130,18 @@ struct BoundControllerNavigationEvent {
                 NotificationCenter.default.post(name: notificationName, object: nil, userInfo: userInfo)
             }
         }
+    }
+
+    static func postHideMultiview(gameID: String, content: BoundPiPContent) {
+        NotificationCenter.default.post(name: hideMultiviewNotificationName, object: nil,
+                                        userInfo: [gameIDKey: gameID, contentKey: content.rawValue])
+    }
+
+    static func hideMultiviewRequestMatches(_ notification: Notification, gameID: String,
+                                            content: BoundPiPContent, available: Bool) -> Bool {
+        guard available, let info = notification.userInfo else { return false }
+        return info[gameIDKey] as? String == gameID
+            && info[contentKey] as? String == content.rawValue
     }
 }
 

@@ -1808,6 +1808,9 @@ struct BoundRRDexView: View {
                 moveSearchFocused = false
             } else {
                 controllerDexFocus = nil
+                if BoundControllerMultiviewPreferences().isEnabled {
+                    BoundControllerNavigationEvent.postHideMultiview(gameID: gameID, content: .dex)
+                }
             }
         }
     }

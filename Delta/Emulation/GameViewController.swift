@@ -43,6 +43,35 @@ private extension DeltaCore.ControllerSkin
         return hasTouchScreen
     }
 }
+/// Reuses the stock Menu hit frame while UIKit repeats layout for unchanged skin geometry.
+struct BoundStockMenuDefaultFrameCache {
+    struct Key: Equatable {
+        let skinIdentity: ObjectIdentifier?
+        let skinIdentifier: String
+        let skinName: String
+        let gameType: String
+        let debugMode: Bool
+        let traits: DeltaCore.ControllerSkin.Traits
+        let sourceFrame: CGRect
+        let contentInsets: UIEdgeInsets
+        let gutter: CGRect?
+        let controlLayout: BoundControlLayout
+        let canvasSize: CGSize
+    }
+
+    private var cachedKey: Key?
+    private var cachedFrame: CGRect?
+    private var hasCachedValue = false
+
+    mutating func frame(for key: Key, compute: () -> CGRect?) -> CGRect? {
+        if hasCachedValue, cachedKey == key { return cachedFrame }
+        let frame = compute()
+        cachedKey = key
+        cachedFrame = frame
+        hasCachedValue = true
+        return frame
+    }
+}
 
 private extension GameViewController
 {
@@ -129,6 +158,7 @@ class GameViewController: DeltaCore.GameViewController
         let contrast: UIAccessibilityContrast
     }
     private var boundControlConfiguration: BoundControlConfiguration?
+    private var boundStockMenuDefaultFrameCache = BoundStockMenuDefaultFrameCache()
     private var boundAppliedSkinIdentifier: String?
     private let boundPanelActions = BoundPanelActionRouter()
     private let boundMultiviewRepeater = BoundMultiviewInputRepeater()
@@ -2900,9 +2930,8 @@ extension GameViewController {
         let source = nativeBoundControllerFrame(base: base)
         let insets = nativeBoundControllerInsets(base: base)
         let gutter = nativeBoundLandscapeControlGutter(base: base)
-        let stock = BoundStockControllerSkin(base: base, canvasSize: source.size, contentInsets: insets, boundLandscapeGutter: gutter)
         let defaultMenu = boundControllerModeButtonDefaults()?[.menu]
-            ?? boundTouchMenuFrame(stock: stock, layout: layout, source: source)
+            ?? cachedBoundTouchMenuFrame(base: base, layout: layout, source: source, insets: insets, gutter: gutter)
         let movableMenu = defaultMenu.flatMap {
             boundCompanion.controllerMenuFrame(defaultFrame: $0, canvas: view.bounds.inset(by: view.safeAreaInsets))
         }
@@ -2918,6 +2947,7 @@ extension GameViewController {
         controllerLayoutBounds = controllerMenuFrame != nil || !layout.positions.isEmpty ? view.bounds : nil
         controllerLayoutSize = controllerMenuFrame != nil ? view.bounds.size : layout.positions.isEmpty && !minimal ? nil : nativeBoundControllerSize()
         let placesTouchControls = !layout.positions.isEmpty || (!mode && controllerMenuFrame != nil)
+        let stock = BoundStockControllerSkin(base: base, canvasSize: source.size, contentInsets: insets, boundLandscapeGutter: gutter)
         var proposed: ControllerSkinProtocol = placesTouchControls
             ? BoundPlacedControllerSkin(base: stock, layout: layout, canvasSize: view.bounds.size, sourceFrame: source,
                                         menuFrame: mode ? nil : controllerMenuFrame)
@@ -3005,11 +3035,25 @@ extension GameViewController {
               let current = controllerView.controllerSkin else { return nil }
         let base = unwrappedBoundControllerSkin(current)
         let source = nativeBoundControllerFrame(base: base)
-        let stock = BoundStockControllerSkin(base: base, canvasSize: source.size,
-            contentInsets: nativeBoundControllerInsets(base: base),
-            boundLandscapeGutter: nativeBoundLandscapeControlGutter(base: base))
+        let insets = nativeBoundControllerInsets(base: base)
+        let gutter = nativeBoundLandscapeControlGutter(base: base)
         let layout = BoundControlPlacementStore.shared.read(skin: base.identifier, landscape: true)
-        return boundTouchMenuFrame(stock: stock, layout: layout, source: source)
+        return cachedBoundTouchMenuFrame(base: base, layout: layout, source: source, insets: insets, gutter: gutter)
+    }
+    private func cachedBoundTouchMenuFrame(base: ControllerSkinProtocol, layout: BoundControlLayout,
+                                           source: CGRect, insets: UIEdgeInsets, gutter: CGRect?) -> CGRect? {
+        guard let traits = controllerView.controllerSkinTraits else { return nil }
+        let isKnownValueSkin = base is DeltaCore.ControllerSkin || base is DeltaCore.TouchControllerSkin
+        let identity: ObjectIdentifier? = isKnownValueSkin ? nil : ObjectIdentifier(base as AnyObject)
+        let key = BoundStockMenuDefaultFrameCache.Key(skinIdentity: identity, skinIdentifier: base.identifier,
+            skinName: base.name, gameType: String(describing: base.gameType), debugMode: base.isDebugModeEnabled,
+            traits: traits, sourceFrame: source, contentInsets: insets, gutter: gutter,
+            controlLayout: layout, canvasSize: view.bounds.size)
+        return boundStockMenuDefaultFrameCache.frame(for: key) {
+            let stock = BoundStockControllerSkin(base: base, canvasSize: source.size,
+                contentInsets: insets, boundLandscapeGutter: gutter)
+            return boundTouchMenuFrame(stock: stock, layout: layout, source: source)
+        }
     }
     private func boundTouchMenuFrame(stock: ControllerSkinProtocol, layout: BoundControlLayout, source: CGRect) -> CGRect? {
         guard let traits = controllerView.controllerSkinTraits,

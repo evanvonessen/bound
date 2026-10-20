@@ -169,6 +169,59 @@ final class CompanionControllerNavigationTests: XCTestCase {
                        "Back closes the picker without changing the committed team.")
     }
 
+    func testRootBackHidesMultiviewAfterDexAndBossChildDestinationsClose() async throws {
+        let multiviewPreference = BoundControllerMultiviewPreferences()
+        let previousPreference = multiviewPreference.isEnabled
+        multiviewPreference.isEnabled = true
+        defer { multiviewPreference.isEnabled = previousPreference }
+
+        var hideRequests: [(String, String)] = []
+        let observer = NotificationCenter.default.addObserver(
+            forName: BoundControllerNavigationEvent.hideMultiviewNotificationName,
+            object: nil, queue: .main
+        ) { notification in
+            let info = notification.userInfo ?? [:]
+            guard let gameID = info[BoundControllerNavigationEvent.gameIDKey] as? String,
+                  let content = info[BoundControllerNavigationEvent.contentKey] as? String else { return }
+            hideRequests.append((gameID, content))
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        await BoundReferenceCatalogStore.shared.loadIfNeeded()
+        let dexGameID = "CTRLBACKDEX_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let dex = try await mount(BoundRRDexView(gameID: dexGameID, presentationChanged: { _ in }))
+        defer { unmount(dex) }
+        BoundControllerNavigationEvent.post(command: .select, gameID: dexGameID, content: .dex)
+        let dexPickerOpened = await settle(dex, until: { dex.host.presentedViewController != nil })
+        XCTAssertTrue(dexPickerOpened, "The Dex child picker should open before checking B behavior.")
+        BoundControllerNavigationEvent.post(command: .back, gameID: dexGameID, content: .dex)
+        let dexPickerClosed = await settle(dex, until: { dex.host.presentedViewController == nil })
+        XCTAssertTrue(dexPickerClosed, "The first B should close the Dex picker.")
+        XCTAssertTrue(hideRequests.isEmpty, "Closing a child screen must not hide the multiview.")
+        BoundControllerNavigationEvent.post(command: .back, gameID: dexGameID, content: .dex)
+        let dexRootClosed = await settle(dex, until: {
+            hideRequests.contains { $0.0 == dexGameID && $0.1 == BoundPiPContent.dex.rawValue }
+        })
+        XCTAssertTrue(dexRootClosed, "B on the Dex root should request that multiview to close.")
+
+        let bossGameID = "CTRLBACKBOSS_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let bosses = try await mount(BoundBossGuideView(gameID: bossGameID, presentationChanged: { _ in }))
+        defer { unmount(bosses) }
+        BoundControllerNavigationEvent.post(command: .details, gameID: bossGameID, content: .bosses)
+        let bossDetailOpened = await settle(bosses, until: { bosses.host.presentedViewController != nil })
+        XCTAssertTrue(bossDetailOpened, "The Boss lineup detail should open before checking B behavior.")
+        BoundControllerNavigationEvent.post(command: .back, gameID: bossGameID, content: .bosses)
+        let bossDetailClosed = await settle(bosses, until: { bosses.host.presentedViewController == nil })
+        XCTAssertTrue(bossDetailClosed, "The first B should close the Boss lineup detail.")
+        XCTAssertEqual(hideRequests.count, 1, "Closing a child screen must not also hide the multiview.")
+        BoundControllerNavigationEvent.post(command: .back, gameID: bossGameID, content: .bosses)
+        let bossRootClosed = await settle(bosses, until: {
+            hideRequests.contains { $0.0 == bossGameID && $0.1 == BoundPiPContent.bosses.rawValue }
+        })
+        XCTAssertTrue(bossRootClosed, "B on the Boss root should request that multiview to close.")
+        XCTAssertEqual(hideRequests.map(\.1), [BoundPiPContent.dex.rawValue, BoundPiPContent.bosses.rawValue])
+    }
+
     func testBossMultiviewDirectionalFocusTrainerLineupAndPicker() async throws {
         await BoundReferenceCatalogStore.shared.loadIfNeeded()
         let catalog = try XCTUnwrap(BoundReferenceCatalogStore.shared.bosses)

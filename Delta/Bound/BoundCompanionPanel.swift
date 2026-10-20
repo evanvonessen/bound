@@ -331,6 +331,15 @@ final class BoundCompanionCoordinator {
             }
             self?.refreshControllerMultiviewRouting()
         })
+        observers.append(NotificationCenter.default.addObserver(forName: BoundControllerNavigationEvent.hideMultiviewNotificationName, object: nil, queue: .main) { [weak self] notification in
+            guard let self, let content = self.controllerReferenceContent,
+                  BoundControllerNavigationEvent.hideMultiviewRequestMatches(
+                    notification, gameID: self.gameID, content: content,
+                    available: self.automaticControllerMultiviewAvailable
+                  ) else { return }
+            if self.landscapeArrangement.active { self.landscapeArrangement.toggleReference() }
+            else if self.landscapeCompanion.active { self.landscapeCompanion.hideReference() }
+        })
         observers.append(NotificationCenter.default.addObserver(forName: Settings.didResetNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
             self.cancelInteractions()
@@ -1034,7 +1043,14 @@ final class BoundCompanionCoordinator {
             : controllerNavigationAvailable
         guard isAvailable else { return }
         if let command = action.navigationCommand {
-            guard let content = controllerReferenceContent, content == .dex || content == .bosses else { return }
+            guard let content = controllerReferenceContent else { return }
+            if command == .back, content == .types,
+               BoundControllerMultiviewPreferences().isEnabled {
+                if landscapeArrangement.active { landscapeArrangement.toggleReference() }
+                else if landscapeCompanion.active { landscapeCompanion.hideReference() }
+                return
+            }
+            guard content == .dex || content == .bosses else { return }
             BoundControllerNavigationEvent.post(command: command, gameID: gameID, content: content)
             return
         }

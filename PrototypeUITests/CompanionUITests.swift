@@ -2851,6 +2851,18 @@ final class CompanionUITests: XCTestCase {
         XCTAssertFalse(app.buttons["bound.settings-close"].exists,
                        "GBA mapping uses its Save and navigation Back controls without a redundant shared Done.")
         XCTAssertFalse(element("bound.settings-footer", in: app).exists)
+        let bindingRows = [(input: "a", action: "A"),
+                           (input: "b", action: "B"),
+                           (input: "leftTrigger", action: "Select"),
+                           (input: "rightTrigger", action: "Start"),
+                           (input: "share", action: "System Capture")]
+        for (input, expectedAction) in bindingRows {
+            let row = app.buttons.matching(identifier: "bound.controller-mapping.\(input)").firstMatch
+            scrollToSetting(row, in: app)
+            XCTAssertTrue(row.waitForExistence(timeout: 5), "The \(input) controller binding row should be visible.")
+            XCTAssertEqual(row.value as? String, expectedAction,
+                           "The \(input) row should expose its effective default action.")
+        }
         XCTAssertTrue(app.buttons["Save"].exists)
         screenshot("GBA-Controller-Mapping-Without-Shared-Done")
 
@@ -2905,6 +2917,20 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(snapping.value as? String, "On", "The distance grid is enabled by default in Controller Mode Off.")
         XCTAssertTrue(spacing.waitForExistence(timeout: 5), "Controller Mode Off uses the same visible spacing slider.")
         XCTAssertEqual(spacing.value as? String, "48 points", "The arrange window uses the spacing configured in Controls.")
+
+        let multiview = element("bound.landscape7-move.dex", in: app)
+        let menuHandle = element("bound.controller-button-move.menu", in: app)
+        XCTAssertTrue(multiview.waitForExistence(timeout: 5))
+        XCTAssertTrue(menuHandle.waitForExistence(timeout: 5))
+        let panelStart = multiview.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        panelStart.press(forDuration: 0.1, thenDragTo: panelStart.withOffset(
+            CGVector(dx: menuHandle.frame.midX - multiview.frame.midX,
+                     dy: menuHandle.frame.midY - multiview.frame.midY)))
+        XCTAssertTrue(multiview.frame.intersects(menuHandle.frame),
+                      "Multiview can overlap Menu on the first drag without pressing a layer arrow.")
+        XCTAssertTrue(app.buttons["bound.landscape7-layer-front.dex"].isSelected,
+                      "Dragging over buttons must preserve the selected layer.")
+        screenshot("Landscape-Controller-Off-Multiview-Overlap-Without-Layer-Change")
 
         let buttonNames = ["menu", "friend", "multiview"]
         let gridSpacing: CGFloat = 48

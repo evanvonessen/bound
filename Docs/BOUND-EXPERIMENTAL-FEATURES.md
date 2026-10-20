@@ -25,6 +25,10 @@ or resize it using its corner handle. Full Size and Centered snaps show a cyan
 guide or label with haptic feedback. **Next** opens companion view and button
 placement; **Done** saves both steps. Cancel or an interrupted editing session
 discards both steps. Controller Mode on and off retain separate arrangements.
+Multiview can overlap native and companion buttons immediately while arranging;
+the layer arrows only choose whether the panel appears in front of or behind them.
+Entering the editor preserves its current frame and layer, and Cancel restores
+the previous placement.
 
 In landscape with Controller Mode on or off, drag Friend or Multiview onto the trash target to remove its
 button. The adjacent **+** opens a tray: tap a button to restore its position or
@@ -63,6 +67,11 @@ Select opens a Pokémon or boss chooser, previous/next changes its highlighted
 candidate, and Select confirms it. Back closes the chooser or detail view.
 Reset Settings to Default turns navigation off and resets custom mappings.
 
+With **Allow Controller to Control Multiview** enabled, B backs out of open Dex
+and Boss subviews first, then hides Multiview from the main Dex, Docs, or Types
+screen and immediately returns controller input to gameplay. This behavior is
+limited to the visible landscape Multiview.
+
 **Previous Multiview Tab** and **Next Multiview Tab** are separate controller
 bindings available alongside Toggle Multiview, without enabling Controller View
 Navigation. They follow the visible tab order and wrap from either end to the
@@ -70,6 +79,7 @@ other. Existing saved previous/next bindings retain their identifiers. An open
 Dex or Boss sheet dismisses before the tab changes so gameplay resumes normally.
 
 Controller mapping exposes Xbox Share and left/right thumbstick clicks (L3/R3).
+Each mapping row displays its effective action, including an unchanged default.
 **None** is an explicit saved binding, distinct from **Default**. **Menu** opens
 Bound's pause menu. The physical Home button also offers **Overlay**, which
 leaves its Apple system gesture enabled. Share keeps its system capture behavior

@@ -95,7 +95,8 @@ private class ControlsEditor
         }
     }
     
-    // Resolve standard inputs to the system's game input before comparing or displaying. (Returns AnyInput so the Picker can use it for selection.)
+    // Normalize standard actions to this system's game buttons for comparison and display.
+    // A nil input remains nil so callers can distinguish an unassigned mapping from a default.
     func normalizedInput(_ input: Input?) -> AnyInput?
     {
         guard let input else { return nil }
@@ -212,6 +213,15 @@ private struct MFiMappingSections: View
 }
 
 // MARK: - Keyboard -
+
+enum ControllerBindingDisplayLabel {
+    static func value(selected: AnyInput?, defaultInput: AnyInput?, unassignedLabel: String? = nil) -> String {
+        selected?.localizedDisplayName
+            ?? defaultInput?.localizedDisplayName
+            ?? unassignedLabel
+            ?? ActionInput.none.localizedDisplayName
+    }
+}
 
 private struct KeyboardMappingSections: View
 {
@@ -334,6 +344,33 @@ private struct InputMappingRow: View
         editor.defaultMapping.input(forControllerInput: controllerInput)
     }
 
+    private var normalizedDefaultInput: AnyInput? {
+        editor.normalizedInput(defaultInput)
+    }
+
+    private var unassignedBindingName: String? {
+        guard controllerInput.type == .controller(.mfi),
+              controllerInput.stringValue == MFiGameController.Input.share.stringValue
+        else { return nil }
+        return String(localized: "System Capture")
+    }
+
+    private var defaultBindingName: String {
+        ControllerBindingDisplayLabel.value(
+            selected: nil,
+            defaultInput: normalizedDefaultInput,
+            unassignedLabel: unassignedBindingName
+        )
+    }
+
+    private var effectiveBindingName: String {
+        ControllerBindingDisplayLabel.value(
+            selected: mappedInput.wrappedValue,
+            defaultInput: normalizedDefaultInput,
+            unassignedLabel: unassignedBindingName
+        )
+    }
+
     private var controllerInputName: String {
         isPhysicalHomeButton ? String(localized: "Home / Overlay") : controllerInput.localizedDisplayName
     }
@@ -349,7 +386,7 @@ private struct InputMappingRow: View
                 } label: {
                     Label(controllerInputName, systemImage: controllerInput.sfSymbolName)
                 } currentValueLabel: {
-                    Text(mappedInput.wrappedValue?.localizedDisplayName ?? String(localized: "Default"))
+                    Text(effectiveBindingName)
                 }
             }
             else
@@ -363,11 +400,13 @@ private struct InputMappingRow: View
         }
         .pickerStyle(.menu)
         .tint(isCustomized ? .accentColor : .secondary)
+        .accessibilityIdentifier("bound.controller-mapping.\(controllerInput.stringValue)")
+        .accessibilityValue(Text(effectiveBindingName))
     }
     
     @ViewBuilder
     var pickerOptions: some View {
-        Text("Default")
+        Text("Default (\(defaultBindingName))")
             .tag(AnyInput?.none)
 
         Label("None", systemImage: ActionInput.none.sfSymbolName)
@@ -403,7 +442,7 @@ private struct InputMappingRow: View
             get: {
                 let current = editor.normalizedInput(editor.inputMapping.input(forControllerInput: controllerInput))
                 
-                // Keyboard rows always show their mapped input; controller rows collapse to "Default" when unchanged.
+                // nil is the Default menu sentinel: keep following the controller's effective mapping when it is unchanged.
                 if controllerInput.type != .controller(.keyboard), current == editor.normalizedInput(defaultInput)
                 {
                     return nil

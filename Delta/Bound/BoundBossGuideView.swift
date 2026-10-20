@@ -1684,7 +1684,9 @@ struct BoundBossGuideView: View {
         case .back:
             if showingTeam { showingTeam = false }
             else if detailSheet != nil { detailSheet = nil }
-            else { controllerNavigationFocus = nil }
+            else if BoundControllerMultiviewPreferences().isEnabled {
+                BoundControllerNavigationEvent.postHideMultiview(gameID: gameID, content: .bosses)
+            } else { controllerNavigationFocus = nil }
         }
     }
 

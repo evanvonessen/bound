@@ -111,6 +111,41 @@ final class ControllerNavigationTests: XCTestCase {
         XCTAssertNil(BoundControllerNavigationEvent.command(from: invalidCommand, gameID: "game-a", content: .dex))
     }
 
+    func testHideMultiviewRequestIsScopedToVisibleGameContentAndAvailability() {
+        let notification = Notification(name: BoundControllerNavigationEvent.hideMultiviewNotificationName,
+                                        object: nil, userInfo: [
+                                            BoundControllerNavigationEvent.gameIDKey: "game-a",
+                                            BoundControllerNavigationEvent.contentKey: BoundPiPContent.dex.rawValue
+                                        ])
+        XCTAssertTrue(BoundControllerNavigationEvent.hideMultiviewRequestMatches(
+            notification, gameID: "game-a", content: .dex, available: true))
+        XCTAssertFalse(BoundControllerNavigationEvent.hideMultiviewRequestMatches(
+            notification, gameID: "game-b", content: .dex, available: true))
+        XCTAssertFalse(BoundControllerNavigationEvent.hideMultiviewRequestMatches(
+            notification, gameID: "game-a", content: .bosses, available: true))
+        XCTAssertFalse(BoundControllerNavigationEvent.hideMultiviewRequestMatches(
+            notification, gameID: "game-a", content: .dex, available: false))
+    }
+
+    func testControllerBindingLabelsShowEffectiveDefaultsAndExplicitOverrides() {
+        XCTAssertEqual(ControllerBindingDisplayLabel.value(selected: nil, defaultInput: AnyInput(ActionInput.boundBack)),
+                       ActionInput.boundBack.localizedDisplayName)
+        XCTAssertEqual(ControllerBindingDisplayLabel.value(selected: AnyInput(ActionInput.none), defaultInput: AnyInput(ActionInput.boundBack)),
+                       ActionInput.none.localizedDisplayName)
+        XCTAssertEqual(ControllerBindingDisplayLabel.value(selected: AnyInput(ActionInput.boundSelect), defaultInput: AnyInput(ActionInput.boundBack)),
+                       ActionInput.boundSelect.localizedDisplayName)
+        XCTAssertEqual(ControllerBindingDisplayLabel.value(
+            selected: nil,
+            defaultInput: nil,
+            unassignedLabel: "System Capture"
+        ), "System Capture", "An unassigned physical Share button keeps its system capture behavior.")
+        XCTAssertEqual(ControllerBindingDisplayLabel.value(
+            selected: AnyInput(ActionInput.none),
+            defaultInput: nil,
+            unassignedLabel: "System Capture"
+        ), ActionInput.none.localizedDisplayName, "An explicit None mapping disables the system capture action.")
+    }
+
     func testMFiShareAndThumbstickClickInputsHaveExpectedDefaultMappings() throws {
         XCTAssertEqual(MFiGameController.Input(rawValue: "share"), .share)
         XCTAssertEqual(MFiGameController.Input(rawValue: "leftThumbstickButton"), .leftThumbstickButton)
@@ -330,11 +365,15 @@ final class ControllerNavigationTests: XCTestCase {
         let modeEnabledPath = IndexPath(row: 4, section: 1)
         let navigationPath = IndexPath(row: 5, section: 1)
 
-        XCTAssertEqual(settings.tableView(tableView, numberOfRowsInSection: 1), 7)
-        for indexPath in [modeEnabledPath, navigationPath, IndexPath(row: 6, section: 1)] {
+        XCTAssertEqual(settings.tableView(tableView, numberOfRowsInSection: 1), 8)
+        for indexPath in [modeEnabledPath, navigationPath, IndexPath(row: 6, section: 1), IndexPath(row: 7, section: 1)] {
             XCTAssertEqual(settings.tableView(tableView, heightForRowAt: indexPath), UITableView.automaticDimension)
             XCTAssertNotNil(settings.tableView(tableView, cellForRowAt: indexPath))
         }
+
+        let gridCell = try XCTUnwrap(settings.tableView(tableView, cellForRowAt: IndexPath(row: 7, section: 1)))
+        XCTAssertTrue(gridCell.contentConfiguration is UIHostingConfiguration<BoundButtonGridSpacingSetting, EmptyView>,
+                      "The eighth Controls row must host the Button Grid Spacing slider.")
 
         let modeCell = try XCTUnwrap(settings.tableView(tableView, cellForRowAt: modeEnabledPath))
         let modeSwitch = try XCTUnwrap(modeCell.accessoryView as? UISwitch)

@@ -15,6 +15,38 @@ private struct RendererFixtureGame: GameProtocol {
 
 @MainActor
 final class StockControlAndGestureTests: XCTestCase {
+    func testStockMenuDefaultFrameCacheReusesAndInvalidatesItsGeometryKey() {
+        let skin = NSObject()
+        let otherSkin = NSObject()
+        let traits = DeltaCore.ControllerSkin.Traits(device: .iphone, displayType: .edgeToEdge, orientation: .landscape)
+        let source = CGRect(x: 0, y: 20, width: 844, height: 350)
+        let layout = BoundControlLayout(positions: ["menu": BoundControlPlacement(x: 0.8, y: 0.5, scale: 1)])
+        func key(skin selectedSkin: NSObject? = nil, source selectedSource: CGRect? = nil,
+                 layout selectedLayout: BoundControlLayout? = nil) -> BoundStockMenuDefaultFrameCache.Key {
+            BoundStockMenuDefaultFrameCache.Key(skinIdentity: ObjectIdentifier(selectedSkin ?? skin), skinIdentifier: "com.delta.gba.standard",
+                skinName: "GBA", gameType: "gba", debugMode: false, traits: traits,
+                sourceFrame: selectedSource ?? source, contentInsets: .zero, gutter: nil,
+                controlLayout: selectedLayout ?? layout, canvasSize: CGSize(width: 844, height: 390))
+        }
+
+        var cache = BoundStockMenuDefaultFrameCache()
+        var computations = 0
+        let firstFrame = CGRect(x: 700, y: 320, width: 44, height: 44)
+        XCTAssertEqual(cache.frame(for: key()) { computations += 1; return firstFrame }, firstFrame)
+        XCTAssertEqual(cache.frame(for: key()) { computations += 1; return nil }, firstFrame)
+        XCTAssertEqual(computations, 1, "Identical UIKit layout geometry should reuse the stock Menu lookup.")
+
+        let movedSource = CGRect(x: 1, y: 20, width: 844, height: 350)
+        XCTAssertEqual(cache.frame(for: key(source: movedSource)) { computations += 1; return firstFrame.offsetBy(dx: 1, dy: 0) },
+                       firstFrame.offsetBy(dx: 1, dy: 0))
+        let changedLayout = BoundControlLayout(positions: ["menu": BoundControlPlacement(x: 0.7, y: 0.5, scale: 1)])
+        XCTAssertEqual(cache.frame(for: key(source: movedSource, layout: changedLayout)) { computations += 1; return firstFrame.offsetBy(dx: 2, dy: 0) },
+                       firstFrame.offsetBy(dx: 2, dy: 0))
+        XCTAssertEqual(cache.frame(for: key(skin: otherSkin, source: movedSource, layout: changedLayout)) { computations += 1; return firstFrame.offsetBy(dx: 3, dy: 0) },
+                       firstFrame.offsetBy(dx: 3, dy: 0))
+        XCTAssertEqual(computations, 4, "Source geometry, control placements, and replacement skin identity must invalidate the cached lookup.")
+    }
+
     func testStoppedSaveStatePreviewCannotRestartAfterHandoff() async throws {
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -909,23 +941,25 @@ final class StockControlAndGestureTests: XCTestCase {
         }
     }
 
-    func testControllerModeLayoutPersistsAndLegacyEnabledPreferenceDefaultsToModeOne() throws {
+    func testControllerModeIsUnifiedWhileLegacyLayoutRemainsAvailableForMigration() throws {
         let name = "ControllerModeLayoutTests."+UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
 
         defaults.set(true, forKey: BoundControllerModePreferences.key)
+        defaults.set(BoundControllerModeLayout.mode2.rawValue, forKey: BoundControllerModePreferences.layoutKey)
         let upgradedPreferences = BoundControllerModePreferences(defaults: defaults)
         XCTAssertTrue(upgradedPreferences.isEnabled)
-        XCTAssertEqual(upgradedPreferences.layout, .mode1)
-
-        upgradedPreferences.layout = .mode2
-        XCTAssertEqual(BoundControllerModePreferences(defaults: defaults).layout, .mode2)
+        XCTAssertEqual(upgradedPreferences.layout, .mode1,
+                       "The legacy layout value must not select a removed Controller Mode.")
+        XCTAssertEqual(defaults.integer(forKey: BoundControllerModePreferences.layoutKey), BoundControllerModeLayout.mode2.rawValue,
+                       "Reading unified Controller Mode must preserve the legacy key until arrangement migration can consume it.")
         upgradedPreferences.isEnabled = false
-        XCTAssertEqual(BoundControllerModePreferences(defaults: defaults).layout, .mode2,
-                       "Turning Controller Mode off should retain the selected layout.")
+        XCTAssertEqual(BoundControllerModePreferences(defaults: defaults).layout, .mode1)
         upgradedPreferences.isEnabled = true
-        XCTAssertEqual(BoundControllerModePreferences(defaults: defaults).layout, .mode2)
+        XCTAssertEqual(BoundControllerModePreferences(defaults: defaults).layout, .mode1)
+        XCTAssertEqual(defaults.integer(forKey: BoundControllerModePreferences.layoutKey), BoundControllerModeLayout.mode2.rawValue,
+                       "Toggling the unified on/off setting must leave legacy layout data available for migration.")
     }
 
     func testControllerModeTwoMatchesStandardGameSizeAndKeepsControlsAccessible() throws {

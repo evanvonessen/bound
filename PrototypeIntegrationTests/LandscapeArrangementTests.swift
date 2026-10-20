@@ -1068,6 +1068,45 @@ final class LandscapeArrangementTests: XCTestCase {
                        "A later launch preserves the migrated physical frame.")
     }
 
+    func testMultiviewCanOverlapButtonsWithoutChangingLayersAndPersistsOnlyWhenSaved() throws {
+        for option in [BoundLandscapeOption.option6, .option7] {
+            for controllerMode in [false, true] {
+                let (model, defaults, namespace) = try makeModel()
+                defer { defaults.removePersistentDomain(forName: namespace) }
+                model.setActive(true)
+                model.useOption(option, controllerModeEnabled: controllerMode)
+                arrangeLayout(model)
+                let menu = model.layout.doneButton
+                let initial = model.layout.reference
+                let layer = model.aboveButtons(for: .dex)
+                XCTAssertFalse(initial.intersects(menu))
+                model.arrange()
+                model.advanceArrangement()
+                XCTAssertEqual(model.layout.reference, initial, "Entering the editor must not move the panel.")
+                model.move(content: .dex, translation: CGSize(width: menu.midX - initial.midX,
+                    height: menu.midY - initial.midY), ended: true)
+                XCTAssertTrue(model.layout.reference.intersects(menu),
+                              "The first drag must allow overlap without tapping either layer arrow.")
+                XCTAssertEqual(model.aboveButtons(for: .dex), layer)
+                model.finish(save: false)
+                arrangeLayout(model)
+                XCTAssertFalse(model.layout.reference.intersects(menu), "Cancel discards the overlap draft.")
+
+                model.arrange()
+                model.advanceArrangement()
+                model.move(content: .dex, translation: CGSize(width: menu.midX - model.layout.reference.midX,
+                    height: menu.midY - model.layout.reference.midY), ended: true)
+                model.finish(save: true)
+                let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+                restored.useOption(option, controllerModeEnabled: controllerMode)
+                restored.setActive(true)
+                arrangeLayout(restored)
+                XCTAssertTrue(restored.layout.reference.intersects(menu), "Saved overlap survives relaunch.")
+                XCTAssertEqual(restored.aboveButtons(for: .dex), layer)
+            }
+        }
+    }
+
     func testExplicitMultiviewLayerAllowsReferenceToStayOverButtons() throws {
         let (model, defaults, namespace) = try makeModel()
         defer { defaults.removePersistentDomain(forName: namespace) }
