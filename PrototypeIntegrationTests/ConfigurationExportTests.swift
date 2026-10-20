@@ -26,6 +26,11 @@ final class ConfigurationExportTests: XCTestCase {
 
         defaults.set(true, forKey: BoundControllerModePreferences.key)
         defaults.set(0.43, forKey: "translucentControllerSkinOpacity")
+        defaults.set(true, forKey: BoundControllerButtonGridPreferences.enabledKey)
+        BoundControllerButtonGridPreferences.setSpacing(24, in: defaults)
+        defaults.set(true, forKey: Settings.Name.respectSilentMode.rawValue)
+        defaults.set(true, forKey: Settings.Name.mixWithOtherAudio.rawValue)
+        defaults.set(true, forKey: Settings.Name.pauseOtherAudio.rawValue)
         defaults.set(7, forKey: "bound.landscape.v1.option")
         defaults.set(Data("{\"positions\":{\"a\":{\"x\":0.2,\"y\":0.8,\"scale\":1.1}}}".utf8),
                      forKey: "bound.controls.v1.test-skin.landscape")
@@ -78,12 +83,19 @@ final class ConfigurationExportTests: XCTestCase {
         XCTAssertEqual(roundTrip["exportedAt"] as? String, ISO8601DateFormatter().string(from: exportedAt))
         XCTAssertEqual((roundTrip["effectiveInterface"] as? [String: Any])?["controllerModeEnabled"] as? Bool, true)
         XCTAssertEqual(preferences["settings"]?["translucentControllerSkinOpacity"] as? Double, 0.43)
+        XCTAssertEqual(preferences["settings"]?[BoundControllerButtonGridPreferences.enabledKey] as? Bool, true)
+        XCTAssertEqual(preferences["settings"]?[BoundControllerButtonGridPreferences.spacingKey] as? Double, 24)
+        for key in [Settings.Name.respectSilentMode, .mixWithOtherAudio, .pauseOtherAudio] {
+            XCTAssertEqual(preferences["settings"]?[key.rawValue] as? Bool, true)
+        }
 
         let off = try XCTUnwrap(preferences["controllerModeOff"])
         let offPlacement = try XCTUnwrap(off[offPrefix + "placement.reference"] as? [String: Any])
         XCTAssertEqual(try decodedData(offPlacement), Data("{\"center\":{\"x\":0.28,\"y\":0.55},\"widthFraction\":0.44,\"heightFraction\":0.65,\"opacity\":0.77}".utf8))
         XCTAssertNotNil(off["bound.landscape.game-screen.v1"])
         XCTAssertNotNil(off["bound.landscape.buttons.v1"])
+        let offButtons = try XCTUnwrap(off["bound.landscape.buttons.v1"] as? [String: Any])
+        XCTAssertEqual(try decodedData(offButtons), defaults.data(forKey: "bound.landscape.buttons.v1"))
 
         let on = try XCTUnwrap(preferences["controllerModeOn"])
         XCTAssertEqual(on[onPrefix + "friend-visible"] as? Bool, false)
@@ -91,6 +103,8 @@ final class ConfigurationExportTests: XCTestCase {
         XCTAssertEqual(try decodedData(onPlacement), Data("{\"center\":{\"x\":0.13,\"y\":0.26},\"widthFraction\":0.36,\"heightFraction\":0.51,\"opacity\":0.49,\"allowsButtonOverlap\":true}".utf8))
         XCTAssertNotNil(on["bound.landscape.controller-unified.game-screen.v1"])
         XCTAssertNotNil(on["bound.landscape.controller-unified.buttons.v1"])
+        let onButtons = try XCTUnwrap(on["bound.landscape.controller-unified.buttons.v1"] as? [String: Any])
+        XCTAssertEqual(try decodedData(onButtons), defaults.data(forKey: "bound.landscape.controller-unified.buttons.v1"))
 
         let touch = try XCTUnwrap(preferences["touchControlLayouts"])
         XCTAssertNotNil(touch["bound.controls.v1.test-skin.landscape"])
@@ -127,6 +141,8 @@ final class ConfigurationExportTests: XCTestCase {
         XCTAssertEqual(interface["landscapeOption"] as? Int, BoundLandscapeOption.option7.rawValue)
         XCTAssertEqual(interface["controllerModeEnabled"] as? Bool, false)
         XCTAssertEqual(settings["translucentControllerSkinOpacity"] as? Double, 0.7)
+        XCTAssertEqual(settings[BoundControllerButtonGridPreferences.enabledKey] as? Bool, false)
+        XCTAssertEqual(settings[BoundControllerButtonGridPreferences.spacingKey] as? Double, 18)
         XCTAssertEqual(settings["bound.delta.pip.v1.bosses.layout"] as? Int, 12)
         XCTAssertEqual(settings["bound.delta.pip.v1.dex.layout"] as? Int, 12)
         for content in BoundPiPContent.allCases {

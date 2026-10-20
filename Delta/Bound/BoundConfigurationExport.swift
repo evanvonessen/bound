@@ -157,6 +157,7 @@ enum BoundConfigurationExport {
                 "missingLayoutKeys": "Use the bundled defaults from this app version and build.",
                 "controllerMappings": "Complete saved maps, including disconnected controllers. Player indices are zero-based; missing inputs are unbound. None and Overlay remain distinct actions.",
                 "coordinates": "Placements retain their original normalized coordinates, sizes, opacity, layering and canvas flags.",
+                "buttonGrid": "Only Menu, Friend and Multiview button centers use the optional grid. Spacing is in screen points and the grid origin is the full screen center. Saved placements include free or snapped positions separately for Controller Mode on and off.",
                 "excluded": "Accounts, credentials, ROMs, saves, notes, per-ROM progress and developer-tool state."
             ]
         ]
@@ -167,6 +168,7 @@ enum BoundConfigurationExport {
         keys.formUnion([
             BoundUIVersionPreferences.key, BoundAppearancePreferences.screenLayoutKey, BoundAppearancePreferences.themeKey,
             BoundControllerModePreferences.key, BoundControllerModePreferences.layoutKey, BoundControllerNavigationPreferences.key, BoundControllerMultiviewPreferences.key,
+            BoundControllerButtonGridPreferences.enabledKey, BoundControllerButtonGridPreferences.spacingKey,
             "gameScreenOffsetPortrait", "gameScreenOffsetLandscape", "preferredGBColorPalette",
             "preferredSaveStatesSorting", "prefersDescendingSaveStatesSorting"
         ])
@@ -210,6 +212,8 @@ enum BoundConfigurationExport {
         values[BoundControllerModePreferences.key] = BoundControllerModePreferences(defaults: defaults).isEnabled
         values[BoundControllerNavigationPreferences.key] = BoundControllerNavigationPreferences(defaults: defaults).isEnabled
         values[BoundControllerMultiviewPreferences.key] = BoundControllerMultiviewPreferences(defaults: defaults).isEnabled
+        values[BoundControllerButtonGridPreferences.enabledKey] = defaults.bool(forKey: BoundControllerButtonGridPreferences.enabledKey)
+        values[BoundControllerButtonGridPreferences.spacingKey] = Double(BoundControllerButtonGridPreferences.spacing(in: defaults))
         values[BoundCompanionButtonPreferences.key] = BoundCompanionButtonPreferences(defaults: defaults).buttonType.rawValue
         values[BoundReferenceLayoutPreferences.bossKey] = 12
         values[BoundReferenceLayoutPreferences.dexKey] = 12

@@ -2876,6 +2876,13 @@ final class CompanionUITests: XCTestCase {
         XCTAssertFalse(element("bound.controller-mode-layout", in: app).exists)
         XCTAssertFalse(app.switches["bound.experimental-settings"].exists)
         XCTAssertFalse(app.switches["bound.enable-experimental-features"].exists)
+        let gridSpacing = app.sliders["bound.button-grid-spacing"]
+        scrollToSetting(gridSpacing, in: app)
+        XCTAssertTrue(gridSpacing.waitForExistence(timeout: 5))
+        XCTAssertEqual(gridSpacing.value as? String, "18 points")
+        gridSpacing.adjust(toNormalizedSliderPosition: 1)
+        XCTAssertEqual(gridSpacing.value as? String, "48 points")
+        screenshot("Controls-Button-Grid-Spacing")
         if enabled.value as? String != "1" {
             enabled.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         }
@@ -2926,6 +2933,13 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(done.waitForExistence(timeout: 8), "NEXT opens view and button placement.")
         XCTAssertTrue(plus.exists)
         XCTAssertTrue(trash.exists)
+        let arrangementSpacing = app.sliders["bound.arrange-buttons.grid-spacing"]
+        XCTAssertTrue(arrangementSpacing.waitForExistence(timeout: 5))
+        XCTAssertEqual(arrangementSpacing.value as? String, "48 points")
+        arrangementSpacing.adjust(toNormalizedSliderPosition: 0)
+        XCTAssertEqual(arrangementSpacing.value as? String, "6 points")
+        arrangementSpacing.adjust(toNormalizedSliderPosition: 1)
+        XCTAssertEqual(arrangementSpacing.value as? String, "48 points")
         XCTAssertTrue(element("bound.controller-button-move.menu", in: app).exists,
                        "The Menu button remains present and cannot be removed.")
 
@@ -2936,7 +2950,8 @@ final class CompanionUITests: XCTestCase {
             XCTAssertTrue(add.waitForExistence(timeout: 5))
             if byDragging {
                 let start = add.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                start.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.68, dy: 0.55)))
+                let target = name == "friend" ? CGVector(dx: 0.82, dy: 0.75) : CGVector(dx: 0.68, dy: 0.55)
+                start.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: target))
             } else {
                 add.tap()
             }
@@ -2953,22 +2968,46 @@ final class CompanionUITests: XCTestCase {
         add("friend", byDragging: true)
         XCTAssertTrue(element("bound.controller-button-move.multiview", in: app).exists)
         screenshot("Controller-Mode-Unified-Buttons-Restored")
-        let spread = app.buttons["bound.arrange-buttons.spread"]
-        spread.tap()
-        let spreadSlider = app.sliders["bound.arrange-buttons.spread-slider"]
-        XCTAssertTrue(spreadSlider.waitForExistence(timeout: 5))
-        spreadSlider.adjust(toNormalizedSliderPosition: 0.55)
+        XCTAssertFalse(app.buttons["bound.arrange-buttons.spread"].exists)
+        let snapping = app.buttons["bound.arrange-buttons.distance-snapping"]
+        XCTAssertTrue(snapping.waitForExistence(timeout: 5))
+        XCTAssertEqual(snapping.value as? String, "Off")
+        let beforeToggle = friend.frame
+        snapping.tap()
+        XCTAssertEqual(snapping.value as? String, "On")
+        XCTAssertEqual(friend.frame, beforeToggle, "Enabling the grid does not move existing buttons.")
         let buttonIDs = ["friend", "multiview", "menu"]
+        for (index, name) in buttonIDs.enumerated() {
+            let button = element("bound.controller-button-move." + name, in: app)
+            let start = button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let target = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .withOffset(CGVector(dx: CGFloat(index - 1) * 96 + 4, dy: 52))
+            start.press(forDuration: 0.1, thenDragTo: target)
+        }
         let row = buttonIDs.map { element("bound.controller-button-move." + $0, in: app).frame }.sorted { $0.midX < $1.midX }
         XCTAssertEqual(row[1].midX - row[0].midX, row[2].midX - row[1].midX, accuracy: 2)
         XCTAssertEqual(row[0].midY, row[2].midY, accuracy: 2)
-        app.buttons["Vertical"].tap()
-        spreadSlider.adjust(toNormalizedSliderPosition: 0.45)
-        let column = buttonIDs.map { element("bound.controller-button-move." + $0, in: app).frame }.sorted { $0.midY < $1.midY }
-        XCTAssertEqual(column[1].midY - column[0].midY, column[2].midY - column[1].midY, accuracy: 2)
-        XCTAssertEqual(column[0].midX, column[2].midX, accuracy: 2)
-        spread.tap()
-        screenshot("Controller-Mode-Buttons-Evenly-Spaced")
+        XCTAssertEqual(row[0].midX + row[2].midX, 2 * app.frame.midX, accuracy: 2)
+        for frame in row {
+            let x = (frame.midX - app.frame.midX) / 48
+            let y = (frame.midY - app.frame.midY) / 48
+            XCTAssertEqual(x, x.rounded(), accuracy: 0.04)
+            XCTAssertEqual(y, y.rounded(), accuracy: 0.04)
+        }
+        screenshot("Controller-Mode-Buttons-Centered-Grid")
+        snapping.tap()
+        XCTAssertEqual(snapping.value as? String, "Off")
+        let freeStart = friend.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let freeFrame = friend.frame
+        freeStart.press(forDuration: 0.1, thenDragTo: freeStart.withOffset(CGVector(dx: 37, dy: 29)))
+        // UIKit's pan threshold can consume part of a synthesized drag. Check
+        // that both axes move freely off the lattice; model tests cover exact translation.
+        XCTAssertGreaterThan(friend.frame.midX - freeFrame.midX, 15)
+        XCTAssertGreaterThan(friend.frame.midY - freeFrame.midY, 10)
+        for offset in [friend.frame.midX - app.frame.midX, friend.frame.midY - app.frame.midY] {
+            XCTAssertGreaterThan(abs(offset - (offset / 48).rounded() * 48), 6)
+        }
+        let savedFriendFrame = friend.frame
         done.tap()
         XCTAssertTrue(done.waitForNonExistence(timeout: 5))
 
@@ -2981,6 +3020,10 @@ final class CompanionUITests: XCTestCase {
                       "DONE persists the restored Friend button.")
         XCTAssertTrue(element("bound.controller-button-move.multiview", in: app).exists,
                        "DONE persists the Multiview button.")
+        XCTAssertEqual(snapping.value as? String, "Off")
+        XCTAssertEqual(arrangementSpacing.value as? String, "48 points")
+        XCTAssertEqual(friend.frame.midX, savedFriendFrame.midX, accuracy: 1)
+        XCTAssertEqual(friend.frame.midY, savedFriendFrame.midY, accuracy: 1)
         done.tap()
 
         XCUIDevice.shared.orientation = .portrait

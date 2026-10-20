@@ -110,6 +110,7 @@
 		9EE1E66A051751E201D09F44 /* BoundCompanionCycleButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F35BC570DB6B8BA023B9B53 /* BoundCompanionCycleButton.swift */; };
 		A5AAF6B64EA97D56F73A4A9D /* BoundFrameCaptureGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = E875C2DEF127D860254648FA /* BoundFrameCaptureGate.swift */; };
 		A653079E9FDFF997EBF3E0EC /* CompanionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D615F5838D061A694CE0824 /* CompanionUITests.swift */; };
+		96349A07E5174D588D00A08B /* AudioSettingsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 417B39D1AEE64F0997986F55 /* AudioSettingsUITests.swift */; };
 		5C64652725BF490BBDE05EE8 /* BoundUITestGestures.m in Sources */ = {isa = PBXBuildFile; fileRef = AEB342F149004958B589EA0A /* BoundUITestGestures.m */; };
 		A728B391ABE5D95387F60413 /* RtcBasic in Frameworks */ = {isa = PBXBuildFile; productRef = 655C47AAEA013CE930E24BBA /* RtcBasic */; };
 		A9D0C8D83FBEE28FB2158E9B /* BoundPiPGestures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8469AA17D6924083971A9ECF /* BoundPiPGestures.swift */; };
@@ -1264,6 +1265,7 @@
 		3B71EC63FAFA4C8A8C29BCB8 /* BoundConfigurationExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundConfigurationExport.swift; sourceTree = "<group>"; };
 		79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigurationExportTests.swift; sourceTree = "<group>"; };
 		C1D82587FA554BF8B7A9E409 /* MultiviewDexNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiviewDexNavigationTests.swift; sourceTree = "<group>"; };
+		417B39D1AEE64F0997986F55 /* AudioSettingsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSettingsUITests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1404,6 +1406,7 @@
 			isa = PBXGroup;
 			children = (
 				7D615F5838D061A694CE0824 /* CompanionUITests.swift */,
+				417B39D1AEE64F0997986F55 /* AudioSettingsUITests.swift */,
 				AEB342F149004958B589EA0A /* BoundUITestGestures.m */,
 				0496545451424414A7232657 /* BoundUITestGestures.h */,
 				FF58B4C5653710C200F455B0 /* MacWorkspaceUITests.swift */,
@@ -3477,6 +3480,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A653079E9FDFF997EBF3E0EC /* CompanionUITests.swift in Sources */,
+				96349A07E5174D588D00A08B /* AudioSettingsUITests.swift in Sources */,
 				5C64652725BF490BBDE05EE8 /* BoundUITestGestures.m in Sources */,
 				B184A47C9063EDC18DBB4691 /* MacWorkspaceUITests.swift in Sources */,
 				9B283F9811D6486EE48A70AE /* PairedFriendUITests.swift in Sources */,

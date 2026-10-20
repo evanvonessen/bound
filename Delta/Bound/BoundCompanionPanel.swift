@@ -298,6 +298,9 @@ final class BoundCompanionCoordinator {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.layoutKey)
             UserDefaults.standard.removeObject(forKey: BoundControllerNavigationPreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundControllerMultiviewPreferences.key)
+            UserDefaults.standard.removeObject(forKey: BoundControllerButtonGridPreferences.enabledKey)
+            UserDefaults.standard.removeObject(forKey: BoundControllerButtonGridPreferences.spacingKey)
+            UserDefaults.standard.removeObject(forKey: "bound.landscape.buttons.v1")
             UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
             UserDefaults.standard.removeObject(forKey: BoundExperimentalSettingsPreferences.key)
             for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("bound.delta.pip.v1.") || key.hasPrefix("bound.delta.pip.v2.") || key.hasPrefix("bound.controls.v1.") || key.hasPrefix("bound.landscape.v1.") || key.hasPrefix("bound.landscape.option3.") || key.hasPrefix("bound.landscape.option4.") || key.hasPrefix("bound.landscape.option5.") || key.hasPrefix("bound.landscape.option6.") || key.hasPrefix("bound.landscape.option7.") || key.hasPrefix("bound.landscape.controller-mode.") || key.hasPrefix("bound.landscape.controller-mode2.") || key.hasPrefix("bound.landscape.controller-mode3.") || key.hasPrefix("bound.landscape.controller-unified.") || key == "bound.landscape.game-screen.v1" { UserDefaults.standard.removeObject(forKey: key) }

@@ -7,6 +7,41 @@ enum BoundControllerButton: String, CaseIterable, Codable, Sendable {
     case menu
 }
 
+/// Distance grid used by the compact landscape controls. The value is in
+/// points: 18 pt is approximately 3 mm on a typical iPhone display.
+enum BoundControllerButtonGridPreferences {
+    static let enabledKey = "bound.controller-button-grid.enabled"
+    static let spacingKey = "bound.controller-button-grid.spacing"
+    static let defaultSpacing: CGFloat = 18
+    static let minimumSpacing: CGFloat = 6
+    static let maximumSpacing: CGFloat = 48
+
+    static func spacing(in defaults: UserDefaults = .standard) -> CGFloat {
+        let stored = defaults.object(forKey: spacingKey) as? NSNumber
+        return normalized(stored.map { CGFloat($0.doubleValue) } ?? defaultSpacing)
+    }
+
+    static func setSpacing(_ spacing: CGFloat, in defaults: UserDefaults = .standard) {
+        defaults.set(Double(normalized(spacing)), forKey: spacingKey)
+    }
+
+    static func normalized(_ spacing: CGFloat) -> CGFloat {
+        min(maximumSpacing, max(minimumSpacing, spacing.isFinite ? spacing : defaultSpacing))
+    }
+}
+
+enum BoundControllerButtonGrid {
+    static func quantize(_ coordinate: CGFloat, centeredAt center: CGFloat, spacing: CGFloat,
+                         minimum: CGFloat, maximum: CGFloat) -> CGFloat {
+        let step = BoundControllerButtonGridPreferences.normalized(spacing)
+        let first = center + ceil((minimum - center) / step) * step
+        let last = center + floor((maximum - center) / step) * step
+        guard first <= last else { return min(maximum, max(minimum, coordinate)) }
+        let nearest = center + ((coordinate - center) / step).rounded() * step
+        return min(last, max(first, nearest))
+    }
+}
+
 /// Normalized button centers, stored relative to the available controller canvas.
 /// A missing or invalid entry falls back to the button's current default frame.
 struct BoundControllerButtonPlacement: Codable, Equatable, Sendable {
@@ -155,103 +190,19 @@ struct BoundControllerButtonDrag {
         let hint: String?
     }
 
-    private struct SnapTarget {
-        let coordinate: CGFloat
-        let hint: String
-    }
-
-    private struct AxisSnap {
-        var target: CGFloat?
-        var hint: String?
-        var entryTranslation: CGFloat = 0
-        var previousRawCenter: CGFloat?
-        var disabledTargets = Set<CGFloat>()
-        var rebaseOffset: CGFloat = 0
-    }
-
     private let startFrame: CGRect
-    private let xTargets: [SnapTarget]
-    private let yTargets: [SnapTarget]
-    private var xSnap = AxisSnap()
-    private var ySnap = AxisSnap()
+    private let distanceSnapping: Bool
+    private let spacing: CGFloat
+    private let gridCenter: CGPoint
+    private var lastGridCenter: CGPoint?
 
-    private let entryDistance: CGFloat = 6
-    private let releaseTravel: CGFloat = 10
-
-    init(startFrame: CGRect, targets: [CGRect]) {
+    init(startFrame: CGRect, distanceSnapping: Bool = false,
+         spacing: CGFloat = BoundControllerButtonGridPreferences.defaultSpacing,
+         gridCenter: CGPoint) {
         self.startFrame = startFrame
-        self.xTargets = targets.map { SnapTarget(coordinate: $0.midX, hint: "Aligned") }
-        self.yTargets = targets.map { SnapTarget(coordinate: $0.midY, hint: "Aligned") }
-    }
-
-    /// Adds the canvas center, reflected peer positions, and extrapolated or
-    /// midpoint positions that evenly space the dragged button with two peers.
-    init(startFrame: CGRect, targets: [CGRect], canvas: CGRect,
-         button: BoundControllerButton, otherButtons: [BoundControllerButton: CGRect]) {
-        self.startFrame = startFrame
-        let peers = BoundControllerButton.allCases.filter { $0 != button && otherButtons[$0] != nil }
-        let peerFrames = peers.compactMap { otherButtons[$0] }
-        var xs = peerFrames.map { SnapTarget(coordinate: $0.midX, hint: "Aligned") }
-        var ys = peerFrames.map { SnapTarget(coordinate: $0.midY, hint: "Aligned") }
-        if canvas.isUsable {
-            xs.append(SnapTarget(coordinate: canvas.midX, hint: "Centered"))
-            ys.append(SnapTarget(coordinate: canvas.midY, hint: "Centered"))
-            let peerCenters = peerFrames.map(\.midX)
-            let peerCentersY = peerFrames.map(\.midY)
-            xs.append(contentsOf: peerCenters.map {
-                SnapTarget(coordinate: 2 * canvas.midX - $0, hint: "Mirrored")
-            })
-            ys.append(contentsOf: peerCentersY.map {
-                SnapTarget(coordinate: 2 * canvas.midY - $0, hint: "Mirrored")
-            })
-            let peersShareRow = (peerCentersY.max() ?? 0) - (peerCentersY.min() ?? 0) <= entryDistance
-            let peersShareColumn = (peerCenters.max() ?? 0) - (peerCenters.min() ?? 0) <= entryDistance
-            if peerCenters.count >= 2 && peersShareRow {
-                for first in 0..<(peerCenters.count - 1) {
-                    for second in (first + 1)..<peerCenters.count {
-                        let a = peerCenters[first]
-                        let b = peerCenters[second]
-                        xs.append(SnapTarget(coordinate: (a + b) / 2, hint: "Even spacing"))
-                        xs.append(SnapTarget(coordinate: 2 * b - a, hint: "Even spacing"))
-                        xs.append(SnapTarget(coordinate: 2 * a - b, hint: "Even spacing"))
-                    }
-                }
-            }
-            if peerCentersY.count >= 2 && peersShareColumn {
-                for first in 0..<(peerCentersY.count - 1) {
-                    for second in (first + 1)..<peerCentersY.count {
-                        let top = peerCentersY[first]
-                        let bottom = peerCentersY[second]
-                        ys.append(SnapTarget(coordinate: (top + bottom) / 2, hint: "Even spacing"))
-                        ys.append(SnapTarget(coordinate: 2 * bottom - top, hint: "Even spacing"))
-                        ys.append(SnapTarget(coordinate: 2 * top - bottom, hint: "Even spacing"))
-                    }
-                }
-            }
-        }
-        self.xTargets = Self.uniqueTargets(xs)
-        self.yTargets = Self.uniqueTargets(ys)
-    }
-
-    init(startFrame: CGRect, targets: [CGRect], canvas: CGRect,
-         button: BoundControllerButton, otherButtons: [BoundControllerButton]) {
-        self.init(startFrame: startFrame, targets: targets, canvas: canvas, button: button,
-                  otherButtons: Dictionary(uniqueKeysWithValues: zip(otherButtons, targets)))
-    }
-
-    private static func uniqueTargets(_ targets: [SnapTarget]) -> [SnapTarget] {
-        var result: [SnapTarget] = []
-        let priority = ["Aligned": 0, "Centered": 1, "Mirrored": 2, "Even spacing": 3]
-        for target in targets where target.coordinate.isFinite {
-            if let index = result.firstIndex(where: { abs($0.coordinate - target.coordinate) < 0.001 }) {
-                if (priority[target.hint] ?? 0) > (priority[result[index].hint] ?? 0) {
-                    result[index] = target
-                }
-            } else {
-                result.append(target)
-            }
-        }
-        return result.sorted { $0.coordinate < $1.coordinate }
+        self.distanceSnapping = distanceSnapping
+        self.spacing = BoundControllerButtonGridPreferences.normalized(spacing)
+        self.gridCenter = gridCenter
     }
 
     mutating func update(translation: CGSize, canvas: CGRect) -> Result {
@@ -259,81 +210,33 @@ struct BoundControllerButtonDrag {
             return Result(frame: startFrame, snappedX: nil, snappedY: nil, didSnap: false, hint: nil)
         }
 
-        let rawX = startFrame.midX + translation.width + xSnap.rebaseOffset
-        let rawY = startFrame.midY + translation.height + ySnap.rebaseOffset
-        let enteredX = update(axis: &xSnap, startCenter: startFrame.midX,
-                              rawCenter: rawX, translation: translation.width,
-                              targets: xTargets, lower: canvas.minX + startFrame.width / 2,
-                              upper: canvas.maxX - startFrame.width / 2)
-        let enteredY = update(axis: &ySnap, startCenter: startFrame.midY,
-                              rawCenter: rawY, translation: translation.height,
-                              targets: yTargets, lower: canvas.minY + startFrame.height / 2,
-                              upper: canvas.maxY - startFrame.height / 2)
-
-        let freeX = startFrame.midX + translation.width + xSnap.rebaseOffset
-        let freeY = startFrame.midY + translation.height + ySnap.rebaseOffset
-        let centerX = min(canvas.maxX - startFrame.width / 2,
-                          max(canvas.minX + startFrame.width / 2, xSnap.target ?? freeX))
-        let centerY = min(canvas.maxY - startFrame.height / 2,
-                          max(canvas.minY + startFrame.height / 2, ySnap.target ?? freeY))
+        let rawX = startFrame.midX + translation.width
+        let rawY = startFrame.midY + translation.height
+        let lowerX = canvas.minX + startFrame.width / 2
+        let upperX = canvas.maxX - startFrame.width / 2
+        let lowerY = canvas.minY + startFrame.height / 2
+        let upperY = canvas.maxY - startFrame.height / 2
+        let centerX: CGFloat
+        let centerY: CGFloat
+        if distanceSnapping {
+            centerX = BoundControllerButtonGrid.quantize(rawX, centeredAt: gridCenter.x, spacing: spacing,
+                                                          minimum: lowerX, maximum: upperX)
+            centerY = BoundControllerButtonGrid.quantize(rawY, centeredAt: gridCenter.y, spacing: spacing,
+                                                          minimum: lowerY, maximum: upperY)
+        } else {
+            centerX = min(upperX, max(lowerX, rawX))
+            centerY = min(upperY, max(lowerY, rawY))
+        }
         let frame = CGRect(x: centerX - startFrame.width / 2,
                            y: centerY - startFrame.height / 2,
                            width: startFrame.width, height: startFrame.height)
-        let hints = [xSnap.hint, ySnap.hint].compactMap { $0 }
-        let hintPriority = ["Aligned": 0, "Centered": 1, "Mirrored": 2, "Even spacing": 3]
-        let hint = hints.max { (hintPriority[$0] ?? 0) < (hintPriority[$1] ?? 0) }
-        return Result(frame: frame, snappedX: xSnap.target, snappedY: ySnap.target,
-                      didSnap: enteredX || enteredY, hint: hint)
-    }
-
-    private func update(axis: inout AxisSnap, startCenter: CGFloat,
-                        rawCenter: CGFloat, translation: CGFloat,
-                        targets: [SnapTarget], lower: CGFloat, upper: CGFloat) -> Bool {
-        let previousRawCenter = axis.previousRawCenter
-        axis.previousRawCenter = rawCenter
-        if let target = axis.target {
-            if abs(translation - axis.entryTranslation) >= releaseTravel {
-                axis.target = nil
-                axis.hint = nil
-                // Rebase at the snapped position so releasing the soft snap is smooth.
-                axis.rebaseOffset = target - startCenter - translation
-                axis.previousRawCenter = target
-                axis.disabledTargets.insert(target)
-                return false
-            }
-            return false
-        }
-
-        // A released target becomes available again as soon as the button has
-        // moved clearly away. This allows users to cross that guide again in
-        // the same drag without the old one-shot snap suppression.
-        axis.disabledTargets = axis.disabledTargets.filter { abs(rawCenter - $0) <= releaseTravel }
-
-        guard upper >= lower else { return false }
-        let eligible = targets.filter {
-            !axis.disabledTargets.contains($0.coordinate) && $0.coordinate >= lower && $0.coordinate <= upper
-        }
-        let near = eligible.map { ($0, abs($0.coordinate - rawCenter)) }
-            .filter { $0.1 <= entryDistance }
-        // Gesture updates can jump across a guide between samples. Catch any
-        // crossing segment; among several guides, the closest to the endpoint
-        // wins so the button follows the direction of travel.
-        let crossed = eligible.filter { target in
-            guard let previousRawCenter else { return false }
-            if rawCenter > previousRawCenter {
-                return target.coordinate > previousRawCenter && target.coordinate <= rawCenter
-            }
-            if rawCenter < previousRawCenter {
-                return target.coordinate < previousRawCenter && target.coordinate >= rawCenter
-            }
-            return false
-        }.map { ($0, abs($0.coordinate - rawCenter)) }
-        let candidate = (near.isEmpty ? crossed : near).min { $0.1 < $1.1 }
-        guard let candidate else { return false }
-        axis.target = candidate.0.coordinate
-        axis.hint = candidate.0.hint
-        axis.entryTranslation = translation
-        return true
+        let previousGridCenter = lastGridCenter ?? CGPoint(x: startFrame.midX, y: startFrame.midY)
+        let didSnap = distanceSnapping
+            && (abs(centerX - previousGridCenter.x) > 0.001 || abs(centerY - previousGridCenter.y) > 0.001)
+        if distanceSnapping { lastGridCenter = CGPoint(x: centerX, y: centerY) }
+        return Result(frame: frame, snappedX: distanceSnapping ? centerX : nil,
+                      snappedY: distanceSnapping ? centerY : nil,
+                      didSnap: didSnap, hint: distanceSnapping ? "Grid" : nil)
     }
 }
 

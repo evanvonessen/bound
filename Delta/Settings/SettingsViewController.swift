@@ -109,6 +109,7 @@ class SettingsViewController: UITableViewController
         case enabled = 4
         case navigation = 5
         case multiview = 6
+        case gridSpacing = 7
     }
     @IBOutlet private var controllerOpacityLabel: UILabel!
     @IBOutlet private var controllerOpacitySlider: UISlider!
@@ -675,7 +676,7 @@ extension SettingsViewController
         if section == .cores && BoundFeatureVisibility.simplifiedSettings { return 1 }
         switch section
         {
-        case .controllers: return 7
+        case .controllers: return 8
         case .controllerSkins: return System.registeredSystems.count
         case .airPlay:
             var numberOfRows = 1
@@ -728,6 +729,11 @@ extension SettingsViewController
         if indexPath.section == Section.controllers.rawValue,
            let row = BoundControllerSettingsRow(rawValue: indexPath.row) {
             switch row {
+            case .gridSpacing:
+                let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+                cell.selectionStyle = .none
+                cell.contentConfiguration = UIHostingConfiguration { BoundButtonGridSpacingSetting() }
+                return cell
             case .enabled:
                 let toggle = UISwitch()
                 toggle.isOn = BoundControllerModePreferences().isEnabled

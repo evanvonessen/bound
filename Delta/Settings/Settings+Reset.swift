@@ -23,6 +23,8 @@ extension Settings {
             BoundAppearancePreferences.screenLayoutKey, BoundAppearancePreferences.themeKey,
             BoundControllerModePreferences.key, BoundControllerModePreferences.layoutKey,
             BoundControllerNavigationPreferences.key, BoundControllerMultiviewPreferences.key,
+            BoundControllerButtonGridPreferences.enabledKey, BoundControllerButtonGridPreferences.spacingKey,
+            "bound.landscape.buttons.v1",
             BoundCompanionButtonPreferences.key, BoundCompanionButtonPreferences.legacyKey,
             BoundReferenceLayoutPreferences.bossKey, BoundReferenceLayoutPreferences.dexKey,
             "bound.delta.pip.v1.corner", "bound.delta.pip.v1.view-order"

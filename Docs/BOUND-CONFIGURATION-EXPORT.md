@@ -18,6 +18,7 @@ export time, screen dimensions in points, and device model family. It contains:
 
 - `preferences.settings`: global controls, opacity, audio/display preferences,
   UI/layout choices, companion button assignments, and each PiP view's settings.
+  This includes Distance Snapping and Button Grid Spacing (in screen points).
 - `preferences.touchControlLayouts`: every saved skin's portrait and landscape
   button positions and sizes.
 - `preferences.landscapeCommon`: landscape option and common companion settings.
@@ -40,6 +41,9 @@ This preserves placement structures without requiring opaque archives to be
 decoded by hand. Positions, size fractions, opacity, overlap and canvas flags
 remain unchanged. Shared implicit defaults are materialized; missing option
 placement keys still refer to that app build's bundled geometry defaults.
+Menu, Friend and Multiview button positions retain their exact saved normalized
+centers whether placed freely or snapped. The optional grid is anchored to the
+full screen center; its default increment is 18 points (roughly 3 mm on iPhones).
 
 The export uses a settings allowlist, not a full UserDefaults or database dump.
 It excludes accounts, credentials, ROMs, saves, notes, per-ROM progress, service

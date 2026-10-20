@@ -29,80 +29,59 @@ final class ControllerButtonPlacementTests: XCTestCase {
                            boundFrame: bound, defaults: defaults, keyboardHeight: 0)
     }
 
-    func testDragSnapsButtonCenterToOtherButtonsOnBothAxes() {
+    func testDistanceSnappingOffKeepsFreeMovementWithoutAlignmentSnap() {
         let canvas = CGRect(x: 0, y: 0, width: 320, height: 240)
         let start = CGRect(x: 0, y: 0, width: 44, height: 44)
-        let target = CGRect(x: 138, y: 98, width: 44, height: 44)
-        var drag = BoundControllerButtonDrag(startFrame: start, targets: [target])
-
+        var drag = BoundControllerButtonDrag(startFrame: start, gridCenter: CGPoint(x: canvas.midX, y: canvas.midY))
         let result = drag.update(translation: CGSize(width: 136, height: 96), canvas: canvas)
-
-        XCTAssertEqual(result.frame.midX, target.midX, accuracy: 0.001)
-        XCTAssertEqual(result.frame.midY, target.midY, accuracy: 0.001)
-        XCTAssertEqual(result.snappedX, target.midX)
-        XCTAssertEqual(result.snappedY, target.midY)
-        XCTAssertTrue(result.didSnap)
+        XCTAssertEqual(result.frame.midX, 158, accuracy: 0.001)
+        XCTAssertEqual(result.frame.midY, 118, accuracy: 0.001)
+        XCTAssertNil(result.snappedX)
+        XCTAssertNil(result.snappedY)
+        XCTAssertFalse(result.didSnap)
     }
 
-    func testSoftSnapReleasesWithoutJumpAndCanRetetherAfterMovingAway() {
-        let canvas = CGRect(x: 0, y: 0, width: 320, height: 240)
-        let start = CGRect(x: 0, y: 0, width: 44, height: 44)
-        let target = CGRect(x: 78, y: 178, width: 44, height: 44)
-        var drag = BoundControllerButtonDrag(startFrame: start, targets: [target])
-
-        let aligned = drag.update(translation: CGSize(width: 72, height: 0), canvas: canvas)
-        XCTAssertEqual(aligned.frame.midX, target.midX, accuracy: 0.001)
-        XCTAssertNil(aligned.snappedY)
-        XCTAssertTrue(aligned.didSnap)
-
-        let released = drag.update(translation: CGSize(width: 84, height: 0), canvas: canvas)
-        XCTAssertNil(released.snappedX)
-        XCTAssertEqual(released.frame.midX, target.midX, accuracy: 0.001,
-                       "The snap should release at the current finger position without moving the button.")
-
-        let movedAway = drag.update(translation: CGSize(width: 86, height: 0), canvas: canvas)
-        XCTAssertEqual(movedAway.frame.midX, target.midX + 2, accuracy: 0.001)
-        XCTAssertNil(movedAway.snappedX)
-
-        let movedFarAway = drag.update(translation: CGSize(width: 100, height: 0), canvas: canvas)
-        XCTAssertNil(movedFarAway.snappedX)
-        let crossedAgain = drag.update(translation: CGSize(width: 78, height: 0), canvas: canvas)
-        XCTAssertEqual(crossedAgain.snappedX, target.midX,
-                       "After moving away, the same alignment should snap again during this drag.")
-        XCTAssertTrue(crossedAgain.didSnap)
+    func testDistanceGridIsCenteredAndSymmetricOnBothAxes() {
+        let spacing: CGFloat = 18
+        XCTAssertEqual(BoundControllerButtonGrid.quantize(100, centeredAt: 160, spacing: spacing,
+                                                           minimum: 22, maximum: 298), 106)
+        XCTAssertEqual(BoundControllerButtonGrid.quantize(220, centeredAt: 160, spacing: spacing,
+                                                           minimum: 22, maximum: 298), 214)
+        XCTAssertEqual(160 - 106, 214 - 160, accuracy: 0.001)
+        XCTAssertEqual(BoundControllerButtonGrid.quantize(40, centeredAt: 120, spacing: spacing,
+                                                           minimum: 22, maximum: 218), 48)
     }
 
-    func testReleasedSharedAlignmentCanSnapAgainAfterMovingAway() {
-        let canvas = CGRect(x: 0, y: 0, width: 320, height: 240)
+    func testDistanceGridKeepsButtonCentersOnLatticeAtScreenEdges() {
+        let canvas = CGRect(x: 0, y: 18, width: 320, height: 222) // Safe canvas is offset from screen center.
+        let screenCenter = CGPoint(x: 160, y: 120)
         let start = CGRect(x: 0, y: 0, width: 44, height: 44)
-        let sharedAlignment = CGRect(x: 78, y: 178, width: 44, height: 44)
-        var drag = BoundControllerButtonDrag(startFrame: start, targets: [sharedAlignment, sharedAlignment])
-
-        let aligned = drag.update(translation: CGSize(width: 72, height: 0), canvas: canvas)
-        XCTAssertEqual(aligned.snappedX, sharedAlignment.midX)
-        let released = drag.update(translation: CGSize(width: 84, height: 0), canvas: canvas)
-        XCTAssertNil(released.snappedX)
-        XCTAssertEqual(released.frame.midX, sharedAlignment.midX, accuracy: 0.001)
-
-        let movedAway = drag.update(translation: CGSize(width: 110, height: 0), canvas: canvas)
-        XCTAssertNil(movedAway.snappedX, "The release target must not catch again at the segment's starting edge.")
-        XCTAssertEqual(movedAway.frame.midX, sharedAlignment.midX + 26, accuracy: 0.001)
-        let continued = drag.update(translation: CGSize(width: 78, height: 0), canvas: canvas)
-        XCTAssertEqual(continued.snappedX, sharedAlignment.midX,
-                       "A coordinate shared by peers must become eligible again after moving away.")
-        XCTAssertTrue(continued.didSnap)
+        var drag = BoundControllerButtonDrag(startFrame: start,
+                                             distanceSnapping: true, spacing: 18,
+                                             gridCenter: screenCenter)
+        let result = drag.update(translation: CGSize(width: -300, height: -300), canvas: canvas)
+        XCTAssertEqual(result.frame.midX, 34, accuracy: 0.001)
+        XCTAssertEqual(result.frame.midY, 48, accuracy: 0.001)
+        XCTAssertEqual(((result.frame.midX - 160) / 18).rounded(), (result.frame.midX - 160) / 18, accuracy: 0.001)
+        XCTAssertEqual(((result.frame.midY - 120) / 18).rounded(), (result.frame.midY - 120) / 18, accuracy: 0.001)
     }
 
-    func testSnapCatchesFastGuideCrossingBetweenGestureSamples() {
+    func testGridHapticOnlyFiresWhenMovingBetweenCellsAndOnRecrossing() {
         let canvas = CGRect(x: 0, y: 0, width: 320, height: 240)
-        let start = CGRect(x: 0, y: 0, width: 44, height: 44)
-        let target = CGRect(x: 78, y: 178, width: 44, height: 44)
-        var drag = BoundControllerButtonDrag(startFrame: start, targets: [target])
+        var drag = BoundControllerButtonDrag(startFrame: CGRect(x: 0, y: 0, width: 44, height: 44),
+                                             distanceSnapping: true, spacing: 18,
+                                             gridCenter: CGPoint(x: 160, y: 120))
+        XCTAssertTrue(drag.update(translation: CGSize(width: 1, height: 0), canvas: canvas).didSnap)
+        XCTAssertFalse(drag.update(translation: CGSize(width: 3, height: 0), canvas: canvas).didSnap)
+        XCTAssertTrue(drag.update(translation: CGSize(width: 22, height: 0), canvas: canvas).didSnap)
+        XCTAssertTrue(drag.update(translation: CGSize(width: 3, height: 0), canvas: canvas).didSnap)
+    }
 
-        _ = drag.update(translation: CGSize(width: 68, height: 0), canvas: canvas) // center 90
-        let crossed = drag.update(translation: CGSize(width: 108, height: 0), canvas: canvas) // center 130
-        XCTAssertEqual(crossed.snappedX, target.midX)
-        XCTAssertEqual(crossed.frame.midX, target.midX, accuracy: 0.001)
+    func testGridSpacingPreferenceClampsAndUsesFiniteDefault() {
+        XCTAssertEqual(BoundControllerButtonGridPreferences.normalized(.nan), 18)
+        XCTAssertEqual(BoundControllerButtonGridPreferences.normalized(.infinity), 18)
+        XCTAssertEqual(BoundControllerButtonGridPreferences.normalized(1), 6)
+        XCTAssertEqual(BoundControllerButtonGridPreferences.normalized(100), 48)
     }
 
     func testPlacementPersistsNormalizedPositionsAndClampsFramesToCanvas() throws {
@@ -178,54 +157,6 @@ final class ControllerButtonPlacementTests: XCTestCase {
         XCTAssertEqual(placement.positions[.friend], CGPoint(x: 0.25, y: 0.5))
     }
 
-    func testSnapTargetsIncludeCenterMirrorAndEqualSpacingCandidates() {
-        let canvas = CGRect(x: 0, y: 0, width: 400, height: 200)
-        let first = CGRect(x: 50, y: 50, width: 40, height: 40) // center 70
-        let second = CGRect(x: 150, y: 50, width: 40, height: 40) // center 170
-        let start = CGRect(x: 300, y: 50, width: 40, height: 40)
-
-        var centerDrag = BoundControllerButtonDrag(startFrame: start, targets: [first, second],
-                                                   canvas: canvas, button: .menu,
-                                                   otherButtons: [.friend: first, .multiview: second])
-        let center = centerDrag.update(translation: CGSize(width: -120, height: 0), canvas: canvas)
-        XCTAssertEqual(center.snappedX, canvas.midX)
-        XCTAssertEqual(center.hint, "Centered")
-
-        var mirrorDrag = BoundControllerButtonDrag(startFrame: start, targets: [first],
-                                                   canvas: canvas, button: .menu,
-                                                   otherButtons: [.friend: first])
-        let mirror = mirrorDrag.update(translation: CGSize(width: 10, height: 0), canvas: canvas)
-        XCTAssertEqual(mirror.snappedX, 330, "A peer at x=70 mirrors to x=330 across center x=200.")
-        XCTAssertEqual(mirror.hint, "Mirrored")
-
-        let verticalStart = CGRect(x: 300, y: 100, width: 40, height: 40) // center y=120
-        var verticalMirrorDrag = BoundControllerButtonDrag(startFrame: verticalStart, targets: [first],
-                                                           canvas: canvas, button: .menu,
-                                                           otherButtons: [.friend: first])
-        let verticalMirror = verticalMirrorDrag.update(translation: CGSize(width: 0, height: 10), canvas: canvas)
-        XCTAssertEqual(verticalMirror.snappedY, 130, "A peer at y=70 mirrors to y=130 across center y=100.")
-        XCTAssertEqual(verticalMirror.hint, "Mirrored")
-
-        var spacingDrag = BoundControllerButtonDrag(startFrame: start, targets: [first, second],
-                                                    canvas: canvas, button: .menu,
-                                                    otherButtons: [.friend: first, .multiview: second])
-        let spaced = spacingDrag.update(translation: CGSize(width: -50, height: 0), canvas: canvas)
-        XCTAssertEqual(spaced.snappedX, 270,
-                       "The x=270 target continues the 70, 170 spacing interval.")
-        XCTAssertEqual(spaced.hint, "Even spacing")
-
-        let verticalCanvas = CGRect(x: 0, y: 0, width: 400, height: 400)
-        let upper = CGRect(x: 50, y: 50, width: 40, height: 40) // center y=70
-        let lower = CGRect(x: 50, y: 150, width: 40, height: 40) // center y=170, same column
-        let verticalSpacingStart = CGRect(x: 300, y: 280, width: 40, height: 40) // center y=300
-        var verticalSpacingDrag = BoundControllerButtonDrag(startFrame: verticalSpacingStart,
-            targets: [upper, lower], canvas: verticalCanvas, button: .menu,
-            otherButtons: [.friend: upper, .multiview: lower])
-        let verticalSpaced = verticalSpacingDrag.update(translation: CGSize(width: 0, height: -30), canvas: verticalCanvas)
-        XCTAssertEqual(verticalSpaced.snappedY, 270)
-        XCTAssertEqual(verticalSpaced.hint, "Even spacing")
-    }
-
     func testGamePlacementClampsAndKeepsFullSizeAndCenterDefaults() throws {
         let canvas = CGRect(x: 10, y: 20, width: 1000, height: 600)
         let base = CGRect(x: 110, y: 70, width: 800, height: 500)
@@ -278,12 +209,12 @@ final class ControllerButtonPlacementTests: XCTestCase {
         alignmentHaptics = 0
         let menuFrame = model.buttonFrame(.menu)
         let friendStart = model.buttonFrame(.friend)
-        let alignTranslation = CGSize(width: menuFrame.midX - friendStart.midX - 5,
+        let alignTranslation = CGSize(width: menuFrame.midX - friendStart.midX,
                                       height: menuFrame.midY - friendStart.midY)
         model.moveControllerButton(.friend, translation: alignTranslation, ended: false)
         model.moveControllerButton(.friend, translation: CGSize(width: alignTranslation.width + 2,
                                                                  height: alignTranslation.height), ended: false)
-        XCTAssertEqual(alignmentHaptics, 1, "Holding an acquired snap should emit one alignment haptic.")
+        XCTAssertEqual(alignmentHaptics, 0, "Free movement must not soft-snap to nearby controls.")
         model.moveControllerButton(.friend, translation: alignTranslation, ended: true)
         model.advanceArrangement()
         XCTAssertNotNil(defaults.data(forKey: key))
@@ -348,7 +279,7 @@ final class ControllerButtonPlacementTests: XCTestCase {
         XCTAssertNotEqual(model.controllerButtonFrame(.menu, defaultFrame: original, canvas: canvas), original)
     }
 
-    func testButtonSpreadSupportsThreeWayRowsColumnsAndTwoButtonSymmetry() throws {
+    func testArrangementGridTogglePersistsWithoutMovingButtonsUntilDragged() throws {
         let (model, defaults, namespace) = try makeModel()
         defer { defaults.removePersistentDomain(forName: namespace) }
         model.useOption(.option7, controllerModeEnabled: true)
@@ -358,33 +289,23 @@ final class ControllerButtonPlacementTests: XCTestCase {
         model.advanceArrangement()
         model.restoreControllerButton(.friend)
         model.restoreControllerButton(.multiview)
+        let before = model.buttonFrame(.friend)
 
-        let canvas = model.layout.canvas
-        model.spreadVertically = false
-        model.setButtonSpread(0.5)
-        var frames = model.visibleControllerButtons.map { model.buttonFrame($0) }.sorted { $0.midX < $1.midX }
-        XCTAssertEqual(frames.count, 3)
-        let firstGap = frames[1].midX - frames[0].midX
-        let secondGap = frames[2].midX - frames[1].midX
-        XCTAssertEqual(firstGap, secondGap, accuracy: 0.01)
-        XCTAssertEqual(frames.map(\.midX).reduce(0, +) / 3, canvas.midX, accuracy: 0.01)
-        XCTAssertTrue(zip(frames, frames.dropFirst()).allSatisfy { $0.1.minX - $0.0.maxX >= -0.01 },
-                      "Spread keeps the button frames at least non-overlapping.")
+        model.setDistanceSnappingEnabled(true)
+        XCTAssertTrue(model.distanceSnappingEnabled)
+        XCTAssertTrue(defaults.bool(forKey: BoundControllerButtonGridPreferences.enabledKey))
+        XCTAssertEqual(model.buttonFrame(.friend), before,
+                       "Enabling the grid must not silently reposition saved buttons.")
 
-        model.spreadVertically = true
-        model.setButtonSpread(0.4)
-        frames = model.visibleControllerButtons.map { model.buttonFrame($0) }.sorted { $0.midY < $1.midY }
-        XCTAssertEqual(frames.count, 3)
-        XCTAssertEqual(frames[1].midY - frames[0].midY,
-                       frames[2].midY - frames[1].midY, accuracy: 0.01)
-        XCTAssertEqual(frames.map(\.midY).reduce(0, +) / 3, canvas.midY, accuracy: 0.01)
+        let target = CGPoint(x: 700, y: 300)
+        let translation = CGSize(width: target.x - before.midX, height: target.y - before.midY)
+        model.moveControllerButton(.friend, translation: translation, ended: true)
+        let moved = model.buttonFrame(.friend)
+        XCTAssertEqual((moved.midX - 500).truncatingRemainder(dividingBy: 18), 0, accuracy: 0.001)
+        XCTAssertEqual((moved.midY - 300).truncatingRemainder(dividingBy: 18), 0, accuracy: 0.001)
 
-        model.spreadVertically = false
-        model.removeControllerButton(.multiview)
-        model.setButtonSpread(0.6)
-        let pair = [model.buttonFrame(.friend), model.buttonFrame(.menu)]
-        XCTAssertEqual(abs(pair[0].midX - canvas.midX), abs(pair[1].midX - canvas.midX), accuracy: 0.01,
-                       "Two buttons remain mirrored around the canvas center.")
+        model.setDistanceSnappingEnabled(false)
+        XCTAssertFalse(defaults.bool(forKey: BoundControllerButtonGridPreferences.enabledKey))
     }
 
     func testTrashRemovalPreservesButtonPlacementAndCannotRemoveMenu() throws {

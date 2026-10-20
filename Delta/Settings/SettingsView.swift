@@ -276,6 +276,8 @@ private struct ControlsSection: View
                     BoundControllerNavigationPreferences().isEnabled = enabled
                 }
 
+            BoundButtonGridSpacingSetting()
+
             NavigationLink {
                 ControllerSettingsView()
             } label: {
@@ -313,6 +315,29 @@ private struct ControlsSection: View
             controllerModeEnabled = BoundControllerModePreferences().isEnabled
             controllerNavigationEnabled = BoundControllerNavigationPreferences().isEnabled
             controllerMultiviewEnabled = BoundControllerMultiviewPreferences().isEnabled
+        }
+    }
+}
+
+struct BoundButtonGridSpacingSetting: View {
+    @State private var spacing = Double(BoundControllerButtonGridPreferences.spacing())
+
+    var body: some View {
+        VStack(alignment: .leading) {
+            LabeledContent("Button Grid Spacing", value: "\(Int(spacing)) pt")
+            Slider(value: Binding(get: { spacing }, set: { value in
+                spacing = value
+                BoundControllerButtonGridPreferences.setSpacing(CGFloat(value))
+            }),
+                   in: Double(BoundControllerButtonGridPreferences.minimumSpacing)...Double(BoundControllerButtonGridPreferences.maximumSpacing),
+                   step: 2)
+                .accessibilityLabel("Button Grid Spacing")
+                .accessibilityValue("\(Int(spacing)) points")
+                .accessibilityIdentifier("bound.button-grid-spacing")
+        }
+        .onAppear { spacing = Double(BoundControllerButtonGridPreferences.spacing()) }
+        .onReceive(NotificationCenter.default.publisher(for: Settings.didResetNotification)) { _ in
+            spacing = Double(BoundControllerButtonGridPreferences.spacing())
         }
     }
 }

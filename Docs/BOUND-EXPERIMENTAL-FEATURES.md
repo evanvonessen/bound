@@ -29,10 +29,15 @@ discards both steps. Controller Mode on and off retain separate arrangements.
 In Controller Mode, drag Friend or Multiview onto the trash target to remove its
 button. The adjacent **+** opens a tray: tap a button to restore its position or
 drag it directly onto the screen. Menu can move but cannot be removed. All three
-buttons support repeatable horizontal/vertical alignment, mirrored placement,
-and equal-spacing snaps. The **Spread** control arranges the visible buttons
-symmetrically with equal spacing, horizontally or vertically. Continuing a drag
-releases a snap; crossing the same guide again can snap again.
+buttons move freely with **Distance Snapping** off. With it on, their centers
+snap to a square grid anchored at the screen center, so equal offsets on either
+side are symmetric. **Settings → Controls → Button Grid Spacing** adjusts the
+increment from 6 to 48 points; the default is 18 points (roughly 3 mm on iPhones).
+The same spacing slider is also visible in a small translucent control inside
+Arrange Views.
+This grid applies only to Menu, Friend and Multiview buttons. Changing its settings
+does not move existing buttons; dragging applies the grid. Their saved placements
+and the grid settings are included in **Export All Config**.
 
 The previous controller modes have been consolidated into this one setup. Saved
 companion panel placements migrate from the previously selected mode once. Reset

@@ -155,20 +155,22 @@ struct BoundLandscapeArrangementOverlay: View {
                 Button {
                     trayButtons = [.friend, .multiview].filter { !model.isButtonVisible($0) }
                     model.showingButtonTray.toggle()
-                    model.showingSpread = false
                 } label: { Image(systemName: "plus") }.frame(width: 44, height: 44)
                     .accessibilityLabel("Add button")
                     .accessibilityIdentifier("bound.arrange-buttons.plus")
                 Button {
-                    model.showingSpread.toggle()
+                    model.setDistanceSnappingEnabled(!model.distanceSnappingEnabled)
                     model.showingButtonTray = false
-                } label: { Image(systemName: "arrow.left.and.right") }.frame(width: 44, height: 44)
-                    .disabled(model.visibleControllerButtons.count < 2)
-                    .accessibilityLabel("Spread buttons evenly")
-                    .accessibilityIdentifier("bound.arrange-buttons.spread")
+                } label: {
+                    Image(systemName: "circle.grid.3x3.fill")
+                        .foregroundStyle(model.distanceSnappingEnabled ? Color(uiColor: .deltaPurple) : Color.primary)
+                }.frame(width: 44, height: 44)
+                    .accessibilityLabel("Distance Snapping")
+                    .accessibilityValue(model.distanceSnappingEnabled ? "On" : "Off")
+                    .accessibilityIdentifier("bound.arrange-buttons.distance-snapping")
             }
             .font(.system(size: 18, weight: .semibold))
-            .frame(width: 210, height: 44, alignment: .leading)
+            .frame(width: 176, height: 44, alignment: .leading)
             .background(.regularMaterial, in: Capsule())
             .placed(model.buttonToolbarFrame)
             if model.showingButtonTray {
@@ -191,24 +193,40 @@ struct BoundLandscapeArrangementOverlay: View {
                         .placed(model.buttonTrayFrame(button))
                 }
             }
-            if model.showingSpread {
-                VStack(spacing: 5) {
-                    Picker("Alignment", selection: $model.spreadVertically) {
-                        Text("Horizontal").tag(false)
-                        Text("Vertical").tag(true)
-                    }.pickerStyle(.segmented)
-                    HStack {
-                        Text("Spread").font(.caption)
-                        Slider(value: Binding(get: { Double(model.buttonSpread) }, set: { model.setButtonSpread(CGFloat($0)) }), in: Double(model.minimumButtonSpread)...1)
-                            .accessibilityLabel("Button spread")
-                            .accessibilityIdentifier("bound.arrange-buttons.spread-slider")
-                    }
-                }
-                .padding(10).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                .placed(CGRect(x: model.buttonToolbarFrame.midX - 140, y: model.buttonToolsExpandUpward ? model.buttonToolbarFrame.minY - 96 : model.buttonToolbarFrame.maxY + 8, width: 280, height: 88))
-            }
+            gridSpacingControl
         }
         .tint(Color(uiColor: .deltaPurple))
+    }
+
+    private var gridSpacingControl: some View {
+        let canvas = model.layout.canvas
+        let toolbar = model.buttonToolbarFrame
+        let width = min(220, canvas.width)
+        let y: CGFloat
+        if model.showingButtonTray {
+            y = model.buttonToolsExpandUpward ? canvas.minY + 4 : canvas.maxY - 40
+        } else {
+            y = model.buttonToolsExpandUpward ? toolbar.minY - 42 : toolbar.maxY + 4
+        }
+        let x = min(canvas.maxX - width, max(canvas.minX, canvas.midX - width / 2))
+        return HStack(spacing: 7) {
+            Text("\(Int(model.buttonGridSpacing)) pt")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .accessibilityHidden(true)
+            Slider(value: Binding(get: { Double(model.buttonGridSpacing) },
+                                  set: { model.setButtonGridSpacing(CGFloat($0)) }),
+                   in: Double(BoundControllerButtonGridPreferences.minimumSpacing)...Double(BoundControllerButtonGridPreferences.maximumSpacing),
+                   step: 2)
+                .accessibilityLabel("Distance grid spacing")
+                .accessibilityValue("\(Int(model.buttonGridSpacing)) points")
+                .accessibilityIdentifier("bound.arrange-buttons.grid-spacing")
+        }
+        .padding(.horizontal, 10)
+        .frame(width: width, height: 36)
+        .background(.ultraThinMaterial, in: Capsule())
+        .opacity(0.86)
+        .placed(CGRect(x: x, y: y, width: width, height: 36))
     }
 
     private var buttonAlignmentGuides: some View {
