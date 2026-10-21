@@ -68,6 +68,20 @@ class SyncingServicesViewController: UITableViewController
         
         self.syncingEnabledSwitch.onTintColor = .deltaPurple
         self.syncingEnabledSwitch.isOn = (self.selectedSyncingService != nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(boundAccountChanged(_:)),
+            name: BoundFriendAccount.sessionDidChangeNotification, object: nil)
+    }
+
+    @objc private func boundAccountChanged(_ notification: Notification) {
+        guard notification.object as? BoundFriendAccount === BoundFriendAccount.shared else { return }
+        selectedSyncingService = SyncManager.currentBoundService
+        syncingEnabledSwitch.setOn(selectedSyncingService != nil, animated: true)
+        tableView.reloadData()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        tableView.reloadData()
     }
 }
 
@@ -157,6 +171,39 @@ private extension SyncingServicesViewController
         }
     }
 
+    func manageDropboxConnection()
+    {
+        let identity = BoundFriendAccount.shared.session
+        let alert = UIAlertController(title: "Dropbox Connection",
+            message: "Disconnect this device to pause its sync, or unlink Dropbox from your Bound account on all devices. Dropbox files and local games are kept.", preferredStyle: .alert)
+        alert.addAction(.cancel)
+        func disconnect(unlink: Bool) {
+            guard let identity, identity.isSameSession(as: BoundFriendAccount.shared.session) else { return }
+            self.activityIndicatorView.startAnimating()
+            SyncManager.shared.deauthenticate { result in
+                DispatchQueue.main.async {
+                    Task { @MainActor in
+                        defer { self.activityIndicatorView.stopAnimating(); self.tableView.reloadData() }
+                        do {
+                            try result.get()
+                            guard identity.isSameSession(as: BoundFriendAccount.shared.session) else { throw BoundDropboxOAuth.Failure.changed }
+                            Settings.syncingService = nil
+                            self.selectedSyncingService = nil
+                            self.syncingEnabledSwitch.setOn(false, animated: true)
+                            if unlink { try await BoundDropboxOAuth.shared.unlink() }
+                        } catch {
+                            let failure = UIAlertController(title: unlink ? "Unable to Unlink Dropbox" : "Unable to Disconnect", error: error)
+                            self.present(failure, animated: true)
+                        }
+                    }
+                }
+            }
+        }
+        alert.addAction(UIAlertAction(title: "Disconnect This Device", style: .default) { _ in disconnect(unlink: false) })
+        alert.addAction(UIAlertAction(title: "Unlink Dropbox Everywhere", style: .destructive) { _ in disconnect(unlink: true) })
+        self.present(alert, animated: true)
+    }
+
     func presentProviderConfigurationAlert()
     {
         let unavailable = SyncManager.availableBoundServices.filter { !SyncManager.isServiceConfigured($0) }
@@ -220,12 +267,12 @@ extension SyncingServicesViewController
             if SyncManager.shared.coordinator?.account != nil
             {
                 cell.textLabel?.textColor = .red
-                cell.textLabel?.text = NSLocalizedString("Sign Out", comment: "")
+                cell.textLabel?.text = NSLocalizedString("Manage Dropbox Connection", comment: "")
             }
             else
             {
                 cell.textLabel?.textColor = .deltaPurple
-                cell.textLabel?.text = NSLocalizedString("Sign In", comment: "")
+                cell.textLabel?.text = NSLocalizedString("Connect Dropbox", comment: "")
             }
         }
         
@@ -234,6 +281,9 @@ extension SyncingServicesViewController
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String?
     {
+        if Section.allCases[section] == .authenticate {
+            return "Sign in to Bound first. Connecting Dropbox links it to your Bound account, so other devices can reconnect without Dropbox authorization. Disconnecting this device keeps that link. Switching Bound accounts pauses sync. Re-enable it to include this device’s local games and saves in that account’s Dropbox."
+        }
         guard Section.allCases[section] == .service,
               SyncManager.availableBoundServices.contains(where: { !SyncManager.isServiceConfigured($0) }) else {
             return super.tableView(tableView, titleForFooterInSection: section)
@@ -277,28 +327,7 @@ extension SyncingServicesViewController
         case .authenticate:            
             if SyncManager.shared.coordinator?.account != nil
             {
-                let alertController = UIAlertController(title: NSLocalizedString("Are you sure you want to sign out?", comment: ""), message: NSLocalizedString("Signing in again later may result in conflicts that must be resolved manually.", comment: ""), preferredStyle: .alert)
-                alertController.addAction(.cancel)
-                alertController.addAction(UIAlertAction(title: NSLocalizedString("Sign Out", comment: ""), style: .destructive) { (action) in
-                    SyncManager.shared.deauthenticate { (result) in
-                        DispatchQueue.main.async {
-                            do
-                            {
-                                try result.get()
-                                self.tableView.reloadData()
-                                
-                                Settings.syncingService = nil
-                            }
-                            catch
-                            {
-                                let alertController = UIAlertController(title: NSLocalizedString("Failed to Sign Out", comment: ""), error: error)
-                                self.present(alertController, animated: true, completion: nil)
-                            }
-                        }
-                    }
-                })
-                
-                self.present(alertController, animated: true, completion: nil)
+                self.manageDropboxConnection()
             }
             else
             {

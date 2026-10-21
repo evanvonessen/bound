@@ -477,6 +477,10 @@
 		B4771000000000000000000D /* NativeBattleRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4771000000000000000000C /* NativeBattleRuntimeTests.swift */; };
 		A15E0000000000000000000A /* PresenceConnectionCheckTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */; };
 		A15E00000000000000000006 /* LivePresenceRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000005 /* LivePresenceRuntimeTests.swift */; };
+		13F19494F424DCFFA2760ABF /* BoundAccountSecurityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8747653C8B7C6C2DD2586A01 /* BoundAccountSecurityView.swift */; };
+		6A17BE0980A8001F718195FB /* BoundPasskeyAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0756130DACFA8B7912B7CD5 /* BoundPasskeyAuthorization.swift */; };
+		BCE5B385F6C0737FD6123053 /* BoundAccountSecurityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0981A00AD461E9397CC203BB /* BoundAccountSecurityTests.swift */; };
+		A5AE64D04542272BAE4E4C27 /* BoundPasskeyAuthorizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A6DCD6DC10B39963CC46BE6 /* BoundPasskeyAuthorizationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1315,6 +1319,10 @@
 		B4771000000000000000000C /* NativeBattleRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeBattleRuntimeTests.swift; sourceTree = "<group>"; };
 		A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresenceConnectionCheckTests.swift; sourceTree = "<group>"; };
 		A15E00000000000000000005 /* LivePresenceRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePresenceRuntimeTests.swift; sourceTree = "<group>"; };
+		8747653C8B7C6C2DD2586A01 /* BoundAccountSecurityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundAccountSecurityView.swift; sourceTree = "<group>"; };
+		F0756130DACFA8B7912B7CD5 /* BoundPasskeyAuthorization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPasskeyAuthorization.swift; sourceTree = "<group>"; };
+		0981A00AD461E9397CC203BB /* BoundAccountSecurityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundAccountSecurityTests.swift; sourceTree = "<group>"; };
+		1A6DCD6DC10B39963CC46BE6 /* BoundPasskeyAuthorizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPasskeyAuthorizationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1450,6 +1458,8 @@
 				13B6FBE642F317EBFF2FEB7F /* MacWorkspaceTests.swift */,
 				AA0D748265F54753A8DF4204 /* MacMetalCacheTests.swift */,
 				82832C7AA5F5408995A7C407 /* BoundAccountSocialTests.swift */,
+				1A6DCD6DC10B39963CC46BE6 /* BoundPasskeyAuthorizationTests.swift */,
+				0981A00AD461E9397CC203BB /* BoundAccountSecurityTests.swift */,
 				EF068D284BCE47409FBF25C2 /* BoundDropboxOAuthTests.swift */,
 				104D04088215A199CB56949A /* StockControlAndGestureTests.swift */,
 				B2476C2B0032441E97FF3CD5 /* AccountPersistenceIntegrationTests.swift */,
@@ -1501,6 +1511,8 @@
 				87F89619153040A1B064B58F /* BoundSourceAndLicenses.swift */,
 				100D7B126A5A87377393E29C /* AgoraSharingTransport.swift */,
 				1610A5E4B1140888AA9EFF6F /* BoundFriendAccount.swift */,
+				F0756130DACFA8B7912B7CD5 /* BoundPasskeyAuthorization.swift */,
+				8747653C8B7C6C2DD2586A01 /* BoundAccountSecurityView.swift */,
 				73551A9F3458410E9D491E3B /* BoundAccountSocial.swift */,
 				EAA7562AAABA52F743D74FFA /* BoundNotesStore.swift */,
 				CD57C331890EA530190F8FB0 /* FriendOnboarding.swift */,
@@ -3259,6 +3271,8 @@
 				CF8D391A7DCA20ABDE574139 /* MacWorkspaceTests.swift in Sources */,
 				AA0D748265F54753A8DF4203 /* MacMetalCacheTests.swift in Sources */,
 				720C1BBDC97744F4AE7CA3F3 /* BoundAccountSocialTests.swift in Sources */,
+				A5AE64D04542272BAE4E4C27 /* BoundPasskeyAuthorizationTests.swift in Sources */,
+				BCE5B385F6C0737FD6123053 /* BoundAccountSecurityTests.swift in Sources */,
 				DC44859A7C07464BBE63B016 /* BoundDropboxOAuthTests.swift in Sources */,
 				D1CCDE2C67C0DCD2A3EF9645 /* StockControlAndGestureTests.swift in Sources */,
 				47AF26DA565A4105BA138CAF /* AccountPersistenceIntegrationTests.swift in Sources */,
@@ -3513,6 +3527,8 @@
 				CA0001102E60000100000010 /* VideoSettingsView.swift in Sources */,
 				061BD9D9D29F92EBDB48A354 /* AgoraSharingTransport.swift in Sources */,
 				C074ECB1EA7E3F7B476BEB91 /* BoundFriendAccount.swift in Sources */,
+				6A17BE0980A8001F718195FB /* BoundPasskeyAuthorization.swift in Sources */,
+				13F19494F424DCFFA2760ABF /* BoundAccountSecurityView.swift in Sources */,
 				F9AFD206089B4A1CA0FCFDBC /* BoundAccountSocial.swift in Sources */,
 				48B56AE0B73C7AAE7DAC60F2 /* BoundNotesStore.swift in Sources */,
 				E8A7206B7421C6BC0900D58C /* FriendOnboarding.swift in Sources */,

@@ -64,7 +64,8 @@ extension SyncManager
     static var availableBoundServices: [Service] { [.dropbox] }
 
     static var currentBoundService: Service? {
-        guard Settings.syncingService == .dropbox else { return nil }
+        guard Settings.syncingService == .dropbox,
+              !UserDefaults.standard.bool(forKey: "bound.dropbox.device-paused.v1") else { return nil }
         return .dropbox
     }
 
@@ -124,6 +125,9 @@ final class SyncManager
     private var controlOperations = [ControlOperation]()
     private var isRunningControlOperation = false
     private var startGeneration = UUID()
+    private var providerGeneration = UUID()
+    private var isChangingBoundAccount = false
+    private static let boundOwnerKey = "bound.dropbox.harmony-owner.v1"
     private var startingCoordinator: SyncCoordinator?
     private var coordinatorWaitingToStop: SyncCoordinator?
     
@@ -133,6 +137,8 @@ final class SyncManager
         
         DropboxService.shared.preferredDirectoryName = "Delta Emulator"
         
+        NotificationCenter.default.addObserver(self, selector: #selector(SyncManager.boundAccountWillSignOut(_:)), name: BoundFriendAccount.willSignOutNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(SyncManager.boundAccountDidChange(_:)), name: BoundFriendAccount.sessionDidChangeNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(SyncManager.syncingDidFinish(_:)), name: SyncCoordinator.didFinishSyncingNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(SyncManager.didEnterBackground(_:)), name: UIApplication.didEnterBackgroundNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(SyncManager.willEnterForeground(_:)), name: UIApplication.willEnterForegroundNotification, object: nil)
@@ -187,11 +193,30 @@ extension SyncManager
             } else {
                 DropboxService.shared.clientID = appKey
             }
-            DropboxService.shared.accessTokenProvider = { presenter, completion in
-                BoundDropboxOAuth.shared.provideAccessToken(presenting: presenter, completion: completion)
+            let epoch = self.startGeneration
+            let providerEpoch = self.providerGeneration
+            let identity = MainActor.assumeIsolated { BoundFriendAccount.shared.session }
+            DropboxService.shared.accessTokenProvider = { [weak self] presenter, completion in
+                Task { @MainActor in
+                    await BoundFriendAccount.shared.refreshIfNeeded()
+                    guard let self, self.startGeneration == epoch, self.providerGeneration == providerEpoch,
+                          let identity, identity.isSameSession(as: BoundFriendAccount.shared.session) else {
+                        completion(.failure(.other(BoundDropboxOAuth.Failure.signIn)))
+                        return
+                    }
+                    BoundDropboxOAuth.shared.provideAccessToken(presenting: presenter, completion: completion)
+                }
             }
-            DropboxService.shared.deauthenticationHandler = {
-                BoundDropboxOAuth.shared.clearCredentials()
+            DropboxService.shared.deauthenticationHandler = { [weak self] in
+                let clear = { @MainActor in
+                    self?.providerGeneration = UUID()
+                    BoundDropboxOAuth.shared.clearCredentials()
+                }
+                if Thread.isMainThread {
+                    MainActor.assumeIsolated { clear() }
+                } else {
+                    DispatchQueue.main.sync { MainActor.assumeIsolated { clear() } }
+                }
             }
         }
         return true
@@ -206,26 +231,38 @@ extension SyncManager
     
     func reset(for service: Service?, completionHandler: @escaping (Result<Void, Swift.Error>) -> Void)
     {
+        let complete: (Result<Void, Swift.Error>) -> Void = { result in
+            if case .success = result {
+                UserDefaults.standard.set(service != .dropbox, forKey: "bound.dropbox.device-paused.v1")
+            }
+            completionHandler(result)
+        }
         self.enqueueControlOperation { finish in
             if let service, !SyncManager.availableBoundServices.contains(service) {
-                completionHandler(.success); finish(); return
+                complete(.success); finish(); return
             }
 
             if let service, !self.configureProvider(service) {
-                completionHandler(.failure(Error.providerNotConfigured(service)))
+                complete(.failure(Error.providerNotConfigured(service)))
                 finish()
                 return
             }
 
             guard let coordinator = self.coordinator else {
-                self.start(service: service, completionHandler: completionHandler, finish: finish)
+                self.start(service: service, completionHandler: complete, finish: finish)
                 return
             }
 
-            coordinator.deauthenticate { _ in
+            self.isChangingBoundAccount = true
+            coordinator.deauthenticate { result in
                 DispatchQueue.main.async {
+                    do { try result.get() }
+                    catch {
+                        self.isChangingBoundAccount = false
+                        complete(.failure(error)); finish(); return
+                    }
                     self.coordinator = nil
-                    self.start(service: service, completionHandler: completionHandler, finish: finish)
+                    self.start(service: service, completionHandler: complete, finish: finish)
                 }
             }
         }
@@ -233,6 +270,14 @@ extension SyncManager
     
     func authenticate(presentingViewController: UIViewController? = nil, completionHandler: @escaping (Result<Account, AuthenticationError>) -> Void)
     {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.authenticate(presentingViewController: presentingViewController, completionHandler: completionHandler) }
+            return
+        }
+        guard MainActor.assumeIsolated({ BoundFriendAccount.shared.session != nil && !BoundFriendAccount.shared.deletionPending }) else {
+            return completionHandler(.failure(.other(BoundDropboxOAuth.Failure.signIn)))
+        }
+        guard !isChangingBoundAccount else { return completionHandler(.failure(.other(BoundDropboxOAuth.Failure.changed))) }
         guard let coordinator = self.coordinator else { return completionHandler(.failure(AuthenticationError(Error.nilService))) }
         
         coordinator.authenticate(presentingViewController: presentingViewController, completionHandler: completionHandler)
@@ -242,17 +287,45 @@ extension SyncManager
     {
         guard let coordinator = self.coordinator else { return completionHandler(.success) }
         
-        coordinator.deauthenticate(completionHandler: completionHandler)
+        self.isChangingBoundAccount = true
+        coordinator.deauthenticate { result in
+            DispatchQueue.main.async {
+                if self.coordinator === coordinator { self.isChangingBoundAccount = false }
+                completionHandler(result)
+            }
+        }
     }
     
     func sync()
     {
-        // Don't sync until we've repaired database.
-        guard !UserDefaults.standard.shouldRepairDatabase else { return }
+        guard Thread.isMainThread else { DispatchQueue.main.async { self.sync() }; return }
+        // Account boundaries stop scheduling immediately, before queued teardown.
+        guard !isChangingBoundAccount, Self.currentBoundService != nil,
+              MainActor.assumeIsolated({ BoundFriendAccount.shared.session != nil && !BoundFriendAccount.shared.deletionPending }),
+              !UserDefaults.standard.shouldRepairDatabase else { return }
         
         let progress = self.coordinator?.sync()
         self.syncProgress = progress
     }
+}
+
+extension SyncManager
+{
+    // Called only on the main actor, before a new broker token reaches Harmony.
+    @MainActor func acceptDropboxConnection(owner: UUID, connection: UUID) -> Bool
+    {
+        let key = "bound.dropbox.connection.v1." + owner.uuidString
+        let previous = UserDefaults.standard.string(forKey: key)
+        UserDefaults.standard.set(connection.uuidString, forKey: key)
+        guard let previous, previous != connection.uuidString else { return true }
+        // Another device may have unlinked and connected a different Dropbox.
+        // Drain old work and reset its metadata before installing the new token.
+        UserDefaults.standard.removeObject(forKey: Self.boundOwnerKey)
+        self.suspendForBoundAccountChange()
+        self.start(service: Self.currentBoundService) { _ in }
+        return false
+    }
+
 }
 
 private extension SyncManager
@@ -300,19 +373,28 @@ private extension SyncManager
         let candidate = SyncCoordinator(service: service.service, persistentContainer: DatabaseManager.shared)
         self.startingCoordinator = candidate
 
-        if !UserDefaults.standard.didValidateHarmonyBetaDatabase {
-            candidate.deauthenticate { _ in
+        let boundOwner = MainActor.assumeIsolated { BoundFriendAccount.shared.session?.owner.uuidString ?? "signed-out" }
+        let needsOwnerReset = UserDefaults.standard.string(forKey: Self.boundOwnerKey) != boundOwner
+        if !UserDefaults.standard.didValidateHarmonyBetaDatabase || needsOwnerReset {
+            candidate.deauthenticate { resetResult in
                 DispatchQueue.main.async {
                     guard self.startGeneration == generation else {
                         self.startingCoordinator = nil
                         self.stopCoordinator(candidate)
-                        completionHandler(.success); finish(); return
+                        completionHandler(.failure(BoundDropboxOAuth.Failure.changed)); finish(); return
                     }
 
-                    do { try FileManager.default.removeItem(at: RecordController.defaultDirectoryURL()) }
-                    catch CocoaError.fileNoSuchFile { /* Ignore. */ }
-                    catch { Logger.sync.error("Failed to remove Harmony database. \(error.localizedDescription, privacy: .public)") }
+                    do {
+                        try resetResult.get()
+                        do { try FileManager.default.removeItem(at: RecordController.defaultDirectoryURL()) }
+                        catch CocoaError.fileNoSuchFile { /* Ignore. */ }
+                    } catch {
+                        self.startingCoordinator = nil
+                        self.stopCoordinator(candidate)
+                        completionHandler(.failure(error)); finish(); return
+                    }
                     UserDefaults.standard.didValidateHarmonyBetaDatabase = true
+                    UserDefaults.standard.set(boundOwner, forKey: Self.boundOwnerKey)
                     self.startingCoordinator = nil
                     self.start(service: service, completionHandler: completionHandler, finish: finish)
                 }
@@ -325,13 +407,14 @@ private extension SyncManager
                 guard self.startGeneration == generation else {
                     self.startingCoordinator = nil
                     self.stopCoordinator(candidate)
-                    completionHandler(.success); finish(); return
+                    completionHandler(.failure(BoundDropboxOAuth.Failure.changed)); finish(); return
                 }
 
                 do {
                     _ = try result.get()
                     self.startingCoordinator = nil
                     self.coordinator = candidate
+                    self.isChangingBoundAccount = false
                     completionHandler(.success); finish()
                 }
                 catch let authError as AuthenticationError {
@@ -391,6 +474,50 @@ private extension SyncManager
         guard coordinator.isStarted else { return }
         do { try coordinator.stop() }
         catch { Logger.sync.error("Failed to stop SyncManager. \(error.localizedDescription, privacy: .public)") }
+    }
+
+    @objc func boundAccountWillSignOut(_ notification: Notification)
+    {
+        MainActor.assumeIsolated {
+            guard notification.object as? BoundFriendAccount === BoundFriendAccount.shared else { return }
+            UserDefaults.standard.set(true, forKey: "bound.dropbox.device-paused.v1")
+            self.suspendForBoundAccountChange()
+        }
+    }
+
+    @MainActor func suspendForBoundAccountChange()
+    {
+        self.isChangingBoundAccount = true
+        self.startGeneration = UUID()
+        BoundDropboxOAuth.shared.cancelPendingAuthorization()
+        let old = self.coordinator
+        self.coordinator = nil
+        self.previousSyncResult = nil
+        self.syncProgress?.cancel(); self.syncProgress = nil
+        // Drain old Dropbox work before resetting the shared Harmony metadata
+        // or allowing a new account's provider to install its access token.
+        self.enqueueControlOperation { finish in
+            guard let old else { finish(); return }
+            old.cancelSyncing {
+                old.deauthenticate { result in
+                    DispatchQueue.main.async {
+                        if case .failure = result {
+                            self.stopCoordinator(old)
+                        }
+                        finish()
+                    }
+                }
+            }
+        }
+    }
+
+    @objc func boundAccountDidChange(_ notification: Notification)
+    {
+        MainActor.assumeIsolated {
+            guard notification.object as? BoundFriendAccount === BoundFriendAccount.shared,
+                  BoundFriendAccount.shared.session != nil else { return }
+            self.start(service: Self.currentBoundService) { _ in }
+        }
     }
 
     @objc func syncingDidFinish(_ notification: Notification)

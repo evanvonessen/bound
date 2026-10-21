@@ -85,10 +85,26 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
     func friendSharingRequest(roomID: String) throws -> URLRequest {
         try request(path: "/functions/v1/agora-token", body: ["roomID": roomID])
     }
+    func dropboxLinkRequest(action: String, code: String? = nil, verifier: String? = nil) throws -> URLRequest {
+        var body = ["action": action]
+        if let code { body["code"] = code }
+        if let verifier { body["verifier"] = verifier }
+        return try request(path: "/functions/v1/bound-dropbox", body: body)
+    }
     func accountUserRequest() throws -> URLRequest {
         var result = try request(path: "/auth/v1/user", body: [:])
         result.httpMethod = "GET"; result.httpBody = nil
         return result
+    }
+    fileprivate func accountSecurityRequest(path: String, method: String = "POST", body: [String: Any] = [:]) throws -> URLRequest {
+        var result = try request(path: "/auth/v1/" + path, body: body)
+        result.httpMethod = method
+        if method == "GET" || method == "DELETE" { result.httpBody = nil }
+        return result
+    }
+    func accountEmailChangeRequest(newEmail: String, currentPassword: String) throws -> URLRequest {
+        try request(path: "/functions/v1/change-account-email",
+                    body: ["newEmail": newEmail, "currentPassword": currentPassword])
     }
     func accountDeletionRequest(operation: String, email: String) throws -> URLRequest {
         try request(path: "/functions/v1/delete-account", body: ["operationToken": operation, "confirmationEmail": email])
@@ -210,13 +226,62 @@ enum BoundAuthTransport {
     }
 }
 
+struct BoundSecurityFactor: Identifiable, Equatable {
+    let id: String
+    let friendlyName: String
+    let factorType: String
+    let status: String
+}
+struct BoundAccountPasskey: Identifiable, Equatable {
+    let id: String
+    let name: String
+}
+/// Enrollment secrets live only in memory until verified or cancelled.
+struct BoundTOTPEnrollment: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
+    let factorID: String
+    let secret: String
+    let uri: String
+    var description: String { "BoundTOTPEnrollment(redacted)" }
+    var debugDescription: String { description }
+    var customMirror: Mirror { Mirror(self, children: ["secret": "redacted"]) }
+}
+
 @MainActor
 final class BoundFriendAccount: ObservableObject {
     nonisolated static let origin = "https://qevnxhngdtlyihhmvnjv.supabase.co"
     // All production game coordinators share one owner of the rotating refresh token.
     static let shared = BoundFriendAccount()
-    static let willSignOutNotification = Notification.Name("BoundFriendAccountWillSignOut")
-    @Published private(set) var session: AppCloudSession?
+    nonisolated static let willSignOutNotification = Notification.Name("BoundFriendAccountWillSignOut")
+    nonisolated static let sessionDidChangeNotification = Notification.Name("BoundFriendAccountSessionDidChange")
+    @Published private(set) var session: AppCloudSession? {
+        didSet {
+            guard publishesSessionChanges else { return }
+            if oldValue == nil && session == nil { return }
+            if let oldValue, oldValue.isSameSession(as: session) { return }
+            NotificationCenter.default.post(name: Self.sessionDidChangeNotification, object: self)
+        }
+    }
+    @Published private(set) var emailAddress: String?
+    @Published private(set) var changingEmail = false
+    @Published private(set) var emailChangeStatus = ""
+    @Published private(set) var sendingPasswordReset = false
+    @Published private(set) var passwordResetStatus = ""
+    @Published private(set) var securityBusy = false {
+        didSet {
+            if !securityBusy {
+                let waiters = securityIdleWaiters; securityIdleWaiters = []
+                for waiter in waiters { waiter.resume() }
+            }
+        }
+    }
+    @Published private(set) var securityStatus = ""
+    @Published private(set) var securityFactors: [BoundSecurityFactor] = []
+    @Published private(set) var passkeys: [BoundAccountPasskey] = []
+    @Published private(set) var totpEnrollment: BoundTOTPEnrollment?
+    @Published private(set) var pendingMFA = false
+    @Published private(set) var securityAAL2 = false
+    var securityIdentityID: UUID? { session?.owner ?? pendingMFASession?.owner }
+    var passkeysAvailable: Bool { passkeysConfigurationAvailable() }
     @Published private(set) var busy = false
     @Published private(set) var status = "Sign in with your existing Bound account."
     @Published private(set) var deletionEmail: String?
@@ -226,6 +291,16 @@ final class BoundFriendAccount: ObservableObject {
     private let configuration: () throws -> String
     private let transport: @MainActor (URLRequest) async throws -> BoundAuthTransport.Response
     private let automaticRefresh: Bool
+    private let passkeyRegistration: @MainActor (Data) async throws -> Data
+    private let passkeyAuthentication: @MainActor (Data) async throws -> Data
+    private let passkeysConfigurationAvailable: @MainActor () -> Bool
+    private var pendingMFASession: BoundSavedSession?
+    private var pendingMFAIdentity: AppCloudSession?
+    private var securityIdleWaiters: [CheckedContinuation<Void, Never>] = []
+    private var enrollmentCleanupTask: Task<Void, Never>?
+    // Initialization must not publish through observers that resolve `.shared`
+    // while the singleton is still being constructed.
+    private var publishesSessionChanges = false
     private var saved: BoundSavedSession?
     private var generation = UUID()
     private var refreshTask: Task<Void, Never>?
@@ -235,26 +310,46 @@ final class BoundFriendAccount: ObservableObject {
     private var removalPending = false
     private var savePending = false
     private var retryDelay: TimeInterval = 5
+    private var loadingEmailAddress = false
+    private var nextPasswordResetAt = Date.distantPast
     private var pendingDeletion: BoundDeletionRecord?
     private var deletionIdentityOwner: UUID?
 
     init(storage: (any BoundSessionStorage)? = nil, deletionStorage: (any BoundSessionStorage)? = nil, automaticRefresh: Bool = true,
          configuration: @escaping () throws -> String = BoundFriendAccount.bundledKey,
-         transport: @escaping @MainActor (URLRequest) async throws -> BoundAuthTransport.Response = BoundAuthTransport.perform) {
+         transport: @escaping @MainActor (URLRequest) async throws -> BoundAuthTransport.Response = BoundAuthTransport.perform,
+         passkeyRegistration: @escaping @MainActor (Data) async throws -> Data = BoundPasskeyAuthorization.registration,
+         passkeyAuthentication: @escaping @MainActor (Data) async throws -> Data = BoundPasskeyAuthorization.authentication,
+         passkeysConfigurationAvailable: @escaping @MainActor () -> Bool = { BoundPasskeyAuthorization.isConfigured }) {
         self.storage = storage ?? BoundKeychainSessionStorage()
         self.deletionStorage = deletionStorage ?? BoundKeychainSessionStorage(service: (Bundle.main.bundleIdentifier ?? "Bound") + ".friend-account-deletion")
         self.configuration = configuration; self.transport = transport; self.automaticRefresh = automaticRefresh
+        self.passkeyRegistration = passkeyRegistration; self.passkeyAuthentication = passkeyAuthentication
+        self.passkeysConfigurationAvailable = passkeysConfigurationAvailable
         restore()
         restoreDeletion()
+        publishesSessionChanges = true
+        if automaticRefresh {
+            // Enqueue after initialization: observers may resolve `.shared` while this
+            // singleton is being constructed, so no asynchronous lookup starts inline.
+            Task { @MainActor [weak self] in
+                await self?.refreshIfNeeded()
+                await self?.loadAccountSecurity()
+            }
+        }
         #if canImport(UIKit)
         activeObserver = BoundAuthObservation(NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification,
                                                                 object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in await self?.refreshIfNeeded() }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.refreshIfNeeded()
+                if self.automaticRefresh { await self.loadAccountSecurity() }
+            }
         })
         #endif
     }
     deinit {
-        timer?.cancel(); refreshTask?.cancel()
+        timer?.cancel(); refreshTask?.cancel(); enrollmentCleanupTask?.cancel()
     }
     nonisolated static func bundledKey() throws -> String {
         guard let url = Bundle.main.url(forResource: "cloud-configuration", withExtension: "json"),
@@ -273,7 +368,8 @@ final class BoundFriendAccount: ObservableObject {
                 let value = try JSONDecoder().decode(BoundSavedSession.self, from: bytes)
                 guard value.origin == Self.origin, !value.refreshToken.isEmpty, value.refreshToken.utf8.count <= 16384 else { throw BoundFriendError.signIn }
                 session = try AppCloudSession(owner: value.owner, key: key, token: value.accessToken, allowExpired: true)
-                saved = value; restorePending = false; status = "Signed in."
+                saved = value; securityAAL2 = Self.assuranceLevel(value.accessToken) == "aal2"; emailAddress = Self.emailClaim(value.accessToken)
+                restorePending = false; status = "Signed in."
                 schedule(after: max(0, session!.expiresAt.timeIntervalSinceNow - 60))
             } catch {
                 restorePending = false
@@ -301,11 +397,7 @@ final class BoundFriendAccount: ObservableObject {
             guard generation == run, !Task.isCancelled else { return }
             guard response.status == 200 else { throw BoundFriendError.signIn }
             let next = try decode(response.data)
-            let identity = try AppCloudSession(owner: next.owner, key: key, token: next.accessToken)
-            // Publish a new login only after secure persistence succeeds.
-            try storage.write(JSONEncoder().encode(next))
-            saved = next; session = identity; retryDelay = 5; status = "Signed in."
-            schedule(after: max(1, identity.expiresAt.timeIntervalSinceNow - 60))
+            try acceptSignIn(next, responseData: response.data, key: key)
         } catch {
             guard generation == run else { return }
             status = "Could not save your sign-in. Check your account, connection, and device lock."
@@ -317,7 +409,7 @@ final class BoundFriendAccount: ObservableObject {
             catch { scheduleRetry(); return }
         }
         restore()
-        guard !busy, let saved, let session else { return }
+        guard !busy, !securityBusy, let saved, let session else { return }
         if let refreshTask { await refreshTask.value; return }
         if savePending {
             do {
@@ -344,10 +436,21 @@ final class BoundFriendAccount: ObservableObject {
             if Self.requiresSignIn(response) { signOut(); if !removalPending { status = "Your session ended. Please sign in again." }; return }
             guard response.status == 200 else { throw BoundFriendError.unavailable }
             let next = try decode(response.data)
-            guard next.owner == previous.owner else { signOut(); return }
+            guard next.owner == previous.owner,
+                  let object = try JSONSerialization.jsonObject(with: response.data) as? [String: Any],
+                  let user = object["user"] as? [String: Any] else { signOut(); return }
+            let factors = try Self.factors(in: user)
+            if factors.contains(where: { $0.status == "verified" }) && Self.assuranceLevel(next.accessToken) != "aal2" {
+                // Auth can discover factors added on another device during refresh.
+                // Preserve the rotated token only in memory and invalidate all old holders.
+                try suspendForSecondFactor(next, factors: factors, key: key)
+                return
+            }
+            securityFactors = factors
             // Keep a rotated refresh token in memory even if Keychain is temporarily locked.
             try session?.renew(token: next.accessToken)
-            saved = next; savePending = true
+            saved = next; savePending = true; securityAAL2 = Self.assuranceLevel(next.accessToken) == "aal2"
+            emailAddress = Self.accountEmail(response.data, owner: next.owner, token: next.accessToken) ?? emailAddress
             try storage.write(JSONEncoder().encode(next))
             savePending = false; retryDelay = 5; status = "Signed in."
             // Publish the renewed snapshot for the UI without replacing its identity.
@@ -360,9 +463,17 @@ final class BoundFriendAccount: ObservableObject {
         }
     }
     func signOut() {
-        if session != nil { NotificationCenter.default.post(name: Self.willSignOutNotification, object: self) }
+        if session != nil && publishesSessionChanges { NotificationCenter.default.post(name: Self.willSignOutNotification, object: self) }
+        BoundPasskeyAuthorization.cancel()
+        enrollmentCleanupTask?.cancel(); enrollmentCleanupTask = nil
         generation = UUID(); refreshTask?.cancel(); refreshTask = nil; timer?.cancel(); timer = nil
         session?.invalidate(); session = nil; saved = nil; busy = false
+        pendingMFAIdentity?.invalidate(); pendingMFAIdentity = nil; pendingMFASession = nil
+        pendingMFA = false; securityAAL2 = false; securityBusy = false
+        securityFactors = []; passkeys = []; totpEnrollment = nil; securityStatus = ""
+        emailAddress = nil; loadingEmailAddress = false
+        changingEmail = false; emailChangeStatus = ""
+        sendingPasswordReset = false; passwordResetStatus = ""
         deletionEmail = nil; deletionIdentityOwner = nil
         restorePending = false; savePending = false; retryDelay = 5
         do { try storage.remove(); removalPending = false; status = "Signed out." }
@@ -388,6 +499,511 @@ final class BoundFriendAccount: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
+    }
+
+    private static func assuranceLevel(_ token: String) -> String? {
+        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3, token.utf8.count <= 16384 else { return nil }
+        var value = String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        value += String(repeating: "=", count: (4 - value.count % 4) % 4)
+        guard let data = Data(base64Encoded: value), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object["aal"] as? String
+    }
+    private static func factors(in user: [String: Any]) throws -> [BoundSecurityFactor] {
+        // Older Auth responses omit factors when none exist. Present malformed data is rejected.
+        guard let raw = user["factors"] else { return [] }
+        guard let values = raw as? [[String: Any]], values.count <= 100 else { throw BoundFriendError.unavailable }
+        return try values.map { value in
+            guard let id = value["id"] as? String, UUID(uuidString: id) != nil,
+                  let status = value["status"] as? String, ["verified", "unverified"].contains(status),
+                  let type = value["factor_type"] as? String, !type.isEmpty, type.count <= 40 else { throw BoundFriendError.unavailable }
+            return BoundSecurityFactor(id: id, friendlyName: String((value["friendly_name"] as? String ?? "Authenticator").prefix(100)), factorType: type, status: status)
+        }
+    }
+    private func suspendForSecondFactor(_ value: BoundSavedSession, factors: [BoundSecurityFactor], key: String) throws {
+        let pending = try AppCloudSession(owner: value.owner, key: key, token: value.accessToken)
+        // This is a local capability transition, not remote logout: the same live
+        // Auth session is needed to challenge and verify the required factor.
+        signOut()
+        pendingMFASession = value; pendingMFAIdentity = pending; pendingMFA = true
+        securityFactors = factors
+        status = "Enter your authenticator code to finish signing in."
+        securityStatus = factors.contains(where: { $0.status == "verified" && $0.factorType == "totp" }) ? "" : "This account requires a security factor supported by another current client."
+    }
+    private func acceptSignIn(_ next: BoundSavedSession, responseData: Data, key: String) throws {
+        guard let object = try JSONSerialization.jsonObject(with: responseData) as? [String: Any],
+              let user = object["user"] as? [String: Any] else { throw BoundFriendError.signIn }
+        let factors = try Self.factors(in: user)
+        let identity = try AppCloudSession(owner: next.owner, key: key, token: next.accessToken)
+        let aal2 = Self.assuranceLevel(next.accessToken) == "aal2"
+        if factors.contains(where: { $0.status == "verified" }) && !aal2 {
+            // Never give service holders, Keychain, or account observers a first-factor token.
+            pendingMFASession = next; pendingMFAIdentity = identity
+            securityFactors = factors; pendingMFA = true; securityAAL2 = false
+            status = "Enter your authenticator code to finish signing in."
+            securityStatus = factors.contains(where: { $0.status == "verified" && $0.factorType == "totp" }) ? "" : "This account requires a security factor supported by another current client."
+            return
+        }
+        try storage.write(JSONEncoder().encode(next))
+        saved = next; securityFactors = factors; securityAAL2 = aal2
+        emailAddress = Self.accountEmail(responseData, owner: next.owner, token: next.accessToken)
+        session = identity; retryDelay = 5; status = "Signed in."
+        schedule(after: max(1, identity.expiresAt.timeIntervalSinceNow - 60))
+    }
+    private func securityRequest(path: String, method: String = "POST", body: [String: Any] = [:], identity: AppCloudSession? = nil) throws -> URLRequest {
+        if let identity { return try identity.accountSecurityRequest(path: path, method: method, body: body) }
+        var request = URLRequest(url: URL(string: Self.origin + "/auth/v1/" + path)!)
+        request.httpMethod = method; request.timeoutInterval = 10
+        request.setValue(try configuration(), forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if method != "GET" && method != "DELETE" { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
+        return request
+    }
+    private func securityMessage(_ response: BoundAuthTransport.Response) -> String {
+        if response.status == 429 { return "Too many attempts. Wait before trying again." }
+        if [401, 403].contains(response.status) { return "Verify your authenticator code or sign in again before changing security settings." }
+        if [404, 501].contains(response.status) { return "This security option is not enabled on the server yet." }
+        return "Could not finish the security request. Check your connection and try again."
+    }
+    func cancelPendingMFA() { signOut() }
+    func loadAccountSecurity() async {
+        guard !busy, !securityBusy, !changingEmail, !deletionPending else { return }
+        await refreshIfNeeded()
+        guard !busy, !securityBusy, !changingEmail, !deletionPending, let identity = session else { return }
+        let run = generation; securityBusy = true; securityStatus = ""
+        defer { if generation == run { securityBusy = false } }
+        do {
+            let response = try await transport(identity.accountUserRequest())
+            guard generation == run, !Task.isCancelled, identity.isSameSession(as: session) else { return }
+            guard response.status == 200, let user = try JSONSerialization.jsonObject(with: response.data) as? [String: Any],
+                  let id = user["id"] as? String, UUID(uuidString: id) == identity.owner,
+                  user["is_anonymous"] as? Bool != true else { throw BoundFriendError.unavailable }
+            let factors = try Self.factors(in: user)
+            securityFactors = factors
+            // A restored legacy session is suspended as soon as Auth reports a required factor.
+            if factors.contains(where: { $0.status == "verified" }) && !securityAAL2, let previous = saved {
+                try suspendForSecondFactor(previous, factors: factors, key: configuration())
+                return
+            }
+            guard passkeysAvailable else { return }
+            let list = try await transport(identity.accountSecurityRequest(path: "passkeys", method: "GET"))
+            guard generation == run, !Task.isCancelled, identity.isSameSession(as: session) else { return }
+            guard list.status == 200 else { securityStatus = securityMessage(list); return }
+            passkeys = try Self.decodePasskeys(list.data)
+        } catch {
+            guard generation == run, !Task.isCancelled else { return }
+            securityStatus = "Could not load account security. Check your connection and try again."
+        }
+    }
+    private static func decodePasskeys(_ data: Data) throws -> [BoundAccountPasskey] {
+        let object = try JSONSerialization.jsonObject(with: data)
+        let values: [[String: Any]]
+        if let array = object as? [[String: Any]] { values = array }
+        else if let wrapper = object as? [String: Any], let array = wrapper["passkeys"] as? [[String: Any]] { values = array }
+        else { throw BoundFriendError.unavailable }
+        guard values.count <= 100 else { throw BoundFriendError.unavailable }
+        return try values.map { value in
+            guard let id = value["id"] as? String, UUID(uuidString: id) != nil else { throw BoundFriendError.unavailable }
+            return BoundAccountPasskey(id: id, name: String((value["friendly_name"] as? String ?? "Passkey").prefix(100)))
+        }
+    }
+    func enrollTOTP() async -> Bool {
+        guard !busy, !securityBusy, !changingEmail, !deletionPending, totpEnrollment == nil else { return false }
+        await refreshIfNeeded()
+        guard !busy, !securityBusy, !changingEmail, let identity = session else { return false }
+        if securityFactors.contains(where: { $0.status == "verified" }) && !securityAAL2 {
+            securityStatus = "Verify your existing authenticator code first."; return false
+        }
+        let run = generation; securityBusy = true; securityStatus = ""
+        defer { if generation == run { securityBusy = false } }
+        do {
+            let response = try await transport(identity.accountSecurityRequest(path: "factors", body: ["factor_type": "totp", "friendly_name": "Bound Authenticator " + UUID().uuidString.prefix(8), "issuer": "Bound"]))
+            guard generation == run, !Task.isCancelled, identity.isSameSession(as: session) else { return false }
+            guard response.status == 200 else { securityStatus = securityMessage(response); return false }
+            guard let value = try JSONSerialization.jsonObject(with: response.data) as? [String: Any],
+                  let id = value["id"] as? String, UUID(uuidString: id) != nil,
+                  let totp = value["totp"] as? [String: Any], let secret = totp["secret"] as? String,
+                  !secret.isEmpty, secret.utf8.count <= 1024, let uri = totp["uri"] as? String,
+                  uri.hasPrefix("otpauth://totp/"), uri.utf8.count <= 4096 else { throw BoundFriendError.unavailable }
+            totpEnrollment = BoundTOTPEnrollment(factorID: id, secret: secret, uri: uri)
+            securityStatus = "Add the setup key to your authenticator, then enter its six-digit code."
+            return true
+        } catch {
+            guard generation == run, !Task.isCancelled else { return false }
+            securityStatus = "Could not start authenticator setup. Try again."; return false
+        }
+    }
+    /// Clear setup secrets synchronously when their view leaves. Cleanup retains
+    /// only the factor ID, owner and generation, and never deletes a verified factor.
+    func discardTOTPEnrollment() {
+        guard let factorID = totpEnrollment?.factorID else { return }
+        totpEnrollment = nil
+        guard let owner = session?.owner else { return }
+        let run = generation
+        enrollmentCleanupTask = Task { @MainActor [weak self] in
+            await self?.cleanupDiscardedEnrollment(factorID: factorID, owner: owner, run: run)
+        }
+    }
+    func cancelTOTPEnrollment() async {
+        discardTOTPEnrollment()
+        await enrollmentCleanupTask?.value
+    }
+    private func waitForSecurityIdle() async {
+        while securityBusy && !Task.isCancelled {
+            await withCheckedContinuation { securityIdleWaiters.append($0) }
+        }
+    }
+    private func cleanupDiscardedEnrollment(factorID: String, owner: UUID, run: UUID) async {
+        // Verification may be returning from a cancelled network request. Waiting
+        // for its completion avoids dropping cleanup or racing an accepted verify.
+        await waitForSecurityIdle()
+        guard generation == run, !Task.isCancelled, !busy, !changingEmail,
+              !deletionPending, session?.owner == owner else { return }
+        await refreshIfNeeded()
+        await waitForSecurityIdle()
+        guard generation == run, !Task.isCancelled, !busy, !changingEmail,
+              !deletionPending, let identity = session, identity.owner == owner else { return }
+        securityBusy = true
+        defer { if generation == run { securityBusy = false } }
+        do {
+            // A verification response may have been lost. Remove only a factor Auth still
+            // reports as unverified; cancelling a sheet must never disable working MFA.
+            let current = try await transport(identity.accountUserRequest())
+            guard generation == run, !Task.isCancelled, identity.isSameSession(as: session) else { return }
+            guard current.status == 200, let user = try JSONSerialization.jsonObject(with: current.data) as? [String: Any],
+                  let userID = user["id"] as? String, UUID(uuidString: userID) == identity.owner else { throw BoundFriendError.unavailable }
+            securityFactors = try Self.factors(in: user)
+            guard securityFactors.contains(where: { $0.id == factorID && $0.status == "unverified" }) else {
+                securityStatus = "Setup key cleared. Reload account security to check your authenticator."; return
+            }
+            let response = try await transport(identity.accountSecurityRequest(path: "factors/" + factorID, method: "DELETE"))
+            guard generation == run, !Task.isCancelled, identity.isSameSession(as: session) else { return }
+            if (200..<300).contains(response.status) {
+                securityFactors.removeAll { $0.id == factorID }
+                securityStatus = "Authenticator setup cancelled."
+            } else {
+                securityStatus = "Setup key cleared. An unfinished factor may remain; reload security settings to remove it."
+            }
+        } catch {
+            guard generation == run, !Task.isCancelled else { return }
+            securityStatus = "Setup key cleared. Reload security settings to remove any unfinished factor."
+        }
+    }
+    func verifyTOTPEnrollment(code: String) async -> Bool {
+        guard let enrollment = totpEnrollment else { return false }
+        return await verifySecurityFactor(id: enrollment.factorID, code: code, enrollment: true)
+    }
+    func verifySecondFactor(code: String, factorID: String? = nil) async -> Bool {
+        guard let factor = securityFactors.first(where: { $0.status == "verified" && $0.factorType == "totp" && (factorID == nil || $0.id == factorID) }) else {
+            securityStatus = "No supported authenticator is available on this account."; return false
+        }
+        return await verifySecurityFactor(id: factor.id, code: code, enrollment: false)
+    }
+    private func verifySecurityFactor(id: String, code: String, enrollment: Bool) async -> Bool {
+        guard !busy, !securityBusy, !changingEmail, !deletionPending else { return false }
+        guard code.utf8.count == 6, code.utf8.allSatisfy({ (48...57).contains($0) }) else {
+            securityStatus = "Enter the six-digit authenticator code."; return false
+        }
+        if !pendingMFA { await refreshIfNeeded() }
+        guard !busy, !securityBusy, let identity = pendingMFAIdentity ?? session else { return false }
+        let wasPending = pendingMFA; let run = generation
+        securityBusy = true; securityStatus = ""
+        defer { if generation == run { securityBusy = false } }
+        func stillCurrent() -> Bool {
+            generation == run && !Task.isCancelled && (wasPending ? pendingMFAIdentity.map { identity.isSameSession(as: $0) } == true : identity.isSameSession(as: session))
+        }
+        do {
+            let challenge = try await transport(identity.accountSecurityRequest(path: "factors/" + id + "/challenge"))
+            guard stillCurrent() else { return false }
+            guard challenge.status == 200 else { securityStatus = securityMessage(challenge); return false }
+            guard let object = try JSONSerialization.jsonObject(with: challenge.data) as? [String: Any],
+                  let challengeID = object["id"] as? String, UUID(uuidString: challengeID) != nil else { throw BoundFriendError.unavailable }
+            let response = try await transport(identity.accountSecurityRequest(path: "factors/" + id + "/verify", body: ["challenge_id": challengeID, "code": code]))
+            guard stillCurrent() else { return false }
+            guard response.status == 200 else { securityStatus = response.status == 400 || response.status == 422 ? "That code was not accepted. Try the current code from your authenticator." : securityMessage(response); return false }
+            let next = try decode(response.data)
+            guard next.owner == identity.owner, Self.assuranceLevel(next.accessToken) == "aal2",
+                  let value = try JSONSerialization.jsonObject(with: response.data) as? [String: Any],
+                  let user = value["user"] as? [String: Any] else { throw BoundFriendError.signIn }
+            let factors = try Self.factors(in: user)
+            if enrollment { totpEnrollment = nil }
+            if wasPending {
+                // Keep the rotated, verified credential in memory if Keychain is locked.
+                // No first-factor credential or service capability is published or persisted.
+                try identity.renew(token: next.accessToken)
+                pendingMFASession = next
+                do { try storage.write(JSONEncoder().encode(next)) }
+                catch {
+                    securityStatus = "Authenticator verified. Unlock your device and try verifying again to save your sign-in."
+                    return false
+                }
+                pendingMFAIdentity = nil; pendingMFASession = nil; pendingMFA = false
+                removalPending = false
+                saved = next; session = identity
+            } else {
+                // MFA rotates refresh tokens; retain that token even if Keychain is temporarily locked.
+                try identity.renew(token: next.accessToken)
+                saved = next; savePending = true
+                do { try storage.write(JSONEncoder().encode(next)); savePending = false }
+                catch { /* Retry secure persistence after leaving the current security operation. */ }
+                session = identity
+            }
+            securityAAL2 = true
+            emailAddress = Self.accountEmail(response.data, owner: next.owner, token: next.accessToken) ?? emailAddress
+            securityFactors = factors
+            if enrollment {
+                totpEnrollment = nil
+                if !securityFactors.contains(where: { $0.id == id }) { securityFactors.append(BoundSecurityFactor(id: id, friendlyName: "Bound Authenticator", factorType: "totp", status: "verified")) }
+            }
+            securityStatus = enrollment ? "Two-factor authentication enabled." : "Authenticator verified."
+            status = savePending ? "Sign-in renewed. Waiting to save securely." : "Signed in."
+            retryDelay = 5
+            if savePending { scheduleRetry() }
+            else { schedule(after: max(1, nextExpiry(next) - 60)) }
+            return true
+        } catch {
+            guard stillCurrent() else { return false }
+            securityStatus = "Could not verify and securely save your sign-in. Try again or sign in again."; return false
+        }
+    }
+    private func nextExpiry(_ value: BoundSavedSession) -> TimeInterval {
+        (try? AppCloudSession(owner: value.owner, key: configuration(), token: value.accessToken).expiresAt.timeIntervalSinceNow) ?? 60
+    }
+    func unenrollTOTP(factorID: String) async -> Bool {
+        guard !busy, !securityBusy, !changingEmail, !deletionPending,
+              let factor = securityFactors.first(where: { $0.id == factorID && $0.factorType == "totp" }),
+              factor.status != "verified" || securityAAL2 else {
+            securityStatus = "Verify your existing authenticator code first."; return false
+        }
+        await refreshIfNeeded()
+        guard let identity = session, !busy, !securityBusy else { return false }
+        let run = generation; securityBusy = true
+        defer { if generation == run { securityBusy = false } }
+        do {
+            let response = try await transport(identity.accountSecurityRequest(path: "factors/" + factor.id, method: "DELETE"))
+            guard generation == run, !Task.isCancelled, identity.isSameSession(as: session) else { return false }
+            guard (200..<300).contains(response.status) else { securityStatus = securityMessage(response); return false }
+            securityFactors.removeAll { $0.id == factor.id }; securityStatus = "Authenticator removed."
+            if totpEnrollment?.factorID == factor.id { totpEnrollment = nil }
+            return true
+        } catch {
+            guard generation == run, !Task.isCancelled else { return false }
+            securityStatus = "Could not confirm authenticator removal. Reload security settings before retrying."; return false
+        }
+    }
+    private static func passkeyVerificationBody(options: Data, credential: Data) throws -> [String: Any] {
+        guard options.count <= 65536, credential.count <= 65536,
+              let envelope = try JSONSerialization.jsonObject(with: options) as? [String: Any],
+              let id = envelope["challenge_id"] as? String, UUID(uuidString: id) != nil,
+              let value = try JSONSerialization.jsonObject(with: credential) as? [String: Any],
+              value["type"] as? String == "public-key" else { throw BoundFriendError.unavailable }
+        return ["challenge_id": id, "credential": value]
+    }
+    func registerPasskey(name: String) async -> Bool {
+        guard passkeysAvailable else { securityStatus = "Passkeys need the Bound account domain to be configured first."; return false }
+        guard !busy, !securityBusy, !changingEmail, !deletionPending else { return false }
+        await refreshIfNeeded()
+        guard !busy, !securityBusy, !changingEmail, let identity = session else { return false }
+        if securityFactors.contains(where: { $0.status == "verified" }) && !securityAAL2 { securityStatus = "Verify your authenticator code first."; return false }
+        let normalized = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(64))
+        let run = generation; securityBusy = true; securityStatus = ""
+        defer { if generation == run { securityBusy = false } }
+        do {
+            let options = try await transport(identity.accountSecurityRequest(path: "passkeys/registration/options"))
+            guard generation == run, !Task.isCancelled, identity.isSameSession(as: session) else { return false }
+            guard options.status == 200 else { securityStatus = securityMessage(options); return false }
+            let credential = try await passkeyRegistration(options.data)
+            guard generation == run, !Task.isCancelled, identity.isSameSession(as: session) else { return false }
+            let body = try Self.passkeyVerificationBody(options: options.data, credential: credential)
+            let result = try await transport(identity.accountSecurityRequest(path: "passkeys/registration/verify", body: body))
+            guard generation == run, !Task.isCancelled, identity.isSameSession(as: session) else { return false }
+            guard result.status == 200 || result.status == 201 else { securityStatus = securityMessage(result); return false }
+            guard let object = try JSONSerialization.jsonObject(with: result.data) as? [String: Any],
+                  let id = object["id"] as? String, UUID(uuidString: id) != nil else { throw BoundFriendError.unavailable }
+            passkeys.append(BoundAccountPasskey(id: id, name: String((object["friendly_name"] as? String ?? (normalized.isEmpty ? "Passkey" : normalized)).prefix(100))))
+            securityStatus = "Passkey added to your Bound account."; return true
+        } catch is CancellationError {
+            guard generation == run else { return false }
+            securityStatus = "Passkey setup cancelled."; return false
+        } catch {
+            guard generation == run, !Task.isCancelled else { return false }
+            securityStatus = "Could not add the passkey. Check account security before retrying."; return false
+        }
+    }
+    func deletePasskey(id: String) async -> Bool {
+        guard !busy, !securityBusy, !changingEmail, !deletionPending, let passkey = passkeys.first(where: { $0.id == id }) else { return false }
+        if securityFactors.contains(where: { $0.status == "verified" }) && !securityAAL2 { securityStatus = "Verify your authenticator code first."; return false }
+        await refreshIfNeeded()
+        guard !busy, !securityBusy, !changingEmail, let identity = session else { return false }
+        let run = generation; securityBusy = true
+        defer { if generation == run { securityBusy = false } }
+        do {
+            let response = try await transport(identity.accountSecurityRequest(path: "passkeys/" + passkey.id, method: "DELETE"))
+            guard generation == run, !Task.isCancelled, identity.isSameSession(as: session) else { return false }
+            guard (200..<300).contains(response.status) else { securityStatus = securityMessage(response); return false }
+            passkeys.removeAll { $0.id == passkey.id }; securityStatus = "Passkey removed."; return true
+        } catch {
+            guard generation == run, !Task.isCancelled else { return false }
+            securityStatus = "Could not confirm passkey removal. Reload security settings before retrying."; return false
+        }
+    }
+    func signInWithPasskey() async {
+        guard passkeysAvailable else { status = "Passkeys need the Bound account domain to be configured first."; return }
+        guard !busy, !securityBusy, !changingEmail, !deletionPending else { return }
+        signOut()
+        guard !removalPending else { return }
+        let run = generation; busy = true
+        defer { if generation == run { busy = false } }
+        do {
+            let options = try await transport(securityRequest(path: "passkeys/authentication/options"))
+            guard generation == run, !Task.isCancelled else { return }
+            guard options.status == 200 else { status = securityMessage(options); return }
+            let credential = try await passkeyAuthentication(options.data)
+            guard generation == run, !Task.isCancelled else { return }
+            let body = try Self.passkeyVerificationBody(options: options.data, credential: credential)
+            let response = try await transport(securityRequest(path: "passkeys/authentication/verify", body: body))
+            guard generation == run, !Task.isCancelled else { return }
+            guard response.status == 200 else { status = securityMessage(response); return }
+            let next = try decode(response.data)
+            try acceptSignIn(next, responseData: response.data, key: configuration())
+        } catch is CancellationError {
+            guard generation == run else { return }; status = "Passkey sign-in cancelled."
+        } catch {
+            guard generation == run, !Task.isCancelled else { return }
+            status = "Could not sign in with the passkey. Try again or use your password."
+        }
+    }
+
+    /// Display-only email comes from Auth, never the text supplied at login.
+    /// Decoding a locally retained JWT here does not make authorization decisions.
+    private static func emailClaim(_ token: String) -> String? {
+        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3, token.utf8.count <= 16384 else { return nil }
+        var encoded = String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        encoded += String(repeating: "=", count: (4 - encoded.count % 4) % 4)
+        guard let bytes = Data(base64Encoded: encoded),
+              let claims = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              let email = claims["email"] as? String else { return nil }
+        return normalizedEmail(email)
+    }
+    private static func accountEmail(_ data: Data, owner: UUID, token: String) -> String? {
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let user = object["user"] as? [String: Any],
+           let id = user["id"] as? String, UUID(uuidString: id) == owner,
+           let email = user["email"] as? String, let normalized = normalizedEmail(email) { return normalized }
+        return emailClaim(token)
+    }
+    func loadEmailAddress() async {
+        guard emailAddress == nil, !loadingEmailAddress, !deletionPending else { return }
+        await refreshIfNeeded()
+        guard emailAddress == nil, !loadingEmailAddress, !deletionPending, let identity = session else { return }
+        let run = generation; loadingEmailAddress = true
+        defer { if generation == run { loadingEmailAddress = false } }
+        do {
+            let response = try await transport(identity.accountUserRequest())
+            guard generation == run, !Task.isCancelled, identity.isSameSession(as: session),
+                  response.status == 200,
+                  let user = try JSONSerialization.jsonObject(with: response.data) as? [String: Any],
+                  let id = user["id"] as? String, UUID(uuidString: id) == identity.owner,
+                  user["role"] as? String == "authenticated", user["is_anonymous"] as? Bool == false,
+                  let email = user["email"] as? String else { return }
+            emailAddress = Self.normalizedEmail(email)
+        } catch { /* Offline email lookup must not change login or account status. */ }
+    }
+
+    private struct EmailChangeReceipt: Decodable { let ok: Bool; let email: String }
+    func changeEmail(to newEmail: String, currentPassword: String) async -> Bool {
+        guard !busy, !securityBusy, !changingEmail, !deletionPending, let identity = session else { return false }
+        guard let normalized = Self.normalizedEmail(newEmail) else {
+            emailChangeStatus = "Enter a valid new email address."; return false
+        }
+        guard !currentPassword.isEmpty, currentPassword.utf8.count <= 1024, !currentPassword.contains("\0") else {
+            emailChangeStatus = "Enter your current password."; return false
+        }
+        guard normalized != emailAddress else {
+            emailChangeStatus = "Enter a different email address."; return false
+        }
+        let run = generation; changingEmail = true; emailChangeStatus = ""
+        defer { if generation == run { changingEmail = false } }
+        await refreshIfNeeded()
+        guard generation == run, !Task.isCancelled else { return false }
+        guard identity.isSameSession(as: session), !deletionPending else {
+            emailChangeStatus = "Sign in again before changing your email."; return false
+        }
+        if emailAddress == nil { await loadEmailAddress() }
+        guard generation == run, !Task.isCancelled, identity.isSameSession(as: session), !deletionPending else { return false }
+        guard let emailAddress else {
+            emailChangeStatus = "Could not load your current email. Check your connection and try again."; return false
+        }
+        guard normalized != emailAddress else {
+            emailChangeStatus = "Enter a different email address."; return false
+        }
+        do {
+            let response = try await transport(identity.accountEmailChangeRequest(newEmail: normalized, currentPassword: currentPassword))
+            guard generation == run, !Task.isCancelled, identity.isSameSession(as: session), !deletionPending else { return false }
+            guard response.status == 200 else {
+                switch response.status {
+                case 401, 403: emailChangeStatus = "Your password or session could not be verified. Check your current password or sign in again."
+                case 409: emailChangeStatus = "That email cannot be used right now. Try another address or try again later."
+                case 429: emailChangeStatus = "Too many attempts. Please wait and try again later."
+                default: emailChangeStatus = "Email changes are unavailable. Please try again later."
+                }
+                return false
+            }
+            guard let receipt = try? JSONDecoder().decode(EmailChangeReceipt.self, from: response.data),
+                  receipt.ok, Self.normalizedEmail(receipt.email) == normalized else {
+                emailChangeStatus = "Could not confirm the email change. Try signing in with the new email before retrying."; return false
+            }
+            // The account UUID and its cloud data do not change. Retire native
+            // credentials containing the old email and request a fresh login.
+            signOut()
+            emailChangeStatus = "Email updated. Sign in with your new email and current password."
+            status = emailChangeStatus
+            return true
+        } catch {
+            guard generation == run, !Task.isCancelled, identity.isSameSession(as: session) else { return false }
+            emailChangeStatus = "Could not confirm the email change. Check your connection; if needed, try signing in with the new email."
+            return false
+        }
+    }
+
+    nonisolated static let passwordRecoveryRedirect = "https://evanvonessen.github.io/bound/reset-password.html"
+    func requestPasswordReset(email: String) async -> Bool {
+        guard !busy, !sendingPasswordReset, session == nil, !deletionPending else { return false }
+        guard let normalized = Self.normalizedEmail(email) else {
+            passwordResetStatus = "Enter a valid email address."; return false
+        }
+        guard Date() >= nextPasswordResetAt else {
+            passwordResetStatus = "Please wait a minute before requesting another reset link."; return false
+        }
+        let run = generation; sendingPasswordReset = true; passwordResetStatus = ""
+        defer { if generation == run { sendingPasswordReset = false } }
+        do {
+            let key = try configuration()
+            var components = URLComponents(string: Self.origin + "/auth/v1/recover")!
+            components.queryItems = [URLQueryItem(name: "redirect_to", value: Self.passwordRecoveryRedirect)]
+            var request = URLRequest(url: components.url!)
+            request.httpMethod = "POST"; request.timeoutInterval = 10
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(key, forHTTPHeaderField: "apikey")
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["email": normalized])
+            nextPasswordResetAt = Date().addingTimeInterval(60)
+            let response = try await transport(request)
+            guard generation == run, !Task.isCancelled, session == nil else { return false }
+            guard (200..<300).contains(response.status) else {
+                passwordResetStatus = response.status == 429
+                    ? "Too many reset requests. Please wait and try again later."
+                    : "Could not request a reset link. Check your connection and try again later."
+                return false
+            }
+            // Supabase intentionally returns the same response for unknown emails.
+            passwordResetStatus = "If an account uses that email, a password reset link will arrive shortly. Check your inbox and spam folder."
+            return true
+        } catch {
+            guard generation == run, !Task.isCancelled else { return false }
+            passwordResetStatus = "Could not request a reset link. Check your connection and try again later."
+            return false
+        }
     }
 
     enum SignupResult: Equatable { case signedIn, checkEmail, usernameTaken, failed, cancelled }
@@ -430,11 +1046,8 @@ final class BoundFriendAccount: ObservableObject {
             guard let object = try JSONSerialization.jsonObject(with: response.data) as? [String: Any] else { throw BoundFriendError.unavailable }
             if object["access_token"] != nil || object["refresh_token"] != nil {
                 let next = try decode(response.data)
-                let identity = try AppCloudSession(owner: next.owner, key: key, token: next.accessToken)
                 receivedSession = true
-                try storage.write(JSONEncoder().encode(next))
-                saved = next; session = identity; retryDelay = 5; status = "Signed in."
-                schedule(after: max(1, identity.expiresAt.timeIntervalSinceNow - 60))
+                try acceptSignIn(next, responseData: response.data, key: key)
                 return .signedIn
             }
             // Auth deliberately returns an obfuscated user for some existing accounts.

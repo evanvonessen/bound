@@ -1,3 +1,13 @@
+// Read claims only after Auth has verified this exact bearer. Accounts that
+// opt in to MFA cannot use an AAL1 password session for privileged operations.
+function permitsSecondFactor(user, authorization) {
+  if (!Array.isArray(user?.factors) || !user.factors.some(f => f?.status === 'verified')) return true;
+  try {
+    const part = authorization.slice(7).split('.')[1];
+    const claims = JSON.parse(atob(part.replaceAll('-', '+').replaceAll('_', '/')));
+    return claims.sub === user.id && claims.aal === 'aal2';
+  } catch { return false; }
+}
 const origin = 'https://qevnxhngdtlyihhmvnjv.supabase.co';
 const topic = 'com.evanvonessen.bound';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -243,6 +253,8 @@ export function createJiggleHandler({ publishableKey, serviceRoleKey, apnsKeyID,
     if (!uuid.test(user?.id ?? '') || user.is_anonymous !== false || user.role !== 'authenticated') {
       return response(403, { ok: false, error: 'forbidden' });
     }
+
+    if (!permitsSecondFactor(user, authorization)) return response(403, { ok: false, error: 'second_factor_required' });
 
     if (isStatus) return response(200, { ok: true, configured: apnsConfigured, environments: environmentConfigured });
     if (!apnsConfigured) return response(503, { ok: false, error: 'not_configured' });

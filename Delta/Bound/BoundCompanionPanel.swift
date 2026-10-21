@@ -1751,6 +1751,7 @@ struct BoundFriendsSheet: View {
     @State private var removingRoom: FriendRoom?
     @State private var showingUsernameHelp = false
     @State private var showingAddFriend = false
+    @State private var showingEmailChange = false
     @State private var roomIDsBeforeAdding: Set<String> = []
     var closed: () -> Void = {}
     private var usesUpdatedUI: Bool { uiVersion == .option2 }
@@ -1772,8 +1773,13 @@ struct BoundFriendsSheet: View {
                         }.disabled(account.busy)
                     } else if account.session == nil {
                         BoundAccountSignInFields(account: account, email: $email, password: $password) { onboarding.synchronizeAccount() }
-                    } else if !usesUpdatedUI {
-                        Button("Sign out") { BoundJiggleNotifications.shared.prepareForSignOut(); sharing.stop(); onboarding.signOut(); account.signOut() }.disabled(account.busy)
+                    } else {
+                        BoundAccountEmailText(account: account) { showingEmailChange = true }
+                        NavigationLink("Account security") { BoundAccountSecurityView(account: account) }
+                            .accessibilityIdentifier("bound.account-security")
+                        if !usesUpdatedUI {
+                            Button("Sign out") { BoundJiggleNotifications.shared.prepareForSignOut(); sharing.stop(); onboarding.signOut(); account.signOut() }.disabled(account.busy)
+                        }
                     }
                     if account.session == nil || account.status != "Signed in." {
                         Text(account.status).font(.caption)
@@ -1918,6 +1924,10 @@ struct BoundFriendsSheet: View {
                 }
             }.navigationTitle("Friends")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(account.busy) } }
+        }
+        .sheet(isPresented: $showingEmailChange) {
+            BoundChangeEmailView(account: account) { email = $0 }
+                .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
         }
         .onAppear { onboarding.open(sharing: sharing, existing: { account.session }) }
         .onReceive(NotificationCenter.default.publisher(for: BoundAccountProfile.didChangeNotification)) { _ in
@@ -2079,26 +2089,171 @@ struct BoundAccountSignInFields: View {
 
     var body: some View {
         Group {
-            TextField("Email", text: $email)
-                .textContentType(.username).textInputAutocapitalization(.never)
-                .keyboardType(.emailAddress).autocorrectionDisabled()
-                .accessibilityIdentifier("account.signin.email")
-            SecureField("Password", text: $password)
-                .textContentType(.password)
-                .accessibilityIdentifier("account.signin.password")
-            Button("Sign in") {
-                let entered = password; password = ""
-                Task { await account.signIn(email: email, password: entered); signedIn() }
+            if account.pendingMFA {
+                BoundAccountSecondFactorSignInView(account: account, signedIn: signedIn)
+            } else {
+                TextField("Email", text: $email)
+                    .textContentType(.username).textInputAutocapitalization(.never)
+                    .keyboardType(.emailAddress).autocorrectionDisabled()
+                    .accessibilityIdentifier("account.signin.email")
+                SecureField("Password", text: $password)
+                    .textContentType(.password)
+                    .accessibilityIdentifier("account.signin.password")
+                Button("Sign in") {
+                    let entered = password; password = ""
+                    Task { await account.signIn(email: email, password: entered); signedIn() }
+                }
+                .disabled(email.isEmpty || password.isEmpty)
+                .accessibilityIdentifier("account.signin.submit")
+                if account.passkeysAvailable {
+                    Button("Sign in with a passkey") {
+                        Task { await account.signInWithPasskey(); signedIn() }
+                    }
+                    .disabled(account.securityBusy)
+                    .accessibilityIdentifier("account.signin.passkey")
+                }
+                NavigationLink("Forgot password?") {
+                    BoundForgotPasswordView(account: account, email: $email)
+                }
+                .accessibilityIdentifier("account.signin.forgot-password")
+                NavigationLink("Create Account") {
+                    BoundCreateAccountView(account: account, signInEmail: $email, signedIn: signedIn)
+                }
+                .accessibilityIdentifier("account.signin.create-account")
+                if account.busy { ProgressView("Signing in…") }
             }
-            .disabled(email.isEmpty || password.isEmpty)
-            .accessibilityIdentifier("account.signin.submit")
-            NavigationLink("Create Account") {
-                BoundCreateAccountView(account: account, signInEmail: $email, signedIn: signedIn)
-            }
-            .accessibilityIdentifier("account.signin.create-account")
-            if account.busy { ProgressView("Signing in…") }
         }
         .disabled(account.busy || account.deletionPending)
+    }
+}
+
+/// Keep the account address grey while providing a password-protected change sheet.
+struct BoundAccountEmailText: View {
+    @ObservedObject var account: BoundFriendAccount
+    var changeEmail: () -> Void = {}
+    var body: some View {
+        if account.session != nil {
+            Button(action: changeEmail) {
+                Text(account.emailAddress ?? "Email unavailable")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .buttonStyle(.plain)
+            .disabled(account.emailAddress == nil || account.busy || account.changingEmail || account.deletionPending)
+            .accessibilityLabel("Account email")
+            .accessibilityValue(account.emailAddress ?? "Email unavailable")
+            .accessibilityHint("Change your email using your current password")
+            .accessibilityIdentifier("bound.account-email")
+            .task(id: account.session?.owner) { await account.loadEmailAddress() }
+        }
+    }
+}
+
+struct BoundChangeEmailView: View {
+    @ObservedObject var account: BoundFriendAccount
+    var emailChanged: (String) -> Void = { _ in }
+    @Environment(\.dismiss) private var dismiss
+    @State private var newEmail = ""
+    @State private var currentPassword = ""
+    @State private var submission: Task<Void, Never>?
+    @State private var changed = false
+    var body: some View {
+        NavigationStack {
+            Form {
+                if changed {
+                    Section {
+                        Text("Email updated. Sign in with your new email and current password.")
+                            .accessibilityIdentifier("account.email-change.success")
+                        Button("Sign in") { dismiss() }
+                            .accessibilityIdentifier("account.email-change.return")
+                    }
+                } else if account.session == nil {
+                    Section {
+                        Text("Sign in before changing your email.")
+                        Button("Sign in") { dismiss() }
+                    }
+                } else {
+                    Section {
+                        TextField("New email", text: $newEmail)
+                            .textContentType(.emailAddress).keyboardType(.emailAddress)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .accessibilityIdentifier("account.email-change.email")
+                        SecureField("Current password", text: $currentPassword)
+                            .textContentType(.password)
+                            .submitLabel(.done).onSubmit { submit() }
+                            .accessibilityIdentifier("account.email-change.password")
+                        Button("Change email") { submit() }
+                            .disabled(account.changingEmail || account.busy || currentPassword.isEmpty ||
+                                      BoundFriendAccount.normalizedEmail(newEmail) == nil ||
+                                      BoundFriendAccount.normalizedEmail(newEmail) == account.emailAddress)
+                            .accessibilityIdentifier("account.email-change.submit")
+                        if account.changingEmail { ProgressView("Changing email…") }
+                    } footer: {
+                        Text("Your current password is required. The new address is confirmed automatically. After changing it, sign in with your new email and the same password.")
+                    }
+                }
+                if !changed && !account.emailChangeStatus.isEmpty {
+                    Section { Text(account.emailChangeStatus).accessibilityIdentifier("account.email-change.status") }
+                }
+            }
+            .navigationTitle("Change email")
+            .toolbar { ToolbarItem(placement: .cancellationAction) {
+                Button(changed ? "Done" : "Cancel") { submission?.cancel(); currentPassword = ""; dismiss() }
+                    .disabled(account.changingEmail)
+            } }
+        }
+        .interactiveDismissDisabled(account.changingEmail)
+        .onDisappear { submission?.cancel(); submission = nil; currentPassword = "" }
+    }
+    private func submit() {
+        guard submission == nil, !account.changingEmail, !account.busy,
+              !currentPassword.isEmpty, let normalized = BoundFriendAccount.normalizedEmail(newEmail),
+              normalized != account.emailAddress else { return }
+        let entered = currentPassword; currentPassword = ""
+        submission = Task { @MainActor in
+            let updated = await account.changeEmail(to: normalized, currentPassword: entered)
+            if updated { emailChanged(normalized); changed = true }
+            submission = nil
+        }
+    }
+}
+
+struct BoundForgotPasswordView: View {
+    @ObservedObject var account: BoundFriendAccount
+    @Binding var email: String
+    @State private var submission: Task<Void, Never>?
+    var body: some View {
+        Form {
+            Section {
+                TextField("Email", text: $email)
+                    .textContentType(.emailAddress).keyboardType(.emailAddress)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .submitLabel(.send).onSubmit { submit() }
+                    .accessibilityIdentifier("account.recovery.email")
+                Button("Send reset link") { submit() }
+                    .disabled(BoundFriendAccount.normalizedEmail(email) == nil || account.busy || account.sendingPasswordReset)
+                    .accessibilityIdentifier("account.recovery.submit")
+                if account.sendingPasswordReset { ProgressView("Sending reset link…") }
+            } footer: {
+                Text("Enter your Bound account email. Follow the link in your email to choose a new password, then return to Bound to sign in.")
+            }
+            if !account.passwordResetStatus.isEmpty {
+                Section {
+                    Text(account.passwordResetStatus)
+                        .accessibilityIdentifier("account.recovery.status")
+                }
+            }
+        }
+        .navigationTitle("Reset password")
+        .onDisappear { submission?.cancel(); submission = nil }
+    }
+    private func submit() {
+        guard submission == nil, !account.busy, !account.sendingPasswordReset,
+              BoundFriendAccount.normalizedEmail(email) != nil else { return }
+        submission = Task { @MainActor in
+            _ = await account.requestPasswordReset(email: email)
+            submission = nil
+        }
     }
 }
 

@@ -57,329 +57,198 @@ enum BoundDropboxOAuthProtocol {
     }
 }
 
-/// Bound-owned Dropbox OAuth for Bound's configured sync provider. The pinned
-/// SwiftyDropbox flow only returns implicit access tokens, so Bound exchanges
-/// PKCE authorization codes and keeps the offline refresh token in Keychain.
+/// Account-linked OAuth. Only short-lived access tokens reach this device;
+/// the Bound backend encrypts the offline grant and binds it to the Auth owner.
+@MainActor
 final class BoundDropboxOAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
-    static let shared = BoundDropboxOAuth()
+    static let shared = BoundDropboxOAuth(acceptConnection: { owner, connection in
+        SyncManager.shared.acceptDropboxConnection(owner: owner, connection: connection)
+    })
 
-    private struct TokenResponse: Decodable {
-        let access_token: String?
-        let refresh_token: String?
-        let error: String?
-    }
-
-    private enum OAuthFailure: LocalizedError, Equatable {
-        case unavailable
-        case malformedResponse
-        case authorizationFailed
-        case cancelled
-        case refreshCredentialRejected
-
+    enum Failure: LocalizedError {
+        case signIn, notLinked, unavailable, changed, cancelled
         var errorDescription: String? {
             switch self {
-            case .unavailable: return "Dropbox authorization is unavailable."
-            case .malformedResponse: return "Dropbox returned an invalid authorization response."
-            case .authorizationFailed: return "Dropbox authorization failed."
+            case .signIn: return "Sign in to your Bound account in Account & Sync before connecting Dropbox."
+            case .notLinked: return "Connect Dropbox to your Bound account to enable cloud sync."
+            case .unavailable: return "Dropbox connection is unavailable. Check your connection and try again."
+            case .changed: return "Your account or Dropbox connection changed. Please try again."
             case .cancelled: return "Dropbox authorization was cancelled."
-            case .refreshCredentialRejected: return "Dropbox needs you to sign in again."
             }
         }
+    }
+    private struct Reply: Decodable { let accessToken: String?; let expiresIn: Double?; let error: String?; let ok: Bool?; let connectionID: UUID? }
+    typealias Transport = @MainActor (URLRequest) async throws -> (Data, Int)
+    private let account: BoundFriendAccount
+    private let transport: Transport
+    private let appKey: () -> String?
+    private let acceptConnection: @MainActor (UUID, UUID) -> Bool
+    private var webSession: ASWebAuthenticationSession?
+    private var task: Task<Void, Never>?
+    private var generation = UUID()
+    private var pending: [(Result<String, Harmony.AuthenticationError>) -> Void] = []
+    private weak var presentationWindow: UIWindow?
+
+    init(account: BoundFriendAccount? = nil,
+         appKey: @escaping () -> String? = BoundDropboxOAuth.configuredAppKey,
+         acceptConnection: @escaping @MainActor (UUID, UUID) -> Bool = { _, _ in true },
+         transport: @escaping Transport = BoundDropboxOAuth.perform) {
+        self.account = account ?? .shared; self.appKey = appKey; self.transport = transport; self.acceptConnection = acceptConnection
+        super.init()
+    }
+
+    nonisolated static func configuredAppKey() -> String? {
+        guard let value = Bundle.main.infoDictionary?["BOUND_DROPBOX_APP_KEY"] as? String,
+              value.range(of: "^[A-Za-z0-9]{8,64}$", options: .regularExpression) != nil else { return nil }
+        return value
     }
 
     private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate {
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-            completionHandler(nil)
-        }
+                        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
     }
-
-    private let keychainService = "com.evanvonessen.bound.dropbox.refresh.v1"
-    private let redirectDelegate = NoRedirectDelegate()
-    private lazy var tokenSession: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.httpCookieStorage = nil
-        configuration.urlCache = nil
-        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.timeoutIntervalForRequest = 15
-        configuration.timeoutIntervalForResource = 15
-        return URLSession(configuration: configuration, delegate: redirectDelegate, delegateQueue: nil)
+    private static let network: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpCookieStorage = nil; config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.timeoutIntervalForRequest = 20; config.timeoutIntervalForResource = 30
+        return URLSession(configuration: config, delegate: NoRedirectDelegate(), delegateQueue: nil)
     }()
-    private var session: ASWebAuthenticationSession?
-    private var tokenTask: URLSessionDataTask?
-    private var activeGeneration = UUID()
-    private var pending: [(Result<String, Harmony.AuthenticationError>) -> Void] = []
-    private var isResolving = false
-    private weak var presentationWindow: UIWindow?
-
-    private override init() { super.init() }
+    static func perform(_ request: URLRequest) async throws -> (Data, Int) {
+        let (data, response) = try await network.data(for: request)
+        guard data.count <= 32768, let response = response as? HTTPURLResponse else { throw Failure.unavailable }
+        return (data, response.statusCode)
+    }
 
     func provideAccessToken(presenting viewController: UIViewController?, completion: @escaping (Result<String, Harmony.AuthenticationError>) -> Void) {
-        DispatchQueue.main.async {
-            guard let appKey = Self.configuredAppKey else {
-                completion(.failure(.invalidClientID))
-                return
+        pending.append(completion)
+        guard task == nil, webSession == nil else { return }
+        let run = generation
+        presentationWindow = viewController?.viewIfLoaded?.window
+        task = Task { [weak self] in
+            guard let self else { return }
+            await account.refreshIfNeeded()
+            guard generation == run, !Task.isCancelled else { return }
+            guard let identity = account.session, !account.deletionPending else {
+                complete(.failure(.other(Failure.signIn)), run: run); return
             }
-
-            self.pending.append(completion)
-            if self.isResolving { return }
-            self.isResolving = true
-            self.presentationWindow = viewController?.viewIfLoaded?.window
-            let generation = UUID()
-            self.activeGeneration = generation
-
-            if let refreshToken = self.refreshToken(for: appKey) {
-                self.refresh(refreshToken: refreshToken, appKey: appKey, generation: generation) { result in
-                    switch result {
-                    case .success(let token): self.complete(.success(token), generation: generation)
-                    case .failure(let error) where Self.isRejectedRefreshCredential(error) && viewController != nil:
-                        self.beginInteractiveAuthorization(appKey: appKey, presenter: viewController, generation: generation)
-                    case .failure(let error) where Self.isRejectedRefreshCredential(error):
-                        self.complete(.failure(.tokenExpired), generation: generation)
-                    case .failure(let error): self.complete(.failure(error), generation: generation)
-                    }
-                }
-            } else if let viewController {
-                self.beginInteractiveAuthorization(appKey: appKey, presenter: viewController, generation: generation)
-            } else {
-                self.complete(.failure(.noSavedCredentials), generation: generation)
+            do {
+                let access = try await request(identity, action: "token")
+                guard accepts(identity, run: run) else { throw Failure.changed }
+                complete(.success(access), run: run)
+            } catch Failure.notLinked {
+                guard accepts(identity, run: run) else { complete(.failure(.other(Failure.changed)), run: run); return }
+                task = nil
+                if let viewController { beginAuthorization(identity, presenter: viewController, run: run) }
+                else { complete(.failure(.noSavedCredentials), run: run) }
+            } catch {
+                complete(.failure(.other(error)), run: run)
             }
         }
     }
 
-    /// Cancels pending OAuth callbacks but preserves the refresh credential.
-    /// Used to cancel authorization when its owning sync operation is cancelled.
+    private func accepts(_ identity: AppCloudSession, run: UUID) -> Bool {
+        generation == run && !Task.isCancelled && !account.deletionPending && identity.isSameSession(as: account.session)
+    }
+
+    private func request(_ identity: AppCloudSession, action: String, code: String? = nil, verifier: String? = nil) async throws -> String {
+        let result: (Data, Int)
+        do { result = try await transport(identity.dropboxLinkRequest(action: action, code: code, verifier: verifier)) }
+        catch { throw Failure.unavailable }
+        let (data, status) = result
+        // Never propagate backend bodies or transport diagnostics containing credentials.
+        guard let reply = try? JSONDecoder().decode(Reply.self, from: data) else { throw Failure.unavailable }
+        if status == 404 && reply.error == "not_linked" || status == 409 && reply.error == "reconnect_required" { throw Failure.notLinked }
+        if status == 401 || status == 403 { throw Failure.signIn }
+        if status == 409 { throw Failure.changed }
+        guard status == 200 else { throw Failure.unavailable }
+        if action == "unlink" {
+            guard reply.ok == true else { throw Failure.unavailable }
+            return ""
+        }
+        guard let token = reply.accessToken, !token.isEmpty, token.utf8.count <= 16384,
+              let expiry = reply.expiresIn, expiry.isFinite, expiry > 0,
+              let connection = reply.connectionID else { throw Failure.unavailable }
+        guard !Task.isCancelled, identity.isSameSession(as: account.session), !account.deletionPending,
+              acceptConnection(identity.owner, connection) else { throw Failure.changed }
+        return token
+    }
+
+    func unlink() async throws {
+        await account.refreshIfNeeded()
+        guard let identity = account.session, !account.deletionPending else { throw Failure.signIn }
+        let run = generation
+        _ = try await request(identity, action: "unlink")
+        guard accepts(identity, run: run) else { throw Failure.changed }
+        clearCredentials()
+    }
+
+    /// Device sign-out/cancellation never unlinks the server grant.
     func cancelPendingAuthorization() {
-        onMain {
-            self.activeGeneration = UUID()
-            self.session?.cancel()
-            self.session = nil
-            self.tokenTask?.cancel()
-            self.tokenTask = nil
-            self.presentationWindow = nil
-            self.isResolving = false
-            let handlers = self.pending
-            self.pending.removeAll()
-            handlers.forEach { $0(.failure(.noSavedCredentials)) }
-        }
+        generation = UUID()
+        task?.cancel(); task = nil
+        webSession?.cancel(); webSession = nil
+        presentationWindow = nil
+        let handlers = pending; pending.removeAll()
+        handlers.forEach { $0(.failure(.other(Failure.changed))) }
     }
-
-    /// Clears Bound's refresh credential on explicit Dropbox deauthentication.
     func clearCredentials() {
-        onMain {
-            self.cancelPendingAuthorizationOnMain()
-            guard let appKey = Self.rawAppKey else { return }
-            self.deleteRefreshToken(for: appKey)
-        }
-    }
-
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        if let presentationWindow { return presentationWindow }
-        return UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first(where: \.isKeyWindow) ?? UIWindow()
-    }
-
-    private static var configuredAppKey: String? {
-        return rawAppKey
-    }
-
-    private static var rawAppKey: String? {
-        guard let raw = Bundle.main.infoDictionary?["BOUND_DROPBOX_APP_KEY"] as? String else { return nil }
-        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard value.range(of: "^[A-Za-z0-9]{8,64}$", options: .regularExpression) != nil else { return nil }
-        return value
-    }
-
-    private static func isRejectedRefreshCredential(_ error: Harmony.AuthenticationError) -> Bool {
-        guard case .other(let underlying) = error else { return false }
-        return (underlying as? OAuthFailure) == .refreshCredentialRejected
-    }
-
-    private func onMain(_ action: @escaping () -> Void) {
-        if Thread.isMainThread { action() }
-        else { DispatchQueue.main.async(execute: action) }
-    }
-
-    private func cancelPendingAuthorizationOnMain() {
-        activeGeneration = UUID()
-        session?.cancel()
-        session = nil
-        tokenTask?.cancel()
-        tokenTask = nil
-        presentationWindow = nil
-        isResolving = false
-        let handlers = pending
-        pending.removeAll()
-        handlers.forEach { $0(.failure(.noSavedCredentials)) }
-    }
-
-    private func beginInteractiveAuthorization(appKey: String, presenter: UIViewController?, generation: UUID) {
-        guard generation == activeGeneration,
-              presenter != nil,
-              let verifierData = Self.randomData(count: 32),
-              let stateData = Self.randomData(count: 32) else {
-            complete(.failure(.invalidClientID), generation: generation)
-            return
-        }
-
-        let verifier = BoundDropboxOAuthProtocol.base64URL(verifierData)
-        let state = BoundDropboxOAuthProtocol.base64URL(stateData)
-        let callbackScheme = "db-\(appKey)"
-        let redirectURI = "\(callbackScheme)://2/token"
-        guard let authorizeURL = BoundDropboxOAuthProtocol.authorizationURL(appKey: appKey, state: state, verifier: verifier) else {
-            complete(.failure(.invalidClientID), generation: generation)
-            return
-        }
-
-        let authSession = ASWebAuthenticationSession(url: authorizeURL, callbackURLScheme: callbackScheme) { [weak self] callback, error in
-            DispatchQueue.main.async {
-                guard let self, generation == self.activeGeneration else { return }
-                self.session = nil
-                guard let callback else {
-                    self.complete(.failure(.other(error ?? OAuthFailure.cancelled)), generation: generation)
-                    return
-                }
-                guard let code = BoundDropboxOAuthProtocol.authorizationCode(from: callback, callbackScheme: callbackScheme, expectedState: state) else {
-                    self.complete(.failure(.other(OAuthFailure.authorizationFailed)), generation: generation)
-                    return
-                }
-                self.exchange(code: code, verifier: verifier, redirectURI: redirectURI, appKey: appKey, generation: generation) { result in
-                    self.complete(result, generation: generation)
-                }
-            }
-        }
-        authSession.presentationContextProvider = self
-        authSession.prefersEphemeralWebBrowserSession = false
-        session = authSession
-        guard authSession.start() else {
-            complete(.failure(.other(OAuthFailure.authorizationFailed)), generation: generation)
-            return
-        }
-    }
-
-    private func refresh(refreshToken: String, appKey: String, generation: UUID, completion: @escaping (Result<String, Harmony.AuthenticationError>) -> Void) {
-        var request = URLRequest(url: URL(string: "https://api.dropboxapi.com/oauth2/token")!, timeoutInterval: 15)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.httpBody = BoundDropboxOAuthProtocol.formBody([("grant_type", "refresh_token"), ("refresh_token", refreshToken), ("client_id", appKey)])
-        tokenTask = tokenSession.dataTask(with: request) { data, response, error in
-            DispatchQueue.main.async {
-                guard generation == self.activeGeneration else { return }
-                self.tokenTask = nil
-                if let error {
-                    completion(.failure(.other(ServiceError.connectionFailed((error as? URLError) ?? URLError(.unknown)))))
-                    return
-                }
-                if let data, let http = response as? HTTPURLResponse,
-                   BoundDropboxOAuthProtocol.isInvalidRefreshCredential(statusCode: http.statusCode, responseBody: data) {
-                    self.deleteRefreshToken(for: appKey)
-                    completion(.failure(.other(OAuthFailure.refreshCredentialRejected)))
-                    return
-                }
-                guard let data, let http = response as? HTTPURLResponse,
-                      (200..<300).contains(http.statusCode),
-                      let tokens = try? JSONDecoder().decode(TokenResponse.self, from: data),
-                      let accessToken = tokens.access_token, !accessToken.isEmpty else {
-                    completion(.failure(.other(ServiceError.connectionFailed(URLError(.badServerResponse)))))
-                    return
-                }
-                if let newRefresh = tokens.refresh_token, !self.storeRefreshToken(newRefresh, for: appKey) {
-                    completion(.failure(.other(OAuthFailure.authorizationFailed)))
-                    return
-                }
-                completion(.success(accessToken))
-            }
-        }
-        tokenTask?.resume()
-    }
-
-    private func exchange(code: String, verifier: String, redirectURI: String, appKey: String, generation: UUID, completion: @escaping (Result<String, Harmony.AuthenticationError>) -> Void) {
-        var request = URLRequest(url: URL(string: "https://api.dropboxapi.com/oauth2/token")!, timeoutInterval: 15)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.httpBody = BoundDropboxOAuthProtocol.formBody([
-            ("grant_type", "authorization_code"), ("code", code), ("code_verifier", verifier),
-            ("redirect_uri", redirectURI), ("client_id", appKey)
-        ])
-        tokenTask = tokenSession.dataTask(with: request) { data, response, error in
-            DispatchQueue.main.async {
-                guard generation == self.activeGeneration else { return }
-                self.tokenTask = nil
-                if let error {
-                    completion(.failure(.other(ServiceError.connectionFailed((error as? URLError) ?? URLError(.unknown)))))
-                    return
-                }
-                guard let data, let http = response as? HTTPURLResponse,
-                      (200..<300).contains(http.statusCode),
-                      let tokens = try? JSONDecoder().decode(TokenResponse.self, from: data),
-                      let accessToken = tokens.access_token, !accessToken.isEmpty,
-                      let refreshToken = tokens.refresh_token else {
-                    completion(.failure(.other(ServiceError.connectionFailed(URLError(.badServerResponse)))))
-                    return
-                }
-                guard self.storeRefreshToken(refreshToken, for: appKey) else {
-                    completion(.failure(.other(OAuthFailure.authorizationFailed)))
-                    return
-                }
-                completion(.success(accessToken))
-            }
-        }
-        tokenTask?.resume()
-    }
-
-    private func complete(_ result: Result<String, Harmony.AuthenticationError>, generation: UUID) {
-        guard generation == activeGeneration else { return }
-        isResolving = false
-        session = nil
-        presentationWindow = nil
-        let handlers = pending
-        pending.removeAll()
-        handlers.forEach { $0(result) }
-    }
-
-    private func refreshToken(for appKey: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: appKey,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    @discardableResult
-    private func storeRefreshToken(_ token: String, for appKey: String) -> Bool {
+        cancelPendingAuthorization()
+        // Retire legacy unowned credentials; never silently attach them to a user.
+        guard let appKey = appKey() else { return }
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                    kSecAttrService as String: keychainService,
-                                    kSecAttrAccount as String: appKey]
-        let attributes: [String: Any] = [kSecValueData as String: Data(token.utf8),
-                                         kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
-        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound {
-            var insert = query
-            attributes.forEach { insert[$0.key] = $0.value }
-            return SecItemAdd(insert as CFDictionary, nil) == errSecSuccess
-        }
-        return status == errSecSuccess
-    }
-
-    private func deleteRefreshToken(for appKey: String) {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                    kSecAttrService as String: keychainService,
-                                    kSecAttrAccount as String: appKey]
+            kSecAttrService as String: "com.evanvonessen.bound.dropbox.refresh.v1", kSecAttrAccount as String: appKey]
         SecItemDelete(query as CFDictionary)
     }
-
-    private static func randomData(count: Int) -> Data? {
-        var bytes = [UInt8](repeating: 0, count: count)
-        guard SecRandomCopyBytes(kSecRandomDefault, count, &bytes) == errSecSuccess else { return nil }
+    private func complete(_ result: Result<String, Harmony.AuthenticationError>, run: UUID) {
+        guard generation == run else { return }
+        task = nil; webSession = nil; presentationWindow = nil
+        let handlers = pending; pending.removeAll()
+        handlers.forEach { $0(result) }
+    }
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        presentationWindow ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows).first(where: \.isKeyWindow) ?? UIWindow()
+    }
+    private func beginAuthorization(_ identity: AppCloudSession, presenter: UIViewController, run: UUID) {
+        guard let appKey = appKey(), let verifierData = Self.randomData(), let stateData = Self.randomData() else {
+            complete(.failure(.invalidClientID), run: run); return
+        }
+        let verifier = BoundDropboxOAuthProtocol.base64URL(verifierData)
+        let state = BoundDropboxOAuthProtocol.base64URL(stateData)
+        let scheme = "db-\(appKey)"
+        guard let url = BoundDropboxOAuthProtocol.authorizationURL(appKey: appKey, state: state, verifier: verifier) else {
+            complete(.failure(.invalidClientID), run: run); return
+        }
+        let session = ASWebAuthenticationSession(url: url, callbackURLScheme: scheme) { [weak self] callback, _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.generation == run else { return }
+                guard self.accepts(identity, run: run) else {
+                    self.complete(.failure(.other(Failure.changed)), run: run); return
+                }
+                self.webSession = nil
+                guard let callback, let code = BoundDropboxOAuthProtocol.authorizationCode(from: callback, callbackScheme: scheme, expectedState: state) else {
+                    self.complete(.failure(.other(Failure.cancelled)), run: run); return
+                }
+                self.task = Task { [weak self] in
+                    guard let self else { return }
+                    do {
+                        let access = try await self.request(identity, action: "link", code: code, verifier: verifier)
+                        guard self.accepts(identity, run: run) else { throw Failure.changed }
+                        self.complete(.success(access), run: run)
+                    } catch { self.complete(.failure(.other(error)), run: run) }
+                }
+            }
+        }
+        presentationWindow = presenter.viewIfLoaded?.window
+        session.presentationContextProvider = self
+        session.prefersEphemeralWebBrowserSession = false
+        webSession = session
+        if !session.start() { complete(.failure(.other(Failure.unavailable)), run: run) }
+    }
+    private static func randomData() -> Data? {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { return nil }
         return Data(bytes)
     }
-
 }

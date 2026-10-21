@@ -1,3 +1,13 @@
+// Read claims only after Auth has verified this exact bearer. Accounts that
+// opt in to MFA cannot use an AAL1 password session for privileged operations.
+function permitsSecondFactor(user, authorization) {
+  if (!Array.isArray(user?.factors) || !user.factors.some(f => f?.status === 'verified')) return true;
+  try {
+    const part = authorization.slice(7).split('.')[1];
+    const claims = JSON.parse(atob(part.replaceAll('-', '+').replaceAll('_', '/')));
+    return claims.sub === user.id && claims.aal === 'aal2';
+  } catch { return false; }
+}
 const origin = 'https://qevnxhngdtlyihhmvnjv.supabase.co';
 const tokenPattern = /^[a-f0-9]{64}$/;
 const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -65,6 +75,7 @@ export function createDeletionHandler({serviceKey, publishableKey, fetchImpl = f
         if (!auth.ok) return reply(auth.status >= 500 ? 503 : 401,{error:'identity_unavailable'});
         const user = await json(auth.body);
         if (!uuidPattern.test(user.id ?? '') || user.is_anonymous !== false || user.role !== 'authenticated' || !Number.isFinite(Date.parse(user.email_confirmed_at ?? ''))) return reply(403,{error:'confirmation_mismatch'});
+        if (!permitsSecondFactor(user, authorization)) return reply(403,{error:'second_factor_required'});
         if (emailBegin) {
           const email = normalizedEmail(user.email);
           if (!email || normalizedEmail(body.confirmationEmail) !== email) return reply(403,{error:'confirmation_mismatch'});
