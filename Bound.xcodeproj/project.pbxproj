@@ -433,6 +433,7 @@
 		720C1BBDC97744F4AE7CA3F3 /* BoundAccountSocialTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82832C7AA5F5408995A7C407 /* BoundAccountSocialTests.swift */; };
 		103E571A4D9543839A7D90EB /* BoundDropboxOAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 627E26C66C2C4CB98A005612 /* BoundDropboxOAuth.swift */; };
 		DC44859A7C07464BBE63B016 /* BoundDropboxOAuthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF068D284BCE47409FBF25C2 /* BoundDropboxOAuthTests.swift */; };
+		15CAE8FBB55D48DE9745E361 /* BoundDropboxLiveSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BE39D4EF6234743A68DEA7B /* BoundDropboxLiveSyncTests.swift */; };
 		AF587D5409BC632CA606F011 /* BoundMacWorkspaceGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32118EFE887BC6DFF711A9BF /* BoundMacWorkspaceGeometry.swift */; };
 		AA0D748265F54753A8DF4201 /* BoundMacMetalCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0D748265F54753A8DF4202 /* BoundMacMetalCache.swift */; };
 		C9F98F6095050C500082B509 /* BoundMacWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D638FE02F6B2876A1CB9CBB /* BoundMacWorkspaceView.swift */; };
@@ -1273,6 +1274,7 @@
 		82832C7AA5F5408995A7C407 /* BoundAccountSocialTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundAccountSocialTests.swift; sourceTree = "<group>"; };
 		627E26C66C2C4CB98A005612 /* BoundDropboxOAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundDropboxOAuth.swift; sourceTree = "<group>"; };
 		EF068D284BCE47409FBF25C2 /* BoundDropboxOAuthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundDropboxOAuthTests.swift; sourceTree = "<group>"; };
+		2BE39D4EF6234743A68DEA7B /* BoundDropboxLiveSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundDropboxLiveSyncTests.swift; sourceTree = "<group>"; };
 		32118EFE887BC6DFF711A9BF /* BoundMacWorkspaceGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundMacWorkspaceGeometry.swift; sourceTree = "<group>"; };
 		AA0D748265F54753A8DF4202 /* BoundMacMetalCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundMacMetalCache.swift; sourceTree = "<group>"; };
 		3D638FE02F6B2876A1CB9CBB /* BoundMacWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundMacWorkspaceView.swift; sourceTree = "<group>"; };
@@ -1461,6 +1463,7 @@
 				1A6DCD6DC10B39963CC46BE6 /* BoundPasskeyAuthorizationTests.swift */,
 				0981A00AD461E9397CC203BB /* BoundAccountSecurityTests.swift */,
 				EF068D284BCE47409FBF25C2 /* BoundDropboxOAuthTests.swift */,
+				2BE39D4EF6234743A68DEA7B /* BoundDropboxLiveSyncTests.swift */,
 				104D04088215A199CB56949A /* StockControlAndGestureTests.swift */,
 				B2476C2B0032441E97FF3CD5 /* AccountPersistenceIntegrationTests.swift */,
 				A8D4C721995E4F78A4E1C302 /* LandscapeCompanionTests.swift */,
@@ -3274,6 +3277,7 @@
 				A5AE64D04542272BAE4E4C27 /* BoundPasskeyAuthorizationTests.swift in Sources */,
 				BCE5B385F6C0737FD6123053 /* BoundAccountSecurityTests.swift in Sources */,
 				DC44859A7C07464BBE63B016 /* BoundDropboxOAuthTests.swift in Sources */,
+				15CAE8FBB55D48DE9745E361 /* BoundDropboxLiveSyncTests.swift in Sources */,
 				D1CCDE2C67C0DCD2A3EF9645 /* StockControlAndGestureTests.swift in Sources */,
 				47AF26DA565A4105BA138CAF /* AccountPersistenceIntegrationTests.swift in Sources */,
 				A8D4C721995E4F78A4E1C301 /* LandscapeCompanionTests.swift in Sources */,
