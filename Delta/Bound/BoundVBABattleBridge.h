@@ -2,6 +2,11 @@
 NS_ASSUME_NONNULL_BEGIN
 /// Paused core or completed-frame owner only. Network callbacks never access RAM.
 @interface BoundVBABattleBridge : NSObject
++ (BOOL)installSharedWorld;
++ (NSDictionary<NSString *,id> *)sharedWorldSnapshot;
++ (void)setSharedWorldPeer:(NSData *)flags group:(NSUInteger)group number:(NSUInteger)number boulders:(NSData *)boulders fresh:(BOOL)fresh;
++ (void)advanceSharedWorld;
++ (void)closeSharedWorld;
 + (void)resetFriendDialogueOwner;
 + (BOOL)friendDialogueReady;
 + (BOOL)beginFriendDialogue:(NSUInteger)mode text:(NSString *)text;
@@ -29,6 +34,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)enforceSoulLink;
 + (void)closeSoulLink;
 #if DEBUG && TARGET_OS_SIMULATOR
++ (BOOL)qaStartSharedWorldWait;
 + (BOOL)qaStartSoulCheck;
 + (BOOL)qaStartSoulCatch:(NSUInteger)mode;
 + (NSArray<NSNumber *> *)qaSoulCheckResult;

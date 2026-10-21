@@ -127,6 +127,92 @@ final class NativeBattleRuntimeTests:XCTestCase {
         super.tearDown()
     }
 
+    func testActualSharedWorldCollisionAndNativeCoexistence() async throws {
+        continueAfterFailure = false
+        guard ProcessInfo.processInfo.environment["BOUND_WORLD_RUNTIME"] == "1" else {
+            throw XCTSkip("Requires the explicit owned-simulator shared world fixture")
+        }
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let rom = root.appendingPathComponent("RadicalRed.gba"), seed = root.appendingPathComponent("seed.sav")
+        let originalROM = try Data(contentsOf: rom), originalSeed = try Data(contentsOf: seed)
+        let output = root.appendingPathComponent("shared-world-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let battery = output.appendingPathComponent("work.sav"); try originalSeed.write(to: battery)
+        let core = try XCTUnwrap(EmulatorCore(game: NativeBattleGame(fileURL: rom, gameSaveURL: battery), options: [.metal: true]))
+        let profile = try BoundPlayerROMProfile(rom: originalROM)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first { $0.isKeyWindow }, window = UIWindow(windowScene: scene), owner = UIViewController(), view = GameView()
+        window.rootViewController = owner; window.makeKeyAndVisible(); owner.view.addSubview(view)
+        view.frame = CGRect(x: 0, y: 150, width: window.bounds.width, height: window.bounds.width * 2/3); core.add(view)
+        let driver = NativeBattleDriver(core: core, profile: profile), reader = BoundVBAPlayerStateProbe(), world = BoundWorldProbe()
+        world.configure(core: core); world.setVerified(true)
+        reader.configure(coreID: ObjectIdentifier(core), profile: profile, active: true, status: .waiting, detail: "Shared world runtime")
+        core.updateHandler = { core in driver.receive(core); reader.receive(core); world.receive(core) }
+        defer {
+            _ = core.pause(); BoundVBABattleBridge.closeSharedWorld(); BoundVBABattleBridge.closeSoulLink(); _ = core.stop()
+            window.isHidden = true; previous?.makeKeyAndVisible()
+        }
+        core.rate = 8; XCTAssertTrue(core.start()); await fulfillment(of: [driver.booted], timeout: 90)
+        _ = core.pause(); core.rate = 1; driver.play(moves: false)
+        XCTAssertTrue(BoundVBABattleBridge.installSharedWorld())
+        XCTAssertTrue(BoundVBABattleBridge.installSoulLink(), "Both independent hook owners must admit the same base hash")
+        XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady(), "Native trade/battle admission strips both owned hooks when verifying the original ROM")
+        let state = BoundVBABattleBridge.sharedWorldSnapshot()
+        let flags = try XCTUnwrap(state["flags"] as? Data)
+        XCTAssertEqual(flags.count, 800)
+        func position() throws -> BoundPlayerState.Point {
+            guard let memory = BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }) else { throw NSError(domain: "snapshot", code: 1) }
+            return try XCTUnwrap(BoundPlayerStateDecoder.read(profile: profile, memory: memory, frame: 1).player?.tile)
+        }
+        let initial = try position()
+        world.publishPolicy(enabled: true, peer: nil, fresh: false)
+        _ = core.resume()
+        for input in [64,128,32,16] {
+            core.deltaCore.emulatorBridge.activateInput(input, value: 1, playerIndex: 0)
+            try await Task.sleep(for: .milliseconds(220))
+            core.deltaCore.emulatorBridge.deactivateInput(input, playerIndex: 0)
+        }
+        _ = core.pause(); XCTAssertEqual(try position(), initial, "A missing partner must block real native player movement in every direction")
+        XCTAssertEqual(world.read()?.flags, flags, "The production completed-frame mailbox must publish a usable local snapshot")
+        let peer = BoundWorldState(group: try XCTUnwrap(state["group"] as? UInt8), number: try XCTUnwrap(state["number"] as? UInt8),
+                                   flags: flags, boulders: state["boulders"] as? Data ?? Data())
+        world.publishPolicy(enabled: true, peer: peer, fresh: true)
+        _ = core.resume()
+        var moved = false
+        for input in [64,128,32,16] {
+            core.deltaCore.emulatorBridge.activateInput(input, value: 1, playerIndex: 0)
+            try await Task.sleep(for: .milliseconds(220))
+            core.deltaCore.emulatorBridge.deactivateInput(input, playerIndex: 0)
+            _ = core.pause(); moved = try position() != initial
+            if moved { break }
+            _ = core.resume()
+        }
+        XCTAssertTrue(moved, "Fresh matching partner progress must restore ordinary native movement")
+        XCTAssertEqual(BoundVBABattleBridge.sharedWorldSnapshot()["flags"] as? Data, flags, "Collision gates must never edit earned progress")
+        BoundVBABattleBridge.setSharedWorldPeer(Data(), group: 0, number: 0, boulders: Data(), fresh: false)
+        XCTAssertTrue(BoundVBABattleBridge.qaStartSharedWorldWait())
+        world.publishPolicy(enabled: true, peer: nil, fresh: false)
+        // The native trainer command must stage the waiting RAM script first.
+        _ = core.resume(); try await Task.sleep(for: .milliseconds(350)); _ = core.pause()
+        let pointer = try XCTUnwrap(core.deltaCore.emulatorBridge.readMemory?(at: 0xEB8, size: 4))
+        let address = pointer.enumerated().reduce(0) { $0 | Int($1.element) << ($1.offset * 8) }
+        XCTAssertTrue((0x03004200..<0x03004220).contains(address), "The native denied-trainer script must already be waiting in serialized RAM")
+        let waitURL = output.appendingPathComponent("waiting.sgm"); core.saveSaveState(to: waitURL)
+        world.publishPolicy(enabled: false, peer: nil, fresh: false)
+        BoundVBABattleBridge.closeSharedWorld(); BoundVBABattleBridge.closeSoulLink()
+        try core.load(DeltaCore.SaveState(fileURL: waitURL, gameType: .gba))
+        _ = core.resume()
+        for _ in 0..<8 {
+            core.deltaCore.emulatorBridge.activateInput(1, value: 1, playerIndex: 0)
+            try await Task.sleep(for: .milliseconds(70))
+            core.deltaCore.emulatorBridge.deactivateInput(1, playerIndex: 0)
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        _ = core.pause()
+        XCTAssertTrue(BoundVBABattleBridge.friendDialogueReady(), "The saved native waiting window must release normally with all multiplayer ROM code removed")
+        XCTAssertEqual(try Data(contentsOf: rom), originalROM); XCTAssertEqual(try Data(contentsOf: seed), originalSeed)
+    }
+
     func testActualNativeFriendDialogue() async throws {
         continueAfterFailure=false
         guard ProcessInfo.processInfo.environment["BOUND_INVITATION_RUNTIME"] == "1" else {

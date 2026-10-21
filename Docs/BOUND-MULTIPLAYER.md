@@ -158,7 +158,9 @@ optional pose: map, elevation, world feet, facing, ROM sprite-frame address,
 flip/priority and 32 palette bytes. Each instance SHA-256 verifies its own ROM;
 unknown or incompatible profiles cannot advertise a live pose. Sprite tile
 artwork is resolved from the receiver's local ROM. No RAM bank, framebuffer,
-controller input, save, story flag or progression state is sent or applied.
+controller input or save is sent or applied in presence packets. A separate
+[shared progression protocol](BOUND-SHARED-WORLD-PROGRESSION.md) now supplies
+bounded predicates for native collision and trainer prerequisite gates.
 
 Before displaying poses, both peers acknowledge the other's current session.
 An unacknowledged hello cannot replace a verified peer; incompatible ROM changes
@@ -305,4 +307,5 @@ connected-map routes, bike/surf/ledge movement and late-game scripts still need
 additional fixtures. The live presence implementation feeds this renderer through
 the existing friend room. Further acceptance includes authenticated Agora across
 separate networks, physical-device cost/presentation timing and those broader
-world fixtures. Each player's local progress remains independent.
+world fixtures. Each player's earned progress remains independent;
+[shared world gates](BOUND-SHARED-WORLD-PROGRESSION.md) can wait for both players.

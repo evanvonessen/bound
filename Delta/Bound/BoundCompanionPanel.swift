@@ -676,6 +676,7 @@ final class BoundCompanionCoordinator {
     func bind(core: EmulatorCore?, gameID: String) {
         sharing.nativeBattle.bind(core: core, gameID: gameID, interactions: sharing.interactions)
         sharing.soulLink.bind(core: core, gameID: gameID)
+        sharing.sharedWorld.bind(core: core)
         sharing.nativeBattle.restored = { [weak owner] in
             guard let owner, let core = owner.emulatorCore else { return }
             owner.boundRRDexDidLoadSaveState(core: core)
@@ -694,13 +695,14 @@ final class BoundCompanionCoordinator {
         guard let core else { boundCore = nil; state.emulationDetails = nil; return }
         state.emulationDetails = BoundEmulationDetails(packageName: core.deltaCore.name, packageIdentifier: core.deltaCore.identifier, packageVersion: core.deltaCore.version)
         boundCore = core
-        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe, soul = sharing.soulLink.probe, dialogue = friendInteractionPanel?.probe
+        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe, soul = sharing.soulLink.probe, world = sharing.sharedWorld.probe, dialogue = friendInteractionPanel?.probe
         #if DEBUG && targetEnvironment(simulator)
         let tradeQA = BoundFullAppGameplayQA.current?.tradeProbe
         BoundFullAppGameplayQA.current?.configureTrade(core:core)
         #endif
-        core.updateHandler = { [weak tap, weak reader, weak battle, weak soul, weak dialogue] core in
+        core.updateHandler = { [weak tap, weak reader, weak battle, weak soul, weak world, weak dialogue] core in
             previous?(core)
+            world?.receive(core)
             dialogue?.receive(core)
             reader?.receive(core)
             tap?.receive(core)
