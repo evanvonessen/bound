@@ -17,7 +17,17 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSArray<NSNumber *> *)playerHP;
 + (NSDictionary<NSString *, id> *)advanceAndObserve;
 + (void)close;
++ (BOOL)installSoulLink;
++ (BOOL)setSoulLinkDenied:(NSData *)identities;
++ (NSDictionary<NSString *,id> *)soulLinkSnapshot;
++ (void)acknowledgeSoulLinkFaints;
++ (void)enforceSoulLink;
++ (void)closeSoulLink;
 #if DEBUG && TARGET_OS_SIMULATOR
++ (BOOL)qaStartSoulCheck;
++ (BOOL)qaStartSoulCatch:(NSUInteger)mode;
++ (NSArray<NSNumber *> *)qaSoulCheckResult;
++ (void)qaFinishSoulCheck;
 + (BOOL)qaPrepareTradeFixture:(NSUInteger)marker;
 + (NSData *)qaTradeParty;
 + (NSDictionary<NSString *, id> *)qaTradeMenu;
