@@ -177,6 +177,7 @@ enum BoundConfigurationExport {
         keys.formUnion([
             BoundUIVersionPreferences.key, BoundAppearancePreferences.screenLayoutKey, BoundAppearancePreferences.themeKey,
             BoundControllerModePreferences.key, BoundControllerModePreferences.layoutKey, BoundControllerNavigationPreferences.key, BoundControllerMultiviewPreferences.key,
+            BoundPlayerStatePreferences.key,
             BoundControllerButtonGridPreferences.enabledKey, BoundControllerButtonGridPreferences.spacingKey,
             "gameScreenOffsetPortrait", "gameScreenOffsetLandscape", "preferredGBColorPalette",
             "preferredSaveStatesSorting", "prefersDescendingSaveStatesSorting"
@@ -221,6 +222,7 @@ enum BoundConfigurationExport {
         values[BoundControllerModePreferences.key] = BoundControllerModePreferences(defaults: defaults).isEnabled
         values[BoundControllerNavigationPreferences.key] = BoundControllerNavigationPreferences(defaults: defaults).isEnabled
         values[BoundControllerMultiviewPreferences.key] = BoundControllerMultiviewPreferences(defaults: defaults).isEnabled
+        values[BoundPlayerStatePreferences.key] = defaults.bool(forKey: BoundPlayerStatePreferences.key)
         values[BoundControllerButtonGridPreferences.enabledKey] = BoundControllerButtonGridPreferences.isEnabled(in: defaults)
         values[BoundControllerButtonGridPreferences.spacingKey] = Double(BoundControllerButtonGridPreferences.spacing(in: defaults))
         values[BoundCompanionButtonPreferences.key] = BoundCompanionButtonPreferences(defaults: defaults).buttonType.rawValue

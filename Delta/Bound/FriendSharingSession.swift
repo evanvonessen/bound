@@ -172,6 +172,14 @@ struct FriendSharingFrameTiming {
 
 @MainActor
 protocol FriendSharingTransport: SharingTransport {
+    var presenceConnectionCheck: BoundPresenceTransportCheck { get }
+    func setPresenceReceiver(_ receiver: (@MainActor (Data) -> Void)?)
+    func sendPresence(_ data: Data) -> Bool
+    func pollPresence()
+    func setInteractionReceiver(_ receiver: (@MainActor (Data?) -> Void)?)
+    func sendInteraction(_ data: Data) -> Bool
+    func pollInteractions()
+    func makeBattleChannel(receiver: @escaping @Sendable (Data) -> Void, failed: @escaping @Sendable () -> Void) -> (any BoundBattleChannel)?
     var publishedFrames: Int { get }
     var receivedFrames: Int { get }
     var diagnostics: [String: Any] { get }
@@ -185,6 +193,14 @@ protocol FriendSharingTransport: SharingTransport {
 }
 
 extension FriendSharingTransport {
+    var presenceConnectionCheck: BoundPresenceTransportCheck { .init() }
+    func setPresenceReceiver(_ receiver: (@MainActor (Data) -> Void)?) {}
+    func sendPresence(_ data: Data) -> Bool { false }
+    func pollPresence() {}
+    func setInteractionReceiver(_ receiver: (@MainActor (Data?) -> Void)?) {}
+    func sendInteraction(_ data: Data) -> Bool { false }
+    func pollInteractions() {}
+    func makeBattleChannel(receiver: @escaping @Sendable (Data) -> Void, failed: @escaping @Sendable () -> Void) -> (any BoundBattleChannel)? { nil }
     var diagnostics: [String: Any] { [:] }
     var frameTiming: FriendSharingFrameTiming? { nil }
     func presentLatestFrame() {}
@@ -194,6 +210,9 @@ extension FriendSharingTransport {
 
 @MainActor
 final class FriendSharingSession: ObservableObject {
+    let livePresence = BoundLivePresenceSession()
+    let interactions = BoundFriendInteractionSession()
+    let nativeBattle = BoundNativeBattleSession()
     private let diagnosticOutput = FriendSharingDiagnosticOutput()
     @Published private(set) var status = "Friend screen"
     @Published private(set) var active = false
@@ -242,6 +261,7 @@ final class FriendSharingSession: ObservableObject {
         let room: String
         let owner: UUID
     }
+    private var featureObservers: [NSObjectProtocol] = []
     private var foregroundReconnectIntent: ForegroundReconnectIntent?
     private var foregroundReconnectRetry: (any SharingCancellation)?
     private var foregroundReconnectAttempts = 0
@@ -261,7 +281,34 @@ final class FriendSharingSession: ObservableObject {
         self.sharing = try! SharingSession(transport: transport, scheduler: scheduler,
                                           minimumPublicationInterval: FriendSharingCadence.interval)
         remoteView.backgroundColor = .black
+        nativeBattle.makeChannel = { [weak self] receiver, failed in self?.transport.makeBattleChannel(receiver: receiver, failed: failed) }
+        nativeBattle.sendControl = { [weak self] data in self?.transport.sendInteraction(data) == true }
+        interactions.agreed = { [weak nativeBattle] activity, id, initiator in nativeBattle?.begin(activity: activity, id: id, initiator: initiator) }
+        interactions.cancelActivity = { [weak nativeBattle] in nativeBattle?.cancel() }
+        interactions.context = { [weak livePresence] in livePresence?.interactionContext() }
+        livePresence.connectionCheck.snapshot = { [weak self] in self?.presenceConnectionSample() }
         if isConfigured { status = "Game sharing ready" }
+        for name in [BoundMultiplayerFeatures.didChange, Settings.didResetNotification] {
+            featureObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshExperimentalFeatures() }
+            })
+        }
+    }
+
+    private func refreshExperimentalFeatures() {
+        if BoundMultiplayerFeatures.isEnabled {
+            if active && joined && !reconnecting && !backgrounded { startPresence() }
+        } else {
+            // Cancel restores a battle snapshot before its cable/consent channel closes.
+            // Interrupted-battle recovery stays available even with the feature off.
+            nativeBattle.cancel(resume: !backgrounded)
+            if nativeBattle.blocksAutoSave {
+                interactions.stop(message: "Recovery snapshot kept. Reopen this game to restore it.")
+            } else {
+                interactions.cancel(); interactions.stop()
+            }
+            livePresence.setEnabled(false); livePresence.stop(); livePresence.connectionCheck.stop()
+        }
     }
 
     deinit {
@@ -269,6 +316,7 @@ final class FriendSharingSession: ObservableObject {
         // runtime aborted inside that trampoline during SwiftUI teardown with Xcode 27.
         // Captures retain only resources, never this owner. Deallocation may occur
         // off-main; all actor-owned cancellation/RTC cleanup is explicitly enqueued.
+        featureObservers.forEach(NotificationCenter.default.removeObserver)
         tokenTask?.cancel()
         let tokenDeadline = tokenDeadline, receiverDisplayLink = receiverDisplayLink
         let recoveryDeadline = recoveryDeadline, foregroundReconnectRetry = foregroundReconnectRetry
@@ -322,11 +370,24 @@ final class FriendSharingSession: ObservableObject {
         reconnecting = false; recoveryAttempts = 0; recoveryCompletions = 0; recoveryTimeouts = 0
         captureClock = FriendSharingCaptureClock()
         active = true; status = "Connecting"
+        transport.setPresenceReceiver { [weak self] data in
+            guard BoundMultiplayerFeatures.isEnabled, let self, self.generation == run, self.active, self.joined, !self.reconnecting else { return }
+            self.livePresence.receive(data)
+        }
+        transport.setInteractionReceiver { [weak self] data in
+            guard BoundMultiplayerFeatures.isEnabled, let self, self.generation == run, self.active, self.joined, !self.reconnecting else { return }
+            if let data {
+                if data.starts(with: BoundBattleControlPacket.prefix) { self.nativeBattle.receive(data) }
+                else { self.interactions.receive(data) }
+            }
+            else { self.nativeBattle.cancel(); self.interactions.stop(message: "Invitation connection lost") }
+        }
         transport.start(configuration: configuration, remoteView: remoteView) { [weak self] event in
             guard let self, self.generation == run, self.active else { return }
             switch event {
             case .joined:
                 self.joined = true
+                self.startPresence()
                 self.status = "Waiting for friend"
                 self.beginReceiving(run: run)
             case .remoteFrame:
@@ -334,6 +395,8 @@ final class FriendSharingSession: ObservableObject {
                 self.remoteVisible = true
                 self.status = "Receiving game video"
             case .remoteGone:
+                self.interactions.invalidate()
+                self.livePresence.peerGone()
                 self.remoteVisible = false
                 self.receivedFrames = 0
                 self.status = "Waiting for friend"
@@ -344,6 +407,7 @@ final class FriendSharingSession: ObservableObject {
                 self.recoveryID = nil
                 self.recoveryDeadline?.cancel(); self.recoveryDeadline = nil
                 self.reconnecting = false; self.joined = true; self.recoveryCompletions += 1
+                self.startPresence()
                 self.status = "Waiting for fresh friend video"
                 self.beginReceiving(run: run)
             case .tokenNeeded:
@@ -436,6 +500,7 @@ final class FriendSharingSession: ObservableObject {
     private func beginRecovery(run: UUID) {
         guard !reconnecting else { return } // Repeated SDK events never extend the deadline.
         reconnecting = true; joined = false; recoveryAttempts += 1
+        nativeBattle.cancel(resume: false); interactions.stop(); livePresence.stop()
         receivePlaybackFrame(nil)
         remoteVisible = false; receivedFrames = 0
         status = "Reconnecting…"
@@ -463,6 +528,10 @@ final class FriendSharingSession: ObservableObject {
             if self.authenticatedMode && (self.authenticatedSession?()?.owner != self.tokenOwner || (self.tokenExpiry ?? 0) <= Date().timeIntervalSince1970) {
                 self.stop(); self.status = "Sign in to share"; return
             }
+            self.transport.pollPresence()
+            self.livePresence.tick()
+            self.transport.pollInteractions()
+            self.interactions.tick()
             // Keep receiving/publishing while Notes, Types or a hidden PiP is
             // selected. Consume the bounded latest-frame mailbox only when visible.
             if self.remotePresentationEnabled { self.transport.presentLatestFrame() }
@@ -484,10 +553,36 @@ final class FriendSharingSession: ObservableObject {
 
     func stop() { stop(clearReconnectIntent: true) }
 
+    private func startPresence() {
+        guard BoundMultiplayerFeatures.isEnabled else { return }
+        interactions.start { [weak self] data in
+            guard let self, self.active, self.joined, !self.reconnecting, !self.backgrounded else { return false }
+            return self.transport.sendInteraction(data)
+        }
+        livePresence.start { [weak self] data in
+            guard let self, self.active, self.joined, !self.reconnecting, !self.backgrounded else { return false }
+            return self.transport.sendPresence(data)
+        }
+    }
+
+    private func presenceConnectionSample() -> BoundPresenceConnectionSample {
+        var sample = BoundPresenceConnectionSample()
+        sample.authenticated = authenticatedMode
+        sample.authorizationReady = authenticatedMode && configuration != nil
+        sample.active = active; sample.joined = joined; sample.reconnecting = reconnecting
+        sample.tokenRenewals = tokenRenewals; sample.reconnectCompletions = recoveryCompletions
+        sample.videoAcceptedSends = transport.publishedFrames; sample.videoReceivedFrames = transport.receivedFrames
+        sample.transport = transport.presenceConnectionCheck
+        sample.reader = livePresence.connectionReaderCheck(at: ProcessInfo.processInfo.systemUptime)
+        return sample
+    }
+
     private func stop(clearReconnectIntent: Bool) {
         BoundMainActorDisposal.drainPending()
         foregroundReconnectRetry?.cancel(); foregroundReconnectRetry = nil
         if clearReconnectIntent { foregroundReconnectIntent = nil; foregroundReconnectAttempts = 0 }
+        nativeBattle.cancel(resume: !backgrounded); interactions.stop(); transport.setInteractionReceiver(nil)
+        livePresence.stop(); transport.setPresenceReceiver(nil)
         generation = UUID()
         tokenTask?.cancel(); tokenTask = nil
         tokenDeadline?.cancel(); tokenDeadline = nil

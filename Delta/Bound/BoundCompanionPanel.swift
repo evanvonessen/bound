@@ -288,11 +288,21 @@ final class BoundCompanionCoordinator {
     #if DEBUG && targetEnvironment(simulator)
     private let usesLocalPairedFixture: Bool
     #endif
-    let onboarding = FriendOnboarding()
-    let account = BoundFriendAccount.shared
+    let onboarding: FriendOnboarding
+    let account: BoundFriendAccount
     let state: BoundCompanionState
     init(state: BoundCompanionState? = nil) {
         self.state = state ?? BoundCompanionState()
+        #if DEBUG && targetEnvironment(simulator)
+        if let qa = BoundFullAppGameplayQA.current {
+            account = qa.account
+            onboarding = FriendOnboarding(sendJiggle: { _, _ in "QA notifications disabled" })
+        } else {
+            account = .shared; onboarding = FriendOnboarding()
+        }
+        #else
+        account = .shared; onboarding = FriendOnboarding()
+        #endif
         #if DEBUG && targetEnvironment(simulator)
         let environment = ProcessInfo.processInfo.environment
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-paired-transport"),
@@ -348,9 +358,28 @@ final class BoundCompanionCoordinator {
     private let fixturePresenter = FriendSharingCanvasPresenter()
     #endif
     private lazy var tap = BoundDeltaFrameTap { [weak self] frame in self?.sharing.receivePlaybackFrame(frame) }
+    let playerStateDisplay = BoundPlayerStateDisplay()
+    private var friendInteractionPanel: BoundFriendInteractionPanel?
     func install(in owner: GameViewController) {
         guard host == nil, macHost == nil else { return }
         self.owner = owner
+        let friendPanel = BoundFriendInteractionPanel(session: sharing.interactions)
+        friendPanel.frame = owner.view.bounds; owner.view.addSubview(friendPanel)
+        friendPanel.name = { [weak self] in self?.onboarding.selected?.displayName ?? "Friend" }
+        friendPanel.willOpen = { [weak owner] in owner?.releaseBoundFriendGameplayInputs() }
+        friendInteractionPanel = friendPanel
+        sharing.interactions.canPresent = { [weak self, weak owner] in
+            guard let self, let owner else { return false }
+            return owner.emulatorCore?.state == .running && owner.view.window?.windowScene?.hasKeyboardFocus == true
+                && owner.presentedViewController == nil && !self.state.showingFriends && !self.state.showingSettings
+                && !self.isEditingNotes && !self.isEditingText
+        }
+        sharing.interactions.changed = { [weak friendPanel] in friendPanel?.render() }
+        playerStateDisplay.attachPresence(sharing.livePresence)
+        playerStateDisplay.install(in: owner)
+        #if DEBUG && targetEnvironment(simulator)
+        BoundFullAppGameplayQA.current?.attach(self, owner: owner)
+        #endif
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-reset-layout") {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.key)
@@ -634,6 +663,15 @@ final class BoundCompanionCoordinator {
         macHost = host
     }
     func bind(core: EmulatorCore?, gameID: String) {
+        sharing.nativeBattle.bind(core: core, gameID: gameID, interactions: sharing.interactions)
+        sharing.nativeBattle.restored = { [weak owner] in
+            guard let owner, let core = owner.emulatorCore else { return }
+            owner.boundRRDexDidLoadSaveState(core: core)
+        }
+        sharing.nativeBattle.canResume = { [weak owner] in
+            UIApplication.shared.applicationState == .active && owner?.view.window?.windowScene?.hasKeyboardFocus == true
+        }
+        playerStateDisplay.bind(core: core)
         guard boundCore !== core || self.gameID != gameID else { return }
         notesDismissalTask?.cancel(); notesDismissalTask = nil; pendingControllerReferenceAction = nil
         cancelInteractions(); tap.setEnabled(false); sharing.stop(); notesPaused = false; isEditingNotes = false; isEditingText = false; owner?.controllerView.isUserInteractionEnabled = true; self.gameID = gameID
@@ -643,8 +681,13 @@ final class BoundCompanionCoordinator {
         guard let core else { boundCore = nil; state.emulationDetails = nil; return }
         state.emulationDetails = BoundEmulationDetails(packageName: core.deltaCore.name, packageIdentifier: core.deltaCore.identifier, packageVersion: core.deltaCore.version)
         boundCore = core
-        let previous = core.updateHandler, tap = self.tap
-        core.updateHandler = { [weak tap] core in previous?(core); tap?.receive(core) }
+        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe
+        core.updateHandler = { [weak tap, weak reader, weak battle] core in
+            previous?(core)
+            reader?.receive(core)
+            tap?.receive(core)
+            battle?.receive(core)
+        }
         #if DEBUG && targetEnvironment(simulator)
         if usesLocalPairedFixture { sharing.start() }
         #endif
@@ -740,6 +783,10 @@ final class BoundCompanionCoordinator {
     }
     func bringControlsToFront() {
         guard let owner else { return }
+        defer {
+            playerStateDisplay.layout(in: owner, gameView: owner.gameView)
+            if let panel = friendInteractionPanel, !panel.isHidden { owner.view.bringSubviewToFront(panel) }
+        }
         if !arrangementLayers.active { arrangementLayers.apply() }
         if macHost != nil, let overlay {
             owner.view.bringSubviewToFront(overlay)
@@ -903,6 +950,24 @@ final class BoundCompanionCoordinator {
             element.accessibilityFrameInContainerSpace = item.frame.applying(.init(scaleX: controllerView.bounds.width, y: controllerView.bounds.height))
             accessibleControls.append(element)
         }
+        #if DEBUG && targetEnvironment(simulator)
+        if BoundFullAppGameplayQA.current != nil {
+            for input in ["up", "down", "left", "right", "a", "b", "start", "select"] {
+                guard let item = skin.items(for: traits)?.first(where: { $0.inputs.allInputs.contains { $0.stringValue == input } }) else { continue }
+                var rect = item.frame.applying(.init(scaleX: controllerView.bounds.width, y: controllerView.bounds.height))
+                if ["up", "down", "left", "right"].contains(input) {
+                    let x = input == "left" ? 0.15 : input == "right" ? 0.85 : 0.5
+                    let y = input == "up" ? 0.15 : input == "down" ? 0.85 : 0.5
+                    rect = CGRect(x: rect.minX + rect.width * x - 6, y: rect.minY + rect.height * y - 6, width: 12, height: 12)
+                }
+                let element = UIAccessibilityElement(accessibilityContainer: controllerView)
+                element.accessibilityIdentifier = "bound.qa-input-" + input
+                element.accessibilityLabel = input; element.accessibilityTraits = .button
+                element.accessibilityFrameInContainerSpace = rect
+                accessibleControls.append(element)
+            }
+        }
+        #endif
         controllerView.accessibilityElements = accessibleControls
         nativeMenuAccessibility = menuAccessibility
         let controller = controllerView.convert(controllerView.bounds, to: owner.view)
@@ -955,7 +1020,9 @@ final class BoundCompanionCoordinator {
         beginMacSheet(from: presenter)
         let context = BoundSettingsGameplayContext(emulationDetails: state.emulationDetails,
             editControls: { [weak self] in self?.state.pendingControlEditor = true },
-            showCompanion: { [weak self] in self?.state.hidden = false; self?.state.refresh() })
+            showCompanion: { [weak self] in self?.state.hidden = false; self?.state.refresh() },
+            recordedPlayer: playerStateDisplay.supportsRecording ? playerStateDisplay.recordingSession : nil,
+            livePresence: playerStateDisplay.supportsRecording ? sharing.livePresence : nil)
         let host = BoundSettingsHostingController(model: state.settings, gameplay: context, closed: { [weak self] in
             guard let self else { return }; self.state.showingSettings = false
             self.cancelInteractions()
@@ -1298,6 +1365,7 @@ final class BoundCompanionCoordinator {
         tap.setEnabled(false); sharing.background(); onboarding.close()
     }
     func stop() {
+        playerStateDisplay.stop()
         foregroundTask?.cancel(); foregroundTask = nil
         notesDismissalTask?.cancel(); notesDismissalTask = nil; pendingControllerReferenceAction = nil
         macSheetPaused = false; macSheetCore = nil
@@ -1786,6 +1854,7 @@ struct BoundFriendsSheet: View {
                 }
                 .id(usesUpdatedUI)
                 if account.session != nil {
+                    BoundLivePresenceControls(session: sharing.livePresence)
                     Section("Friends") {
                         if !onboarding.message.isEmpty {
                             Text(onboarding.message).font(.caption)

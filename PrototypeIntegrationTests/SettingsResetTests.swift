@@ -41,6 +41,7 @@ final class SettingsResetTests: XCTestCase {
 
         BoundUIVersionPreferences(defaults: defaults).version = .option1
         BoundExperimentalSettingsPreferences(defaults: defaults).enabled = true
+        defaults.set(true, forKey: BoundMultiplayerFeatures.key)
         let appearance = BoundAppearancePreferences(defaults: defaults)
         appearance.screenLayout = .delta
         appearance.theme = .minimal
@@ -96,6 +97,7 @@ final class SettingsResetTests: XCTestCase {
         }
         XCTAssertEqual(BoundUIVersionPreferences(defaults: defaults).version, .option2)
         XCTAssertFalse(BoundExperimentalSettingsPreferences(defaults: defaults).enabled)
+        XCTAssertFalse(defaults.bool(forKey: BoundMultiplayerFeatures.key))
         XCTAssertEqual(appearance.effectiveScreenLayout, .bound)
         XCTAssertEqual(appearance.effectiveTheme, .delta)
         XCTAssertFalse(BoundFastForwardPreferences(defaults: defaults).isEnabled(for: "ROM123"))

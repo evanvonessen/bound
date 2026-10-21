@@ -1,11 +1,28 @@
 # Bound feature baseline
 
-Bound permanently provides the feature set that was previously available after
+Settings now includes **Enable Experimental Features** directly below **Enable
+Developer Features**, independently of that switch. It defaults to off and
+persists across launches. It gates the merged `multiplayer` branch: live map
+sprites, NPC-style Battle/Trade invitations, native friend battles, the local
+player-state HUD and recorded-player replay controls. Enable it on both players'
+devices, then connect in Friends and turn on **Show friend on map**.
+
+Turning it off removes these controls, stops presence/invitation/check channels,
+hides sprites and restores an active battle's pre-battle snapshot before closing
+its cable. Rejoining or foreground recovery cannot enable multiplayer while the
+switch is off. Recovery of an interrupted battle snapshot remains available to
+protect the save. Reset Settings to Default turns the switch off. Normal friend
+accounts and video sharing remain available. Trades remain invitation-only.
+
+This opt-in uses the new `bound.experimental-multiplayer.enabled.v1` key. Neither
+retired customization key can enable multiplayer on an upgraded installation.
+
+Bound permanently provides the customization feature set that was previously available after
 enabling Experimental Features. The old preference may exist on upgraded devices,
 but it has no authority over app behavior. The historical Build 13 branch remains
 available in Git history.
 
-The **Enable experimental features** checkbox and its customization controls have
+The historical experimental-customization checkbox and its customization controls have
 been removed: UI Version, Landscape Options, Bound button style/assignments,
 companion view choices/order, and RR Dex/Boss layout pickers. The Interface &
 Companion menu is also removed. Context Menu Previews and Pause Menu Button
@@ -207,3 +224,22 @@ spacing, saved layouts, reset behavior, and portrait touch controls. The GBA
 mapping editor keeps Save and Back while hiding the shared Done button.
 An unsigned Release iPhone build passed. Physical controller behavior and haptic
 feel were not tested on a device; live network services were not exercised.
+
+## Multiplayer opt-in validation — October 20, 2026
+
+The merge retains current main's Mac presentation, rendering/performance and
+settings changes and incorporates multiplayer through `4041c330`. Validation
+passed 65 focused integration tests, the Simulator UI switch flow (placement,
+independence from Developer Features, hidden/shown controls, relaunch persistence,
+off and reset), the Debug test builds and an unsigned Release iPhone build.
+Runtime fixture checks cover disabled entry, enabling during an existing video
+connection, disabling active presence/invitations, stale callbacks, reconnects
+and settings reset. The first UI attempt used an ambiguous Settings back-button
+selector; the scoped Controls back-button selector passed on retry.
+
+All 17,061 current pinned source files and the 864-byte battle-entry header
+verified. Source and Debug/Release bundled cloud configuration are identical.
+No backend/cloud setup, signing identities, normal app data or unrelated
+worktree edits were changed. This gate validation used synthetic transports
+and a disposable Simulator; it did not repeat the prior real Agora battle
+or 900-second presence acceptance, or exercise physical devices.

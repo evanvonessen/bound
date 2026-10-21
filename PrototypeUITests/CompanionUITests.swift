@@ -1024,6 +1024,49 @@ final class CompanionUITests: XCTestCase {
         app.buttons["bound.settings-close"].tap()
     }
 
+    func testExperimentalMultiplayerSwitchPlacementPersistenceAndVisibility() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations"]
+        app.launch()
+        defer { app.terminate() }
+        func openSettings() {
+            XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 15))
+            app.buttons["Settings"].tap()
+            XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
+        }
+        func readerVisible(_ expected: Bool) {
+            app.buttons["bound.settings-controls"].tap()
+            XCTAssertTrue(app.switches["bound.controller-mode-enabled"].waitForExistence(timeout: 5))
+            XCTAssertEqual(app.switches["bound.player-state-enabled"].exists, expected)
+            app.navigationBars["Controls"].buttons["BackButton"].tap()
+        }
+        openSettings()
+        app.buttons["bound.settings-reset-defaults"].tap()
+        let developer = app.switches["bound.settings-developer-features"]
+        let experimental = app.switches["bound.settings-experimental-features"]
+        XCTAssertTrue(experimental.waitForExistence(timeout: 5))
+        XCTAssertEqual(developer.value as? String, "0")
+        XCTAssertEqual(experimental.value as? String, "0")
+        XCTAssertLessThan(developer.frame.maxY, experimental.frame.midY)
+        XCTAssertEqual(experimental.label, "Enable Experimental Features")
+        readerVisible(false)
+        experimental.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(experimental.value as? String, "1")
+        XCTAssertEqual(developer.value as? String, "0", "Multiplayer opt-in is independent of Developer Features")
+        readerVisible(true)
+        app.terminate(); app.launch(); openSettings()
+        XCTAssertEqual(app.switches["bound.settings-experimental-features"].value as? String, "1")
+        readerVisible(true)
+        app.switches["bound.settings-experimental-features"].coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        readerVisible(false)
+        app.switches["bound.settings-experimental-features"].coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        app.buttons["bound.settings-reset-defaults"].tap()
+        XCTAssertEqual(app.switches["bound.settings-experimental-features"].value as? String, "0")
+        readerVisible(false)
+        app.buttons["bound.settings-close"].tap()
+    }
+
     func testDeveloperFeaturesExportAllConfigAndReset() throws {
         let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
         var originals: [(Method, IMP)] = []
@@ -1065,7 +1108,7 @@ final class CompanionUITests: XCTestCase {
         let export = app.buttons["bound.settings-export-all-config"]
         XCTAssertTrue(export.waitForExistence(timeout: 5))
         XCTAssertLessThan(developerFeatures.frame.midY, export.frame.midY,
-                          "Export All Config appears immediately below the switch.")
+                          "Export All Config appears below the feature switches.")
 
         app.terminate()
         app.launch()

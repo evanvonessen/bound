@@ -31,6 +31,18 @@ enum BoundFeatureVisibility {
     static let simplifiedSettings = true
 }
 
+/// Explicit opt-in for the multiplayer branch. Use a new key so retired
+/// customization preferences cannot silently enable networking/gameplay hooks.
+enum BoundMultiplayerFeatures {
+    static let key = "bound.experimental-multiplayer.enabled.v1"
+    static let didChange = Notification.Name("BoundExperimentalMultiplayerChanged")
+    static var isEnabled: Bool { UserDefaults.standard.bool(forKey: key) }
+    static func setEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: key)
+        NotificationCenter.default.post(name: didChange, object: nil)
+    }
+}
+
 /// Retired customization-visibility preference kept for upgrade/reset compatibility.
 /// It no longer exposes settings or gates saved choices at runtime.
 final class BoundExperimentalSettingsPreferences {

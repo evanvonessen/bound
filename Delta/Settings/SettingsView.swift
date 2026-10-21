@@ -31,6 +31,8 @@ struct BoundSettingsGameplayContext {
     let emulationDetails: BoundEmulationDetails?
     var editControls: (() -> Void)? = nil
     var showCompanion: (() -> Void)? = nil
+    var recordedPlayer: BoundRecordedPlayerSession? = nil
+    var livePresence: BoundLivePresenceSession? = nil
 }
 
 /// Both entry points use this owner so closing and interactive dismissal share
@@ -111,6 +113,7 @@ struct SettingsView: View {
     @State private var resetting = false
     @State private var resetFailed = false
     @State private var resetRevision = 0
+    @AppStorage(BoundMultiplayerFeatures.key) private var experimentalFeaturesEnabled = false
     @AppStorage(BoundDeveloperFeatures.key) private var developerFeaturesEnabled = false
     @State private var configurationExportFile: BoundConfigurationFile?
     @State private var pendingConfigurationExportFile: BoundConfigurationFile?
@@ -132,6 +135,11 @@ struct SettingsView: View {
                         NavigationLink {
                             Form {
                                 ControlsSection()
+                                if experimentalFeaturesEnabled {
+                                    BoundPlayerStateSetting()
+                                    if let session = gameplay?.recordedPlayer { BoundRecordedPlayerControls(session: session) }
+                                    if let session = gameplay?.livePresence { BoundLivePresenceControls(session: session) }
+                                }
                                 BoundCompanionControlsSections(model: model, gameplay: gameplay)
                                 if !BoundFeatureVisibility.simplifiedSettings, let edit = gameplay?.editControls {
                                     Section { Button("Button placement") { edit(); close() } }
@@ -224,6 +232,12 @@ struct SettingsView: View {
 
                         Toggle("Enable Developer Features", isOn: $developerFeaturesEnabled)
                             .accessibilityIdentifier("bound.settings-developer-features")
+
+                        Toggle("Enable Experimental Features", isOn: $experimentalFeaturesEnabled)
+                            .accessibilityIdentifier("bound.settings-experimental-features")
+                            .onChange(of: experimentalFeaturesEnabled) { _, enabled in
+                                BoundMultiplayerFeatures.setEnabled(enabled)
+                            }
 
                         if developerFeaturesEnabled {
                             Button("Export All Config") {

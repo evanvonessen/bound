@@ -457,6 +457,26 @@
 		7BB4140243E744498AD5B635 /* BoundDefaultConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7DD6C16ED774139B1400CDB /* BoundDefaultConfiguration.swift */; };
 		B2C54DC0DA784D1994623938 /* BoundDefaultConfiguration-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = 6B8103391E5B4B97A4994286 /* BoundDefaultConfiguration-v1.json */; };
 		761DFF9E956344B281111DE1 /* DefaultConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 225FF5926EF643879964B713 /* DefaultConfigurationTests.swift */; };
+		92A220783C5444D8894C0EFC /* BoundPlayerState.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11EC3B5F0FA4653A65DA9F6 /* BoundPlayerState.swift */; };
+		DC679C3395174FE38794C79A /* BoundPlayerStateDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 604D0B88F2BD4127A7AC9266 /* BoundPlayerStateDisplay.swift */; };
+		87214F8B08E34E1699AB1A1A /* PlayerStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DB42D13CD4642F59F46B8EE /* PlayerStateTests.swift */; };
+		18BC10A8D7EF4D1397B91702 /* BoundPlayerScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BC10A8D7EF4D1397B91701 /* BoundPlayerScene.swift */; };
+		18BC10A8D7EF4D1397B91704 /* BoundRecordedPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BC10A8D7EF4D1397B91703 /* BoundRecordedPlayer.swift */; };
+		A15E00000000000000000002 /* BoundLivePresence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000001 /* BoundLivePresence.swift */; };
+		A15F00000000000000000002 /* BoundFriendInteraction.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15F00000000000000000001 /* BoundFriendInteraction.swift */; };
+		B47710000000000000000002 /* BoundVBABattleBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = B47710000000000000000001 /* BoundVBABattleBridge.mm */; };
+		B47710000000000000000009 /* AgoraBattleChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B47710000000000000000008 /* AgoraBattleChannel.swift */; };
+		B47710000000000000000007 /* BoundNativeBattle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B47710000000000000000006 /* BoundNativeBattle.swift */; };
+		B47710000000000000000005 /* BoundBattleCable.swift in Sources */ = {isa = PBXBuildFile; fileRef = B47710000000000000000004 /* BoundBattleCable.swift */; };
+		A15F00000000000000000004 /* BoundFriendInteractionPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15F00000000000000000003 /* BoundFriendInteractionPanel.swift */; };
+		A15E00000000000000000008 /* BoundPresenceConnectionCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000007 /* BoundPresenceConnectionCheck.swift */; };
+		A15E0000000000000000000C /* BoundFullAppGameplayQA.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E0000000000000000000B /* BoundFullAppGameplayQA.swift */; };
+		18BC10A8D7EF4D1397B91706 /* RecordedPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */; };
+		A15E00000000000000000004 /* LivePresenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000003 /* LivePresenceTests.swift */; };
+		A15F00000000000000000006 /* FriendInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15F00000000000000000005 /* FriendInteractionTests.swift */; };
+		B4771000000000000000000D /* NativeBattleRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4771000000000000000000C /* NativeBattleRuntimeTests.swift */; };
+		A15E0000000000000000000A /* PresenceConnectionCheckTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */; };
+		A15E00000000000000000006 /* LivePresenceRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000005 /* LivePresenceRuntimeTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1274,6 +1294,27 @@
 		F7DD6C16ED774139B1400CDB /* BoundDefaultConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundDefaultConfiguration.swift; sourceTree = "<group>"; };
 		6B8103391E5B4B97A4994286 /* BoundDefaultConfiguration-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = Resources/BoundDefaultConfiguration-v1.json; sourceTree = "<group>"; };
 		225FF5926EF643879964B713 /* DefaultConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultConfigurationTests.swift; sourceTree = "<group>"; };
+		E11EC3B5F0FA4653A65DA9F6 /* BoundPlayerState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPlayerState.swift; sourceTree = "<group>"; };
+		604D0B88F2BD4127A7AC9266 /* BoundPlayerStateDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPlayerStateDisplay.swift; sourceTree = "<group>"; };
+		3DB42D13CD4642F59F46B8EE /* PlayerStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerStateTests.swift; sourceTree = "<group>"; };
+		18BC10A8D7EF4D1397B91701 /* BoundPlayerScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPlayerScene.swift; sourceTree = "<group>"; };
+		18BC10A8D7EF4D1397B91703 /* BoundRecordedPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundRecordedPlayer.swift; sourceTree = "<group>"; };
+		A15E00000000000000000001 /* BoundLivePresence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLivePresence.swift; sourceTree = "<group>"; };
+		A15F00000000000000000001 /* BoundFriendInteraction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundFriendInteraction.swift; sourceTree = "<group>"; };
+		B47710000000000000000001 /* BoundVBABattleBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = BoundVBABattleBridge.mm; sourceTree = "<group>"; };
+		B47710000000000000000003 /* BoundVBABattleBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = BoundVBABattleBridge.h; sourceTree = "<group>"; };
+		B47710000000000000000008 /* AgoraBattleChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgoraBattleChannel.swift; sourceTree = "<group>"; };
+		B47710000000000000000006 /* BoundNativeBattle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundNativeBattle.swift; sourceTree = "<group>"; };
+		B47710000000000000000004 /* BoundBattleCable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundBattleCable.swift; sourceTree = "<group>"; };
+		A15F00000000000000000003 /* BoundFriendInteractionPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundFriendInteractionPanel.swift; sourceTree = "<group>"; };
+		A15E00000000000000000007 /* BoundPresenceConnectionCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPresenceConnectionCheck.swift; sourceTree = "<group>"; };
+		A15E0000000000000000000B /* BoundFullAppGameplayQA.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundFullAppGameplayQA.swift; sourceTree = "<group>"; };
+		18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordedPlayerTests.swift; sourceTree = "<group>"; };
+		A15E00000000000000000003 /* LivePresenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePresenceTests.swift; sourceTree = "<group>"; };
+		A15F00000000000000000005 /* FriendInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FriendInteractionTests.swift; sourceTree = "<group>"; };
+		B4771000000000000000000C /* NativeBattleRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeBattleRuntimeTests.swift; sourceTree = "<group>"; };
+		A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresenceConnectionCheckTests.swift; sourceTree = "<group>"; };
+		A15E00000000000000000005 /* LivePresenceRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePresenceRuntimeTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1388,6 +1429,13 @@
 			children = (
 				5DD465FEC61E429CA4EAC9AB /* SourceAndLicenseTests.swift */,
 				E519E2BAF174403DB37DB3A5 /* PlaybackSharingTests.swift */,
+				3DB42D13CD4642F59F46B8EE /* PlayerStateTests.swift */,
+				18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */,
+				A15E00000000000000000003 /* LivePresenceTests.swift */,
+				A15F00000000000000000005 /* FriendInteractionTests.swift */,
+				B4771000000000000000000C /* NativeBattleRuntimeTests.swift */,
+				A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */,
+				A15E00000000000000000005 /* LivePresenceRuntimeTests.swift */,
 				35733EA11CCE9FF25284EFB8 /* AppearanceIntegrationTests.swift */,
 				79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */,
 				C1D82587FA554BF8B7A9E409 /* MultiviewDexNavigationTests.swift */,
@@ -1497,6 +1545,20 @@
 				8469AA17D6924083971A9ECF /* BoundPiPGestures.swift */,
 				DBC28B362D94E4127E8A7166 /* BoundPiPPreferences.swift */,
 				06F079A697C7C561C356F7E9 /* BoundDeltaFrameTap.swift */,
+				604D0B88F2BD4127A7AC9266 /* BoundPlayerStateDisplay.swift */,
+				E11EC3B5F0FA4653A65DA9F6 /* BoundPlayerState.swift */,
+				18BC10A8D7EF4D1397B91701 /* BoundPlayerScene.swift */,
+				18BC10A8D7EF4D1397B91703 /* BoundRecordedPlayer.swift */,
+				A15E00000000000000000001 /* BoundLivePresence.swift */,
+				A15F00000000000000000001 /* BoundFriendInteraction.swift */,
+				B47710000000000000000001 /* BoundVBABattleBridge.mm */,
+				B47710000000000000000003 /* BoundVBABattleBridge.h */,
+				B47710000000000000000008 /* AgoraBattleChannel.swift */,
+				B47710000000000000000006 /* BoundNativeBattle.swift */,
+				B47710000000000000000004 /* BoundBattleCable.swift */,
+				A15F00000000000000000003 /* BoundFriendInteractionPanel.swift */,
+				A15E00000000000000000007 /* BoundPresenceConnectionCheck.swift */,
+				A15E0000000000000000000B /* BoundFullAppGameplayQA.swift */,
 				E875C2DEF127D860254648FA /* BoundFrameCaptureGate.swift */,
 				9F35BC570DB6B8BA023B9B53 /* BoundCompanionCycleButton.swift */,
 				6D75D15A8F3B6F2793C7F56D /* BoundPortraitScreenGeometry.swift */,
@@ -3177,6 +3239,13 @@
 			files = (
 				59CF946CE2E3410795B06A0E /* SourceAndLicenseTests.swift in Sources */,
 				074EAD7F7AE78C628F0977A8 /* PlaybackSharingTests.swift in Sources */,
+				87214F8B08E34E1699AB1A1A /* PlayerStateTests.swift in Sources */,
+				18BC10A8D7EF4D1397B91706 /* RecordedPlayerTests.swift in Sources */,
+				A15E00000000000000000004 /* LivePresenceTests.swift in Sources */,
+				A15F00000000000000000006 /* FriendInteractionTests.swift in Sources */,
+				B4771000000000000000000D /* NativeBattleRuntimeTests.swift in Sources */,
+				A15E0000000000000000000A /* PresenceConnectionCheckTests.swift in Sources */,
+				A15E00000000000000000006 /* LivePresenceRuntimeTests.swift in Sources */,
 				273B677E21CFB932EFA82ACD /* AppearanceIntegrationTests.swift in Sources */,
 				0DCC5A17E990440B949F4582 /* ConfigurationExportTests.swift in Sources */,
 				4C2097EAF620479EAF50EA68 /* MultiviewDexNavigationTests.swift in Sources */,
@@ -3483,6 +3552,19 @@
 				A9D0C8D83FBEE28FB2158E9B /* BoundPiPGestures.swift in Sources */,
 				0BCD0BD062911305B3322273 /* BoundPiPPreferences.swift in Sources */,
 				108629E5695D84AE84FD49AA /* BoundDeltaFrameTap.swift in Sources */,
+				DC679C3395174FE38794C79A /* BoundPlayerStateDisplay.swift in Sources */,
+				92A220783C5444D8894C0EFC /* BoundPlayerState.swift in Sources */,
+				18BC10A8D7EF4D1397B91702 /* BoundPlayerScene.swift in Sources */,
+				18BC10A8D7EF4D1397B91704 /* BoundRecordedPlayer.swift in Sources */,
+				A15E00000000000000000002 /* BoundLivePresence.swift in Sources */,
+				A15F00000000000000000002 /* BoundFriendInteraction.swift in Sources */,
+				B47710000000000000000002 /* BoundVBABattleBridge.mm in Sources */,
+				B47710000000000000000009 /* AgoraBattleChannel.swift in Sources */,
+				B47710000000000000000007 /* BoundNativeBattle.swift in Sources */,
+				B47710000000000000000005 /* BoundBattleCable.swift in Sources */,
+				A15F00000000000000000004 /* BoundFriendInteractionPanel.swift in Sources */,
+				A15E00000000000000000008 /* BoundPresenceConnectionCheck.swift in Sources */,
+				A15E0000000000000000000C /* BoundFullAppGameplayQA.swift in Sources */,
 				A5AAF6B64EA97D56F73A4A9D /* BoundFrameCaptureGate.swift in Sources */,
 				9EE1E66A051751E201D09F44 /* BoundCompanionCycleButton.swift in Sources */,
 				086D5B30CBE1065AE9A6C9AA /* BoundPortraitScreenGeometry.swift in Sources */,
@@ -3926,7 +4008,8 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_MODULES_AUTOLINK = NO;
-				CODE_SIGN_ENTITLEMENTS = Delta/Delta.entitlements;
+				BOUND_APP_ENTITLEMENTS = Delta/Delta.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "$(BOUND_APP_ENTITLEMENTS)";
 				BOUND_APNS_ENVIRONMENT = development;
 				BOUND_GOOGLE_CLIENT_ID = "";
 				BOUND_GOOGLE_REVERSED_CLIENT_ID = "bound-google-unconfigured";
@@ -3935,7 +4018,8 @@
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 3N83BX5M9G;
-				INFOPLIST_FILE = "Delta/Supporting Files/Info.plist";
+				BOUND_APP_INFO_PLIST = "Delta/Supporting Files/Info.plist";
+				INFOPLIST_FILE = "$(BOUND_APP_INFO_PLIST)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -4005,7 +4089,8 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_MODULES_AUTOLINK = NO;
-				CODE_SIGN_ENTITLEMENTS = Delta/Delta.entitlements;
+				BOUND_APP_ENTITLEMENTS = Delta/Delta.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "$(BOUND_APP_ENTITLEMENTS)";
 				BOUND_APNS_ENVIRONMENT = production;
 				BOUND_GOOGLE_CLIENT_ID = "";
 				BOUND_GOOGLE_REVERSED_CLIENT_ID = "bound-google-unconfigured";
@@ -4014,7 +4099,8 @@
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 3N83BX5M9G;
-				INFOPLIST_FILE = "Delta/Supporting Files/Info.plist";
+				BOUND_APP_INFO_PLIST = "Delta/Supporting Files/Info.plist";
+				INFOPLIST_FILE = "$(BOUND_APP_INFO_PLIST)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (

@@ -47,7 +47,47 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
     private var sdkEvidence: [String: Int] = [:]
     private var lastReceivedAt: TimeInterval?
     private var lastConvertedAt: TimeInterval?
-    func suspendFrames() { lock.lock(); suspended = true; frameGeneration &+= 1; count = 0; latestPixels = nil; pixelEvidence = [:]; lock.unlock() }
+    private var latestPresence: Data?
+    private var presencePackets = 0
+    private var interactions: [Data] = []
+    private var interactionFailed = false
+    private var interactionFailureReported = false
+    private var battleChannel: AgoraBattleChannel?
+    func setBattleChannel(_ channel: AgoraBattleChannel?) { lock.lock(); battleChannel=channel; lock.unlock() }
+    func rtcEngine(_ engine: AgoraRtcEngineKit, receiveRdtMessageFromUid uid: UInt, type: AgoraRdtStreamType, data: Data) {
+        guard uid == remoteUID, (type == .data || type == .cmd), data.count <= 131072 else { return }
+        lock.lock(); let channel=battleChannel; lock.unlock(); channel?.receive(data)
+    }
+    func rtcEngine(_ engine: AgoraRtcEngineKit, didOccurRdtMessageStateFromUid uid: UInt, state: AgoraRdtState) {
+        guard uid == remoteUID else { return }
+        NSLog("Bound battle RDT state: %ld",state.rawValue)
+        if state == .broken || state == .pending {
+            lock.lock(); let channel=battleChannel; lock.unlock(); channel?.failed()
+        }
+    }
+    func takeInteractions() -> (messages: [Data], failed: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        let result = interactions; interactions.removeAll(keepingCapacity: true)
+        let failed = interactionFailed && !interactionFailureReported
+        if failed { interactionFailureReported = true }
+        return (result, failed)
+    }
+    func receiveInteraction(_ data: Data, uid: UInt) {
+        guard uid == remoteUID, (data.starts(with: BoundFriendInteractionPacket.prefix) || data.starts(with: BoundBattleControlPacket.prefix)),
+              data.count <= BoundFriendInteractionPacket.maximumBytes else { return }
+        lock.lock(); defer { lock.unlock() }
+        guard acceptsFrames, !suspended, !interactionFailed else { return }
+        guard interactions.count < 64 else {
+            interactions.removeAll(keepingCapacity: true); interactionFailed = true; return
+        }
+        interactions.append(data.withUnsafeBytes { Data($0) })
+    }
+    func rtcEngine(_ engine: AgoraRtcEngineKit, didOccurStreamMessageErrorFromUid uid: UInt,
+                   streamId: Int, error: Int, missed: Int, cached: Int) {
+        guard uid == remoteUID else { return }
+        lock.lock(); interactionFailed = true; interactions.removeAll(keepingCapacity: true); lock.unlock()
+    }
+    func suspendFrames() { lock.lock(); suspended = true; frameGeneration &+= 1; count = 0; latestPixels = nil; latestPresence = nil; interactions.removeAll(keepingCapacity: true); interactionFailed = false; interactionFailureReported = false; pixelEvidence = [:]; lock.unlock() }
     func resumeFrames() { lock.lock(); suspended = false; frameGeneration &+= 1; count = 0; latestPixels = nil; pixelEvidence = [:]; lock.unlock() }
     private var pixelEvidence: [String: Int] = [:]
     private var firstRendered = false
@@ -56,10 +96,25 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
         lock.lock(); defer { lock.unlock() }
         let result = latestPixels; latestPixels = nil; return result
     }
+    func takeLatestPresence() -> Data? {
+        lock.lock(); defer { lock.unlock() }
+        let data = latestPresence; latestPresence = nil; return data
+    }
+    func receivePresence(_ data: Data, uid: UInt) {
+        guard uid == remoteUID, !data.isEmpty, data.count <= BoundPresencePacket.maximumBytes else { return }
+        lock.lock(); defer { lock.unlock() }
+        guard acceptsFrames, !suspended else { return }
+        latestPresence = data.withUnsafeBytes { Data($0) }; presencePackets += 1
+    }
+    func rtcEngine(_ engine: AgoraRtcEngineKit, receiveStreamMessageFromUid uid: UInt, streamId: Int, data: Data) {
+        if (data.starts(with: BoundFriendInteractionPacket.prefix) || data.starts(with: BoundBattleControlPacket.prefix)) { receiveInteraction(data, uid: uid) }
+        else { receivePresence(data, uid: uid) }
+    }
     var diagnostics: [String: Int] {
         lock.lock(); defer { lock.unlock() }
         var result = pixelEvidence
         result["firstRemoteRendered"] = firstRendered ? 1 : 0
+        result["presencePackets"] = presencePackets
         result["convertedFrames"] = convertedFrames
         result["replacedPendingFrames"] = replacedFrames
         result["conversionBusyDrops"] = busyDrops
@@ -75,7 +130,7 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
         self.remoteUID = remoteUID; self.event = event
     }
     var receivedFrames: Int { lock.lock(); defer { lock.unlock() }; return count }
-    func resetFrames(enabled: Bool) { lock.lock(); count = 0; frameGeneration &+= 1; acceptsFrames = enabled; convertedFrames = 0; replacedFrames = 0; busyDrops = 0; staleDrops = 0; lastReceivedAt = nil; lastConvertedAt = nil; pixelEvidence = [:]; firstRendered = false; latestPixels = nil; lock.unlock() }
+    func resetFrames(enabled: Bool) { lock.lock(); count = 0; frameGeneration &+= 1; acceptsFrames = enabled; convertedFrames = 0; replacedFrames = 0; busyDrops = 0; staleDrops = 0; lastReceivedAt = nil; lastConvertedAt = nil; pixelEvidence = [:]; firstRendered = false; latestPixels = nil; latestPresence = nil; interactions.removeAll(keepingCapacity: true); interactionFailed = false; interactionFailureReported = false; lock.unlock() }
     func onRenderVideoFrame(_ videoFrame: AgoraOutputVideoFrame, uid: UInt, channelId: String) -> Bool {
         guard uid == remoteUID else { return false }
         let convert = { () -> Data? in
@@ -341,6 +396,14 @@ final class AgoraSharingTransport: FriendSharingTransport {
     private var presentedFrames = 0
     private var lastPresentedAt: TimeInterval?
     private var lastPublishedAt: TimeInterval?
+    private var presenceReceiver: (@MainActor (Data) -> Void)?
+    private var presenceStream: Int?
+    private var interactionStream: Int?
+    private var interactionReceiver: (@MainActor (Data?) -> Void)?
+    private var battleChannel: AgoraBattleChannel?
+    private var sentPresence = 0
+    private var presenceCreateResult: Int?
+    private var presenceSendResult: Int?
     private let metalAvailable = MTLCreateSystemDefaultDevice() != nil
 
     private(set) var publishedFrames = 0
@@ -350,10 +413,16 @@ final class AgoraSharingTransport: FriendSharingTransport {
         return FriendSharingFrameTiming(received: times?.received, converted: times?.converted,
                                         presented: lastPresentedAt, published: lastPublishedAt)
     }
+    var presenceConnectionCheck: BoundPresenceTransportCheck {
+        .init(kind: .agora, streamCreated: presenceStream != nil, createResult: presenceCreateResult,
+              sendResult: presenceSendResult, acceptedSends: sentPresence,
+              receivedMessages: callbacks?.diagnostics["presencePackets"] ?? 0)
+    }
 
     var diagnostics: [String: Any] {
         var result: [String: Any] = callbacks?.diagnostics ?? [:]
         result["publicationFailure"] = lastFailure
+        result["sentPresencePackets"] = sentPresence
         result["recovering"] = recovering
         result["reconnectCount"] = recoveryCount
         result["reconnectSuccessCount"] = recoverySuccessCount
@@ -436,6 +505,8 @@ final class AgoraSharingTransport: FriendSharingTransport {
                event: @escaping @MainActor (FriendSharingEvent) -> Void) {
         BoundMainActorDisposal.drainPending()
         stop()
+        sentPresence = 0
+        presenceCreateResult = nil; presenceSendResult = nil
         lastFailure = [:]; lastConnectionState = nil; lastConnectionReason = nil
         joinResult = nil; lastPushAccepted = nil; attemptedFrames = 0; lastAttemptedSequence = 0
         recoveryCount = 0; recoverySuccessCount = 0; sdkRejoinCallbacks = 0; lastRecoveryReason = nil
@@ -479,6 +550,10 @@ final class AgoraSharingTransport: FriendSharingTransport {
         let logs = AgoraLogConfig(); logs.level = .none; config.logConfig = logs
         let kit = AgoraRtcEngineKit.sharedEngine(with: config, delegate: proxy)
         engine = kit
+        // The pinned 4.6.4 SDK leaves its RDT engine disabled by default.
+        // Enable the client tunnel before joining; this changes no cloud setup.
+        let rdtResult = kit.setParameters("{\"rtc.rdt_enable\":true,\"rtc.rdt_auto_connect\":true}")
+        NSLog("Bound battle RDT setup: %d", rdtResult)
         kit.disableAudio()
         kit.setExternalVideoSource(true, useTexture: true, sourceType: .videoFrame)
         kit.enableVideo()
@@ -611,9 +686,58 @@ final class AgoraSharingTransport: FriendSharingTransport {
         remoteView?.subviews.forEach { $0.removeFromSuperview() }
         remoteView?.layer.sublayers?.forEach { $0.removeFromSuperlayer() }
     }
+    func setPresenceReceiver(_ receiver: (@MainActor (Data) -> Void)?) { presenceReceiver = receiver }
+    func pollPresence() {
+        guard joined, !recovering, let data = callbacks?.takeLatestPresence() else { return }
+        presenceReceiver?(data)
+    }
+    func makeBattleChannel(receiver: @escaping @Sendable (Data) -> Void, failed: @escaping @Sendable () -> Void) -> (any BoundBattleChannel)? {
+        guard joined, !recovering, let engine, remoteUID != 0 else { return nil }
+        battleChannel?.close()
+        let channel = AgoraBattleChannel(engine: engine, uid: remoteUID, receiver: receiver, failure: failed)
+        battleChannel = channel; callbacks?.setBattleChannel(channel)
+        return channel
+    }
+    func setInteractionReceiver(_ receiver: (@MainActor (Data?) -> Void)?) { interactionReceiver = receiver }
+    func pollInteractions() {
+        guard joined, !recovering, let pending = callbacks?.takeInteractions() else { return }
+        if pending.failed { interactionReceiver?(nil); return }
+        for data in pending.messages { interactionReceiver?(data) }
+    }
+    func sendInteraction(_ data: Data) -> Bool {
+        guard joined, !recovering, (data.starts(with: BoundFriendInteractionPacket.prefix) || data.starts(with: BoundBattleControlPacket.prefix)),
+              data.count <= BoundFriendInteractionPacket.maximumBytes,
+              let engine, engine.getConnectionState() == .connected else { return false }
+        if interactionStream == nil {
+            var stream = 0
+            guard engine.createDataStream(&stream, reliable: true, ordered: true) == 0 else { return false }
+            interactionStream = stream
+        }
+        guard let interactionStream else { return false }
+        return engine.sendStreamMessage(interactionStream, data: data) == 0
+    }
+    func sendPresence(_ data: Data) -> Bool {
+        guard joined, !recovering, !data.isEmpty, data.count <= BoundPresencePacket.maximumBytes,
+              let engine, engine.getConnectionState() == .connected else { return false }
+        if presenceStream == nil {
+            var stream = 0
+            let config = AgoraDataStreamConfig(); config.ordered = false; config.syncWithAudio = false
+            let result = engine.createDataStream(&stream, config: config)
+            presenceCreateResult = Int(result)
+            guard result == 0 else { return false }
+            presenceStream = stream
+        }
+        guard let presenceStream else { return false }
+        let result = engine.sendStreamMessage(presenceStream, data: data)
+        presenceSendResult = Int(result)
+        guard result == 0 else { return false }
+        sentPresence += 1; return true
+    }
     func renewToken(_ token: String) -> Bool { engine?.renewToken(token) == 0 }
 
     func stop() {
+        battleChannel?.close(); battleChannel = nil; callbacks?.setBattleChannel(nil)
+        presenceStream = nil; interactionStream = nil
         BoundMainActorDisposal.drainPending()
         generation = UUID(); joined = false; recovering = false; eventHandler = nil; setupResult = nil
         callbacks?.resetFrames(enabled: false)

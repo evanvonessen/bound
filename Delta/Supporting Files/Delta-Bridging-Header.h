@@ -5,3 +5,5 @@
 #import "NSFetchedResultsController+Conveniences.h"
 #import "ControllerSkinConfigurations.h"
 #import "GameSetting.h"
+
+#import "../Bound/BoundVBABattleBridge.h"
