@@ -158,7 +158,23 @@ struct SettingsView: View {
                                 BoundAppearanceSettings(emulationDetails: gameplay?.emulationDetails, includeAppearance: false)
                                 Section("Cores") { CoreSettingsLinks() }
                                 Section("Links") {
-                                    Link(destination: URL(string: "https://evanvonessen.github.io/bound/moderation.html")!) {
+                                    Link(destination: URL(string: "https://evanvonessen.github.io/bound/current/")!) {
+                                        SettingsRow(label: Text("Website"), systemImage: "globe", color: .blue) {
+                                            Image(systemName: "arrow.up.right")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .accessibilityIdentifier("bound.website-link")
+                                    Link(destination: URL(string: "https://evanvonessen.github.io/bound/current/privacy.html")!) {
+                                        SettingsRow(label: Text("Privacy Policy"), systemImage: "hand.raised", color: .blue) {
+                                            Image(systemName: "arrow.up.right")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .accessibilityIdentifier("bound.privacy-policy-link")
+                                    Link(destination: URL(string: "https://evanvonessen.github.io/bound/current/moderation.html")!) {
                                         SettingsRow(label: Text("Rules & Contact"), systemImage: "book.closed", color: .orange) {
                                             Image(systemName: "arrow.up.right")
                                                 .font(.caption)

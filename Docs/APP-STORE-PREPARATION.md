@@ -4,7 +4,18 @@ The intended listing name is **Bound - Game Emulator**. The public website is a
 static GitHub Pages site in `Docs/site`, deployed by `.github/workflows/pages.yml`.
 Directory case is significant on the Linux deployment runner.
 
-## Listing URLs
+## Current app website
+
+The plain website lives at `https://evanvonessen.github.io/bound/current/`.
+The current app's About settings link to that site, its `privacy.html`, and its
+`moderation.html`. The site contains only contact, privacy, and community information.
+
+## Build 12 review URLs — preserve
+
+Build 12's Friends and Report screens link to the root `moderation.html` below
+(source snapshot `635f5d72`). Keep all existing root HTML, CSS, and assets unchanged
+while that build is under review. Do not redirect these URLs to the current site
+or change the submitted listing URLs as part of publishing the new site.
 
 - Marketing: `https://evanvonessen.github.io/bound/`
 - Support: `https://evanvonessen.github.io/bound/support.html`
