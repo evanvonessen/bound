@@ -1,8 +1,26 @@
 import XCTest
+import ObjectiveC
 
 final class MacWorkspaceUITests: XCTestCase {
+    private var originalQuiescenceImplementations: [(Method, IMP)] = []
+
     override func setUpWithError() throws {
         continueAfterFailure = false
+        // Use the same Xcode 27 idle-notification workaround as the companion
+        // tests; every transition below still waits for its actual UI controls.
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originalQuiescenceImplementations.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+    }
+
+    override func tearDownWithError() throws {
+        for (method, original) in originalQuiescenceImplementations {
+            imp_removeBlock(method_setImplementation(method, original))
+        }
+        originalQuiescenceImplementations.removeAll()
     }
 
     func testForcedMacWorkspaceKeepsFriendVideoWhileChangingCompanionTabs() throws {
@@ -162,11 +180,48 @@ final class MacWorkspaceUITests: XCTestCase {
         ])
         XCTAssertFalse(element("bound.mac-workspace", in: app).exists)
 
-        let cycle = app.buttons["bound.panel-cycle"]
-        XCTAssertTrue(cycle.waitForExistence(timeout: 15), "The existing iOS companion control should remain available")
-        XCTAssertEqual(cycle.value as? String, "Friend")
+        let friendControl = app.buttons["bound.panel-cycle.1"]
+        XCTAssertTrue(friendControl.waitForExistence(timeout: 15), "The current iOS Friend control should remain available")
+        XCTAssertEqual(friendControl.value as? String, "Friend")
+        XCTAssertTrue(app.buttons["bound.panel-cycle.2"].exists, "The current iOS Multiview control should remain available")
         XCTAssertTrue(element("bound.friend-screen", in: app).exists)
         XCTAssertFalse(app.buttons["bound.mac-dex"].exists)
+        app.terminate()
+    }
+
+    func testMacWorkspaceSettingsExposeSharedControllerOptionsAndBindings() throws {
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = launchDiagnosticGame(arguments: [
+            "--bound-ui-mac-workspace",
+            "--bound-ui-no-animations"
+        ])
+
+        let workspace = element("bound.mac-workspace", in: app)
+        XCTAssertTrue(workspace.waitForExistence(timeout: 20))
+        let settings = app.buttons["bound.mac-settings"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 5), "Mac workspace Settings must be reachable")
+        settings.tap()
+
+        XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
+        let controlsEntry = app.buttons["bound.settings-controls"]
+        XCTAssertTrue(controlsEntry.waitForExistence(timeout: 5))
+        controlsEntry.tap()
+
+        XCTAssertTrue(app.switches["bound.controller-mode-enabled"].waitForExistence(timeout: 5),
+                      "The shared Controls screen must expose Controller Mode")
+        XCTAssertTrue(app.switches["bound.controller-multiview"].waitForExistence(timeout: 5),
+                      "The shared Controls screen must expose controller Multiview control")
+
+        let controllers = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Controllers")).firstMatch
+        XCTAssertTrue(controllers.waitForExistence(timeout: 5), "Controls must retain its controller bindings entry")
+        controllers.tap()
+        XCTAssertTrue(app.navigationBars["Controllers"].waitForExistence(timeout: 5))
+        let playerOne = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Player 1")).firstMatch
+        XCTAssertTrue(playerOne.waitForExistence(timeout: 5), "Controller bindings must offer Player 1")
+        playerOne.tap()
+        XCTAssertTrue(app.navigationBars["Player 1"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["This Device"].waitForExistence(timeout: 5),
+                      "Player 1 bindings must show the built-in touch controller without requiring external hardware")
         app.terminate()
     }
 

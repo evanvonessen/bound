@@ -160,8 +160,8 @@ struct BoundMacWorkspaceView: View {
             let width = proxy.size.width
             let feedWidth = min(270, max(1, width - 54))
             let feedHeight = feedWidth / 1.5
-            let availableReferenceHeight = proxy.size.height - feedHeight - 208
-            let needsOuterScroll = availableReferenceHeight < 300
+            let availableReferenceHeight = proxy.size.height - (state.macFriendVisible ? feedHeight + 208 : 147)
+            let needsOuterScroll = state.macReferenceVisible && availableReferenceHeight < 300
             Group {
                 if needsOuterScroll {
                     ScrollView(.vertical) {
@@ -170,9 +170,9 @@ struct BoundMacWorkspaceView: View {
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 14) {
-                        friendCard(width: feedWidth, feedHeight: feedHeight)
+                        friendSection(width: feedWidth, feedHeight: feedHeight)
                         referencePicker
-                        referenceContent.frame(height: availableReferenceHeight, alignment: .top)
+                        referenceSection(height: max(0, availableReferenceHeight))
                     }
                     .padding(16)
                 }
@@ -186,11 +186,54 @@ struct BoundMacWorkspaceView: View {
 
     private func inspectorContents(feedWidth: CGFloat, feedHeight: CGFloat, referenceHeight: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            friendCard(width: feedWidth, feedHeight: feedHeight)
+            friendSection(width: feedWidth, feedHeight: feedHeight)
             referencePicker
-            referenceContent.frame(height: referenceHeight, alignment: .top)
+            referenceSection(height: referenceHeight)
         }
         .padding(16)
+    }
+
+    private func friendSection(width: CGFloat, feedHeight: CGFloat) -> some View {
+        ZStack(alignment: .top) {
+            // Keep the remote renderer mounted when a controller hides it.
+            friendCard(width: width, feedHeight: feedHeight)
+                .opacity(state.macFriendVisible ? 1 : 0)
+                .allowsHitTesting(state.macFriendVisible)
+                .accessibilityHidden(!state.macFriendVisible)
+            if !state.macFriendVisible {
+                Button { state.macFriendVisible = true } label: {
+                    Label("Show Friend Gameplay", systemImage: "person.2.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(maxWidth: .infinity).frame(height: 32)
+                        .background(panel, in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain).foregroundStyle(accent)
+                .accessibilityIdentifier("bound.mac-show-friend")
+            }
+        }
+        .frame(height: state.macFriendVisible ? nil : 32, alignment: .top)
+        .clipped()
+    }
+
+    private func referenceSection(height: CGFloat) -> some View {
+        ZStack(alignment: .top) {
+            referenceContent.frame(height: height, alignment: .top)
+                .opacity(state.macReferenceVisible ? 1 : 0)
+                .allowsHitTesting(state.macReferenceVisible)
+                .accessibilityHidden(!state.macReferenceVisible)
+            if !state.macReferenceVisible {
+                Button { state.macReferenceVisible = true } label: {
+                    Label("Show Multiview", systemImage: "rectangle.on.rectangle")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(maxWidth: .infinity).frame(height: 32)
+                        .background(panel, in: RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain).foregroundStyle(accent)
+                .accessibilityIdentifier("bound.mac-show-multiview")
+            }
+        }
+        .frame(height: state.macReferenceVisible ? height : 32, alignment: .top)
+        .clipped()
     }
 
     private func friendCard(width: CGFloat, feedHeight: CGFloat) -> some View {
@@ -254,44 +297,48 @@ struct BoundMacWorkspaceView: View {
     }
 
     private func referenceButton(_ content: BoundPiPContent, icon: String, label: String, id: String) -> some View {
-        Button { state.macReference = content } label: {
+        let selected = state.macReferenceVisible && state.macReference == content
+        return Button {
+            state.macReference = content
+            state.macReferenceVisible = true
+        } label: {
             VStack(spacing: 5) {
                 Image(systemName: icon).font(.system(size: 13, weight: .semibold))
                 Text(label).font(.system(size: 9, weight: .semibold)).lineLimit(1)
             }
-            .foregroundStyle(state.macReference == content ? accent : Color.white.opacity(0.58))
+            .foregroundStyle(selected ? accent : Color.white.opacity(0.58))
             .frame(maxWidth: .infinity).frame(height: 39)
-            .background(state.macReference == content ? accent.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 7))
+            .background(selected ? accent.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain).accessibilityIdentifier(id)
         .help(label)
-        .accessibilityAddTraits(state.macReference == content ? .isSelected : [])
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private var referenceContent: some View {
         ZStack(alignment: .topLeading) {
-            if state.macReference == .notes {
+            if state.macReferenceVisible && state.macReference == .notes {
                 BoundNotesEditor(gameID: gameID, floating: false, editingChanged: { editing in
                     textEditingChanged(editing)
                     editingChanged(editing)
                 })
-            } else if state.macReference == .types {
+            } else if state.macReferenceVisible && state.macReference == .types {
                 BoundTypeChartView(topInset: 0, constrainsPan: true)
             }
-            BoundRetainedReferenceView(isActive: state.macReference == .dex, floating: false,
+            BoundRetainedReferenceView(isActive: state.macReferenceVisible && state.macReference == .dex, floating: false,
                                        portraitTopInset: 0) { floating, topInset in
                 BoundRRDexView(gameID: gameID, floating: floating, portraitTopInset: topInset,
-                               isActive: state.macReference == .dex,
+                               isActive: state.macReferenceVisible && state.macReference == .dex,
                                presentationChanged: { presented in
                     if state.macReference == .dex { editingChanged(presented) }
                 }, textEditingChanged: { editing in
                     if state.macReference == .dex { textEditingChanged(editing) }
                 }, currentSave: { try currentSave(gameID) })
             }
-            BoundRetainedReferenceView(isActive: state.macReference == .bosses, floating: false,
+            BoundRetainedReferenceView(isActive: state.macReferenceVisible && state.macReference == .bosses, floating: false,
                                        portraitTopInset: 0) { floating, topInset in
                 BoundBossGuideView(gameID: gameID, floating: floating, portraitTopInset: topInset,
-                                   isActive: state.macReference == .bosses,
+                                   isActive: state.macReferenceVisible && state.macReference == .bosses,
                                    presentationChanged: { presented in
                     if state.macReference == .bosses { editingChanged(presented) }
                 })

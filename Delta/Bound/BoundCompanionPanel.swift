@@ -82,7 +82,9 @@ final class BoundCompanionState: ObservableObject {
     @Published var showingFriends = false
     @Published var showingSettings = false
     // Desktop reference selection is separate from the iPhone PiP cycle.
-    @Published var macReference: BoundPiPContent = .dex
+    @Published var macReference: BoundPiPContent = .dex { didSet { if oldValue != macReference { changed?() } } }
+    @Published var macFriendVisible = true { didSet { if oldValue != macFriendVisible { changed?() } } }
+    @Published var macReferenceVisible = true { didSet { if oldValue != macReferenceVisible { changed?() } } }
     @Published var revision = 0
     @Published var emulationDetails: BoundEmulationDetails?
     #if DEBUG
@@ -224,6 +226,51 @@ final class BoundOverlayView: UIView {
 }
 
 @MainActor
+enum BoundMacControllerActionRouting {
+    static let referenceContents: [BoundPiPContent] = [.dex, .bosses, .notes, .types]
+
+    static func inputMapping(_ mapping: BoundControllerInputMapping) -> BoundControllerInputMapping {
+        var mapping = mapping
+        // Automatic focus uses gamepad inputs. Keep Mac keyboard gameplay and
+        // any explicitly assigned keyboard companion shortcuts available.
+        if mapping.gameControllerInputType == .keyboard { mapping.multiviewActive = false }
+        return mapping
+    }
+
+    static func isEnabled(controllerMode: Bool, multiview: Bool,
+                          showingFriends: Bool, showingSettings: Bool) -> Bool {
+        (controllerMode || multiview) && !showingFriends && !showingSettings
+    }
+
+    static func apply(_ action: ActionInput, to state: BoundCompanionState) {
+        switch action {
+        case .toggleBoundFriend: state.macFriendVisible.toggle()
+        case .boundHideFriend: state.macFriendVisible = false
+        case .toggleBoundMultiview: state.macReferenceVisible.toggle()
+        case .boundHideMultiview: state.macReferenceVisible = false
+        case .boundShowDex: show(.dex, in: state)
+        case .boundShowBosses: show(.bosses, in: state)
+        case .boundShowTypes: show(.types, in: state)
+        case .cycleBoundPanels: advanceReference(direction: 1, in: state)
+        case .boundNextView: advanceReference(direction: 1, in: state)
+        case .boundPreviousView: advanceReference(direction: -1, in: state)
+        default: break
+        }
+    }
+
+    private static func show(_ content: BoundPiPContent, in state: BoundCompanionState) {
+        state.macReference = content
+        state.macReferenceVisible = true
+    }
+
+    private static func advanceReference(direction: Int, in state: BoundCompanionState) {
+        guard let index = referenceContents.firstIndex(of: state.macReference), !referenceContents.isEmpty else { return }
+        let next = (index + (direction > 0 ? 1 : -1) + referenceContents.count) % referenceContents.count
+        show(referenceContents[next], in: state)
+    }
+}
+
+@MainActor
 final class BoundCompanionCoordinator {
     let sharing: FriendSharingSession
     #if DEBUG && targetEnvironment(simulator)
@@ -345,7 +392,8 @@ final class BoundCompanionCoordinator {
                         notification, gameID: self.gameID, content: content,
                         available: self.automaticControllerMultiviewAvailable
                       ) else { return }
-                if self.landscapeArrangement.active { self.landscapeArrangement.toggleReference() }
+                if self.macHost != nil { self.state.macReferenceVisible = false }
+                else if self.landscapeArrangement.active { self.landscapeArrangement.toggleReference() }
                 else if self.landscapeCompanion.active { self.landscapeCompanion.hideReference() }
             }
         })
@@ -978,14 +1026,18 @@ final class BoundCompanionCoordinator {
         owner?.view.endEditing(true)
         cancelInteractions()
         if macHost != nil {
-            let contents: [BoundPiPContent] = [.dex, .bosses, .notes, .types]
-            let next = ((contents.firstIndex(of: state.macReference) ?? 0) + 1) % contents.count
-            state.macReference = contents[next]
+            BoundMacControllerActionRouting.apply(.cycleBoundPanels, to: state)
             return
         }
         state.advancePanel()
     }
     func toggleControllerPanel(_ action: ActionInput) {
+        if macHost != nil {
+            guard macControllerNavigationEnabled else { return }
+            if action == .toggleBoundMultiview, dismissReferenceBeforeControllerAction(action) { return }
+            BoundMacControllerActionRouting.apply(action, to: state)
+            return
+        }
         guard state.landscape,
               BoundControllerModePreferences().isEnabled || BoundControllerMultiviewPreferences().isEnabled,
               BoundAppearancePreferences().effectiveScreenLayout == .bound else { return }
@@ -1005,11 +1057,23 @@ final class BoundCompanionCoordinator {
         }
     }
     var controllerNavigationAvailable: Bool {
-        controllerCompanionAvailable && (BoundControllerMultiviewPreferences().isEnabled
+        if macHost != nil { return macControllerNavigationEnabled }
+        return controllerCompanionAvailable && (BoundControllerMultiviewPreferences().isEnabled
             || BoundControllerModePreferences().isEnabled)
     }
+    private var macControllerNavigationEnabled: Bool {
+        BoundMacControllerActionRouting.isEnabled(
+            controllerMode: BoundControllerModePreferences().isEnabled,
+            multiview: BoundControllerMultiviewPreferences().isEnabled,
+            showingFriends: state.showingFriends, showingSettings: state.showingSettings)
+    }
+    var isMacWorkspace: Bool { macHost != nil }
     var automaticControllerMultiviewAvailable: Bool {
-        BoundControllerMultiviewPreferences().isEnabled && controllerCompanionAvailable
+        if macHost != nil {
+            return BoundControllerMultiviewPreferences().isEnabled && macControllerNavigationEnabled
+                && state.macReferenceVisible
+        }
+        return BoundControllerMultiviewPreferences().isEnabled && controllerCompanionAvailable
             && controllerReferenceContent != nil
     }
     private func refreshControllerMultiviewRouting() {
@@ -1021,18 +1085,23 @@ final class BoundCompanionCoordinator {
         owner?.refreshBoundMultiviewInputRouting()
     }
     private var controllerCompanionAvailable: Bool {
-        state.landscape
+        if macHost != nil { return macControllerNavigationEnabled }
+        return state.landscape
             && BoundAppearancePreferences().effectiveScreenLayout == .bound
             && !state.showingFriends && !state.showingSettings
             && !landscapeArrangement.editing && !landscapeCompanion.editing
             && (landscapeArrangement.active || landscapeCompanion.active)
     }
     var controllerMultiviewTabCyclingAvailable: Bool {
-        controllerCompanionAvailable
+        if macHost != nil {
+            return macControllerNavigationEnabled && macControllerTabContents.count > 1
+        }
+        return controllerCompanionAvailable
             && (BoundControllerModePreferences().isEnabled || BoundControllerMultiviewPreferences().isEnabled)
             && (landscapeArrangement.active ? landscapeArrangement.contents.count > 1 : landscapeCompanion.referenceContents.count > 1)
     }
     var controllerReferenceContent: BoundPiPContent? {
+        if macHost != nil { return state.macReferenceVisible ? state.macReference : nil }
         if landscapeArrangement.active {
             return landscapeArrangement.referenceVisible ? landscapeArrangement.referenceContent : nil
         }
@@ -1069,7 +1138,8 @@ final class BoundCompanionCoordinator {
             guard let content = controllerReferenceContent else { return }
             if command == .back, content == .types,
                BoundControllerMultiviewPreferences().isEnabled {
-                if landscapeArrangement.active { landscapeArrangement.toggleReference() }
+                if macHost != nil { state.macReferenceVisible = false }
+                else if landscapeArrangement.active { landscapeArrangement.toggleReference() }
                 else if landscapeCompanion.active { landscapeCompanion.hideReference() }
                 return
             }
@@ -1078,8 +1148,12 @@ final class BoundCompanionCoordinator {
             return
         }
         if [.boundHideMultiview, .boundShowDex, .boundShowBosses, .boundShowTypes,
-            .boundNextView, .boundPreviousView].contains(action),
+            .boundNextView, .boundPreviousView, .toggleBoundMultiview].contains(action),
            dismissReferenceBeforeControllerAction(action) { return }
+        if macHost != nil {
+            BoundMacControllerActionRouting.apply(action, to: state)
+            return
+        }
         switch action {
         case .boundHideFriend:
             if landscapeArrangement.active, landscapeArrangement.friendVisible { landscapeArrangement.toggleFriend() }
@@ -1107,6 +1181,7 @@ final class BoundCompanionCoordinator {
             if !landscapeArrangement.referenceVisible { landscapeArrangement.toggleReference() }
         } else if landscapeCompanion.active { landscapeCompanion.selectReference(content) }
     }
+    private var macControllerTabContents: [BoundPiPContent] { [.dex, .bosses, .notes, .types] }
     var allowsOpacityGesture: Bool { !state.availableContents.isEmpty && state.landscape && state.content != .types && !isEditingNotes }
     private func companionBaseSize(width: CGFloat, content: BoundPiPContent? = nil) -> CGSize {
         let content = content ?? state.content

@@ -477,7 +477,7 @@ class GameViewController: DeltaCore.GameViewController
                 && (expectedCore?.state == .running || (navigatingReference && expectedCore?.state == .paused))
                 // Consume landscape companion bindings in portrait without
                 // changing a panel or falling back to the button's game input.
-                && self.view.bounds.width > self.view.bounds.height
+                && (self.boundCompanion.isMacWorkspace || self.view.bounds.width > self.view.bounds.height)
                 && controller.inputType != .controllerSkin && controller.playerIndex != nil
                 && ExternalGameControllerManager.shared.connectedControllers.contains(where: { $0 === controller })
                 && self.view.window?.windowScene?.hasKeyboardFocus == true
@@ -942,6 +942,7 @@ private extension GameViewController
 {
     private func installBoundInputMapping(_ mapping: BoundControllerInputMapping,
                                          controller: GameController, core: EmulatorCore) {
+        let mapping = boundCompanion.isMacWorkspace ? BoundMacControllerActionRouting.inputMapping(mapping) : mapping
         let old = controller.inputMapping(for: self)
         let held = controller.activatedInputs
         // Release the OLD mapped game input before swapping. Otherwise holding
@@ -3033,7 +3034,7 @@ extension GameViewController
     {
         guard !updatingBoundMultiviewRouting, let core = emulatorCore else { return }
         let capture = boundCompanion.automaticControllerMultiviewAvailable
-            && view.bounds.width > view.bounds.height
+            && (boundCompanion.isMacWorkspace || view.bounds.width > view.bounds.height)
         guard capture != boundMultiviewCapturing else { return }
         updatingBoundMultiviewRouting = true
         boundMultiviewCapturing = capture

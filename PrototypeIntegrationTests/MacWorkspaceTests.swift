@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import DeltaCore
 @testable import Delta
 
 final class MacWorkspaceGeometryTests: XCTestCase {
@@ -59,5 +60,65 @@ final class MacWorkspaceGeometryTests: XCTestCase {
         XCTAssertFalse(ProcessInfo.processInfo.arguments.contains("--bound-ui-mac-workspace"))
         XCTAssertFalse(BoundMacWorkspacePlatform.isEnabled,
                        "An ordinary iPhone or iPad launch must retain the existing companion UI.")
+    }
+}
+
+@MainActor
+final class MacWorkspaceControllerRoutingTests: XCTestCase {
+    func testVisibleMacMultiviewPreservesKeyboardGameplayAndAssignedShortcuts() throws {
+        var keyboard = DeltaCore.GameControllerInputMapping(gameControllerInputType: .keyboard)
+        keyboard.set(StandardGameControllerInput.up, forControllerInput: KeyboardGameController.Input.up)
+        keyboard.set(ActionInput.toggleBoundMultiview, forControllerInput: KeyboardGameController.Input.tab)
+        let mapping = BoundMacControllerActionRouting.inputMapping(
+            BoundControllerInputMapping(base: keyboard, multiviewActive: true))
+        XCTAssertEqual(StandardGameControllerInput(input: try XCTUnwrap(
+            mapping.input(forControllerInput: KeyboardGameController.Input.up))), .up)
+        XCTAssertEqual(ActionInput(input: try XCTUnwrap(
+            mapping.input(forControllerInput: KeyboardGameController.Input.tab))), .toggleBoundMultiview)
+
+        let gamepad = DeltaCore.GameControllerInputMapping(gameControllerInputType: .mfi)
+        let captured = BoundMacControllerActionRouting.inputMapping(
+            BoundControllerInputMapping(base: gamepad, multiviewActive: true))
+        XCTAssertEqual(ActionInput(input: try XCTUnwrap(
+            captured.input(forControllerInput: MFiGameController.Input.up))), .boundFocusUp)
+    }
+
+    func testControllerModeOrMultiviewEnablesMacNavigationUntilSettingsSheetOpens() {
+        XCTAssertTrue(BoundMacControllerActionRouting.isEnabled(
+            controllerMode: true, multiview: false, showingFriends: false, showingSettings: false))
+        XCTAssertTrue(BoundMacControllerActionRouting.isEnabled(
+            controllerMode: false, multiview: true, showingFriends: false, showingSettings: false))
+        XCTAssertFalse(BoundMacControllerActionRouting.isEnabled(
+            controllerMode: false, multiview: false, showingFriends: false, showingSettings: false))
+        XCTAssertFalse(BoundMacControllerActionRouting.isEnabled(
+            controllerMode: true, multiview: false, showingFriends: true, showingSettings: false))
+        XCTAssertFalse(BoundMacControllerActionRouting.isEnabled(
+            controllerMode: false, multiview: true, showingFriends: false, showingSettings: true))
+    }
+
+    func testMappedActionsShowHideAndCycleMacReferenceAndFriend() {
+        let state = BoundCompanionState()
+        state.macReference = .bosses
+        state.macReferenceVisible = false
+        state.macFriendVisible = true
+
+        BoundMacControllerActionRouting.apply(.boundShowTypes, to: state)
+        XCTAssertEqual(state.macReference, .types)
+        XCTAssertTrue(state.macReferenceVisible)
+
+        BoundMacControllerActionRouting.apply(.boundHideMultiview, to: state)
+        XCTAssertFalse(state.macReferenceVisible)
+        BoundMacControllerActionRouting.apply(.boundNextView, to: state)
+        XCTAssertEqual(state.macReference, .dex)
+        XCTAssertTrue(state.macReferenceVisible)
+        BoundMacControllerActionRouting.apply(.boundPreviousView, to: state)
+        XCTAssertEqual(state.macReference, .types)
+
+        BoundMacControllerActionRouting.apply(.boundHideFriend, to: state)
+        XCTAssertFalse(state.macFriendVisible)
+        BoundMacControllerActionRouting.apply(.toggleBoundFriend, to: state)
+        XCTAssertTrue(state.macFriendVisible)
+        BoundMacControllerActionRouting.apply(.toggleBoundMultiview, to: state)
+        XCTAssertFalse(state.macReferenceVisible)
     }
 }
