@@ -50,12 +50,97 @@ NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
 }
 }
 #include "SoulLink/bridge.inc"
+#include "NativeBattle/invitation.inc"
 #if DEBUG && TARGET_OS_SIMULATOR
 #include "SoulLink/BoundSoulQACode.h"
 static uint8_t soulQAScriptBackup[128];
 #endif
 
 @implementation BoundVBABattleBridge
++ (void)resetFriendDialogueOwner {
+    // A temporary detach may rebind the same loaded cartridge. Let its native
+    // task close normally; a genuinely new ROM has an untouched FF tail.
+    const uint8_t signature[]={0x69,0x67,0x80,0xFD,0xFF,0x09};
+    if(inviteOwnsROM()&&memcmp(rom+InviteStart,signature,sizeof(signature))==0) {
+        inviteCancelling=true; return;
+    }
+    // Never write through a stale ROM pointer from an unloaded cartridge.
+    if(inviteBHeld) [[GBAEmulatorBridge sharedBridge] deactivateInput:2 playerIndex:0];
+    inviteROM=nullptr; inviteActive=inviteBHeld=inviteCancelling=false; inviteResult=-1;
+}
++ (BOOL)friendDialogueReady {
+    return !armed&&!inviteActive&&overworld();
+}
++ (BOOL)beginFriendDialogue:(NSUInteger)mode text:(NSString *)text {
+    if(mode>2||![self friendDialogueReady]) return NO;
+    uint8_t digest[32]; soulOriginalHash(digest);
+    const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
+        0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
+    if(memcmp(digest,expected,32)!=0) return NO;
+    for(size_t i=0;i<InviteSize;i++) if(rom[InviteStart+i]!=0xFF) return NO;
+    inviteROM=rom; inviteMode=unsigned(mode); inviteFrames=0; inviteResult=-1;
+    inviteActive=true; inviteCancelling=inviteBHeld=false;
+    memcpy(inviteScratchOriginal,internalRAM+InviteResult,2); put16(internalRAM+InviteResult,0xFFFF);
+    inviteText(InviteStart+0x80,text);
+    if(mode==0) {
+        // Temporarily lend native multichoice slot zero our three labels. No
+        // game script can run concurrently; restore it before native link entry.
+        memcpy(inviteMenuOriginal,rom+InviteMenuSlot,8);
+        NSString *labels[]={@"Battle",@"Trade",@"Cancel"};
+        for(unsigned i=0;i<3;i++) {
+            inviteText(InviteStart+0x140+i*16,labels[i]);
+            put32(rom+InviteStart+0x120+i*8,0x08000000+InviteStart+0x140+i*16);
+            put32(rom+InviteStart+0x124+i*8,0);
+        }
+        put32(rom+InviteMenuSlot,0x08000000+InviteStart+0x120);
+        put32(rom+InviteMenuSlot+4,3);
+    }
+    uint8_t script[64]={0x69,0x67,0,0,0,0,0x66};
+    put32(script+2,0x08000000+InviteStart+0x80);
+    size_t n=7;
+    if(mode==0) { script[n++]=0x6F; script[n++]=20; script[n++]=0; script[n++]=0; script[n++]=0; }
+    else if(mode==1) { script[n++]=0x6E; script[n++]=0; script[n++]=0; }
+    else { script[n++]=0x6D; }
+    // Latch before releaseall/end: ordinary field tasks reuse VAR_RESULT as
+    // soon as the script releases control. This two-byte link-queue scratch is
+    // unused while !armed and is restored before any native link preparation.
+    for(unsigned i=0;i<2;i++) {
+        script[n++]=0x15; // native copybyte destination, source
+        put32(script+n,0x03000000+InviteResult+i); n+=4;
+        put32(script+n,0x020370D0+i); n+=4;
+    }
+    script[n++]=0x6B; script[n++]=0x02;
+    memcpy(rom+InviteStart,script,n);
+    memset(internalRAM+0xEB0,0,0x74); internalRAM[0xEB1]=1;
+    put32(internalRAM+0xEB8,0x08000000+InviteStart);
+    put32(internalRAM+0xF0C,0x0815F9B4); put32(internalRAM+0xF10,0x0815FD08);
+    internalRAM[0xEA8]=0; internalRAM[0xF9C]=1;
+    internalRAM[0xF9D]=0; internalRAM[0xF9E]=0; internalRAM[0xFA0]=0;
+    return YES;
+}
++ (void)cancelFriendDialogue { if(inviteOwnsROM()) inviteCancelling=true; }
++ (NSDictionary<NSString *,id> *)advanceFriendDialogue {
+    if(inviteActive&&inviteROM!=rom) { inviteActive=inviteBHeld=false; inviteResult=-2; }
+    if(inviteOwnsROM()) {
+        if(overworld()) {
+            inviteResult=inviteCancelling?-2:int(half(internalRAM+InviteResult));
+            restoreInvite();
+        } else if(inviteCancelling) {
+            // Dismiss through the game's ordinary B handling, including native
+            // YES/NO task/window cleanup. Never synthesize an acceptance.
+            ++inviteFrames;
+            bool held=inviteFrames%12<2;
+            if(held!=inviteBHeld) {
+                if(held) [[GBAEmulatorBridge sharedBridge] activateInput:2 value:1 playerIndex:0];
+                else [[GBAEmulatorBridge sharedBridge] deactivateInput:2 playerIndex:0];
+                inviteBHeld=held;
+            }
+        }
+    }
+    return @{@"active":@(inviteActive),@"ready":@([self friendDialogueReady]),
+        @"menuReady":@(inviteMenuReady()),@"result":@(inviteResult),
+        @"mode":@(inviteActive?int(inviteMode):-1),@"cursor":@(inviteActive&&workRAM?int(workRAM[0x3ADE6]):-1)};
+}
 + (BOOL)verifyBattleReady {
     verifiedROM=nullptr;
     if(armed||!overworld()||workRAM[0x24029]==0||workRAM[0x24029]>6) return NO;

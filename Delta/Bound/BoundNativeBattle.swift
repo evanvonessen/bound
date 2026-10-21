@@ -59,6 +59,7 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
     private var peerGeneration:UInt16=0,receivedGeneration:UInt16=0,announcedGeneration:UInt16=0
     private var pendingAcknowledgement=Data(),lastAcknowledgement=Data()
     private var sender:(@Sendable (Data)->Bool)?
+    private var senderEnabled=false
     private var failed:(@Sendable ()->Void)?
     private var lastSent:TimeInterval=0
     private var lastReceived=ProcessInfo.processInfo.systemUptime
@@ -66,13 +67,16 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
     func configure(core:EmulatorCore?) {
         lock.lock(); defer { lock.unlock() }
         coreID=core.map(ObjectIdentifier.init); entryPlayer=nil; peerDisconnectPending=false; latest=nil; frame=0
-        incoming.removeAll(); blockAdmission=BoundNativeBlockAdmission(); sender=nil; failed=nil; lastSent=0
+        incoming.removeAll(); blockAdmission=BoundNativeBlockAdmission(); sender=nil; senderEnabled=false; failed=nil; lastSent=0
         peerGeneration=0; receivedGeneration=0; announcedGeneration=0
         pendingAcknowledgement.removeAll(); lastAcknowledgement.removeAll()
         lastReceived=ProcessInfo.processInfo.systemUptime; sentCommands=0; receivedCommands=0
     }
     func setSender(_ sender:@escaping @Sendable (Data)->Bool,failed:@escaping @Sendable ()->Void) {
         lock.lock(); self.sender=sender; self.failed=failed; lock.unlock()
+    }
+    func enableSender() {
+        lock.lock(); senderEnabled=true; lastReceived=ProcessInfo.processInfo.systemUptime; lock.unlock()
     }
     func receiveNetworkPacket(_ packet:Data)->Bool {
         guard let commands=BoundNativeCommandPacket.decode(packet) else { return false }
@@ -106,7 +110,7 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
         guard coreID==ObjectIdentifier(core) else { lock.unlock(); return }
         let player=entryPlayer; entryPlayer=nil
         let disconnectPeer=peerDisconnectPending; peerDisconnectPending=false
-        let send=sender,failure=failed
+        let send=senderEnabled ? sender:nil,failure=failed
         lock.unlock()
         if let player { _=BoundVBABattleBridge.installBattle(forPlayer:UInt(player)) }
         if disconnectPeer { BoundVBABattleBridge.requestPeerDisconnect() }
@@ -171,6 +175,7 @@ final class BoundNativeBattleSession {
     private var channel:(any BoundBattleChannel)?
     private var wire:BoundBattleWire?
     private var timer:Timer?
+    private var earlyPreparation:UUID?
     private var localPrepared=false,peerPrepared=false
     private var localConnected=false,peerConnected=false,entryQueued=false
     private var localFinished=false,peerFinished=false,played=false,peerLinkClosed=false
@@ -193,12 +198,12 @@ final class BoundNativeBattleSession {
     var restored:(()->Void)?
     var canResume:(()->Bool)?
     var isActive:Bool { id != nil || recovery != nil }
-    var blocksAutoSave:Bool { isActive || recoveryFailed }
+    var blocksAutoSave:Bool { isActive || recoveryFailed || interactions?.nativeDialogueBusy == true }
 
     func bind(core:EmulatorCore?,gameID:String,interactions:BoundFriendInteractionSession) {
         if self.core !== core || self.gameID != gameID {
             if recovery != nil { timer?.invalidate(); timer=nil; recovery=nil; probe.configure(core:nil) }
-            cancel(resume:false); self.core=core; self.gameID=gameID; recoveryFailed=false
+            cancel(resume:false); earlyPreparation=nil; self.core=core; self.gameID=gameID; recoveryFailed=false
         }
         self.interactions=interactions
         if core != nil,!isActive { findRecovery() }
@@ -211,7 +216,7 @@ final class BoundNativeBattleSession {
         }
         originalRate=core.rate
         self.id=id; self.activity=activity; self.initiator=initiator; lastFailure=""; lastCancellation=""; observation=nil
-        localPrepared=false; peerPrepared=false; localConnected=false; peerConnected=false
+        localPrepared=false; peerPrepared=earlyPreparation==id; earlyPreparation=nil; localConnected=false; peerConnected=false
         localFinished=false; peerFinished=false; entryQueued=false; played=false; peerLinkClosed=false
         deadline=ProcessInfo.processInfo.systemUptime+30
         interactions?.activityProgress(activity == .trade ? "Connecting trade…" : "Connecting battle…",playing:false)
@@ -262,7 +267,18 @@ final class BoundNativeBattleSession {
         advance()
     }
     func receive(_ data:Data) {
-        guard let packet=BoundBattleControlPacket.decode(data),packet.id==id else { return }
+        guard let packet=BoundBattleControlPacket.decode(data) else { return }
+        if packet.id != id {
+            // Ordered confirm/prepared messages can arrive together while our
+            // native invitation is still closing. Keep only that consented ID.
+            guard id==nil,let interactions,interactions.requestID==packet.id,
+                  [.confirming,.agreed].contains(interactions.phase) else { return }
+            if packet.kind == .prepared { earlyPreparation=packet.id }
+            else if packet.kind == .abort {
+                earlyPreparation=nil; interactions.activityEnded("Your friend ended the interaction")
+            }
+            return
+        }
         switch packet.kind {
         case .prepared: peerPrepared=true
         case .connected: peerConnected=true
@@ -296,6 +312,9 @@ final class BoundNativeBattleSession {
         }
         if entryQueued && probe.networkAge>15 { fail("\(activity.title) data connection timed out"); return }
         if localConnected && peerConnected && !entryQueued {
+            // Both receivers now exist. Sending sequence 1 before this barrier
+            // loses it while the peer is still dismissing its native invitation.
+            probe.enableSender()
             if activity == .trade {
                 // Durable before any native trade code or input can run, including
                 // when the main actor is delayed while emulation keeps advancing.
@@ -327,6 +346,7 @@ final class BoundNativeBattleSession {
         return sendControl?(data)==true
     }
     func cancel(resume:Bool=true,source:String=#fileID,line:Int=#line) {
+        earlyPreparation=nil
         guard id != nil else { return }
         lastCancellation="\(source):\(line)"
         _=emit(.abort); finish(message:"\(activity.title) ended",resume:resume)

@@ -75,6 +75,21 @@ final class FriendInteractionTests: XCTestCase {
             XCTAssertEqual(p.a.phase,.idle); XCTAssertEqual(p.b.phase,.idle)
         }
     }
+    func testNativeSnapshotPoseGapCannotDropAnAlreadyAcceptedConfirmation() {
+        let p=peers();var launches=[String]()
+        p.a.agreed={ _,_,_ in launches.append("A") }
+        p.b.agreed={ _,_,_ in launches.append("B") }
+        p.a.open(at:10);p.a.request(.trade,at:10);p.deliver()
+        p.b.accept(at:10.1);p.deliver(at:10.2)
+        XCTAssertEqual(p.a.phase,.agreed);XCTAssertEqual(p.b.phase,.confirming)
+        p.online=false // Native snapshot briefly withholds pose, not the channel.
+        p.a.tick(at:10.3);p.b.tick(at:10.3)
+        XCTAssertEqual(p.a.phase,.agreed);XCTAssertEqual(p.b.phase,.confirming)
+        p.deliver(at:10.4)
+        XCTAssertEqual(p.b.phase,.agreed);XCTAssertEqual(launches,["A","B"])
+        p.a.stop();p.b.stop()
+        XCTAssertEqual(p.a.phase,.ended);XCTAssertEqual(p.b.phase,.ended)
+    }
     func testDeclineCancelTimeoutAndCrossedInvitationsCannotLaunchActivity() {
         let p = peers(); var launched = false
         p.a.agreed = { _,_,_ in launched = true }; p.b.agreed = { _,_,_ in launched = true }
@@ -186,21 +201,31 @@ final class FriendInteractionTests: XCTestCase {
         callbacks.suspendFrames(); XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
         callbacks.receiveInteraction(packet,uid:2); XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
     }
-    func testInteractionPanelHasRealActionsAndExplainsPersistentTradeScope() {
-        let p = peers(), panel = BoundFriendInteractionPanel(session: peers().a)
+    func testInvitationAttachmentNeverCreatesAnAppPopup() {
+        let p=peers(), panel=BoundFriendInteractionPanel(session:peers().a)
         XCTAssertTrue(panel.isHidden)
-        let active = BoundFriendInteractionPanel(session:p.a)
-        p.a.changed = { active.render() }
-        p.a.open(at:10); active.frame = CGRect(x:0,y:0,width:393,height:852); active.layoutIfNeeded()
-        XCTAssertFalse(active.isHidden)
-        func descendants(_ view:UIView)->[UIView] { view.subviews.flatMap { [$0]+descendants($0) } }
-        let views = descendants(active)
-        let battle = views.compactMap { $0 as? UIButton }.first { $0.accessibilityIdentifier == "bound.friend-interaction.battle" }
-        XCTAssertNotNil(battle); battle?.sendActions(for:.touchUpInside)
-        XCTAssertEqual(p.a.phase,.outgoing); XCTAssertEqual(p.a.activity,.battle)
-        XCTAssertTrue(views.compactMap { $0 as? UILabel }.contains { $0.text?.contains("Pokémon selection, confirmation and saving") == true })
-        p.a.cancel(); XCTAssertTrue(active.isHidden)
+        let active=BoundFriendInteractionPanel(session:p.a)
+        p.a.changed={ active.render() }
+        p.a.open(at:10)
+        XCTAssertTrue(active.isHidden)
+        XCTAssertTrue(active.subviews.isEmpty)
+        p.a.request(.trade,at:10); p.deliver()
+        XCTAssertTrue(active.isHidden)
+        XCTAssertTrue(active.subviews.isEmpty)
     }
+    func testAgreementWaitsForNativeWindowCleanupAndRejectsCancelledCompletion() {
+        for cancel in [false,true] {
+            let p=peers(); var ready:(()->Void)?, launches=0
+            p.a.beforeAgreement={ ready=$0 }
+            p.a.agreed={ _,_,_ in launches+=1 }
+            p.a.open(at:10); p.a.request(.trade,at:10); p.deliver()
+            p.b.accept(at:10); p.deliver()
+            XCTAssertEqual(p.a.phase,.agreed); XCTAssertEqual(launches,0)
+            if cancel { p.a.cancel() }
+            ready?(); XCTAssertEqual(launches,cancel ? 0:1)
+        }
+    }
+
 }
 
 final class BattleCableTests:XCTestCase {

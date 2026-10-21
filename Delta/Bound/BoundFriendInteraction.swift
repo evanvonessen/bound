@@ -98,8 +98,14 @@ final class BoundFriendInteractionSession {
     var agreed: ((Packet.Activity, UUID, Bool) -> Void)?
     var canPresent: (() -> Bool)?
     let inputGate = BoundFriendWorldInputGate()
-    func refreshInputGate() { inputGate.update(available: canInteract, blocked: blocksGameplay) }
+    var beforeAgreement: ((@escaping () -> Void) -> Void)?
+    var nativeDialogueManaged=false, nativeDialogueReady=false, nativeDialogueBusy=false, nativeDialogueInput=false
+    func refreshInputGate() {
+        inputGate.update(available:canInteract, blocked:(blocksGameplay || nativeDialogueBusy) && !nativeDialogueInput)
+    }
     private func notify() { refreshInputGate(); changed?() }
+    private(set) var anchorFailure=""
+    var contextDiagnostic:(()->String)?
     private var anchor: Context?
     private var initiator = false
     private var deadline: TimeInterval?
@@ -113,7 +119,7 @@ final class BoundFriendInteractionSession {
     }
     func activityEnded(_ message: String) { end(message) }
     var canInteract: Bool {
-        guard BoundMultiplayerFeatures.isEnabled, connected, phase == .idle, canPresent?() ?? true, let value = context?() else { return false }
+        guard BoundMultiplayerFeatures.isEnabled, connected, phase == .idle, (!nativeDialogueManaged || nativeDialogueReady && !nativeDialogueBusy), canPresent?() ?? true, let value = context?() else { return false }
         return value.local.isFacing(value.peer)
     }
 
@@ -154,7 +160,7 @@ final class BoundFriendInteractionSession {
     }
     func cancel() {
         if phase == .connecting || phase == .playing { cancelActivity?(); return }
-        if [.outgoing, .confirming, .incoming].contains(phase), let anchor { _ = emit(.cancel, anchor: anchor) }
+        if [.outgoing, .confirming, .incoming, .agreed].contains(phase), let anchor { _ = emit(.cancel, anchor: anchor) }
         reset()
     }
     func invalidate() {
@@ -165,8 +171,8 @@ final class BoundFriendInteractionSession {
     }
     func tick(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         refreshInputGate()
-        guard ![.idle, .ended, .connecting, .playing].contains(phase) else { return }
-        if !validAnchor() {
+        guard ![.idle, .ended, .agreed, .connecting, .playing].contains(phase) else { return }
+        if phase != .confirming && !validAnchor() {
             if let anchor { _ = emit(.cancel, anchor: anchor) }
             end("Your friend is no longer next to you")
         } else if let deadline, now >= deadline {
@@ -176,11 +182,11 @@ final class BoundFriendInteractionSession {
     }
     func receive(_ data: Data, at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         guard BoundMultiplayerFeatures.isEnabled, connected, let packet = Packet.decode(data), !retired.contains(packet.id),
-              let current = context?(), packet.sender == current.peerSession,
-              packet.receiver == current.localSession else { return }
+              let current = context?() ?? (packet.action == .request ? nil:anchor),
+              packet.sender == current.peerSession, packet.receiver == current.localSession else { return }
         if packet.action == .request {
             if packet.id == requestID { return } // Duplicate delivery is idempotent.
-            guard (phase == .idle || phase == .choosing), canPresent?() ?? true else {
+            guard (phase == .idle || phase == .choosing), (!nativeDialogueManaged || nativeDialogueReady || phase == .choosing), canPresent?() ?? true else {
                 // One pending invitation at a time, including crossed requests.
                 let reply = Packet(sender: current.localSession, receiver: current.peerSession, id: packet.id,
                     activity: packet.activity, action: .decline, origin: packet.origin, target: packet.target)
@@ -201,11 +207,13 @@ final class BoundFriendInteractionSession {
             guard phase == .outgoing, initiator, validAnchor() else { return }
             phase = .agreed; deadline = nil; message = "\(packet.activity.title) invitation accepted"
             guard emit(.confirm, anchor: anchor) else { end("Couldn’t confirm the request"); return }
-            notify(); agreed?(packet.activity, packet.id, true)
+            notify(); finishAgreement(packet, initiator:true)
         case .confirm:
-            guard phase == .confirming, !initiator, validAnchor() else { return }
+            // Both peers already consented at verified adjacent anchors. The
+            // initiator can now pause for its snapshot, withholding live pose.
+            guard phase == .confirming, !initiator else { return }
             phase = .agreed; deadline = nil; message = "\(packet.activity.title) invitation accepted"
-            notify(); agreed?(packet.activity, packet.id, false)
+            notify(); finishAgreement(packet, initiator:false)
         case .decline:
             guard phase == .outgoing else { return }
             end("Your friend declined the request")
@@ -213,12 +221,21 @@ final class BoundFriendInteractionSession {
         case .request: break
         }
     }
+    private func finishAgreement(_ packet:Packet, initiator:Bool) {
+        let completion={ [weak self] in
+            guard let self,self.phase == .agreed,self.requestID==packet.id else { return }
+            self.agreed?(packet.activity,packet.id,initiator)
+        }
+        if let beforeAgreement { beforeAgreement(completion) } else { completion() }
+    }
     private func validAnchor() -> Bool {
-        guard BoundMultiplayerFeatures.isEnabled, connected, let anchor, let current = context?(),
-              current.localSession == anchor.localSession, current.peerSession == anchor.peerSession,
-              current.local.occupiesSameTile(as: anchor.local), current.peer.occupiesSameTile(as: anchor.peer),
-              current.local.isNextTo(current.peer) else { return false }
-        return (initiator || phase == .choosing) ? current.local.isFacing(current.peer) : current.peer.isFacing(current.local)
+        guard BoundMultiplayerFeatures.isEnabled, connected, let anchor else { anchorFailure="disabled/disconnected/no anchor"; return false }
+        guard let current=context?() else { anchorFailure=contextDiagnostic?() ?? "context unavailable"; return false }
+        guard current.localSession==anchor.localSession,current.peerSession==anchor.peerSession else { anchorFailure="session changed"; return false }
+        guard current.local.occupiesSameTile(as:anchor.local),current.peer.occupiesSameTile(as:anchor.peer),current.local.isNextTo(current.peer) else { anchorFailure="tile/map changed"; return false }
+        let valid=(initiator || phase == .choosing) ? current.local.isFacing(current.peer):current.peer.isFacing(current.local)
+        anchorFailure=valid ? "":"facing changed"
+        return valid
     }
     private func emit(_ action: Packet.Action, anchor: Context) -> Bool {
         guard let activity, let requestID else { return false }

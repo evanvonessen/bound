@@ -2,6 +2,11 @@
 NS_ASSUME_NONNULL_BEGIN
 /// Paused core or completed-frame owner only. Network callbacks never access RAM.
 @interface BoundVBABattleBridge : NSObject
++ (void)resetFriendDialogueOwner;
++ (BOOL)friendDialogueReady;
++ (BOOL)beginFriendDialogue:(NSUInteger)mode text:(NSString *)text;
++ (void)cancelFriendDialogue;
++ (NSDictionary<NSString *,id> *)advanceFriendDialogue;
 + (BOOL)verifyBattleReady;
 + (BOOL)prepareBattleForPlayer:(NSUInteger)player;
 + (BOOL)prepareTradeForPlayer:(NSUInteger)player;

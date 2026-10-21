@@ -127,6 +127,67 @@ final class NativeBattleRuntimeTests:XCTestCase {
         super.tearDown()
     }
 
+    func testActualNativeFriendDialogue() async throws {
+        continueAfterFailure=false
+        guard ProcessInfo.processInfo.environment["BOUND_INVITATION_RUNTIME"] == "1" else {
+            throw XCTSkip("Requires the explicit owned-simulator native invitation fixture")
+        }
+        let root=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let rom=root.appendingPathComponent("RadicalRed.gba"), seed=root.appendingPathComponent("seed.sav")
+        let originalROM=try Data(contentsOf:rom), originalSeed=try Data(contentsOf:seed)
+        let output=root.appendingPathComponent("native-invitation-"+UUID().uuidString)
+        try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+        let battery=output.appendingPathComponent("work.sav"); try originalSeed.write(to:battery)
+        let core=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
+        let scene=try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous=scene.windows.first { $0.isKeyWindow }, window=UIWindow(windowScene:scene), owner=UIViewController(), view=GameView()
+        window.rootViewController=owner; window.makeKeyAndVisible(); owner.view.addSubview(view)
+        view.frame=CGRect(x:0,y:150,width:window.bounds.width,height:window.bounds.width*2/3); core.add(view)
+        let driver=NativeBattleDriver(core:core,profile:try BoundPlayerROMProfile(rom:originalROM)),probe=BoundFriendDialogueProbe()
+        probe.configure(core:core)
+        core.updateHandler={ core in driver.receive(core); probe.receive(core) }
+        defer {
+            probe.show(nil); _=core.pause(); BoundVBABattleBridge.close(); _=core.stop()
+            window.isHidden=true; previous?.makeKeyAndVisible()
+        }
+        core.rate=8; XCTAssertTrue(core.start()); await fulfillment(of:[driver.booted],timeout:90)
+        _=core.pause(); core.rate=1; _=core.resume()
+        func wait(_ predicate:()->Bool) async throws {
+            for _ in 0..<200 {
+                if predicate() { return }
+                try await Task.sleep(for:.milliseconds(25))
+            }
+            XCTFail("Native invitation did not reach expected state")
+        }
+        func press(_ mask:Int) async throws {
+            core.deltaCore.emulatorBridge.activateInput(mask,value:1,playerIndex:0)
+            try await Task.sleep(for:.milliseconds(100))
+            core.deltaCore.emulatorBridge.deactivateInput(mask,playerIndex:0)
+            try await Task.sleep(for:.milliseconds(150))
+        }
+        for (mode,button,expected) in [(0,128,1),(1,0,1),(1,128,0),(1,2,0)] {
+            let request=BoundFriendDialogueProbe.Request(id:UUID(),mode:mode,text:mode==0 ? "What would you like to do?":"Your friend wants to trade.\nWill you accept?")
+            probe.show(request)
+            try await wait { probe.read().menuReady }
+            try await Task.sleep(for:.milliseconds(350))
+            if button==128 { try await press(128) }
+            try await press(button==2 ? 2:1)
+            try await wait { probe.read().id==request.id }
+            XCTAssertEqual(probe.read().result,expected)
+            probe.show(nil); try await wait { probe.read().ready }
+            _=core.pause(); XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady(),"Native task, window, script lock and menu table must be restored"); _=core.resume()
+        }
+        let pending=BoundFriendDialogueProbe.Request(id:UUID(),mode:1,text:"Will you accept?")
+        probe.show(pending); try await wait { probe.read().menuReady }
+        probe.show(nil); try await wait { !probe.read().active && probe.read().ready }
+        let detached=BoundFriendDialogueProbe.Request(id:UUID(),mode:1,text:"Will you accept?")
+        probe.show(detached); try await wait { probe.read().menuReady }
+        probe.configure(core:nil); probe.configure(core:core)
+        try await wait { probe.read().ready && !probe.read().active }
+        _=core.pause(); XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady())
+        XCTAssertEqual(try Data(contentsOf:rom),originalROM); XCTAssertEqual(try Data(contentsOf:seed),originalSeed)
+    }
+
     func testActualSoulLinkNativeHPAndStateRecovery() async throws {
         continueAfterFailure = false
         guard ProcessInfo.processInfo.environment["BOUND_SOUL_RUNTIME"] == "1" else {

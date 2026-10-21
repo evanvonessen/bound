@@ -85,6 +85,7 @@ final class BoundLivePresenceSession: ObservableObject {
     private(set) var peerEpoch: UUID?
     private(set) var bufferedSamples = 0
     var demandChanged: (() -> Void)?
+    var retainsNativeDialoguePose: (() -> Bool)?
     var presentationChanged: (() -> Void)?
     var needsReader: Bool { BoundMultiplayerFeatures.isEnabled && enabled && connected }
     private var send: ((Data) -> Bool)?
@@ -150,7 +151,19 @@ final class BoundLivePresenceSession: ObservableObject {
 
     func consume(_ reading: BoundPlayerStateReading, at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         readerStatus = reading.status.rawValue
-        localPose = needsReader && romVerified ? BoundPresencePose(reading: reading) : nil
+        let previousPose=localPose
+        localPose=needsReader && romVerified ? BoundPresencePose(reading:reading):nil
+        if localPose==nil,needsReader,romVerified,retainsNativeDialoguePose?()==true,
+           reading.status == .live,let player=reading.player,let previousPose,
+           let position=BoundFriendWorldPosition(pose:previousPose),
+           position.mapGroup==player.mapGroup,position.mapNumber==player.mapNumber,
+           position.elevation==player.elevation,position.x==player.tile.x,position.y==player.tile.y,
+           previousPose.facing==["South":1,"North":2,"West":3,"East":4][player.facing] {
+            // Native field windows temporarily make the sprite frame unavailable.
+            // Fresh, independently decoded world coordinates still prove this is
+            // the same stationary player. Never retain across a move/fade/menu.
+            localPose=previousPose
+        }
         localAt = now
         if let position = localPose.flatMap(BoundFriendWorldPosition.init(pose:)) {
             if settledLocal.map({ position.occupiesSameTile(as: $0) }) != true { settledLocalAt = now }
@@ -234,6 +247,9 @@ final class BoundLivePresenceSession: ObservableObject {
 
     /// Invitation admission uses fresh settled samples, never the interpolated
     /// rendering pose. A second sample prevents targeting a walking sprite.
+    func interactionDiagnostic(at now:TimeInterval=ProcessInfo.processInfo.systemUptime)->String {
+        "reader=\(readerStatus) local=\(localPose != nil) samples=\(samples.count) localAge=\(localAt.map { now-$0 } ?? -1) peerAge=\(lastReceived.map { now-$0 } ?? -1) settledAge=\(settledLocalAt.map { now-$0 } ?? -1)"
+    }
     func interactionContext(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundFriendInteractionSession.Context? {
         guard needsReader, romVerified, let peerEpoch, let localPose,
               let settledLocalAt, now >= settledLocalAt, now - settledLocalAt >= 0.05,

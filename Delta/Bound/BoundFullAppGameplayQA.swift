@@ -160,7 +160,15 @@ final class BoundFullAppGameplayQA {
             "videoReceived": sharing.receivedFrames, "renewals": sample?.tokenRenewals ?? 0,
             "visiblePixels": display.livePlayerOverlay.visiblePixels, "restores": restores]
         value["interactionPhase"] = String(describing: sharing.interactions.phase)
+        let dialogue=coordinator.friendDialogueReading
+        value["nativeInvitationActive"]=dialogue.active
+        value["nativeInvitationReady"]=dialogue.menuReady
+        value["nativeInvitationLastResult"]=dialogue.result
+        value["nativeInvitationMode"]=dialogue.mode
+        value["nativeInvitationCursor"]=dialogue.cursor
+        value["nativeActivity"]=sharing.nativeBattle.activity.rawValue
         value["interactionCanStart"] = sharing.interactions.canInteract
+        value["interactionAnchorFailure"]=sharing.interactions.anchorFailure
         value["interactionMessage"] = sharing.interactions.message
         value["battleCancellation"] = sharing.nativeBattle.lastCancellation
         value["battleFailure"] = sharing.nativeBattle.lastFailure

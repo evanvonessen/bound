@@ -299,6 +299,12 @@ final class FriendSharingSession: ObservableObject {
         }
         interactions.cancelActivity = { [weak nativeBattle] in nativeBattle?.cancel() }
         interactions.context = { [weak livePresence] in livePresence?.interactionContext() }
+        livePresence.retainsNativeDialoguePose = { [weak interactions] in
+            guard let interactions,interactions.nativeDialogueManaged else { return false }
+            return [.choosing,.incoming,.outgoing,.confirming,.agreed,.ended].contains(interactions.phase)
+                || interactions.nativeDialogueBusy
+        }
+        interactions.contextDiagnostic = { [weak livePresence] in livePresence?.interactionDiagnostic() ?? "presence unavailable" }
         livePresence.connectionCheck.snapshot = { [weak self] in self?.presenceConnectionSample() }
         if isConfigured { status = "Game sharing ready" }
         for name in [BoundMultiplayerFeatures.didChange, Settings.didResetNotification] {

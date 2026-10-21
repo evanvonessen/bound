@@ -1,7 +1,7 @@
 # Native friend battles
 
 Walk to the cardinal tile beside a connected friend, face their tile and press
-A. Choose Battle; the friend must accept. Bound prepares a private recovery
+A. Choose Battle in the native game menu; the friend answers its YES/NO dialogue. Bound prepares a private recovery
 snapshot, transports the game's two-player link commands over the existing Agora
 session, and starts the cartridge's native single battle with each current party.
 The ordinary game controls select moves and Pokémon. Opening the app menu,

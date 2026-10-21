@@ -5,7 +5,9 @@ and remaining device/network verification limits are recorded below.
 
 Enable **Settings → Enable Experimental Features** on both devices. Connect in
 Friends, turn on **Show friend on map**, walk to the cardinal tile beside the
-friend, face them and press **A → Trade**. The friend must accept the invitation.
+friend, face them and press **A**, then choose **Trade** in the game. The friend answers
+the native **YES/NO** dialogue with ordinary game controls. **NO** or **B**
+declines without opening the trade link or changing either party.
 The same validated Radical Red 4.1 ROM and VBA-M core are required on both sides.
 
 Confirm the game's save and link prompts using normal A/B controls. In the
@@ -15,6 +17,51 @@ checks and linked save. Use the native **Cancel** entry on the party screen and
 confirm when both players have finished; this returns to the original world.
 The cartridge's own eligibility rules remain active, including keeping another
 Pokémon available for battle. Bound does not bypass those rules.
+
+## In-game invitations
+
+The walk-up Battle/Trade/Cancel menu, incoming YES/NO, waiting/cancellation and
+result acknowledgement use the cartridge's own field-script windows. There is
+no UIKit invitation card, app alert or app acceptance button. The existing panel
+attachment is permanently hidden and only coordinates a bounded completed-frame
+mailbox. Normal controller touches and physical controller mappings reach the
+native choices while the script freezes movement. Initial A is consumed before
+it can activate an underlying NPC or sign.
+
+The exact-hash bridge stages original text and script commands in the unused
+ROM tail at 09FFFD00, outside the existing battle guest and trade-entry script.
+For the chooser only, it temporarily lends native multichoice slot zero at
+083E04B0 the Battle/Trade/Cancel labels. YES/NO uses the native script opcode
+6E (0806BA80), ScriptMenu_YesNo (0809CDEC), and its ordinary input task
+(0809CE54). The chooser uses native multichoice/input routines at 0809C9B4
+and 0809CC98. Native releaseall/end closes the field message and restores control;
+the selection is latched by native copybyte before releaseall/end can expose the
+shared result variable to ordinary field tasks. Its two-byte scratch lies in the
+inactive link queue and is restored along with the table and unused tail before
+any native link snapshot or entry.
+The on-disk ROM and save are untouched by this invitation layer.
+
+After explicit acceptance, confirmation is fenced by the invitation/session ID
+and original anchor, rather than requiring a render pose during the peer's
+brief snapshot pause. An early prepared control is held only for that consented
+invitation; game-data sequence 1 is sent only after both native receivers exist. A real disconnect still ends the invitation; confirmation
+retains its bounded timeout. A received acceptance waits for the local dialogue to close before invoking the
+unchanged trade coordinator. Canceled/stale completions cannot start an activity.
+Cancellation dismisses the native window through B; production code never
+synthesizes YES or A. Quick/automatic state capture stays blocked while a staged
+invitation could be captured. Interrupted-trade title/Continue inputs remain
+available before a native result can be shown in the overworld. New core binding
+forgets the previous cartridge's pending dialogue/selection.
+
+Interaction admission and pending anchors retain the original 200 ms freshness
+limit. Native field windows temporarily make the local sprite image unavailable;
+during an owned dialogue only, the last appearance is retained when fresh native
+world data confirms the same map, tile, elevation and facing. Movement, fades,
+battles, other menus, missing frames and changed sessions still invalidate it.
+
+Source references: [field-script commands](https://github.com/pret/pokefirered/blob/master/asm/macros/event.inc)
+and [native script menus](https://github.com/pret/pokefirered/blob/master/src/script_menu.c).
+Exact-profile addresses and runtime checks are separate from those references.
 
 ## Native implementation
 
@@ -211,3 +258,57 @@ message acknowledgement and Experimental Features disable/re-enable. The final
 Debug test build and unsigned iPhone Release build passed. All 17,061 pinned
 source files and the unchanged 932-byte native guest verify; source, Debug and
 Release cloud configuration SHA-256 hashes match.
+
+## Native invitation verification — October 21, 2026
+
+The focused native-dialogue check cold-boots a disposable seed in actual VBA-M,
+selects Trade in the native chooser, answers YES, answers NO, presses B, and
+cancels a pending menu. Every path returns to the unlocked overworld with the
+original menu table and supported ROM digest restored. Original ROM/seed hashes
+remain unchanged. Invitation handoff tests also verify that native-window cleanup
+precedes agreement delivery and a canceled completion cannot start the trade.
+
+Failed full-app attempts are retained separately. Diagnostics identified native
+field windows making the sprite image unavailable while fresh position data
+remained valid. A trial of a longer pending freshness limit did not fix that
+rendering dependency and was reverted. Owned native windows now retain only a
+stationary appearance proven by fresh world data.
+
+The acceptance checks also exposed ordered prepared controls arriving before the
+peer finished dismissing its field window, and the first wire heartbeat being
+sent before that peer installed its native receiver. Preparation now stays bound
+to the accepted invitation, and sequenced game data waits for the existing
+two-sided connected barrier. Native trade guest code, save prompts and exchange
+routines remain unchanged. UI checks verify the actual native cursor before
+selecting Trade, YES or NO, and wait for acceptance before pressing A on save
+prompts.
+
+Final checks: **68 focused tests passed**, including native chooser/YES/NO/B,
+cancellation, same-core rebind cleanup, consent fencing, presence, settings and
+Soul Link regressions. Debug test builds and the unsigned iPhone Release build
+passed. All 17,061 pinned source files, the unchanged 932-byte native trade/battle
+guest and source/Debug/Release cloud configuration hashes match.
+
+On two dedicated simulators over **real Agora**, `paired-1103-retry-1` verified
+NO returning both players to idle without a native activity, followed by YES
+entering the actual native Trade menu on both players. Neither invitation used
+an app card or app acceptance button. The run was intentionally stopped during
+the exchange stage after desktop control reported the Mac locked; it is not
+full-app Agora exchange-completion evidence. Earlier failed attempts are retained.
+The previous QA-device shutdown is recorded separately, and the final invitation
+check used newly created task-owned devices.
+
+`native-invitation-trade-regression` then passed on both dedicated simulators in
+**92.6 seconds** with a controlled 25 ms local relay delay. The native exchange,
+linked save and return completed; a new emulator cold-booted each cartridge save
+and retained the peer's offered nickname/original trainer. Both unoffered party
+members stayed unchanged. This separately verifies the preserved trading flow;
+it does not replace the missing full-app Agora exchange-completion check.
+
+The original ROM/seed, all 57 current protected setup files and original active
+friend lists were preserved. Temporary friendships and one-use inputs were
+removed. Three newer main-branch account/Dropbox files differed from the old
+transferred QA baseline; their unchanged HEAD blobs were verified, the historical
+manifest retained, and the current baseline recorded before the final runs. No
+backend, signing, cloud configuration or dependency settings changed. Physical
+devices and separate networks remain unverified for the new invitation UI.

@@ -360,6 +360,9 @@ final class BoundCompanionCoordinator {
     private lazy var tap = BoundDeltaFrameTap { [weak self] frame in self?.sharing.receivePlaybackFrame(frame) }
     let playerStateDisplay = BoundPlayerStateDisplay()
     private var friendInteractionPanel: BoundFriendInteractionPanel?
+    #if DEBUG && targetEnvironment(simulator)
+    var friendDialogueReading: BoundFriendDialogueProbe.Reading { friendInteractionPanel?.probe.read() ?? .init() }
+    #endif
     func install(in owner: GameViewController) {
         guard host == nil, macHost == nil else { return }
         self.owner = owner
@@ -681,6 +684,7 @@ final class BoundCompanionCoordinator {
             UIApplication.shared.applicationState == .active && owner?.view.window?.windowScene?.hasKeyboardFocus == true
         }
         playerStateDisplay.bind(core: core)
+        friendInteractionPanel?.bind(core: core)
         guard boundCore !== core || self.gameID != gameID else { return }
         notesDismissalTask?.cancel(); notesDismissalTask = nil; pendingControllerReferenceAction = nil
         cancelInteractions(); tap.setEnabled(false); sharing.stop(); notesPaused = false; isEditingNotes = false; isEditingText = false; owner?.controllerView.isUserInteractionEnabled = true; self.gameID = gameID
@@ -690,13 +694,14 @@ final class BoundCompanionCoordinator {
         guard let core else { boundCore = nil; state.emulationDetails = nil; return }
         state.emulationDetails = BoundEmulationDetails(packageName: core.deltaCore.name, packageIdentifier: core.deltaCore.identifier, packageVersion: core.deltaCore.version)
         boundCore = core
-        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe, soul = sharing.soulLink.probe
+        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe, soul = sharing.soulLink.probe, dialogue = friendInteractionPanel?.probe
         #if DEBUG && targetEnvironment(simulator)
         let tradeQA = BoundFullAppGameplayQA.current?.tradeProbe
         BoundFullAppGameplayQA.current?.configureTrade(core:core)
         #endif
-        core.updateHandler = { [weak tap, weak reader, weak battle, weak soul] core in
+        core.updateHandler = { [weak tap, weak reader, weak battle, weak soul, weak dialogue] core in
             previous?(core)
+            dialogue?.receive(core)
             reader?.receive(core)
             tap?.receive(core)
             soul?.receive(core)

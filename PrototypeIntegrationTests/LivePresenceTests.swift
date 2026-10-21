@@ -76,6 +76,31 @@ final class LivePresenceTests: XCTestCase {
         XCTAssertNil(session.interactionContext(at:20.15))
     }
 
+    func testNativeDialogueRetainsAppearanceOnlyForFreshMatchingWorldData() throws {
+        let session=session(),peer=UUID()
+        session.consume(reading(),at:20)
+        session.receive(try packet(session,peer:peer,reading:reading(x:120)),at:20)
+        session.consume(reading(),at:20.06)
+        session.receive(try packet(session,peer:peer,sequence:2,time:10.06,reading:reading(x:120)),at:20.06)
+        var player=try XCTUnwrap(reading().player); player.scene=nil
+        let withoutSprite=BoundPlayerStateReading(frame:12346,status:.live,detail:"Native window",player:player)
+        session.retainsNativeDialoguePose={ true }
+        session.consume(withoutSprite,at:20.1)
+        XCTAssertNotNil(session.interactionContext(at:20.1))
+        XCTAssertNil(session.interactionContext(at:20.4),"Dialogue cannot extend the original freshness deadline")
+        session.retainsNativeDialoguePose={ false }
+        session.consume(withoutSprite,at:20.11)
+        XCTAssertNil(session.interactionContext(at:20.11),"No cached appearance outside an owned dialogue")
+        session.consume(reading(),at:20.12)
+        session.retainsNativeDialoguePose={ true }
+        var moved=try XCTUnwrap(reading(x:136).player); moved.scene=nil
+        session.consume(.init(frame:12347,status:.live,detail:"Moved",player:moved),at:20.13)
+        XCTAssertNil(session.interactionContext(at:20.13))
+        session.consume(reading(),at:20.14)
+        session.consume(.inactive(.battle,"Battle",frame:12348),at:20.15)
+        XCTAssertNil(session.interactionContext(at:20.15))
+    }
+
     func testWireIsBoundedAndCarriesOnlyPresenceWithROMFrameReference() throws {
         let session = session(), data = try packet(session, peer: UUID(), reading: reading())
         XCTAssertLessThan(data.count, BoundPresencePacket.maximumBytes)

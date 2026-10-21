@@ -146,31 +146,30 @@ final class FullAppGameplayUITests: XCTestCase {
                     if peer == "A" {
                         try waitFor { $0["interactionCanStart"] as? Bool == true }
                         try press("a", duration: 0.08)
-                        XCTAssertTrue(app.buttons["bound.friend-interaction.battle"].waitForExistence(timeout: 8))
+                        try waitForNativeInvitation()
                         let image = XCTAttachment(screenshot:XCUIScreen.main.screenshot())
                         image.name = "Walk-up-A-interaction"; image.lifetime = .keepAlways; add(image)
                     }
                 case "battle-invite":
-                    if peer == "A" { app.buttons["bound.friend-interaction.battle"].tap() }
+                    if peer == "A" { try chooseNativeActivity(trade:false) }
                     try waitFor { $0["interactionPhase"] as? String == (self.peer == "A" ? "outgoing" : "incoming") }
                 case "battle-accept":
-                    if peer == "B" { app.buttons["bound.friend-interaction.decline"].tap() }
+                    if peer == "B" { try answerNativeInvitation(accept:false) }
                     try waitFor { $0["interactionPhase"] as? String == (self.peer == "A" ? "ended":"idle") }
                 case "close-battle":
-                    if peer == "A" { app.buttons["bound.friend-interaction.close"].tap() }
+                    if peer == "A" { try acknowledgeNativeResult() }
                     try waitFor { $0["interactionPhase"] as? String == "idle" }
                 case "trade-invite":
                     if peer == "A" {
                         try waitFor { $0["interactionCanStart"] as? Bool == true }
                         try press("a", duration: 0.08)
-                        XCTAssertTrue(app.buttons["bound.friend-interaction.trade"].waitForExistence(timeout: 8))
-                        app.buttons["bound.friend-interaction.trade"].tap()
+                        try chooseNativeActivity(trade:true)
                     }
                     try waitFor { $0["interactionPhase"] as? String == (self.peer == "A" ? "outgoing" : "incoming") }
                 case "trade-decline":
-                    if peer == "B" { app.buttons["bound.friend-interaction.decline"].tap() }
+                    if peer == "B" { try answerNativeInvitation(accept:false) }
                     try waitFor { $0["interactionPhase"] as? String == (self.peer == "A" ? "ended" : "idle") }
-                    if peer == "A" { app.buttons["bound.friend-interaction.close"].tap() }
+                    if peer == "A" { try acknowledgeNativeResult() }
                 default: pause(0.2); continue
                 }
                 try report(stage); completed.insert(stage)
@@ -197,12 +196,12 @@ final class FullAppGameplayUITests: XCTestCase {
                     if peer == "A" {
                         try waitFor { $0["interactionCanStart"] as? Bool == true }
                         try press("a",duration:0.08)
-                        XCTAssertTrue(app.buttons["bound.friend-interaction.battle"].waitForExistence(timeout:8))
-                        app.buttons["bound.friend-interaction.battle"].tap()
+                        try waitForNativeInvitation()
+                        try chooseNativeActivity(trade:false)
                     }
                     try waitFor { $0["interactionPhase"] as? String == (self.peer == "A" ? "outgoing":"incoming") }
                 case "battle-accept":
-                    if peer == "B" { app.buttons["bound.friend-interaction.accept"].tap() }
+                    if peer == "B" { try answerNativeInvitation(accept:true) }
                     try waitFor(timeout:150) { $0["nativeBattle"] as? Bool == true && $0["interactionPhase"] as? String == "playing" }
                     let image=XCTAttachment(screenshot:XCUIScreen.main.screenshot())
                     image.name="Actual-friend-battle-"+peer; image.lifetime = .keepAlways; add(image)
@@ -225,7 +224,7 @@ final class FullAppGameplayUITests: XCTestCase {
                         try press("a",duration:0.12); pause(0.12)
                     }
                     XCTAssertEqual(try snapshot()["battlesCompleted"] as? Int,1)
-                    app.buttons["bound.friend-interaction.close"].tap()
+                    try acknowledgeNativeResult()
                     try waitFor { $0["reader"] as? String == "live" && $0["tile"] as? [Int] == [self.peer == "A" ? 6:7,8] }
                 default: pause(0.2); continue
                 }
@@ -236,6 +235,52 @@ final class FullAppGameplayUITests: XCTestCase {
         XCTFail("Actual friend battle did not finish")
     }
 
+    private func waitForNativeInvitation(mode:Int?=nil) throws {
+        try waitFor { $0["nativeInvitationActive"] as? Bool == true && $0["nativeInvitationReady"] as? Bool == true && (mode==nil || $0["nativeInvitationMode"] as? Int == mode) }
+        XCTAssertFalse(element("bound.friend-interaction").exists,"Invitation must stay inside the game")
+        pause(0.15)
+    }
+    private func chooseNativeActivity(trade:Bool) throws {
+        try waitForNativeInvitation(mode:0)
+        for _ in 0..<4 {
+            try selectNativeCursor(trade ? 1:0)
+            try press("a",duration:0.08); pause(0.5)
+            if try snapshot()["interactionPhase"] as? String != "choosing" { return }
+        }
+        XCTFail("Native activity choice was not acknowledged")
+    }
+    private func answerNativeInvitation(accept:Bool) throws {
+        try waitForNativeInvitation(mode:1)
+        try selectNativeCursor(accept ? 0:1)
+        let image=XCTAttachment(screenshot:XCUIScreen.main.screenshot())
+        image.name=accept ? "Native-invitation-YES":"Native-invitation-NO"
+        image.lifetime = .keepAlways; add(image)
+        for _ in 0..<4 {
+            try selectNativeCursor(accept ? 0:1)
+            try press("a",duration:0.08); pause(0.5)
+            if try snapshot()["interactionPhase"] as? String != "incoming" { return }
+        }
+        XCTFail("Native YES/NO choice was not acknowledged")
+    }
+    private func selectNativeCursor(_ target:Int) throws {
+        for _ in 0..<4 {
+            let cursor=try snapshot()["nativeInvitationCursor"] as? Int ?? -1
+            if cursor==target { return }
+            try press(cursor>target ? "up":"down",duration:0.08)
+            pause(0.2)
+        }
+        XCTAssertEqual(try snapshot()["nativeInvitationCursor"] as? Int,target,"Native cursor must reach the chosen action before A")
+    }
+    private func acknowledgeNativeResult() throws {
+        let deadline=Date().addingTimeInterval(12)
+        while Date()<deadline {
+            let value=try snapshot()
+            if value["interactionPhase"] as? String == "idle" { return }
+            if value["nativeInvitationReady"] as? Bool == true { try press("a",duration:0.08) }
+            pause(0.2)
+        }
+        XCTFail("Native result dialogue did not close")
+    }
     func testActualFriendTrade() throws {
         try connectFriend()
         try waitFor { $0["tradeFixtureReady"] as? Bool == true }
@@ -251,16 +296,23 @@ final class FullAppGameplayUITests: XCTestCase {
             if stage == "failed" { XCTFail("Trade coordinator failed"); return }
             if !completed.contains(stage) {
                 switch stage {
-                case "trade-invite":
+                case "trade-decline-invite", "trade-invite":
                     if peer == "A" {
                         try waitFor { $0["interactionCanStart"] as? Bool == true }
                         try press("a",duration:0.08)
-                        XCTAssertTrue(app.buttons["bound.friend-interaction.trade"].waitForExistence(timeout:8))
-                        try tapScreenPoint(in:app.buttons["bound.friend-interaction.trade"])
+                        try chooseNativeActivity(trade:true)
                     }
                     try waitFor { $0["interactionPhase"] as? String == (self.peer == "A" ? "outgoing":"incoming") }
+                case "trade-decline":
+                    if peer == "B" { try answerNativeInvitation(accept:false) }
+                    try waitFor { $0["interactionPhase"] as? String == (self.peer == "A" ? "ended":"idle") }
+                    if peer == "A" { try acknowledgeNativeResult() }
+                    try waitFor { $0["interactionPhase"] as? String == "idle" && $0["nativeInvitationActive"] as? Bool == false }
+                    XCTAssertEqual(try snapshot()["tradesCompleted"] as? Int,0)
                 case "trade-accept":
-                    if peer == "B" { try tapScreenPoint(in:app.buttons["bound.friend-interaction.accept"]) }
+                    if peer == "B" { try answerNativeInvitation(accept:true) }
+                    try waitFor(timeout:35) { ["connecting","playing"].contains($0["interactionPhase"] as? String ?? "") }
+                    XCTAssertEqual(try snapshot()["nativeActivity"] as? String,"trade")
                     let end=Date().addingTimeInterval(100)
                     while Date()<end {
                         let value=try snapshot()
@@ -305,14 +357,12 @@ final class FullAppGameplayUITests: XCTestCase {
                         } else { try press("a",duration:0.08) }
                         pause(0.3)
                     }
-                    try waitFor { $0["tradesCompleted"] as? Int == 1 && $0["tradeRecoveryBlocked"] as? Bool == false }
-                    try tapScreenPoint(in:app.buttons["bound.friend-interaction.close"])
+                    try waitFor { $0["tradesCompleted"] as? Int == 1 }
+                    try acknowledgeNativeResult()
                     try waitFor { $0["reader"] as? String == "live" }
                 case "trade-disconnect":
                     if peer == "A" { XCUIDevice.shared.press(.home); pause(4); app.activate(); pause(1); resume() }
-                    try waitFor(timeout:35) { $0["tradeRecoveryBlocked"] as? Bool == false && $0["tradeOpened"] as? Bool == true }
-                    if app.buttons["bound.friend-interaction.close"].exists { try tapScreenPoint(in:app.buttons["bound.friend-interaction.close"]) }
-                    try waitFor { $0["interactionPhase"] as? String == "idle" }
+                    try waitFor(timeout:35) { $0["interactionPhase"] as? String == "ended" && $0["tradeOpened"] as? Bool == true }
                     // Interrupted trade boots the actual cartridge save. Continue
                     // through its native title/menu, using only controller touches.
                     let end=Date().addingTimeInterval(55)
@@ -322,6 +372,8 @@ final class FullAppGameplayUITests: XCTestCase {
                         try press("start",duration:0.08); try press("a",duration:0.08); pause(0.3)
                     }
                     try waitFor { $0["reader"] as? String == "live" }
+                    if try snapshot()["interactionPhase"] as? String == "ended" { try acknowledgeNativeResult() }
+                    try waitFor { $0["interactionPhase"] as? String == "idle" }
                 case "trade-verify":
                     let value=try snapshot(),exchanged=mode != "menu-disconnect"
                     if mode == "exchange-disconnect" {
@@ -446,8 +498,7 @@ final class FullAppGameplayUITests: XCTestCase {
         }
         XCTAssertEqual(try snapshot()["reader"] as? String, "live")
         XCTAssertEqual(try snapshot()["core"] as? String, "com.rileytestut.GBADeltaCore")
-        let recovered=app.buttons["bound.friend-interaction.close"]
-        if recovered.exists { recovered.tap() }
+        if try snapshot()["interactionPhase"] as? String == "ended" { try acknowledgeNativeResult() }
     }
 
     private func runConnectedGameplay() throws {
