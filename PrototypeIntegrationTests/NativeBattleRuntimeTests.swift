@@ -53,6 +53,66 @@ private final class NativeBattleDriver:@unchecked Sendable {
     }
 }
 
+private final class NativeTradeDriver:@unchecked Sendable {
+    private let lock=NSLock(),reader=BoundVBAPlayerStateProbe()
+    private var frame=0,lastMask=0,playing=false,boot=false
+    private var callbackID = -1,stateFrame=0
+    private var count=0,marker=0
+    private let offersEnabled:Bool
+    let booted=XCTestExpectation(description:"Trade overworld boot")
+    init(core:EmulatorCore,profile:BoundPlayerROMProfile,offersEnabled:Bool=true) {
+        self.offersEnabled=offersEnabled
+        reader.configure(coreID:ObjectIdentifier(core),profile:profile,active:true,status:.waiting,detail:"Trade boot")
+    }
+    func begin() { lock.lock(); playing=true; lock.unlock() }
+    var currentMarker:Int { lock.lock(); defer { lock.unlock() }; return marker }
+    func receive(_ core:EmulatorCore) {
+        frame+=1
+        lock.lock(); let playing=playing; lock.unlock()
+        if !playing {
+            if reader.receive(core)?.status == .live,!boot { boot=true; booted.fulfill() }
+            apply(boot ? 0:(1300..<1302).contains(frame) ? 8:(1600..<1602).contains(frame)||(2200..<2202).contains(frame) ? 1:0,core)
+            return
+        }
+        let value=BoundVBABattleBridge.advanceAndObserve()
+        let callback=value["callback"] as? Int ?? 0
+        let trades=value["tradeCount"] as? Int ?? 0
+        let bytes=BoundVBABattleBridge.qaTradeParty()
+        lock.lock(); marker=bytes.count>8 ? Int(bytes[8]):0; count=trades; lock.unlock()
+        var mask=0,id = -1,cursor = -1
+        if callback==0x0804D639,
+           let p=core.deltaCore.emulatorBridge.readMemory?(at:0x39DA8,size:4),p.count==4 {
+            let address=p.enumerated().reduce(0) { $0 | Int($1.element)<<($1.offset*8) }
+            if (0x02000000..<0x02040000-128).contains(address),
+               let menu=core.deltaCore.emulatorBridge.readMemory?(at:address-0x02000000+0x8000,size:128),menu.count==128 {
+                id=Int(menu[0x6F]); cursor=Int(menu[0x35])
+            }
+        }
+        if id != callbackID {
+            NSLog("Trade fixture menu id=%d cursor=%d native=%08x trades=%d",id,cursor,callback,trades)
+            callbackID=id; stateFrame=frame
+        }
+        let elapsed=frame-stateFrame
+        if id==0 {
+            if trades==0 { mask=offersEnabled && elapsed%30<2 ? 1:0 }
+            else if cursor != 12 { mask=elapsed%30<2 ? 64:0 } // Up selects native Cancel with one party member.
+            else { mask=elapsed%30<2 ? 1:0 }
+        } else if id==1 {
+            if elapsed==8 || elapsed==9 { mask=128 } // Native Summary/Trade selector: Down.
+            else if elapsed>=20 { mask=elapsed%30<2 ? 1:0 }
+        } else if [3,4,7,14].contains(id) { mask=elapsed%30<2 ? 1:0 }
+        else if value["tradeOpened"] as? Bool != true { mask=frame%30<2 ? 1:0 } // Save/link confirmations only.
+        apply(mask,core)
+    }
+    private func apply(_ mask:Int,_ core:EmulatorCore) {
+        for bit in [1,2,8,64,128] where mask&bit != lastMask&bit {
+            if mask&bit != 0 { core.deltaCore.emulatorBridge.activateInput(bit,value:1,playerIndex:0) }
+            else { core.deltaCore.emulatorBridge.deactivateInput(bit,playerIndex:0) }
+        }
+        lastMask=mask
+    }
+}
+
 @MainActor
 final class NativeBattleRuntimeTests:XCTestCase {
     private var previousExperimentalFeature: Any?
@@ -67,6 +127,94 @@ final class NativeBattleRuntimeTests:XCTestCase {
         super.tearDown()
     }
 
+    func testActualNativeTrade() async throws {
+        continueAfterFailure=false
+        let env=ProcessInfo.processInfo.environment
+        guard let peer=env["BOUND_NATIVE_BATTLE_PEER"],["A","B"].contains(peer),
+              let port=env["BOUND_NATIVE_BATTLE_PORT"].flatMap(Int.init),
+              let relayPort=env["BOUND_NATIVE_BATTLE_RELAY_PORT"].flatMap(UInt16.init),
+              let id=env["BOUND_NATIVE_BATTLE_RELAY_ID"].flatMap(UUID.init(uuidString:)) else {
+            throw XCTSkip("Requires two owned simulators and the native --trade coordinator")
+        }
+        let fixtures=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let rom=fixtures.appendingPathComponent("RadicalRed.gba"),seed=fixtures.appendingPathComponent("seed.sav")
+        let originalROM=try Data(contentsOf:rom),originalSeed=try Data(contentsOf:seed)
+        let cancelMode=env["BOUND_NATIVE_TRADE_CANCEL"]=="1"
+        let profile=try BoundPlayerROMProfile(rom:originalROM)
+        let output=fixtures.appendingPathComponent("native-trade-"+UUID().uuidString,isDirectory:true)
+        try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+        let battery=output.appendingPathComponent("work.sav"); try originalSeed.write(to:battery)
+        let core=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
+        let scene=try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous=scene.windows.first { $0.isKeyWindow },window=UIWindow(windowScene:scene),owner=UIViewController(),view=GameView()
+        window.rootViewController=owner; window.makeKeyAndVisible(); owner.view.addSubview(view)
+        view.frame=CGRect(x:0,y:150,width:window.bounds.width,height:window.bounds.width*2/3); core.add(view)
+        let driver=NativeTradeDriver(core:core,profile:profile,offersEnabled:!cancelMode),native=BoundNativeBattleSession(),interactions=BoundFriendInteractionSession()
+        let probe=native.probe
+        core.updateHandler={ core in driver.receive(core); probe.receive(core) }
+        var channel:NativeBattleRelayChannel?
+        defer {
+            native.cancel(resume:false); channel?.close(); _=core.pause(); BoundVBABattleBridge.close(); _=core.stop()
+            window.isHidden=true; previous?.makeKeyAndVisible()
+        }
+        core.rate=8; XCTAssertTrue(core.start()); await fulfillment(of:[driver.booted],timeout:90)
+        _=core.pause(); core.rate=1
+        XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady())
+        let offered=peer=="A" ? 0xBB:0xBC
+        let expected=cancelMode ? offered : peer=="A" ? 0xBC:0xBB
+        XCTAssertTrue(BoundVBABattleBridge.qaPrepareTradeFixture(UInt(offered)))
+        let beforeTrade=BoundVBABattleBridge.qaTradeParty()
+        native.bind(core:core,gameID:output.lastPathComponent,interactions:interactions); native.canResume={ true }
+        native.makeChannel={ receiver,failed in
+            let value=NativeBattleRelayChannel(port:relayPort,peer:peer,receive:{ data in
+                if data.starts(with:BoundBattleControlPacket.prefix) { Task { @MainActor in native.receive(data) } }
+                else { receiver(data) }
+            },failed:failed)
+            channel=value; return value
+        }
+        native.sendControl={ channel?.send($0)==true }
+        driver.begin(); _=core.resume(); native.begin(activity:.trade,id:id,initiator:peer=="A")
+        for tick in 0..<9000 {
+            if tick%200==0 { NSLog("Native trade %@ callback=%08x script=%d trades=%d %@",peer,native.observation?.callback ?? 0,native.observation?.scriptResult ?? -1,native.observation?.tradeCount ?? 0,native.probe.diagnostics) }
+            if cancelMode,native.observation?.tradeOpened==true {
+                _=try await request(port:port,peer:peer,body:["stage":"menu"])
+                for _ in 0..<200 {
+                    let status=try await request(port:port)
+                    if let peers=status["peers"] as? [String:[String:Any]],peers.count==2,peers.values.allSatisfy({ ["menu","done"].contains($0["stage"] as? String ?? "") }) { break }
+                    try await Task.sleep(for:.milliseconds(50))
+                }
+                if peer=="A" { native.cancel() }
+                for _ in 0..<200 where native.isActive { try await Task.sleep(for:.milliseconds(50)) }
+                XCTAssertFalse(native.isActive); break
+            }
+            if native.completedTrades>0 || !native.isActive { break }
+            try await Task.sleep(for:.milliseconds(50))
+        }
+        XCTAssertEqual(native.completedTrades,cancelMode ? 0:1,"Native trade failed: \(native.lastFailure) \(native.lastCableDiagnostic)")
+        _=core.pause()
+        if !cancelMode {
+            let received=BoundVBABattleBridge.qaTradeParty()
+            XCTAssertEqual(received[8],UInt8(expected),"Native swap must deliver the peer's offered Pokémon")
+            XCTAssertEqual(received[4],UInt8(expected),"The original trainer identity must travel with the offered Pokémon")
+            XCTAssertEqual(received.subdata(in:100..<200),beforeTrade.subdata(in:100..<200),"The unoffered party member stays unchanged")
+            XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady(),"Return to the real overworld with all hooks removed")
+        }
+        XCTAssertFalse(native.blocksAutoSave)
+        // Start a new emulator instance from the actual cartridge save, not a state.
+        XCTAssertTrue(core.stop()); core.updateHandler=nil
+        let reopened=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
+        let reboot=NativeTradeDriver(core:reopened,profile:profile)
+        reopened.updateHandler={ reboot.receive($0) }; reopened.rate=8; reopened.add(view)
+        XCTAssertTrue(reopened.start()); await fulfillment(of:[reboot.booted],timeout:90); _=reopened.pause()
+        let persisted=BoundVBABattleBridge.qaTradeParty(); XCTAssertEqual(persisted[8],UInt8(expected))
+        XCTAssertEqual(persisted[4],UInt8(expected))
+        XCTAssertEqual(persisted.subdata(in:100..<200),beforeTrade.subdata(in:100..<200))
+        XCTAssertTrue(reopened.stop())
+        XCTAssertEqual(try Data(contentsOf:rom),originalROM); XCTAssertEqual(try Data(contentsOf:seed),originalSeed)
+        let report:[String:Any]=["stage":"done","trade":native.completedTrades==1,"canceled":cancelMode && !native.isActive,"persisted":persisted[8]==UInt8(expected),"cable":native.lastCableDiagnostic]
+        try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("report.json"))
+        _=try await request(port:port,peer:peer,body:report)
+    }
     func testActualNativeLinkBattle() async throws { try await runNativeBattle(entryOnly:false) }
     func testNativeSessionForwardedEntry() async throws { try await runNativeBattle(entryOnly:true) }
     private func runNativeBattle(entryOnly:Bool) async throws {

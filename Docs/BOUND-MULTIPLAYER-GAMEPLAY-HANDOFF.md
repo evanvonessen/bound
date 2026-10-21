@@ -21,7 +21,9 @@ documents the invitation protocol. Accepted Battles now use the native activity
 adapter described in [native friend battles](BOUND-NATIVE-FRIEND-BATTLES.md);
 the normal-app Agora knockout acceptance passed in 314.7 seconds with native
 attacks, matching win/loss, and both original positions restored. Trades
-remain invitations only. Do not repeat the
+are implemented separately in the unmerged `codex/friend-trading` worktree;
+see [native friend trades](BOUND-NATIVE-FRIEND-TRADES.md) for current behavior,
+persistence rules and observed validation. Do not repeat the
 900-second presence run as a substitute for implementing gameplay.
 
 ## Checkout and ownership

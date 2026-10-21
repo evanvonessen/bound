@@ -108,7 +108,7 @@ final class BoundFriendInteractionSession {
     var blocksGameplay: Bool { phase != .idle && phase != .playing }
     var cancelActivity: (() -> Void)?
     func activityProgress(_ message: String, playing: Bool) {
-        guard activity == .battle else { return }
+        guard activity != nil else { return }
         phase = playing ? .playing : .connecting; self.message = message; deadline = nil; notify()
     }
     func activityEnded(_ message: String) { end(message) }

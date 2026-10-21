@@ -319,7 +319,10 @@ extension LivePresenceTests {
         XCTAssertFalse(sharing.interactions.open())
         let recording = BoundRecordedPlayerSession(); recording.record()
         XCTAssertEqual(recording.mode, .idle)
-        sharing.nativeBattle.begin(activity: .battle, id: UUID(), initiator: true)
+        for activity in BoundFriendInteractionPacket.Activity.allCases {
+            sharing.nativeBattle.begin(activity: activity, id: UUID(), initiator: true)
+            XCTAssertFalse(sharing.nativeBattle.isActive)
+        }
         XCTAssertFalse(sharing.nativeBattle.isActive)
         XCTAssertFalse(sharing.nativeBattle.blocksAutoSave)
 

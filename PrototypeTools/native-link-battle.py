@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a disposable two-VBA-M native battle before testing RTC/UI integration.
+"""Exercise native friend battles or trades on two disposable VBA-M instances.
 
 The loopback relay forwards the production native command packets and test
 observations. It supplies no ROM, RAM, credentials or gameplay commands.
@@ -22,9 +22,12 @@ def main():
     parser.add_argument('--sim-a',required=True); parser.add_argument('--sim-b',required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--latency-ms',type=int,default=0,help='Controlled local one-way relay delay, 0–100 ms')
+    parser.add_argument('--trade-cancel',action='store_true',help='Cancel from the native trade menu before offering; both original parties must persist')
+    parser.add_argument('--trade',action='store_true',help='Exercise the actual native trade menu, exchange, save and cold-boot persistence')
     parser.add_argument('--session-entry',action='store_true',help='Exercise the production activity coordinator through native entry and cancel/restore; requires --relay')
     parser.add_argument('--relay',action='store_true',help='Exercise production command transport through a local reliable-message relay')
     args=parser.parse_args()
+    args.trade = args.trade or args.trade_cancel
     if not 0<=args.latency_ms<=100:parser.error('Latency must be 0–100 ms')
     if not args.relay:parser.error('The command transport harness requires --relay')
     if args.sim_a==args.sim_b: parser.error('Two distinct disposable simulators are required')
@@ -74,7 +77,7 @@ def main():
             if isinstance(value,dict):
                 copy={k:visit(v) for k,v in value.items()}
                 if 'TestBundlePath' in copy:
-                    copy.setdefault('EnvironmentVariables',{}).update(BOUND_NATIVE_BATTLE_PEER=peer,BOUND_NATIVE_BATTLE_PORT=str(server.server_port))
+                    copy.setdefault('EnvironmentVariables',{}).update(BOUND_NATIVE_BATTLE_PEER=peer,BOUND_NATIVE_BATTLE_PORT=str(server.server_port),BOUND_NATIVE_TRADE_CANCEL='1' if args.trade_cancel else '0')
                     if relay:copy['EnvironmentVariables'].update(BOUND_NATIVE_BATTLE_RELAY_PORT=str(relay.server_address[1]),BOUND_NATIVE_BATTLE_RELAY_ID=relay_id)
                 return copy
             if isinstance(value,list): return [visit(v) for v in value]
@@ -85,21 +88,21 @@ def main():
             log=(args.output/(peer+'.log')).open('wb')
             cmd=['/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild','test-without-building','-xctestrun',str(clone(peer)),
                 '-destination','platform=iOS Simulator,id='+sim,'-parallel-testing-enabled','NO',
-                '-only-testing:BoundIntegrationTests/NativeBattleRuntimeTests/'+('testNativeSessionForwardedEntry' if args.session_entry else 'testActualNativeLinkBattle'),
+                '-only-testing:BoundIntegrationTests/NativeBattleRuntimeTests/'+('testActualNativeTrade' if args.trade else 'testNativeSessionForwardedEntry' if args.session_entry else 'testActualNativeLinkBattle'),
                 '-collect-test-diagnostics','never','-resultBundlePath',str(args.output/(peer+'.xcresult'))]
             processes.append((subprocess.Popen(cmd,stdout=log,stderr=subprocess.STDOUT),log))
         deadline=time.monotonic()+800
         while time.monotonic()<deadline:
             states=[p.poll() for p,_ in processes]
-            if any(code is not None and code!=0 for code in states): raise RuntimeError('A native battle test failed')
+            if any(code is not None and code!=0 for code in states): raise RuntimeError('A native activity test failed')
             if all(code==0 for code in states): break
             time.sleep(0.5)
-        else: raise TimeoutError('Native battle test timed out')
+        else: raise TimeoutError('Native activity test timed out')
         with lock: result=dict(peers)
-        if set(result)!=set(('A','B')) or not all(v.get('stage')=='done' and v.get('battle') and (args.session_entry or v.get('damaged')) and v.get('restored') for v in result.values()):
-            raise RuntimeError('Missing actual battle/damage/restoration evidence')
-        outcomes={q['outcome'] for q in result.values()}
-        if not args.session_entry and outcomes not in ({1,2},{3}): raise RuntimeError('Native outcomes disagree')
+        if set(result)!=set(('A','B')) or not all(v.get('stage')=='done' and ((v.get('canceled') if args.trade_cancel else v.get('trade')) and v.get('persisted') if args.trade else v.get('battle') and (args.session_entry or v.get('damaged')) and v.get('restored')) for v in result.values()):
+            raise RuntimeError('Missing native activity or persistence/restoration evidence')
+        outcomes={q.get('outcome') for q in result.values()}
+        if not args.trade and not args.session_entry and outcomes not in ({1,2},{3}): raise RuntimeError('Native outcomes disagree')
         passed=True
     except BaseException as exc:
         error=type(exc).__name__+': '+str(exc)
@@ -108,7 +111,7 @@ def main():
             if process.poll() is None: process.terminate()
             log.close()
         with lock: result=dict(peers)
-        (args.output/'summary.json').write_text(json.dumps(dict(passed=passed,error=error,relay=args.relay,latencyMs=args.latency_ms,entryOnly=args.session_entry,elapsed=time.monotonic()-started,peers=result,
+        (args.output/'summary.json').write_text(json.dumps(dict(passed=passed,error=error,relay=args.relay,latencyMs=args.latency_ms,entryOnly=args.session_entry,trade=args.trade,cancel=args.trade_cancel,elapsed=time.monotonic()-started,peers=result,
             limits='Native command transport on two owned simulators over host loopback; separate from real Agora and normal-app interaction acceptance.'),indent=2)+'\n')
         server.shutdown(); server.server_close()
         if relay:relay.shutdown(); relay.server_close()

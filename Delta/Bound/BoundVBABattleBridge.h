@@ -4,6 +4,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface BoundVBABattleBridge : NSObject
 + (BOOL)verifyBattleReady;
 + (BOOL)prepareBattleForPlayer:(NSUInteger)player;
++ (BOOL)prepareTradeForPlayer:(NSUInteger)player;
 + (BOOL)installBattleForPlayer:(NSUInteger)player;
 + (NSData *)takeOutgoingCommands;
 + (NSUInteger)connectionGeneration;
@@ -16,5 +17,9 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSArray<NSNumber *> *)playerHP;
 + (NSDictionary<NSString *, id> *)advanceAndObserve;
 + (void)close;
+#if DEBUG && TARGET_OS_SIMULATOR
++ (BOOL)qaPrepareTradeFixture:(NSUInteger)marker;
++ (NSData *)qaTradeParty;
+#endif
 @end
 NS_ASSUME_NONNULL_END

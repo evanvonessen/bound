@@ -2,8 +2,10 @@
 
 Accepted Battle requests now enter the supported game's native two-player
 single battle through VBA-M. See [native friend battles](BOUND-NATIVE-FRIEND-BATTLES.md)
-for entry, transport, recovery and current validation evidence. Trade remains an
-invitation only; exchanging Pokémon is still unfinished.
+for entry, transport, recovery and current validation evidence. Accepted Trades
+enter the native trade menu and save the exchange; see
+[native friend trades](BOUND-NATIVE-FRIEND-TRADES.md). Both activities require the
+Experimental Features switch.
 
 ## Player interaction
 
@@ -18,7 +20,7 @@ can accept or decline. Either player can cancel. A request expires after 30
 seconds; acceptance confirmation expires after 10 seconds. Moving away, losing
 presence, restoring a state or losing the connection invalidates the request.
 Two simultaneous requests decline each other rather than silently choosing an
-activity. An accepted Battle starts native connection setup; accepting Trade records consent only.
+activity. An accepted Battle starts native connection setup; accepting Trade starts native save/link setup and the cartridge trade menu.
 
 The invitation overlay leaves the local emulator running so presence stays fresh. It
 releases held gameplay inputs and blocks further game inputs until closed.
@@ -49,7 +51,7 @@ Other emulation cores retain their normal mappings.
 - Sharing stop/recovery, ROM binding and restored-state admission fence old
   invitations. The SDK callback accepts only the configured friend's remote UID.
 - `BoundFriendInteractionPanel` is a scrollable native overlay with explicit
-  friendly-battle and trade-limitation wording. `BoundFriendWorldInputGate` filters the same logical
+  friendly-battle and persistent-trade wording. `BoundFriendWorldInputGate` filters the same logical
   mapping before both the app and emulator receive a controller input.
 
 Cloud setup, backend, authentication, signing configuration, SDK versions and

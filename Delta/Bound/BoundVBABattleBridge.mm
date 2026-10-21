@@ -22,11 +22,16 @@ Hook hooks[]={
     {0xB248,BoundBattleRecvCountAddress},
     {0x5833C,BoundBattleSendCountAddress},
     {0xB2F4,BoundBattleEnableSerialAddress},
-    {0xB29C,BoundBattleDisableSerialAddress}
+    {0xB29C,BoundBattleDisableSerialAddress},
+    // Walk-up trades save the current map, not a stale cable-room dynamic warp.
+    {0x4C1C0,BoundBattleLinkVSyncAddress},
+    {0x56854,BoundBattleTradeReturnAddress}
 };
 uint8_t *verifiedROM=nullptr,*patchedROM=nullptr;
 bool armed=false,installed=false,failed=false,syntheticHeld=false;
-unsigned role=0,preparationFrames=0;
+unsigned role=0,preparationFrames=0,tradeCount=0;
+bool tradeMode=false,tradeOpened=false,tradeScene=false;
+bool usesHook(size_t index) { return tradeMode ? index>=2 : index<9; }
 uint16_t networkRead=0;
 uint32_t word(const uint8_t *p) { return p[0]|uint32_t(p[1])<<8|uint32_t(p[2])<<16|uint32_t(p[3])<<24; }
 unsigned half(const uint8_t *p) { return p[0]|unsigned(p[1])<<8; }
@@ -58,13 +63,20 @@ NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
 }
 + (BOOL)prepareBattleForPlayer:(NSUInteger)player {
     if(armed||verifiedROM!=rom||!overworld()||player>1) return NO;
-    role=unsigned(player); armed=true; return YES;
+    role=unsigned(player); tradeMode=false; armed=true; return YES;
+}
++ (BOOL)prepareTradeForPlayer:(NSUInteger)player {
+    if (![self prepareBattleForPlayer:player]) return NO;
+    tradeMode=true; tradeOpened=tradeScene=false; tradeCount=0;
+    return YES;
 }
 + (BOOL)installBattleForPlayer:(NSUInteger)player {
     if(!armed||installed||verifiedROM!=rom||!overworld()||player!=role) { failed=true; return NO; }
     memcpy(rom+RegionOffset,BoundBattleEntryCode,sizeof(BoundBattleEntryCode));
     rom[0x1FFFBF0]=uint8_t(role);
-    for(auto &hook:hooks) {
+    for(size_t index=0;index<sizeof(hooks)/sizeof(hooks[0]);index++) {
+        if(!usesHook(index)) continue;
+        auto &hook=hooks[index];
         memcpy(hook.original,rom+hook.offset,8);
         hook.thunk[0]=0; hook.thunk[1]=0x48; hook.thunk[2]=0; hook.thunk[3]=0x47;
         put32(hook.thunk+4,hook.target); memcpy(rom+hook.offset,hook.thunk,8);
@@ -76,14 +88,27 @@ NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
     auto ptr = [&](uint32_t v) { for (int i=0;i<4;i++) byte(v >> (8*i)); };
     auto setvar = [&](uint16_t var, uint16_t value) { byte(0x16); half(var); half(value); };
     auto special = [&](uint16_t id) { byte(0x25); half(id); };
-    setvar(0x8004,1); setvar(0x8005,static_cast<uint16_t>(player)); setvar(0x800D,0);
-    special(28); byte(0x27); // Native TryBattleLinkup, then wait for the actual result.
+    setvar(0x8004,tradeMode?3:1); setvar(0x8005,static_cast<uint16_t>(player)); setvar(0x800D,0);
+    // Native trade/save confirmation precedes the exchange. We never synthesize
+    // A on a save prompt or trade menu; player consent uses normal controls.
+    if(tradeMode) {
+        special(35); byte(0x27);
+        byte(0x21); half(0x800D); half(1);
+        byte(0x06); byte(1); size_t savedPointer=n; ptr(0);
+        byte(0x23); ptr(BoundBattleReturnAddress); byte(0x27); byte(0x02);
+        put32(script+savedPointer,ScriptAddress+static_cast<uint32_t>(n));
+    }
+    special(tradeMode?29:28); byte(0x27); // Exact-profile native linkup.
     byte(0x21); half(0x800D); half(1);
     byte(0x06); byte(1); size_t successPointer=n; ptr(0); // equal -> native setup
     byte(0x23); ptr(BoundBattleReturnAddress); byte(0x27); byte(0x02);
     put32(script+successPointer, ScriptAddress+static_cast<uint32_t>(n));
-    special(0); special(39); special(331); // Heal, SavePlayerParty, LoadPlayerBag.
-    byte(0x23); ptr(BoundBattleStartAddress); byte(0x27); byte(0x02);
+    if(tradeMode) { special(34); byte(0x27); byte(0x02); }
+    else {
+        special(0); special(39); special(331); // Heal, SavePlayerParty, LoadPlayerBag.
+        byte(0x23); ptr(BoundBattleStartAddress); byte(0x27); byte(0x02);
+    }
+    if(n>sizeof(script)) { failed=true; return NO; }
     memcpy(rom + (ScriptAddress - 0x08000000), script, n);
     // Exact bindings verified against the profile's ScriptContext_SetupScript.
     memset(internalRAM + 0xEB0,0,0x74);
@@ -153,8 +178,19 @@ NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
     if(mailboxReady()&&half(internalRAM+Mailbox+12)) failed=true;
     if(installed&&ioMem) put16(ioMem+0x128,0x2008|(role<<4)|(role?4:0));
     const bool battle=(internalRAM[0x3529]&2)!=0;
-    const bool returned=installed&&callback==BoundBattleIdleAddress;
-    if(installed&&!battle&&!returned&&!failed) {
+    if(installed&&tradeMode) {
+        if(callback==0x0804C729 || callback==0x0804C719) {
+            if(tradeScene) {
+                tradeCount++;
+            }
+            tradeScene=false; tradeOpened=true;
+        }
+        if(tradeOpened && callback==0x08053E8D) tradeScene=true;
+    }
+    const bool returned=installed&&(callback==BoundBattleIdleAddress || (tradeMode&&tradeOpened&&overworld()));
+    // Battle setup retains its verified linkup tap. Trade setup and all native
+    // trade confirmations are strictly user-driven.
+    if(installed&&!tradeMode&&!battle&&!returned&&!failed) {
         ++preparationFrames;
         if(preparationFrames%12==1) { [[GBAEmulatorBridge sharedBridge] activateInput:1 value:1 playerIndex:0]; syntheticHeld=true; }
         else if(preparationFrames%12==3) { [[GBAEmulatorBridge sharedBridge] deactivateInput:1 playerIndex:0]; syntheticHeld=false; }
@@ -162,15 +198,41 @@ NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
     return @{@"error":@(failed),@"connected":@(armed),@"battle":@(battle),@"returned":@(returned),
         @"outcome":@(workRAM[0x23E8A]),@"flags":@(word(workRAM+0x22B4C)),@"callback":@(callback),
         @"scriptStatus":@(internalRAM[0xEA8]),@"scriptResult":@(half(workRAM+0x370D0)),
-        @"playerHP":partyHP(0x24284,workRAM[0x24029]),@"enemyHP":partyHP(0x2402C,6)};
+        @"playerHP":partyHP(0x24284,workRAM[0x24029]),@"enemyHP":partyHP(0x2402C,6),
+        @"tradeOpened":@(tradeOpened),@"tradeCount":@(tradeCount)};
 }
 + (void)close {
     if(armed||installed||syntheticHeld) [[GBAEmulatorBridge sharedBridge] deactivateInput:1 playerIndex:0];
     if(rom&&rom==patchedROM&&memcmp(rom+RegionOffset,BoundBattleEntryCode,sizeof(BoundBattleEntryCode))==0) {
         bool allOurs=true;
-        for(auto &hook:hooks) if(memcmp(rom+hook.offset,hook.thunk,8)!=0) allOurs=false;
-        if(allOurs) { for(auto &hook:hooks) memcpy(rom+hook.offset,hook.original,8); memset(rom+RegionOffset,0xFF,RegionSize); }
+        for(size_t index=0;index<sizeof(hooks)/sizeof(hooks[0]);index++)
+            if(usesHook(index)&&memcmp(rom+hooks[index].offset,hooks[index].thunk,8)!=0) allOurs=false;
+        if(allOurs) {
+            for(size_t index=0;index<sizeof(hooks)/sizeof(hooks[0]);index++)
+                if(usesHook(index)) memcpy(rom+hooks[index].offset,hooks[index].original,8);
+            memset(rom+RegionOffset,0xFF,RegionSize);
+        }
     }
-    armed=installed=failed=syntheticHeld=false; patchedROM=verifiedROM=nullptr;
+    armed=installed=failed=syntheticHeld=tradeMode=tradeOpened=tradeScene=false;
+    tradeCount=0; patchedROM=verifiedROM=nullptr;
 }
+#if DEBUG && TARGET_OS_SIMULATOR
++ (BOOL)qaPrepareTradeFixture:(NSUInteger)marker {
+    if(!overworld()||verifiedROM!=rom||(marker!=0xBB&&marker!=0xBC)) return NO;
+    if(workRAM[0x24029]!=1) return NO;
+    auto *mon=workRAM+0x24284;
+    // Two healthy Pokémon are required by the cartridge. This modifies only a
+    // disposable simulator's working party, never the protected seed file.
+    memcpy(mon+100,mon,100); workRAM[0x24029]=2;
+    // This exact RR profile stores party substructures without vanilla's XOR
+    // encryption. Only the fixture header's OT/name differ between peers.
+    put32(mon+4,0xB00D0000u|uint32_t(marker));
+    memset(mon+8,0xFF,10); mon[8]=uint8_t(marker);
+    return YES;
+}
++ (NSData *)qaTradeParty {
+    if(!workRAM||!rom) return [NSData data];
+    return [NSData dataWithBytes:workRAM+0x24284 length:600];
+}
+#endif
 @end

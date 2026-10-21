@@ -158,7 +158,7 @@ final class FriendInteractionTests: XCTestCase {
         callbacks.suspendFrames(); XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
         callbacks.receiveInteraction(packet,uid:2); XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
     }
-    func testInteractionPanelHasRealActionsAndExplicitInvitationScope() {
+    func testInteractionPanelHasRealActionsAndExplainsPersistentTradeScope() {
         let p = peers(), panel = BoundFriendInteractionPanel(session: peers().a)
         XCTAssertTrue(panel.isHidden)
         let active = BoundFriendInteractionPanel(session:p.a)
@@ -170,7 +170,7 @@ final class FriendInteractionTests: XCTestCase {
         let battle = views.compactMap { $0 as? UIButton }.first { $0.accessibilityIdentifier == "bound.friend-interaction.battle" }
         XCTAssertNotNil(battle); battle?.sendActions(for:.touchUpInside)
         XCTAssertEqual(p.a.phase,.outgoing); XCTAssertEqual(p.a.activity,.battle)
-        XCTAssertTrue(views.compactMap { $0 as? UILabel }.contains { $0.text?.contains("Trades are invitations only") == true })
+        XCTAssertTrue(views.compactMap { $0 as? UILabel }.contains { $0.text?.contains("Pokémon selection, confirmation and saving") == true })
         p.a.cancel(); XCTAssertTrue(active.isHidden)
     }
 }
@@ -261,5 +261,23 @@ final class BattleCableTests:XCTestCase {
         XCTAssertNil(BoundNativeCommandPacket.encode(command))
         XCTAssertNil(BoundNativeCommandPacket.decode(Data([1,2])))
         XCTAssertNil(BoundNativeCommandPacket.encode(Data(repeating:0,count:240)))
+    }
+}
+
+@MainActor
+extension FriendInteractionTests {
+    func testAcceptedTradeHandsControlsToNativeActivityAndCancelReturnsToAdapter() throws {
+        let p=peers(); var canceled=0
+        p.a.agreed={ [weak a=p.a] activity,_,_ in
+            XCTAssertEqual(activity,.trade)
+            a?.activityProgress("Connecting trade…",playing:false)
+        }
+        p.a.cancelActivity={ [weak a=p.a] in canceled+=1; a?.activityEnded("Trade ended") }
+        XCTAssertTrue(p.a.open(at:10)); p.a.request(.trade,at:10); p.deliver()
+        p.b.accept(at:10.1); p.deliver(at:10.2)
+        XCTAssertEqual(p.a.phase,.connecting); XCTAssertTrue(p.a.blocksGameplay)
+        p.a.activityProgress("Trade",playing:true)
+        XCTAssertEqual(p.a.phase,.playing); XCTAssertFalse(p.a.blocksGameplay)
+        p.a.cancel(); XCTAssertEqual(canceled,1); XCTAssertEqual(p.a.phase,.ended)
     }
 }

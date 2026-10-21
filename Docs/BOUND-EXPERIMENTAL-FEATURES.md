@@ -12,7 +12,9 @@ hides sprites and restores an active battle's pre-battle snapshot before closing
 its cable. Rejoining or foreground recovery cannot enable multiplayer while the
 switch is off. Recovery of an interrupted battle snapshot remains available to
 protect the save. Reset Settings to Default turns the switch off. Normal friend
-accounts and video sharing remain available. Trades remain invitation-only.
+accounts and video sharing remain available. Trades use the persistent [native trade flow](BOUND-NATIVE-FRIEND-TRADES.md);
+interruptions after trade entry return to the cartridge save rather than restoring
+the pre-trade party.
 
 This opt-in uses the new `bound.experimental-multiplayer.enabled.v1` key. Neither
 retired customization key can enable multiplayer on an upgraded installation.

@@ -12,8 +12,8 @@ battle; quick load ends the battle before loading the selected state.
 This entry supports only the SHA-256-verified Radical Red 4.1 profile already
 used by live presence. The player must be in an unlocked normal overworld scene
 with a party of 1–6. The native game performs party/link checks. Bound does not
-manufacture a win/loss or rewrite party data to simulate a battle. Trade is
-still an invitation only.
+manufacture a win/loss or rewrite party data to simulate a battle. Trade now uses its own persistent native flow; see
+[native friend trades](BOUND-NATIVE-FRIEND-TRADES.md).
 
 ## Native entry
 
@@ -142,6 +142,6 @@ focused protocol, interaction, presence and controller checks passed, recorded i
 This is single-battle acceptance with the private one-Pokémon fixture. Physical
 phones, separate networks, wider party/move/ability coverage, and the native
 Run/forfeit path remain unverified. Interruption recovery is implemented, but the
-final run does not establish a complete interruption matrix. Trade still does
-not exchange Pokémon. The earlier serial-word tunnel drafts and unsuccessful
+final run does not establish a complete interruption matrix. The trade status in this historical battle acceptance predates the
+[native trade implementation](BOUND-NATIVE-FRIEND-TRADES.md). The earlier serial-word tunnel drafts and unsuccessful
 finish/menu-automation attempts remain private; they are not acceptance evidence.

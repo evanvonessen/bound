@@ -88,3 +88,14 @@ static void SetVirtualSerial(u8 state)
 }
 void BoundBattleEnableSerial(void) { MAILBOX->generation++; MAILBOX->inRead=MAILBOX->inWrite; MAILBOX->localRead=MAILBOX->outRead=MAILBOX->outWrite; SetVirtualSerial(1); }
 void BoundBattleDisableSerial(void) { SetVirtualSerial(0); }
+
+/* A walk-up trade exits to this local map, not a synchronized cable room.
+ * Party, Dex and the native linked save are retained by these native routines. */
+void BoundBattleTradeReturn(void)
+{
+    ((void (*)(void))0x080578D9)();
+    ((void (*)(u32))0x080565E1)(0x08056535);
+    ((void (*)(void))0x08069A81)();
+    ((void (*)(void))0x0806994D)();
+    ((void (*)(void))0x080568FD)();
+}

@@ -26,6 +26,8 @@ struct BoundNativeBattleObservation:Sendable {
     let returned:Bool
     let outcome:Int
     let flags:Int
+    let tradeOpened:Bool
+    let tradeCount:Int
     let callback:Int
     let scriptStatus:Int
     let scriptResult:Int
@@ -38,6 +40,7 @@ struct BoundNativeBattleObservation:Sendable {
         outcome=values["outcome"] as? Int ?? 0; flags=values["flags"] as? Int ?? 0
         callback=values["callback"] as? Int ?? 0; scriptStatus=values["scriptStatus"] as? Int ?? -1
         scriptResult=values["scriptResult"] as? Int ?? -1
+        tradeOpened=values["tradeOpened"] as? Bool ?? false; tradeCount=values["tradeCount"] as? Int ?? 0
         playerHP=values["playerHP"] as? [Int] ?? []; enemyHP=values["enemyHP"] as? [Int] ?? []
     }
 }
@@ -164,6 +167,7 @@ final class BoundNativeBattleSession {
     private var gameID=""
     private var id:UUID?
     private var initiator=false
+    private(set) var activity=BoundFriendInteractionPacket.Activity.battle
     private var channel:(any BoundBattleChannel)?
     private var wire:BoundBattleWire?
     private var timer:Timer?
@@ -174,7 +178,7 @@ final class BoundNativeBattleSession {
     private var backupURL:URL?
     private var journalURL:URL?
     private var originalRate=1.0
-    private struct Recovery { let state:URL; let journal:URL; let digest:String }
+    private struct Recovery { let state:URL; let journal:URL; let digest:String; var tradeBattery:Data? = nil }
     private var recovery:Recovery?
     private var recoveryFailed=false
     private(set) var observation:BoundNativeBattleObservation?
@@ -182,6 +186,7 @@ final class BoundNativeBattleSession {
     private(set) var lastCableDiagnostic=""
     private(set) var completedBattles=0
     private(set) var restoredBattles=0
+    private(set) var completedTrades=0
     var makeChannel:((@escaping @Sendable (Data)->Void,@escaping @Sendable ()->Void)->(any BoundBattleChannel)?)?
     var sendControl:((Data)->Bool)?
     var restored:(()->Void)?
@@ -198,18 +203,18 @@ final class BoundNativeBattleSession {
         if core != nil,!isActive { findRecovery() }
     }
     func begin(activity:BoundFriendInteractionPacket.Activity,id:UUID,initiator:Bool) {
-        guard BoundMultiplayerFeatures.isEnabled, activity == .battle else { return }
+        guard BoundMultiplayerFeatures.isEnabled else { return }
         guard !isActive,!recoveryFailed,let core,core.state == .running,
               core.deltaCore.identifier == "com.rileytestut.GBADeltaCore" else {
-            interactions?.activityEnded("Game is not ready for a link battle"); return
+            interactions?.activityEnded("Game is not ready for a link \(activity.rawValue)"); return
         }
         originalRate=core.rate
-        self.id=id; self.initiator=initiator; lastFailure=""; observation=nil
+        self.id=id; self.activity=activity; self.initiator=initiator; lastFailure=""; observation=nil
         localPrepared=false; peerPrepared=false; localConnected=false; peerConnected=false
         localFinished=false; peerFinished=false; entryQueued=false; played=false; peerLinkClosed=false
         deadline=ProcessInfo.processInfo.systemUptime+30
-        interactions?.activityProgress("Connecting battle…",playing:false)
-        guard core.pause(),BoundVBABattleBridge.verifyBattleReady() else { fail("Game is not ready for a link battle"); return }
+        interactions?.activityProgress(activity == .trade ? "Connecting trade…" : "Connecting battle…",playing:false)
+        guard core.pause(),BoundVBABattleBridge.verifyBattleReady() else { fail("Game is not ready for a link \(activity.rawValue)"); return }
         core.rate=core.deltaCore.supportedRates.lowerBound
         do {
             let folder=try FileManager.default.url(for:.applicationSupportDirectory,in:.userDomainMask,appropriateFor:nil,create:true)
@@ -222,7 +227,7 @@ final class BoundNativeBattleSession {
             backupURL=backup
             let journal=folder.appendingPathComponent(id.uuidString+".json")
             let value:[String:Any]=["gameID":gameID,"rom":BoundPlayerROMProfile.supportedSHA256,
-                "state":backup.lastPathComponent,"sha256":Self.hash(bytes)]
+                "state":backup.lastPathComponent,"sha256":Self.hash(bytes),"activity":activity.rawValue]
             try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]).write(to:journal,options:.atomic)
             journalURL=journal
             var resource=URLResourceValues(); resource.isExcludedFromBackup=true
@@ -231,7 +236,7 @@ final class BoundNativeBattleSession {
         let failure:@Sendable ()->Void = { [weak self] in
             Task { @MainActor in
                 guard let self,self.id==id else { return }
-                self.fail("Battle connection lost")
+                self.fail("\(self.activity.title) connection lost")
             }
         }
         probe.configure(core:core)
@@ -239,13 +244,15 @@ final class BoundNativeBattleSession {
             if !probe.receiveNetworkPacket(bytes) { failure() }
         },failed:failure)
         guard let channel=makeChannel?({ data in safeWire.receive(data) },failure) else {
-            fail("Battle data connection unavailable"); return
+            fail("\(activity.title) data connection unavailable"); return
         }
         self.channel=channel; self.wire=safeWire
         safeWire.setSender { [channel] data in channel.send(data) }
         probe.setSender({ bytes in safeWire.send(bytes) },failed:failure)
-        guard BoundVBABattleBridge.prepareBattle(forPlayer:initiator ? 0:1) else {
-            fail("Couldn’t prepare the native battle link"); return
+        let prepared = activity == .trade ? BoundVBABattleBridge.prepareTrade(forPlayer:initiator ? 0:1)
+            : BoundVBABattleBridge.prepareBattle(forPlayer:initiator ? 0:1)
+        guard prepared else {
+            fail("Couldn’t prepare the native \(activity.rawValue) link"); return
         }
         localPrepared=true; _=emit(.prepared)
         _=core.resume()
@@ -259,7 +266,7 @@ final class BoundNativeBattleSession {
         case .prepared: peerPrepared=true
         case .connected: peerConnected=true
         case .finished: peerFinished=true
-        case .abort: fail("Your friend ended the battle"); return
+        case .abort: fail("Your friend ended the \(activity.rawValue)"); return
         }
         advance()
     }
@@ -267,34 +274,52 @@ final class BoundNativeBattleSession {
         if recovery != nil { recoverIfRunning(); return }
         guard id != nil else { return }
         let now=ProcessInfo.processInfo.systemUptime
-        if now>deadline { fail("Battle connection timed out"); return }
+        if now>deadline { fail("\(activity.title) connection timed out"); return }
         if let value=probe.take() {
             observation=value
-            if value.error { fail("Native battle connection failed"); return }
+            if value.error { fail("Native \(activity.rawValue) connection failed"); return }
             if value.connected && localPrepared && peerPrepared && !localConnected { localConnected=true; _=emit(.connected) }
-            if !value.connected && entryQueued { fail("Battle cable disconnected"); return }
-            if value.battle && !played {
+            if !value.connected && entryQueued { fail("\(activity.title) cable disconnected"); return }
+            if (activity == .battle ? value.battle : value.tradeOpened) && !played {
                 played=true; deadline=now+7200
-                interactions?.activityProgress("Battle",playing:true)
+                interactions?.activityProgress(activity == .trade ? "Trade" : "Battle",playing:true)
             }
             // The remote game has finished and our native engine independently
             // has a result. Emulate its cable closure; never write an outcome.
-            if played,peerFinished,!peerLinkClosed,!value.returned,[1,2,3].contains(value.outcome) {
+            if activity == .battle,played,peerFinished,!peerLinkClosed,!value.returned,[1,2,3].contains(value.outcome) {
                 peerLinkClosed=true; probe.disconnectFinishedPeer()
             }
             if value.returned && !localFinished {
                 localFinished=true; deadline=now+15; _=emit(.finished)
             }
         }
-        if entryQueued && probe.networkAge>15 { fail("Battle data connection timed out"); return }
+        if entryQueued && probe.networkAge>15 { fail("\(activity.title) data connection timed out"); return }
         if localConnected && peerConnected && !entryQueued {
-            entryQueued=true; deadline=now+120; probe.enter(player:initiator ? 0:1)
-            interactions?.activityProgress("Starting battle…",playing:false)
+            if activity == .trade {
+                // Durable before any native trade code or input can run, including
+                // when the main actor is delayed while emulation keeps advancing.
+                do { try markTradeStarted() }
+                catch { fail("Couldn’t protect the trade save"); return }
+            }
+            entryQueued=true; deadline=now+(activity == .trade ? 300:120); probe.enter(player:initiator ? 0:1)
+            interactions?.activityProgress(activity == .trade ? "Use A to save and confirm the native trade link…" : "Starting battle…",playing:activity == .trade)
         }
         if localFinished && peerFinished {
             let outcome=observation?.outcome ?? 0
+            if activity == .trade {
+                finish(message:observation?.tradeCount ?? 0 > 0 ? "Trade complete · Pokémon saved" : "Trade ended",resume:true)
+                return
+            }
             finish(message:!played ? "Battle could not start" : outcome==1 ? "Battle won" : outcome==2 ? "Battle lost" : outcome==3 ? "Battle draw" : "Battle ended",resume:true)
         }
+    }
+    private func markTradeStarted() throws {
+        guard let journalURL,let bytes=try? Data(contentsOf:journalURL),
+              var value=try JSONSerialization.jsonObject(with:bytes) as? [String:String] else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        value["tradeStarted"]="true"
+        try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]).write(to:journalURL,options:.atomic)
     }
     private func emit(_ kind:BoundBattleControlPacket.Kind)->Bool {
         guard let id,let data=BoundBattleControlPacket(id:id,kind:kind).encoded() else { return false }
@@ -302,7 +327,7 @@ final class BoundNativeBattleSession {
     }
     func cancel(resume:Bool=true) {
         guard id != nil else { return }
-        _=emit(.abort); finish(message:"Battle ended",resume:resume)
+        _=emit(.abort); finish(message:"\(activity.title) ended",resume:resume)
     }
     private func fail(_ message:String) {
         guard id != nil else { return }
@@ -317,8 +342,15 @@ final class BoundNativeBattleSession {
         channel?.close(); wire?.close(); channel=nil; wire=nil
         guard let core else { interactions?.activityEnded(message); return }
         if core.state == .running { _=core.pause() }
+        // Inspect on the fenced frame owner before close clears the observation.
+        // Even a delayed UI timer cannot roll back an already opened trade.
+        let tradeWasOpened=activity == .trade && (played || BoundVBABattleBridge.advanceAndObserve()["tradeOpened"] as? Bool == true)
         probe.configure(core:nil)
         BoundVBABattleBridge.close()
+        if tradeWasOpened {
+            finishTrade(core:core,message:message,resume:resume)
+            return
+        }
         var didRestore=false
         var recovered=backupURL==nil
         if let backupURL,core.state != .stopped {
@@ -339,11 +371,36 @@ final class BoundNativeBattleSession {
         backupURL=nil; journalURL=nil; core.rate=originalRate
         interactions?.activityEnded(recovered ? message : "Recovery snapshot kept. Reopen this game to restore it.")
         if didRestore {
-            restoredBattles += 1
-            if played && localFinished && peerFinished { completedBattles += 1 }
+            if activity == .battle {
+                restoredBattles += 1
+                if played && localFinished && peerFinished { completedBattles += 1 }
+            }
             restored?()
         }
         if recovered,resume,canResume?() ?? true,core.state == .paused { _=core.resume() }
+    }
+    private func finishTrade(core:EmulatorCore,message:String,resume:Bool) {
+        // Native trade owns party swap, mail, Dex, evolution and its linked save
+        // protocol. Retain those changes; a battle-style state rollback duplicates
+        // or destroys exchanged Pokémon. Interrupted trades boot the native save.
+        let finished=localFinished && peerFinished && observation?.returned == true
+        var success=finished
+        if !finished { success=core.stop() && core.start() }
+        core.rate=originalRate
+        if success {
+            if finished { completedTrades += observation?.tradeCount ?? 0 }
+            do {
+                if let journalURL { try FileManager.default.removeItem(at:journalURL) }
+                if let backupURL { try? FileManager.default.removeItem(at:backupURL) }
+                self.journalURL=nil; self.backupURL=nil
+                interactions?.activityEnded(finished ? message : "Trade interrupted. Continue from your in-game save.")
+                restored?()
+            } catch { success=false }
+        }
+        recoveryFailed = !success
+        if !success { interactions?.activityEnded("Trade recovery kept. Reopen this game to continue from its in-game save.") }
+        if !resume || !(canResume?() ?? true) { if core.state == .running { _=core.pause() } }
+        else if success,core.state == .paused { _=core.resume() }
     }
     private func findRecovery() {
         guard let core else { return }
@@ -362,13 +419,30 @@ final class BoundNativeBattleSession {
                       let name=value["state"],name==URL(fileURLWithPath:name).lastPathComponent,
                       UUID(uuidString:URL(fileURLWithPath:name).deletingPathExtension().lastPathComponent) != nil,
                       let digest=value["sha256"],digest.count==64 else { continue }
-                recovery = .init(state:folder.appendingPathComponent(name),journal:journal,digest:digest)
+                var pending = Recovery(state:folder.appendingPathComponent(name),journal:journal,digest:digest)
+                if value["activity"] == "trade",value["tradeStarted"] == "true" {
+                    // Bind runs before loading automatic states. Preserve the actual
+                    // cartridge save, never flash data from a pre-trade save state.
+                    recoveryFailed=true
+                    let battery=try Data(contentsOf:core.game.gameSaveURL)
+                    guard battery.count == 131072 else {
+                        interactions?.activityEnded("Trade save needs recovery. The original snapshots were kept.")
+                        return
+                    }
+                    pending.tradeBattery=battery
+                }
+                recovery=pending
                 recoveryFailed=false; probe.configure(core:core)
                 let timer=Timer(timeInterval:1.0/60,repeats:true) { [weak self] _ in MainActor.assumeIsolated { self?.advance() } }
                 RunLoop.main.add(timer,forMode:.common); self.timer=timer
                 return
             }
-        } catch { /* No matching journal means ordinary playback remains unchanged. */ }
+        } catch {
+            if recoveryFailed {
+                lastFailure="Trade cartridge save could not be read"
+                interactions?.activityEnded("Trade save needs recovery. The original snapshots were kept.")
+            }
+        }
     }
     private func recoverIfRunning() {
         guard let recovery,let core,core.state != .stopped,probe.take() != nil else { return }
@@ -378,6 +452,17 @@ final class BoundNativeBattleSession {
             let bytes=try Data(contentsOf:recovery.state)
             guard Self.hash(bytes)==recovery.digest else { throw CocoaError(.fileReadCorruptFile) }
             _=try BoundPlayerROMProfile(rom:Data(contentsOf:core.game.fileURL,options:.mappedIfSafe))
+            if let battery=recovery.tradeBattery {
+                guard core.stop() else { throw CocoaError(.fileReadUnknown) }
+                try battery.write(to:core.game.gameSaveURL,options:.atomic)
+                guard core.start() else { throw CocoaError(.fileReadUnknown) }
+                try FileManager.default.removeItem(at:recovery.journal)
+                try? FileManager.default.removeItem(at:recovery.state)
+                self.recovery=nil; timer?.invalidate(); timer=nil
+                interactions?.activityEnded("Continue from your in-game save after the interrupted trade.")
+                if !(canResume?() ?? true) { _=core.pause() }
+                return
+            }
             try core.load(DeltaCore.SaveState(fileURL:recovery.state,gameType:core.game.type))
             let check=BoundVBABattleBridge.advanceAndObserve()
             guard (check["callback"] as? Int)==0x080565B5,(check["battle"] as? Bool)==false else { throw CocoaError(.fileReadCorruptFile) }
