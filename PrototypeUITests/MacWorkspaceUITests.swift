@@ -95,30 +95,49 @@ final class MacWorkspaceUITests: XCTestCase {
         let learnset = element("bound.rrdex-layout12-learnset", in: app)
         XCTAssertTrue(dexDetails.waitForExistence(timeout: 5))
         XCTAssertTrue(learnset.waitForExistence(timeout: 5))
+        // Learnset is a passive accessibility container. Scroll to the actual
+        // method button, just as the iPhone Layout 12 regression does.
+        let levelUp = app.buttons["bound.rrdex-layout12-learnset-method-Level up"]
+        XCTAssertTrue(levelUp.waitForExistence(timeout: 5))
         for _ in 0..<14 {
-            if learnset.isHittable && dexDetails.frame.contains(learnset.frame) { break }
-            let below = !learnset.exists || learnset.frame.midY > dexDetails.frame.midY
+            if !levelUp.frame.isEmpty && dexDetails.frame.contains(levelUp.frame) { break }
+            let below = levelUp.frame.midY > dexDetails.frame.midY
             dexDetails.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: below ? 0.8 : 0.4))
                 .press(forDuration: 0.1,
                        thenDragTo: dexDetails.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: below ? 0.4 : 0.8)),
                        withVelocity: .slow, thenHoldForDuration: 0.2)
+            // Quiescence is disabled, so let the scroll geometry settle.
+            Thread.sleep(forTimeInterval: 0.5)
         }
-        XCTAssertTrue(learnset.isHittable, "The Layout 12 learnset control must be reachable in the workspace.")
-        let levelUp = app.buttons["bound.rrdex-layout12-learnset-method-Level up"]
-        XCTAssertTrue(levelUp.waitForExistence(timeout: 5))
+        // Xcode 27 can report these nested-host buttons as nonhittable even
+        // when a normal tap works. Verify visible bounds and the tap's result.
+        XCTAssertFalse(levelUp.frame.isEmpty)
+        XCTAssertTrue(dexDetails.frame.contains(levelUp.frame), "The entire Level Up button must be inside the details viewport.")
+        XCTAssertTrue(app.frame.contains(levelUp.frame), "The Level Up button must be onscreen.")
         levelUp.tap()
-        XCTAssertEqual(levelUp.value as? String, "Selected")
+        let levelUpSelected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Selected"), object: levelUp)
+        XCTAssertEqual(XCTWaiter.wait(for: [levelUpSelected], timeout: 5), .completed)
         let dexList = app.scrollViews["bound.rrdex-layout12-learnset-list"]
         XCTAssertTrue(dexList.waitForExistence(timeout: 5))
         let dexMoves = app.descendants(matching: .any).matching(
-            NSPredicate(format: "identifier BEGINSWITH %@", "bound.rrdex-layout12-learnset-move-")
+            NSPredicate(format: "identifier BEGINSWITH %@", "bound.rrdex-layout12-learnset-move-entry-")
         )
+        XCTAssertTrue(dexMoves.firstMatch.waitForExistence(timeout: 5))
+        let initialDexMove = try XCTUnwrap(dexMoves.allElementsBoundByIndex.first { move in
+            !move.frame.isEmpty && dexList.frame.insetBy(dx: 0, dy: 1).contains(move.frame)
+        }, "A Level Up move should be visible before scrolling the learnset.")
+        let initialDexMoveID = initialDexMove.identifier
+        let initialDexMoveY = initialDexMove.frame.minY
         dexList.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.8))
             .press(forDuration: 0.1,
                    thenDragTo: dexList.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.3)),
                    withVelocity: .slow, thenHoldForDuration: 0.2)
+        Thread.sleep(forTimeInterval: 0.5)
+        let scrolledDexMove = element(initialDexMoveID, in: app)
+        XCTAssertTrue(!scrolledDexMove.exists || scrolledDexMove.frame.minY < initialDexMoveY - 5,
+                      "The learnset must actually scroll before its position is tested across tab changes.")
         let rememberedDexMove = try XCTUnwrap(dexMoves.allElementsBoundByIndex.first { move in
-            dexList.frame.insetBy(dx: 0, dy: 1).contains(move.frame)
+            !move.frame.isEmpty && dexList.frame.insetBy(dx: 0, dy: 1).contains(move.frame)
         }, "A Level up move should be visible after scrolling the learnset.")
         let rememberedDexMoveID = rememberedDexMove.identifier
         let rememberedDexMoveFrame = rememberedDexMove.frame
