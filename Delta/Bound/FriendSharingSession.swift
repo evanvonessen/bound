@@ -176,6 +176,9 @@ protocol FriendSharingTransport: SharingTransport {
     func setPresenceReceiver(_ receiver: (@MainActor (Data) -> Void)?)
     func sendPresence(_ data: Data) -> Bool
     func pollPresence()
+    func setInteractionReceiver(_ receiver: (@MainActor (Data?) -> Void)?)
+    func sendInteraction(_ data: Data) -> Bool
+    func pollInteractions()
     var publishedFrames: Int { get }
     var receivedFrames: Int { get }
     var diagnostics: [String: Any] { get }
@@ -193,6 +196,9 @@ extension FriendSharingTransport {
     func setPresenceReceiver(_ receiver: (@MainActor (Data) -> Void)?) {}
     func sendPresence(_ data: Data) -> Bool { false }
     func pollPresence() {}
+    func setInteractionReceiver(_ receiver: (@MainActor (Data?) -> Void)?) {}
+    func sendInteraction(_ data: Data) -> Bool { false }
+    func pollInteractions() {}
     var diagnostics: [String: Any] { [:] }
     var frameTiming: FriendSharingFrameTiming? { nil }
     func presentLatestFrame() {}
@@ -203,6 +209,7 @@ extension FriendSharingTransport {
 @MainActor
 final class FriendSharingSession: ObservableObject {
     let livePresence = BoundLivePresenceSession()
+    let interactions = BoundFriendInteractionSession()
     private let diagnosticOutput = FriendSharingDiagnosticOutput()
     @Published private(set) var status = "Friend screen"
     @Published private(set) var active = false
@@ -270,6 +277,7 @@ final class FriendSharingSession: ObservableObject {
         self.sharing = try! SharingSession(transport: transport, scheduler: scheduler,
                                           minimumPublicationInterval: FriendSharingCadence.interval)
         remoteView.backgroundColor = .black
+        interactions.context = { [weak livePresence] in livePresence?.interactionContext() }
         livePresence.connectionCheck.snapshot = { [weak self] in self?.presenceConnectionSample() }
         if isConfigured { status = "Game sharing ready" }
     }
@@ -336,6 +344,11 @@ final class FriendSharingSession: ObservableObject {
             guard let self, self.generation == run, self.active, self.joined, !self.reconnecting else { return }
             self.livePresence.receive(data)
         }
+        transport.setInteractionReceiver { [weak self] data in
+            guard let self, self.generation == run, self.active, self.joined, !self.reconnecting else { return }
+            if let data { self.interactions.receive(data) }
+            else { self.interactions.stop(message: "Invitation connection lost") }
+        }
         transport.start(configuration: configuration, remoteView: remoteView) { [weak self] event in
             guard let self, self.generation == run, self.active else { return }
             switch event {
@@ -349,6 +362,7 @@ final class FriendSharingSession: ObservableObject {
                 self.remoteVisible = true
                 self.status = "Receiving game video"
             case .remoteGone:
+                self.interactions.invalidate()
                 self.livePresence.peerGone()
                 self.remoteVisible = false
                 self.receivedFrames = 0
@@ -453,7 +467,7 @@ final class FriendSharingSession: ObservableObject {
     private func beginRecovery(run: UUID) {
         guard !reconnecting else { return } // Repeated SDK events never extend the deadline.
         reconnecting = true; joined = false; recoveryAttempts += 1
-        livePresence.stop()
+        interactions.stop(); livePresence.stop()
         receivePlaybackFrame(nil)
         remoteVisible = false; receivedFrames = 0
         status = "Reconnecting…"
@@ -483,6 +497,8 @@ final class FriendSharingSession: ObservableObject {
             }
             self.transport.pollPresence()
             self.livePresence.tick()
+            self.transport.pollInteractions()
+            self.interactions.tick()
             // Keep receiving/publishing while Notes, Types or a hidden PiP is
             // selected. Consume the bounded latest-frame mailbox only when visible.
             if self.remotePresentationEnabled { self.transport.presentLatestFrame() }
@@ -505,6 +521,10 @@ final class FriendSharingSession: ObservableObject {
     func stop() { stop(clearReconnectIntent: true) }
 
     private func startPresence() {
+        interactions.start { [weak self] data in
+            guard let self, self.active, self.joined, !self.reconnecting, !self.backgrounded else { return false }
+            return self.transport.sendInteraction(data)
+        }
         livePresence.start { [weak self] data in
             guard let self, self.active, self.joined, !self.reconnecting, !self.backgrounded else { return false }
             return self.transport.sendPresence(data)
@@ -527,6 +547,7 @@ final class FriendSharingSession: ObservableObject {
         BoundMainActorDisposal.drainPending()
         foregroundReconnectRetry?.cancel(); foregroundReconnectRetry = nil
         if clearReconnectIntent { foregroundReconnectIntent = nil; foregroundReconnectAttempts = 0 }
+        interactions.stop(); transport.setInteractionReceiver(nil)
         livePresence.stop(); transport.setPresenceReceiver(nil)
         generation = UUID()
         tokenTask?.cancel(); tokenTask = nil

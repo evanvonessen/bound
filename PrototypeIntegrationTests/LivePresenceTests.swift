@@ -47,6 +47,23 @@ final class LivePresenceTests: XCTestCase {
         session.setEnabled(true); session.start { _ in true }; return session
     }
 
+    func testInteractionAdmissionUsesFreshSettledSamplesAndInvalidatesOnRestore() throws {
+        let session = session(), peer = UUID()
+        session.consume(reading(x:104),at:20)
+        session.receive(try packet(session,peer:peer,time:10,reading:reading(x:120)),at:20)
+        XCTAssertNil(session.interactionContext(at:20))
+        session.consume(reading(x:104),at:20.06)
+        session.receive(try packet(session,peer:peer,sequence:2,time:10.06,reading:reading(x:120)),at:20.06)
+        XCTAssertNotNil(session.interactionContext(at:20.06))
+        XCTAssertNil(session.interactionContext(at:20.3), "An old rendering pose cannot admit an interaction")
+        session.consume(reading(x:105),at:20.1)
+        XCTAssertNil(session.interactionContext(at:20.1), "Mid-step pixels are not settled tiles")
+        session.consume(reading(x:104),at:20.11)
+        XCTAssertNil(session.interactionContext(at:20.12))
+        session.invalidateLocal()
+        XCTAssertNil(session.interactionContext(at:20.15))
+    }
+
     func testWireIsBoundedAndCarriesOnlyPresenceWithROMFrameReference() throws {
         let session = session(), data = try packet(session, peer: UUID(), reading: reading())
         XCTAssertLessThan(data.count, BoundPresencePacket.maximumBytes)

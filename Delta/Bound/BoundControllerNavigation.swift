@@ -16,6 +16,7 @@ struct BoundControllerInputMapping: GameControllerInputMappingProtocol {
     let base: GameControllerInputMappingProtocol
     var multiviewActive = false
     var multiviewDefaults: DeltaCore.GameControllerInputMapping? = nil
+    var friendWorldGate: BoundFriendWorldInputGate? = nil
     var gameControllerInputType: GameControllerInputType { base.gameControllerInputType }
 
     static func isLeftStickDirection(_ input: Input) -> Bool {
@@ -41,7 +42,7 @@ struct BoundControllerInputMapping: GameControllerInputMappingProtocol {
             if let target, StandardGameControllerInput(input: target) == .menu { return target }
             return Self.multiviewAction(for: controllerInput)
         }
-        return target
+        return target.map { friendWorldGate?.filter($0) ?? $0 }
     }
 
     static func multiviewAction(for input: Input) -> ActionInput? {

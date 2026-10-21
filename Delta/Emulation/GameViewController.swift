@@ -122,7 +122,28 @@ private extension GameViewController
 class GameViewController: DeltaCore.GameViewController
 {
     private let boundCompanion = BoundCompanionCoordinator()
+    private let boundWorldAPressed = NSHashTable<AnyObject>.weakObjects()
     var boundCompanionForTesting: BoundCompanionCoordinator { boundCompanion }
+    func releaseBoundFriendGameplayInputs() {
+        guard let core = emulatorCore else { return }
+        var controllers: [GameController] = [controllerView]
+        controllers.append(contentsOf: ExternalGameControllerManager.shared.connectedControllers)
+        for controller in controllers {
+            guard var mapping = controller.inputMapping(for: core) as? BoundControllerInputMapping else { continue }
+            mapping.friendWorldGate = nil
+            for (physical, _) in controller.activatedInputs {
+                if let target = mapping.input(forControllerInput: physical),
+                   ActionInput(input: target) == nil, StandardGameControllerInput(input: target) != .menu {
+                    // Cancel sustained reactivation as well as the current press;
+                    // otherwise Delta's delayed hold job can reassert a game input
+                    // after the invitation starts blocking the normal mapping.
+                    if controller.sustainedInputs[physical] != nil { controller.unsustain(physical) }
+                    core.gameController(controller, didDeactivate: target)
+                }
+            }
+        }
+        controllerView.cancelTouchInputs()
+    }
     func refreshBoundControllerPreferences() {
         updateControllers()
         refreshBoundMultiviewInputRouting()
@@ -130,6 +151,7 @@ class GameViewController: DeltaCore.GameViewController
     private(set) var boundRRDexSaveCache = BoundRRDexSaveCache()
     func boundRRDexDidLoadSaveState(core: EmulatorCore) {
         guard core === emulatorCore, core.game.type == .gba else { return }
+        boundCompanion.sharing.interactions.invalidate()
         boundCompanion.playerStateDisplay.didLoadSaveState()
         #if DEBUG && targetEnvironment(simulator)
         BoundFullAppGameplayQA.current?.didRestore()
@@ -388,6 +410,17 @@ class GameViewController: DeltaCore.GameViewController
     override func gameController(_ gameController: GameController, didActivate input: Input, value: Double)
     {
         super.gameController(gameController, didActivate: input, value: value)
+        let worldInput = BoundFriendWorldInput(input: input)
+        if BoundFriendWorldInputGate.isA(input) || worldInput == .interact || worldInput == .blockedA {
+            if value < 0.33 { boundWorldAPressed.remove(gameController) }
+            else if !boundWorldAPressed.contains(gameController) {
+                boundWorldAPressed.add(gameController)
+                if worldInput == .interact, self.view.window?.windowScene?.hasKeyboardFocus == true {
+                    boundCompanion.sharing.interactions.open()
+                }
+            }
+        }
+        if worldInput != nil { return }
         if let action = ActionInput(input: input), action.isBoundPanelAction {
             self.receiveBoundPanelAction(action, from: gameController, pressed: value >= 0.5)
             return
@@ -427,6 +460,11 @@ class GameViewController: DeltaCore.GameViewController
     override func gameController(_ gameController: GameController, didDeactivate input: Input)
     {
         super.gameController(gameController, didDeactivate: input)
+        let worldInput = BoundFriendWorldInput(input: input)
+        if BoundFriendWorldInputGate.isA(input) || worldInput == .interact || worldInput == .blockedA {
+            boundWorldAPressed.remove(gameController)
+        }
+        if worldInput != nil { return }
         if let action = ActionInput(input: input), action.isBoundPanelAction {
             self.receiveBoundPanelAction(action, from: gameController, pressed: false)
             return
@@ -1073,7 +1111,8 @@ private extension GameViewController
                     }
                     let gameplayMapping = BoundControllerInputMapping(base: inputMapping,
                         multiviewActive: gameController.inputType != .controllerSkin && boundMultiviewCapturing,
-                        multiviewDefaults: multiviewDefaults)
+                        multiviewDefaults: multiviewDefaults,
+                        friendWorldGate: game.type == .gba ? boundCompanion.sharing.interactions.inputGate : nil)
                     installBoundInputMapping(gameplayMapping, controller: gameController, core: emulatorCore)
                 }
                 else
@@ -3062,7 +3101,8 @@ extension GameViewController
             guard controller.playerIndex != nil,
                   let old = controller.inputMapping(for: self) as? BoundControllerInputMapping else { continue }
             let mapping = BoundControllerInputMapping(base: old.base, multiviewActive: capture,
-                                                       multiviewDefaults: old.multiviewDefaults)
+                                                       multiviewDefaults: old.multiviewDefaults,
+                                                       friendWorldGate: old.friendWorldGate)
             installBoundInputMapping(mapping, controller: controller, core: core)
         }
         updatingBoundMultiviewRouting = false

@@ -110,9 +110,10 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--duration', type=int, default=900)
     parser.add_argument('--smoke', action='store_true')
+    parser.add_argument('--interactions-only', action='store_true', help='Short walk-up/A and reliable invitation regression; does not launch a battle or trade')
     parser.add_argument('--native-only', action='store_true', help='Preflight maps and native states without an RTC connection')
     args = parser.parse_args()
-    if args.sim_a == args.sim_b or args.duration < (1 if args.smoke or args.native_only else 900):
+    if args.sim_a == args.sim_b or args.duration < (1 if args.smoke or args.native_only or args.interactions_only else 900):
         parser.error('Use two distinct disposable simulators; acceptance requires at least 900 seconds')
     args.output.mkdir(parents=True, exist_ok=False)
     state = Coordinator(dict(zip(PEERS, (args.sim_a, args.sim_b))))
@@ -126,7 +127,7 @@ def main():
             log = (args.output / (peer + '.log')).open('wb')
             command = ['xcodebuild','test-without-building','-xctestrun',str(run),
                 '-destination','platform=iOS Simulator,id='+state.simulators[peer],'-parallel-testing-enabled','NO',
-                '-only-testing:BoundCompanionUITests/FullAppGameplayUITests/'+('testNativeMapAndSaveRestore' if args.native_only else 'testFullAppLiveGameplay'),
+                '-only-testing:BoundCompanionUITests/FullAppGameplayUITests/'+('testNativeMapAndSaveRestore' if args.native_only else 'testFriendWorldInvitations' if args.interactions_only else 'testFullAppLiveGameplay'),
                 '-collect-test-diagnostics','never','-resultBundlePath',str(args.output/(peer+'.xcresult'))]
             processes.append((subprocess.Popen(command,stdout=log,stderr=subprocess.STDOUT),log))
 
@@ -147,7 +148,12 @@ def main():
                 and v.get('transport')=='agora' and v.get('joined') and v.get('received',0)>10
                 and v.get('visiblePixels',0)>20 and v.get('observationAge',100)<2 for v in value['peers'].values())
         def reported(value, stage): return all(value['ui'].get(p,{}).get('stage')==stage for p in PEERS)
-        if args.native_only:
+        if args.interactions_only:
+            wait('positioned native players', lambda v:reported(v,'positioned') and visible(v),360)
+            for stage in ['facing-away','open-interaction','battle-invite','battle-accept','close-battle','trade-invite','trade-decline']:
+                state.change(stage)
+                wait(stage,lambda v:reported(v,stage),90)
+        elif args.native_only:
             result=wait('native map and save-state preflight',lambda v:reported(v,'native-done'),360)
             for peer in PEERS:
                 observed=result['ui'][peer]
@@ -232,7 +238,7 @@ def main():
         for process,log in processes:
             if process.poll() is None:process.terminate()
             log.close()
-        (args.output/'summary.json').write_text(json.dumps(dict(passed=passed,smoke=args.smoke,nativeOnly=args.native_only,failure=failure,
+        (args.output/'summary.json').write_text(json.dumps(dict(passed=passed,smoke=args.smoke,nativeOnly=args.native_only,interactionsOnly=args.interactions_only,failure=failure,
             elapsed=time.monotonic()-started,checkpoints=state.checkpoints,final=state.status(),
             snapshots=state.snapshots,
             soak=state.soak,

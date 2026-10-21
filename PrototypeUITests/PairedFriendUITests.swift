@@ -114,6 +114,91 @@ final class FullAppGameplayUITests: XCTestCase {
     }
 
     func testFullAppLiveGameplay() throws {
+        try connectFriend()
+        try press(peer == "A" ? "left" : "right", duration: 0.28)
+        try report("ready")
+        try runConnectedGameplay()
+    }
+
+    /// Short regression for the new NPC-style entry and real reliable Agora
+    /// invitations. This intentionally makes no battle/trade completion claim.
+    func testFriendWorldInvitations() throws {
+        try connectFriend()
+        try walkTo(x: peer == "A" ? 6 : 7, y: 8)
+        if peer == "A" { try face("North", input: "up", x: 6, y: 8) }
+        try report("positioned")
+        var completed = Set<String>()
+        let deadline = Date().addingTimeInterval(180)
+        while Date() < deadline {
+            let stage = try request("/status")["stage"] as? String ?? "waiting"
+            if stage == "done" { return }
+            if stage == "failed" { XCTFail("Invitation coordinator failed"); return }
+            if !completed.contains(stage) {
+                switch stage {
+                case "facing-away":
+                    if peer == "A" {
+                        XCTAssertEqual(try snapshot()["interactionCanStart"] as? Bool, false)
+                        try press("a", duration: 0.08)
+                        XCTAssertFalse(element("bound.friend-interaction.battle").exists)
+                        try face("East", input: "right", x: 6, y: 8)
+                    }
+                case "open-interaction":
+                    if peer == "A" {
+                        try waitFor { $0["interactionCanStart"] as? Bool == true }
+                        try press("a", duration: 0.08)
+                        XCTAssertTrue(app.buttons["bound.friend-interaction.battle"].waitForExistence(timeout: 8))
+                        let image = XCTAttachment(screenshot:XCUIScreen.main.screenshot())
+                        image.name = "Walk-up-A-interaction"; image.lifetime = .keepAlways; add(image)
+                    }
+                case "battle-invite":
+                    if peer == "A" { app.buttons["bound.friend-interaction.battle"].tap() }
+                    try waitFor { $0["interactionPhase"] as? String == (self.peer == "A" ? "outgoing" : "incoming") }
+                case "battle-accept":
+                    if peer == "B" { app.buttons["bound.friend-interaction.accept"].tap() }
+                    try waitFor { $0["interactionPhase"] as? String == "agreed" }
+                case "close-battle":
+                    app.buttons["bound.friend-interaction.close"].tap()
+                    try waitFor { $0["interactionPhase"] as? String == "idle" }
+                case "trade-invite":
+                    if peer == "A" {
+                        try waitFor { $0["interactionCanStart"] as? Bool == true }
+                        try press("a", duration: 0.08)
+                        XCTAssertTrue(app.buttons["bound.friend-interaction.trade"].waitForExistence(timeout: 8))
+                        app.buttons["bound.friend-interaction.trade"].tap()
+                    }
+                    try waitFor { $0["interactionPhase"] as? String == (self.peer == "A" ? "outgoing" : "incoming") }
+                case "trade-decline":
+                    if peer == "B" { app.buttons["bound.friend-interaction.decline"].tap() }
+                    try waitFor { $0["interactionPhase"] as? String == (self.peer == "A" ? "ended" : "idle") }
+                    if peer == "A" { app.buttons["bound.friend-interaction.close"].tap() }
+                default: pause(0.2); continue
+                }
+                try report(stage); completed.insert(stage)
+            }
+            pause(0.2)
+        }
+        XCTFail("World invitation regression did not finish")
+    }
+
+    private func walkTo(x: Int, y: Int) throws {
+        for _ in 0..<20 {
+            let tile = try XCTUnwrap(snapshot()["tile"] as? [Int])
+            if tile == [x,y] { return }
+            let input = tile[1] < y ? "down" : tile[1] > y ? "up" : tile[0] < x ? "right" : "left"
+            try press(input,duration:0.12); pause(0.25)
+        }
+        XCTFail("Native walking did not reach the interaction tile")
+    }
+    private func face(_ direction: String, input: String, x: Int, y: Int) throws {
+        for _ in 0..<8 {
+            try walkTo(x:x,y:y)
+            if try snapshot()["facing"] as? String == direction { pause(0.3); return }
+            try press(input,duration:0.025); pause(0.25)
+        }
+        XCTFail("Native controller did not face the friend")
+    }
+
+    private func connectFriend() throws {
         try launchGame()
         try openFriends()
         let live = app.switches["bound.live-presence-enabled"]
@@ -136,9 +221,6 @@ final class FullAppGameplayUITests: XCTestCase {
         try tapScreenPoint(in: friend, horizontal: 0.15)
         try waitFor { $0["qaFriendSelected"] as? Bool == true && $0["active"] as? Bool == true }
         app.buttons["Done"].tap(); resume()
-        try press(peer == "A" ? "left" : "right", duration: 0.28)
-        try report("ready")
-        try runConnectedGameplay()
     }
 
     /// Resolve native routing independently of RTC/friend-pairing setup.

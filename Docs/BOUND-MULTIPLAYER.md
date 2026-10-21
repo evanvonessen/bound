@@ -12,6 +12,14 @@ recovery, sustained >=900-second gameplay with renewals and normal UI stop.
 Physical-device and separate-network acceptance remain described in
 [device acceptance](BOUND-MULTIPLAYER-DEVICE-QA.md).
 
+## Battle and trade invitations
+
+The [overworld interaction layer](BOUND-MULTIPLAYER-INTERACTIONS.md) starts when
+a player stands on the adjacent tile, faces their friend and presses A. It
+supports real accept/decline/cancel messages over a separate reliable Agora
+stream. **Native battles and Pokémon trades are not implemented yet.** The UI
+labels this as invitations only; accepting does not change game data.
+
 ## Use the local display
 
 In Settings → Controls, enable **Player state display**, then resume a GBA game.

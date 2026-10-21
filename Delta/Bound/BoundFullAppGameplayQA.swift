@@ -118,6 +118,8 @@ final class BoundFullAppGameplayQA {
             "received": sample?.reader.received ?? 0,
             "videoReceived": sharing.receivedFrames, "renewals": sample?.tokenRenewals ?? 0,
             "visiblePixels": display.livePlayerOverlay.visiblePixels, "restores": restores]
+        value["interactionPhase"] = String(describing: sharing.interactions.phase)
+        value["interactionCanStart"] = sharing.interactions.canInteract
         value["accountReady"] = coordinator.account.session != nil
         value["friendCount"] = coordinator.onboarding.rooms.count
         value["qaFriendListed"] = coordinator.onboarding.rooms.contains { $0.roomID.lowercased() == roomID.lowercased() }
@@ -130,6 +132,7 @@ final class BoundFullAppGameplayQA {
             value["map"] = [player.mapGroup, player.mapNumber]
             value["tile"] = [player.tile.x, player.tile.y]
             value["elevation"] = player.elevation
+            value["facing"] = player.facing
         }
         guard let bytes = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else { return }
         observation.accessibilityValue = String(data: bytes, encoding: .utf8)

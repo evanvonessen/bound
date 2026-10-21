@@ -100,6 +100,8 @@ final class BoundLivePresenceSession: ObservableObject {
     private var localPose: BoundPresencePose?
     private var romVerified = false
     private var localAt: TimeInterval?
+    private var settledLocal: BoundFriendWorldPosition?
+    private var settledLocalAt: TimeInterval?
     private var readerStatus = "waiting"
     private var presentationCheck = BoundPresenceReaderCheck()
     private var lastPresentationAt: TimeInterval?
@@ -132,7 +134,7 @@ final class BoundLivePresenceSession: ObservableObject {
     }
     private func resetTimeline() {
         epoch = UUID(); sequence = 0; lastSent = nil
-        localPose = nil; localAt = nil
+        localPose = nil; localAt = nil; settledLocal = nil; settledLocalAt = nil
         peerEpoch = nil; proposedPeer = nil; proposalAt = nil; clearPeer()
     }
     private func clearPeer() {
@@ -148,6 +150,10 @@ final class BoundLivePresenceSession: ObservableObject {
         readerStatus = reading.status.rawValue
         localPose = needsReader && romVerified ? BoundPresencePose(reading: reading) : nil
         localAt = now
+        if let position = localPose.flatMap(BoundFriendWorldPosition.init(pose:)) {
+            if settledLocal.map({ position.occupiesSameTile(as: $0) }) != true { settledLocalAt = now }
+            settledLocal = position
+        } else { settledLocal = nil; settledLocalAt = nil }
         if localPose == nil { presentationChanged?() }
     }
     func setROMVerified(_ value: Bool) {
@@ -222,6 +228,21 @@ final class BoundLivePresenceSession: ObservableObject {
         samples.append(.init(time: packet.time, pose: pose))
         if samples.count > 8 { samples.removeFirst(samples.count - 8) }
         bufferedSamples = samples.count; setStatus("Receiving live friend sprite")
+    }
+
+    /// Invitation admission uses fresh settled samples, never the interpolated
+    /// rendering pose. A second sample prevents targeting a walking sprite.
+    func interactionContext(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundFriendInteractionSession.Context? {
+        guard needsReader, romVerified, let peerEpoch, let localPose,
+              let settledLocalAt, now >= settledLocalAt, now - settledLocalAt >= 0.05,
+              let localAt, now >= localAt, now - localAt <= 0.2,
+              let lastReceived, now >= lastReceived, now - lastReceived <= 0.2,
+              samples.count >= 2, let last = samples.last,
+              let local = BoundFriendWorldPosition(pose: localPose),
+              let peer = BoundFriendWorldPosition(pose: last.pose),
+              let previous = BoundFriendWorldPosition(pose: samples[samples.count - 2].pose),
+              peer.occupiesSameTile(as: previous) else { return nil }
+        return .init(localSession: epoch, peerSession: peerEpoch, local: local, peer: peer)
     }
 
     func pose(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundPresencePose? {

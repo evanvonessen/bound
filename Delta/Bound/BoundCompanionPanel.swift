@@ -300,9 +300,22 @@ final class BoundCompanionCoordinator {
     #endif
     private lazy var tap = BoundDeltaFrameTap { [weak self] frame in self?.sharing.receivePlaybackFrame(frame) }
     let playerStateDisplay = BoundPlayerStateDisplay()
+    private var friendInteractionPanel: BoundFriendInteractionPanel?
     func install(in owner: GameViewController) {
         guard host == nil, macHost == nil else { return }
         self.owner = owner
+        let friendPanel = BoundFriendInteractionPanel(session: sharing.interactions)
+        friendPanel.frame = owner.view.bounds; owner.view.addSubview(friendPanel)
+        friendPanel.name = { [weak self] in self?.onboarding.selected?.displayName ?? "Friend" }
+        friendPanel.willOpen = { [weak owner] in owner?.releaseBoundFriendGameplayInputs() }
+        friendInteractionPanel = friendPanel
+        sharing.interactions.canPresent = { [weak self, weak owner] in
+            guard let self, let owner else { return false }
+            return owner.emulatorCore?.state == .running && owner.view.window?.windowScene?.hasKeyboardFocus == true
+                && owner.presentedViewController == nil && !self.state.showingFriends && !self.state.showingSettings
+                && !self.isEditingNotes && !self.isEditingText
+        }
+        sharing.interactions.changed = { [weak friendPanel] in friendPanel?.render() }
         playerStateDisplay.attachPresence(sharing.livePresence)
         playerStateDisplay.install(in: owner)
         #if DEBUG && targetEnvironment(simulator)
@@ -696,7 +709,10 @@ final class BoundCompanionCoordinator {
     }
     func bringControlsToFront() {
         guard let owner else { return }
-        defer { playerStateDisplay.layout(in: owner, gameView: owner.gameView) }
+        defer {
+            playerStateDisplay.layout(in: owner, gameView: owner.gameView)
+            if let panel = friendInteractionPanel, !panel.isHidden { owner.view.bringSubviewToFront(panel) }
+        }
         if !arrangementLayers.active { arrangementLayers.apply() }
         if macHost != nil, let overlay {
             owner.view.bringSubviewToFront(overlay)

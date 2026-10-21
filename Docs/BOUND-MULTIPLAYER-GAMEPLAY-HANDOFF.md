@@ -6,6 +6,16 @@ this continuation verifies its gameplay paths and fixes native UI-test selectors
 See [the acceptance evidence](BOUND-MULTIPLAYER-GAMEPLAY-QA.md) for observed
 results, aggregate counters and explicit limits.
 
+## Current gameplay feature work
+
+The user moved on from movement acceptance to battles and trades, with this
+specific entry: stand on the tile next to a friend, face them and press A as
+with a normal NPC. The new [interaction handoff](BOUND-MULTIPLAYER-INTERACTIONS.md)
+documents the invitation protocol and the remaining native activity work.
+An accepted invitation currently does **not** launch a battle or trade.
+Continue the native activity adapter from that handoff; do not repeat the
+900-second presence run as a substitute for implementing gameplay.
+
 ## Checkout and ownership
 
 The isolated continuation checkout is `/Users/evandev/dev/bound-multiplayer`
