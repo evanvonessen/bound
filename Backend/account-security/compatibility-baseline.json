@@ -1,0 +1,638 @@
+{
+  "checkedAt": "2026-10-21",
+  "project": "qevnxhngdtlyihhmvnjv",
+  "changedFunctions": [],
+  "changedPolicies": [],
+  "originalFunctions": 56,
+  "originalPolicies": 24,
+  "newFunctions": 7,
+  "newPolicies": 5,
+  "baseline": {
+    "tables": [
+      {
+        "rls": true,
+        "name": "bound_autosave_revisions",
+        "schema": "public"
+      },
+      {
+        "rls": true,
+        "name": "bound_note_revisions",
+        "schema": "public"
+      },
+      {
+        "rls": true,
+        "name": "bound_roms",
+        "schema": "public"
+      },
+      {
+        "rls": true,
+        "name": "cup040_catalogue",
+        "schema": "public"
+      }
+    ],
+    "policies": [
+      {
+        "cmd": "INSERT",
+        "name": "autosave_owner_insert",
+        "check": "((( SELECT auth.uid() AS uid) = owner) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)))",
+        "roles": [
+          "authenticated"
+        ],
+        "table": "bound_autosave_revisions",
+        "using": null,
+        "schema": "public"
+      },
+      {
+        "cmd": "SELECT",
+        "name": "autosave_owner_read",
+        "check": null,
+        "roles": [
+          "authenticated"
+        ],
+        "table": "bound_autosave_revisions",
+        "using": "((( SELECT auth.uid() AS uid) = owner) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)))",
+        "schema": "public"
+      },
+      {
+        "cmd": "INSERT",
+        "name": "bound_notes_owner_insert",
+        "check": "((owner = ( SELECT auth.uid() AS uid)) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)))",
+        "roles": [
+          "authenticated"
+        ],
+        "table": "bound_note_revisions",
+        "using": null,
+        "schema": "public"
+      },
+      {
+        "cmd": "SELECT",
+        "name": "bound_notes_owner_read",
+        "check": null,
+        "roles": [
+          "authenticated"
+        ],
+        "table": "bound_note_revisions",
+        "using": "((owner = ( SELECT auth.uid() AS uid)) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)))",
+        "schema": "public"
+      },
+      {
+        "cmd": "INSERT",
+        "name": "bound_rom_catalogue_insert",
+        "check": "((owner = ( SELECT auth.uid() AS uid)) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)))",
+        "roles": [
+          "authenticated"
+        ],
+        "table": "bound_roms",
+        "using": null,
+        "schema": "public"
+      },
+      {
+        "cmd": "SELECT",
+        "name": "bound_rom_catalogue_read",
+        "check": null,
+        "roles": [
+          "authenticated"
+        ],
+        "table": "bound_roms",
+        "using": "((owner = ( SELECT auth.uid() AS uid)) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)))",
+        "schema": "public"
+      },
+      {
+        "cmd": "UPDATE",
+        "name": "bound_rom_catalogue_update",
+        "check": "((owner = ( SELECT auth.uid() AS uid)) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)))",
+        "roles": [
+          "authenticated"
+        ],
+        "table": "bound_roms",
+        "using": "((owner = ( SELECT auth.uid() AS uid)) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)))",
+        "schema": "public"
+      },
+      {
+        "cmd": "INSERT",
+        "name": "cup040_catalogue_insert",
+        "check": "((owner_id = ( SELECT auth.uid() AS uid)) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)) AND (EXISTS ( SELECT 1\n   FROM storage.objects o\n  WHERE ((o.bucket_id = 'cup040-saves'::text) AND (o.name = (((((((((cup040_catalogue.owner_id)::text || '/'::text) || cup040_catalogue.rom_sha256) || '/'::text) || (cup040_catalogue.scope_id)::text) || '/'::text) || cup040_catalogue.kind) || '/'::text) || (cup040_catalogue.object_id)::text)) AND (((o.metadata ->> 'size'::text))::bigint = cup040_catalogue.archive_bytes)))))",
+        "roles": [
+          "authenticated"
+        ],
+        "table": "cup040_catalogue",
+        "using": null,
+        "schema": "public"
+      },
+      {
+        "cmd": "SELECT",
+        "name": "cup040_catalogue_read",
+        "check": null,
+        "roles": [
+          "authenticated"
+        ],
+        "table": "cup040_catalogue",
+        "using": "((owner_id = ( SELECT auth.uid() AS uid)) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)))",
+        "schema": "public"
+      },
+      {
+        "cmd": "ALL",
+        "name": "bound_rom_object_guard",
+        "check": "((bucket_id <> 'bound-roms'::text) OR ((split_part(name, '/'::text, 1) = (( SELECT auth.uid() AS uid))::text) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)) AND (name ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{64}\\.gba$'::text)))",
+        "roles": [
+          "public"
+        ],
+        "table": "objects",
+        "using": "((bucket_id <> 'bound-roms'::text) OR ((split_part(name, '/'::text, 1) = (( SELECT auth.uid() AS uid))::text) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false))))",
+        "schema": "storage"
+      },
+      {
+        "cmd": "UPDATE",
+        "name": "bound_rom_object_immutable",
+        "check": "(bucket_id <> 'bound-roms'::text)",
+        "roles": [
+          "public"
+        ],
+        "table": "objects",
+        "using": "(bucket_id <> 'bound-roms'::text)",
+        "schema": "storage"
+      },
+      {
+        "cmd": "INSERT",
+        "name": "bound_rom_object_insert",
+        "check": "((bucket_id = 'bound-roms'::text) AND (split_part(name, '/'::text, 1) = (( SELECT auth.uid() AS uid))::text) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)) AND (name ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{64}\\.gba$'::text))",
+        "roles": [
+          "authenticated"
+        ],
+        "table": "objects",
+        "using": null,
+        "schema": "storage"
+      },
+      {
+        "cmd": "DELETE",
+        "name": "bound_rom_object_no_delete",
+        "check": null,
+        "roles": [
+          "public"
+        ],
+        "table": "objects",
+        "using": "(bucket_id <> 'bound-roms'::text)",
+        "schema": "storage"
+      },
+      {
+        "cmd": "SELECT",
+        "name": "bound_rom_object_read",
+        "check": null,
+        "roles": [
+          "authenticated"
+        ],
+        "table": "objects",
+        "using": "((bucket_id = 'bound-roms'::text) AND (split_part(name, '/'::text, 1) = (( SELECT auth.uid() AS uid))::text) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)))",
+        "schema": "storage"
+      },
+      {
+        "cmd": "INSERT",
+        "name": "cup040_objects_insert",
+        "check": "((bucket_id = 'cup040-saves'::text) AND (split_part(name, '/'::text, 1) = (( SELECT auth.uid() AS uid))::text) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)) AND (name ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{64}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/(revision|event)/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text))",
+        "roles": [
+          "authenticated"
+        ],
+        "table": "objects",
+        "using": null,
+        "schema": "storage"
+      },
+      {
+        "cmd": "DELETE",
+        "name": "cup040_objects_no_delete",
+        "check": null,
+        "roles": [
+          "public"
+        ],
+        "table": "objects",
+        "using": "(bucket_id <> 'cup040-saves'::text)",
+        "schema": "storage"
+      },
+      {
+        "cmd": "UPDATE",
+        "name": "cup040_objects_no_update",
+        "check": "(bucket_id <> 'cup040-saves'::text)",
+        "roles": [
+          "public"
+        ],
+        "table": "objects",
+        "using": "(bucket_id <> 'cup040-saves'::text)",
+        "schema": "storage"
+      },
+      {
+        "cmd": "ALL",
+        "name": "cup040_objects_owner_guard",
+        "check": "((bucket_id <> 'cup040-saves'::text) OR ((split_part(name, '/'::text, 1) = (( SELECT auth.uid() AS uid))::text) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false))))",
+        "roles": [
+          "public"
+        ],
+        "table": "objects",
+        "using": "((bucket_id <> 'cup040-saves'::text) OR ((split_part(name, '/'::text, 1) = (( SELECT auth.uid() AS uid))::text) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false))))",
+        "schema": "storage"
+      },
+      {
+        "cmd": "SELECT",
+        "name": "cup040_objects_read",
+        "check": null,
+        "roles": [
+          "authenticated"
+        ],
+        "table": "objects",
+        "using": "((bucket_id = 'cup040-saves'::text) AND (split_part(name, '/'::text, 1) = (( SELECT auth.uid() AS uid))::text) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)))",
+        "schema": "storage"
+      },
+      {
+        "cmd": "ALL",
+        "name": "cup071_covers_guard",
+        "check": "((bucket_id <> 'cup071-covers'::text) OR ((split_part(name, '/'::text, 1) = (( SELECT auth.uid() AS uid))::text) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)) AND (name ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{64}\\.png$'::text)))",
+        "roles": [
+          "public"
+        ],
+        "table": "objects",
+        "using": "((bucket_id <> 'cup071-covers'::text) OR ((split_part(name, '/'::text, 1) = (( SELECT auth.uid() AS uid))::text) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false))))",
+        "schema": "storage"
+      },
+      {
+        "cmd": "INSERT",
+        "name": "cup071_covers_insert",
+        "check": "((bucket_id = 'cup071-covers'::text) AND (split_part(name, '/'::text, 1) = (( SELECT auth.uid() AS uid))::text) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)) AND (name ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{64}\\.png$'::text))",
+        "roles": [
+          "authenticated"
+        ],
+        "table": "objects",
+        "using": null,
+        "schema": "storage"
+      },
+      {
+        "cmd": "DELETE",
+        "name": "cup071_covers_no_delete",
+        "check": null,
+        "roles": [
+          "public"
+        ],
+        "table": "objects",
+        "using": "(bucket_id <> 'cup071-covers'::text)",
+        "schema": "storage"
+      },
+      {
+        "cmd": "SELECT",
+        "name": "cup071_covers_read",
+        "check": null,
+        "roles": [
+          "authenticated"
+        ],
+        "table": "objects",
+        "using": "((bucket_id = 'cup071-covers'::text) AND (split_part(name, '/'::text, 1) = (( SELECT auth.uid() AS uid))::text) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)))",
+        "schema": "storage"
+      },
+      {
+        "cmd": "UPDATE",
+        "name": "cup071_covers_update",
+        "check": "((bucket_id = 'cup071-covers'::text) AND (split_part(name, '/'::text, 1) = (( SELECT auth.uid() AS uid))::text) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)) AND (name ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[0-9a-f]{64}\\.png$'::text))",
+        "roles": [
+          "authenticated"
+        ],
+        "table": "objects",
+        "using": "((bucket_id = 'cup071-covers'::text) AND (split_part(name, '/'::text, 1) = (( SELECT auth.uid() AS uid))::text) AND (NOT COALESCE((( SELECT (auth.jwt() ->> 'is_anonymous'::text)))::boolean, false)))",
+        "schema": "storage"
+      }
+    ],
+    "functions": [
+      {
+        "args": "action text, payload jsonb",
+        "hash": "5f5abbea8b43b6ad535d7d4757523727",
+        "name": "action",
+        "schema": "bound_moderation_private"
+      },
+      {
+        "args": "actor uuid",
+        "hash": "e136feef70ffef6fa33cca91ca353cd9",
+        "name": "block_list",
+        "schema": "bound_moderation_private"
+      },
+      {
+        "args": "value text",
+        "hash": "d818381537ebd513567d4c36bea08a6b",
+        "name": "clean_name",
+        "schema": "bound_moderation_private"
+      },
+      {
+        "args": "a uuid, b uuid",
+        "hash": "d829b8b2aaada9a8c2f8b61e5808fac4",
+        "name": "denied_pair",
+        "schema": "bound_moderation_private"
+      },
+      {
+        "args": "value text",
+        "hash": "96e9209c4a05e7c5943ee5a3c5e84bef",
+        "name": "label",
+        "schema": "bound_moderation_private"
+      },
+      {
+        "args": "report_id uuid, decision text",
+        "hash": "033c4518d467edd3907a000789763a37",
+        "name": "review",
+        "schema": "bound_moderation_private"
+      },
+      {
+        "args": "",
+        "hash": "b94abf389da273ada75268f4e0a2a7c9",
+        "name": "claim_signup_username",
+        "schema": "bound_social_private"
+      },
+      {
+        "args": "actor uuid",
+        "hash": "54d3f308ae24f43ea0c565ea086c688f",
+        "name": "ensure_profile",
+        "schema": "bound_social_private"
+      },
+      {
+        "args": "candidate text, excluded_owner uuid",
+        "hash": "ba5d731a079d816f57cd7fb5e4036fae",
+        "name": "username_is_available",
+        "schema": "bound_social_private"
+      },
+      {
+        "args": "username text",
+        "hash": "d2316f1a49bc2873bfa66e0e7d49fd27",
+        "name": "available",
+        "schema": "bound_username_private"
+      },
+      {
+        "args": "candidate text, excluded_owner uuid",
+        "hash": "c0b5e4e17475fa3f8e46a249f0d13a1e",
+        "name": "name_available",
+        "schema": "bound_username_private"
+      },
+      {
+        "args": "payload jsonb",
+        "hash": "f9caf74abc90343dbe59e6cbe3801267",
+        "name": "social_add",
+        "schema": "bound_username_private"
+      },
+      {
+        "args": "r cup041_private.receipts",
+        "hash": "39e9acf0357f317c6c509e59ab20199a",
+        "name": "ack",
+        "schema": "cup041_private"
+      },
+      {
+        "args": "j jsonb",
+        "hash": "461d349c0e25bf64928fc3d9b1f4bcad",
+        "name": "entity",
+        "schema": "cup041_private"
+      },
+      {
+        "args": "j jsonb",
+        "hash": "a71cac9a870e8681c00a1f9d017e9ab3",
+        "name": "identity",
+        "schema": "cup041_private"
+      },
+      {
+        "args": "raw text",
+        "hash": "5906dabc9af82d308ef83e4431c5a499",
+        "name": "input",
+        "schema": "cup041_private"
+      },
+      {
+        "args": "j jsonb",
+        "hash": "f5587baac6647d0848a18661795434c6",
+        "name": "provenance",
+        "schema": "cup041_private"
+      },
+      {
+        "args": "j jsonb",
+        "hash": "c6df2d0e3b58958e8c3140f81a50df24",
+        "name": "snapshot_name",
+        "schema": "cup041_private"
+      },
+      {
+        "args": "j jsonb",
+        "hash": "57a9b65dd47d3541620201b5c89dd3bc",
+        "name": "uuid_value",
+        "schema": "cup041_private"
+      },
+      {
+        "args": "o uuid, g uuid",
+        "hash": "40c3c60ecd0105e134867c079371ca1f",
+        "name": "active",
+        "schema": "cup041_v3_private"
+      },
+      {
+        "args": "o uuid, g uuid, s uuid, m uuid",
+        "hash": "5390cc862ae4ec4cec11e9b45e5f6a65",
+        "name": "copy_id",
+        "schema": "cup041_v3_private"
+      },
+      {
+        "args": "raw text, extras text[]",
+        "hash": "2865e3d731d9b6e2351c99a69fe90489",
+        "name": "input",
+        "schema": "cup041_v3_private"
+      },
+      {
+        "args": "j jsonb, allowed text[]",
+        "hash": "639c7ad7b02d3f022fbf3bb47cf8a05e",
+        "name": "keys",
+        "schema": "cup041_v3_private"
+      },
+      {
+        "args": "v cup041_v3_private.\"values\"",
+        "hash": "cdc3bd3b0c3ec7a39340b1a861863874",
+        "name": "metadata",
+        "schema": "cup041_v3_private"
+      },
+      {
+        "args": "j jsonb",
+        "hash": "7143fc0582ba43d60a78134b5e9e63b7",
+        "name": "positive",
+        "schema": "cup041_v3_private"
+      },
+      {
+        "args": "j jsonb, raw text, seed boolean",
+        "hash": "b08dec5c8e579b5de602eb6e54e3ac44",
+        "name": "publish",
+        "schema": "cup041_v3_private"
+      },
+      {
+        "args": "o uuid, g uuid, op uuid",
+        "hash": "9a9641e4f2afc80080df6cd3cf56bf0c",
+        "name": "relocate",
+        "schema": "cup041_v3_private"
+      },
+      {
+        "args": "o uuid, g uuid, h text",
+        "hash": "0fa7c2202edfa1f569924ea6bc791d27",
+        "name": "retire",
+        "schema": "cup041_v3_private"
+      },
+      {
+        "args": "o uuid, g uuid",
+        "hash": "312dfd8c099c16ad2ebcd3e1f6b5cdbf",
+        "name": "tick",
+        "schema": "cup041_v3_private"
+      },
+      {
+        "args": "j jsonb",
+        "hash": "88ebfbf89e3d7082965193bee88793bc",
+        "name": "uuid",
+        "schema": "cup041_v3_private"
+      },
+      {
+        "args": "j jsonb",
+        "hash": "48a1f87e57e407379334f4e6c0106727",
+        "name": "validate_payload",
+        "schema": "cup041_v3_private"
+      },
+      {
+        "args": "action text, payload jsonb",
+        "hash": "5d3028fd7d0d2a9f6fd873d474337fa9",
+        "name": "bound_friend_service_v1",
+        "schema": "cup050_private"
+      },
+      {
+        "args": "actor uuid",
+        "hash": "a4c4bf0d714b11dcba8ad11a450dba9b",
+        "name": "assert_active",
+        "schema": "cup117_private"
+      },
+      {
+        "args": "",
+        "hash": "4e9ba6877d47c4cc6282dfa4382b0646",
+        "name": "write_guard",
+        "schema": "cup117_private"
+      },
+      {
+        "args": "",
+        "hash": "51f0a4a1d6607211eb372fe4f57f663c",
+        "name": "bound_autosave_parent_order",
+        "schema": "public"
+      },
+      {
+        "args": "sender uuid, room uuid, request uuid",
+        "hash": "39b3f576ceb87956a3057aae6674ffbc",
+        "name": "bound_jiggle_dispatch",
+        "schema": "public"
+      },
+      {
+        "args": "job uuid, delivered boolean, invalid_tokens text[]",
+        "hash": "37fb5db1556dbe236b7169c91eb76bbe",
+        "name": "bound_jiggle_finish",
+        "schema": "public"
+      },
+      {
+        "args": "action text, payload jsonb",
+        "hash": "a014265ed69de4f33c2666eb360eaeba",
+        "name": "bound_social_v1",
+        "schema": "public"
+      },
+      {
+        "args": "action text, payload jsonb",
+        "hash": "4c2166af8b40bbb973eb6d6b199aa5c1",
+        "name": "bound_social_v2",
+        "schema": "public"
+      },
+      {
+        "args": "username text",
+        "hash": "91f742ba44a6d7b7a0f777696cd04606",
+        "name": "bound_username_available",
+        "schema": "public"
+      },
+      {
+        "args": "p_request text",
+        "hash": "d20af597a8eadfd97cd514b4b428e09f",
+        "name": "cup041_fetch",
+        "schema": "public"
+      },
+      {
+        "args": "p_request text",
+        "hash": "6a4ddb278d2d70ae1d3710cacf430580",
+        "name": "cup041_list",
+        "schema": "public"
+      },
+      {
+        "args": "p_request text",
+        "hash": "be5697710ffe9a0a13239fc25acbfb29",
+        "name": "cup041_publish",
+        "schema": "public"
+      },
+      {
+        "args": "p_request text",
+        "hash": "f4b225d57f370c5d5225d25a7eea4356",
+        "name": "cup041_resolve",
+        "schema": "public"
+      },
+      {
+        "args": "p_request text",
+        "hash": "4c1c1c36cf77366a14c5dd5f627c4154",
+        "name": "cup041_v3_activate",
+        "schema": "public"
+      },
+      {
+        "args": "p_request text",
+        "hash": "ea26ef3b39cff96c29887c5d300c1204",
+        "name": "cup041_v3_delete",
+        "schema": "public"
+      },
+      {
+        "args": "p_request text",
+        "hash": "d4901c5da0682ac39f6b4aa6e3cfa861",
+        "name": "cup041_v3_fetch",
+        "schema": "public"
+      },
+      {
+        "args": "p_request text",
+        "hash": "2f7be5ad90200478bedeb5dd78310774",
+        "name": "cup041_v3_legacy",
+        "schema": "public"
+      },
+      {
+        "args": "p_request text",
+        "hash": "7de61cde9d99ff2c1dd072e5dbb6d312",
+        "name": "cup041_v3_list",
+        "schema": "public"
+      },
+      {
+        "args": "p_request text",
+        "hash": "f22d32be16ebebd495e7cc8df493f8c2",
+        "name": "cup041_v3_publish",
+        "schema": "public"
+      },
+      {
+        "args": "p_request text",
+        "hash": "57a45a77a304b5b196c4a3a478ea6503",
+        "name": "cup041_v3_receipt",
+        "schema": "public"
+      },
+      {
+        "args": "p_request text",
+        "hash": "2b5be1350ebba8dfc6b6e86620ae7229",
+        "name": "cup041_v3_resolve",
+        "schema": "public"
+      },
+      {
+        "args": "p_request text",
+        "hash": "512a6a2b341e87cb18a3b9e25a8fe5d9",
+        "name": "cup041_v3_seed",
+        "schema": "public"
+      },
+      {
+        "args": "action text, payload jsonb",
+        "hash": "804b1d1a8d20bb91294e4ed6957fb1e9",
+        "name": "cup050_friends",
+        "schema": "public"
+      },
+      {
+        "args": "",
+        "hash": "667d93c46e03fbc45955cd8d6f0c4730",
+        "name": "cup117_account_active",
+        "schema": "public"
+      },
+      {
+        "args": "action text, payload jsonb",
+        "hash": "8b1ff0c0cd1491659836dc289b26d74e",
+        "name": "cup117_delete_account",
+        "schema": "public"
+      }
+    ]
+  }
+}

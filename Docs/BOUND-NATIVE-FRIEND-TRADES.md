@@ -1,7 +1,7 @@
 # Native friend trades
 
-Implemented on `codex/friend-trading` in the trading worktree. Intentionally
-unmerged from `main` pending the user’s instruction.
+Integrated into `main` from `codex/friend-trading`. Native trade runtime evidence
+and remaining device/network verification limits are recorded below.
 
 Enable **Settings → Enable Experimental Features** on both devices. Connect in
 Friends, turn on **Show friend on map**, walk to the cardinal tile beside the
@@ -132,6 +132,13 @@ iPhone Release build passed (`trading-build-9.log`, `trading-release-2.log`).
 All 17,061 current pinned source files and the generated guest header verify.
 The exact 932-byte guest and identical cloud configuration are present in Debug
 and Release; Release excludes the simulator party-fixture helper.
+
+Main integration with account-sync/security commit `916d491f` passed a new
+**153-test focused regression run** (trading, battles, controls, settings,
+presence and account persistence/security), with zero failures. The merged
+Debug test build, unsigned iPhone Release build, 17,061 pinned-source checks
+and generated guest check passed. Bundled cloud configuration hashes match.
+Private merge logs use the `trade-merge-` prefix.
 
 These are native-engine and local-relay checks. This continuation did not run a
 live Agora trade or a normal-app UI trade end to end, physical devices/separate

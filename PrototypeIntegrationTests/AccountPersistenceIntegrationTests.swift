@@ -126,7 +126,7 @@ final class AccountPersistenceIntegrationTests: XCTestCase {
     }
 
     private func token(owner: UUID, expires: TimeInterval = 3600) throws -> String {
-        let bytes = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + expires])
+        let bytes = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "email": "fixture@example.invalid", "exp": Date().timeIntervalSince1970 + expires])
         let payload = bytes.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         return "fixture." + payload + ".signature"
     }

@@ -64,7 +64,7 @@ extension LaunchViewController
         let isSyncingManagerStarted = RSTLaunchCondition(condition: { self.didAttemptStartingSyncManager }) { (completionHandler) in
             self.didAttemptStartingSyncManager = true
             
-            let service = SyncManager.serviceForBoundSync(Settings.syncingService)
+            let service = SyncManager.currentBoundService
             SyncManager.shared.start(service: service) { (result) in
                 switch result
                 {

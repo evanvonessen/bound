@@ -65,3 +65,24 @@ test('normalization matches app rules without accepting controls or ambiguous em
   assert.equal(normalizedEmail(' USER@EXAMPLE.INVALID\r\n'),'user@example.invalid');
   for(const email of ['a@@b','@b','a@','a b@c','a@b\0','ä@b',null,{}])assert.equal(normalizedEmail(email),null);
 });
+
+
+test('MFA enrolled user must complete the second factor before beginning deletion',async()=>{
+  const f=fixture({identity:{...user,factors:[{status:'verified',factor_type:'totp'}]}});
+  assert.equal((await f.request()).status,403);
+  assert.equal(f.calls.length,1);
+});
+
+test('MFA enrolled AAL2 caller can begin the existing deletion contract',async()=>{
+  const calls=[];
+  const token=`header.${Buffer.from(JSON.stringify({sub:owner,aal:'aal2'})).toString('base64url')}.signature`;
+  const handler=createDeletionHandler({serviceKey:'synthetic-server-only',publishableKey:'synthetic-public',hash:async()=> 'b'.repeat(64),fetchImpl:async(url,options)=>{
+    calls.push(url);
+    if(url.endsWith('/auth/v1/user')) return response({...user,factors:[{status:'verified',factor_type:'totp'}]});
+    assert.ok(url.endsWith('/cup117_delete_account'));
+    assert.equal(JSON.parse(options.body).action,'begin');
+    return response({ok:true,status:'complete'});
+  }});
+  const result=await handler(new Request('https://fixture.invalid/delete-account',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({operationToken:operation,confirmationEmail:user.email})}));
+  assert.equal(result.status,200); assert.equal(calls.length,2);
+});

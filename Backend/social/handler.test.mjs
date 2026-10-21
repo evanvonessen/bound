@@ -258,3 +258,19 @@ test('invalid APNs configuration is observable as unavailable without exposing s
   assert.deepEqual(await result.json(), { ok: false, error: 'not_configured' });
   assert.equal(f.calls.some(call => call.url.endsWith('/bound_jiggle_dispatch')), false);
 });
+
+
+test('MFA enrolled users cannot dispatch or inspect configuration with AAL1', async () => {
+  const f = await fixture({auth:{...identity,factors:[{status:'verified',factor_type:'totp'}]}});
+  for (const body of [{operation:'status'},{roomID:room,requestID}]) {
+    assert.equal((await f.request(body)).status,403);
+  }
+  assert.ok(f.calls.every(call=>call.url.endsWith('/auth/v1/user')));
+});
+
+test('MFA enrolled AAL2 caller retains Jiggle dispatch',async()=>{
+  const f=await fixture({auth:{...identity,factors:[{status:'verified',factor_type:'totp'}]}});
+  const token=`header.${Buffer.from(JSON.stringify({sub:sender,aal:'aal2'})).toString('base64url')}.signature`;
+  assert.equal((await f.request({roomID:room,requestID},{authorization:`Bearer ${token}`})).status,200);
+  assert.ok(f.calls.some(call=>call.url.endsWith('/bound_jiggle_dispatch')));
+});
