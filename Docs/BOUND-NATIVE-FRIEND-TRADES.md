@@ -312,3 +312,36 @@ transferred QA baseline; their unchanged HEAD blobs were verified, the historica
 manifest retained, and the current baseline recorded before the final runs. No
 backend, signing, cloud configuration or dependency settings changed. Physical
 devices and separate networks remain unverified for the new invitation UI.
+
+## Completed native invitation acceptance on published main — October 21, 2026
+
+After the Mac was unlocked, `paired-1201` passed in **149.2 seconds** on the
+same two task-owned simulators, using an exact build of published main
+`b14f292fc038f8b512fbb92fa7a772480a2e2b8c` and **real Agora**. NO returned
+both players to idle with no native trade started. A subsequent YES opened the
+native Trade menu on both players, completed the exchange and native linked
+save, and returned both games to their own playable overworlds with saving
+unblocked. The received nickname and original-trainer markers matched the
+peer's offer, both native completion counts were one, and both unoffered party
+members remained unchanged. All invitation choices stayed in native game
+windows; no app acceptance card or button was used.
+
+This closes the full-app exchange-completion gap for the native invitation UI
+recorded above. This run checked the native linked save and returned game state;
+it did not cold-boot a new emulator instance. The separate cold-boot persistence
+check remains `native-invitation-trade-regression`, described above. Physical
+phones and separate networks remain unverified.
+
+The main-based Debug UI test build passed. The delivery retry also produced a
+verified signed Release archive of that same commit, with all 17,061 pinned
+source files and source/archive privacy checks passing. Xcode then rejected
+export with `Failed to Use Accounts`; this is not an accepted upload or a
+TestFlight delivery. App Store Connect confirmed the authorized group still
+contains only the existing internal tester, with build 176 as its newest
+available build. Cloud remained blocked by its monthly usage limit.
+
+`live-receipt-1201.json` records unchanged original ROM/seed files and all 57
+protected setup files, removal of the temporary friendship and one-use inputs,
+and restoration of both original active friend lists. Both owned QA simulators
+were shut down afterward. Private logs and receipts remain ignored under
+`.build/full-app-gameplay-validation/` in the main-based validation worktree.
