@@ -110,4 +110,46 @@ import UIKit
         XCTAssertEqual(scroll.contentOffset.y, -(scroll.bounds.height - scroll.contentSize.height), accuracy: 0.1)
     }
 
+    func testMacChartInitiallyFitsAndCentersAcrossSidebarResizes() throws {
+        let scroll = BoundPortraitChartScrollView(frame: CGRect(x: 0, y: 0, width: 220, height: 390))
+        scroll.constrainsPan = true
+        scroll.fitsViewport = true
+        scroll.layoutIfNeeded()
+        let image = try XCTUnwrap(scroll.subviews.compactMap { $0 as? UIImageView }.first)
+        let source = try XCTUnwrap(image.image)
+        for viewport in [CGSize(width: 220, height: 390), CGSize(width: 360, height: 180)] {
+            scroll.frame = CGRect(origin: .zero, size: viewport)
+            scroll.setNeedsLayout()
+            scroll.layoutIfNeeded()
+            let visible = image.frame.offsetBy(dx: -scroll.contentOffset.x, dy: -scroll.contentOffset.y)
+            XCTAssertEqual(scroll.zoomScale, min(viewport.width / source.size.width, viewport.height / source.size.height), accuracy: 0.0001)
+            XCTAssertLessThanOrEqual(visible.width, viewport.width + 0.1)
+            XCTAssertLessThanOrEqual(visible.height, viewport.height + 0.1)
+            XCTAssertEqual(visible.midX, viewport.width / 2, accuracy: 0.1)
+            XCTAssertEqual(visible.midY, viewport.height / 2, accuracy: 0.1)
+            let centeredOffset = scroll.contentOffset
+            scroll.setContentOffset(CGPoint(x: 1000, y: -1000), animated: false)
+            XCTAssertEqual(scroll.contentOffset.x, centeredOffset.x, accuracy: 0.1)
+            XCTAssertEqual(scroll.contentOffset.y, centeredOffset.y, accuracy: 0.1)
+        }
+    }
+
+    func testMacChartPreservesMagnificationAndFocusWhenSidebarResizes() throws {
+        let scroll = BoundPortraitChartScrollView(frame: CGRect(x: 0, y: 0, width: 220, height: 390))
+        scroll.constrainsPan = true
+        scroll.fitsViewport = true
+        scroll.layoutIfNeeded()
+        let image = try XCTUnwrap(scroll.subviews.compactMap { $0 as? UIImageView }.first)
+        scroll.setZoomScale(scroll.minimumZoomScale * 3, animated: false)
+        scroll.setContentOffset(CGPoint(x: 110, y: 135), animated: false)
+        let focus = CGPoint(x: (scroll.contentOffset.x + scroll.bounds.width / 2) / image.frame.width,
+                            y: (scroll.contentOffset.y + scroll.bounds.height / 2) / image.frame.height)
+        scroll.frame = CGRect(x: 0, y: 0, width: 320, height: 280)
+        scroll.setNeedsLayout()
+        scroll.layoutIfNeeded()
+        XCTAssertEqual(scroll.zoomScale / scroll.minimumZoomScale, 3, accuracy: 0.0001)
+        XCTAssertEqual((scroll.contentOffset.x + scroll.bounds.width / 2) / image.frame.width, focus.x, accuracy: 0.001)
+        XCTAssertEqual((scroll.contentOffset.y + scroll.bounds.height / 2) / image.frame.height, focus.y, accuracy: 0.001)
+    }
+
 }

@@ -1,9 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// Desktop workspace chrome around Delta's live game viewport and the existing
-/// companion reference views. The gameplay rectangle stays transparent so the
-/// emulator view beneath this overlay remains visible and interactive.
+/// Mac-only workspace. Delta's native game fills the space beside the inspector.
 struct BoundMacWorkspaceView: View {
     @ObservedObject var sharing: FriendSharingSession
     @ObservedObject var state: BoundCompanionState
@@ -18,377 +16,272 @@ struct BoundMacWorkspaceView: View {
     let showFriends: () -> Void
     let showSettings: () -> Void
 
-    private var compactToolbar: Bool { geometry.toolbar.width < 550 }
-
+    @State private var retainedSidebarSize = CGSize.zero
+    @State private var widthDragStart: CGFloat?
+    @State private var topDragStart: CGFloat?
     private let accent = Color(uiColor: .deltaPurple)
     private let shell = Color(red: 0.075, green: 0.082, blue: 0.105)
     private let panel = Color(red: 0.105, green: 0.115, blue: 0.145)
-    private let raised = Color(red: 0.145, green: 0.155, blue: 0.19)
-    private let hairline = Color.white.opacity(0.09)
+    private var referenceIsVisible: Bool { state.macSidebarVisible && state.macReferenceVisible }
 
     var body: some View {
+        // Layout catches up one pass after a toggle; never squeeze retained
+        // scroll views to zero during that transition.
+        let size = state.macSidebarVisible && geometry.inspector.width > 0
+            ? geometry.inspector.size : retainedSidebarSize
         ZStack(alignment: .topLeading) {
-            // The actual game is rendered by Delta behind the workspace.
-            Color.clear.frame(geometry.gameplay).allowsHitTesting(false)
-
-            if geometry.sidebar.width > 0 {
-                sidebar.frame(geometry.sidebar)
+            Color.clear.frame(width: geometry.bounds.width, height: geometry.bounds.height)
+                .allowsHitTesting(false)
+            inspector(size: size)
+                .frame(width: size.width, height: size.height)
+                .position(x: geometry.bounds.maxX - size.width / 2, y: geometry.bounds.minY + size.height / 2)
+                .opacity(state.macSidebarVisible ? 1 : 0)
+                .allowsHitTesting(state.macSidebarVisible)
+                .accessibilityHidden(!state.macSidebarVisible)
+            if state.macSidebarVisible {
+                sidebarResizeHandle.frame(width: geometry.resizeHandle.width, height: geometry.resizeHandle.height)
+                    .position(x: geometry.resizeHandle.midX, y: geometry.resizeHandle.midY)
             }
-            toolbar.frame(geometry.toolbar)
-            footer.frame(geometry.footer)
-            inspector.frame(geometry.inspector)
+            workspaceControls.frame(width: geometry.controls.width, height: geometry.controls.height)
+                .position(x: geometry.controls.midX, y: geometry.controls.midY)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("bound.mac-workspace")
-        .onChange(of: state.macReference) { _, _ in
-            textEditingChanged(false)
-            editingChanged(false)
+        .onChange(of: geometry.inspector.size, initial: true) { _, size in
+            if size.width > 0 && size.height > 0 { retainedSidebarSize = size }
+        }
+        .onChange(of: state.macReference) { _, _ in endEditing() }
+        .onChange(of: state.macSidebarVisible) { _, visible in
+            if !visible { endEditing() }
+        }
+        .onChange(of: state.macReferenceVisible) { _, visible in
+            if !visible { endEditing() }
         }
     }
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10).fill(accent.gradient)
-                    Image(systemName: "gamecontroller.fill").font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
-                }.frame(width: 34, height: 34)
-                if geometry.sidebar.width > 100 {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("BOUND").font(.system(size: 13, weight: .black, design: .rounded)).tracking(1.2)
-                        Text("GAME LIBRARY").font(.system(size: 9, weight: .semibold)).tracking(1.1).foregroundStyle(.white.opacity(0.48))
-                    }
-                }
-            }
+    private func endEditing() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        textEditingChanged(false)
+        editingChanged(false)
+    }
 
-            VStack(alignment: .leading, spacing: 7) {
-                if geometry.sidebar.width > 100 {
-                    Text("LIBRARY").font(.system(size: 9, weight: .bold)).tracking(1.3).foregroundStyle(.white.opacity(0.42))
-                }
-                sideButton("Library", icon: "square.grid.2x2.fill", action: showLibrary, id: "bound.mac-library-nav")
-                HStack(spacing: 10) {
-                    RoundedRectangle(cornerRadius: 3).fill(accent).frame(width: 3, height: 29)
-                    Image(systemName: "gamecontroller").font(.system(size: 14)).frame(width: 18)
-                    if geometry.sidebar.width > 100 {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(gameTitle).font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                            Text("NOW PLAYING").font(.system(size: 8, weight: .bold)).tracking(0.8).foregroundStyle(accent)
-                        }
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 8).frame(height: 42)
-                .background(raised, in: RoundedRectangle(cornerRadius: 9))
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Now playing, \(gameTitle)")
+    private var workspaceControls: some View {
+        HStack(spacing: 4) {
+            Menu {
+                Button("Library", systemImage: "square.grid.2x2", action: showLibrary)
+                    .accessibilityIdentifier("bound.mac-library")
+                Button("Game menu", systemImage: "gamecontroller", action: showMenu)
+                    .accessibilityIdentifier("bound.mac-menu")
+                Button("Friends", systemImage: "person.2", action: showFriends)
+                    .accessibilityIdentifier("bound.mac-friends")
+                Button("Settings", systemImage: "gearshape", action: showSettings)
+                    .accessibilityIdentifier("bound.mac-settings")
+            } label: {
+                Image(systemName: "ellipsis").frame(width: 36, height: 36)
             }
+            .accessibilityLabel("Workspace menu")
+            .accessibilityIdentifier("bound.mac-actions")
+            Button {
+                state.macSidebarVisible.toggle()
+            } label: {
+                Image(systemName: "sidebar.right").frame(width: 36, height: 36)
+            }
+            .accessibilityLabel(state.macSidebarVisible ? "Hide sidebar" : "Show sidebar")
+            .accessibilityValue(state.macSidebarVisible ? "Expanded" : "Collapsed")
+            .accessibilityIdentifier("bound.mac-sidebar-toggle")
+        }
+        .font(.system(size: 16, weight: .medium))
+        .buttonStyle(.plain).foregroundStyle(.white)
+        .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 9))
+    }
 
-            Spacer(minLength: 12)
-            VStack(alignment: .leading, spacing: 5) {
-                sideButton("Friends", icon: "person.2.fill", action: showFriends, id: "bound.mac-friends-nav")
-                sideButton("Settings", icon: "gearshape.fill", action: showSettings, id: "bound.mac-settings-nav")
-                sideButton("Menu", icon: "line.3.horizontal", action: showMenu, id: "bound.mac-menu-nav")
+    private var sidebarResizeHandle: some View {
+        Rectangle().fill(.clear)
+            .overlay { Capsule().fill(.white.opacity(0.4)).frame(width: 4, height: 40) }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { value in
+                    if widthDragStart == nil { widthDragStart = geometry.inspector.width }
+                    resizeSidebar(to: (widthDragStart ?? geometry.inspector.width) - value.translation.width)
+                }
+                .onEnded { _ in widthDragStart = nil })
+            .accessibilityElement()
+            .accessibilityLabel("Sidebar width")
+            .accessibilityIdentifier("bound.mac-sidebar-resize")
+            .accessibilityAdjustableAction { direction in
+                resizeSidebar(to: geometry.inspector.width + (direction == .increment ? 40 : -40))
+            }
+            .help("Drag to resize sidebar")
+    }
+
+    private func resizeSidebar(to width: CGFloat) {
+        state.macSidebarWidth = BoundMacWorkspaceGeometry(bounds: geometry.bounds,
+            preferredSidebarWidth: width).inspector.width
+    }
+
+    private func inspector(size: CGSize) -> some View {
+        let height = max(0, size.height - 16)
+        let bottomHeight = min(320, height * 0.30)
+        let remaining = max(0, height - bottomHeight - 20)
+        let minimumTop = min(120, remaining * 0.35)
+        let minimumMid = min(180, remaining * 0.45)
+        let topHeight = state.macFriendVisible
+            ? min(remaining - minimumMid, max(minimumTop, remaining * state.macTopFraction))
+            : min(40, remaining)
+        let visibleTop = state.macReferenceVisible ? topHeight : max(0, height - 44)
+        return VStack(spacing: 0) {
+            friendSection.frame(height: visibleTop)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("bound.mac-top")
+            if state.macReferenceVisible {
+                topMidDivider(topHeight: topHeight, available: remaining).frame(height: 12)
+            }
+            // Keep both panes mounted when the sidebar or Multiview is hidden.
+            VStack(spacing: 0) {
+                midSection.frame(height: max(0, remaining - topHeight))
+                Color.clear.frame(height: 8)
+                bottomSection.frame(height: bottomHeight)
+            }
+            .frame(height: state.macReferenceVisible ? max(0, height - topHeight - 12) : 0, alignment: .top)
+            .opacity(state.macReferenceVisible ? 1 : 0)
+            .allowsHitTesting(referenceIsVisible)
+            .accessibilityHidden(!referenceIsVisible)
+            .clipped()
+            if !state.macReferenceVisible {
+                Button("Show Multiview") { state.macReferenceVisible = true }
+                    .frame(maxWidth: .infinity).frame(height: 44)
+                    .accessibilityIdentifier("bound.mac-show-multiview")
             }
         }
-        .padding(.horizontal, geometry.sidebar.width > 100 ? 14 : 11)
-        .padding(.top, 18).padding(.bottom, 14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.leading, 14).padding(.trailing, 8).padding(.vertical, 8)
         .background(shell)
-        .foregroundStyle(Color.white.opacity(0.92))
-        .overlay(alignment: .trailing) { Rectangle().fill(hairline).frame(width: 1) }
-    }
-
-    private var toolbar: some View {
-        HStack(spacing: 14) {
-            Button(action: showLibrary) {
-                HStack(spacing: 8) {
-                    Circle().fill(Color(red: 0.34, green: 0.82, blue: 0.58)).frame(width: 7, height: 7)
-                    Text(gameTitle).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                        .frame(maxWidth: compactToolbar ? 108 : nil, alignment: .leading)
-                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(.white.opacity(0.44))
-                }
-                .padding(.horizontal, 11).frame(height: 30)
-                .background(raised, in: RoundedRectangle(cornerRadius: 8))
-            }
-            .buttonStyle(.plain).accessibilityLabel("Library, current game \(gameTitle)")
-            .accessibilityIdentifier("bound.mac-library")
-            .help("Open game library")
-
-            Spacer(minLength: 10)
-            Button(action: showMenu) {
-                toolbarButtonLabel("Game menu", icon: "ellipsis.circle")
-            }.buttonStyle(.plain).accessibilityIdentifier("bound.mac-menu").help("Game menu")
-
-            Button(action: showFriends) {
-                toolbarButtonLabel(sharing.remoteVisible ? "Friend live" : "Friends", icon: "person.2.fill")
-                    .background(accent.opacity(0.2), in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(accent.opacity(0.38), lineWidth: 1))
-            }
-            .buttonStyle(.plain).accessibilityIdentifier("bound.mac-friends")
-            .help("Open friends")
-            Button(action: showSettings) {
-                Image(systemName: "gearshape").font(.system(size: 14, weight: .medium))
-                    .frame(width: 30, height: 30).background(raised, in: RoundedRectangle(cornerRadius: 8))
-            }.buttonStyle(.plain).accessibilityLabel("Settings").accessibilityIdentifier("bound.mac-settings")
-                .help("Settings")
-        }
-        .padding(.horizontal, 18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(shell.opacity(0.98))
-        .foregroundStyle(Color.white.opacity(0.92))
-        .overlay(alignment: .bottom) { Rectangle().fill(hairline).frame(height: 1) }
-    }
-
-    private var footer: some View {
-        HStack(spacing: 9) {
-            Circle().fill(sharing.remoteVisible ? Color.green : Color.white.opacity(0.3)).frame(width: 6, height: 6)
-            Text(sharing.status).lineLimit(1)
-                .font(.system(size: 10, weight: .medium)).foregroundStyle(.white.opacity(0.62))
-            Spacer()
-            Text("BOUND").font(.system(size: 9, weight: .bold, design: .monospaced)).tracking(0.8)
-                .foregroundStyle(.white.opacity(0.34))
-        }
-        .padding(.horizontal, 18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(shell)
-        .foregroundStyle(Color.white.opacity(0.92))
-        .overlay(alignment: .top) { Rectangle().fill(hairline).frame(height: 1) }
-    }
-
-    private var inspector: some View {
-        GeometryReader { proxy in
-            let width = proxy.size.width
-            let feedWidth = min(270, max(1, width - 54))
-            let feedHeight = feedWidth / 1.5
-            let availableReferenceHeight = proxy.size.height - (state.macFriendVisible ? feedHeight + 208 : 147)
-            let needsOuterScroll = state.macReferenceVisible && availableReferenceHeight < 300
-            Group {
-                if needsOuterScroll {
-                    ScrollView(.vertical) {
-                        inspectorContents(feedWidth: feedWidth, feedHeight: feedHeight,
-                                          referenceHeight: max(300, availableReferenceHeight))
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 14) {
-                        friendSection(width: feedWidth, feedHeight: feedHeight)
-                        referencePicker
-                        referenceSection(height: max(0, availableReferenceHeight))
-                    }
-                    .padding(16)
-                }
-            }
-            .scrollIndicators(.automatic)
-            .background(shell)
-        }
-        .overlay(alignment: .leading) { Rectangle().fill(hairline).frame(width: 1) }
         .environment(\.colorScheme, .dark)
     }
 
-    private func inspectorContents(feedWidth: CGFloat, feedHeight: CGFloat, referenceHeight: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            friendSection(width: feedWidth, feedHeight: feedHeight)
-            referencePicker
-            referenceSection(height: referenceHeight)
-        }
-        .padding(16)
-    }
-
-    private func friendSection(width: CGFloat, feedHeight: CGFloat) -> some View {
-        ZStack(alignment: .top) {
-            // Keep the remote renderer mounted when a controller hides it.
-            friendCard(width: width, feedHeight: feedHeight)
-                .opacity(state.macFriendVisible ? 1 : 0)
-                .allowsHitTesting(state.macFriendVisible)
-                .accessibilityHidden(!state.macFriendVisible)
-            if !state.macFriendVisible {
-                Button { state.macFriendVisible = true } label: {
-                    Label("Show Friend Gameplay", systemImage: "person.2.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(maxWidth: .infinity).frame(height: 32)
-                        .background(panel, in: RoundedRectangle(cornerRadius: 8))
+    private func topMidDivider(topHeight: CGFloat, available: CGFloat) -> some View {
+        Rectangle().fill(.clear)
+            .overlay { Capsule().fill(.white.opacity(0.4)).frame(width: 42, height: 4) }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                .onChanged { value in
+                    if topDragStart == nil { topDragStart = topHeight }
+                    state.macTopFraction = min(0.95, max(0.05,
+                        ((topDragStart ?? topHeight) + value.translation.height) / max(1, available)))
                 }
-                .buttonStyle(.plain).foregroundStyle(accent)
-                .accessibilityIdentifier("bound.mac-show-friend")
+                .onEnded { _ in topDragStart = nil })
+            .accessibilityElement()
+            .accessibilityLabel("Friend and reference divider")
+            .accessibilityIdentifier("bound.mac-top-mid-resize")
+            .accessibilityAdjustableAction { direction in
+                state.macTopFraction = min(0.95, max(0.05, state.macTopFraction + (direction == .increment ? 0.08 : -0.08)))
             }
-        }
-        .frame(height: state.macFriendVisible ? nil : 32, alignment: .top)
-        .clipped()
+            .help("Drag to resize Friend and references")
     }
 
-    private func referenceSection(height: CGFloat) -> some View {
-        ZStack(alignment: .top) {
-            referenceContent.frame(height: height, alignment: .top)
-                .opacity(state.macReferenceVisible ? 1 : 0)
-                .allowsHitTesting(state.macReferenceVisible)
-                .accessibilityHidden(!state.macReferenceVisible)
-            if !state.macReferenceVisible {
-                Button { state.macReferenceVisible = true } label: {
-                    Label("Show Multiview", systemImage: "rectangle.on.rectangle")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(maxWidth: .infinity).frame(height: 32)
-                        .background(panel, in: RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.plain).foregroundStyle(accent)
-                .accessibilityIdentifier("bound.mac-show-multiview")
-            }
-        }
-        .frame(height: state.macReferenceVisible ? height : 32, alignment: .top)
-        .clipped()
-    }
-
-    private func friendCard(width: CGFloat, feedHeight: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "person.2.wave.2.fill").foregroundStyle(accent)
-                Text("FRIEND GAMEPLAY").font(.system(size: 9, weight: .bold)).tracking(1.1)
-                Spacer()
-                Text(sharing.remoteVisible ? "LIVE" : sharing.joined ? "WAITING" : sharing.active ? "CONNECTING" : "OFF")
-                    .font(.system(size: 8, weight: .bold, design: .monospaced)).tracking(0.7)
-                    .foregroundStyle(sharing.remoteVisible ? Color.green : Color.white.opacity(0.48))
-            }
+    private var friendSection: some View {
+        VStack(spacing: 4) {
             ZStack {
-                RoundedRectangle(cornerRadius: 8).fill(Color.black)
+                Color.black
                 BoundRemoteCanvas(view: sharing.remoteView)
-                    .frame(width: width, height: feedHeight)
-                    .opacity(sharing.remoteVisible || state.displaysFixtureVideo ? 1 : 0)
-                if !sharing.remoteVisible && !state.displaysFixtureVideo {
-                    VStack(spacing: 7) {
-                        Image(systemName: sharing.active ? "hourglass" : "person.crop.rectangle.stack")
-                            .font(.system(size: 18)).foregroundStyle(.white.opacity(0.48))
-                        Text(sharing.active ? "Waiting for friend" : "Connect a friend")
-                            .font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.66))
-                    }.allowsHitTesting(false)
+                    .opacity(state.macFriendVisible && (sharing.remoteVisible || state.displaysFixtureVideo) ? 1 : 0)
+                if !state.macFriendVisible {
+                    Button("Show Friend Gameplay") { state.macFriendVisible = true }
+                        .accessibilityIdentifier("bound.mac-show-friend")
+                } else if !sharing.remoteVisible && !state.displaysFixtureVideo {
+                    Text(sharing.active ? "Waiting for friend" : "Connect a friend")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .allowsHitTesting(false)
                 }
             }
-            .frame(width: width, height: feedHeight)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .accessibilityElement(children: .ignore)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            .accessibilityElement(children: state.macFriendVisible ? .ignore : .contain)
             .accessibilityLabel("Friend gameplay")
             .accessibilityValue(sharing.status)
             .accessibilityIdentifier("bound.friend-screen")
-            .frame(maxWidth: .infinity)
-            HStack(spacing: 8) {
-                Button(action: showFriends) {
-                    Label(sharing.active ? "Friends" : "Connect", systemImage: "person.2.fill")
-                        .font(.system(size: 11, weight: .semibold)).frame(maxWidth: .infinity).frame(height: 32)
-                        .background(accent, in: RoundedRectangle(cornerRadius: 7))
-                }.buttonStyle(.plain).accessibilityIdentifier("bound.mac-friends-connect").help("Connect with a friend")
-                if sharing.active {
-                    Button { sharing.stop() } label: {
-                        Label("Stop", systemImage: "stop.fill")
-                            .font(.system(size: 11, weight: .semibold)).frame(maxWidth: .infinity).frame(height: 32)
-                            .background(raised, in: RoundedRectangle(cornerRadius: 7))
-                    }.buttonStyle(.plain)
+            if state.macFriendVisible {
+                Button {
+                    if sharing.active || sharing.joined { sharing.stop() } else { showFriends() }
+                } label: {
+                    Text(sharing.active || sharing.joined ? "Disconnect" : "Connect")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity).frame(height: 32)
+                        .background(accent, in: RoundedRectangle(cornerRadius: 6))
                 }
+                .buttonStyle(.plain).foregroundStyle(.white)
+                .accessibilityIdentifier("bound.mac-friends-connect")
             }
         }
-        .padding(11).background(panel, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(hairline, lineWidth: 1))
     }
 
-    private var referencePicker: some View {
-        HStack(spacing: 3) {
-            referenceButton(.dex, icon: "magnifyingglass", label: "RR Dex", id: "bound.mac-dex")
-            referenceButton(.bosses, icon: "person.crop.rectangle.stack", label: "Boss", id: "bound.mac-bosses")
-            referenceButton(.notes, icon: "note.text", label: "Notes", id: "bound.mac-notes")
-            referenceButton(.types, icon: "circle.hexagongrid.fill", label: "Types", id: "bound.mac-types")
+    private var midSection: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 3) {
+                referenceButton(.dex, icon: "magnifyingglass", label: "Dex", id: "bound.mac-dex")
+                referenceButton(.bosses, icon: "person.crop.rectangle", label: "Docs", id: "bound.mac-bosses")
+            }.padding(3).background(panel)
+            ZStack {
+                BoundRetainedReferenceView(isActive: referenceIsVisible && state.macMidReference == .dex,
+                                           floating: false, portraitTopInset: 0) { floating, topInset in
+                    BoundRRDexView(gameID: gameID, floating: floating, portraitTopInset: topInset,
+                        isActive: referenceIsVisible && state.macMidReference == .dex,
+                        presentationChanged: { presented in
+                            if state.macMidReference == .dex { editingChanged(presented) }
+                        }, textEditingChanged: { editing in
+                            if state.macMidReference == .dex { textEditingChanged(editing) }
+                        },
+                        currentSave: { try currentSave(gameID) })
+                }
+                BoundRetainedReferenceView(isActive: referenceIsVisible && state.macMidReference == .bosses,
+                                           floating: false, portraitTopInset: 0) { floating, topInset in
+                    BoundBossGuideView(gameID: gameID, floating: floating, portraitTopInset: topInset,
+                        isActive: referenceIsVisible && state.macMidReference == .bosses,
+                        presentationChanged: { presented in
+                            if state.macMidReference == .bosses { editingChanged(presented) }
+                        })
+                }
+            }.id(gameID)
         }
-        .padding(4).background(panel, in: RoundedRectangle(cornerRadius: 10))
+        .background(.black).clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .contain).accessibilityIdentifier("bound.mac-mid")
+    }
+
+    private var bottomSection: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 3) {
+                referenceButton(.notes, icon: "note.text", label: "Notes", id: "bound.mac-notes")
+                referenceButton(.types, icon: "circle.hexagongrid", label: "Types", id: "bound.mac-types")
+            }.padding(3).background(panel)
+            ZStack {
+                BoundNotesEditor(gameID: gameID, floating: false, editingChanged: { editing in
+                    textEditingChanged(editing); editingChanged(editing)
+                })
+                .opacity(state.macBottomReference == .notes ? 1 : 0)
+                .allowsHitTesting(referenceIsVisible && state.macBottomReference == .notes)
+                .accessibilityHidden(!referenceIsVisible || state.macBottomReference != .notes)
+                BoundTypeChartView(topInset: 0, constrainsPan: true, fitsViewport: true)
+                    .opacity(state.macBottomReference == .types ? 1 : 0)
+                    .allowsHitTesting(referenceIsVisible && state.macBottomReference == .types)
+                    .accessibilityHidden(!referenceIsVisible || state.macBottomReference != .types)
+            }.id(gameID).frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(.black).clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .contain).accessibilityIdentifier("bound.mac-bottom")
     }
 
     private func referenceButton(_ content: BoundPiPContent, icon: String, label: String, id: String) -> some View {
-        let selected = state.macReferenceVisible && state.macReference == content
+        let selected = content == state.macMidReference || content == state.macBottomReference
         return Button {
             state.macReference = content
             state.macReferenceVisible = true
         } label: {
-            VStack(spacing: 5) {
-                Image(systemName: icon).font(.system(size: 13, weight: .semibold))
-                Text(label).font(.system(size: 9, weight: .semibold)).lineLimit(1)
-            }
-            .foregroundStyle(selected ? accent : Color.white.opacity(0.58))
-            .frame(maxWidth: .infinity).frame(height: 39)
-            .background(selected ? accent.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 7))
+            Label(label, systemImage: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .frame(maxWidth: .infinity).frame(height: 30)
+                .foregroundStyle(selected ? accent : .white.opacity(0.6))
+                .background(selected ? accent.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain).accessibilityIdentifier(id)
-        .help(label)
         .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private var referenceContent: some View {
-        ZStack(alignment: .topLeading) {
-            if state.macReferenceVisible && state.macReference == .notes {
-                BoundNotesEditor(gameID: gameID, floating: false, editingChanged: { editing in
-                    textEditingChanged(editing)
-                    editingChanged(editing)
-                })
-            } else if state.macReferenceVisible && state.macReference == .types {
-                BoundTypeChartView(topInset: 0, constrainsPan: true)
-            }
-            BoundRetainedReferenceView(isActive: state.macReferenceVisible && state.macReference == .dex, floating: false,
-                                       portraitTopInset: 0) { floating, topInset in
-                BoundRRDexView(gameID: gameID, floating: floating, portraitTopInset: topInset,
-                               isActive: state.macReferenceVisible && state.macReference == .dex,
-                               presentationChanged: { presented in
-                    if state.macReference == .dex { editingChanged(presented) }
-                }, textEditingChanged: { editing in
-                    if state.macReference == .dex { textEditingChanged(editing) }
-                }, currentSave: { try currentSave(gameID) })
-            }
-            BoundRetainedReferenceView(isActive: state.macReferenceVisible && state.macReference == .bosses, floating: false,
-                                       portraitTopInset: 0) { floating, topInset in
-                BoundBossGuideView(gameID: gameID, floating: floating, portraitTopInset: topInset,
-                                   isActive: state.macReferenceVisible && state.macReference == .bosses,
-                                   presentationChanged: { presented in
-                    if state.macReference == .bosses { editingChanged(presented) }
-                })
-            }
-        }
-        .id(gameID)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(8)
-        .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(hairline, lineWidth: 1))
-    }
-
-    private func sideButton(_ title: String, icon: String, action: @escaping () -> Void,
-                            id: String? = nil) -> some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: icon).font(.system(size: 13, weight: .medium)).frame(width: 18)
-                if geometry.sidebar.width > 100 {
-                    Text(title).font(.system(size: 11, weight: .medium)).lineLimit(1)
-                }
-                Spacer(minLength: 0)
-            }
-            .foregroundStyle(Color.white.opacity(0.72))
-            .padding(.horizontal, 9).frame(height: 34)
-            .contentShape(RoundedRectangle(cornerRadius: 7))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityIdentifier(id ?? "bound.mac-\(title.lowercased())")
-        .help(title)
-    }
-
-    @ViewBuilder
-    private func toolbarButtonLabel(_ title: String, icon: String) -> some View {
-        if compactToolbar {
-            Image(systemName: icon).font(.system(size: 13, weight: .semibold))
-                .frame(width: 30, height: 30).background(raised, in: RoundedRectangle(cornerRadius: 8))
-                .accessibilityLabel(title)
-        } else {
-            Label(title, systemImage: icon)
-                .font(.system(size: 11, weight: .semibold))
-                .padding(.horizontal, 11).frame(height: 30)
-                .background(raised, in: RoundedRectangle(cornerRadius: 8))
-        }
-    }
-}
-
-private extension View {
-    func frame(_ rect: CGRect) -> some View {
-        frame(width: rect.width, height: rect.height)
-            .position(x: rect.midX, y: rect.midY)
     }
 }

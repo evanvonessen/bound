@@ -82,7 +82,18 @@ final class BoundCompanionState: ObservableObject {
     @Published var showingFriends = false
     @Published var showingSettings = false
     // Desktop reference selection is separate from the iPhone PiP cycle.
-    @Published var macReference: BoundPiPContent = .dex { didSet { if oldValue != macReference { changed?() } } }
+    @Published var macReference: BoundPiPContent = .dex {
+        didSet {
+            if macReference == .dex || macReference == .bosses { macMidReference = macReference }
+            if macReference == .notes || macReference == .types { macBottomReference = macReference }
+            if oldValue != macReference { changed?() }
+        }
+    }
+    @Published var macMidReference: BoundPiPContent = .dex
+    @Published var macBottomReference: BoundPiPContent = .types
+    @Published var macSidebarVisible = true { didSet { if oldValue != macSidebarVisible { changed?() } } }
+    @Published var macSidebarWidth: CGFloat = 420 { didSet { if oldValue != macSidebarWidth { changed?() } } }
+    @Published var macTopFraction: CGFloat = 0.44
     @Published var macFriendVisible = true { didSet { if oldValue != macFriendVisible { changed?() } } }
     @Published var macReferenceVisible = true { didSet { if oldValue != macReferenceVisible { changed?() } } }
     @Published var revision = 0
@@ -261,6 +272,7 @@ enum BoundMacControllerActionRouting {
     private static func show(_ content: BoundPiPContent, in state: BoundCompanionState) {
         state.macReference = content
         state.macReferenceVisible = true
+        state.macSidebarVisible = true
     }
 
     private static func advanceReference(direction: Int, in state: BoundCompanionState) {
@@ -609,7 +621,10 @@ final class BoundCompanionCoordinator {
         host.safeAreaRegions = []
         host.view.backgroundColor = .clear
         let overlay = BoundOverlayView()
-        overlay.yieldsTouch = { [weak self] point in self?.macHost?.rootView.geometry.gameplay.contains(point) ?? false }
+        overlay.yieldsTouch = { [weak self] point in
+            guard let geometry = self?.macHost?.rootView.geometry else { return false }
+            return geometry.gameplay.contains(point) && !geometry.controls.contains(point)
+        }
         owner.addChild(host)
         owner.view.addSubview(overlay)
         overlay.addSubview(host.view)
@@ -639,7 +654,9 @@ final class BoundCompanionCoordinator {
         defer { refreshControllerMultiviewRouting() }
         if let macHost, let overlay {
             let safeBounds = bounds.inset(by: safeArea)
-            let geometry = BoundMacWorkspaceGeometry(bounds: CGRect(origin: .zero, size: safeBounds.size))
+            let geometry = BoundMacWorkspaceGeometry(bounds: CGRect(origin: .zero, size: safeBounds.size),
+                                                     sidebarVisible: state.macSidebarVisible,
+                                                     preferredSidebarWidth: state.macSidebarWidth)
             if macHost.rootView.geometry != geometry { macHost.rootView.geometry = geometry }
             overlay.frame = safeBounds
             macHost.view.frame = overlay.bounds
@@ -1071,7 +1088,7 @@ final class BoundCompanionCoordinator {
     var automaticControllerMultiviewAvailable: Bool {
         if macHost != nil {
             return BoundControllerMultiviewPreferences().isEnabled && macControllerNavigationEnabled
-                && state.macReferenceVisible
+                && state.macSidebarVisible && state.macReferenceVisible
         }
         return BoundControllerMultiviewPreferences().isEnabled && controllerCompanionAvailable
             && controllerReferenceContent != nil
@@ -1101,7 +1118,7 @@ final class BoundCompanionCoordinator {
             && (landscapeArrangement.active ? landscapeArrangement.contents.count > 1 : landscapeCompanion.referenceContents.count > 1)
     }
     var controllerReferenceContent: BoundPiPContent? {
-        if macHost != nil { return state.macReferenceVisible ? state.macReference : nil }
+        if macHost != nil { return state.macSidebarVisible && state.macReferenceVisible ? state.macReference : nil }
         if landscapeArrangement.active {
             return landscapeArrangement.referenceVisible ? landscapeArrangement.referenceContent : nil
         }
@@ -1251,7 +1268,8 @@ final class BoundCompanionCoordinator {
     func foreground() {
         foregroundTask?.cancel()
         scheduleNotesDismissalIfNeeded()
-        if state.content == .dex || (macHost != nil && state.macReference == .dex)
+        if state.content == .dex || (macHost != nil && state.macSidebarVisible
+            && state.macReferenceVisible && state.macMidReference == .dex)
             || (landscapeCompanion.active && landscapeCompanion.referenceContent == .dex)
             || (landscapeArrangement.active && landscapeArrangement.referenceContent == .dex) {
             BoundRRDexSaveRefreshEvent.post(gameID: gameID)

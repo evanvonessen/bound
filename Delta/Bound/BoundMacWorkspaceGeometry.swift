@@ -11,29 +11,27 @@ enum BoundMacWorkspacePlatform {
     }
 }
 
-/// The game renderer and SwiftUI chrome use the same rectangles, so resizing
-/// cannot place reference controls over gameplay or its touchscreen input.
+/// Shared rectangles keep the native game renderer aligned with the resizable sidebar.
 struct BoundMacWorkspaceGeometry: Equatable {
-    let sidebar: CGRect
-    let toolbar: CGRect
+    let bounds: CGRect
     let gameplay: CGRect
-    let footer: CGRect
     let inspector: CGRect
+    let resizeHandle: CGRect
+    let controls: CGRect
 
-    init(bounds: CGRect) {
+    init(bounds: CGRect, sidebarVisible: Bool = true, preferredSidebarWidth: CGFloat = 420) {
+        self.bounds = bounds
         let width = max(0, bounds.width), height = max(0, bounds.height)
-        let sidebarWidth: CGFloat = width >= 1080 ? 176 : width >= 840 ? 64 : 0
-        let inspectorWidth = min(420, max(350, width * 0.34), width * 0.48)
-        let centerWidth = max(0, width - sidebarWidth - inspectorWidth)
-        let toolbarHeight = min(56, height * 0.15)
-        let footerHeight = min(36, height * 0.1)
-        let gutter = min(16, centerWidth * 0.04, height * 0.02)
-        sidebar = CGRect(x: bounds.minX, y: bounds.minY, width: sidebarWidth, height: height)
-        toolbar = CGRect(x: sidebar.maxX, y: bounds.minY, width: centerWidth, height: toolbarHeight)
-        footer = CGRect(x: sidebar.maxX, y: bounds.maxY - footerHeight, width: centerWidth, height: footerHeight)
-        gameplay = CGRect(x: sidebar.maxX + gutter, y: toolbar.maxY + gutter,
-                          width: max(0, centerWidth - 2 * gutter),
-                          height: max(0, height - toolbarHeight - footerHeight - 2 * gutter))
-        inspector = CGRect(x: bounds.maxX - inspectorWidth, y: bounds.minY, width: inspectorWidth, height: height)
+        let maximum = min(720, width * 0.6, max(0, width - 240))
+        let minimum = min(280, maximum)
+        let preferred = preferredSidebarWidth.isFinite ? preferredSidebarWidth : 420
+        let inspectorWidth = sidebarVisible ? min(maximum, max(minimum, preferred)) : 0
+        gameplay = CGRect(x: bounds.minX, y: bounds.minY, width: width - inspectorWidth, height: height)
+        inspector = sidebarVisible ? CGRect(x: gameplay.maxX, y: bounds.minY, width: inspectorWidth, height: height) : .zero
+        resizeHandle = sidebarVisible ? CGRect(x: inspector.minX, y: bounds.minY, width: min(12, inspectorWidth), height: height) : .zero
+        let controlWidth = min(76, width), controlHeight = min(36, height)
+        controls = CGRect(x: max(bounds.minX, bounds.maxX - controlWidth - 8),
+                          y: bounds.minY + min(8, max(0, height - controlHeight)),
+                          width: controlWidth, height: controlHeight)
     }
 }
