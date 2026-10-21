@@ -310,7 +310,7 @@ final class BoundFriendAccount: ObservableObject {
     private var removalPending = false
     private var savePending = false
     private var retryDelay: TimeInterval = 5
-    private var loadingEmailAddress = false
+    private var emailAddressTask: Task<Void, Never>?
     private var nextPasswordResetAt = Date.distantPast
     private var pendingDeletion: BoundDeletionRecord?
     private var deletionIdentityOwner: UUID?
@@ -471,7 +471,7 @@ final class BoundFriendAccount: ObservableObject {
         pendingMFAIdentity?.invalidate(); pendingMFAIdentity = nil; pendingMFASession = nil
         pendingMFA = false; securityAAL2 = false; securityBusy = false
         securityFactors = []; passkeys = []; totpEnrollment = nil; securityStatus = ""
-        emailAddress = nil; loadingEmailAddress = false
+        emailAddress = nil; emailAddressTask?.cancel(); emailAddressTask = nil
         changingEmail = false; emailChangeStatus = ""
         sendingPasswordReset = false; passwordResetStatus = ""
         deletionEmail = nil; deletionIdentityOwner = nil
@@ -894,11 +894,20 @@ final class BoundFriendAccount: ObservableObject {
         return emailClaim(token)
     }
     func loadEmailAddress() async {
-        guard emailAddress == nil, !loadingEmailAddress, !deletionPending else { return }
+        guard emailAddress == nil, !deletionPending else { return }
+        if let emailAddressTask { await emailAddressTask.value; return }
+        let run = generation
+        let lookup = Task<Void, Never> { @MainActor [weak self] in
+            await self?.fetchEmailAddress(run: run)
+        }
+        emailAddressTask = lookup
+        await lookup.value
+        if generation == run { emailAddressTask = nil }
+    }
+    private func fetchEmailAddress(run: UUID) async {
         await refreshIfNeeded()
-        guard emailAddress == nil, !loadingEmailAddress, !deletionPending, let identity = session else { return }
-        let run = generation; loadingEmailAddress = true
-        defer { if generation == run { loadingEmailAddress = false } }
+        guard generation == run, !Task.isCancelled, emailAddress == nil,
+              !deletionPending, let identity = session else { return }
         do {
             let response = try await transport(identity.accountUserRequest())
             guard generation == run, !Task.isCancelled, identity.isSameSession(as: session),
@@ -969,15 +978,44 @@ final class BoundFriendAccount: ObservableObject {
 
     nonisolated static let passwordRecoveryRedirect = "https://evanvonessen.github.io/bound/reset-password.html"
     func requestPasswordReset(email: String) async -> Bool {
-        guard !busy, !sendingPasswordReset, session == nil, !deletionPending else { return false }
-        guard let normalized = Self.normalizedEmail(email) else {
-            passwordResetStatus = "Enter a valid email address."; return false
-        }
+        guard session == nil else { return false }
+        return await sendPasswordReset(email: email, identity: nil)
+    }
+
+    /// Signed-in recovery always uses the account's authenticated email, never
+    /// an editable field or credentials from the browser's recovery session.
+    func requestPasswordResetForCurrentAccount() async -> Bool {
+        guard let identity = session else { return false }
+        return await sendPasswordReset(email: nil, identity: identity)
+    }
+
+    private func passwordResetSessionMatches(_ identity: AppCloudSession?) -> Bool {
+        if let identity { return identity.isSameSession(as: session) }
+        return session == nil
+    }
+
+    private func sendPasswordReset(email: String?, identity: AppCloudSession?) async -> Bool {
+        guard !busy, !securityBusy, !changingEmail, !sendingPasswordReset, !deletionPending else { return false }
         guard Date() >= nextPasswordResetAt else {
             passwordResetStatus = "Please wait a minute before requesting another reset link."; return false
         }
         let run = generation; sendingPasswordReset = true; passwordResetStatus = ""
         defer { if generation == run { sendingPasswordReset = false } }
+        if identity != nil { await refreshIfNeeded() }
+        guard generation == run, !Task.isCancelled, !deletionPending else { return false }
+        guard passwordResetSessionMatches(identity) else {
+            passwordResetStatus = "Could not verify your account. Check your connection or sign in again before resetting your password."
+            return false
+        }
+        if identity != nil && emailAddress == nil { await loadEmailAddress() }
+        guard generation == run, !Task.isCancelled, !deletionPending,
+              passwordResetSessionMatches(identity) else { return false }
+        guard let normalized = Self.normalizedEmail((identity == nil ? email : emailAddress) ?? "") else {
+            passwordResetStatus = identity == nil
+                ? "Enter a valid email address."
+                : "Could not load your account email. Check your connection and try again."
+            return false
+        }
         do {
             let key = try configuration()
             var components = URLComponents(string: Self.origin + "/auth/v1/recover")!
@@ -989,7 +1027,8 @@ final class BoundFriendAccount: ObservableObject {
             request.httpBody = try JSONSerialization.data(withJSONObject: ["email": normalized])
             nextPasswordResetAt = Date().addingTimeInterval(60)
             let response = try await transport(request)
-            guard generation == run, !Task.isCancelled, session == nil else { return false }
+            guard generation == run, !Task.isCancelled, !deletionPending,
+                  passwordResetSessionMatches(identity) else { return false }
             guard (200..<300).contains(response.status) else {
                 passwordResetStatus = response.status == 429
                     ? "Too many reset requests. Please wait and try again later."
@@ -1000,7 +1039,8 @@ final class BoundFriendAccount: ObservableObject {
             passwordResetStatus = "If an account uses that email, a password reset link will arrive shortly. Check your inbox and spam folder."
             return true
         } catch {
-            guard generation == run, !Task.isCancelled else { return false }
+            guard generation == run, !Task.isCancelled, !deletionPending,
+                  passwordResetSessionMatches(identity) else { return false }
             passwordResetStatus = "Could not request a reset link. Check your connection and try again later."
             return false
         }

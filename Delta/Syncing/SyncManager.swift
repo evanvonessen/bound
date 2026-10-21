@@ -73,6 +73,17 @@ extension SyncManager
         guard service == .dropbox else { return nil }
         return .dropbox
     }
+
+    static func shouldPreserveSyncState(after error: AuthenticationError) -> Bool {
+        switch error {
+        case .other(ServiceError.connectionFailed), .other(ServiceError.rateLimitExceeded),
+             .other(BoundDropboxOAuth.Failure.unavailable), .other(BoundDropboxOAuth.Failure.notConfigured),
+             .other(BoundDropboxOAuth.Failure.rateLimited), .other(BoundDropboxOAuth.Failure.secondFactorRequired):
+            return true
+        default:
+            return false
+        }
+    }
     
     enum Error: LocalizedError
     {
@@ -211,6 +222,10 @@ extension SyncManager
                 let clear = { @MainActor in
                     self?.providerGeneration = UUID()
                     BoundDropboxOAuth.shared.clearCredentials()
+                    // Retained callbacks remain fenced by their old generation,
+                    // while Harmony can retry with a fresh provider after its
+                    // own deauthentication (including interactive reconnect).
+                    _ = self?.configureProvider(.dropbox)
                 }
                 if Thread.isMainThread {
                     MainActor.assumeIsolated { clear() }
@@ -421,11 +436,13 @@ private extension SyncManager
                     // A network failure leaves the coordinator usable for a later retry.
                     self.startingCoordinator = nil
                     self.coordinator = candidate
-                    switch authError {
-                    case .other(ServiceError.connectionFailed):
-                        Logger.sync.error("Failed to authenticate SyncManager due to network connection (ignoring). \(authError.localizedDescription, privacy: .public)")
+                    if Self.shouldPreserveSyncState(after: authError) {
+                        // A broker outage/configuration issue is not a changed
+                        // Dropbox account. Keep Harmony's sync history intact.
+                        self.isChangingBoundAccount = false
+                        Logger.sync.error("Sync authentication can be retried. \(authError.localizedDescription, privacy: .public)")
                         completionHandler(.success); finish()
-                    default:
+                    } else {
                         Logger.sync.error("Failed to authenticate SyncManager. \(authError.localizedDescription, privacy: .public)")
                         self.deauthenticate { result in
                             DispatchQueue.main.async {

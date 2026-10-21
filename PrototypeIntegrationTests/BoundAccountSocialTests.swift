@@ -407,6 +407,272 @@ final class BoundAccountSocialTests: XCTestCase {
         XCTAssertEqual(storage.removeCount, 0)
     }
 
+    func testSignedInPasswordResetUsesAuthenticatedEmailWithoutChangingSession() async throws {
+        let owner = UUID()
+        let storage = SocialFixtureStorage()
+        try storage.write(JSONEncoder().encode(BoundSavedSession(origin: BoundFriendAccount.origin, owner: owner,
+            accessToken: accessToken(owner: owner, email: "verified@example.invalid"), refreshToken: "synthetic-refresh-token")))
+        var requests: [URLRequest] = []
+        let account = BoundFriendAccount(storage: storage, automaticRefresh: false,
+                                         configuration: { "fixture-publishable-key" }, transport: { request in
+            requests.append(request)
+            return try self.jsonResponse([:])
+        })
+        defer { account.signOut(); storage.clear() }
+        let originalSession = try XCTUnwrap(account.session)
+        let originalStorage = try storage.read()
+        let originalStatus = account.status
+
+        let result = await account.requestPasswordResetForCurrentAccount()
+
+        XCTAssertTrue(result)
+        let request = try XCTUnwrap(requests.first)
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(request.url?.path, "/auth/v1/recover")
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), "fixture-publishable-key")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"), "Recovery does not send the saved session token")
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: String],
+                       ["email": "verified@example.invalid"])
+        XCTAssertTrue(originalSession.isSameSession(as: account.session))
+        XCTAssertEqual(account.emailAddress, "verified@example.invalid")
+        XCTAssertEqual(account.status, originalStatus)
+        XCTAssertFalse(account.passwordResetStatus.isEmpty)
+        XCTAssertFalse(account.sendingPasswordReset)
+        XCTAssertEqual(try storage.read(), originalStorage)
+        XCTAssertEqual(storage.writeCount, 1)
+        XCTAssertEqual(storage.removeCount, 0)
+
+        account.signOut()
+        let repeated = await account.requestPasswordReset(email: "verified@example.invalid")
+        XCTAssertFalse(repeated, "Signed-in and signed-out recovery share the resend cooldown")
+        XCTAssertEqual(requests.count, 1)
+    }
+
+    func testSignedInPasswordResetResolvesLegacyEmailBeforeSending() async throws {
+        let owner = UUID()
+        let storage = SocialFixtureStorage()
+        try storage.write(JSONEncoder().encode(BoundSavedSession(origin: BoundFriendAccount.origin, owner: owner,
+            accessToken: accessToken(owner: owner), refreshToken: "synthetic-refresh-token")))
+        var requests: [URLRequest] = []
+        let account = BoundFriendAccount(storage: storage, automaticRefresh: false,
+                                         configuration: { "fixture-publishable-key" }, transport: { request in
+            requests.append(request)
+            if request.url?.path == "/auth/v1/user" {
+                return try self.jsonResponse(["id": owner.uuidString.lowercased(), "role": "authenticated",
+                                              "is_anonymous": false, "email": "verified@example.invalid"])
+            }
+            return try self.jsonResponse([:])
+        })
+        defer { account.signOut(); storage.clear() }
+        let original = try storage.read()
+        XCTAssertNil(account.emailAddress)
+
+        let result = await account.requestPasswordResetForCurrentAccount()
+
+        XCTAssertTrue(result)
+        XCTAssertEqual(requests.compactMap { $0.url?.path }, ["/auth/v1/user", "/auth/v1/recover"])
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: XCTUnwrap(requests.last?.httpBody)) as? [String: String],
+                       ["email": "verified@example.invalid"])
+        XCTAssertEqual(account.session?.owner, owner)
+        XCTAssertEqual(try storage.read(), original)
+        XCTAssertEqual(storage.writeCount, 1)
+        XCTAssertEqual(storage.removeCount, 0)
+    }
+
+    func testSignedInPasswordResetRefreshesExpiredSessionAndReportsRefreshFailure() async throws {
+        for refreshSucceeds in [true, false] {
+            let owner = UUID()
+            let storage = SocialFixtureStorage()
+            try storage.write(JSONEncoder().encode(BoundSavedSession(origin: BoundFriendAccount.origin, owner: owner,
+                accessToken: accessToken(owner: owner, expiry: Date().timeIntervalSince1970 - 60,
+                                         email: "cached@example.invalid"), refreshToken: "synthetic-refresh-token")))
+            let originalStorage = try storage.read()
+            var requests: [URLRequest] = []
+            let account = BoundFriendAccount(storage: storage, automaticRefresh: false,
+                                             configuration: { "fixture-publishable-key" }, transport: { request in
+                requests.append(request)
+                if request.url?.path == "/auth/v1/token" {
+                    guard refreshSucceeds else { throw URLError(.notConnectedToInternet) }
+                    return try self.jsonResponse(["access_token": self.accessToken(owner: owner),
+                                                  "refresh_token": "rotated-refresh-token",
+                                                  "user": ["id": owner.uuidString.lowercased(), "email": "refreshed@example.invalid"]])
+                }
+                return try self.jsonResponse([:])
+            })
+            let originalSession = try XCTUnwrap(account.session)
+
+            let result = await account.requestPasswordResetForCurrentAccount()
+
+            XCTAssertEqual(result, refreshSucceeds)
+            XCTAssertEqual(account.session?.owner, owner)
+            XCTAssertFalse(account.sendingPasswordReset)
+            XCTAssertFalse(account.passwordResetStatus.isEmpty, "An unavailable expired session must explain how to retry")
+            XCTAssertEqual(storage.removeCount, 0)
+            if refreshSucceeds {
+                XCTAssertEqual(requests.compactMap { $0.url?.path }, ["/auth/v1/token", "/auth/v1/recover"])
+                XCTAssertEqual(try JSONSerialization.jsonObject(with: XCTUnwrap(requests.last?.httpBody)) as? [String: String],
+                               ["email": "refreshed@example.invalid"])
+                XCTAssertTrue(originalSession.isSameSession(as: account.session))
+                XCTAssertEqual(storage.writeCount, 2, "Only the normal token refresh updates saved credentials")
+            } else {
+                XCTAssertEqual(requests.compactMap { $0.url?.path }, ["/auth/v1/token"])
+                XCTAssertEqual(try storage.read(), originalStorage)
+                XCTAssertEqual(storage.writeCount, 1)
+            }
+            account.signOut(); storage.clear()
+        }
+    }
+
+    func testSignedInPasswordResetWaitsForInFlightEmailLookup() async throws {
+        let owner = UUID()
+        let storage = SocialFixtureStorage()
+        try storage.write(JSONEncoder().encode(BoundSavedSession(origin: BoundFriendAccount.origin, owner: owner,
+            accessToken: accessToken(owner: owner), refreshToken: "synthetic-refresh-token")))
+        let lookupStarted = expectation(description: "account email lookup started")
+        let resetStarted = expectation(description: "reset started during lookup")
+        var continuation: CheckedContinuation<BoundAuthTransport.Response, Error>?
+        var requests: [URLRequest] = []
+        let account = BoundFriendAccount(storage: storage, automaticRefresh: false,
+                                         configuration: { "fixture-publishable-key" }, transport: { request in
+            requests.append(request)
+            if request.url?.path == "/auth/v1/user" {
+                lookupStarted.fulfill()
+                return try await withCheckedThrowingContinuation { continuation = $0 }
+            }
+            return try self.jsonResponse([:])
+        })
+        defer { account.signOut(); storage.clear() }
+        let lookup = Task { await account.loadEmailAddress() }
+        await fulfillment(of: [lookupStarted], timeout: 2)
+        let reset = Task {
+            resetStarted.fulfill()
+            return await account.requestPasswordResetForCurrentAccount()
+        }
+        await fulfillment(of: [resetStarted], timeout: 2)
+        XCTAssertTrue(account.sendingPasswordReset)
+        continuation?.resume(returning: try jsonResponse(["id": owner.uuidString.lowercased(), "role": "authenticated",
+                                                         "is_anonymous": false, "email": "verified@example.invalid"]))
+        await lookup.value
+        let result = await reset.value
+
+        XCTAssertTrue(result)
+        XCTAssertEqual(requests.compactMap { $0.url?.path }, ["/auth/v1/user", "/auth/v1/recover"])
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: XCTUnwrap(requests.last?.httpBody)) as? [String: String],
+                       ["email": "verified@example.invalid"])
+        XCTAssertFalse(account.sendingPasswordReset)
+        XCTAssertEqual(storage.writeCount, 1)
+    }
+
+    func testSignedInPasswordResetRejectsUnverifiedEmailWithoutSendingRecoveryMail() async throws {
+        for offline in [false, true] {
+            let owner = UUID()
+            let storage = SocialFixtureStorage()
+            try storage.write(JSONEncoder().encode(BoundSavedSession(origin: BoundFriendAccount.origin, owner: owner,
+                accessToken: accessToken(owner: owner), refreshToken: "synthetic-refresh-token")))
+            var paths: [String] = []
+            let account = BoundFriendAccount(storage: storage, automaticRefresh: false,
+                                             configuration: { "fixture-publishable-key" }, transport: { request in
+                paths.append(request.url!.path)
+                if offline { throw URLError(.notConnectedToInternet) }
+                return try self.jsonResponse(["id": UUID().uuidString.lowercased(), "role": "authenticated",
+                                              "is_anonymous": false, "email": "different-owner@example.invalid"])
+            })
+
+            let result = await account.requestPasswordResetForCurrentAccount()
+
+            XCTAssertFalse(result)
+            XCTAssertEqual(paths, ["/auth/v1/user"])
+            XCTAssertNil(account.emailAddress)
+            XCTAssertEqual(account.session?.owner, owner)
+            XCTAssertFalse(account.passwordResetStatus.isEmpty)
+            XCTAssertFalse(account.passwordResetStatus.contains("different-owner"))
+            XCTAssertFalse(account.sendingPasswordReset)
+            XCTAssertEqual(storage.writeCount, 1)
+            XCTAssertEqual(storage.removeCount, 0)
+            account.signOut(); storage.clear()
+        }
+    }
+
+    func testSignedInPasswordResetIgnoresLateResponseAfterSignOut() async throws {
+        let started = expectation(description: "signed-in recovery started")
+        var continuation: CheckedContinuation<BoundAuthTransport.Response, Error>?
+        let (account, storage) = try makeEmailChangeAccount(transport: { request in
+            XCTAssertEqual(request.url?.path, "/auth/v1/recover")
+            started.fulfill()
+            return try await withCheckedThrowingContinuation { continuation = $0 }
+        })
+        defer { account.signOut(); storage.clear() }
+
+        let task = Task { await account.requestPasswordResetForCurrentAccount() }
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertTrue(account.sendingPasswordReset)
+        account.signOut()
+        continuation?.resume(returning: try jsonResponse([:]))
+        let result = await task.value
+
+        XCTAssertFalse(result)
+        XCTAssertNil(account.session)
+        XCTAssertTrue(account.passwordResetStatus.isEmpty)
+        XCTAssertFalse(account.sendingPasswordReset)
+        XCTAssertNil(try storage.read())
+        XCTAssertEqual(storage.writeCount, 1)
+    }
+
+    func testSignedInPasswordResetDoesNotSendAfterAccountSwitchDuringEmailLookup() async throws {
+        let owner = UUID(), nextOwner = UUID()
+        let storage = SocialFixtureStorage()
+        try storage.write(JSONEncoder().encode(BoundSavedSession(origin: BoundFriendAccount.origin, owner: owner,
+            accessToken: accessToken(owner: owner), refreshToken: "synthetic-refresh-token")))
+        let started = expectation(description: "legacy account email lookup")
+        var continuation: CheckedContinuation<BoundAuthTransport.Response, Error>?
+        var recoveryRequests = 0
+        let account = BoundFriendAccount(storage: storage, automaticRefresh: false,
+                                         configuration: { "fixture-publishable-key" }, transport: { request in
+            if request.url?.path == "/auth/v1/user" {
+                started.fulfill()
+                return try await withCheckedThrowingContinuation { continuation = $0 }
+            }
+            if request.url?.path == "/auth/v1/recover" { recoveryRequests += 1 }
+            return try self.jsonResponse(["access_token": self.accessToken(owner: nextOwner),
+                                          "refresh_token": "next-refresh-token",
+                                          "user": ["id": nextOwner.uuidString.lowercased(), "email": "next@example.invalid"]])
+        })
+        defer { account.signOut(); storage.clear() }
+
+        let task = Task { await account.requestPasswordResetForCurrentAccount() }
+        await fulfillment(of: [started], timeout: 2)
+        await account.signIn(email: "next@example.invalid", password: "synthetic-password")
+        continuation?.resume(returning: try jsonResponse(["id": owner.uuidString.lowercased(), "role": "authenticated",
+                                                         "is_anonymous": false, "email": "previous@example.invalid"]))
+        let result = await task.value
+
+        XCTAssertFalse(result)
+        XCTAssertEqual(recoveryRequests, 0)
+        XCTAssertEqual(account.session?.owner, nextOwner)
+        XCTAssertEqual(account.emailAddress, "next@example.invalid")
+        XCTAssertTrue(account.passwordResetStatus.isEmpty)
+        XCTAssertFalse(account.sendingPasswordReset)
+    }
+
+    func testSignedInPasswordResetRequiresCurrentSession() async throws {
+        let storage = SocialFixtureStorage()
+        var requests = 0
+        let account = BoundFriendAccount(storage: storage, automaticRefresh: false,
+                                         configuration: { "fixture-publishable-key" }, transport: { _ in
+            requests += 1
+            return try self.jsonResponse([:])
+        })
+        defer { account.signOut(); storage.clear() }
+
+        let result = await account.requestPasswordResetForCurrentAccount()
+
+        XCTAssertFalse(result)
+        XCTAssertEqual(requests, 0)
+        XCTAssertEqual(storage.writeCount, 0)
+        XCTAssertFalse(account.sendingPasswordReset)
+    }
+
     func testPasswordResetHandlesRateLimitsAndNetworkFailureWithoutServerDetails() async throws {
         let rateLimitedStorage = SocialFixtureStorage()
         let offlineStorage = SocialFixtureStorage()

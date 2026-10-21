@@ -55,6 +55,9 @@ class SyncingServicesViewController: UITableViewController
     private var activityIndicatorView: UIActivityIndicatorView!
     
     private var selectedSyncingService = SyncManager.currentBoundService
+    private var isDropboxConnected: Bool {
+        SyncManager.shared.coordinator?.isAuthenticated == true && SyncManager.shared.coordinator?.account != nil
+    }
     
     override func viewDidLoad()
     {
@@ -138,10 +141,11 @@ private extension SyncingServicesViewController
                     self.selectedSyncingService = service
                     
                     // Same check as below when showing Sign In or Sign Out.
-                    if let coordinator = SyncManager.shared.coordinator, coordinator.account != nil
+                    if self.isDropboxConnected
                     {
                         // Authenticated, so assign syncingService.
                         Settings.syncingService = service
+                        SyncManager.shared.sync()
                     }
                     else
                     {
@@ -224,7 +228,7 @@ private extension SyncingServicesViewController
         switch section
         {
         case .service: return false
-        case .account: return !self.syncingEnabledSwitch.isOn || SyncManager.shared.coordinator?.account == nil
+        case .account: return !self.syncingEnabledSwitch.isOn || !self.isDropboxConnected
         case .authenticate: return !self.syncingEnabledSwitch.isOn
         default: return false
         }
@@ -264,7 +268,7 @@ extension SyncingServicesViewController
             }
             
         case .authenticate:
-            if SyncManager.shared.coordinator?.account != nil
+            if self.isDropboxConnected
             {
                 cell.textLabel?.textColor = .red
                 cell.textLabel?.text = NSLocalizedString("Manage Dropbox Connection", comment: "")
@@ -325,7 +329,7 @@ extension SyncingServicesViewController
         case .account: break
             
         case .authenticate:            
-            if SyncManager.shared.coordinator?.account != nil
+            if self.isDropboxConnected
             {
                 self.manageDropboxConnection()
             }
@@ -341,6 +345,7 @@ extension SyncingServicesViewController
                             self.tableView.reloadData()
                             
                             Settings.syncingService = self.selectedSyncingService
+                            SyncManager.shared.sync()
                         }
                         catch GeneralError.cancelled.self
                         {
@@ -348,7 +353,7 @@ extension SyncingServicesViewController
                         }
                         catch
                         {
-                            let alertController = UIAlertController(title: NSLocalizedString("Failed to Sign In", comment: ""), error: error)
+                            let alertController = UIAlertController(title: NSLocalizedString("Unable to Connect Dropbox", comment: ""), error: error)
                             self.present(alertController, animated: true, completion: nil)
                         }
                         

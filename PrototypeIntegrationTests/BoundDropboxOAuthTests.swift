@@ -103,6 +103,54 @@ final class BoundDropboxOAuthTests: XCTestCase {
         let result = await access(provider)
         guard case .failure(.noSavedCredentials) = result else { return XCTFail("Expected no saved connection") }
     }
+    func testBrokerConfigurationFailureExplainsServiceSetupAndAllowsRetry() async throws {
+        var available = false
+        let provider = BoundDropboxOAuth(account: try account()) { _ in
+            if available {
+                return (Data(#"{"accessToken":"restored-token","expiresIn":14400,"connectionID":"33333333-3333-4333-8333-333333333333"}"#.utf8), 200)
+            }
+            return (Data(#"{"error":"not_configured"}"#.utf8), 503)
+        }
+        let failure = await access(provider)
+        guard case .failure(.other(BoundDropboxOAuth.Failure.notConfigured)) = failure else {
+            return XCTFail("Server setup must not be reported as a Bound sign-in or connectivity failure")
+        }
+        available = true
+        let restored = await access(provider)
+        XCTAssertEqual(try restored.get(), "restored-token")
+    }
+
+    func testRetryableBrokerAndNetworkFailuresPreserveHarmonySyncHistory() {
+        let failures: [Harmony.AuthenticationError] = [
+            .other(BoundDropboxOAuth.Failure.unavailable),
+            .other(BoundDropboxOAuth.Failure.notConfigured),
+            .other(BoundDropboxOAuth.Failure.rateLimited),
+            .other(BoundDropboxOAuth.Failure.secondFactorRequired),
+            .other(ServiceError.connectionFailed(URLError(.notConnectedToInternet))),
+            .other(ServiceError.rateLimitExceeded)
+        ]
+        for failure in failures {
+            XCTAssertTrue(SyncManager.shouldPreserveSyncState(after: failure))
+        }
+        XCTAssertFalse(SyncManager.shouldPreserveSyncState(after: .other(BoundDropboxOAuth.Failure.changed)))
+        XCTAssertFalse(SyncManager.shouldPreserveSyncState(after: .other(BoundDropboxOAuth.Failure.signIn)))
+    }
+
+    func testRateLimitingAndSecondFactorRequirementRemainActionable() async throws {
+        for (body, status) in [(#"{"error":"rate_limited"}"#, 429), (#"{"error":"second_factor_required"}"#, 403)] {
+            let provider = BoundDropboxOAuth(account: try account()) { _ in (Data(body.utf8), status) }
+            let result = await access(provider)
+            if status == 429 {
+                guard case .failure(.other(BoundDropboxOAuth.Failure.rateLimited)) = result else {
+                    return XCTFail("Rate limiting must allow a later retry")
+                }
+            } else {
+                guard case .failure(.other(BoundDropboxOAuth.Failure.secondFactorRequired)) = result else {
+                    return XCTFail("Two-factor requirement must be distinguished from signed-out state")
+                }
+            }
+        }
+    }
     func testLateTokenAfterAccountSignOutIsRejected() async throws {
         let account = try account()
         let provider = BoundDropboxOAuth(account: account) { _ in

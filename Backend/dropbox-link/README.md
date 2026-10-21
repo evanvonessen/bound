@@ -52,12 +52,14 @@ Target: `qevnxhngdtlyihhmvnjv`. Preserve existing functions and Auth settings.
    build cannot restore this connection; its device-only token is not migrated.
 
 The private contract and `bound-dropbox` v1 were deployed on 2026-10-21. Server
-secret activation is still pending: a value-redacted smoke check returned
-`503 not_configured`. The connector cannot manage secrets, and approval review
-blocked reading the secrets dashboard because it could expose existing values.
-No secret values were read or committed. Complete step 2 using a secure channel;
-the public app key is `qky6pxxx8ks3d2k`. Until configured, the app reports the
-connection unavailable and never falls back to unowned local credentials.
+secret activation is still pending. A live check on 2026-10-21 returned
+`503 not_configured`; a read of the secrets dashboard confirmed that
+`BOUND_DROPBOX_APP_KEY` and `BOUND_DROPBOX_ENCRYPTION_KEY` were absent. A read-only
+SQL check found zero stored Dropbox links. Complete step 2 using a secure channel;
+the public app key is `qky6pxxx8ks3d2k`. Until configured, the app explains that
+Bound's connection service needs setup and never falls back to unowned local
+credentials. The connector cannot manage secrets. No secret values belong in
+this repository or validation output.
 
 ## User behavior and limits
 
@@ -89,6 +91,13 @@ connection unavailable and never falls back to unowned local credentials.
 - The first new access-token request needs the Bound backend. Local offline
   gameplay remains available. Account deletion removes the stored connection;
   it does not delete Dropbox files or remove Dropbox's app permission entry.
+- Temporary broker/network failures, service configuration failures, rate limits
+  and pending second-factor sign-in retain Harmony's sync history for retry.
+  Cached account metadata alone does not count as an authenticated connection:
+  the settings screen offers **Connect Dropbox** again when authorization fails.
+  Successful connection starts sync immediately. Deauthentication replaces the
+  provider hook for subsequent retries while previously retained callbacks remain
+  fenced by their original generation.
 
 ## Local checks
 
@@ -103,11 +112,13 @@ connection unavailable and never falls back to unowned local credentials.
   expired sessions, deletion markers, rate limiting and FK deletion cleanup.
 - Native `BoundDropboxOAuthTests` use injected account storage and transport to
   exercise restore, sign-out, cancellation, late-token fencing, unlink and errors.
+  Regression cases also cover recovery after missing server configuration,
+  preservation of sync history for retryable failures, rate limiting and MFA.
   No live credentials or one-use Keychain fixture is required.
 - Build ordinary `Bound.xcodeproj` / `Bound`, Release, generic iOS destination.
   Simulator checks do not establish physical-device/network or playback parity.
 
-### Implementation validation
+### Historical implementation validation
 
 - 20 handler tests passed; the real SQL contract passed in disposable PostgreSQL
   (PGlite), including client permission denial, session/owner fences and deletion.

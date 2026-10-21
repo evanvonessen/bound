@@ -32,6 +32,9 @@ struct BoundAccountSecurityView: View {
             if account.session == nil {
                 Section { Text("Sign in to manage your account security.") }
             } else {
+                Section("Password") {
+                    BoundAccountPasswordResetLink(account: account)
+                }
                 authenticatorSection
                 if let enrollment = account.totpEnrollment {
                     enrollmentSection(enrollment)

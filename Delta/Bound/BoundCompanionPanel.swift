@@ -1782,6 +1782,7 @@ struct BoundFriendsSheet: View {
                         BoundAccountSignInFields(account: account, email: $email, password: $password) { onboarding.synchronizeAccount() }
                     } else {
                         BoundAccountEmailText(account: account) { showingEmailChange = true }
+                        BoundAccountPasswordResetLink(account: account)
                         NavigationLink("Account security") { BoundAccountSecurityView(account: account) }
                             .accessibilityIdentifier("bound.account-security")
                         if !usesUpdatedUI {
@@ -2225,24 +2226,57 @@ struct BoundChangeEmailView: View {
     }
 }
 
+/// Keep password recovery visible even when a saved account is already signed in.
+struct BoundAccountPasswordResetLink: View {
+    @ObservedObject var account: BoundFriendAccount
+    var body: some View {
+        NavigationLink("Reset password") {
+            BoundForgotPasswordView(account: account, email: .constant(""), forCurrentAccount: true)
+        }
+        .disabled(account.busy || account.securityBusy || account.changingEmail || account.deletionPending)
+        .accessibilityIdentifier("bound.account-reset-password")
+    }
+}
+
 struct BoundForgotPasswordView: View {
     @ObservedObject var account: BoundFriendAccount
     @Binding var email: String
+    var forCurrentAccount = false
     @State private var submission: Task<Void, Never>?
+    private var unavailable: Bool {
+        submission != nil || account.busy || account.securityBusy || account.changingEmail ||
+        account.sendingPasswordReset || account.deletionPending ||
+        (forCurrentAccount ? account.session == nil : BoundFriendAccount.normalizedEmail(email) == nil)
+    }
     var body: some View {
         Form {
             Section {
-                TextField("Email", text: $email)
-                    .textContentType(.emailAddress).keyboardType(.emailAddress)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .submitLabel(.send).onSubmit { submit() }
-                    .accessibilityIdentifier("account.recovery.email")
+                if forCurrentAccount {
+                    if account.session != nil {
+                        LabeledContent("Email") {
+                            Text(account.emailAddress ?? "Email unavailable")
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("account.recovery.account-email")
+                        }
+                    } else {
+                        Text("Your account has signed out. Return to Sign in and choose Forgot password to request a reset link.")
+                    }
+                } else {
+                    TextField("Email", text: $email)
+                        .textContentType(.emailAddress).keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .submitLabel(.send).onSubmit { submit() }
+                        .accessibilityIdentifier("account.recovery.email")
+                }
                 Button("Send reset link") { submit() }
-                    .disabled(BoundFriendAccount.normalizedEmail(email) == nil || account.busy || account.sendingPasswordReset)
+                    .disabled(unavailable)
                     .accessibilityIdentifier("account.recovery.submit")
                 if account.sendingPasswordReset { ProgressView("Sending reset link…") }
             } footer: {
-                Text("Enter your Bound account email. Follow the link in your email to choose a new password, then return to Bound to sign in.")
+                Text(forCurrentAccount
+                     ? "Send a reset link to your Bound account email. Follow the link to choose a new password. Requesting the link keeps you signed in."
+                     : "Enter your Bound account email. Follow the link in your email to choose a new password, then return to Bound to sign in.")
             }
             if !account.passwordResetStatus.isEmpty {
                 Section {
@@ -2252,13 +2286,16 @@ struct BoundForgotPasswordView: View {
             }
         }
         .navigationTitle("Reset password")
+        .task(id: account.session?.owner) {
+            if forCurrentAccount { await account.loadEmailAddress() }
+        }
         .onDisappear { submission?.cancel(); submission = nil }
     }
     private func submit() {
-        guard submission == nil, !account.busy, !account.sendingPasswordReset,
-              BoundFriendAccount.normalizedEmail(email) != nil else { return }
+        guard !unavailable else { return }
         submission = Task { @MainActor in
-            _ = await account.requestPasswordReset(email: email)
+            if forCurrentAccount { _ = await account.requestPasswordResetForCurrentAccount() }
+            else { _ = await account.requestPasswordReset(email: email) }
             submission = nil
         }
     }

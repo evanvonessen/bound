@@ -66,12 +66,15 @@ final class BoundDropboxOAuth: NSObject, ASWebAuthenticationPresentationContextP
     })
 
     enum Failure: LocalizedError {
-        case signIn, notLinked, unavailable, changed, cancelled
+        case signIn, notLinked, notConfigured, unavailable, rateLimited, secondFactorRequired, changed, cancelled
         var errorDescription: String? {
             switch self {
             case .signIn: return "Sign in to your Bound account in Account & Sync before connecting Dropbox."
             case .notLinked: return "Connect Dropbox to your Bound account to enable cloud sync."
+            case .notConfigured: return "Dropbox sync is unavailable because Bound’s connection service has not been set up yet. Please try again later."
             case .unavailable: return "Dropbox connection is unavailable. Check your connection and try again."
+            case .rateLimited: return "Dropbox connection requests are temporarily limited. Wait a moment, then try again."
+            case .secondFactorRequired: return "Complete two-factor sign-in to your Bound account before connecting Dropbox."
             case .changed: return "Your account or Dropbox connection changed. Please try again."
             case .cancelled: return "Dropbox authorization was cancelled."
             }
@@ -159,6 +162,9 @@ final class BoundDropboxOAuth: NSObject, ASWebAuthenticationPresentationContextP
         // Never propagate backend bodies or transport diagnostics containing credentials.
         guard let reply = try? JSONDecoder().decode(Reply.self, from: data) else { throw Failure.unavailable }
         if status == 404 && reply.error == "not_linked" || status == 409 && reply.error == "reconnect_required" { throw Failure.notLinked }
+        if status == 503 && reply.error == "not_configured" { throw Failure.notConfigured }
+        if status == 429 { throw Failure.rateLimited }
+        if status == 403 && reply.error == "second_factor_required" { throw Failure.secondFactorRequired }
         if status == 401 || status == 403 { throw Failure.signIn }
         if status == 409 { throw Failure.changed }
         guard status == 200 else { throw Failure.unavailable }

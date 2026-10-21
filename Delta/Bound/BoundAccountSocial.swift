@@ -272,6 +272,7 @@ struct BoundAccountSocialSettings: View {
                 .accessibilityIdentifier("bound.account-delete-retry")
             } else if account.session != nil {
                 BoundAccountEmailText(account: account) { showingEmailChange = true }
+                BoundAccountPasswordResetLink(account: account)
                 NavigationLink("Account security") { BoundAccountSecurityView(account: account) }
                     .accessibilityIdentifier("bound.account-security")
                 NavigationLink {

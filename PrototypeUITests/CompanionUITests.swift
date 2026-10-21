@@ -3279,6 +3279,16 @@ final class CompanionUITests: XCTestCase {
             email.tap()
             email.typeText("library-fixture@example.invalid")
 
+            app.buttons["account.signin.forgot-password"].tap()
+            let recoveryEmail = app.textFields["account.recovery.email"]
+            XCTAssertTrue(recoveryEmail.waitForExistence(timeout: 5))
+            XCTAssertEqual(recoveryEmail.value as? String, "library-fixture@example.invalid",
+                           "Forgot password carries the entered account email into recovery.")
+            XCTAssertTrue(app.buttons["account.recovery.submit"].isEnabled)
+            // Check discovery and navigation without sending a real recovery email.
+            app.navigationBars["Reset password"].buttons.firstMatch.tap()
+            XCTAssertTrue(email.waitForExistence(timeout: 5))
+
             app.buttons["account.signin.create-account"].tap()
             let signupEmail = app.textFields["account.signup.email"]
             XCTAssertTrue(signupEmail.waitForExistence(timeout: 5))
