@@ -300,6 +300,25 @@ extension LivePresenceTests {
         XCTAssertTrue(defaults.bool(forKey: BoundLegacyPreferences.experimentalFeaturesKey))
     }
 
+    func testExperimentalDisablePreservesTradeRecoveryInstruction() {
+        let transport = PresenceFixtureTransport()
+        let sharing = FriendSharingSession(configuration: .init(appID: String(repeating:"0",count:32),
+            channel:"trade-recovery-gate",uid:1,remoteUID:2,token:"offline-fixture"),
+            transport:transport,authenticatedMode:false)
+        defer { sharing.stop() }
+        sharing.start()
+        let message="Trade interrupted. Continue from your in-game save."
+        sharing.interactions.activityEnded(message)
+        BoundMultiplayerFeatures.setEnabled(false)
+        XCTAssertEqual(sharing.interactions.phase,.ended)
+        XCTAssertEqual(sharing.interactions.message,message)
+        XCTAssertFalse(sharing.interactions.connected)
+        BoundMultiplayerFeatures.setEnabled(true)
+        XCTAssertEqual(sharing.interactions.message,message)
+        sharing.interactions.cancel()
+        XCTAssertEqual(sharing.interactions.phase,.idle)
+    }
+
     func testExperimentalGateBlocksRuntimeEntryAndStopsActiveChannels() throws {
         BoundMultiplayerFeatures.setEnabled(false)
         let transport = PresenceFixtureTransport()

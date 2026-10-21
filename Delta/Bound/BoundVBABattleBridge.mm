@@ -219,8 +219,10 @@ NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
 #if DEBUG && TARGET_OS_SIMULATOR
 + (BOOL)qaPrepareTradeFixture:(NSUInteger)marker {
     if(!overworld()||verifiedROM!=rom||(marker!=0xBB&&marker!=0xBC)) return NO;
-    if(workRAM[0x24029]!=1) return NO;
     auto *mon=workRAM+0x24284;
+    if(workRAM[0x24029]==2 && (mon[8]==0xBB || mon[8]==0xBC)) {
+        memcpy(mon,mon+100,100); // Reuse only this explicit disposable fixture.
+    } else if(workRAM[0x24029]!=1) return NO;
     // Two healthy Pokémon are required by the cartridge. This modifies only a
     // disposable simulator's working party, never the protected seed file.
     memcpy(mon+100,mon,100); workRAM[0x24029]=2;
@@ -229,6 +231,14 @@ NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
     put32(mon+4,0xB00D0000u|uint32_t(marker));
     memset(mon+8,0xFF,10); mon[8]=uint8_t(marker);
     return YES;
+}
++ (NSDictionary<NSString *, id> *)qaTradeMenu {
+    if(!workRAM||!internalRAM||!rom) return @{};
+    const auto callback=word(internalRAM+0x30F4);
+    const auto menu=word(workRAM+0x31DA8);
+    if(callback!=0x0804D639 || menu<0x02000000 || menu>0x0203FF80) return @{};
+    const auto *data=workRAM+menu-0x02000000;
+    return @{@"id":@(data[0x6F]),@"cursor":@(data[0x35])};
 }
 + (NSData *)qaTradeParty {
     if(!workRAM||!rom) return [NSData data];

@@ -20,6 +20,7 @@ NS_ASSUME_NONNULL_BEGIN
 #if DEBUG && TARGET_OS_SIMULATOR
 + (BOOL)qaPrepareTradeFixture:(NSUInteger)marker;
 + (NSData *)qaTradeParty;
++ (NSDictionary<NSString *, id> *)qaTradeMenu;
 #endif
 @end
 NS_ASSUME_NONNULL_END

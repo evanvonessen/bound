@@ -105,6 +105,32 @@ The first complete exchange/save then exposed the linked-room return issuing
 unsupported physical overworld commands; the local field-return adapter addresses
 that path. Failed/interrupted attempts are retained and are not acceptance evidence.
 
+## Full friend-to-friend reliability checks
+
+`PrototypeTools/full-app-gameplay.py --trade complete` drives the normal Friends
+selection, live map visibility, adjacent-tile/facing/A invitation, acceptance,
+native save/link prompts, Pokémon selection, confirmation, exchange and return
+through two full app UIs over real Agora. It checks both offered trainer/nickname
+identities, the unchanged unoffered party member, playable worlds and released
+save restrictions. It does not substitute a loopback cable for the Agora path.
+
+The same coordinator supports `--trade menu-disconnect`, `--trade
+exchange-disconnect`, and `--trade saved-disconnect`. The initiator backgrounds
+the app before offering, during the native animation before completion, or after
+the native exchange/save returns to the party menu. Both peers use native
+Continue inputs after recovery; the last two modes verify that the pair of saves
+contains either the original pair or the exchanged pair as appropriate, rejecting
+duplicated or lost offer identities. Fixture preparation and party/menu
+observations are DEBUG/Simulator-only and run on the completed-frame owner;
+all invitations, selections, confirmations and recovery inputs use normal UI.
+
+Trade recovery/completion messages now survive transport shutdown, reconnect and
+Experimental Features disable until the player acknowledges Return to game.
+Repeated join callbacks preserve an already active activity's consent and input
+handoff. Cancellation diagnostics identify the calling source without account or
+credential data. The UIKit tests wait for stable control rectangles after a
+foreground transition before touching them.
+
 ## Observed results — October 21, 2026
 
 `native-trade-5` passed in **93.2 seconds** on the two owned iOS simulators, with
@@ -140,10 +166,48 @@ Debug test build, unsigned iPhone Release build, 17,061 pinned-source checks
 and generated guest check passed. Bundled cloud configuration hashes match.
 Private merge logs use the `trade-merge-` prefix.
 
-These are native-engine and local-relay checks. This continuation did not run a
-live Agora trade or a normal-app UI trade end to end, physical devices/separate
-networks, mail/egg/trade-evolution cases, repeated exchanges, or a complete
-power-loss/critical-save recovery matrix. The underlying real Agora battle and
-walk-up invitation evidence remains in their respective handoffs. No account,
-friendship, backend or cloud setup was created or changed by this validation.
+The earlier implementation evidence above used native-engine/local-relay tests;
+it did not establish a normal-app Agora trade. The subsequent reliability run
+adds that evidence below. Physical devices/separate networks,
+mail/egg/trade-evolution cases, repeated exchanges within one native menu, and a
+complete power-loss/critical-save recovery matrix remain outside acceptance.
 Private receipts, working saves, screenshots and failed attempts remain ignored.
+
+## Full-app Agora evidence — October 21, 2026
+
+- `paired-1003`: complete native trade, **131.8 seconds**. Both offered identities
+  arrived at the peer, the unoffered members stayed unchanged, and both games
+  returned to their real overworlds with one completed trade.
+- `paired-1003-retry-2`: disconnect before offering, **74.1 seconds**. Both
+  players continued from their cartridge saves with the original parties and
+  released save restrictions.
+- `paired-1004`: disconnect during the native animation before its completion
+  counter, **88.1 seconds**. Both continued from the original cartridge parties;
+  the paired identity check found neither loss nor duplication.
+- `paired-1004-saved-disconnect`: disconnect after the native linked save,
+  **134.2 seconds**. Both players used Continue after recovery and retained the
+  peer's offered Pokémon, with the unoffered members unchanged and saving
+  unblocked. The `1004` suite passed both disconnect scenarios on its first run.
+
+The earlier failed attempts are retained. `1001` failed to open the invitation
+with an observer that paused the core; the observer now belongs to the frame
+owner. `1002` encountered an unplanned cancellation during animation before
+cancellation-source diagnostics existed; it is not successful trade evidence.
+The initial before-offer checks in `1003` exposed XCTest's offscreen/stale
+recovery-dialog hit rectangles after foregrounding. Stable rectangle checks
+and an independently observed dialog dismissal fixed that driver path.
+
+Each suite uses the two existing dedicated development accounts and normal
+friend APIs, reuses its temporary friendship for bounded retries, removes it
+and one-use inputs afterward, and checks restoration of the original friend
+lists. No account was created and no rate limit was changed or bypassed. The
+current 57-file protected setup baseline and original ROM/seed hashes remained
+unchanged; the transferred historical baseline is preserved separately.
+No backend, cloud configuration, dependency pin or signing configuration changed.
+
+Final reliability checks: **156 focused integration tests** passed with zero
+failures (`trade-reliable-focused.xcresult`), including repeated joins, recovery
+message acknowledgement and Experimental Features disable/re-enable. The final
+Debug test build and unsigned iPhone Release build passed. All 17,061 pinned
+source files and the unchanged 932-byte native guest verify; source, Debug and
+Release cloud configuration SHA-256 hashes match.

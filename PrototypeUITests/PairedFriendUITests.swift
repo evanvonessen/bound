@@ -236,6 +236,113 @@ final class FullAppGameplayUITests: XCTestCase {
         XCTFail("Actual friend battle did not finish")
     }
 
+    func testActualFriendTrade() throws {
+        try connectFriend()
+        try waitFor { $0["tradeFixtureReady"] as? Bool == true }
+        try walkTo(x:peer == "A" ? 6:7,y:8)
+        if peer == "A" { try face("East",input:"right",x:6,y:8) }
+        try report("positioned")
+        let mode=ProcessInfo.processInfo.environment["BOUND_GAMEPLAY_TRADE"] ?? "complete"
+        var completed=Set<String>()
+        let deadline=Date().addingTimeInterval(600)
+        while Date()<deadline {
+            let stage=try request("/status")["stage"] as? String ?? "waiting"
+            if stage == "done" { return }
+            if stage == "failed" { XCTFail("Trade coordinator failed"); return }
+            if !completed.contains(stage) {
+                switch stage {
+                case "trade-invite":
+                    if peer == "A" {
+                        try waitFor { $0["interactionCanStart"] as? Bool == true }
+                        try press("a",duration:0.08)
+                        XCTAssertTrue(app.buttons["bound.friend-interaction.trade"].waitForExistence(timeout:8))
+                        try tapScreenPoint(in:app.buttons["bound.friend-interaction.trade"])
+                    }
+                    try waitFor { $0["interactionPhase"] as? String == (self.peer == "A" ? "outgoing":"incoming") }
+                case "trade-accept":
+                    if peer == "B" { try tapScreenPoint(in:app.buttons["bound.friend-interaction.accept"]) }
+                    let end=Date().addingTimeInterval(100)
+                    while Date()<end {
+                        let value=try snapshot()
+                        XCTAssertEqual(value["battleFailure"] as? String,"")
+                        if value["tradeOpened"] as? Bool == true { break }
+                        try press("a",duration:0.08); pause(0.3)
+                    }
+                    XCTAssertEqual(try snapshot()["tradeOpened"] as? Bool,true)
+                case "trade-exchange":
+                    let end=Date().addingTimeInterval(180)
+                    var selectedTrade=false
+                    while Date()<end {
+                        let value=try snapshot()
+                        XCTAssertEqual(value["battleFailure"] as? String,"")
+                        XCTAssertEqual(value["interactionPhase"] as? String,"playing","Unexpected cancellation: \(value["battleCancellation"] ?? "")")
+                        if mode == "exchange-disconnect", value["battleCallback"] as? Int == 0x08053D85 { break }
+                        if (value["tradeCount"] as? Int ?? 0)>0 { break }
+                        if value["tradeMenuID"] as? Int == 1, !selectedTrade {
+                            try press("down",duration:0.08); selectedTrade=true
+                        } else {
+                            if value["tradeMenuID"] as? Int != 1 { selectedTrade=false }
+                            try press("a",duration:0.08)
+                        }
+                        pause(0.3)
+                    }
+                    let value=try snapshot()
+                    if mode == "exchange-disconnect" {
+                        XCTAssertEqual(value["tradeCount"] as? Int,0,"Interrupt before native exchange/save completion")
+                    } else {
+                    XCTAssertEqual(value["tradeCount"] as? Int,1)
+                    XCTAssertEqual(value["tradeMarker"] as? Int,peer == "A" ? 0xBC:0xBB)
+                    XCTAssertEqual(value["tradeOT"] as? Int,peer == "A" ? 0xBC:0xBB)
+                    XCTAssertEqual(value["tradeUnofferedUnchanged"] as? Bool,true)
+                    }
+                case "trade-exit":
+                    let end=Date().addingTimeInterval(50)
+                    while Date()<end {
+                        let value=try snapshot()
+                        if value["interactionPhase"] as? String == "ended" { break }
+                        if value["tradeMenuID"] as? Int == 0, value["tradeCursor"] as? Int != 12 {
+                            try press("up",duration:0.08)
+                        } else { try press("a",duration:0.08) }
+                        pause(0.3)
+                    }
+                    try waitFor { $0["tradesCompleted"] as? Int == 1 && $0["tradeRecoveryBlocked"] as? Bool == false }
+                    try tapScreenPoint(in:app.buttons["bound.friend-interaction.close"])
+                    try waitFor { $0["reader"] as? String == "live" }
+                case "trade-disconnect":
+                    if peer == "A" { XCUIDevice.shared.press(.home); pause(4); app.activate(); pause(1); resume() }
+                    try waitFor(timeout:35) { $0["tradeRecoveryBlocked"] as? Bool == false && $0["tradeOpened"] as? Bool == true }
+                    if app.buttons["bound.friend-interaction.close"].exists { try tapScreenPoint(in:app.buttons["bound.friend-interaction.close"]) }
+                    try waitFor { $0["interactionPhase"] as? String == "idle" }
+                    // Interrupted trade boots the actual cartridge save. Continue
+                    // through its native title/menu, using only controller touches.
+                    let end=Date().addingTimeInterval(55)
+                    while Date()<end {
+                        let value=try snapshot()
+                        if value["reader"] as? String == "live" { break }
+                        try press("start",duration:0.08); try press("a",duration:0.08); pause(0.3)
+                    }
+                    try waitFor { $0["reader"] as? String == "live" }
+                case "trade-verify":
+                    let value=try snapshot(),exchanged=mode != "menu-disconnect"
+                    if mode == "exchange-disconnect" {
+                        XCTAssertTrue([0xBB,0xBC].contains(value["tradeMarker"] as? Int ?? 0))
+                    } else {
+                    XCTAssertEqual(value["tradeMarker"] as? Int,exchanged ? (peer == "A" ? 0xBC:0xBB):(peer == "A" ? 0xBB:0xBC))
+                    }
+                    XCTAssertEqual(value["tradeOT"] as? Int,value["tradeMarker"] as? Int)
+                    XCTAssertEqual(value["tradeUnofferedUnchanged"] as? Bool,true)
+                    XCTAssertEqual(value["tradeRecoveryBlocked"] as? Bool,false)
+                    let image=XCTAttachment(screenshot:XCUIScreen.main.screenshot())
+                    image.name="Actual-friend-trade-"+mode+"-"+peer; image.lifetime = .keepAlways; add(image)
+                default: pause(0.2); continue
+                }
+                try report(stage); completed.insert(stage)
+            }
+            pause(0.2)
+        }
+        XCTFail("Actual friend trade did not finish")
+    }
+
     private func walkTo(x: Int, y: Int) throws {
         for _ in 0..<20 {
             let tile = try XCTUnwrap(snapshot()["tile"] as? [Int])
@@ -315,6 +422,7 @@ final class FullAppGameplayUITests: XCTestCase {
             }
         }
         app.launchArguments = ["--bound-ui-gameplay-qa", "--bound-ui-no-animations", "--bound-ui-screen-layout-bound"]
+        if ProcessInfo.processInfo.environment["BOUND_GAMEPLAY_TRADE"] != nil { app.launchArguments.append("--bound-ui-trade-qa") }
         XCUIDevice.shared.orientation = .portrait
         app.launch()
         if app.buttons["Close"].waitForExistence(timeout: 3) { app.buttons["Close"].tap() }
@@ -429,12 +537,21 @@ final class FullAppGameplayUITests: XCTestCase {
     private func tapScreenPoint(in target: XCUIElement, horizontal: CGFloat = 0.5) throws {
         // SwiftUI applies the row identifier to its sibling buttons too. Freeze
         // the chosen label's frame before synthesis can resolve that shared ID.
-        XCTAssertTrue(target.isEnabled)
-        let frame = target.frame
-        XCTAssertFalse(frame.isEmpty)
-        XCTAssertTrue(frame.midX.isFinite && frame.midY.isFinite)
-        app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: frame.minX + frame.width * horizontal, dy: frame.midY)).tap()
+        let deadline=Date().addingTimeInterval(10)
+        var previous=CGRect.null,stableSince=Date()
+        while Date()<deadline {
+            let frame=target.frame
+            if frame != previous { previous=frame; stableSince=Date() }
+            if target.isEnabled, !frame.isEmpty, frame.midX.isFinite, frame.midY.isFinite,
+               app.frame.contains(CGPoint(x:frame.midX,y:frame.midY)),
+               Date().timeIntervalSince(stableSince)>=0.5 {
+                app.coordinate(withNormalizedOffset:.zero)
+                    .withOffset(CGVector(dx:frame.minX+frame.width*horizontal,dy:frame.midY)).tap()
+                return
+            }
+            pause(0.2)
+        }
+        XCTFail("Normal control geometry did not settle")
     }
     private func snapshot() throws -> [String: Any] {
         let value = element("bound.gameplay-qa-status")

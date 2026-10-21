@@ -91,13 +91,15 @@ class Handler(BaseHTTPRequestHandler):
         self.reply(200, {})
 
 
-def clone(source, destination, peer, port):
+def clone(source, destination, peer, port, trade=None):
     root = str(source.resolve().parent)
     def rewrite(node):
         if isinstance(node, dict):
             result = {k:rewrite(v) for k,v in node.items()}
             if 'TestBundlePath' in result:
                 result.setdefault('EnvironmentVariables', {}).update(BOUND_GAMEPLAY_PEER=peer, BOUND_GAMEPLAY_PORT=str(port))
+            if trade and 'TestBundlePath' in result:
+                result['EnvironmentVariables']['BOUND_GAMEPLAY_TRADE']=trade
             return result
         if isinstance(node, list): return [rewrite(v) for v in node]
         return node.replace('__TESTROOT__', root) if isinstance(node, str) else node
@@ -111,11 +113,12 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--duration', type=int, default=900)
     parser.add_argument('--smoke', action='store_true')
+    parser.add_argument('--trade', choices=['complete','menu-disconnect','exchange-disconnect','saved-disconnect'], help='Normal walk-up native trade over Agora and disconnect recovery')
     parser.add_argument('--battles-only', action='store_true', help='Actual walk-up/A native battle over real Agora, damage, outcome and world restore')
     parser.add_argument('--interactions-only', action='store_true', help='Short walk-up/A and reliable invitation regression; does not launch a battle or trade')
     parser.add_argument('--native-only', action='store_true', help='Preflight maps and native states without an RTC connection')
     args = parser.parse_args()
-    if args.sim_a == args.sim_b or args.duration < (1 if args.smoke or args.native_only or args.interactions_only or args.battles_only else 900):
+    if args.sim_a == args.sim_b or args.duration < (1 if args.smoke or args.native_only or args.interactions_only or args.battles_only or args.trade else 900):
         parser.error('Use two distinct disposable simulators; acceptance requires at least 900 seconds')
     args.output.mkdir(parents=True, exist_ok=False)
     state = Coordinator(dict(zip(PEERS, (args.sim_a, args.sim_b))))
@@ -125,11 +128,11 @@ def main():
     started = time.monotonic()
     try:
         for peer in PEERS:
-            run = args.output / (peer + '.xctestrun'); clone(args.xctestrun, run, peer, server.server_port)
+            run = args.output / (peer + '.xctestrun'); clone(args.xctestrun, run, peer, server.server_port, args.trade)
             log = (args.output / (peer + '.log')).open('wb')
-            command = ['xcodebuild','test-without-building','-xctestrun',str(run),
+            command = ['/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild','test-without-building','-xctestrun',str(run),
                 '-destination','platform=iOS Simulator,id='+state.simulators[peer],'-parallel-testing-enabled','NO',
-                '-only-testing:BoundCompanionUITests/FullAppGameplayUITests/'+('testNativeMapAndSaveRestore' if args.native_only else 'testActualFriendBattle' if args.battles_only else 'testFriendWorldInvitations' if args.interactions_only else 'testFullAppLiveGameplay'),
+                '-only-testing:BoundCompanionUITests/FullAppGameplayUITests/'+('testNativeMapAndSaveRestore' if args.native_only else 'testActualFriendTrade' if args.trade else 'testActualFriendBattle' if args.battles_only else 'testFriendWorldInvitations' if args.interactions_only else 'testFullAppLiveGameplay'),
                 '-collect-test-diagnostics','never','-resultBundlePath',str(args.output/(peer+'.xcresult'))]
             processes.append((subprocess.Popen(command,stdout=log,stderr=subprocess.STDOUT),log))
 
@@ -152,7 +155,22 @@ def main():
                 and v.get('transport')=='agora' and v.get('joined') and v.get('received',0)>10
                 and v.get('visiblePixels',0)>20 and v.get('observationAge',100)<2 for v in value['peers'].values())
         def reported(value, stage): return all(value['ui'].get(p,{}).get('stage')==stage for p in PEERS)
-        if args.battles_only:
+        if args.trade:
+            wait('positioned native players',lambda v:reported(v,'positioned') and visible(v),360)
+            stages=['trade-invite','trade-accept']
+            if args.trade!='menu-disconnect': stages.append('trade-exchange')
+            stages += ['trade-exit' if args.trade=='complete' else 'trade-disconnect','trade-verify']
+            for stage in stages:
+                state.change(stage); result=wait(stage,lambda v:reported(v,stage),200)
+            parties={p:result['peers'][p].get('tradeMarker') for p in PEERS}
+            expected={'A':0xBB,'B':0xBC} if args.trade=='menu-disconnect' else {'A':0xBC,'B':0xBB}
+            if args.trade=='exchange-disconnect':
+                if parties not in ({'A':0xBB,'B':0xBC},{'A':0xBC,'B':0xBB}):
+                    raise RuntimeError('Interrupted trade lost or duplicated an offered Pokemon')
+            elif parties!=expected: raise RuntimeError('Trade party identities do not match the expected result')
+            if not all(v.get('reader')=='live' and v.get('tradeUnofferedUnchanged') and not v.get('tradeRecoveryBlocked') for v in result['peers'].values()):
+                raise RuntimeError('Trade recovery did not restore both playable worlds with intact unoffered parties')
+        elif args.battles_only:
             wait('positioned native players',lambda v:reported(v,'positioned') and visible(v),360)
             for stage,timeout in [('battle-invite',90),('battle-accept',180)]:
                 state.change(stage); result=wait(stage,lambda v:reported(v,stage),timeout)
@@ -253,7 +271,7 @@ def main():
         for process,log in processes:
             if process.poll() is None:process.terminate()
             log.close()
-        (args.output/'summary.json').write_text(json.dumps(dict(passed=passed,smoke=args.smoke,nativeOnly=args.native_only,interactionsOnly=args.interactions_only,battlesOnly=args.battles_only,failure=failure,
+        (args.output/'summary.json').write_text(json.dumps(dict(passed=passed,trade=args.trade,smoke=args.smoke,nativeOnly=args.native_only,interactionsOnly=args.interactions_only,battlesOnly=args.battles_only,failure=failure,
             elapsed=time.monotonic()-started,checkpoints=state.checkpoints,final=state.status(),
             snapshots=state.snapshots,
             soak=state.soak,

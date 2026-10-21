@@ -1,10 +1,45 @@
 #if DEBUG && targetEnvironment(simulator)
 import Foundation
+import CryptoKit
 import UIKit
 import DeltaCore
 
 /// Explicit, simulator-only preparation/observation. All gameplay, input, friend
 /// selection, save and load actions remain in Bound's ordinary UI and owners.
+/// Explicit QA fixture/RAM observations share the completed-frame owner. No
+/// periodic core pauses or event routing changes are introduced by observation.
+final class BoundFullAppTradeProbe: @unchecked Sendable {
+    private let lock=NSLock()
+    private var coreID:ObjectIdentifier?
+    private var marker:UInt=0
+    private var prepared=false
+    private var unofferedHash=""
+    private var values:[String:Any]=[:]
+    func configure(core:EmulatorCore?,marker:UInt) {
+        lock.lock(); defer { lock.unlock() }
+        guard coreID != core.map(ObjectIdentifier.init) else { return }
+        coreID=core.map(ObjectIdentifier.init); self.marker=marker
+        prepared=false; unofferedHash=""; values=[:]
+    }
+    var snapshot:[String:Any] { lock.lock(); defer { lock.unlock() }; return values }
+    func receive(_ core:EmulatorCore) {
+        lock.lock(); defer { lock.unlock() }
+        guard coreID==ObjectIdentifier(core) else { return }
+        if !prepared,BoundVBABattleBridge.verifyBattleReady() {
+            prepared=BoundVBABattleBridge.qaPrepareTradeFixture(marker)
+        }
+        guard prepared else { return }
+        let party=BoundVBABattleBridge.qaTradeParty()
+        guard party.count==600 else { return }
+        let hash=SHA256.hash(data:party.subdata(in:100..<200)).map { String(format:"%02x",$0) }.joined()
+        if unofferedHash.isEmpty { unofferedHash=hash }
+        let menu=BoundVBABattleBridge.qaTradeMenu()
+        values=["tradeFixtureReady":true,"tradeMarker":Int(party[8]),"tradeOT":Int(party[4]),
+                "tradeUnofferedUnchanged":hash==unofferedHash]
+        values["tradeMenuID"]=menu["id"]; values["tradeCursor"]=menu["cursor"]
+    }
+}
+
 @MainActor
 final class BoundFullAppGameplayQA {
     private struct Input: Decodable {
@@ -41,6 +76,7 @@ final class BoundFullAppGameplayQA {
     let roomID: String
     private let peer: String
     private let run: UUID
+    let tradeProbe = BoundFullAppTradeProbe()
     private var prepared = false
     private var timer: Timer?
     private weak var coordinator: BoundCompanionCoordinator?
@@ -83,6 +119,11 @@ final class BoundFullAppGameplayQA {
         } catch { /* No fixture fallbacks, credential logging or ROM patching. */ }
     }
 
+    func configureTrade(core:EmulatorCore?) {
+        guard ProcessInfo.processInfo.arguments.contains("--bound-ui-trade-qa") else { return }
+        tradeProbe.configure(core:core,marker:peer == "A" ? 0xBB:0xBC)
+    }
+
     func attach(_ coordinator: BoundCompanionCoordinator, owner: GameViewController) {
         self.coordinator = coordinator; self.owner = owner
         observation.isAccessibilityElement = true
@@ -121,6 +162,7 @@ final class BoundFullAppGameplayQA {
         value["interactionPhase"] = String(describing: sharing.interactions.phase)
         value["interactionCanStart"] = sharing.interactions.canInteract
         value["interactionMessage"] = sharing.interactions.message
+        value["battleCancellation"] = sharing.nativeBattle.lastCancellation
         value["battleFailure"] = sharing.nativeBattle.lastFailure
         value["battleCable"] = sharing.nativeBattle.lastCableDiagnostic
         value["battlesCompleted"] = sharing.nativeBattle.completedBattles
@@ -135,6 +177,12 @@ final class BoundFullAppGameplayQA {
             value["battlePlayerHP"] = battle.playerHP
             value["battleEnemyHP"] = battle.enemyHP
         }
+
+        value.merge(tradeProbe.snapshot) { _,new in new }
+        value["tradeOpened"]=sharing.nativeBattle.observation?.tradeOpened ?? false
+        value["tradeCount"]=sharing.nativeBattle.observation?.tradeCount ?? 0
+        value["tradesCompleted"]=sharing.nativeBattle.completedTrades
+        value["tradeRecoveryBlocked"]=sharing.nativeBattle.blocksAutoSave
 
         value["accountReady"] = coordinator.account.session != nil
         value["friendCount"] = coordinator.onboarding.rooms.count

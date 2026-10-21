@@ -103,6 +103,34 @@ final class FriendInteractionTests: XCTestCase {
         XCTAssertEqual(p.a.inputGate.filter(GBAGameInput.a).type,.game(.gba), "Stopping must release the gate even while idle")
         XCTAssertFalse(p.a.canInteract)
     }
+    func testRepeatedJoinPreservesActiveTradeConsentAndControls() {
+        let p=peers()
+        p.a.open(at:10); p.a.request(.trade,at:10)
+        p.a.activityProgress("Trade",playing:true)
+        p.a.start(send:{ _ in true })
+        XCTAssertEqual(p.a.phase,.playing)
+        XCTAssertEqual(p.a.activity,.trade)
+        XCTAssertEqual(p.a.message,"Trade")
+        XCTAssertFalse(p.a.blocksGameplay)
+    }
+
+    func testRecoveryResultSurvivesDisconnectAndReconnectUntilAcknowledged() {
+        let p = peers()
+        p.a.open(at:10); p.a.request(.trade,at:10)
+        let recovery = "Trade interrupted. Continue from your in-game save."
+        p.a.activityEnded(recovery)
+        p.a.stop()
+        XCTAssertEqual(p.a.phase,.ended)
+        XCTAssertEqual(p.a.message,recovery)
+        XCTAssertTrue(p.a.blocksGameplay)
+        p.a.start(send:{ _ in true })
+        XCTAssertEqual(p.a.message,recovery)
+        XCTAssertFalse(p.a.canInteract)
+        p.a.cancel()
+        XCTAssertEqual(p.a.phase,.idle)
+        XCTAssertTrue(p.a.canInteract)
+    }
+
     func testWrongSessionWrongCoordinatesAndOldInvitationsAreRejected() throws {
         let p = peers(); p.a.open(at:10); p.a.request(.trade,at:10)
         let request = try XCTUnwrap(Packet.decode(try XCTUnwrap(p.aPackets.first)))

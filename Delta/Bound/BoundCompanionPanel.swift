@@ -682,11 +682,18 @@ final class BoundCompanionCoordinator {
         state.emulationDetails = BoundEmulationDetails(packageName: core.deltaCore.name, packageIdentifier: core.deltaCore.identifier, packageVersion: core.deltaCore.version)
         boundCore = core
         let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe
+        #if DEBUG && targetEnvironment(simulator)
+        let tradeQA = BoundFullAppGameplayQA.current?.tradeProbe
+        BoundFullAppGameplayQA.current?.configureTrade(core:core)
+        #endif
         core.updateHandler = { [weak tap, weak reader, weak battle] core in
             previous?(core)
             reader?.receive(core)
             tap?.receive(core)
             battle?.receive(core)
+            #if DEBUG && targetEnvironment(simulator)
+            tradeQA?.receive(core)
+            #endif
         }
         #if DEBUG && targetEnvironment(simulator)
         if usesLocalPairedFixture { sharing.start() }

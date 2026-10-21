@@ -182,6 +182,7 @@ final class BoundNativeBattleSession {
     private var recovery:Recovery?
     private var recoveryFailed=false
     private(set) var observation:BoundNativeBattleObservation?
+    private(set) var lastCancellation=""
     private(set) var lastFailure=""
     private(set) var lastCableDiagnostic=""
     private(set) var completedBattles=0
@@ -209,7 +210,7 @@ final class BoundNativeBattleSession {
             interactions?.activityEnded("Game is not ready for a link \(activity.rawValue)"); return
         }
         originalRate=core.rate
-        self.id=id; self.activity=activity; self.initiator=initiator; lastFailure=""; observation=nil
+        self.id=id; self.activity=activity; self.initiator=initiator; lastFailure=""; lastCancellation=""; observation=nil
         localPrepared=false; peerPrepared=false; localConnected=false; peerConnected=false
         localFinished=false; peerFinished=false; entryQueued=false; played=false; peerLinkClosed=false
         deadline=ProcessInfo.processInfo.systemUptime+30
@@ -325,8 +326,9 @@ final class BoundNativeBattleSession {
         guard let id,let data=BoundBattleControlPacket(id:id,kind:kind).encoded() else { return false }
         return sendControl?(data)==true
     }
-    func cancel(resume:Bool=true) {
+    func cancel(resume:Bool=true,source:String=#fileID,line:Int=#line) {
         guard id != nil else { return }
+        lastCancellation="\(source):\(line)"
         _=emit(.abort); finish(message:"\(activity.title) ended",resume:resume)
     }
     private func fail(_ message:String) {

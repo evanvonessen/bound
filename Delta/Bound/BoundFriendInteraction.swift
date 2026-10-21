@@ -119,12 +119,15 @@ final class BoundFriendInteractionSession {
 
     func start(send: @escaping (Data) -> Bool) {
         guard BoundMultiplayerFeatures.isEnabled else { return }
-        reset(); self.send = send; connected = true; refreshInputGate()
+        // A reconnect must not erase the save/recovery result before the
+        // player has acknowledged it. Retired requests still cannot restart.
+        if !connected && phase != .ended { reset() }
+        self.send = send; connected = true; refreshInputGate()
     }
     func stop(message: String = "Friend connection ended") {
         guard connected else { refreshInputGate(); return }
         connected = false; send = nil
-        if phase != .idle { end(message) }
+        if phase != .idle && phase != .ended { end(message) }
         refreshInputGate()
     }
     @discardableResult func open(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {

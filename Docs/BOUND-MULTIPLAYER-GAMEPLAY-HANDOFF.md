@@ -23,7 +23,12 @@ the normal-app Agora knockout acceptance passed in 314.7 seconds with native
 attacks, matching win/loss, and both original positions restored. Trades
 are integrated into `main` from the `codex/friend-trading` worktree;
 see [native friend trades](BOUND-NATIVE-FRIEND-TRADES.md) for current behavior,
-persistence rules and observed validation. Do not repeat the
+persistence rules and observed validation. Full-app real Agora acceptance now
+covers a complete trade plus disconnects before offering, during animation and
+after the native linked save, with both cartridge parties checked on recovery.
+Recovery messages survive reconnect/feature disable, and repeated joins preserve
+active trade consent and controls. Physical-device/separate-network and complete
+power-loss coverage remain unverified. Do not repeat the
 900-second presence run as a substitute for implementing gameplay.
 
 ## Checkout and ownership

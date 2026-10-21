@@ -305,7 +305,8 @@ final class FriendSharingSession: ObservableObject {
             if nativeBattle.blocksAutoSave {
                 interactions.stop(message: "Recovery snapshot kept. Reopen this game to restore it.")
             } else {
-                interactions.cancel(); interactions.stop()
+                if interactions.phase != .ended { interactions.cancel() }
+                interactions.stop()
             }
             livePresence.setEnabled(false); livePresence.stop(); livePresence.connectionCheck.stop()
         }
