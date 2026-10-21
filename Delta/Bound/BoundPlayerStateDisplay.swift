@@ -17,8 +17,6 @@ struct BoundPlayerStateSetting: View {
                 .onChange(of: enabled) { _, _ in
                     NotificationCenter.default.post(name: BoundPlayerStatePreferences.didChange, object: nil)
                 }
-            Text("Show the local map, position, facing and reader status during GBA playback. Supports the validated Radical Red 4.1 ROM.")
-                .font(.footnote).foregroundStyle(.secondary)
         }
     }
 }

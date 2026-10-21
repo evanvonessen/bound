@@ -41,16 +41,6 @@ struct VideoSettingsView: View
                 .accessibilityIdentifier("bound.video.renderer")
             } header: {
                 Text("Game Rendering")
-            } footer: {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Close and reopen the game after changing its renderer. N64 games use their own renderer.")
-                    if requiresMetal {
-                        Text("Metal is required when running Bound on this Mac.")
-                    }
-                    #if targetEnvironment(simulator)
-                    Text("Game Boy Advance games always use Metal in the Simulator.")
-                    #endif
-                }
             }
 
             if !BoundFeatureVisibility.simplifiedSettings {

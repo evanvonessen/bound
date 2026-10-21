@@ -27,8 +27,6 @@ struct AudioSettingsView: View
                     set: { Settings.respectSilentMode = $0 }
                 ))
                 .accessibilityIdentifier("bound.audio.respect-silent-mode")
-            } footer: {
-                Text("When enabled, Delta will only play game audio if your device isn't silenced.")
             }
             
             Section {
@@ -37,8 +35,6 @@ struct AudioSettingsView: View
                     set: { Settings.mixWithOtherAudio = $0 }
                 ))
                 .accessibilityIdentifier("bound.audio.mix-with-other-audio")
-            } footer: {
-                Text("When enabled, game audio will play alongside other audio on your device.")
             }
 
             Section {
@@ -47,8 +43,6 @@ struct AudioSettingsView: View
                     set: { Settings.pauseOtherAudio = $0 }
                 ))
                 .accessibilityIdentifier("bound.audio.pause-other-audio")
-            } footer: {
-                Text("When enabled, starting a game pauses audio from other apps.")
             }
         }
         .tint(.accentColor)

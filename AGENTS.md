@@ -2,6 +2,11 @@
 
 Preserve the upstream Delta module/core identities and committed dependency pins and patches. The ordinary app entry is Bound.xcodeproj / Bound. Do not introduce a nested app-build wrapper or restore the old mGBA app.
 
+Keep feature UI concise. Do not add explanatory blurbs, implementation details,
+or descriptive paragraphs beneath feature controls. Use clear labels and status
+text; keep only required action instructions and consequential warnings. Put
+technical explanations in documentation or explicitly opened help instead.
+
 Before publishing changes, run focused checks and a Release iPhone build, preserve unrelated work, and report device/network validation limits. Never commit credentials, signing assets, app data or build output. Public distribution requires the unresolved dependency/SDK licensing review.
 
 When the user authorizes publishing, verify the remote and push validated changes directly to `origin/main` with an explicit refspec; never push the current branch implicitly. Use original upstream Delta playback smoothness as the performance baseline, and do not claim phone parity from simulator tests.

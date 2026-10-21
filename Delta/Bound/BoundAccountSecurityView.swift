@@ -121,8 +121,6 @@ struct BoundAccountSecurityView: View {
             }
         } header: {
             Text("Two-factor authentication")
-        } footer: {
-            Text("Use an authenticator app to generate a six-digit code when signing in. Setup becomes active only after you verify a code. Keep a backup authenticator or setup key. With multiple authenticators, choose which one to use when entering a code. Enabling 2FA can sign out other devices; use an updated Bound app on every device.")
         }
     }
 
@@ -190,8 +188,6 @@ struct BoundAccountSecurityView: View {
                 .accessibilityIdentifier("account.security.step-up.verify")
         } header: {
             Text("Verify your identity")
-        } footer: {
-            Text("Confirm a current authenticator code before removing security methods.")
         }
     }
 
@@ -224,8 +220,6 @@ struct BoundAccountSecurityView: View {
             }
         } header: {
             Text("Passkeys")
-        } footer: {
-            Text("Sign in using Face ID, Touch ID, or your device passcode. Your passkey is saved by your device's credential provider; your Bound password stays available.")
         }
     }
 

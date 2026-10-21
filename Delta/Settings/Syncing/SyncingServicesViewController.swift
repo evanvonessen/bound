@@ -285,14 +285,7 @@ extension SyncingServicesViewController
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String?
     {
-        if Section.allCases[section] == .authenticate {
-            return "Sign in to Bound first. Connecting Dropbox links it to your Bound account, so other devices can reconnect without Dropbox authorization. Disconnecting this device keeps that link. Switching Bound accounts pauses sync. Re-enable it to include this device’s local games and saves in that account’s Dropbox."
-        }
-        guard Section.allCases[section] == .service,
-              SyncManager.availableBoundServices.contains(where: { !SyncManager.isServiceConfigured($0) }) else {
-            return super.tableView(tableView, titleForFooterInSection: section)
-        }
-        return NSLocalizedString("Cloud sync sign-in providers must be configured specifically for Bound. Unconfigured providers cannot be selected.", comment: "")
+        return nil
     }
     
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath)

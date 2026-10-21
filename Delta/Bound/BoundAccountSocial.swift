@@ -347,8 +347,6 @@ private struct BoundUsernameSettings: View {
                     Task { await profile.rename(username); if profile.status.hasPrefix("Username updated") { username = profile.username ?? username; edited = false } }
                 }.disabled(profile.busy || !BoundSocialAPI.validUsername(username.trimmingCharacters(in: .whitespacesAndNewlines)) || username == profile.username)
                     .accessibilityIdentifier("bound.username-save")
-            } footer: {
-                Text("This is the username all your friends see. Use 1–40 characters.")
             }
             if !profile.status.isEmpty { Text(profile.status).font(.caption).accessibilityIdentifier("bound.username-status") }
         }.navigationTitle("Username")

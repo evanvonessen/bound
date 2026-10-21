@@ -319,8 +319,6 @@ struct BoundLivePresenceControls: View {
                 .accessibilityIdentifier("bound.live-presence-enabled")
             Text(session.status).font(.footnote).foregroundStyle(.secondary)
                 .accessibilityIdentifier("bound.live-presence-status")
-            Text("Connect in Friends and enable this on both devices. Requires the supported Radical Red ROM and on-foot gameplay. Each player keeps their own save and progress.")
-                .font(.footnote).foregroundStyle(.secondary)
             BoundPresenceConnectionCheckControls(check: session.connectionCheck)
         }
     }

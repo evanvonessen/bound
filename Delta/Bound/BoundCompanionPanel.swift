@@ -1609,7 +1609,6 @@ struct BoundCompanionControlsSections: View {
         BoundAppearanceSettings(includeAbout: false)
         if !BoundFeatureVisibility.simplifiedSettings {
             Section("Picture in picture") {
-                Text("In landscape, drag a panel to move it or pinch to resize. Swipe to an edge to hide it; tap the Bound button to restore it.")
                 ForEach([BoundPiPContent.friend, .notes], id: \.rawValue) { content in
                     VStack(alignment: .leading) {
                         Text("\(content.title) transparency: \(Int(model.preferences.transparency(for: content) * 100))%")
@@ -1917,7 +1916,6 @@ struct BoundFriendsSheet: View {
                             Button("Add friend") { onboarding.add(username: friendUsername) }
                                 .disabled(onboarding.busy || !BoundSocialAPI.validUsername(friendUsername.trimmingCharacters(in: .whitespacesAndNewlines)))
                                 .accessibilityIdentifier("bound.add-friend")
-                            Text("Usernames aren't case sensitive.").font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     if !usesUpdatedUI {
@@ -1970,7 +1968,6 @@ struct BoundFriendsSheet: View {
                             .submitLabel(.go)
                             .onSubmit { addFriendByUsername() }
                             .accessibilityIdentifier("bound.add-friend-username")
-                        Text("Usernames aren't case sensitive.").font(.caption).foregroundStyle(.secondary)
                     }
                     if !onboarding.message.isEmpty { Text(onboarding.message).font(.caption) }
                     Button("Add friend") { addFriendByUsername() }
@@ -2196,8 +2193,6 @@ struct BoundChangeEmailView: View {
                                       BoundFriendAccount.normalizedEmail(newEmail) == account.emailAddress)
                             .accessibilityIdentifier("account.email-change.submit")
                         if account.changingEmail { ProgressView("Changing email…") }
-                    } footer: {
-                        Text("Your current password is required. The new address is confirmed automatically. After changing it, sign in with your new email and the same password.")
                     }
                 }
                 if !changed && !account.emailChangeStatus.isEmpty {
@@ -2273,10 +2268,6 @@ struct BoundForgotPasswordView: View {
                     .disabled(unavailable)
                     .accessibilityIdentifier("account.recovery.submit")
                 if account.sendingPasswordReset { ProgressView("Sending reset link…") }
-            } footer: {
-                Text(forCurrentAccount
-                     ? "Send a reset link to your Bound account email. Follow the link to choose a new password. Requesting the link keeps you signed in."
-                     : "Enter your Bound account email. Follow the link in your email to choose a new password, then return to Bound to sign in.")
             }
             if !account.passwordResetStatus.isEmpty {
                 Section {
@@ -2323,8 +2314,6 @@ struct BoundCreateAccountView: View {
                     TextField("Username", text: $username)
                         .textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled()
                         .accessibilityIdentifier("account.signup.username")
-                    Text("Choose a unique username. Capitalization doesn't make it different.")
-                        .font(.caption).foregroundStyle(.secondary)
                     TextField("Email", text: $email).textContentType(.username).keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("account.signup.email")
                     SecureField("Password", text: $password).textContentType(.newPassword)

@@ -84,7 +84,7 @@ this repository or validation output.
 - The local game library is shared by the installation, as before. Switching
   Bound accounts keeps local games/saves; enabling sync on the other account can
   upload those local games. This change isolates credentials and sync metadata,
-  not local libraries. The settings footer explains that local games remain.
+  not local libraries.
 - Per-device sync enable/disable remains a local preference. On a fresh device,
   sign into Bound and enable Dropbox sync; no Dropbox consent is needed for an
   existing account link. Revoked/invalid credentials require consent again.

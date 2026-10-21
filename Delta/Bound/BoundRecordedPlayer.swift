@@ -153,8 +153,6 @@ struct BoundRecordedPlayerControls: View {
             }
             Button("Clear recording", role: .destructive) { session.clear() }
                 .disabled(!session.hasRecording && session.mode == .idle).accessibilityIdentifier("bound.recorded-player-clear")
-            Text("Records up to 30 seconds of walking. Resume the game after choosing Record or Replay. The recording lasts until you leave this game.")
-                .font(.footnote).foregroundStyle(.secondary)
         }
     }
 }

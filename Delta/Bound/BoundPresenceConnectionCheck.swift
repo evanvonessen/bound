@@ -160,8 +160,6 @@ struct BoundPresenceConnectionCheckControls: View {
     @State private var failed = false
     var body: some View {
         DisclosureGroup("Connection check") {
-            Text("Record up to 15 minutes of connection, reader and display counters. Recording stays on this device until you export it.")
-                .font(.footnote).foregroundStyle(.secondary)
             if check.recording {
                 Button("Stop recording check") { check.stop() }
                     .accessibilityIdentifier("bound.presence-check-stop")
