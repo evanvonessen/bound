@@ -229,11 +229,21 @@ final class BoundCompanionCoordinator {
     #if DEBUG && targetEnvironment(simulator)
     private let usesLocalPairedFixture: Bool
     #endif
-    let onboarding = FriendOnboarding()
-    let account = BoundFriendAccount.shared
+    let onboarding: FriendOnboarding
+    let account: BoundFriendAccount
     let state: BoundCompanionState
     init(state: BoundCompanionState? = nil) {
         self.state = state ?? BoundCompanionState()
+        #if DEBUG && targetEnvironment(simulator)
+        if let qa = BoundFullAppGameplayQA.current {
+            account = qa.account
+            onboarding = FriendOnboarding(sendJiggle: { _, _ in "QA notifications disabled" })
+        } else {
+            account = .shared; onboarding = FriendOnboarding()
+        }
+        #else
+        account = .shared; onboarding = FriendOnboarding()
+        #endif
         #if DEBUG && targetEnvironment(simulator)
         let environment = ProcessInfo.processInfo.environment
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-paired-transport"),
@@ -295,6 +305,9 @@ final class BoundCompanionCoordinator {
         self.owner = owner
         playerStateDisplay.attachPresence(sharing.livePresence)
         playerStateDisplay.install(in: owner)
+        #if DEBUG && targetEnvironment(simulator)
+        BoundFullAppGameplayQA.current?.attach(self, owner: owner)
+        #endif
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--bound-ui-reset-layout") {
             UserDefaults.standard.removeObject(forKey: BoundControllerModePreferences.key)
@@ -847,6 +860,24 @@ final class BoundCompanionCoordinator {
             element.accessibilityFrameInContainerSpace = item.frame.applying(.init(scaleX: controllerView.bounds.width, y: controllerView.bounds.height))
             accessibleControls.append(element)
         }
+        #if DEBUG && targetEnvironment(simulator)
+        if BoundFullAppGameplayQA.current != nil {
+            for input in ["up", "down", "left", "right", "a", "b", "start", "select"] {
+                guard let item = skin.items(for: traits)?.first(where: { $0.inputs.allInputs.contains { $0.stringValue == input } }) else { continue }
+                var rect = item.frame.applying(.init(scaleX: controllerView.bounds.width, y: controllerView.bounds.height))
+                if ["up", "down", "left", "right"].contains(input) {
+                    let x = input == "left" ? 0.15 : input == "right" ? 0.85 : 0.5
+                    let y = input == "up" ? 0.15 : input == "down" ? 0.85 : 0.5
+                    rect = CGRect(x: rect.minX + rect.width * x - 6, y: rect.minY + rect.height * y - 6, width: 12, height: 12)
+                }
+                let element = UIAccessibilityElement(accessibilityContainer: controllerView)
+                element.accessibilityIdentifier = "bound.qa-input-" + input
+                element.accessibilityLabel = input; element.accessibilityTraits = .button
+                element.accessibilityFrameInContainerSpace = rect
+                accessibleControls.append(element)
+            }
+        }
+        #endif
         controllerView.accessibilityElements = accessibleControls
         nativeMenuAccessibility = menuAccessibility
         let controller = controllerView.convert(controllerView.bounds, to: owner.view)

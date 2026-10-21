@@ -5,6 +5,11 @@ Keep Bound's existing GBADeltaCore identity and pinned VBA-M source. The earlier
 mGBA investigation is historical evidence; its serialized state format is not
 used by this implementation.
 
+The [full-app gameplay acceptance recipe](BOUND-MULTIPLAYER-GAMEPLAY-QA.md)
+uses two ordinary Bound simulator UIs, real Agora, door/map changes and native
+save-state creation/restoration. Physical-device and separate-network acceptance
+remain described in [device acceptance](BOUND-MULTIPLAYER-DEVICE-QA.md).
+
 ## Use the local display
 
 In Settings → Controls, enable **Player state display**, then resume a GBA game.

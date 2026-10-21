@@ -460,6 +460,7 @@
 		18BC10A8D7EF4D1397B91704 /* BoundRecordedPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BC10A8D7EF4D1397B91703 /* BoundRecordedPlayer.swift */; };
 		A15E00000000000000000002 /* BoundLivePresence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000001 /* BoundLivePresence.swift */; };
 		A15E00000000000000000008 /* BoundPresenceConnectionCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000007 /* BoundPresenceConnectionCheck.swift */; };
+		A15E0000000000000000000C /* BoundFullAppGameplayQA.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E0000000000000000000B /* BoundFullAppGameplayQA.swift */; };
 		18BC10A8D7EF4D1397B91706 /* RecordedPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */; };
 		A15E00000000000000000004 /* LivePresenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000003 /* LivePresenceTests.swift */; };
 		A15E0000000000000000000A /* PresenceConnectionCheckTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */; };
@@ -1284,6 +1285,7 @@
 		18BC10A8D7EF4D1397B91703 /* BoundRecordedPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundRecordedPlayer.swift; sourceTree = "<group>"; };
 		A15E00000000000000000001 /* BoundLivePresence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLivePresence.swift; sourceTree = "<group>"; };
 		A15E00000000000000000007 /* BoundPresenceConnectionCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPresenceConnectionCheck.swift; sourceTree = "<group>"; };
+		A15E0000000000000000000B /* BoundFullAppGameplayQA.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundFullAppGameplayQA.swift; sourceTree = "<group>"; };
 		18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordedPlayerTests.swift; sourceTree = "<group>"; };
 		A15E00000000000000000003 /* LivePresenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePresenceTests.swift; sourceTree = "<group>"; };
 		A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresenceConnectionCheckTests.swift; sourceTree = "<group>"; };
@@ -1517,6 +1519,7 @@
 				18BC10A8D7EF4D1397B91703 /* BoundRecordedPlayer.swift */,
 				A15E00000000000000000001 /* BoundLivePresence.swift */,
 				A15E00000000000000000007 /* BoundPresenceConnectionCheck.swift */,
+				A15E0000000000000000000B /* BoundFullAppGameplayQA.swift */,
 				E875C2DEF127D860254648FA /* BoundFrameCaptureGate.swift */,
 				9F35BC570DB6B8BA023B9B53 /* BoundCompanionCycleButton.swift */,
 				6D75D15A8F3B6F2793C7F56D /* BoundPortraitScreenGeometry.swift */,
@@ -3510,6 +3513,7 @@
 				18BC10A8D7EF4D1397B91704 /* BoundRecordedPlayer.swift in Sources */,
 				A15E00000000000000000002 /* BoundLivePresence.swift in Sources */,
 				A15E00000000000000000008 /* BoundPresenceConnectionCheck.swift in Sources */,
+				A15E0000000000000000000C /* BoundFullAppGameplayQA.swift in Sources */,
 				A5AAF6B64EA97D56F73A4A9D /* BoundFrameCaptureGate.swift in Sources */,
 				9EE1E66A051751E201D09F44 /* BoundCompanionCycleButton.swift in Sources */,
 				086D5B30CBE1065AE9A6C9AA /* BoundPortraitScreenGeometry.swift in Sources */,

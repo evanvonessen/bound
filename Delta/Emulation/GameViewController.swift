@@ -131,6 +131,9 @@ class GameViewController: DeltaCore.GameViewController
     func boundRRDexDidLoadSaveState(core: EmulatorCore) {
         guard core === emulatorCore, core.game.type == .gba else { return }
         boundCompanion.playerStateDisplay.didLoadSaveState()
+        #if DEBUG && targetEnvironment(simulator)
+        BoundFullAppGameplayQA.current?.didRestore()
+        #endif
         boundRRDexSaveCache.invalidate(restoredState: true)
         guard let game = game as? Game else { return }
         // Save-state RAM can differ from the battery file. Read it while the

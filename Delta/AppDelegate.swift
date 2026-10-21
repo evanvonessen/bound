@@ -315,6 +315,10 @@ private extension AppDelegate
         // Operator: notify device of database readiness
         self.handleOperatorDatabaseReady()
 
+        #if DEBUG && targetEnvironment(simulator)
+        BoundFullAppGameplayQA.current?.prepareLibrary()
+        #endif
+
         guard let deepLink = self.appLaunchDeepLink else { return }
         
         DispatchQueue.main.async {
