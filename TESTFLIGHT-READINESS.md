@@ -1,5 +1,12 @@
 # Bound TestFlight preparation
 
+For the current authorized personal internal delivery process, Cloud post-action,
+local quota fallback, and device update settings, see
+[TestFlight delivery](Docs/TESTFLIGHT-DELIVERY.md). The dated preparation evidence
+below remains historical; its earlier upload/signing restrictions do not replace
+the current user-authorized personal delivery procedure. Public distribution
+review limits remain unresolved.
+
 Review date: 2026-10-06. The user authorized preparation and TestFlight upload to the existing Bound record (Apple ID 6815926598, SKU bound-ios), using existing signing assets. Final submission remains with the user. New credentials, profiles, agreements, and unsupported attestations are not authorized.
 
 ## Identity

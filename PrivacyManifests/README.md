@@ -2,6 +2,18 @@
 
 Reviewed 2026-10-06 against commit `4b971847ef6af8960e64a3bb446acb9bc7de3a29`. These are locally maintained declarations for the exact pinned sources, not manifests published by those SDK versions. No SDK version or runtime source changes accompany them.
 
+Rechecked 2026-10-21 against `b433394b5d6c241dc01c50b67da8cb60adc8e313`
+when enabling personal TestFlight delivery. Compared all changes since the
+original audit in `MFiGameController.swift`, `ControllerSkinTraits.swift`,
+`ControllerView.swift`, `GameView.swift`, and
+`GameCollectionViewController.swift`. The changes add physical controller button
+mapping, update scene/trait APIs and import type identifiers, remove pressed
+artwork animation/cache work, adjust Core Image intermediate caching, and update
+game preview/error/save-state UI handling. They do not change the audited
+required-reason API accesses, elapsed-time scheduling, or SDWebImage request/cache
+call sites. Refreshed only these five source hashes. Manifest declarations,
+dependency pins, runtime source, and the broader review limits below are unchanged.
+
 ## SDWebImage 3.8.3
 
 The committed CocoaPods lock identifies 3.8.3. The required-reason API scan of `Pods/SDWebImage/SDWebImage` found file-metadata access in `SDImageCache.m`:
