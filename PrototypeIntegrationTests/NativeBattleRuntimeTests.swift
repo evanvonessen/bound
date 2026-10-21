@@ -208,6 +208,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
                 XCTAssertEqual(BoundVBABattleBridge.playerHP().last?.intValue, 0, "Second catch in the same area is unusable")
             } else if mode == 2 {
                 XCTAssertEqual(record.slot, "egg:1"); XCTAssertTrue(record.eligible)
+                XCTAssertEqual(result[2], 0, "A zero-HP write to an unhatched egg does not emit a native faint")
                 XCTAssertFalse(reopened.read().ledger?.dead.contains("egg:1") == true)
             } else {
                 XCTAssertEqual(result[0], 1, "Actual native GiveMonToPlayer sent the catch to a PC box")

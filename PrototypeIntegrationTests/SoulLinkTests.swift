@@ -54,7 +54,7 @@ final class SoulLinkTests: XCTestCase {
     }
     func testUnhatchedEggDoesNotDieFromZeroPartyHP() throws {
         var ledger = makeLedger()
-        try ledger.observe([mon(1, egg: true, isEgg: true, hp: 0)], registering: true, fainted: [])
+        try ledger.observe([mon(1, egg: true, isEgg: true, hp: 0)], registering: true, fainted: [mon(1).identity])
         XCTAssertTrue(ledger.dead.isEmpty)
     }
     func testLatchedNativeZeroHPWriteSurvivesSameFrameHealing() throws {

@@ -146,7 +146,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
             }
         }
         for record in records where record.eligible {
-            if !fainted.isDisjoint(with: record.identities) || mons.contains(where: { record.identities.contains($0.identity) && !$0.isEgg && $0.hp == 0 }) {
+            if (!record.pendingHatch && !fainted.isDisjoint(with: record.identities)) || mons.contains(where: { record.identities.contains($0.identity) && !$0.isEgg && $0.hp == 0 }) {
                 dead.insert(record.slot)
             }
         }

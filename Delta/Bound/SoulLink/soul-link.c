@@ -39,7 +39,8 @@ void BoundSoulSet(u8 *mon,int field,const void *data) {
     if(field==57) {
         /* Native zero-HP writes are latched even if a raid/Pokemon Center heals
          * again in the same frame. Only owned identities are admitted by host. */
-        if(read16(data)==0 && read16(mon+86)>0 && read16(mon+88)>0) {
+        if(read16(data)==0 && read16(mon+86)>0 && read16(mon+88)>0
+           && !(mon[19]&4) && !(mon[75]&0x40)) {
             if(EVENTS->magic!=MAGIC) { EVENTS->count=EVENTS->overflow=0; EVENTS->magic=MAGIC; }
             unsigned i=EVENTS->count;
             if(i<32) { EVENTS->fainted[i].personality=read32(mon); EVENTS->fainted[i].trainer=read32(mon+4); EVENTS->count=i+1; }
@@ -73,7 +74,12 @@ void BoundSoulQACatch(void) {
     for(i=0;i<100;i++) mon[i]=party[i];
     *(u32 *)mon=0xD00D0000u+mode;
     mon[19]=(mon[19]|2)&(u8)~4; mon[75]&=(u8)~0x40;
-    if(mode==2) { mon[19]|=4; mon[75]|=0x40; mon[70]&=0x80; mon[69]=253; }
+    if(mode==2) {
+        u16 healthy=read16(mon+88),zero=0;
+        mon[19]|=4; mon[75]|=0x40; mon[70]&=0x80; mon[69]=253;
+        ((void (*)(u8 *,int,const void *))0x0804037D)(mon,57,&healthy);
+        ((void (*)(u8 *,int,const void *))0x0804037D)(mon,57,&zero);
+    }
     if(mode==3) {
         for(unsigned slot=1;slot<6;slot++) for(i=0;i<100;i++) party[slot*100+i]=party[i];
         *(volatile u8 *)0x02024029=6;
@@ -81,7 +87,7 @@ void BoundSoulQACatch(void) {
     }
     result[0]=0;
     result[1]=((u8 (*)(u8 *))0x08040B15)(mon);
-    result[2]=mon[69]; result[3]=(mon[19]&4)!=0;
+    result[2]=mon[69]; result[3]=mode==2 ? (EVENTS->magic==MAGIC ? EVENTS->count:0):(mon[19]&4)!=0;
     result[0]=0x31415153;
 }
 #endif

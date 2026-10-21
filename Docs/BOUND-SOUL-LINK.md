@@ -106,10 +106,11 @@ It is a local challenge record, not a server anti-cheat service.
   barred. The same check invokes the actual native `GiveMonToPlayer` routine
   for a further same-area catch, an egg, and a new-area catch with a full party;
   it verifies ineligibility, Egg 1, and the real compressed PC result respectively.
+  A healthy-to-zero native HP write to an unhatched egg emits no faint event.
   Unhooking restores original ROM-hash/native-link admission. Original
   ROM and seed bytes are checked unchanged. QA fixture code is simulator Debug
   only and is absent from the Release shim.
-- Local evidence: `.build/soul-regressions-final.xcresult` / `.log`: **60 checks
+- Local evidence: `.build/soul-egg-regressions.xcresult` / `.log`: **60 checks
   passed, zero failures**, including the actual VBA-M fixture above and paired
   reconnect/loss propagation. Debug test build and unsigned iPhone Release build passed; no physical-device
   claim is made.
