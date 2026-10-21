@@ -30,9 +30,16 @@ private let ReceivedApplicationState: @convention(c) (CFNotificationCenter?, Uns
     appDelegate.receivedApplicationStateRequest()
 }
 
-@UIApplicationMain
+@main
 class AppDelegate: UIResponder, UIApplicationDelegate
 {
+    static func main()
+    {
+        // Prepare the Mac cache before UIKit/Core Image can initialize Metal.
+        BoundMacMetalCache.configureIfNeeded()
+        UIApplicationMain(CommandLine.argc, CommandLine.unsafeArgv, nil, NSStringFromClass(AppDelegate.self))
+    }
+
     var window: UIWindow?
     
     private let deepLinkController = DeepLinkController(window: nil)

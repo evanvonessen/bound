@@ -434,8 +434,10 @@
 		103E571A4D9543839A7D90EB /* BoundDropboxOAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 627E26C66C2C4CB98A005612 /* BoundDropboxOAuth.swift */; };
 		DC44859A7C07464BBE63B016 /* BoundDropboxOAuthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF068D284BCE47409FBF25C2 /* BoundDropboxOAuthTests.swift */; };
 		AF587D5409BC632CA606F011 /* BoundMacWorkspaceGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32118EFE887BC6DFF711A9BF /* BoundMacWorkspaceGeometry.swift */; };
+		AA0D748265F54753A8DF4201 /* BoundMacMetalCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0D748265F54753A8DF4202 /* BoundMacMetalCache.swift */; };
 		C9F98F6095050C500082B509 /* BoundMacWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D638FE02F6B2876A1CB9CBB /* BoundMacWorkspaceView.swift */; };
 		CF8D391A7DCA20ABDE574139 /* MacWorkspaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13B6FBE642F317EBFF2FEB7F /* MacWorkspaceTests.swift */; };
+		AA0D748265F54753A8DF4203 /* MacMetalCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0D748265F54753A8DF4204 /* MacMetalCacheTests.swift */; };
 		B184A47C9063EDC18DBB4691 /* MacWorkspaceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF58B4C5653710C200F455B0 /* MacWorkspaceUITests.swift */; };
 		70E48E5D9D7B468A8A60DD61 /* BoundLandscapePreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E745195014845F0878192F6 /* BoundLandscapePreferences.swift */; };
 		4978387F9B9B4EDFB5172A2F /* BoundLandscapeCompanion.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD788325701142D5A8E31F99 /* BoundLandscapeCompanion.swift */; };
@@ -1248,8 +1250,10 @@
 		627E26C66C2C4CB98A005612 /* BoundDropboxOAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundDropboxOAuth.swift; sourceTree = "<group>"; };
 		EF068D284BCE47409FBF25C2 /* BoundDropboxOAuthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundDropboxOAuthTests.swift; sourceTree = "<group>"; };
 		32118EFE887BC6DFF711A9BF /* BoundMacWorkspaceGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundMacWorkspaceGeometry.swift; sourceTree = "<group>"; };
+		AA0D748265F54753A8DF4202 /* BoundMacMetalCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundMacMetalCache.swift; sourceTree = "<group>"; };
 		3D638FE02F6B2876A1CB9CBB /* BoundMacWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundMacWorkspaceView.swift; sourceTree = "<group>"; };
 		13B6FBE642F317EBFF2FEB7F /* MacWorkspaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWorkspaceTests.swift; sourceTree = "<group>"; };
+		AA0D748265F54753A8DF4204 /* MacMetalCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMetalCacheTests.swift; sourceTree = "<group>"; };
 		FF58B4C5653710C200F455B0 /* MacWorkspaceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWorkspaceUITests.swift; sourceTree = "<group>"; };
 		6E745195014845F0878192F6 /* BoundLandscapePreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLandscapePreferences.swift; sourceTree = "<group>"; };
 		CD788325701142D5A8E31F99 /* BoundLandscapeCompanion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLandscapeCompanion.swift; sourceTree = "<group>"; };
@@ -1396,6 +1400,7 @@
 				1EAF49DF04CC61B325DAF2E0 /* TypeChartViewTests.swift */,
 				B8A586A10E1DB92A87DB45B1 /* CompanionCycleButtonTests.swift */,
 				13B6FBE642F317EBFF2FEB7F /* MacWorkspaceTests.swift */,
+				AA0D748265F54753A8DF4204 /* MacMetalCacheTests.swift */,
 				82832C7AA5F5408995A7C407 /* BoundAccountSocialTests.swift */,
 				EF068D284BCE47409FBF25C2 /* BoundDropboxOAuthTests.swift */,
 				104D04088215A199CB56949A /* StockControlAndGestureTests.swift */,
@@ -1470,6 +1475,7 @@
 				E0B9C64D60692EA8EAC11ACE /* BoundCompanionPanel.swift */,
 				3D638FE02F6B2876A1CB9CBB /* BoundMacWorkspaceView.swift */,
 				32118EFE887BC6DFF711A9BF /* BoundMacWorkspaceGeometry.swift */,
+				AA0D748265F54753A8DF4202 /* BoundMacMetalCache.swift */,
 				0006FC7AB17F4EBEF25CB391 /* BoundAppearanceSkin.swift */,
 				DCAE7D666E24AD4015C010BC /* BoundAppearanceSettings.swift */,
 				700B4229FD43D2D7CC485768 /* BoundAppearancePreferences.swift */,
@@ -3182,6 +3188,7 @@
 				3EC156C10490F4D05AACF9C7 /* TypeChartViewTests.swift in Sources */,
 				531059D8A4211817FB949969 /* CompanionCycleButtonTests.swift in Sources */,
 				CF8D391A7DCA20ABDE574139 /* MacWorkspaceTests.swift in Sources */,
+				AA0D748265F54753A8DF4203 /* MacMetalCacheTests.swift in Sources */,
 				720C1BBDC97744F4AE7CA3F3 /* BoundAccountSocialTests.swift in Sources */,
 				DC44859A7C07464BBE63B016 /* BoundDropboxOAuthTests.swift in Sources */,
 				D1CCDE2C67C0DCD2A3EF9645 /* StockControlAndGestureTests.swift in Sources */,
@@ -3458,6 +3465,7 @@
 				EE19B3FE32D45413CAB52F5A /* BoundCompanionPanel.swift in Sources */,
 				C9F98F6095050C500082B509 /* BoundMacWorkspaceView.swift in Sources */,
 				AF587D5409BC632CA606F011 /* BoundMacWorkspaceGeometry.swift in Sources */,
+				AA0D748265F54753A8DF4201 /* BoundMacMetalCache.swift in Sources */,
 				C34FCF2EE936BE9C3BC18B6A /* BoundAppearanceSkin.swift in Sources */,
 				0EF8EC59DD43C2CE2B8F47B2 /* BoundAppearanceSettings.swift in Sources */,
 				72FDE3D87998618604D197B4 /* BoundAppearancePreferences.swift in Sources */,
@@ -3973,7 +3981,8 @@
 					"\"AuthenticationServices\"",
 				);
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" -DDEBUG";
-				PRODUCT_BUNDLE_IDENTIFIER = com.evanvonessen.bound;
+				BOUND_APP_BUNDLE_IDENTIFIER = com.evanvonessen.bound;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BOUND_APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_MODULE_NAME = Delta;
 				PRODUCT_NAME = Bound;
 				PROVISIONING_PROFILE = "";
@@ -4013,7 +4022,8 @@
 					"@executable_path/Frameworks",
 				);
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" -DIMPACTOR";
-				PRODUCT_BUNDLE_IDENTIFIER = com.evanvonessen.bound;
+				BOUND_APP_BUNDLE_IDENTIFIER = com.evanvonessen.bound;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BOUND_APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_MODULE_NAME = Delta;
 				PRODUCT_NAME = Bound;
 				PROVISIONING_PROFILE = "";
