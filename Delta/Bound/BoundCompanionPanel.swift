@@ -368,6 +368,14 @@ final class BoundCompanionCoordinator {
         friendPanel.name = { [weak self] in self?.onboarding.selected?.displayName ?? "Friend" }
         friendPanel.willOpen = { [weak owner] in owner?.releaseBoundFriendGameplayInputs() }
         friendInteractionPanel = friendPanel
+        let soulBanner = BoundSoulBanner()
+        owner.view.addSubview(soulBanner); soulBanner.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            soulBanner.centerXAnchor.constraint(equalTo: owner.view.safeAreaLayoutGuide.centerXAnchor),
+            soulBanner.topAnchor.constraint(equalTo: owner.view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            soulBanner.widthAnchor.constraint(lessThanOrEqualTo: owner.view.safeAreaLayoutGuide.widthAnchor, constant: -24)
+        ])
+        sharing.soulLink.bannerChanged = { [weak soulBanner] message in soulBanner?.show(message) }
         sharing.interactions.canPresent = { [weak self, weak owner] in
             guard let self, let owner else { return false }
             return owner.emulatorCore?.state == .running && owner.view.window?.windowScene?.hasKeyboardFocus == true
@@ -664,6 +672,7 @@ final class BoundCompanionCoordinator {
     }
     func bind(core: EmulatorCore?, gameID: String) {
         sharing.nativeBattle.bind(core: core, gameID: gameID, interactions: sharing.interactions)
+        sharing.soulLink.bind(core: core, gameID: gameID)
         sharing.nativeBattle.restored = { [weak owner] in
             guard let owner, let core = owner.emulatorCore else { return }
             owner.boundRRDexDidLoadSaveState(core: core)
@@ -681,15 +690,16 @@ final class BoundCompanionCoordinator {
         guard let core else { boundCore = nil; state.emulationDetails = nil; return }
         state.emulationDetails = BoundEmulationDetails(packageName: core.deltaCore.name, packageIdentifier: core.deltaCore.identifier, packageVersion: core.deltaCore.version)
         boundCore = core
-        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe
+        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe, soul = sharing.soulLink.probe
         #if DEBUG && targetEnvironment(simulator)
         let tradeQA = BoundFullAppGameplayQA.current?.tradeProbe
         BoundFullAppGameplayQA.current?.configureTrade(core:core)
         #endif
-        core.updateHandler = { [weak tap, weak reader, weak battle] core in
+        core.updateHandler = { [weak tap, weak reader, weak battle, weak soul] core in
             previous?(core)
             reader?.receive(core)
             tap?.receive(core)
+            soul?.receive(core)
             battle?.receive(core)
             #if DEBUG && targetEnvironment(simulator)
             tradeQA?.receive(core)
@@ -1868,6 +1878,7 @@ struct BoundFriendsSheet: View {
                 .id(usesUpdatedUI)
                 if account.session != nil {
                     BoundLivePresenceControls(session: sharing.livePresence)
+                    BoundSoulControls(session: sharing.soulLink)
                     Section("Friends") {
                         if !onboarding.message.isEmpty {
                             Text(onboarding.message).font(.caption)

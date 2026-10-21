@@ -127,6 +127,103 @@ final class NativeBattleRuntimeTests:XCTestCase {
         super.tearDown()
     }
 
+    func testActualSoulLinkNativeHPAndStateRecovery() async throws {
+        continueAfterFailure = false
+        guard ProcessInfo.processInfo.environment["BOUND_SOUL_RUNTIME"] == "1" else {
+            throw XCTSkip("Requires the explicit owned-simulator Soul Link fixture")
+        }
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let rom = root.appendingPathComponent("RadicalRed.gba"), seed = root.appendingPathComponent("seed.sav")
+        let originalROM = try Data(contentsOf: rom), originalSeed = try Data(contentsOf: seed)
+        let profile = try BoundPlayerROMProfile(rom: originalROM)
+        let output = root.appendingPathComponent("soul-link-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let battery = output.appendingPathComponent("work.sav"); try originalSeed.write(to: battery)
+        let core = try XCTUnwrap(EmulatorCore(game: NativeBattleGame(fileURL: rom, gameSaveURL: battery), options: [.metal:true]))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first { $0.isKeyWindow }, window = UIWindow(windowScene: scene), owner = UIViewController(), view = GameView()
+        window.rootViewController = owner; window.makeKeyAndVisible(); owner.view.addSubview(view)
+        view.frame = CGRect(x: 0, y: 150, width: window.bounds.width, height: window.bounds.width * 2/3); core.add(view)
+        let driver = NativeBattleDriver(core: core, profile: profile), probe = BoundSoulProbe()
+        let journal = output.appendingPathComponent("run.json")
+        probe.configure(core: core, url: journal); probe.setVerified(true); probe.setPreviewEnabled(true)
+        core.updateHandler = { core in driver.receive(core); probe.receive(core) }
+        defer {
+            _ = core.pause(); BoundVBABattleBridge.closeSoulLink(); _ = core.stop()
+            window.isHidden = true; previous?.makeKeyAndVisible()
+        }
+        core.rate = 8; XCTAssertTrue(core.start()); await fulfillment(of: [driver.booted], timeout: 90)
+        for _ in 0..<20 {
+            if probe.read().ready { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        _ = core.pause(); core.rate = 1
+        XCTAssertTrue(probe.read().ready, "Wait for the Soul Link observation cadence after the first native overworld frame")
+        XCTAssertEqual(probe.read().mons.count, 1, "Only the disposable starter is owned")
+        let before = output.appendingPathComponent("before.state"); core.saveSaveState(to: before)
+        try probe.start(run: UUID(), binding: String(repeating: "a", count: 64))
+        _ = core.resume(); try await Task.sleep(for: .milliseconds(150)); _ = core.pause()
+        let starter = try XCTUnwrap(probe.read().ledger?.records.first)
+        XCTAssertTrue(BoundVBABattleBridge.qaStartSoulCheck()); _ = core.resume()
+        for _ in 0..<100 {
+            try await Task.sleep(for: .milliseconds(25))
+            if probe.read().ledger?.dead.contains(starter.slot) == true { break }
+        }
+        _ = core.pause()
+        let first = BoundVBABattleBridge.qaSoulCheckResult().map(\.intValue)
+        XCTAssertEqual(first.count, 3)
+        XCTAssertGreaterThan(first[0], 0, "Original GetMonData species forwarding still works")
+        XCTAssertGreaterThan(first[1], 0, "Native zero-HP then heal occurred in one guest frame")
+        XCTAssertEqual(first[1], first[2])
+        XCTAssertTrue(probe.read().ledger?.dead.contains(starter.slot) == true, "Native faint latch survives healing")
+        XCTAssertEqual(BoundVBABattleBridge.playerHP().first?.intValue, 0)
+        BoundVBABattleBridge.qaFinishSoulCheck()
+        _ = core.resume(); try await Task.sleep(for: .milliseconds(100)); _ = core.pause()
+        XCTAssertTrue(BoundVBABattleBridge.qaStartSoulCheck()); _ = core.resume()
+        try await Task.sleep(for: .milliseconds(250)); _ = core.pause()
+        let second = BoundVBABattleBridge.qaSoulCheckResult().map(\.intValue)
+        XCTAssertEqual(second.count, 3); XCTAssertEqual(second[1], 0); XCTAssertEqual(second[2], 0, "Native healing cannot revive a denied Pokemon")
+        BoundVBABattleBridge.qaFinishSoulCheck()
+        try core.load(DeltaCore.SaveState(fileURL: before, gameType: .gba))
+        XCTAssertGreaterThan(BoundVBABattleBridge.playerHP().first?.intValue ?? 0, 0, "The old state really contained a healthy party")
+        let reopened = BoundSoulProbe(); reopened.configure(core: core, url: journal); reopened.setVerified(true)
+        core.updateHandler = { core in driver.receive(core); reopened.receive(core) }
+        _ = core.resume(); try await Task.sleep(for: .milliseconds(200)); _ = core.pause()
+        XCTAssertTrue(reopened.read().ledger?.dead.contains(starter.slot) == true)
+        XCTAssertEqual(BoundVBABattleBridge.playerHP().first?.intValue, 0, "Old-state load and journal reload cannot revive the link")
+        XCTAssertNil(reopened.read().error)
+        for mode in 1...3 {
+            let beforeCount = reopened.read().ledger?.records.count ?? 0
+            XCTAssertTrue(BoundVBABattleBridge.qaStartSoulCatch(UInt(mode))); _ = core.resume()
+            for _ in 0..<100 {
+                try await Task.sleep(for: .milliseconds(25))
+                if (reopened.read().ledger?.records.count ?? 0) > beforeCount { break }
+            }
+            _ = core.pause()
+            let record = try XCTUnwrap(reopened.read().ledger?.records.last)
+            let result = BoundVBABattleBridge.qaSoulCheckResult().map(\.intValue)
+            XCTAssertEqual(result.count, 3)
+            if mode == 1 {
+                XCTAssertEqual(record.slot, starter.slot); XCTAssertFalse(record.eligible)
+                XCTAssertEqual(BoundVBABattleBridge.playerHP().last?.intValue, 0, "Second catch in the same area is unusable")
+            } else if mode == 2 {
+                XCTAssertEqual(record.slot, "egg:1"); XCTAssertTrue(record.eligible)
+                XCTAssertFalse(reopened.read().ledger?.dead.contains("egg:1") == true)
+            } else {
+                XCTAssertEqual(result[0], 1, "Actual native GiveMonToPlayer sent the catch to a PC box")
+                XCTAssertTrue(record.slot.hasPrefix("area:")); XCTAssertNotEqual(record.slot, starter.slot)
+                XCTAssertTrue(record.eligible)
+                let boxed = try XCTUnwrap(reopened.read().mons.first { $0.identity == record.identity })
+                XCTAssertNil(boxed.hp, "Read the real native 58-byte compressed PC catch")
+            }
+            BoundVBABattleBridge.qaFinishSoulCheck()
+        }
+        BoundVBABattleBridge.closeSoulLink()
+        XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady(), "Original ROM hash and native link ABI remain intact after unhooking")
+        BoundVBABattleBridge.close()
+        XCTAssertEqual(try Data(contentsOf: rom), originalROM); XCTAssertEqual(try Data(contentsOf: seed), originalSeed)
+    }
+
     func testActualNativeTrade() async throws {
         continueAfterFailure=false
         let env=ProcessInfo.processInfo.environment

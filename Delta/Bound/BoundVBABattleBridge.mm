@@ -49,13 +49,19 @@ NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
     return values;
 }
 }
+#include "SoulLink/bridge.inc"
+#if DEBUG && TARGET_OS_SIMULATOR
+#include "SoulLink/BoundSoulQACode.h"
+static uint8_t soulQAScriptBackup[128];
+#endif
+
 @implementation BoundVBABattleBridge
 + (BOOL)verifyBattleReady {
     verifiedROM=nullptr;
     if(armed||!overworld()||workRAM[0x24029]==0||workRAM[0x24029]>6) return NO;
     const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
         0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
-    uint8_t digest[CC_SHA256_DIGEST_LENGTH]; CC_SHA256(rom,0x2000000,digest);
+    uint8_t digest[CC_SHA256_DIGEST_LENGTH]; soulOriginalHash(digest);
     if(memcmp(digest,expected,32)!=0) return NO;
     for(size_t i=0;i<RegionSize;i++) if(rom[RegionOffset+i]!=0xFF) return NO;
     if(word(internalRAM+0xF0C)!=0x0815F9B4||word(internalRAM+0xF10)!=0x0815FD08) return NO;
@@ -216,7 +222,137 @@ NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
     armed=installed=failed=syntheticHeld=tradeMode=tradeOpened=tradeScene=false;
     tradeCount=0; patchedROM=verifiedROM=nullptr;
 }
+
++ (BOOL)installSoulLink {
+    if(soulHooked()) return YES;
+    if(armed || !rom || !workRAM || !internalRAM) return NO;
+    uint8_t digest[32]; soulOriginalHash(digest);
+    const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
+        0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
+    if(memcmp(digest,expected,32)!=0) return NO;
+    if(!soulResident()) for(size_t i=SoulStart;i<SoulEnd;i++) if(rom[i]!=0xFF) return NO;
+    memcpy(soulOriginalGet,rom+0x3FBE8,8); memcpy(soulOriginalSet,rom+0x4037C,8);
+    memcpy(rom+SoulStart,BoundSoulCode,sizeof(BoundSoulCode));
+    uint8_t *thunks[]={soulGetThunk,soulSetThunk};
+    const uint32_t targets[]={BoundSoulGetAddress,BoundSoulSetAddress};
+    const size_t offsets[]={0x3FBE8,0x4037C};
+    for(unsigned i=0;i<2;i++) {
+        auto *t=thunks[i]; t[0]=0; t[1]=0x4B; t[2]=0x18; t[3]=0x47; // ldr r3; bx r3 (r0-r2 arguments preserved)
+        put32(t+4,targets[i]); memcpy(rom+offsets[i],t,8);
+    }
+    put32(rom+SoulPolicy,0x314C5342); put32(rom+SoulPolicy+4,0);
+    memset(internalRAM+0x4500,0,12+32*8); soulROM=rom; return YES;
+}
++ (BOOL)setSoulLinkDenied:(NSData *)identities {
+    if(!soulHooked() || identities.length%8 || identities.length>2048*8) return NO;
+    memcpy(rom+SoulPolicy+8,identities.bytes,identities.length);
+    put32(rom+SoulPolicy+4,unsigned(identities.length/8)); return YES;
+}
++ (NSDictionary<NSString *,id> *)soulLinkSnapshot {
+    if(!rom||!workRAM||!internalRAM || workRAM[0x24029]>6) return @{};
+    NSMutableData *boxes=[NSMutableData data];
+    const bool ready=overworld();
+    if(ready) {
+        // Exact RR 4.1 table: 25 boxes, 30 slots, 58-byte compressed Pokemon.
+        for(unsigned i=0;i<25;i++) {
+            uint32_t address=word(rom+0x1148930+i*4);
+            if(address<0x02000000 || address>0x02040000-30*58) return @{};
+            [boxes appendBytes:workRAM+address-0x02000000 length:30*58];
+        }
+    }
+    const unsigned n=workRAM[0x24029];
+    NSMutableData *faints=[NSMutableData data];
+    bool overflow=false;
+    if(soulHooked() && word(internalRAM+0x4500)==0x314C5342) {
+        unsigned count=word(internalRAM+0x4504);
+        overflow=count>32 || word(internalRAM+0x4508)!=0;
+        if(count<=32) [faints appendBytes:internalRAM+0x450C length:count*8];
+    }
+    NSMutableData *active=[NSMutableData data];
+    if(internalRAM[0x3529]&2) {
+        unsigned count=workRAM[0x23BCC];
+        if(count<=4) for(unsigned i=0;i<count;i++) {
+            const auto *b=workRAM+0x23BE4+i*88;
+            // Match identity, not side/index: partner and raid teams may reorder.
+            if(half(b+0x2C)>0 && half(b+0x28)==0) {
+                [active appendBytes:b+0x48 length:4]; [active appendBytes:b+0x54 length:4];
+            }
+        }
+    }
+    return @{@"ready":@(ready),@"battle":@((internalRAM[0x3529]&2)!=0),@"party":[NSData dataWithBytes:workRAM+0x24284 length:n*100],
+             @"boxes":boxes,@"faints":faints,@"battleFaints":active,@"overflow":@(overflow)};
+}
++ (void)acknowledgeSoulLinkFaints {
+    if(soulHooked()&&word(internalRAM+0x4500)==0x314C5342) { put32(internalRAM+0x4504,0); put32(internalRAM+0x4508,0); }
+}
++ (void)enforceSoulLink {
+    if(!soulHooked()||!workRAM||!internalRAM) return;
+    const unsigned count=word(rom+SoulPolicy+4);
+    if(count>2048) return;
+    auto denied=[](const uint8_t *mon) {
+        unsigned low=0,high=word(rom+SoulPolicy+4);
+        const auto p=word(mon),t=word(mon+4);
+        while(low<high) {
+            unsigned mid=(low+high)/2; const auto *id=rom+SoulPolicy+8+mid*8;
+            auto a=word(id),b=word(id+4);
+            if(a==p&&b==t) return true;
+            if(a<p || (a==p&&b<t)) low=mid+1; else high=mid;
+        }
+        return false;
+    };
+    for(unsigned i=0;i<workRAM[0x24029]&&i<6;i++) {
+        auto *mon=workRAM+0x24284+i*100;
+        if(denied(mon)) put16(mon+86,0);
+    }
+    if(internalRAM[0x3529]&2) {
+        unsigned n=workRAM[0x23BCC];
+        if(n<=4) for(unsigned i=0;i<n;i++) {
+            auto *b=workRAM+0x23BE4+i*88;
+            uint8_t identity[8]; memcpy(identity,b+0x48,4); memcpy(identity+4,b+0x54,4);
+            // Native attack-canceler rejects a zero-HP attacker. Also cover
+            // already-active Pokemon when the partner faints during a turn.
+            if(half(b+0x2C)>0 && denied(identity)) put16(b+0x28,0);
+        }
+    }
+}
++ (void)closeSoulLink {
+    if(soulHooked()) {
+        memcpy(rom+0x3FBE8,soulOriginalGet,8); memcpy(rom+0x4037C,soulOriginalSet,8);
+        // A paused CPU can still have a shim return address on its stack.
+        // Leave the original tiny body resident and inert until ROM unload;
+        // restore entry bytes and clear policy instead of erasing live code.
+        put32(rom+SoulPolicy+4,0);
+    }
+}
+
 #if DEBUG && TARGET_OS_SIMULATOR
++ (BOOL)qaStartSoulCheck {
+    if(!soulHooked() || !overworld()) return NO;
+    memcpy(rom+SoulStart,BoundSoulQACode,sizeof(BoundSoulQACode));
+    memcpy(soulQAScriptBackup,rom+ScriptAddress-0x08000000,128);
+    uint8_t script[7]={0x23,0,0,0,0,0x6C,0x02};
+    put32(script+1,BoundSoulQAAddress); memcpy(rom+ScriptAddress-0x08000000,script,sizeof(script));
+    memset(internalRAM+0x4D00,0,16);
+    memset(internalRAM+0xEB0,0,0x74); internalRAM[0xEB1]=1; put32(internalRAM+0xEB8,ScriptAddress);
+    put32(internalRAM+0xF0C,0x0815F9B4); put32(internalRAM+0xF10,0x0815FD08);
+    internalRAM[0xEA8]=0; internalRAM[0xF9C]=1;
+    internalRAM[0xF9D]=internalRAM[0xF9E]=internalRAM[0xFA0]=0;
+    return YES;
+}
++ (BOOL)qaStartSoulCatch:(NSUInteger)mode {
+    if(mode<1 || mode>3 || ![self qaStartSoulCheck]) return NO;
+    put32(rom+ScriptAddress-0x08000000+1,BoundSoulQACatchAddress);
+    put32(internalRAM+0x4D20,unsigned(mode)); return YES;
+}
++ (NSArray<NSNumber *> *)qaSoulCheckResult {
+    if(!internalRAM || word(internalRAM+0x4D00)!=0x31415153) return @[];
+    return @[@(word(internalRAM+0x4D04)),@(word(internalRAM+0x4D08)),@(word(internalRAM+0x4D0C))];
+}
++ (void)qaFinishSoulCheck {
+    if(!soulHooked()) return;
+    memset(rom+SoulStart,0xFF,0x2000); memcpy(rom+SoulStart,BoundSoulCode,sizeof(BoundSoulCode));
+    memcpy(rom+ScriptAddress-0x08000000,soulQAScriptBackup,128);
+}
 + (BOOL)qaPrepareTradeFixture:(NSUInteger)marker {
     if(!overworld()||verifiedROM!=rom||(marker!=0xBB&&marker!=0xBC)) return NO;
     auto *mon=workRAM+0x24284;
