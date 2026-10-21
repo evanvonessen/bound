@@ -21,16 +21,27 @@ The workflow is managed in App Store Connect, not by the local manifest:
 
 After a validated code change is published to `origin/main`, check that the
 Cloud run for that exact commit reaches TestFlight. If Cloud's usage limit
-blocks the run, use the signed-in Mac instead:
+blocks the run, report delivery as blocked and stop delivery work. Normal code
+validation, commits and pushes may continue. Do not automatically create a local
+distribution archive or upload from this Mac, including through Xcode Organizer,
+when Cloud minutes are exhausted or Cloud otherwise cannot deliver. Leave the
+existing Cloud workflow in place for when capacity becomes available.
+
+A local upload requires an explicit human request for that upload. Implementing,
+committing or pushing a change alone does not authorize a local upload. After
+that explicit request, the signed-in Mac can use:
 
 ```sh
 python3 PrototypeTools/deliver-testflight.py --revision <published-commit> --check
 python3 PrototypeTools/deliver-testflight.py --revision <published-commit> --upload
 ```
 
-This is part of the Codex publication procedure in `AGENTS.md`, not a Git hook
-or an unattended service. It requires this Mac, Xcode, network access, and a
-working developer account in Xcode. It does not purchase Cloud minutes.
+The Cloud check is part of the Codex publication procedure in `AGENTS.md`.
+The local commands above are manual delivery tools, not an automatic fallback,
+a Git hook or an unattended service. They require this Mac, Xcode, network access
+and a working developer account in Xcode. They do not purchase Cloud minutes.
+An upload already accepted by Apple continues processing independently of this
+policy; its receipt must be checked before any explicitly requested retry.
 
 The tool checks both origin URLs and the live `origin/main` commit, builds a
 temporary snapshot of that commit, checks pinned sources and audited privacy
