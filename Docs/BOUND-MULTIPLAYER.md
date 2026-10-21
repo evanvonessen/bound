@@ -5,10 +5,12 @@ Keep Bound's existing GBADeltaCore identity and pinned VBA-M source. The earlier
 mGBA investigation is historical evidence; its serialized state format is not
 used by this implementation.
 
-The [full-app gameplay acceptance recipe](BOUND-MULTIPLAYER-GAMEPLAY-QA.md)
-uses two ordinary Bound simulator UIs, real Agora, door/map changes and native
-save-state creation/restoration. Physical-device and separate-network acceptance
-remain described in [device acceptance](BOUND-MULTIPLAYER-DEVICE-QA.md).
+The [full-app gameplay acceptance](BOUND-MULTIPLAYER-GAMEPLAY-QA.md)
+passed on October 20, 2026: two ordinary Bound simulator UIs over real Agora,
+door/map changes, independent native save-state creation/restoration, background
+recovery, sustained >=900-second gameplay with renewals and normal UI stop.
+Physical-device and separate-network acceptance remain described in
+[device acceptance](BOUND-MULTIPLAYER-DEVICE-QA.md).
 
 ## Use the local display
 
@@ -284,9 +286,10 @@ original active friend lists restored. Cloud settings/deployments were unchanged
 Two physical devices are unavailable; physical and separate-network acceptance
 remains open.
 
-Additional fixtures are needed for doors, connected maps, bike/surf/ledge
-movement, late-game scripts and save-state restoration in actual VBA-M gameplay.
-The live presence implementation now feeds this renderer through the existing
-friend room. Next acceptance work includes real authenticated Agora sessions
-across networks, physical-device cost/presentation timing and broader world
-fixtures. Keep each player's local progress independent.
+Door exits and native save-state restoration now pass through the ordinary
+Bound UI over real Agora; see the full-app acceptance evidence above. Broader
+connected-map routes, bike/surf/ledge movement and late-game scripts still need
+additional fixtures. The live presence implementation feeds this renderer through
+the existing friend room. Further acceptance includes authenticated Agora across
+separate networks, physical-device cost/presentation timing and those broader
+world fixtures. Each player's local progress remains independent.

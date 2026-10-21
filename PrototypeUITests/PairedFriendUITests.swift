@@ -126,10 +126,15 @@ final class FullAppGameplayUITests: XCTestCase {
         try reveal(check); check.tap()
         let record = app.buttons["bound.presence-check-start"]
         try reveal(record); record.tap()
-        try waitFor(timeout: 25) { $0["qaFriendListed"] as? Bool == true }
+        try waitFor(timeout: 25) { $0["qaFriendListed"] as? Bool == true && $0["friendsBusy"] as? Bool == false }
         let label = try XCTUnwrap(snapshot()["qaFriendLabel"] as? String)
         let friend = app.buttons[label].firstMatch
-        try reveal(friend); friend.tap()
+        try reveal(friend)
+        XCTAssertTrue(friend.isEnabled)
+        // The row also contains a trailing actions menu. Touch the friend's
+        // label area, then verify that the normal selection actually started.
+        try tapScreenPoint(in: friend, horizontal: 0.15)
+        try waitFor { $0["qaFriendSelected"] as? Bool == true && $0["active"] as? Bool == true }
         app.buttons["Done"].tap(); resume()
         try press(peer == "A" ? "left" : "right", duration: 0.28)
         try report("ready")
@@ -216,9 +221,12 @@ final class FullAppGameplayUITests: XCTestCase {
                     try reveal(disclosure); disclosure.tap()
                     let stopCheck = app.buttons["bound.presence-check-stop"]
                     if stopCheck.exists { try reveal(stopCheck); stopCheck.tap() }
-                    let stop = app.buttons["Stop"].firstMatch
-                    if stop.exists { try reveal(stop); stop.tap() }
-                    else { try reveal(app.buttons["Stop sharing"]); app.buttons["Stop sharing"].tap() }
+                    // SwiftUI materializes this row only after scrolling. Keep
+                    // both normal UI labels in the query while revealing it.
+                    let stop = app.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "Stop", "Stop sharing")).firstMatch
+                    try waitFor { $0["friendsBusy"] as? Bool == false }
+                    try reveal(stop); try tapScreenPoint(in: stop)
+                    try waitFor { $0["active"] as? Bool == false && $0["joined"] as? Bool == false }
                     app.buttons["Done"].tap(); resume()
                 default: break
                 }
@@ -268,6 +276,16 @@ final class FullAppGameplayUITests: XCTestCase {
         image.name = "Unavailable-native-" + input; image.lifetime = .keepAlways; add(image)
         XCTFail("Native controller geometry was unavailable")
     }
+    private func tapScreenPoint(in target: XCUIElement, horizontal: CGFloat = 0.5) throws {
+        // SwiftUI applies the row identifier to its sibling buttons too. Freeze
+        // the chosen label's frame before synthesis can resolve that shared ID.
+        XCTAssertTrue(target.isEnabled)
+        let frame = target.frame
+        XCTAssertFalse(frame.isEmpty)
+        XCTAssertTrue(frame.midX.isFinite && frame.midY.isFinite)
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: frame.minX + frame.width * horizontal, dy: frame.midY)).tap()
+    }
     private func snapshot() throws -> [String: Any] {
         let value = element("bound.gameplay-qa-status")
         if value.exists, let text = value.value as? String, let data = text.data(using: .utf8),
@@ -278,6 +296,12 @@ final class FullAppGameplayUITests: XCTestCase {
     private func waitFor(timeout: Double = 20, _ predicate: ([String: Any]) -> Bool) throws {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline { if predicate(try snapshot()) { return }; pause(0.25) }
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = "Unreached-gameplay-checkpoint"; hierarchy.lifetime = .keepAlways; add(hierarchy)
+        let image = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        image.name = "Unreached-gameplay-checkpoint"; image.lifetime = .keepAlways; add(image)
+        let observed = XCTAttachment(string: String(describing: try snapshot()))
+        observed.name = "Unreached-gameplay-observation"; observed.lifetime = .keepAlways; add(observed)
         XCTFail("Native gameplay state did not reach the expected checkpoint")
     }
     private func menu() {

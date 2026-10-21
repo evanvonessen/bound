@@ -123,6 +123,8 @@ final class BoundFullAppGameplayQA {
         value["qaFriendListed"] = coordinator.onboarding.rooms.contains { $0.roomID.lowercased() == roomID.lowercased() }
         value["qaFriendLabel"] = coordinator.onboarding.rooms.first { $0.roomID.lowercased() == roomID.lowercased() }?.displayName
         value["friendsBusy"] = coordinator.onboarding.busy
+        value["qaFriendSelected"] = coordinator.onboarding.selected?.roomID.lowercased() == roomID.lowercased()
+        value["sharingStatus"] = sharing.status
         value["friendsMessage"] = coordinator.onboarding.message
         if let player = reading.player {
             value["map"] = [player.mapGroup, player.mapNumber]

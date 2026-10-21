@@ -1,21 +1,65 @@
 # Full-app multiplayer gameplay acceptance
 
-**Checkpoint: implementation is compiled, but full-app acceptance has not
-passed.** Work stopped at the user's request on October 20, 2026. See the
-[continuation handoff](BOUND-MULTIPLAYER-GAMEPLAY-HANDOFF.md) for current failures,
-local evidence, private preparation and the next exact actions. Do not interpret
-the acceptance requirements below as observed results.
+## Verified October 20, 2026
 
-This milestone runs two ordinary Bound apps with the pinned VBA-M core, the
-supported private ROM and separate disposable saves. XCTest opens the library,
-boots the game, selects the friend in Friends, enables live sprites and records
-the connection through the normal controls. Presence and native video travel
-through the existing real Agora transport.
+Full-app simulator acceptance **passed** on `multiplayer` with the pinned VBA-M
+core (`com.rileytestut.GBADeltaCore`) and the existing real Agora transport.
+The native-only preflight and short paired rehearsal also passed on both peers.
+The full run maintained the acceptance interval for **900.7 seconds**
+from the first bidirectional visible connection; both native UI tests and both
+Xcode processes succeeded.
 
-The app's Agora/Supabase configuration, authentication implementations, deployed
-functions, schema/RLS, SDK versions, dependency pins and save-sync configuration
-are unchanged. Use only dedicated test accounts and disposable simulators;
-joining an RTC identity already used elsewhere can interrupt its session.
+Observed through the ordinary app UI:
+
+- Friends selection and the live-sprite switch started actual authenticated sharing.
+- Each app created its own native state through Menu → Save State → Add.
+  The files have different hashes and positions, and each remained unchanged
+  while the other app restored its own state.
+- A exited Oak's lab while B stayed inside; both remote sprites hid. B exited,
+  and same-map visibility returned outside.
+- Actual Menu → Load State restored each app independently to its saved lab
+  position, with mismatch hiding and reunion verified by live reader observations.
+- Backgrounding A hid its sprite on B; foregrounding restored fresh presence.
+- Both peers continued moving and receiving native video and presence during the
+  sustained interval, renewed tokens, then stopped sharing through the normal UI.
+
+| Peer | Saved tile | State bytes | Soak tiles | Presence gain | Video gain | Renewals |
+| --- | --- | --- | --- | --- | --- | --- |
+| A | 6,8 | 43,899 | 7 | 16,469 | 25,202 | 28 |
+| B | 7,8 | 43,786 | 7 | 16,439 | 24,938 | 30 |
+
+The saved map was `4:3` on both peers. The tile and file rows describe actual
+native snapshots; the gains count only the soak portion after the map/restore/
+background scenarios. The separate native preflight verified the finite native
+controller geometry, door route and real restores before friendship creation in
+this continuation.
+
+Other checks passed: Debug `BoundCompanionQA` and `BoundIntegrationQA`
+build-for-testing; 61 focused integration tests with no failures or skips;
+the ordinary-app fast-forward persistence UI regression; unsigned generic
+iPhone Release build; all 17,060 pinned source files; and `git diff --check`.
+The actual-ROM reader and recorded-player tests were included in the 61 tests.
+The Release executable excludes `--bound-ui-gameplay-qa`; its bundled cloud
+configuration matches Debug and the committed resource byte-for-byte.
+
+The 57 available protected setup/auth/sync/config files matched the original
+transferred baseline. Its remaining entry is the original Mac's ignored
+`Backend/social/supabase/.temp/cli-latest` cache marker, absent on this Mac.
+The original 58-entry manifest was preserved rather than regenerated; that
+absent cache marker is not claimed as byte-verified.
+
+The final rehearsal and full run reused one temporary QA friendship. Cleanup
+removed it, verified both original active friend lists, removed all one-use
+inputs and preserved the fixture ROM/seed hashes. No notification, deployment,
+backend/configuration change, signing-setting change or normal app-data change
+was made. Runtime Debug products use local simulator ad hoc signing; the
+ordinary iPhone Release build is unsigned.
+
+These results cover two simulators on one Mac/network. They do not establish
+physical-device performance, separate-network connectivity, interactive login/
+keychain persistence, push delivery or adverse-network recovery. Battle and
+unsupported-scene admission are covered by focused tests, not a full-app battle
+playthrough.
 
 ## Private preparation
 
@@ -53,7 +97,7 @@ renewal, presence and video use their normal implementations.
 ```sh
 umask 077
 python3 -B PrototypeTools/full-app-gameplay.py \
-  --xctestrun /absolute/path/to/BoundCompanionQA_iphonesimulator27.0-arm64.xctestrun \
+  --xctestrun /absolute/path/to/BoundCompanionQA_iphonesimulator27.1-arm64.xctestrun \
   --sim-a OWNED_QA_SIMULATOR_A --sim-b OWNED_QA_SIMULATOR_B \
   --output .build/new-full-app-gameplay-run --duration 900
 ```
@@ -93,8 +137,8 @@ without opening Friends or joining RTC. Use it to debug native boot, controller
 coordinates, the door route and state restoration before consuming another
 temporary pairing. The private preparation still supplies the QA observer's
 access-only input, but can use a random unused room UUID and must skip friendship
-creation. This preflight was added and compiled at the checkpoint; it has not
-been executed successfully yet and provides no Agora evidence.
+creation. This preflight passed on both peers during the validated
+continuation. Native-only mode itself provides no Agora evidence.
 
 All observations, screenshots, ROMs, batteries, states, one-use inputs and SDK
 logs stay private and ignored. QA observations include raw map/tile values and
