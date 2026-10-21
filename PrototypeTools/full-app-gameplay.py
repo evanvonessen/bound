@@ -83,7 +83,8 @@ class Handler(BaseHTTPRequestHandler):
         value = json.loads(self.rfile.read(length))
         # The UI reports only native observations and stage names, never auth.
         allowed = {'stage','peer','run','elapsed','reader','frame','core','running','joined','active',
-                   'transport','received','videoReceived','renewals','visiblePixels','restores','map','tile','elevation','saveState','savedTile'}
+                   'transport','received','videoReceived','renewals','visiblePixels','restores','map','tile','elevation','saveState','savedTile',
+                   'nativeBattle','battleReturned','battleOutcome','battleFlags','battlePlayerHP','battleEnemyHP','battleFailure','battlesCompleted','battlesRestored','interactionPhase'}
         value = {k:v for k,v in value.items() if k in allowed}
         with self.server.state.lock:
             self.server.state.ui[peer] = value
@@ -110,10 +111,11 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--duration', type=int, default=900)
     parser.add_argument('--smoke', action='store_true')
+    parser.add_argument('--battles-only', action='store_true', help='Actual walk-up/A native battle over real Agora, damage, outcome and world restore')
     parser.add_argument('--interactions-only', action='store_true', help='Short walk-up/A and reliable invitation regression; does not launch a battle or trade')
     parser.add_argument('--native-only', action='store_true', help='Preflight maps and native states without an RTC connection')
     args = parser.parse_args()
-    if args.sim_a == args.sim_b or args.duration < (1 if args.smoke or args.native_only or args.interactions_only else 900):
+    if args.sim_a == args.sim_b or args.duration < (1 if args.smoke or args.native_only or args.interactions_only or args.battles_only else 900):
         parser.error('Use two distinct disposable simulators; acceptance requires at least 900 seconds')
     args.output.mkdir(parents=True, exist_ok=False)
     state = Coordinator(dict(zip(PEERS, (args.sim_a, args.sim_b))))
@@ -127,7 +129,7 @@ def main():
             log = (args.output / (peer + '.log')).open('wb')
             command = ['xcodebuild','test-without-building','-xctestrun',str(run),
                 '-destination','platform=iOS Simulator,id='+state.simulators[peer],'-parallel-testing-enabled','NO',
-                '-only-testing:BoundCompanionUITests/FullAppGameplayUITests/'+('testNativeMapAndSaveRestore' if args.native_only else 'testFriendWorldInvitations' if args.interactions_only else 'testFullAppLiveGameplay'),
+                '-only-testing:BoundCompanionUITests/FullAppGameplayUITests/'+('testNativeMapAndSaveRestore' if args.native_only else 'testActualFriendBattle' if args.battles_only else 'testFriendWorldInvitations' if args.interactions_only else 'testFullAppLiveGameplay'),
                 '-collect-test-diagnostics','never','-resultBundlePath',str(args.output/(peer+'.xcresult'))]
             processes.append((subprocess.Popen(command,stdout=log,stderr=subprocess.STDOUT),log))
 
@@ -138,6 +140,8 @@ def main():
                 if predicate(value):
                     state.checkpoints.append(dict(name=label,elapsed=time.monotonic()-started,**value))
                     print('Verified: '+label,flush=True); return value
+                if args.battles_only and label=='battle-accept' and any(v.get('interactionPhase')=='ended' for v in value['peers'].values()):
+                    raise RuntimeError('Battle startup ended: '+', '.join(v.get('battleFailure','') for v in value['peers'].values()))
                 if any(p.poll() is not None and (not args.native_only or p.returncode!=0) for p,_ in processes):
                     raise RuntimeError('A UI test exited before '+label)
                 time.sleep(0.3)
@@ -148,7 +152,18 @@ def main():
                 and v.get('transport')=='agora' and v.get('joined') and v.get('received',0)>10
                 and v.get('visiblePixels',0)>20 and v.get('observationAge',100)<2 for v in value['peers'].values())
         def reported(value, stage): return all(value['ui'].get(p,{}).get('stage')==stage for p in PEERS)
-        if args.interactions_only:
+        if args.battles_only:
+            wait('positioned native players',lambda v:reported(v,'positioned') and visible(v),360)
+            for stage,timeout in [('battle-invite',90),('battle-accept',180)]:
+                state.change(stage); result=wait(stage,lambda v:reported(v,stage),timeout)
+            state.change('battle-play')
+            wait('both players take native damage',lambda v:reported(v,'battle-damage'),300)
+            result=wait('native knockout, outcome and restore',lambda v:reported(v,'battle-play'),360)
+            if not all(v.get('battlesCompleted')==1 and v.get('battlesRestored')==1 and not v.get('battleFailure') for v in result['peers'].values()):
+                raise RuntimeError('Native battle did not complete and restore both players')
+            outcomes={v.get('battleOutcome') for v in result['peers'].values()}
+            if outcomes not in ({1,2},{3}): raise RuntimeError('Native battle outcomes disagree')
+        elif args.interactions_only:
             wait('positioned native players', lambda v:reported(v,'positioned') and visible(v),360)
             for stage in ['facing-away','open-interaction','battle-invite','battle-accept','close-battle','trade-invite','trade-decline']:
                 state.change(stage)
@@ -238,7 +253,7 @@ def main():
         for process,log in processes:
             if process.poll() is None:process.terminate()
             log.close()
-        (args.output/'summary.json').write_text(json.dumps(dict(passed=passed,smoke=args.smoke,nativeOnly=args.native_only,interactionsOnly=args.interactions_only,failure=failure,
+        (args.output/'summary.json').write_text(json.dumps(dict(passed=passed,smoke=args.smoke,nativeOnly=args.native_only,interactionsOnly=args.interactions_only,battlesOnly=args.battles_only,failure=failure,
             elapsed=time.monotonic()-started,checkpoints=state.checkpoints,final=state.status(),
             snapshots=state.snapshots,
             soak=state.soak,

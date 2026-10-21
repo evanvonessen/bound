@@ -120,6 +120,22 @@ final class BoundFullAppGameplayQA {
             "visiblePixels": display.livePlayerOverlay.visiblePixels, "restores": restores]
         value["interactionPhase"] = String(describing: sharing.interactions.phase)
         value["interactionCanStart"] = sharing.interactions.canInteract
+        value["interactionMessage"] = sharing.interactions.message
+        value["battleFailure"] = sharing.nativeBattle.lastFailure
+        value["battleCable"] = sharing.nativeBattle.lastCableDiagnostic
+        value["battlesCompleted"] = sharing.nativeBattle.completedBattles
+        value["battlesRestored"] = sharing.nativeBattle.restoredBattles
+        if let battle = sharing.nativeBattle.observation {
+            value["nativeBattle"] = battle.battle
+            value["battleReturned"] = battle.returned
+            value["battleOutcome"] = battle.outcome
+            value["battleFlags"] = battle.flags
+            value["battleCallback"] = battle.callback
+            value["battleScriptResult"] = battle.scriptResult
+            value["battlePlayerHP"] = battle.playerHP
+            value["battleEnemyHP"] = battle.enemyHP
+        }
+
         value["accountReady"] = coordinator.account.session != nil
         value["friendCount"] = coordinator.onboarding.rooms.count
         value["qaFriendListed"] = coordinator.onboarding.rooms.contains { $0.roomID.lowercased() == roomID.lowercased() }

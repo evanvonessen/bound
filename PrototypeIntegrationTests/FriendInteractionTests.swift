@@ -158,7 +158,96 @@ final class FriendInteractionTests: XCTestCase {
         let battle = views.compactMap { $0 as? UIButton }.first { $0.accessibilityIdentifier == "bound.friend-interaction.battle" }
         XCTAssertNotNil(battle); battle?.sendActions(for:.touchUpInside)
         XCTAssertEqual(p.a.phase,.outgoing); XCTAssertEqual(p.a.activity,.battle)
-        XCTAssertTrue(views.compactMap { $0 as? UILabel }.contains { $0.text?.contains("not available yet") == true })
+        XCTAssertTrue(views.compactMap { $0 as? UILabel }.contains { $0.text?.contains("Trades are invitations only") == true })
         p.a.cancel(); XCTAssertTrue(active.isHidden)
+    }
+}
+
+final class BattleCableTests:XCTestCase {
+    private final class Box:@unchecked Sendable {
+        private let lock=NSLock()
+        private var values:[Data]=[]
+        func add(_ data:Data) { lock.lock(); values.append(data); lock.unlock() }
+        var snapshot:[Data] { lock.lock(); defer { lock.unlock() }; return values }
+    }
+    func testWireReordersAndDeduplicatesAndRejectsWrongActivity() throws {
+        let id=UUID(),sent=Box(),received=Box(),failures=Box()
+        let outgoing=BoundBattleWire(id:id,receive:{ _ in },failed:{ XCTFail("Unexpected failure") })
+        outgoing.setSender { sent.add($0); return true }
+        XCTAssertTrue(outgoing.send(Data([1]))); XCTAssertTrue(outgoing.send(Data([2,3])))
+        let incoming=BoundBattleWire(id:id,receive:{ received.add($0) },failed:{ failures.add(Data([1])) })
+        let packets=sent.snapshot
+        incoming.receive(packets[1]); XCTAssertTrue(received.snapshot.isEmpty)
+        incoming.receive(packets[0]); incoming.receive(packets[0]); incoming.receive(packets[1])
+        XCTAssertEqual(received.snapshot,[Data([1]),Data([2,3])]); XCTAssertTrue(failures.snapshot.isEmpty)
+        let wrong=BoundBattleWire(id:UUID(),receive:{ _ in XCTFail("Wrong activity delivered") },failed:{ XCTFail() })
+        wrong.receive(packets[0])
+        var malformed=packets[0]; malformed[29]=2
+        incoming.receive(malformed)
+        incoming.close(); XCTAssertFalse(incoming.send(Data([1])))
+        XCTAssertFalse(outgoing.send(Data(repeating:1,count:4097)))
+    }
+    func testRDTCallbacksMayFragmentAndCombineWireFrames() throws {
+        let sent=Box(),id=UUID()
+        let wire=BoundBattleWire(id:id,receive:{ _ in },failed:{ XCTFail() })
+        wire.setSender { sent.add($0); return true }
+        XCTAssertTrue(wire.send(Data([8,0,1,2,3,4,5,6])))
+        XCTAssertTrue(wire.send(Data([4,4,0,0])))
+        let packets=sent.snapshot,combined=packets[0]+packets[1]
+        var split=BoundBattleRDTFramer(),result:[Data]=[]
+        for byte in combined { result += try XCTUnwrap(split.consume(Data([byte]))) }
+        XCTAssertEqual(result,packets)
+        var joined=BoundBattleRDTFramer()
+        XCTAssertEqual(joined.consume(combined),packets)
+        var invalid=BoundBattleRDTFramer()
+        XCTAssertNil(invalid.consume(Data(repeating:255,count:30)))
+        var huge=BoundBattleRDTFramer()
+        XCTAssertNil(huge.consume(Data(repeating:0,count:131073)))
+    }
+    func testWireFailsClosedOnUnboundedReordering() {
+        let id=UUID(),sent=Box(),failures=Box()
+        let outgoing=BoundBattleWire(id:id,receive:{ _ in },failed:{ XCTFail() })
+        outgoing.setSender { sent.add($0); return true }
+        for _ in 0..<65 { XCTAssertTrue(outgoing.send(Data([1]))) }
+        let incoming=BoundBattleWire(id:id,receive:{ _ in XCTFail() },failed:{ failures.add(Data([1])) })
+        incoming.receive(sent.snapshot[64]); incoming.receive(sent.snapshot[0])
+        XCTAssertEqual(failures.snapshot.count,1)
+    }
+    func testNativeBlockAdmissionRejectsUnsolicitedAndExcessWrites() {
+        var admission=BoundNativeBlockAdmission()
+        var continuation=Data(repeating:0,count:16)
+        continuation[0]=0x88; continuation[1]=0x88
+        XCTAssertFalse(admission.accept(continuation))
+        var initial=Data(repeating:0,count:16)
+        initial[0]=0xBB; initial[1]=0xBB; initial[2]=28
+        XCTAssertTrue(admission.accept(initial+continuation+continuation))
+        XCTAssertFalse(admission.accept(continuation))
+        initial[2]=255
+        XCTAssertFalse(admission.accept(initial)) // rounded write crosses small buffer
+        initial[2]=88; initial[3]=2 // native 600-byte party exchange
+        XCTAssertTrue(admission.accept(initial))
+        for _ in 0..<43 { XCTAssertTrue(admission.accept(continuation)) }
+        XCTAssertFalse(admission.accept(continuation))
+    }
+    func testNativeCommandsAreBoundedAndCannotSelectMemoryOrTradeActions() throws {
+        var command=Data(repeating:0,count:16); command[0]=0xBB; command[1]=0xBB
+        command[2]=0x58; command[3]=2 // Native party block: 600 bytes.
+        let packet=try XCTUnwrap(BoundNativeCommandPacket.encode(command))
+        XCTAssertEqual(BoundNativeCommandPacket.decode(packet),command)
+        XCTAssertEqual(BoundNativeCommandPacket.generation(packet),1)
+        XCTAssertEqual(BoundNativeCommandPacket.sequence(packet),1)
+        let ack=Data([3,4,0,23,0])
+        XCTAssertEqual(BoundNativeCommandPacket.decode(ack),Data())
+        XCTAssertEqual(BoundNativeCommandPacket.sequence(ack),23)
+        XCTAssertEqual(BoundNativeCommandPacket.acknowledgement(ack),Data([4,0,23,0]))
+        XCTAssertEqual(BoundNativeCommandPacket.decode(BoundNativeCommandPacket.connection(4)),Data())
+        XCTAssertNil(BoundNativeCommandPacket.decode(Data([2,0,0])))
+        XCTAssertEqual(BoundNativeCommandPacket.decode(Data([0])),Data())
+        command[2]=0xFF; command[3]=0xFF
+        XCTAssertNil(BoundNativeCommandPacket.encode(command))
+        command[0]=0xDD; command[1]=0xDD // Trade selection has no place in a battle.
+        XCTAssertNil(BoundNativeCommandPacket.encode(command))
+        XCTAssertNil(BoundNativeCommandPacket.decode(Data([1,2])))
+        XCTAssertNil(BoundNativeCommandPacket.encode(Data(repeating:0,count:240)))
     }
 }

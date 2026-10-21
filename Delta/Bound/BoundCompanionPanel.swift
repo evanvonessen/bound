@@ -600,6 +600,14 @@ final class BoundCompanionCoordinator {
         macHost = host
     }
     func bind(core: EmulatorCore?, gameID: String) {
+        sharing.nativeBattle.bind(core: core, gameID: gameID, interactions: sharing.interactions)
+        sharing.nativeBattle.restored = { [weak owner] in
+            guard let owner, let core = owner.emulatorCore else { return }
+            owner.boundRRDexDidLoadSaveState(core: core)
+        }
+        sharing.nativeBattle.canResume = { [weak owner] in
+            UIApplication.shared.applicationState == .active && owner?.view.window?.windowScene?.hasKeyboardFocus == true
+        }
         playerStateDisplay.bind(core: core)
         guard boundCore !== core || self.gameID != gameID else { return }
         notesDismissalTask?.cancel(); notesDismissalTask = nil; pendingControllerReferenceAction = nil
@@ -610,11 +618,12 @@ final class BoundCompanionCoordinator {
         guard let core else { boundCore = nil; state.emulationDetails = nil; return }
         state.emulationDetails = BoundEmulationDetails(packageName: core.deltaCore.name, packageIdentifier: core.deltaCore.identifier, packageVersion: core.deltaCore.version)
         boundCore = core
-        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe
-        core.updateHandler = { [weak tap, weak reader] core in
+        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe
+        core.updateHandler = { [weak tap, weak reader, weak battle] core in
             previous?(core)
             reader?.receive(core)
             tap?.receive(core)
+            battle?.receive(core)
         }
         #if DEBUG && targetEnvironment(simulator)
         if usesLocalPairedFixture { sharing.start() }

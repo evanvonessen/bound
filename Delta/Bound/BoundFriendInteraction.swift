@@ -84,7 +84,7 @@ final class BoundFriendInteractionSession {
         let peer: BoundFriendWorldPosition
     }
     enum Phase: Equatable {
-        case idle, choosing, outgoing, incoming, confirming, agreed, ended
+        case idle, choosing, outgoing, incoming, confirming, agreed, connecting, playing, ended
     }
     private(set) var phase: Phase = .idle
     private(set) var activity: Packet.Activity?
@@ -105,7 +105,13 @@ final class BoundFriendInteractionSession {
     private var deadline: TimeInterval?
     private var retired: [UUID] = []
     private var connected = false
-    var blocksGameplay: Bool { phase != .idle }
+    var blocksGameplay: Bool { phase != .idle && phase != .playing }
+    var cancelActivity: (() -> Void)?
+    func activityProgress(_ message: String, playing: Bool) {
+        guard activity == .battle else { return }
+        phase = playing ? .playing : .connecting; self.message = message; deadline = nil; notify()
+    }
+    func activityEnded(_ message: String) { end(message) }
     var canInteract: Bool {
         guard connected, phase == .idle, canPresent?() ?? true, let value = context?() else { return false }
         return value.local.isFacing(value.peer)
@@ -143,17 +149,19 @@ final class BoundFriendInteractionSession {
         reset()
     }
     func cancel() {
+        if phase == .connecting || phase == .playing { cancelActivity?(); return }
         if [.outgoing, .confirming, .incoming].contains(phase), let anchor { _ = emit(.cancel, anchor: anchor) }
         reset()
     }
     func invalidate() {
+        if phase == .connecting || phase == .playing { cancelActivity?(); return }
         guard ![.idle, .ended].contains(phase) else { return }
         if let anchor { _ = emit(.cancel, anchor: anchor) }
         end("Interaction ended")
     }
     func tick(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         refreshInputGate()
-        guard ![.idle, .ended].contains(phase) else { return }
+        guard ![.idle, .ended, .connecting, .playing].contains(phase) else { return }
         if !validAnchor() {
             if let anchor { _ = emit(.cancel, anchor: anchor) }
             end("Your friend is no longer next to you")
@@ -220,7 +228,7 @@ final class BoundFriendInteractionSession {
         if let requestID { retired.append(requestID); if retired.count > 32 { retired.removeFirst() } }
     }
     private func end(_ message: String) {
-        retireRequest(); deadline = nil; phase = .ended; self.message = message; changed?()
+        retireRequest(); deadline = nil; phase = .ended; self.message = message; notify()
     }
     private func reset() {
         retireRequest(); phase = .idle; anchor = nil; activity = nil; requestID = nil; deadline = nil; message = ""

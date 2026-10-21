@@ -53,25 +53,25 @@ final class BoundFriendInteractionPanel: UIView {
         card.arrangedSubviews.forEach { card.removeArrangedSubview($0); $0.removeFromSuperview() }
         label(name?() ?? "Friend", style: .headline, id: "title")
         switch session.phase {
-        case .idle: break
+        case .idle, .playing: break
         case .choosing:
             label("Send an invitation", style: .title2, id: "status")
-            label("Invitations only. Battle and trade gameplay is not available yet.", style: .footnote, id: "availability")
+            label("Friendly battles use your current party. Your game is restored afterward. Trades are invitations only.", style: .footnote, id: "availability")
             for activity in BoundFriendInteractionPacket.Activity.allCases {
                 button(activity.title, id: activity.rawValue) { [weak session] in session?.request(activity) }
             }
             button("Cancel", id: "cancel") { [weak session] in session?.cancel() }
         case .incoming:
             label(session.message, style: .title2, id: "status")
-            label("Invitations only. Battle and trade gameplay is not available yet.", style: .footnote, id: "availability")
+            label("Friendly battles use your current party. Your game is restored afterward. Trades are invitations only.", style: .footnote, id: "availability")
             button("Accept invitation", id: "accept") { [weak session] in session?.accept() }
             button("Decline", id: "decline") { [weak session] in session?.decline() }
-        case .outgoing, .confirming:
+        case .outgoing, .confirming, .connecting:
             label(session.message, style: .title2, id: "status")
             button("Cancel", id: "cancel") { [weak session] in session?.cancel() }
         case .agreed:
             label(session.message, style: .title2, id: "status")
-            label("Battle and trade gameplay is not available yet.", style: .footnote, id: "availability")
+            label("Trading Pokémon is not available yet.", style: .footnote, id: "availability")
             button("Return to game", id: "close") { [weak session] in session?.cancel() }
         case .ended:
             label(session.message, style: .title2, id: "status")

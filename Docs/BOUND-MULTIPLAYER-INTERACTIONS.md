@@ -1,9 +1,9 @@
 # Friend interactions in the overworld
 
-This branch now has the **invitation layer** for battles and trades. It does
-not start a native link battle or transfer Pokémon. The UI says this explicitly
-before sending an invitation and after acceptance. The complete battle/trade
-milestone remains unfinished.
+Accepted Battle requests now enter the supported game's native two-player
+single battle through VBA-M. See [native friend battles](BOUND-NATIVE-FRIEND-BATTLES.md)
+for entry, transport, recovery and current validation evidence. Trade remains an
+invitation only; exchanging Pokémon is still unfinished.
 
 ## Player interaction
 
@@ -18,9 +18,9 @@ can accept or decline. Either player can cancel. A request expires after 30
 seconds; acceptance confirmation expires after 10 seconds. Moving away, losing
 presence, restoring a state or losing the connection invalidates the request.
 Two simultaneous requests decline each other rather than silently choosing an
-activity. An accepted invitation is consent only, not a battle result or trade.
+activity. An accepted Battle starts native connection setup; accepting Trade records consent only.
 
-The overlay leaves the local emulator running so presence stays fresh. It
+The invitation overlay leaves the local emulator running so presence stays fresh. It
 releases held gameplay inputs and blocks further game inputs until closed.
 The native menu and existing app shortcuts retain their mapping. A press used
 to interact with a friend is an app-only input, which VBA-M ignores; it does
@@ -49,41 +49,24 @@ Other emulation cores retain their normal mappings.
 - Sharing stop/recovery, ROM binding and restored-state admission fence old
   invitations. The SDK callback accepts only the configured friend's remote UID.
 - `BoundFriendInteractionPanel` is a scrollable native overlay with explicit
-  invitation-only wording. `BoundFriendWorldInputGate` filters the same logical
+  friendly-battle and trade-limitation wording. `BoundFriendWorldInputGate` filters the same logical
   mapping before both the app and emulator receive a controller input.
 
-No cloud setup, backend, authentication, signing configuration, SDK version,
-core identity, ROM, RAM or save data is changed by this layer.
+Cloud setup, backend, authentication, signing configuration, SDK versions and
+core identities remain unchanged. The native battle adapter temporarily modifies
+the loaded ROM and game RAM for the exact supported profile, then restores a
+private pre-battle state. The cartridge file itself is never rewritten. Native command transport leaves the pinned VBA-M sources and manifest unchanged.
 
-## Next implementation work
-
-Connect `BoundFriendInteractionSession.agreed` to actual native activity startup.
-This callback currently has no production activity adapter. Do not describe it
-as a working battle or trade, remove the UI's limitation wording, write party
-bytes or record game outcomes merely because an invitation is accepted.
-
-The pinned VBA-M source already compiles the GBA cable-socket implementation
-(`GBALink.cpp`) and exports `InitLink`, `ConnectLinkUpdate`, `CloseLink`, etc.
-Bound's bridge currently exposes none of these APIs to the app. The original
-trade and battle room event scripts are present in the supported ROM; their
-presence does not establish compatibility with Radical Red's battle rules or
-safe entry from arbitrary overworld locations.
-
-A native adapter still needs a reliable bidirectional cable transport, explicit
-emulation-thread ownership, a ROM-specific activity entry/return path, cancel
-and disconnect recovery, and real two-peer battle/trade completion checks. The
-legacy socket engine hardcodes port 5738 and binds all interfaces; using it
-without an explicit scoped endpoint is unsuitable for two simulator processes
-on one host. Keep core revisions pinned and record any compatibility patch
-instead of silently modifying the vendored-source integrity manifest.
+## Remaining trade work
 
 Trade completion must use the game's own behavior and preserve each player's
-save ownership, including interrupted-operation recovery. Invitation agreement
-provides none of those guarantees.
+save ownership, including interrupted-operation recovery. An accepted Trade
+invitation does not transfer a Pokémon.
 
 ## Focused validation
 
-Use `BoundIntegrationQA` with `FriendInteractionTests`, `LivePresenceTests` and
+Use `BoundIntegrationQA` with `BattleCableTests`, `FriendInteractionTests`,
+`LivePresenceTests` and
 `ControllerNavigationTests`. The interaction tests cover adjacency/facing,
 consent, duplicate delivery, crossed invitations, cancel/decline/timeout,
 connection and location invalidation, bounded FIFO behavior, and input filtering.
@@ -93,15 +76,16 @@ with native controller touches and real Agora. The existing private launcher
 can opt into `BOUND_GAMEPLAY_INTERACTIONS=1`; the public coordinator selects this
 short flow with `--interactions-only --duration 1`. It checks facing away does
 not open the panel, facing the adjacent friend plus A does, battle invitation
-acceptance reaches both apps, and a trade invitation can be declined.
-This is invitation validation, not native battle/trade acceptance.
+decline reaches both apps, and a trade invitation can be declined.
+The separate `testActualFriendBattle` / `--battles-only` flow exercises actual
+battle entry, native touches for moves, damage, matching outcomes and world restore.
 
 The earlier full-app movement/save-state 900-second acceptance is recorded in
 `BOUND-MULTIPLAYER-GAMEPLAY-QA.md` at checkpoint `ec35f9cb`. It need not be repeated
 for invitation UI work. Build/test logs and runtime artifacts stay in ignored
 `.build/full-app-gameplay-validation/`; ROMs and credentials remain private.
 
-## Observed results — October 20, 2026
+## Invitation checkpoint results — October 20, 2026
 
 - Final focused suite: **39 passed, no failures or skips** (nine interaction,
   twelve presence and eighteen controller-navigation tests).
@@ -126,3 +110,6 @@ Private evidence: `paired-15/summary.json`, `live-receipt-15.json`,
 `friend-interaction-unit-2.log` / `.xcresult`,
 `friend-interaction-release-2.log`, and
 `friend-interaction-verification-15.json` under the ignored validation folder.
+
+The subsequent native-battle acceptance and current limits are recorded in
+[Native friend battles](BOUND-NATIVE-FRIEND-BATTLES.md#observed-results--october-20-2026).

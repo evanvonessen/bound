@@ -154,10 +154,10 @@ final class FullAppGameplayUITests: XCTestCase {
                     if peer == "A" { app.buttons["bound.friend-interaction.battle"].tap() }
                     try waitFor { $0["interactionPhase"] as? String == (self.peer == "A" ? "outgoing" : "incoming") }
                 case "battle-accept":
-                    if peer == "B" { app.buttons["bound.friend-interaction.accept"].tap() }
-                    try waitFor { $0["interactionPhase"] as? String == "agreed" }
+                    if peer == "B" { app.buttons["bound.friend-interaction.decline"].tap() }
+                    try waitFor { $0["interactionPhase"] as? String == (self.peer == "A" ? "ended":"idle") }
                 case "close-battle":
-                    app.buttons["bound.friend-interaction.close"].tap()
+                    if peer == "A" { app.buttons["bound.friend-interaction.close"].tap() }
                     try waitFor { $0["interactionPhase"] as? String == "idle" }
                 case "trade-invite":
                     if peer == "A" {
@@ -178,6 +178,62 @@ final class FullAppGameplayUITests: XCTestCase {
             pause(0.2)
         }
         XCTFail("World invitation regression did not finish")
+    }
+
+    func testActualFriendBattle() throws {
+        try connectFriend()
+        try walkTo(x:peer == "A" ? 6:7,y:8)
+        if peer == "A" { try face("East",input:"right",x:6,y:8) }
+        try report("positioned")
+        var completed=Set<String>()
+        let deadline=Date().addingTimeInterval(850)
+        while Date()<deadline {
+            let stage=try request("/status")["stage"] as? String ?? "waiting"
+            if stage == "done" { return }
+            if stage == "failed" { XCTFail("Battle coordinator failed"); return }
+            if !completed.contains(stage) {
+                switch stage {
+                case "battle-invite":
+                    if peer == "A" {
+                        try waitFor { $0["interactionCanStart"] as? Bool == true }
+                        try press("a",duration:0.08)
+                        XCTAssertTrue(app.buttons["bound.friend-interaction.battle"].waitForExistence(timeout:8))
+                        app.buttons["bound.friend-interaction.battle"].tap()
+                    }
+                    try waitFor { $0["interactionPhase"] as? String == (self.peer == "A" ? "outgoing":"incoming") }
+                case "battle-accept":
+                    if peer == "B" { app.buttons["bound.friend-interaction.accept"].tap() }
+                    try waitFor(timeout:150) { $0["nativeBattle"] as? Bool == true && $0["interactionPhase"] as? String == "playing" }
+                    let image=XCTAttachment(screenshot:XCUIScreen.main.screenshot())
+                    image.name="Actual-friend-battle-"+peer; image.lifetime = .keepAlways; add(image)
+                case "battle-play":
+                    let end=Date().addingTimeInterval(600)
+                    var damaged=false,reportedDamage=false
+                    let initial=try snapshot()["battlePlayerHP"] as? [Int] ?? []
+                    while Date()<end {
+                        let value=try snapshot()
+                        XCTAssertEqual(value["battleFailure"] as? String,"")
+                        if value["nativeBattle"] as? Bool == true,let hp=value["battlePlayerHP"] as? [Int],hp != initial { damaged=true }
+                        if value["interactionPhase"] as? String == "ended" {
+                            XCTAssertTrue(damaged,"A real native move must change party HP")
+                            XCTAssertEqual(value["battlesCompleted"] as? Int,1)
+                            XCTAssertEqual(value["battlesRestored"] as? Int,1)
+                            XCTAssertTrue([1,2,3].contains(value["battleOutcome"] as? Int ?? 0))
+                            break
+                        }
+                        if damaged && !reportedDamage { try report("battle-damage"); reportedDamage=true }
+                        try press("a",duration:0.12); pause(0.12)
+                    }
+                    XCTAssertEqual(try snapshot()["battlesCompleted"] as? Int,1)
+                    app.buttons["bound.friend-interaction.close"].tap()
+                    try waitFor { $0["reader"] as? String == "live" && $0["tile"] as? [Int] == [self.peer == "A" ? 6:7,8] }
+                default: pause(0.2); continue
+                }
+                try report(stage); completed.insert(stage)
+            }
+            pause(0.2)
+        }
+        XCTFail("Actual friend battle did not finish")
     }
 
     private func walkTo(x: Int, y: Int) throws {
@@ -221,6 +277,7 @@ final class FullAppGameplayUITests: XCTestCase {
         try tapScreenPoint(in: friend, horizontal: 0.15)
         try waitFor { $0["qaFriendSelected"] as? Bool == true && $0["active"] as? Bool == true }
         app.buttons["Done"].tap(); resume()
+        try waitFor { $0["reader"] as? String == "live" && $0["running"] as? Bool == true && ($0["tile"] as? [Int])?.count == 2 }
     }
 
     /// Resolve native routing independently of RTC/friend-pairing setup.
@@ -272,6 +329,8 @@ final class FullAppGameplayUITests: XCTestCase {
         }
         XCTAssertEqual(try snapshot()["reader"] as? String, "live")
         XCTAssertEqual(try snapshot()["core"] as? String, "com.rileytestut.GBADeltaCore")
+        let recovered=app.buttons["bound.friend-interaction.close"]
+        if recovered.exists { recovered.tap() }
     }
 
     private func runConnectedGameplay() throws {
