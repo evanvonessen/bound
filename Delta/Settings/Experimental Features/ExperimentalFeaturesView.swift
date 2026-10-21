@@ -20,8 +20,11 @@ extension ExperimentalFeaturesView
         
         init()
         {
-            // Sort features alphabetically by name.
-            self.sortedFeatures = ExperimentalFeatures.shared.allFeatures.sorted { (featureA, featureB) in
+            // Renderer selection lives in regular Video settings; retain its
+            // backing feature only for saved-preference compatibility.
+            self.sortedFeatures = ExperimentalFeatures.shared.allFeatures.filter {
+                $0.key != ExperimentalFeatures.shared.metal.key
+            }.sorted { (featureA, featureB) in
                 return String(describing: featureA.name) < String(describing: featureB.name)
             }
         }

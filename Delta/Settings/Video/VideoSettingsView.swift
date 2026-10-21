@@ -8,9 +8,15 @@
 
 import SwiftUI
 import DeltaCore
+import DeltaFeatures
 
 struct VideoSettingsView: View
 {
+    // Keep Delta's existing preference so upgrades, reset and config export
+    // retain the same renderer choice.
+    @AppStorage("metal")
+    private var usesMetal = false
+
     @AppStorage(Settings.Name.supportsExternalDisplays.rawValue)
     private var supportsExternalDisplays: Bool = true
     
@@ -23,35 +29,73 @@ struct VideoSettingsView: View
     var body: some View {
         Form {
             Section {
-                Toggle("Display Full Screen", isOn: $supportsExternalDisplays)
-                    .onChange(of: supportsExternalDisplays) { _, newValue in
-                        Settings.supportsExternalDisplays = newValue
-                    }
-
-                if supportsExternalDisplays
-                {
-                    Toggle("Top Screen Only", isOn: $topScreenOnly)
-                        .onChange(of: topScreenOnly) { _, newValue in
-                            Settings.features.dsAirPlay.topScreenOnly = newValue
-                        }
-
-                    if !topScreenOnly
-                    {
-                        Toggle("Layout Screens Horizontally", isOn: $layoutHorizontally)
-                            .onChange(of: layoutHorizontally) { _, newValue in
-                                Settings.features.dsAirPlay.layoutAxis = newValue ? .horizontal : .vertical
-                            }
-                    }
+                Picker("Renderer", selection: Binding(
+                    get: { requiresMetal ? true : usesMetal },
+                    set: { ExperimentalFeatures.shared.metal.isEnabled = $0 }
+                )) {
+                    Text("Metal").tag(true)
+                    Text("OpenGL ES (Original Delta)").tag(false)
                 }
+                .pickerStyle(.menu)
+                .disabled(requiresMetal)
+                .accessibilityIdentifier("bound.video.renderer")
             } header: {
-                Text(UIDevice.current.userInterfaceIdiom == .pad ? "AirPlay / External Displays" : "AirPlay")
+                Text("Game Rendering")
             } footer: {
-                Text(airPlayFooter)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Close and reopen the game after changing its renderer. N64 games use their own renderer.")
+                    if requiresMetal {
+                        Text("Metal is required when running Bound on this Mac.")
+                    }
+                    #if targetEnvironment(simulator)
+                    Text("Game Boy Advance games always use Metal in the Simulator.")
+                    #endif
+                }
+            }
+
+            if !BoundFeatureVisibility.simplifiedSettings {
+                airPlaySection
             }
         }
         .tint(.accentColor)
         .navigationTitle("Video")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var requiresMetal: Bool {
+        if #available(iOS 18, macOS 15, *), ProcessInfo.processInfo.isiOSAppOnMac {
+            return true
+        }
+        return false
+    }
+
+    private var airPlaySection: some View {
+        Section {
+            Toggle("Display Full Screen", isOn: $supportsExternalDisplays)
+                .onChange(of: supportsExternalDisplays) { _, newValue in
+                    Settings.supportsExternalDisplays = newValue
+                }
+
+            if supportsExternalDisplays
+            {
+                Toggle("Top Screen Only", isOn: $topScreenOnly)
+                    .onChange(of: topScreenOnly) { _, newValue in
+                        Settings.features.dsAirPlay.topScreenOnly = newValue
+                    }
+
+                if !topScreenOnly
+                {
+                    Toggle("Layout Screens Horizontally", isOn: $layoutHorizontally)
+                        .onChange(of: layoutHorizontally) { _, newValue in
+                            Settings.features.dsAirPlay.layoutAxis = newValue ? .horizontal : .vertical
+                        }
+                }
+            }
+        } header: {
+            Text(UIDevice.current.userInterfaceIdiom == .pad ? "AirPlay / External Displays" : "AirPlay")
+        } footer: {
+            Text(airPlayFooter)
+        }
     }
 
     private var airPlayFooter: String {

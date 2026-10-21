@@ -155,6 +155,11 @@ struct SettingsView: View {
                             SettingsRow(label: Text("Audio"), systemImage: "speaker.wave.2", color: .green)
                         }.accessibilityIdentifier("bound.settings-audio")
                         NavigationLink {
+                            VideoSettingsView().boundSettingsPage()
+                        } label: {
+                            SettingsRow(label: Text("Video"), systemImage: "display", color: .teal)
+                        }.accessibilityIdentifier("bound.settings-video")
+                        NavigationLink {
                             Form { BoundAccountSocialSettings(); DeltaSyncSettingsSection() }
                                 .navigationTitle("Account & Sync").navigationBarTitleDisplayMode(.inline)
                                 .boundSettingsPage()
@@ -192,13 +197,6 @@ struct SettingsView: View {
                                     .accessibilityIdentifier("bound.rules-and-contact-link")
                                 }
                                 if !BoundFeatureVisibility.simplifiedSettings {
-                                    Section("Emulation") {
-                                        NavigationLink {
-                                            VideoSettingsView().boundSettingsPage()
-                                        } label: {
-                                            SettingsRow(label: Text("Video"), systemImage: "display", color: .teal)
-                                        }
-                                    }
                                     OnlineMultiplayerSection()
                                 }
                                 if !BoundFeatureVisibility.simplifiedSettings { CreditsSection() }

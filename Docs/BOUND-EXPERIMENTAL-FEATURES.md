@@ -130,7 +130,14 @@ controller layouts, portrait/mode-off/editing guards, and selected-tab preservat
 Physical Bluetooth/wired controllers were not exercised.
 
 The Library settings button and pause-menu Settings tile open the same grouped
-home: Controls, Audio, Account & Sync, and About.
+home: Controls, Audio, Video, Account & Sync, and About.
+Video offers **Metal** and **OpenGL ES (Original Delta)** in regular settings,
+independently of Developer Features and Enable Experimental Features. It reuses
+the existing `metal` preference, including saved choices, reset and config export.
+Close and reopen a game to apply a changed renderer. N64 retains its own renderer;
+Simulator GBA and Bound running on macOS 15 or later retain their required Metal
+paths. The Mac picker displays the required renderer without overwriting the
+saved preference. Unrelated AirPlay controls retain the `simplifiedSettings` gate.
 Context Menu Previews and Pause Menu Button Placement are in Controls. About uses concise
 source labels in Sources & Licenses while retaining attribution and bundled
 license documents. Audio opens its controls directly; About includes the Game
