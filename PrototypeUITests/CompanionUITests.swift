@@ -1049,7 +1049,7 @@ final class CompanionUITests: XCTestCase {
         XCTAssertEqual(developer.value as? String, "0")
         XCTAssertEqual(experimental.value as? String, "0")
         XCTAssertLessThan(developer.frame.maxY, experimental.frame.midY)
-        XCTAssertEqual(experimental.label, "Enable Experimental Features")
+        XCTAssertEqual(experimental.label, "Enable Experimental Multiplayer")
         readerVisible(false)
         experimental.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertEqual(experimental.value as? String, "1")

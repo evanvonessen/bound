@@ -1,6 +1,6 @@
 # Bound feature baseline
 
-Settings now includes **Enable Experimental Features** directly below **Enable
+Settings now includes **Enable Experimental Multiplayer** directly below **Enable
 Developer Features**, independently of that switch. It defaults to off and
 persists across launches. It gates the merged `multiplayer` branch: live map
 sprites, NPC-style Battle/Trade invitations, native friend battles, the local
@@ -132,7 +132,7 @@ Physical Bluetooth/wired controllers were not exercised.
 The Library settings button and pause-menu Settings tile open the same grouped
 home: Controls, Audio, Video, Account & Sync, and About.
 Video offers **Metal** and **OpenGL ES (Original Delta)** in regular settings,
-independently of Developer Features and Enable Experimental Features. It reuses
+independently of Developer Features and Enable Experimental Multiplayer. It reuses
 the existing `metal` preference, including saved choices, reset and config export.
 Close and reopen a game to apply a changed renderer. N64 retains its own renderer;
 Simulator GBA and Bound running on macOS 15 or later retain their required Metal

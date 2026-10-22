@@ -1,6 +1,7 @@
 # Bound account security
 
-Settings → Account & Sync and Friends → Account security offer optional
+Settings → Account & Sync → Account and Security and Friends → Account and
+Security group username changes, email changes, password recovery and optional
 authenticator-based two-factor authentication. Add Bound to an authenticator
 using the QR code or manual key, then enter a code to enable it. Users can add a
 backup authenticator and remove factors after verification. Keep the setup key

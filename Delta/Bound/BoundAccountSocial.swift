@@ -257,11 +257,9 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
 struct BoundAccountSocialSettings: View {
     static let stopSharingNotification = Notification.Name("BoundAccountSocialSettingsStopSharing")
     @ObservedObject private var account = BoundFriendAccount.shared
-    @ObservedObject private var profile = BoundAccountProfile.shared
     @ObservedObject private var notifications = BoundJiggleNotifications.shared
     @State private var email = ""
     @State private var password = ""
-    @State private var showingEmailChange = false
     @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option2
     private var usesUpdatedUI: Bool { uiVersion == .option2 }
     var body: some View {
@@ -271,15 +269,10 @@ struct BoundAccountSocialSettings: View {
                 .disabled(account.busy)
                 .accessibilityIdentifier("bound.account-delete-retry")
             } else if account.session != nil {
-                BoundAccountEmailText(account: account) { showingEmailChange = true }
-                BoundAccountPasswordResetLink(account: account)
-                NavigationLink("Account security") { BoundAccountSecurityView(account: account) }
+                NavigationLink("Account and Security") {
+                    BoundAccountSecurityView(account: account) { email = $0 }
+                }
                     .accessibilityIdentifier("bound.account-security")
-                NavigationLink {
-                    BoundUsernameSettings().boundSettingsPage()
-                } label: {
-                    LabeledContent("Username", value: profile.username ?? "Loading…")
-                }.accessibilityIdentifier("bound.account-username")
                 Toggle("Receive Jiggles", isOn: Binding(get: { notifications.enabled }, set: { value in
                     Task { await notifications.setEnabled(value) }
                 })).disabled(notifications.busy).accessibilityIdentifier("bound.jiggles-enabled")
@@ -302,11 +295,6 @@ struct BoundAccountSocialSettings: View {
                     .accessibilityIdentifier("account.signin.status")
             }
         }
-        .sheet(isPresented: $showingEmailChange) {
-            BoundChangeEmailView(account: account) { email = $0 }
-                .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
-        }
-        .task(id: account.session?.owner) { await profile.refresh() }
         .onDisappear { password = "" }
     }
 

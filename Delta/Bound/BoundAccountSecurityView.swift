@@ -5,6 +5,7 @@ import CoreImage.CIFilterBuiltins
 /// Optional account security belongs to the Bound account, independently of device sync.
 struct BoundAccountSecurityView: View {
     @ObservedObject var account: BoundFriendAccount
+    var emailChanged: (String) -> Void = { _ in }
     @State private var enrollmentCode = ""
     @State private var verificationCode = ""
     @State private var selectedFactorID: String?
@@ -31,12 +32,15 @@ struct BoundAccountSecurityView: View {
     var body: some View {
         Form {
             if account.session == nil {
-                Section { Text("Sign in to manage your account security.") }
+                Section { Text("Sign in to manage your account.") }
             } else {
-                Section("Email") {
+                Section("Account") {
+                    NavigationLink("Change username") {
+                        BoundUsernameSettings().boundSettingsPage()
+                    }
+                    .disabled(unavailable || account.changingEmail)
+                    .accessibilityIdentifier("bound.account-username")
                     BoundAccountEmailText(account: account) { showingEmailChange = true }
-                }
-                Section("Password") {
                     BoundAccountPasswordResetLink(account: account)
                 }
                 authenticatorSection
@@ -54,9 +58,9 @@ struct BoundAccountSecurityView: View {
                 }
             }
         }
-        .navigationTitle("Account security")
+        .navigationTitle("Account and Security")
         .sheet(isPresented: $showingEmailChange) {
-            BoundChangeEmailView(account: account)
+            BoundChangeEmailView(account: account, emailChanged: emailChanged)
                 .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
         }
         .task(id: account.securityIdentityID) {

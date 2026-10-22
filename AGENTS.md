@@ -40,7 +40,7 @@ Device Automatic Updates must be enabled in TestFlight separately on each device
 The current feature set is the permanent Bound baseline. New features are non-experimental unless the user explicitly states otherwise. The experimental customization checkbox/options and Interface & Companion settings menu have been removed; their remaining settings live in Controls. Do not restore those entry points or erase saved customization choices. Keep unrelated upstream Delta controls under the existing `simplifiedSettings` and Debug/Release rules. Preserve saved preferences, and keep UI Version independent of companion appearance. See `Docs/BOUND-EXPERIMENTAL-FEATURES.md`.
 
 The multiplayer additions are explicitly experimental at the user's request.
-Keep Settings → Enable Experimental Features directly below Enable Developer
+Keep Settings → Enable Experimental Multiplayer directly below Enable Developer
 Features, default off, using `bound.experimental-multiplayer.enabled.v1`. Gate
 live sprites, world invitations, battles and multiplayer reader/replay controls;
 leave normal friend accounts/video sharing and all existing customization alone.

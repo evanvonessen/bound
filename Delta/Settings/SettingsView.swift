@@ -239,7 +239,7 @@ struct SettingsView: View {
                         Toggle("Enable Developer Features", isOn: $developerFeaturesEnabled)
                             .accessibilityIdentifier("bound.settings-developer-features")
 
-                        Toggle("Enable Experimental Features", isOn: $experimentalFeaturesEnabled)
+                        Toggle("Enable Experimental Multiplayer", isOn: $experimentalFeaturesEnabled)
                             .accessibilityIdentifier("bound.settings-experimental-features")
                             .onChange(of: experimentalFeaturesEnabled) { _, enabled in
                                 BoundMultiplayerFeatures.setEnabled(enabled)

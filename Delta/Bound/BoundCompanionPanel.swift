@@ -1798,7 +1798,6 @@ struct BoundFriendsSheet: View {
     @State private var blockingRoom: FriendRoom?
     @State private var removingRoom: FriendRoom?
     @State private var showingAddFriend = false
-    @State private var showingEmailChange = false
     @State private var roomIDsBeforeAdding: Set<String> = []
     var closed: () -> Void = {}
     private var usesUpdatedUI: Bool { uiVersion == .option2 }
@@ -1821,15 +1820,10 @@ struct BoundFriendsSheet: View {
                     } else if account.session == nil {
                         BoundAccountSignInFields(account: account, email: $email, password: $password) { onboarding.synchronizeAccount() }
                     } else {
-                        BoundAccountEmailText(account: account) { showingEmailChange = true }
-                        NavigationLink("Change username") {
-                            BoundUsernameSettings().boundSettingsPage()
+                        NavigationLink("Account and Security") {
+                            BoundAccountSecurityView(account: account) { email = $0 }
                         }
-                        .disabled(account.busy || account.deletionPending)
-                        .accessibilityIdentifier("bound.friends-change-username")
-                        BoundAccountPasswordResetLink(account: account)
-                        NavigationLink("Account security") { BoundAccountSecurityView(account: account) }
-                            .accessibilityIdentifier("bound.account-security")
+                        .accessibilityIdentifier("bound.account-security")
                         if !usesUpdatedUI {
                             Button("Sign out") { BoundJiggleNotifications.shared.prepareForSignOut(); sharing.stop(); onboarding.signOut(); account.signOut() }.disabled(account.busy)
                         }
@@ -1839,32 +1833,13 @@ struct BoundFriendsSheet: View {
                     }
                 } header: {
                     if account.session != nil {
-                        HStack(spacing: 6) {
-                            Text(onboarding.accountUsername.map { "Hello \($0)" } ?? "Hello")
-                                .lineLimit(2).minimumScaleFactor(0.75)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .accessibilityIdentifier("bound.friends-greeting")
-                            if usesUpdatedUI {
-                                Button {
-                                    guard account.session != nil else { return }
-                                    roomIDsBeforeAdding = Set(onboarding.rooms.map(\.roomID))
-                                    friendUsername = ""
-                                    showingAddFriend = true
-                                } label: {
-                                    Label("Add", systemImage: "person.badge.plus")
-                                        .font(.subheadline.weight(.semibold))
-                                        .lineLimit(1).minimumScaleFactor(0.8)
-                                        .frame(minWidth: 44, minHeight: 44)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.borderless)
-                                .accessibilityLabel("Add friend")
-                                .accessibilityIdentifier("bound.add-friend-open")
-                            }
-                        }
-                        .textCase(nil)
-                        .frame(minHeight: 44)
+                        Text(onboarding.accountUsername.map { "Hello \($0)" } ?? "Hello")
+                            .lineLimit(2).minimumScaleFactor(0.75)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("bound.friends-greeting")
+                            .textCase(nil)
+                            .frame(minHeight: 44)
                     } else {
                         Text("Bound account")
                     }
@@ -1875,7 +1850,7 @@ struct BoundFriendsSheet: View {
                     BoundSoulControls(session: sharing.soulLink)
                     BoundRunTimelineControls(timeline: sharing.soulLink.probe.timeline)
                     BoundPartnerSpectatorControls(sharing: sharing)
-                    Section("Friends") {
+                    Section {
                         if !onboarding.message.isEmpty {
                             Text(onboarding.message).font(.caption)
                         }
@@ -1901,6 +1876,30 @@ struct BoundFriendsSheet: View {
                         if !usesUpdatedUI && sharing.active {
                             Button("Stop sharing") { sharing.stop() }
                         }
+                    } header: {
+                        HStack {
+                            Text("Friends")
+                                .accessibilityIdentifier("bound.friends-list-heading")
+                            Spacer()
+                            if usesUpdatedUI {
+                                Button {
+                                    guard account.session != nil else { return }
+                                    roomIDsBeforeAdding = Set(onboarding.rooms.map(\.roomID))
+                                    friendUsername = ""
+                                    showingAddFriend = true
+                                } label: {
+                                    Label("Add", systemImage: "person.badge.plus")
+                                        .font(.subheadline.weight(.semibold))
+                                        .lineLimit(1).minimumScaleFactor(0.8)
+                                        .frame(minWidth: 44, minHeight: 44)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("Add friend")
+                                .accessibilityIdentifier("bound.add-friend-open")
+                            }
+                        }
+                        .textCase(nil)
                     }
                     if !onboarding.blocks.isEmpty {
                         Section("Blocked") {
@@ -1937,10 +1936,6 @@ struct BoundFriendsSheet: View {
                 }
             }.navigationTitle("Friends")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(account.busy) } }
-        }
-        .sheet(isPresented: $showingEmailChange) {
-            BoundChangeEmailView(account: account) { email = $0 }
-                .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
         }
         .onAppear { onboarding.open(sharing: sharing, existing: { account.session }) }
         .onReceive(NotificationCenter.default.publisher(for: BoundAccountProfile.didChangeNotification)) { _ in
