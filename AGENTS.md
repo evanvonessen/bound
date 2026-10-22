@@ -53,3 +53,15 @@ with no times. Use America/Los_Angeles calendar dates. Preserve the plain HTML
 style of the current site and keep earlier entries as a running history.
 Within each date, separate Radical Red multiplayer changes from general Bound
 changes under their own labels.
+
+## Latest integrated ROM
+
+After pushing completed changes to `origin/main`, run
+`python3 ../multi_red/tools/publish_latest_rom.py --bound-repo .` and verify
+`../multi_red/build/latest-rom/status.json`. The installed Mac login service also
+checks both repositories' remote main heads every minute. It publishes the
+matching integrated ROM to multi_red's permanent first-README download link and
+refreshes the named main iPhone 17 simulator when booted. Preserve earlier ROMs
+and saves; report incompatible game/app commits or service failures accurately.
+See `../multi_red/docs/main-simulator.md`. This does not replace the existing
+Bound validation or on-demand internal TestFlight delivery rules.
