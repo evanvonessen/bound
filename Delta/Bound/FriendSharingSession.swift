@@ -402,7 +402,7 @@ final class FriendSharingSession: ObservableObject {
             guard BoundMultiplayerFeatures.isEnabled, let self, self.generation == run, self.active, self.joined, !self.reconnecting else { return }
             if let data {
                 if data.starts(with: BoundWorldPacket.prefix) { self.sharedWorld.receive(data) }
-                else if data.starts(with: BoundSoulPacket.prefix) { self.soulLink.receive(data) }
+                else if BoundSoulPacket.recognizes(data) { self.soulLink.receive(data) }
                 else if data.starts(with: BoundBattleControlPacket.prefix) { self.nativeBattle.receive(data) }
                 else { self.interactions.receive(data) }
             }

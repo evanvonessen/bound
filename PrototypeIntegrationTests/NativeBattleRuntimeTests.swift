@@ -539,12 +539,16 @@ final class NativeBattleRuntimeTests:XCTestCase {
         let driver = NativeBattleDriver(core: core, profile: profile), probe = BoundSoulProbe()
         let journal = output.appendingPathComponent("run.json")
         probe.configure(core: core, url: journal); probe.setVerified(true); probe.setPreviewEnabled(true)
-        core.updateHandler = { core in driver.receive(core); probe.receive(core) }
+        core.audioManager.pausesOtherAudio = false; core.audioManager.mixesWithOtherAudio = true; core.audioManager.isEnabled = false
+        core.updateHandler = { core in
+            if core.audioManager.isEnabled { core.audioManager.isEnabled = false }
+            driver.receive(core); probe.receive(core)
+        }
         defer {
             _ = core.pause(); BoundVBABattleBridge.closeSoulLink(); _ = core.stop()
             window.isHidden = true; previous?.makeKeyAndVisible()
         }
-        core.rate = 8; XCTAssertTrue(core.start()); await fulfillment(of: [driver.booted], timeout: 90)
+        core.rate = 8; XCTAssertTrue(core.start()); core.deltaCore.emulatorBridge.audioRenderer = nil; await fulfillment(of: [driver.booted], timeout: 90)
         for _ in 0..<20 {
             if probe.read().ready { break }
             try await Task.sleep(for: .milliseconds(100))
@@ -579,7 +583,10 @@ final class NativeBattleRuntimeTests:XCTestCase {
         try core.load(DeltaCore.SaveState(fileURL: before, gameType: .gba))
         XCTAssertGreaterThan(BoundVBABattleBridge.playerHP().first?.intValue ?? 0, 0, "The old state really contained a healthy party")
         let reopened = BoundSoulProbe(); reopened.configure(core: core, url: journal); reopened.setVerified(true)
-        core.updateHandler = { core in driver.receive(core); reopened.receive(core) }
+        core.updateHandler = { core in
+            if core.audioManager.isEnabled { core.audioManager.isEnabled = false }
+            driver.receive(core); reopened.receive(core)
+        }
         _ = core.resume(); try await Task.sleep(for: .milliseconds(200)); _ = core.pause()
         XCTAssertTrue(reopened.read().ledger?.dead.contains(starter.slot) == true)
         XCTAssertEqual(BoundVBABattleBridge.playerHP().first?.intValue, 0, "Old-state load and journal reload cannot revive the link")

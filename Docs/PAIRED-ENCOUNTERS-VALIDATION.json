@@ -1,0 +1,48 @@
+{
+  "client_date": "2026-10-21",
+  "feature": "paired encounter tracker",
+  "entry": "Friends > Soul Link > Paired encounters",
+  "soul_wire_version": 2,
+  "journal_version": 1,
+  "old_journal_compatible": true,
+  "requires_both_apps_updated": true,
+  "game_rom_changed": false,
+  "integrated_rom_sha256": "9f0740e30ae7f71da3d993fb3c2ad84dadfe1dd23f1d08480f81582692567dde",
+  "behavior": [
+    "Automatic first successful acquisition pairs by met area; eggs by ordinal",
+    "Both local-only and partner-only catches appear",
+    "Available, syncing, waiting, linked and fainted states",
+    "Complete acquisition and loss bitmaps in each heartbeat",
+    "Partner records and names persist atomically; old packets cannot free occupied slots",
+    "Acquisitions require fresh session challenge; losses remain monotonic",
+    "Legacy peers trigger an app-update message"
+  ],
+  "validation": {
+    "selected_tests": 37,
+    "failures": 0,
+    "skips": 0,
+    "soul_link_tests": 26,
+    "shared_world_tests": 10,
+    "native_runtime_tests": 1,
+    "simulator_debug_build": true,
+    "unsigned_release_iphone_build": true,
+    "pinned_source_files_unchanged": 17061,
+    "game_abi_import_check": true,
+    "soul_native_shim_check": true,
+    "audio_disabled": true,
+    "original_rom_and_seed_unchanged": true,
+    "screen_visually_checked": true
+  },
+  "evidence": {
+    "test_bundle": ".build/paired-encounters-publish-tests.xcresult",
+    "test_log": ".build/paired-encounters-publish-tests.log",
+    "debug_log": ".build/paired-encounters-debug-publish.log",
+    "release_log": ".build/paired-encounters-release-publish.log",
+    "preserved_files": ".build/paired-encounters-evidence/manifest.json"
+  },
+  "limits": [
+    "Paired sessions run locally using production session/packet code",
+    "Native catches, PC delivery, eggs, fainting, and raw-state rollback tested in one disposable VBA-M process",
+    "No physical two-phone or real Agora gameplay acceptance claim"
+  ]
+}

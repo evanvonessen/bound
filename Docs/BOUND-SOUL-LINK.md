@@ -24,6 +24,25 @@ rules. Its terminal result is sent again after reconnecting. A subsequent run
 archives the previous record in Finished Runs. Starting a new run requires the
 same starter-only conditions.
 
+## Paired encounter tracker
+
+Open **Friends → Soul Link → Paired encounters** during a run. Search by area or
+Pokémon name. Each named area shows your catch, your partner's catch, and
+**Available**, **Waiting for you**, **Waiting for partner**, **Linked**, or
+**Fainted**. Partner-only catches appear even before you visit that area.
+Unobserved partner data shows **Syncing partner**, never an assumed free catch.
+Available areas come from the verified game's met-location name table; the list
+is not a promise that every listed location has a catchable encounter.
+
+The first successful acquisition on each side pairs automatically by area;
+eggs pair by ordinal. No manual matching is needed. Catch records, partner names,
+and permanent losses survive reconnects, app restarts, boxing, release and save
+rollback. Both players need this app version. Existing run journals load with
+all their original eligibility/deaths and acquire partner metadata on reconnect.
+A legacy peer triggers a pause and an update message. No new ROM is required: this adds
+tracking through the existing native Soul Link observation/enforcement adapter;
+the integrated game and shared-progression ABI remain unchanged.
+
 ## Encounter and egg rules
 
 - An area is the game's native **met location**, such as Route 2 or Viridian
@@ -80,9 +99,12 @@ save state does not remove a death or free an encounter slot. A damaged/unwritab
 journal pauses play and is preserved.
 
 The existing authenticated, ordered/reliable Agora control stream carries a
-separate bounded `BSL1` protocol. Each state includes the **complete 288-byte loss
-bitmap** (all 256 areas and up to 2,048 egg ordinals), plus a rotating small set of
-names for the list. Losses merge by union. New session challenges prevent an old
+separate bounded `BSL2` protocol. Every state carries **two complete 288-byte
+bitmaps**: successful acquisitions and permanent losses (all 256 areas and up to
+2,048 egg ordinals), plus up to three rotating names. A catch becomes occupied
+immediately after a fresh challenge, independent of name rotation. Both sets
+merge monotonically and are committed atomically to the run journal. Losses
+merge even before the fresh challenge; acquisitions and names require it. New session challenges prevent an old
 pre-disconnect alive packet from marking a reconnect ready. Run and local room
 bindings prevent a different run/friend from changing the ledger. Deaths and end
 results survive disconnects and are replayed. Pokémon identities/party bytes
@@ -92,7 +114,29 @@ The ledger bounds the total identity/alias set at 2,048. Overflow or a native
 faint-latch overrun pauses with a preserved record rather than dropping events.
 It is a local challenge record, not a server anti-cheat service.
 
+## BSL2 wire format
+
+Packets are binary and at most 1,024 bytes. Offsets: `BSL2` magic at 0, version
+2 at 4, kind byte at 5 (offer/accept/confirm/decline/state/end = 0..5), run UUID at
+6, sender challenge UUID at 22, receiver-present byte at 38, receiver UUID at 39,
+loss bits at 55, acquisition bits at 343, row count at 631, rows at 632.
+UUIDs use their 16 RFC-order bytes. Each row has a little-endian 16-bit slot
+(areas 0..255; eggs 256..2303), dead byte, UTF-8 byte count, then the name (at most
+20 characters/80 bytes). Unknown versions, duplicate/invalid slots, malformed
+UTF-8, truncated fields and trailing data are rejected. Three worst-case names
+with both complete bitmaps occupy 884 bytes. Identities and Pokémon data stay local.
+BSL1 is recognized only to explain the required app update, never as BSL2 state.
+
 ## Verification
+
+The paired encounter update passed 37 selected checks: 26 Soul Link rules/UI/
+protocol checks, 10 shared-world checks and the actual native Soul Link capture,
+PC/egg, faint and rollback fixture. The screen was rendered and visually checked
+in the disposable simulator, and an unsigned Release iPhone build passed.
+The native fixture runs with emulator audio disabled. Full logs/screenshots and
+working save copies remain under `.build/paired-encounters-*`; original ROM and
+seed bytes are checked unchanged. Paired sessions are exercised locally through
+the production packet/session code; this is not a two-phone/Agora acceptance run.
 
 - Focused rules cover shared grass/fishing/raid metadata slots, direct-to-PC
   metadata, duplicate exclusion, eggs/hatching/OT changes, same-frame healing,
