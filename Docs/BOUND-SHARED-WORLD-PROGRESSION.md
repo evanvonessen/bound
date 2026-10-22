@@ -8,8 +8,8 @@ only the declared peer-data port. It no longer ships or installs the shared
 world C payload. The original unchanged ROM remains a separate solo artifact.
 
 Build/import instructions and the precise contract are in
-`/Users/evandev/dev/integratedred/docs/integrated-multiplayer.md`. Neither
-worktree is merged or published by this task.
+`/Users/evandev/dev/integratedred/docs/integrated-multiplayer.md`. Update the
+game and app together using the matching exported interface.
 
 Enable Experimental Features, connect to a friend and enable Live Friend Sprites
 on both devices. The supported exact-ROM multiplayer profile now uses both
@@ -144,4 +144,4 @@ working batteries, raw states, XCTest bundles and prior failed fixture attempts
 are retained under `.build/paired-bridge-*`. The compact receipt is
 [PAIRED-NUGGET-BRIDGE-VALIDATION.json](PAIRED-NUGGET-BRIDGE-VALIDATION.json).
 This does not establish physical-device, Agora or normal-app invitation flow
-acceptance. All source and evidence remain in the unmerged worktrees.
+acceptance. Full QA evidence remains in the preserved worktrees.
