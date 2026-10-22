@@ -638,10 +638,11 @@ final class BoundROMMultiplayerCoordinator {
         return BoundMultiplayerSaveStore.hash((try? BoundMultiplayerSaveStore.encode(canonical)) ?? Data())
     }
     static func validSettings(_ data: Data) -> Bool {
-        guard data.count == 32, data[0] == 1 || data[0] == 2 else { return false }
+        guard data.count == 32, (1...3).contains(data[0]) else { return false }
         return data[1..<10].allSatisfy { $0 <= 1 }
-            && data[10] <= (data[0] == 2 ? 1 : 0)
-            && data[11..<32].allSatisfy { $0 == 0 }
+            && data[10] <= (data[0] >= 2 ? 1 : 0)
+            && data[11] <= (data[0] >= 3 ? 1 : 0)
+            && data[12..<32].allSatisfy { $0 == 0 }
             && Int(data[2]) + Int(data[3]) + Int(data[4]) <= 1
             && !(data[6] == 1 && data[7] == 1)
     }

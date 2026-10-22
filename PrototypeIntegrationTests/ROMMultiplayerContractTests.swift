@@ -22,6 +22,36 @@ final class ROMMultiplayerContractTests: XCTestCase {
         XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(Data()))
     }
 
+    @MainActor
+    func testAutomaticNicknameChoiceRequiresVersionThreeAndRejectsUnknownSettings() {
+        var settings = Data(repeating: 0, count: 32)
+        settings[11] = 1
+        for version in [UInt8(1), 2] {
+            settings[0] = version
+            XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings),
+                           "Older settings formats cannot silently enable automatic nicknames")
+        }
+        settings[0] = 3
+        for cheats in [UInt8(0), 1] {
+            for nicknames in [UInt8(0), 1] {
+                settings[10] = cheats; settings[11] = nicknames
+                XCTAssertTrue(BoundROMMultiplayerCoordinator.validSettings(settings))
+            }
+        }
+        settings[11] = 2
+        XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings))
+        settings[11] = 1
+        for reserved in 12..<32 {
+            settings[reserved] = 1
+            XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings))
+            settings[reserved] = 0
+        }
+        settings[0] = 4
+        XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings))
+        settings[0] = 0
+        XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings))
+    }
+
     func testCheckpointCaptureWaitsUntilBothCartridgesFreezeTheSameHistory() {
         func stage(local: Bool = true, peer: Bool = true, pending: Bool = true,
                    history: Bool = true, fresh: Bool = true) -> BoundROMCheckpointStage {
