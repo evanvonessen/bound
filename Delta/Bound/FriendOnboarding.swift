@@ -63,6 +63,7 @@ final class FriendOnboarding: ObservableObject {
     private var multiplayerServiceActive = false
     private(set) var multiplayerPartnerRoomID: String?
     private var hasCurrentFriendList = false
+    private var disconnectedRooms = Set<String>()
     private var lastProfileRefresh = Date.distantPast
     private let observeAccount: @MainActor (@escaping @MainActor () -> Void) -> any SharingCancellation
     private var reusedSession: (() -> AppCloudSession?)?
@@ -129,8 +130,9 @@ final class FriendOnboarding: ObservableObject {
     }
     /// Called with the run's persisted room or a friend selected in the ROM.
     /// A server-refreshed friend list and the current account authorize connection.
-    func setMultiplayerPartner(roomID: String?) {
+    func setMultiplayerPartner(roomID: String?, userInitiated: Bool = false) {
         guard roomID == nil || UUID(uuidString: roomID!) != nil else { return }
+        if userInitiated, let roomID { disconnectedRooms.remove(roomID) }
         if multiplayerPartnerRoomID != roomID {
             sharing?.setAutomaticMultiplayerConnection(false)
             multiplayerPartnerRoomID = roomID
@@ -147,7 +149,7 @@ final class FriendOnboarding: ObservableObject {
     }
     private func synchronizeMultiplayerConnection() {
         guard multiplayerServiceActive, BoundMultiplayerFeatures.isEnabled, permitsRTC,
-              hasCurrentFriendList, let roomID = multiplayerPartnerRoomID,
+              hasCurrentFriendList, let roomID = multiplayerPartnerRoomID, !disconnectedRooms.contains(roomID),
               let room = rooms.first(where: { $0.roomID == roomID }), currentIdentity() != nil else { return }
         if selected?.roomID != roomID {
             cancelPendingJiggle(); selected = room
@@ -170,7 +172,7 @@ final class FriendOnboarding: ObservableObject {
         }
         let hadAccount = ownerID != nil
         cancelPendingRequest(); cancelPendingJiggle(); ownerID = nil; signedIn = false; rooms = []; blocks = []; selected = nil; accountUsername = nil
-        hasCurrentFriendList = false; multiplayerPartnerRoomID = nil
+        hasCurrentFriendList = false; multiplayerPartnerRoomID = nil; disconnectedRooms.removeAll()
         if hadAccount || current != nil || managesFlow {
             managesFlow = true
             sharing?.configureAuthenticatedRoom(nil, identity: { [weak self] in self?.sharingIdentity() })
@@ -230,7 +232,7 @@ final class FriendOnboarding: ObservableObject {
     func signOut() {
         cancelPendingRequest(); cancelPendingJiggle(); ownerID = nil; signedIn = false; managesFlow = true
         rooms = []; blocks = []; selected = nil; accountUsername = nil; message = "Sign in above to add a friend."
-        hasCurrentFriendList = false; multiplayerPartnerRoomID = nil
+        hasCurrentFriendList = false; multiplayerPartnerRoomID = nil; disconnectedRooms.removeAll()
         sharing?.configureAuthenticatedRoom(nil, identity: { nil })
     }
     func select(_ room: FriendRoom, startSharing: Bool = false) {
@@ -241,6 +243,7 @@ final class FriendOnboarding: ObservableObject {
             message = "End or suspend the linked run before switching friends."
             return
         }
+        disconnectedRooms.remove(room.roomID)
         let startsImmediately = startSharing
         // Repeated taps on the current friend must not interrupt a live session.
         if startsImmediately, selected?.roomID == room.roomID, sharing?.active == true {
@@ -256,6 +259,17 @@ final class FriendOnboarding: ObservableObject {
             sharing.start()
             if sharing.active { notifyFriendOfSharing(room, identity: identity) }
         }
+    }
+    /// An explicit Stop clears the row and transport and blocks background room
+    /// restoration until the user selects this friend again. Linked-run recovery
+    /// continues to use the transport's existing safe disconnect path.
+    func disconnect() {
+        if let roomID = selected?.roomID { disconnectedRooms.insert(roomID) }
+        if let roomID = multiplayerPartnerRoomID { disconnectedRooms.insert(roomID) }
+        cancelPendingJiggle()
+        selected = nil
+        sharing?.configureAuthenticatedRoom(nil, identity: { [weak self] in self?.sharingIdentity() })
+        message = ""
     }
     func refresh() {
         guard !busy else { return }

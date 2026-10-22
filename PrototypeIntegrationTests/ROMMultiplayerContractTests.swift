@@ -2,6 +2,26 @@ import XCTest
 @testable import Delta
 
 final class ROMMultiplayerContractTests: XCTestCase {
+    @MainActor
+    func testCommonCheatChoiceHasVersionedSharedSettingsAndRejectsUnknownBits() {
+        var settings = Data(repeating: 0, count: 32)
+        settings[0] = 1
+        XCTAssertTrue(BoundROMMultiplayerCoordinator.validSettings(settings))
+        settings[10] = 1
+        XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings))
+        settings[0] = 2
+        XCTAssertTrue(BoundROMMultiplayerCoordinator.validSettings(settings))
+        settings[10] = 0
+        XCTAssertTrue(BoundROMMultiplayerCoordinator.validSettings(settings))
+        settings[10] = 2
+        XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings))
+        settings[10] = 1; settings[31] = 1
+        XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings))
+        settings[31] = 0; settings[2] = 1; settings[3] = 1
+        XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings))
+        XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(Data()))
+    }
+
     func testCheckpointCaptureWaitsUntilBothCartridgesFreezeTheSameHistory() {
         func stage(local: Bool = true, peer: Bool = true, pending: Bool = true,
                    history: Bool = true, fresh: Bool = true) -> BoundROMCheckpointStage {

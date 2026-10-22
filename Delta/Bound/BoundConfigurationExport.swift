@@ -5,6 +5,7 @@ import SwiftUI
 
 enum BoundDeveloperFeatures {
     static let key = "bound.developer-features.enabled.v1"
+    static let didChange = Notification.Name("BoundDeveloperFeaturesChanged")
 }
 
 struct BoundConfigurationDocument {

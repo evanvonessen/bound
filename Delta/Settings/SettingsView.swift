@@ -238,6 +238,9 @@ struct SettingsView: View {
 
                         Toggle("Enable Developer Features", isOn: $developerFeaturesEnabled)
                             .accessibilityIdentifier("bound.settings-developer-features")
+                            .onChange(of: developerFeaturesEnabled) { _, _ in
+                                NotificationCenter.default.post(name: BoundDeveloperFeatures.didChange, object: nil)
+                            }
 
                         Toggle("Enable Experimental Multiplayer", isOn: $experimentalFeaturesEnabled)
                             .accessibilityIdentifier("bound.settings-experimental-features")

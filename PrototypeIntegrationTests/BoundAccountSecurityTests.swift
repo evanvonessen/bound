@@ -289,6 +289,24 @@ final class BoundAccountSecurityTests: XCTestCase {
         XCTAssertThrowsError(try previous.credentials())
     }
 
+    func testSecuritySettingsDoNotQueryHiddenPasskeyService() async throws {
+        let storage = SecurityFixtureStorage()
+        try storage.write(JSONEncoder().encode(BoundSavedSession(origin: BoundFriendAccount.origin, owner: owner, accessToken: token(aal: "aal1"), refreshToken: "fixture-refresh")))
+        var paths: [String] = []
+        let account = BoundFriendAccount(storage: storage, automaticRefresh: false, configuration: { "fixture-publishable" }, transport: { request in
+            paths.append(request.url!.path)
+            if request.url!.path == "/auth/v1/user" {
+                return .init(data: try JSONSerialization.data(withJSONObject: ["id": self.owner.uuidString.lowercased(), "is_anonymous": false, "factors": []]), status: 200)
+            }
+            return .init(data: Data(), status: 501)
+        }, passkeysConfigurationAvailable: { true })
+        await account.loadAccountSecurity()
+        defer { account.signOut() }
+        XCTAssertEqual(paths, ["/auth/v1/user"])
+        XCTAssertTrue(account.securityStatus.isEmpty)
+        XCTAssertNotNil(account.session)
+    }
+
     func testUnconfiguredPasskeysDoNotContactServerOrClearExistingSignIn() async throws {
         let storage = SecurityFixtureStorage()
         var requests = 0

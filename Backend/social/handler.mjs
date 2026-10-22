@@ -268,7 +268,7 @@ export function createJiggleHandler({ publishableKey, serviceRoleKey, apnsKeyID,
     if (dispatch.kind === 'duplicate') return response(200, { ok: true, duplicate: true, status: dispatch.status });
 
     const payload = {
-      aps: { alert: { title: 'Bound', body: `${dispatch.username} wants to play.` }, sound: 'default', category: 'BOUND_JIGGLE' },
+      aps: { alert: { title: 'Bound', body: `${dispatch.username} wants to play Pokémon!` }, sound: 'default', category: 'BOUND_JIGGLE' },
       kind: 'bound-jiggle', recipientID: dispatch.recipientID, roomID: body.roomID.toLowerCase(),
     };
     const results = await Promise.all(dispatch.devices.map(device => sendToAPNs({ device, payload, jwtProviders, fetchImpl, now, timeoutMs: requestTimeoutMs })));

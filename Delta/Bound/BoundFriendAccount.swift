@@ -588,11 +588,8 @@ final class BoundFriendAccount: ObservableObject {
                 try suspendForSecondFactor(previous, factors: factors, key: configuration())
                 return
             }
-            guard passkeysAvailable else { return }
-            let list = try await transport(identity.accountSecurityRequest(path: "passkeys", method: "GET"))
-            guard generation == run, !Task.isCancelled, identity.isSameSession(as: session) else { return }
-            guard list.status == 200 else { securityStatus = securityMessage(list); return }
-            passkeys = try Self.decodePasskeys(list.data)
+            // Account settings expose authenticators only. Do not query the
+            // hidden passkey service or surface its availability errors here.
         } catch {
             guard generation == run, !Task.isCancelled else { return }
             securityStatus = "Could not load account security. Check your connection and try again."

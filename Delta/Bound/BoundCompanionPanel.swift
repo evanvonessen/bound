@@ -1685,7 +1685,7 @@ struct BoundCompanionControlsSections: View {
         BoundGeneralSettingsSections()
         BoundAppearanceSettings(includeAbout: false)
         if !BoundFeatureVisibility.simplifiedSettings {
-            Section("Picture in picture") {
+            Section("Picture in Picture") {
                 ForEach([BoundPiPContent.friend, .notes], id: \.rawValue) { content in
                     VStack(alignment: .leading) {
                         Text("\(content.title) transparency: \(Int(model.preferences.transparency(for: content) * 100))%")
@@ -1874,7 +1874,7 @@ struct BoundFriendsSheet: View {
                             .accessibilityIdentifier("bound.friends-greeting")
                             .textCase(nil)
                     } else {
-                        Text("Bound account")
+                        Text("Bound Account")
                     }
                 }
                 if account.session != nil {
@@ -2004,10 +2004,10 @@ struct BoundFriendsSheet: View {
             }
             .buttonStyle(.plain)
             .disabled(onboarding.busy)
-            .accessibilityHint("Starts sharing your game and sends this friend a Jiggle notification")
+            .accessibilityHint("Starts sharing your game and sends this friend a notification")
             if selected && sharing.active {
                 Button("Stop") {
-                    sharing.stop()
+                    onboarding.disconnect()
                 }
                     .font(.caption.weight(.semibold))
                     .buttonStyle(.borderless)
@@ -2369,7 +2369,7 @@ struct BoundPartnerSpectatorControls: View {
     @ObservedObject var sharing: FriendSharingSession
     @State private var showing = false
     var body: some View {
-        Section("Partner battle") {
+        Section("Partner Battle") {
             Button("Watch partner", systemImage: "play.rectangle") {
                 sharing.watchPartner()
                 showing = sharing.watchingPartner

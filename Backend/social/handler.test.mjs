@@ -73,7 +73,7 @@ test('verified identity dispatches only RPC-owned recipient data and sends bound
   assert.equal(push.options.headers['apns-topic'], 'com.evanvonessen.bound');
   assert.equal(push.options.headers['apns-expiration'], '1800000060');
   assert.deepEqual(JSON.parse(push.options.body), {
-    aps: { alert: { title: 'Bound', body: 'River wants to play.' }, sound: 'default', category: 'BOUND_JIGGLE' },
+    aps: { alert: { title: 'Bound', body: 'River wants to play Pokémon!' }, sound: 'default', category: 'BOUND_JIGGLE' },
     kind: 'bound-jiggle', recipientID: recipient, roomID: room,
   });
   const finish = f.calls.find(call => call.url.endsWith('/bound_jiggle_finish'));
@@ -183,7 +183,7 @@ test('dispatch accepts a 40-codepoint username made of astral Unicode characters
   const result = await f.request({ roomID: room, requestID });
   assert.deepEqual(await result.json(), { ok: true, status: 'sent' });
   const push = f.calls.find(call => call.url.includes('.push.apple.com/'));
-  assert.equal(JSON.parse(push.options.body).aps.alert.body, `${username} wants to play.`);
+  assert.equal(JSON.parse(push.options.body).aps.alert.body, `${username} wants to play Pokémon!`);
 });
 
 test('strict request shape and server-verified nonanonymous identity block spoofed calls', async () => {

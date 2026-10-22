@@ -370,6 +370,53 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         sharing.stop()
     }
 
+    func testExplicitDisconnectSurvivesROMTicksRefreshAndForegroundUntilFriendTap() async throws {
+        let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer {
+            UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key)
+            NotificationCenter.default.post(name: BoundMultiplayerFeatures.didChange, object: nil)
+        }
+        let identity = try makeIdentity(owner: UUID())
+        let room = FriendRoom(roomID: UUID().uuidString, displayName: "Friend")
+        let transport = FriendTapSharingTransport()
+        var requests = 0
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            tokenFetcher: { room, identity in
+                requests += 1
+                return self.makeLease(room: room, owner: identity.owner, request: requests)
+            })
+        var observation: OnboardingObservation?
+        let onboarding = FriendOnboarding(call: { _, _, _ in FriendResponse(ok: true, rooms: [room]) },
+            sendJiggle: { _, _ in "" }, observeAccount: { observation = OnboardingObservation($0); return observation! })
+        onboarding.setMultiplayerServiceActive(true, sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+        onboarding.setMultiplayerPartner(roomID: room.roomID)
+        await waitUntil { sharing.joined }
+        onboarding.disconnect()
+        XCTAssertFalse(sharing.active)
+        XCTAssertFalse(sharing.joined)
+        XCTAssertNil(sharing.connectedRoomID)
+        XCTAssertNil(onboarding.selected)
+        for _ in 0..<5 { onboarding.setMultiplayerPartner(roomID: room.roomID); observation?.fire() }
+        sharing.background(); sharing.foreground()
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+        await settle()
+        XCTAssertEqual(requests, 1, "Manual Stop must block background reconnection")
+        XCTAssertNil(onboarding.selected, "Stopped friends have no paused/not-sharing badge")
+        onboarding.select(room, startSharing: true)
+        await waitUntil { sharing.joined }
+        XCTAssertEqual(requests, 2)
+        onboarding.disconnect()
+        onboarding.setMultiplayerPartner(roomID: room.roomID, userInitiated: true)
+        await waitUntil { sharing.joined }
+        XCTAssertEqual(requests, 3, "An explicit ROM friend choice also reconnects")
+        onboarding.disconnect()
+        onboarding.close()
+        onboarding.setMultiplayerServiceActive(false, sharing: sharing, existing: { identity })
+    }
+
     func testDisablingROMServicesPreservesExplicitOrdinaryVideoSharing() async throws {
         let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
         BoundMultiplayerFeatures.setEnabled(true)

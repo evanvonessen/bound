@@ -261,7 +261,7 @@ struct BoundAccountSocialSettings: View {
     @State private var email = ""
     @State private var password = ""
     var body: some View {
-        Section("Bound account") {
+        Section("Bound Account") {
             if account.deletionPending {
                 Button("Retry account deletion", role: .destructive) { retryAccountDeletion() }
                 .disabled(account.busy)
@@ -271,7 +271,7 @@ struct BoundAccountSocialSettings: View {
                     BoundAccountSecurityView(account: account) { email = $0 }
                 }
                     .accessibilityIdentifier("bound.account-security")
-                Toggle("Receive Jiggles", isOn: Binding(get: { notifications.enabled }, set: { value in
+                Toggle("Receive Notifications", isOn: Binding(get: { notifications.enabled }, set: { value in
                     Task { await notifications.setEnabled(value) }
                 })).disabled(notifications.busy).accessibilityIdentifier("bound.jiggles-enabled")
                 if !notifications.status.isEmpty { Text(notifications.status).font(.caption) }

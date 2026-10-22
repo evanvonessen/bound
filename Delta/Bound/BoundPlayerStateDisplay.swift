@@ -11,8 +11,8 @@ enum BoundPlayerStatePreferences {
 struct BoundPlayerStateSetting: View {
     @AppStorage(BoundPlayerStatePreferences.key) private var enabled = false
     var body: some View {
-        Section("Radical Red") {
-            Toggle("Player state display", isOn: $enabled)
+        Section {
+            Toggle("Player State Display", isOn: $enabled)
                 .accessibilityIdentifier("bound.player-state-enabled")
                 .onChange(of: enabled) { _, _ in
                     NotificationCenter.default.post(name: BoundPlayerStatePreferences.didChange, object: nil)
@@ -151,7 +151,7 @@ final class BoundPlayerStateDisplay {
     private var suspended = false
 
     init() {
-        for name in [BoundPlayerStatePreferences.didChange, BoundMultiplayerFeatures.didChange, Settings.didResetNotification] {
+        for name in [BoundPlayerStatePreferences.didChange, BoundMultiplayerFeatures.didChange, BoundDeveloperFeatures.didChange, Settings.didResetNotification] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     if name == Settings.didResetNotification || !BoundMultiplayerFeatures.isEnabled {
@@ -213,7 +213,7 @@ final class BoundPlayerStateDisplay {
         refreshPreference()
     }
 
-    private var enabled: Bool { BoundMultiplayerFeatures.isEnabled && UserDefaults.standard.bool(forKey: BoundPlayerStatePreferences.key) }
+    private var enabled: Bool { BoundMultiplayerFeatures.isEnabled && UserDefaults.standard.bool(forKey: BoundDeveloperFeatures.key) && UserDefaults.standard.bool(forKey: BoundPlayerStatePreferences.key) }
     private var supportsCore: Bool { core?.deltaCore.identifier == "com.rileytestut.GBADeltaCore" }
     var supportsRecording: Bool { supportsCore }
     private var needsScene: Bool { recordingSession.needsReader || presence?.needsReader == true }

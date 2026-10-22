@@ -39,3 +39,5 @@ The pass exercises real invite hashes/codes, counters/quotas, room creation/list
 ```
 
 The snapshot is a local input file, not generated or changed by the test. Queue idempotency records are retained for 30 days; older completed or abandoned queue rows are purged during dispatch. Neither test path connects to the hosted project.
+
+`bound-jiggle` version 6 was deployed on 2026-10-22 with the alert body `[friend_name] wants to play Pokémon!`. The downloaded version 5 source matched the repository before the one-line change; version 6 source was verified after deployment. All 17 mocked handler checks pass, and the deployed endpoint rejects an unauthenticated status request with 401. No real push was sent during validation.
