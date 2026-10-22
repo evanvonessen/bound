@@ -269,8 +269,12 @@ final class FriendSharingSession: ObservableObject {
         remoteVisible = false
     }
 
-    func updateSpectatorFreshness(received: Int, at timestamp: TimeInterval) {
-        if let timing = transport.frameTiming {
+    func updateSpectatorFreshness(received: Int, now: () -> TimeInterval = CACurrentMediaTime) {
+        // Decoding can finish after the display link's frame timestamp. Sample
+        // host time after the timing snapshot so a new frame cannot look stale.
+        let timing = transport.frameTiming
+        let timestamp = now()
+        if let timing {
             // SDK arrival counts include invalid/busy conversions. Only a new,
             // detached pixel frame may refresh the production Live indicator.
             if let converted = timing.converted, converted != lastConvertedFrame {
@@ -624,7 +628,7 @@ final class FriendSharingSession: ObservableObject {
             if self.remotePresentationEnabled || self.watchingPartner { self.transport.presentLatestFrame() }
             let cadence = self.receiverCadence.tick(at: timestamp)
             let received = self.transport.receivedFrames
-            self.updateSpectatorFreshness(received: received, at: timestamp)
+            self.updateSpectatorFreshness(received: received)
             if cadence.statistics {
                 if self.publishedFrames != self.transport.publishedFrames { self.publishedFrames = self.transport.publishedFrames }
                 if self.receivedFrames != received { self.receivedFrames = received }
