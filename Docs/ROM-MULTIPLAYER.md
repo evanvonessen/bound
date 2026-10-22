@@ -19,10 +19,11 @@ Press Select in the overworld for the friend/action menu. It includes Soul Link,
 battle, trade, Watch partner, Run timeline and explicit End Soul Link. Nearby battle
 and trade invitations retain the existing native dialogue and native link services.
 Battle/trade requests wait for the ROM menu to close before opening those services.
-The existing restriction on friendly battles and trades during an active Soul Link
-is retained: transient PvP deaths and traded encounter identities cannot yet be
-reconciled safely with permanent linked records. The native dialogue states this
-restriction. Watch partner opens the existing live video viewer from the ROM action.
+Friendly battles are available during Soul Link without permanent losses. Their
+temporary party HP, faint events and results are excluded from the run until the
+prebattle state is restored. Run saves defer or safely end the battle before
+capturing world state. Friend trades remain unavailable during an active run.
+Watch partner opens the existing live video viewer from the ROM action.
 
 A callback gate in the cartridge freezes both main callbacks, including battles
 and scripts, while its native disconnect/recovery dialogue remains responsive.

@@ -7,6 +7,25 @@ final class SoulLinkTests: XCTestCase {
         .init(identity: .init(personality: id, trainer: 42), species: 1, name: "Mon\(id)", area: area, eggOrigin: egg, isEgg: isEgg, hp: hp)
     }
     private func makeLedger() -> BoundSoulLedger { .init(run: UUID(), binding: String(repeating: "a", count: 64)) }
+    @MainActor
+    func testFriendlyBattlesRemainAvailableDuringSoulLinkWhileTradesStayBlocked() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("run.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let probe = BoundSoulProbe(); probe.configure(core: nil, url: url)
+        let session = BoundSoulSession(probe: probe)
+        XCTAssertTrue(session.permitsNativeActivity(.battle))
+        XCTAssertTrue(session.permitsNativeActivity(.trade))
+        session.setConnection(owner: "player", room: "room")
+        try session.startPreparedRun(run: UUID())
+        XCTAssertTrue(session.active)
+        XCTAssertTrue(session.permitsNativeActivity(.battle), "Walk-up friendly battles are available during an active linked run")
+        XCTAssertFalse(session.permitsNativeActivity(.trade), "Trades must preserve the existing linked-run restriction")
+        XCTAssertFalse(session.permitsIndependentStateLoading)
+        session.endRun()
+        XCTAssertFalse(session.active)
+        XCTAssertTrue(session.permitsNativeActivity(.battle))
+        XCTAssertTrue(session.permitsNativeActivity(.trade))
+    }
     func testRunTimelinePersistsBaselineCatchDeathTradeAndVictoryWithoutDuplicates() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("timeline.json")
         let history = BoundRunTimeline(); history.configure(url: url)

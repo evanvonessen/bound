@@ -119,8 +119,10 @@ remain the shared authority. All memorial metadata stays in the local journal.
 - A faint permanently marks the pair's slot dead. Both owned linked Pokémon
   become unusable; if the other player has not caught that area's Pokémon yet,
   their later catch is already barred. A further catch cannot replace a dead pair.
-- Friend battles and friend trades are unavailable during an active Soul Link
-  run. Normal friend battles/trades remain available outside the run.
+- Friendly battles do not create permanent losses. Bound restores the prebattle
+  state before normal death observation resumes, including after interruption.
+  Existing legitimate deaths stay enforced. Friend trades remain unavailable
+  during an active Soul Link run.
 
 ## Native enforcement and persistence
 

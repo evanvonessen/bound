@@ -183,7 +183,7 @@ final class BoundNativeBattleSession {
     private var backupURL:URL?
     private var journalURL:URL?
     private var originalRate=1.0
-    private struct Recovery { let state:URL; let journal:URL; let digest:String; var tradeBattery:Data? = nil }
+    private struct Recovery { let state:URL; let journal:URL; let digest:String; let friendlyBattle:Bool; var tradeBattery:Data? = nil }
     private var recovery:Recovery?
     private var recoveryFailed=false
     private(set) var observation:BoundNativeBattleObservation?
@@ -198,13 +198,17 @@ final class BoundNativeBattleSession {
     var tradeCompleted: ((UUID, Int) -> Void)?
     var restored:(()->Void)?
     var canResume:(()->Bool)?
+    var soulProbe:BoundSoulProbe?
     var isActive:Bool { id != nil || recovery != nil }
-    var blocksAutoSave:Bool { isActive || recoveryFailed || interactions?.nativeDialogueBusy == true }
+    var protectsTemporaryState:Bool { isActive || recoveryFailed }
+    var blocksAutoSave:Bool { protectsTemporaryState || interactions?.nativeDialogueBusy == true }
 
     func bind(core:EmulatorCore?,gameID:String,interactions:BoundFriendInteractionSession) {
         if self.core !== core || self.gameID != gameID {
             if recovery != nil { timer?.invalidate(); timer=nil; recovery=nil; probe.configure(core:nil) }
-            cancel(resume:false); earlyPreparation=nil; self.core=core; self.gameID=gameID; recoveryFailed=false
+            cancel(resume:false)
+            if let oldCore = self.core { soulProbe?.setFriendlyBattleActive(false, for:oldCore) }
+            earlyPreparation=nil; self.core=core; self.gameID=gameID; recoveryFailed=false
         }
         self.interactions=interactions
         if core != nil,!isActive { findRecovery() }
@@ -221,7 +225,8 @@ final class BoundNativeBattleSession {
         localFinished=false; peerFinished=false; entryQueued=false; played=false; peerLinkClosed=false
         deadline=ProcessInfo.processInfo.systemUptime+30
         interactions?.activityProgress(activity == .trade ? "Connecting trade…" : "Connecting battle…",playing:false)
-        guard core.pause(),BoundVBABattleBridge.verifyBattleReady() else { fail("Game is not ready for a link \(activity.rawValue)"); return }
+        guard core.pause(),BoundVBABattleBridge.verifyBattleEntryReady() else { fail("Game is not ready for a link \(activity.rawValue)"); return }
+        if activity == .battle { soulProbe?.setFriendlyBattleActive(true, for:core) }
         core.rate=core.deltaCore.supportedRates.lowerBound
         do {
             let folder=try FileManager.default.url(for:.applicationSupportDirectory,in:.userDomainMask,appropriateFor:nil,create:true)
@@ -391,6 +396,7 @@ final class BoundNativeBattleSession {
             } catch { recovered=false }
         }
         recoveryFailed = !recovered
+        if recovered, activity == .battle { soulProbe?.setFriendlyBattleActive(false, for:core) }
         backupURL=nil; journalURL=nil; core.rate=originalRate
         interactions?.activityEnded(recovered ? message : "Recovery snapshot kept. Reopen this game to restore it.")
         if didRestore {
@@ -446,7 +452,9 @@ final class BoundNativeBattleSession {
                       let name=value["state"],name==URL(fileURLWithPath:name).lastPathComponent,
                       UUID(uuidString:URL(fileURLWithPath:name).deletingPathExtension().lastPathComponent) != nil,
                       let digest=value["sha256"],digest.count==64 else { continue }
-                var pending = Recovery(state:folder.appendingPathComponent(name),journal:journal,digest:digest)
+                var pending = Recovery(state:folder.appendingPathComponent(name),journal:journal,digest:digest,
+                                       friendlyBattle:value["activity"] != "trade")
+                if pending.friendlyBattle { soulProbe?.setFriendlyBattleActive(true, for:core) }
                 if value["activity"] == "trade",value["tradeStarted"] == "true" {
                     // Bind runs before loading automatic states. Preserve the actual
                     // cartridge save, never flash data from a pre-trade save state.
@@ -496,6 +504,7 @@ final class BoundNativeBattleSession {
             try FileManager.default.removeItem(at:recovery.journal)
             try? FileManager.default.removeItem(at:recovery.state)
             self.recovery=nil; timer?.invalidate(); timer=nil
+            if recovery.friendlyBattle { soulProbe?.setFriendlyBattleActive(false, for:core) }
             interactions?.activityEnded("Your game was restored after an interrupted friendly battle")
             restored?()
             if canResume?() ?? true,core.state == .paused { _=core.resume() }

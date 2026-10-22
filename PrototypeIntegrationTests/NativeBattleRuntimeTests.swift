@@ -571,6 +571,8 @@ final class NativeBattleRuntimeTests:XCTestCase {
         }
         _ = core.pause()
         XCTAssertEqual(try position(),initial,"A disconnected linked run must block native movement")
+        XCTAssertFalse(BoundVBABattleBridge.verifyBattleEntryReady(), "Paused cartridge callbacks cannot admit a new friend battle")
+        XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady(), "Host pause policy must not invalidate a restored overworld snapshot")
         XCTAssertGreaterThan(try XCTUnwrap(probe.read()).frame,pausedFrame,"The mailbox keeps processing while gameplay is paused")
         host.connected = true; probe.publish(host); _ = core.resume(); try await waitForPause(false)
         var moved = false
@@ -672,6 +674,37 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertEqual(starterTeam.party.first?.slot,starter.slot)
         XCTAssertGreaterThan(starterTeam.party.first?.level ?? 0,0)
         XCTAssertGreaterThan(starterTeam.party.first?.maxHP ?? 0,0)
+        let friendlyBefore = output.appendingPathComponent("friendly-before.state")
+        core.saveSaveState(to: friendlyBefore)
+        let friendlyLedger = try XCTUnwrap(probe.read().ledger)
+        let friendlyJournal = try Data(contentsOf: journal)
+        let friendlyTimeline = probe.timeline.read().events
+        let friendlyHP = BoundVBABattleBridge.playerHP().map(\.intValue)
+        probe.setFriendlyBattleActive(true, for: core)
+        XCTAssertTrue(BoundVBABattleBridge.qaStartSoulCheck()); _ = core.resume()
+        try await Task.sleep(for: .milliseconds(250)); _ = core.pause()
+        let friendlyFaint = BoundVBABattleBridge.qaSoulCheckResult().map(\.intValue)
+        XCTAssertEqual(friendlyFaint.count, 3)
+        XCTAssertGreaterThan(friendlyFaint[1], 0, "The friendly battle fixture really faints and heals a Pokemon in native guest code")
+        XCTAssertEqual(friendlyFaint[1], friendlyFaint[2])
+        XCTAssertEqual(probe.read().ledger, friendlyLedger, "Temporary battle HP cannot change catches, deaths or memorials")
+        XCTAssertEqual(probe.read().ledger?.lossBits, friendlyLedger.lossBits, "No friendly battle loss can be sent to the partner")
+        XCTAssertEqual(probe.read().team, starterTeam, "Temporary battle team state must not replace the overworld team")
+        XCTAssertEqual(probe.timeline.read().events, friendlyTimeline)
+        XCTAssertEqual(try Data(contentsOf: journal), friendlyJournal, "Friendly battles must not rewrite the durable run journal")
+        let retainedFaints = try XCTUnwrap(BoundVBABattleBridge.soulLinkSnapshot()["faints"] as? Data)
+        XCTAssertEqual(retainedFaints, starter.identity.bytes, "Quarantine must not acknowledge the native faint buffer before recovery")
+        BoundVBABattleBridge.qaFinishSoulCheck()
+        try core.load(DeltaCore.SaveState(fileURL: friendlyBefore, gameType: .gba))
+        probe.setFriendlyBattleActive(false, for: core)
+        _ = core.resume(); try await Task.sleep(for: .milliseconds(200)); _ = core.pause()
+        XCTAssertEqual(BoundVBABattleBridge.playerHP().map(\.intValue), friendlyHP)
+        XCTAssertEqual(probe.read().ledger, friendlyLedger, "Restored temporary faints cannot become delayed permanent deaths")
+        XCTAssertEqual(probe.read().ledger?.memorials, friendlyLedger.memorials)
+        XCTAssertEqual(try Data(contentsOf: journal), friendlyJournal)
+        XCTAssertTrue((BoundVBABattleBridge.soulLinkSnapshot()["faints"] as? Data)?.isEmpty == true)
+        // The normal native faint below must still become permanent after the
+        // friendly battle fence has been released.
         probe.setNativeObservationAllowed(false)
         XCTAssertTrue(BoundVBABattleBridge.qaStartSoulCheck()); _ = core.resume()
         try await Task.sleep(for:.milliseconds(150)); _ = core.pause()
@@ -860,7 +893,10 @@ final class NativeBattleRuntimeTests:XCTestCase {
         owner.view.addSubview(gameView); core.add(gameView)
         let driver=NativeBattleDriver(core:core,profile:profile)
         let native=BoundNativeBattleSession(),interactions=BoundFriendInteractionSession(),probe=native.probe
-        core.updateHandler={ core in driver.receive(core); probe.receive(core) }
+        let soulProbe=BoundSoulProbe(),soulJournal=output.appendingPathComponent("run.json")
+        soulProbe.configure(core:core,url:soulJournal); soulProbe.setVerified(true); soulProbe.setPreviewEnabled(true)
+        native.soulProbe=soulProbe
+        core.updateHandler={ core in driver.receive(core); soulProbe.receive(core); probe.receive(core) }
         var channel:NativeBattleRelayChannel?
         defer {
             native.cancel(resume:false); channel?.close(); native.makeChannel=nil; native.sendControl=nil
@@ -869,8 +905,18 @@ final class NativeBattleRuntimeTests:XCTestCase {
         }
         core.rate=8; XCTAssertTrue(core.start())
         await fulfillment(of:[driver.booted],timeout:90)
+        for _ in 0..<20 {
+            if soulProbe.read().ready { break }
+            try await Task.sleep(for:.milliseconds(100))
+        }
         _=core.pause(); core.rate=1
         XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady())
+        try soulProbe.start(run:UUID(),binding:String(repeating:"a",count:64))
+        _=core.resume(); try await Task.sleep(for:.milliseconds(150)); _=core.pause()
+        let soulBefore=try XCTUnwrap(soulProbe.read().ledger)
+        let journalBefore=try Data(contentsOf:soulJournal)
+        let hpBefore=BoundVBABattleBridge.playerHP().map(\.intValue)
+        let timelineBefore=soulProbe.timeline.read().events
         let before=output.appendingPathComponent("before.state"); core.saveSaveState(to:before)
         native.bind(core:core,gameID:output.lastPathComponent,interactions:interactions)
         native.canResume={ true }
@@ -892,6 +938,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
             try await Task.sleep(for:.milliseconds(50))
         }
         XCTAssertTrue(entered,"Native entry failed: \(native.lastFailure), \(native.lastCableDiagnostic), result \(native.observation?.scriptResult ?? -1)")
+        XCTAssertEqual(soulProbe.read().ledger,soulBefore,"Native friend battle entry cannot mutate the Soul Link ledger")
         _=try await request(port:port,peer:peer,body:["stage":"entered"])
         for _ in 0..<200 {
             let status=try await request(port:port)
@@ -910,14 +957,22 @@ final class NativeBattleRuntimeTests:XCTestCase {
             XCTAssertTrue(done,"Native battle failed: \(native.lastFailure), \(native.lastCableDiagnostic)")
             XCTAssertTrue(driver.damaged,"A native move must change party HP")
         }
+        try await Task.sleep(for:.milliseconds(200))
         _=core.pause()
         XCTAssertEqual(native.restoredBattles,1)
+        XCTAssertEqual(BoundVBABattleBridge.playerHP().map(\.intValue),hpBefore,"Friendly completion and cancellation restore the prebattle party")
+        XCTAssertEqual(soulProbe.read().ledger,soulBefore,"Friendly battle faints never become permanent Soul Link deaths")
+        XCTAssertEqual(soulProbe.read().ledger?.lossBits,soulBefore.lossBits)
+        XCTAssertEqual(soulProbe.read().ledger?.memorials,soulBefore.memorials)
+        XCTAssertEqual(soulProbe.timeline.read().events,timelineBefore)
+        XCTAssertEqual(try Data(contentsOf:soulJournal),journalBefore)
+        XCTAssertNil(soulProbe.read().error)
         XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady())
         XCTAssertEqual(try Data(contentsOf:romURL),rom)
         XCTAssertEqual(try Data(contentsOf:seed),seedBytes)
         let report:[String:Any]=["stage":"done","entryOnly":entryOnly,"battle":entered,
             "damaged":driver.damaged,"restored":native.restoredBattles==1,"cable":native.lastCableDiagnostic,
-            "outcome":native.observation?.outcome ?? 0]
+            "outcome":native.observation?.outcome ?? 0,"soulLedgerUnchanged":soulProbe.read().ledger==soulBefore]
         try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("report.json"))
         _=try await request(port:port,peer:peer,body:report)
     }

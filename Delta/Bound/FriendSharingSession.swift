@@ -348,6 +348,7 @@ final class FriendSharingSession: ObservableObject {
         remoteView.backgroundColor = .black
         nativeBattle.makeChannel = { [weak self] receiver, failed in self?.transport.makeBattleChannel(receiver: receiver, failed: failed) }
         nativeBattle.sendControl = { [weak self] data in self?.transport.sendInteraction(data) == true }
+        nativeBattle.soulProbe = soulLink.probe
         sharedWorld.send = { [weak self] data in self?.transport.sendInteraction(data) == true }
         soulLink.send = { [weak self] data in self?.transport.sendInteraction(data) == true }
         soulLink.connected = { [weak self] in
@@ -357,8 +358,8 @@ final class FriendSharingSession: ObservableObject {
         soulLink.nativeActivity = { [weak nativeBattle] in nativeBattle?.isActive == true }
         interactions.agreed = { [weak self] activity, id, initiator in
             guard let self else { return }
-            guard self.soulLink.permitsNativeActivity else {
-                self.interactions.activityEnded("Battles and trades with friends are unavailable during Soul Link."); return
+            guard self.soulLink.permitsNativeActivity(activity) else {
+                self.interactions.activityEnded("Trades with friends are unavailable during Soul Link."); return
             }
             self.nativeBattle.begin(activity: activity, id: id, initiator: initiator)
         }

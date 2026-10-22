@@ -284,6 +284,18 @@ static uint8_t soulQAScriptBackup[128];
     if(word(internalRAM+0xF0C)!=0x0815F9B4||word(internalRAM+0xF10)!=0x0815FD08) return NO;
     verifiedROM=rom; failed=false; return YES;
 }
++ (BOOL)verifyBattleEntryReady {
+    if(![self verifyBattleReady]) return NO;
+    if(ownsROMUI()) {
+        const auto *host=rom+GameUIHostOffset;
+        const auto *state=workRAM+GameUIRequestAddress-0x02000000;
+        // Host save/recovery flags govern entry, not proof that rollback
+        // restored the world. They intentionally survive emulator snapshots.
+        if((word(host)==0x31495552 && (word(host+12)&(32|256|512)))
+           || (word(state)==0x31525552 && (word(state+80)&4))) return NO;
+    }
+    return YES;
+}
 + (BOOL)prepareBattleForPlayer:(NSUInteger)player {
     if(armed||verifiedROM!=rom||!overworld()||player>1) return NO;
     role=unsigned(player); tradeMode=false; armed=true; return YES;

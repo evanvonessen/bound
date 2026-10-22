@@ -120,7 +120,7 @@ final class BoundFriendInteractionPanel: UIView {
     private static func message(_ value:String)->String {
         if value.hasPrefix("Trade interrupted") { return "Trade interrupted.\nContinue your in-game save." }
         if value.contains("Reopen this game") { return "Recovery kept. Reopen this\ngame to continue." }
-        if value.contains("unavailable during Soul Link") { return "End Soul Link before\nbattling or trading friends." }
+        if value.contains("unavailable during Soul Link") { return "End Soul Link before\ntrading with friends." }
         // Native text has a 28-column field box. Wrap without control sequences
         // or names supplied by another account; the host's status is bounded.
         let words=value.replacingOccurrences(of:"…",with:"...").replacingOccurrences(of:"’",with:"'").replacingOccurrences(of:"·",with:".").components(separatedBy:.whitespacesAndNewlines)

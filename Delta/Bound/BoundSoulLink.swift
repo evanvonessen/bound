@@ -408,6 +408,7 @@ final class BoundSoulProbe: @unchecked Sendable {
     private var previewEnabled = false
     private var verified = false
     private var nativeObservationAllowed = true
+    private var friendlyBattleCoreID: ObjectIdentifier?
     private var coreID: ObjectIdentifier?
     private var url: URL?
     private var ledger: BoundSoulLedger?
@@ -421,6 +422,7 @@ final class BoundSoulProbe: @unchecked Sendable {
     func configure(core: EmulatorCore?, url: URL?) {
         lock.lock(); defer { lock.unlock() }
         self.coreID = core.map(ObjectIdentifier.init); self.url = url
+        if friendlyBattleCoreID != self.coreID { friendlyBattleCoreID = nil }
         verified = false; ledger = nil; installed = false; reachedField = false; frame = 0; snapshot = Snapshot(); lastPolicy = Data(); lastBoxes = Data(); cachedBoxes = []
         timeline.configure(url: url.map { $0.deletingPathExtension().appendingPathExtension("timeline.json") })
         guard let url, FileManager.default.fileExists(atPath: url.path) else { return }
@@ -436,6 +438,14 @@ final class BoundSoulProbe: @unchecked Sendable {
     func setPreviewEnabled(_ value: Bool) { lock.lock(); previewEnabled = value; lock.unlock() }
     func setVerified(_ value: Bool) { lock.lock(); verified = value; lock.unlock() }
     func setNativeObservationAllowed(_ value: Bool) { lock.lock(); nativeObservationAllowed = value; lock.unlock() }
+    /// Friendly battle RAM is temporary until its prebattle state is restored.
+    /// Keep this separate from run ownership: either fence can deny observation.
+    func setFriendlyBattleActive(_ active: Bool, for core: EmulatorCore) {
+        lock.lock(); defer { lock.unlock() }
+        let identity = ObjectIdentifier(core)
+        if active { friendlyBattleCoreID = identity }
+        else if friendlyBattleCoreID == identity { friendlyBattleCoreID = nil }
+    }
     func start(run: UUID, binding: String, offering: Bool = false) throws {
         lock.lock(); defer { lock.unlock() }
         guard snapshot.ready, (ledger == nil || ledger?.ended == true), snapshot.mons.count == 1, let starter = snapshot.mons.first,
@@ -533,7 +543,9 @@ final class BoundSoulProbe: @unchecked Sendable {
         // No ROM/RAM access on unrelated cores or before exact file verification.
         guard core.deltaCore.identifier == "com.rileytestut.GBADeltaCore" else { return }
         if ledger == nil || ledger?.ended == true { if frame % 30 != 1 { return } }
+        let friendlyBattle = friendlyBattleCoreID == ObjectIdentifier(core)
         if ledger != nil, ledger?.ended == false, !installed {
+            if friendlyBattle { return }
             installed = BoundVBABattleBridge.installSoulLink()
             if !installed { snapshot.error = "Soul Link requires the supported Radical Red 4.1 game."; return }
         }
@@ -545,6 +557,10 @@ final class BoundSoulProbe: @unchecked Sendable {
             }
             BoundVBABattleBridge.enforceSoulLink()
         }
+        // Do not consume events, zero HP, team changes or victory history from
+        // the temporary battle. Its state rollback restores the original faint
+        // buffer too, so genuine events pending before entry are not discarded.
+        guard !friendlyBattle else { return }
         let native = BoundVBABattleBridge.soulLinkSnapshot()
         let ready = native["ready"] as? Bool == true
         reachedField = reachedField || ready
@@ -650,7 +666,9 @@ final class BoundSoulSession: ObservableObject {
     }
     var active: Bool { ledger != nil && ledger?.ended == false }
     var paired: Bool { confirmed && clock() - lastPeer < 3 }
-    var permitsNativeActivity: Bool { !active }
+    func permitsNativeActivity(_ activity: BoundFriendInteractionPacket.Activity) -> Bool {
+        activity == .battle || !active
+    }
     var permitsIndependentStateLoading: Bool { !active && probe.read().error == nil }
     static func hasProtectedRun(gameID: String) -> Bool {
         let url = directory.appendingPathComponent(hash(gameID) + ".json")
@@ -960,7 +978,7 @@ struct BoundSoulControls: View {
             .confirmationDialog("Start Soul Link with this friend?", isPresented: $confirming, titleVisibility: .visible) {
                 Button("Start Soul Link") { if session.incoming != nil { session.accept() } else { session.invite() } }
             } message: {
-                Text("Start after receiving only your starter. One catch per named area, including raids. Eggs pair as Egg 1, Egg 2. Fainting permanently disables both linked Pokémon. Stay connected to play this run. Friend battles and trades are unavailable during the run.")
+                Text("Start after receiving only your starter. One catch per named area, including raids. Eggs pair as Egg 1, Egg 2. Fainting permanently disables both linked Pokémon, except in friendly battles. Stay connected to play this run. Trades are unavailable during the run.")
             }
         }
     }

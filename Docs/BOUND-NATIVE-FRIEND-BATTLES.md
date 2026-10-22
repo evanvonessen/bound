@@ -9,6 +9,16 @@ leaving sharing or losing the connection ends the friendly battle and restores
 the local pre-battle world. Quick saves and fast-forward are suppressed during
 battle; quick load ends the battle before loading the selected state.
 
+Friendly battles are also available during Soul Link. A core-scoped observation
+fence excludes temporary faint events, party HP, team changes and victory history
+from the durable run. It starts before native battle preparation and stays active
+until the prebattle state is verified restored. Interrupted battle recovery sets
+the same fence before guest frames resume; failed recovery retains it. The native
+faint buffer is restored with the snapshot, preserving genuine prebattle events.
+Already recorded losses remain enforced. Automatic paired checkpoints wait;
+explicit saves first end and restore the friendly battle. Recovery snapshots and
+run transfers cannot replace each other's temporary state.
+
 This entry supports only the SHA-256-verified Radical Red 4.1 profile already
 used by live presence. The player must be in an unlocked normal overworld scene
 with a party of 1–6. The native game performs party/link checks. Bound does not

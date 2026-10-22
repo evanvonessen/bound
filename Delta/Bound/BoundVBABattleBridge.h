@@ -19,6 +19,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)cancelFriendDialogue;
 + (NSDictionary<NSString *,id> *)advanceFriendDialogue;
 + (BOOL)verifyBattleReady;
++ (BOOL)verifyBattleEntryReady;
 + (BOOL)prepareBattleForPlayer:(NSUInteger)player;
 + (BOOL)prepareTradeForPlayer:(NSUInteger)player;
 + (BOOL)installBattleForPlayer:(NSUInteger)player;
