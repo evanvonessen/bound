@@ -60,7 +60,6 @@ class GamesViewController: UIViewController
         }
     }
     
-    private var hasRecentlyPlayed: Bool = false
     
     weak var activeEmulatorCore: EmulatorCore? {
         didSet
@@ -81,16 +80,8 @@ class GamesViewController: UIViewController
     }
     
     fileprivate var pages: [Page] {
-        var result: [Page] = []
         let gameCollections = self.fetchedResultsController.fetchedObjects as? [GameCollection] ?? []
-        if !gameCollections.isEmpty {
-            result.append(.favorites)
-        }
-        if self.hasRecentlyPlayed {
-            result.append(.recentlyPlayed)
-        }
-        result += gameCollections.map { .gameCollection($0) }
-        return result
+        return gameCollections.filter { $0.system == .gba }.map { .gameCollection($0) }
     }
     
     override var preferredStatusBarStyle: UIStatusBarStyle {
@@ -102,8 +93,6 @@ class GamesViewController: UIViewController
     private var pageControl: PageControlView!
     
     private let fetchedResultsController: NSFetchedResultsController<NSFetchRequestResult>
-    private let favoritesFetchedResultsController: NSFetchedResultsController<Game>
-    private let recentlyPlayedFetchedResultsController: NSFetchedResultsController<Game>
     
     private var searchController: RSTSearchController?
     private lazy var importController: ImportController = self.makeImportController()
@@ -132,21 +121,9 @@ class GamesViewController: UIViewController
                 
         self.fetchedResultsController = NSFetchedResultsController(fetchRequest: fetchRequest, managedObjectContext: DatabaseManager.shared.viewContext, sectionNameKeyPath: nil, cacheName: nil)
         
-        let favoritesFetchRequest = Game.favoritesFetchRequest
-        favoritesFetchRequest.fetchLimit = 1
-        self.favoritesFetchedResultsController = NSFetchedResultsController<Game>(fetchRequest: favoritesFetchRequest, managedObjectContext: DatabaseManager.shared.viewContext, sectionNameKeyPath: nil, cacheName: nil)
-        
-        let recentlyPlayedFetchRequest = Game.fetchRequest() as NSFetchRequest<Game>
-        recentlyPlayedFetchRequest.fetchLimit = 1
-        recentlyPlayedFetchRequest.sortDescriptors = [NSSortDescriptor(keyPath: \Game.playedDate, ascending: false)]
-        recentlyPlayedFetchRequest.predicate = NSPredicate(format: "%K != nil", #keyPath(Game.playedDate), #keyPath(Game.playedDate))
-        self.recentlyPlayedFetchedResultsController = NSFetchedResultsController<Game>(fetchRequest: recentlyPlayedFetchRequest, managedObjectContext: DatabaseManager.shared.viewContext, sectionNameKeyPath: nil, cacheName: nil)
-        
         super.init(coder: aDecoder)
         
         self.fetchedResultsController.delegate = self
-        self.favoritesFetchedResultsController.delegate = self
-        self.recentlyPlayedFetchedResultsController.delegate = self
         
         NotificationCenter.default.addObserver(self, selector: #selector(GamesViewController.syncingDidStart(_:)), name: SyncCoordinator.didStartSyncingNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(GamesViewController.syncingDidFinish(_:)), name: SyncCoordinator.didFinishSyncingNotification, object: nil)
@@ -256,11 +233,7 @@ extension GamesViewController
     {
         super.viewWillAppear(animated)
         
-        let favoritesDidFetch = self.favoritesFetchedResultsController.performFetchIfNeeded()
-        let recentlyPlayedDidFetch = self.recentlyPlayedFetchedResultsController.performFetchIfNeeded()
-        let collectionsDidFetch = self.fetchedResultsController.performFetchIfNeeded()
-        
-        if favoritesDidFetch || recentlyPlayedDidFetch || collectionsDidFetch
+        if self.fetchedResultsController.performFetchIfNeeded()
         {
             self.updateSections(animated: false)
         }
@@ -440,9 +413,6 @@ private extension GamesViewController
     
     func updateSections(animated: Bool)
     {
-        let hasRecentlyPlayed = self.recentlyPlayedFetchedResultsController.fetchedObjects?.count ?? 0 > 0
-        self.hasRecentlyPlayed = hasRecentlyPlayed
-        
         let sections = self.pages.count
         self.pageControl.model.indicators = self.pages.map { $0.pageIndicator }
         
@@ -458,7 +428,7 @@ private extension GamesViewController
             else
             {
                 resetPageViewController = true
-                self.pageControl.model.currentPage = min(1, self.pages.count - 1)
+                self.pageControl.model.currentPage = 0
             }
         }
         
@@ -478,7 +448,7 @@ private extension GamesViewController
             // Reset page view controller if currently hidden or current child should view controller no longer exists
             if self.pageViewController.view.isHidden || resetPageViewController
             {
-                let index = min(1, self.pages.count - 1) // Recents page, or first game system
+                let index = 0
                 
                 if let viewController = self.viewControllerForIndex(index)
                 {
