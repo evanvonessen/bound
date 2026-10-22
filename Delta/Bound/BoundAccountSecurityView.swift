@@ -12,6 +12,7 @@ struct BoundAccountSecurityView: View {
     @State private var operationID = UUID()
     @State private var factorToRemove: String?
     @State private var passkeyToRemove: String?
+    @State private var showingEmailChange = false
 
     private var authenticatorFactors: [BoundSecurityFactor] {
         account.securityFactors.filter { $0.factorType == "totp" }
@@ -32,6 +33,9 @@ struct BoundAccountSecurityView: View {
             if account.session == nil {
                 Section { Text("Sign in to manage your account security.") }
             } else {
+                Section("Email") {
+                    BoundAccountEmailText(account: account) { showingEmailChange = true }
+                }
                 Section("Password") {
                     BoundAccountPasswordResetLink(account: account)
                 }
@@ -51,6 +55,10 @@ struct BoundAccountSecurityView: View {
             }
         }
         .navigationTitle("Account security")
+        .sheet(isPresented: $showingEmailChange) {
+            BoundChangeEmailView(account: account)
+                .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+        }
         .task(id: account.securityIdentityID) {
             operationID = UUID(); submission?.cancel(); submission = nil
             clearInputs()

@@ -2177,20 +2177,25 @@ struct BoundAccountSignInFields: View {
     }
 }
 
-/// Keep the account address grey while providing a password-protected change sheet.
+/// Show the current address alongside an explicit password-protected change action.
 struct BoundAccountEmailText: View {
     @ObservedObject var account: BoundFriendAccount
     var changeEmail: () -> Void = {}
     var body: some View {
         if account.session != nil {
             Button(action: changeEmail) {
-                Text(account.emailAddress ?? "Email unavailable")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Text("Change email")
+                    Spacer()
+                    Text(account.emailAddress ?? "Email unavailable")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.trailing)
+                }
             }
             .buttonStyle(.plain)
-            .disabled(account.emailAddress == nil || account.busy || account.changingEmail || account.deletionPending)
-            .accessibilityLabel("Account email")
+            .disabled(account.busy || account.securityBusy || account.changingEmail || account.deletionPending)
+            .accessibilityLabel("Change email")
             .accessibilityValue(account.emailAddress ?? "Email unavailable")
             .accessibilityHint("Change your email using your current password")
             .accessibilityIdentifier("bound.account-email")
