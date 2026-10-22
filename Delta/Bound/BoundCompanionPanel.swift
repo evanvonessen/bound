@@ -697,6 +697,10 @@ final class BoundCompanionCoordinator {
     func bind(core: EmulatorCore?, gameID: String) {
         sharing.nativeBattle.bind(core: core, gameID: gameID, interactions: sharing.interactions)
         sharing.soulLink.bind(core: core, gameID: gameID)
+        sharing.nativeBattle.tradeCompleted = { [weak soul = sharing.soulLink] id, count in
+            soul?.probe.timeline.append(id: "trade:" + id.uuidString, kind: .trade,
+                                        title: count == 1 ? "Trade completed" : "\(count) trades completed")
+        }
         sharing.sharedWorld.bind(core: core)
         sharing.nativeBattle.restored = { [weak owner] in
             guard let owner, let core = owner.emulatorCore else { return }
@@ -1907,6 +1911,7 @@ struct BoundFriendsSheet: View {
                 if account.session != nil {
                     BoundLivePresenceControls(session: sharing.livePresence)
                     BoundSoulControls(session: sharing.soulLink)
+                    BoundRunTimelineControls(timeline: sharing.soulLink.probe.timeline)
                     BoundPartnerSpectatorControls(sharing: sharing)
                     Section("Friends") {
                         if !onboarding.message.isEmpty {

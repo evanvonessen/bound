@@ -403,6 +403,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         var error: String?
         var activeDenied = false
     }
+    let timeline = BoundRunTimeline()
     private let lock = NSRecursiveLock()
     private var previewEnabled = false
     private var verified = false
@@ -420,6 +421,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         self.coreID = core.map(ObjectIdentifier.init); self.url = url
         verified = false; ledger = nil; installed = false; reachedField = false; frame = 0; snapshot = Snapshot(); lastPolicy = Data(); lastBoxes = Data(); cachedBoxes = []
+        timeline.configure(url: url.map { $0.deletingPathExtension().appendingPathExtension("timeline.json") })
         guard let url, FileManager.default.fileExists(atPath: url.path) else { return }
         do {
             let data = try Data(contentsOf: url)
@@ -530,6 +532,8 @@ final class BoundSoulProbe: @unchecked Sendable {
         let boxBytes = native["boxes"] as? Data ?? Data()
         let boxesChanged = ready && boxBytes != lastBoxes
         if boxesChanged { lastBoxes = boxBytes; cachedBoxes = BoundSoulMon.decode(boxBytes, stride: 58) }
+        timeline.observe(mons: party + cachedBoxes, ready: ready, battle: native["battle"] as? Bool == true,
+                         outcome: native["outcome"] as? Int ?? 0, flags: native["battleFlags"] as? UInt32 ?? 0)
         snapshot.ready = ready
         if ready { snapshot.mons = party + cachedBoxes }
         guard reachedField, var value = ledger, !value.ended else { return }
@@ -826,6 +830,7 @@ final class BoundSoulSession: ObservableObject {
         probe.setPreviewEnabled(BoundMultiplayerFeatures.isEnabled)
         defer { updateTeams(at: now); updateDeathMoment(at: now); bannerChanged?((probe.read().error != nil || (active && !paired)) ? status : nil) }
         let snapshot = probe.read(); if snapshot.ledger != ledger { ledger = snapshot.ledger }
+        if let ledger { probe.timeline.observeSoul(ledger) }
         canStart = BoundMultiplayerFeatures.isEnabled && supported && snapshot.ready && snapshot.mons.count == 1
             && !snapshot.mons.contains(where: { $0.eggOrigin || ($0.hp ?? 0) <= 0 })
             && (ledger == nil || ledger?.ended == true) && binding != nil && connected?() == true && nativeActivity?() != true
@@ -1111,5 +1116,153 @@ final class BoundSoulBanner: UILabel {
         guard text != message || isHidden != (message == nil) else { return }
         text = message; isHidden = message == nil
         if message != nil { superview?.bringSubviewToFront(self) }
+    }
+}
+
+struct BoundRunEvent: Codable, Equatable, Identifiable, Sendable {
+    enum Kind: String, Codable, CaseIterable { case catchPokemon, death, trade, victory }
+    let id: String
+    let date: Date
+    let kind: Kind
+    let title: String
+    let detail: String
+    var symbol: String {
+        switch kind {
+        case .catchPokemon: return "circle.inset.filled"
+        case .death: return "heart.slash"
+        case .trade: return "arrow.left.arrow.right"
+        case .victory: return "trophy"
+        }
+    }
+}
+
+/// Append-only per-game history. The frame owner and UI share this locked store;
+/// persistence succeeds before new history becomes visible. It never writes saves.
+final class BoundRunTimeline: @unchecked Sendable {
+    struct Journal: Codable {
+        var version = 1
+        var events: [BoundRunEvent] = []
+        var known: Set<BoundSoulIdentity> = []
+        var initialized = false
+    }
+    private let lock = NSRecursiveLock()
+    private var journal = Journal()
+    private var url: URL?
+    private var error: String?
+    private var inBattle = false
+    private var battleID: UUID?
+    private var battleFlags: UInt32 = 0
+    func configure(url: URL?) {
+        lock.lock(); defer { lock.unlock() }
+        self.url = url; journal = Journal(); error = nil; inBattle = false; battleID = nil
+        guard let url, FileManager.default.fileExists(atPath: url.path) else { return }
+        do {
+            let bytes = try Data(contentsOf: url)
+            guard bytes.count <= 8_388_608 else { throw BoundSoulLedger.Error.capacity }
+            let value = try JSONDecoder().decode(Journal.self, from: bytes)
+            guard value.version == 1, value.events.count <= 20000, value.known.count <= 20000,
+                  Set(value.events.map(\.id)).count == value.events.count,
+                  value.events.allSatisfy({ $0.id.count <= 180 && $0.title.count <= 100 && $0.detail.count <= 200 && $0.date.timeIntervalSince1970.isFinite }) else { throw BoundSoulLedger.Error.corrupt }
+            journal = value
+        } catch { self.error = "Run history couldn’t be read." }
+    }
+    func read() -> (events: [BoundRunEvent], error: String?) {
+        lock.lock(); defer { lock.unlock() }; return (journal.events, error)
+    }
+    private func save(_ value: Journal) throws {
+        guard let url, value.events.count <= 20000, value.known.count <= 20000 else { throw BoundSoulLedger.Error.capacity }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try JSONEncoder().encode(value).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        journal = value
+    }
+    func append(id: String, kind: BoundRunEvent.Kind, title: String, detail: String = "", at date: Date = Date()) {
+        lock.lock(); defer { lock.unlock() }
+        guard error == nil, url != nil, !journal.events.contains(where: { $0.id == id }) else { return }
+        var value = journal
+        value.events.append(.init(id: id, date: date, kind: kind, title: title, detail: detail))
+        do { try save(value) } catch { self.error = "Run history couldn’t be saved." }
+    }
+    func observe(mons: [BoundSoulMon], ready: Bool, battle: Bool, outcome: Int, flags: UInt32, at date: Date = Date()) {
+        lock.lock(); defer { lock.unlock() }
+        guard error == nil, url != nil else { return }
+        // Ignore link/scripted demonstrations; never claim a victory from a
+        // loaded outcome byte without observing a battle in this session.
+        if battle && !inBattle { battleID = UUID(); battleFlags = flags }
+        if battle { battleFlags |= flags }
+        if !battle && inBattle, let id = battleID, outcome == 1, battleFlags & 0x10222 == 0 {
+            append(id: "victory:" + id.uuidString, kind: .victory,
+                   title: battleFlags & 8 != 0 ? "Trainer battle won" : "Wild battle won", at: date)
+        }
+        inBattle = battle
+        guard ready else { return }
+        var value = journal
+        for mon in mons where !value.known.contains(mon.identity) {
+            if value.initialized {
+                value.events.append(.init(id: "catch:\(mon.identity.personality):\(mon.identity.trainer)", date: date,
+                    kind: .catchPokemon, title: mon.isEgg ? "Egg received" : "Acquired \(mon.name)", detail: "Area \(mon.area)"))
+            }
+            value.known.insert(mon.identity)
+        }
+        value.initialized = true
+        if value.known != journal.known || value.initialized != journal.initialized {
+            do { try save(value) } catch { self.error = "Run history couldn’t be saved." }
+        }
+    }
+    func observeSoul(_ ledger: BoundSoulLedger) {
+        for death in ledger.memorials ?? [] {
+            // Undated migrated losses are historical, not fabricated new events.
+            guard let date = death.recordedAt else { continue }
+            append(id: "death:\(ledger.run.uuidString):\(death.slot)", kind: .death,
+                   title: "Linked pair lost", detail: death.names, at: date)
+        }
+    }
+}
+
+struct BoundRunTimelineView: View {
+    let timeline: BoundRunTimeline
+    @State private var events: [BoundRunEvent] = []
+    @State private var error: String?
+    @State private var filter: BoundRunEvent.Kind?
+    private let refresh = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    private func load() { let snapshot = timeline.read(); events = snapshot.events; error = snapshot.error }
+    var body: some View {
+        List {
+            Picker("Show", selection: $filter) {
+                Text("All events").tag(BoundRunEvent.Kind?.none)
+                Text("Catches").tag(Optional(BoundRunEvent.Kind.catchPokemon))
+                Text("Deaths").tag(Optional(BoundRunEvent.Kind.death))
+                Text("Trades").tag(Optional(BoundRunEvent.Kind.trade))
+                Text("Victories").tag(Optional(BoundRunEvent.Kind.victory))
+            }
+            if let error { Text(error).foregroundStyle(.secondary) }
+            let visible = events.reversed().filter { filter == nil || $0.kind == filter }.sorted { $0.date > $1.date }
+            if visible.isEmpty { Text("No events yet").foregroundStyle(.secondary) }
+            ForEach(visible) { event in
+                Label {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(event.title)
+                        if !event.detail.isEmpty { Text(event.detail).font(.caption).foregroundStyle(.secondary) }
+                        Text(event.date, format: .dateTime.month().day().hour().minute()).font(.caption2).foregroundStyle(.secondary)
+                    }
+                } icon: { Image(systemName: event.symbol) }
+            }
+        }
+        .navigationTitle("Run timeline")
+        .accessibilityIdentifier("bound.run-timeline")
+        .onAppear { load() }
+        .onReceive(refresh) { _ in load() }
+    }
+}
+
+struct BoundRunTimelineControls: View {
+    let timeline: BoundRunTimeline
+    var body: some View {
+        Section {
+            NavigationLink {
+                BoundRunTimelineView(timeline: timeline)
+            } label: {
+                Label("Run timeline", systemImage: "clock.arrow.circlepath")
+            }
+        }
     }
 }

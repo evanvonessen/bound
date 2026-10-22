@@ -407,6 +407,7 @@ static uint8_t soulQAScriptBackup[128];
         }
     }
     return @{@"ready":@(ready),@"battle":@((internalRAM[0x3529]&2)!=0),@"party":[NSData dataWithBytes:workRAM+0x24284 length:n*100],
+             @"outcome":@(workRAM[0x23E8A]),@"battleFlags":@(word(workRAM+0x22B4C)),
              @"boxes":boxes,@"faints":faints,@"battleFaints":active,@"overflow":@(overflow)};
 }
 + (void)acknowledgeSoulLinkFaints {

@@ -7,6 +7,66 @@ final class SoulLinkTests: XCTestCase {
         .init(identity: .init(personality: id, trainer: 42), species: 1, name: "Mon\(id)", area: area, eggOrigin: egg, isEgg: isEgg, hp: hp)
     }
     private func makeLedger() -> BoundSoulLedger { .init(run: UUID(), binding: String(repeating: "a", count: 64)) }
+    func testRunTimelinePersistsBaselineCatchDeathTradeAndVictoryWithoutDuplicates() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("timeline.json")
+        let history = BoundRunTimeline(); history.configure(url: url)
+        let date = Date(timeIntervalSince1970: 100)
+        history.observe(mons: [mon(1)], ready: true, battle: false, outcome: 1, flags: 0, at: date)
+        XCTAssertTrue(history.read().events.isEmpty, "Existing catches and stale outcomes are not new events")
+        history.observe(mons: [mon(1), mon(2, area: 101)], ready: true, battle: false, outcome: 0, flags: 0, at: date)
+        history.observe(mons: [], ready: false, battle: true, outcome: 0, flags: 8, at: date)
+        history.observe(mons: [], ready: false, battle: false, outcome: 1, flags: 8, at: date)
+        history.observe(mons: [], ready: false, battle: false, outcome: 1, flags: 8, at: date)
+        history.append(id: "trade:fixture", kind: .trade, title: "Trade completed", at: date)
+        history.append(id: "trade:fixture", kind: .trade, title: "Trade completed", at: date)
+        var ledger = makeLedger()
+        try ledger.observe([mon(1)], registering: true, fainted: [])
+        ledger.dead.insert("area:100"); ledger.recordDeaths(previous: [], at: date)
+        history.observeSoul(ledger); history.observeSoul(ledger)
+        XCTAssertEqual(history.read().events.map(\.kind), [.catchPokemon, .victory, .trade, .death])
+        let reopened = BoundRunTimeline(); reopened.configure(url: url)
+        XCTAssertEqual(reopened.read().events, history.read().events)
+        reopened.observe(mons: [mon(2, area: 101)], ready: true, battle: false, outcome: 1, flags: 8)
+        XCTAssertEqual(reopened.read().events.count, 4)
+        XCTAssertNil(reopened.read().error)
+    }
+    func testRunTimelineIgnoresLossEscapeLinkAndHistoricalDeathsAndPreservesCorruption() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("timeline.json")
+        let history = BoundRunTimeline(); history.configure(url: url)
+        for (outcome, flags) in [(2, UInt32(8)), (4, 0), (1, 2), (1, 0x200), (1, 0x10000)] {
+            history.observe(mons: [], ready: false, battle: true, outcome: 0, flags: flags)
+            history.observe(mons: [], ready: false, battle: false, outcome: outcome, flags: flags)
+        }
+        var ledger = makeLedger(); ledger.dead.insert("area:100"); ledger.recordDeaths(previous: ledger.dead)
+        history.observeSoul(ledger)
+        XCTAssertTrue(history.read().events.isEmpty)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let corrupt = Data("broken".utf8); try corrupt.write(to: url)
+        history.configure(url: url)
+        history.append(id: "new", kind: .trade, title: "Trade completed")
+        XCTAssertNotNil(history.read().error)
+        XCTAssertEqual(try Data(contentsOf: url), corrupt)
+    }
+
+    @MainActor
+    func testRunTimelineRendersAllFourEventKinds() throws {
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("RunTimelineQA")
+        let history = BoundRunTimeline(); history.configure(url: root.appendingPathComponent(UUID().uuidString + ".json"))
+        for (i, kind) in BoundRunEvent.Kind.allCases.enumerated() {
+            history.append(id: "render:\(i)", kind: kind, title: ["Acquired Pikachu", "Linked pair lost", "Trade completed", "Trainer battle won"][i], detail: "Route 24", at: Date(timeIntervalSince1970: 1792656000 + Double(i)))
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first { $0.isKeyWindow }, window = UIWindow(windowScene: scene)
+        let host = UIHostingController(rootView: NavigationStack { BoundRunTimelineView(timeline: history) })
+        window.rootViewController = host; window.makeKeyAndVisible(); host.view.layoutIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+        try XCTUnwrap(image.pngData()).write(to: root.appendingPathComponent("timeline.png"))
+        let attachment = XCTAttachment(image: image); attachment.lifetime = .keepAlways; add(attachment)
+        window.isHidden = true; previous?.makeKeyAndVisible()
+        XCTAssertEqual(history.read().events.count, 4)
+    }
+
     func testGrassFishingAndRaidShareExactlyOneAreaSlotIncludingBoxedCatches() throws {
         var ledger = makeLedger()
         try ledger.observe([mon(1)], registering: true, fainted: [])

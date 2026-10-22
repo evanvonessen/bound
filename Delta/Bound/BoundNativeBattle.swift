@@ -195,6 +195,7 @@ final class BoundNativeBattleSession {
     private(set) var completedTrades=0
     var makeChannel:((@escaping @Sendable (Data)->Void,@escaping @Sendable ()->Void)->(any BoundBattleChannel)?)?
     var sendControl:((Data)->Bool)?
+    var tradeCompleted: ((UUID, Int) -> Void)?
     var restored:(()->Void)?
     var canResume:(()->Bool)?
     var isActive:Bool { id != nil || recovery != nil }
@@ -356,7 +357,7 @@ final class BoundNativeBattleSession {
         lastFailure=message; _=emit(.abort); finish(message:message,resume:true)
     }
     private func finish(message:String,resume:Bool) {
-        guard id != nil else { return }
+        guard let finishedID = id else { return }
         id=nil; timer?.invalidate(); timer=nil
         // Fence background delivery before pausing the sole native RAM owner.
         lastCableDiagnostic=(wire?.diagnostics ?? "no wire")+" "+probe.diagnostics
@@ -370,7 +371,7 @@ final class BoundNativeBattleSession {
         probe.configure(core:nil)
         BoundVBABattleBridge.close()
         if tradeWasOpened {
-            finishTrade(core:core,message:message,resume:resume)
+            finishTrade(core:core,message:message,resume:resume, tradeID: finishedID)
             return
         }
         var didRestore=false
@@ -401,7 +402,7 @@ final class BoundNativeBattleSession {
         }
         if recovered,resume,canResume?() ?? true,core.state == .paused { _=core.resume() }
     }
-    private func finishTrade(core:EmulatorCore,message:String,resume:Bool) {
+    private func finishTrade(core:EmulatorCore,message:String,resume:Bool, tradeID: UUID) {
         // Native trade owns party swap, mail, Dex, evolution and its linked save
         // protocol. Retain those changes; a battle-style state rollback duplicates
         // or destroys exchanged Pokémon. Interrupted trades boot the native save.
@@ -410,7 +411,11 @@ final class BoundNativeBattleSession {
         if !finished { success=core.stop() && core.start() }
         core.rate=originalRate
         if success {
-            if finished { completedTrades += observation?.tradeCount ?? 0 }
+            if finished {
+                let count = observation?.tradeCount ?? 0
+                completedTrades += count
+                if count > 0 { tradeCompleted?(tradeID, count) }
+            }
             do {
                 if let journalURL { try FileManager.default.removeItem(at:journalURL) }
                 if let backupURL { try? FileManager.default.removeItem(at:backupURL) }
