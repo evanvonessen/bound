@@ -1907,6 +1907,7 @@ struct BoundFriendsSheet: View {
                 if account.session != nil {
                     BoundLivePresenceControls(session: sharing.livePresence)
                     BoundSoulControls(session: sharing.soulLink)
+                    BoundPartnerSpectatorControls(sharing: sharing)
                     Section("Friends") {
                         if !onboarding.message.isEmpty {
                             Text(onboarding.message).font(.caption)
@@ -2417,5 +2418,46 @@ struct BoundDeleteAccountView: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button(account.session == nil ? "Done" : "Cancel") { dismiss() }.disabled(account.busy) } }
             .task { await account.loadDeletionIdentity() }
             .interactiveDismissDisabled(account.busy)
+    }
+}
+
+
+/// A separate canvas preserves the companion screen when the watch sheet closes.
+struct BoundPartnerSpectatorControls: View {
+    @ObservedObject var sharing: FriendSharingSession
+    @State private var showing = false
+    var body: some View {
+        Section("Partner battle") {
+            Button("Watch partner", systemImage: "play.rectangle") {
+                sharing.watchPartner()
+                showing = sharing.watchingPartner
+            }
+            .disabled(!sharing.active || !sharing.joined || sharing.reconnecting)
+            .accessibilityIdentifier("bound.watch-partner")
+        }
+        .fullScreenCover(isPresented: $showing, onDismiss: { sharing.stopWatchingPartner() }) {
+            NavigationStack {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    BoundRemoteCanvas(view: sharing.spectatorView, hidesAccessibilityChildren: true)
+                        .aspectRatio(1.5, contentMode: .fit)
+                        .opacity(sharing.spectatorLive ? 1 : 0)
+                    if !sharing.spectatorLive {
+                        Text(sharing.reconnecting ? "Reconnecting…" : "Waiting for live partner video…")
+                            .foregroundStyle(.white)
+                    }
+                }
+                .navigationTitle(sharing.spectatorLive ? "Partner · Live" : "Partner")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Close") { showing = false }
+                    }
+                }
+            }
+            .onChange(of: sharing.watchingPartner) { _, watching in
+                if !watching { showing = false }
+            }
+        }
     }
 }

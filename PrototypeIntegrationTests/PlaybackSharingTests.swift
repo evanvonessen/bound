@@ -64,6 +64,9 @@ private final class TransitionCount: @unchecked Sendable {
     let callbacks = AgoraSharingCallbacks(remoteUID: 2) { _, _ in }
     let presenter = FriendSharingCanvasPresenter()
     private var host: UIView?
+    private var spectator: UIView?
+    let spectatorPresenter = FriendSharingCanvasPresenter()
+    func setSpectatorView(_ view: UIView?) { spectatorPresenter.clear(); spectator = view }
     private var generation = 0
     private(set) var publishedFrames = 0
     var receivedFrames: Int { callbacks.receivedFrames }
@@ -113,7 +116,10 @@ private final class TransitionCount: @unchecked Sendable {
     private(set) var presentationCalls = 0
     func presentLatestFrame() {
         presentationCalls += 1
-        if let host, let pixels = callbacks.takeLatestPixels() { presenter.present(pixels, in: host) }
+        if let host, let pixels = callbacks.takeLatestPixels() {
+            presenter.present(pixels, in: host)
+            if let spectator { spectatorPresenter.present(pixels, in: spectator) }
+        }
     }
     func interrupt() { callbacks.suspendFrames(); presenter.clear(); event?(.reconnecting) }
     func recover() { callbacks.resumeFrames(); event?(.rejoined) }
@@ -322,6 +328,35 @@ private final class TransitionCount: @unchecked Sendable {
         XCTAssertEqual(transport.presentationCalls, calls)
         XCTAssertTrue(session.active)
     }
+    func testSpectatingReceivesPixelsWithCompanionHiddenAndClosesIndependently() async throws {
+        let transport = OfflineVideoTransport()
+        let session = FriendSharingSession(configuration: configuration(), transport: transport, authenticatedMode: false)
+        session.setRemotePresentationEnabled(false)
+        session.start(); defer { session.stop() }
+        session.watchPartner()
+        for i in 1...4 {
+            session.receivePlaybackFrame(GameFrame(rgba: FriendSharingPixels.rgba(sequence: UInt64(i), uid: 2), number: UInt64(i), buttons: 0))
+            try await wait(0.1)
+        }
+        XCTAssertTrue(session.spectatorLive)
+        XCTAssertTrue(transport.spectatorPresenter.isVisible)
+        XCTAssertEqual(session.spectatorView.subviews.count, 1)
+        transport.interrupt()
+        XCTAssertFalse(session.spectatorLive)
+        transport.recover()
+        XCTAssertFalse(session.spectatorLive, "Rejoining cannot label a retained frame live")
+        session.receivePlaybackFrame(GameFrame(rgba: FriendSharingPixels.rgba(sequence: 5, uid: 2), number: 5, buttons: 0))
+        try await wait(0.2)
+        XCTAssertTrue(session.spectatorLive)
+        session.stopWatchingPartner()
+        XCTAssertTrue(session.active)
+        XCTAssertTrue(session.spectatorView.subviews.isEmpty)
+        XCTAssertTrue(transport.presenter.isVisible)
+        let calls = transport.presentationCalls
+        try await wait(0.15)
+        XCTAssertEqual(transport.presentationCalls, calls)
+    }
+
     func testDecodedFrameDiagnosticsAreDisabledInRelease() {
         let callbacks = AgoraSharingCallbacks(remoteUID: 2) { _, _ in }
         var samples = 0

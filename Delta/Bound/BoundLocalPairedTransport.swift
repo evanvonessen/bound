@@ -21,6 +21,8 @@ final class BoundLocalPairedTransport: FriendSharingTransport {
     private let outgoing = AgoraOutgoingPixels()
     private let callbacks = AgoraSharingCallbacks(remoteUID: 2) { _, _ in }
     private let presenter = FriendSharingCanvasPresenter()
+    private let spectatorPresenter = FriendSharingCanvasPresenter()
+    private weak var spectatorView: UIView?
     private let session: URLSession
     private var host: UIView?
     private var event: (@MainActor (FriendSharingEvent) -> Void)?
@@ -66,13 +68,13 @@ final class BoundLocalPairedTransport: FriendSharingTransport {
         generation = UUID(); running = false; online = false
         outgoingPending?.cancel(); pollTask?.cancel(); reportTask?.cancel()
         event = nil; host = nil; pendingEvidence = nil
-        callbacks.resetFrames(enabled: false); presenter.clear(); report(force: true)
+        callbacks.resetFrames(enabled: false); presenter.clear(); spectatorPresenter.clear(); spectatorView = nil; report(force: true)
     }
     private func changeEpoch(_ newer: Int) {
         guard newer > epoch else { return }
         epoch = newer; outgoingPending?.cancel()
         remoteRun = ""; lastReceivedSequence = 0; pendingEvidence = nil
-        callbacks.resetFrames(enabled: running); presenter.clear()
+        callbacks.resetFrames(enabled: running); presenter.clear(); spectatorPresenter.clear()
         lastPresentedSeq = 0; lastPresentedHash = ""; lastRemotePeer = ""
     }
     private func setOnline(_ value: Bool) {
@@ -175,9 +177,11 @@ final class BoundLocalPairedTransport: FriendSharingTransport {
             }
         }
     }
+    func setSpectatorView(_ view: UIView?) { spectatorPresenter.clear(); spectatorView = view }
     func presentLatestFrame() {
         guard running, online, let host, let pixels = callbacks.takeLatestPixels(), let evidence = pendingEvidence,
               presenter.present(pixels, in: host) else { return }
+        if let spectatorView { spectatorPresenter.present(pixels, in: spectatorView) }
         pendingEvidence = nil; presentedFrames += 1
         lastPresentedSeq = evidence.sequence; lastPresentedHash = evidence.hash; lastRemotePeer = evidence.peer
         report()

@@ -262,6 +262,51 @@ final class LivePresenceTests: XCTestCase {
         XCTAssertEqual(session.peerEpoch, old)
     }
 
+    func testPartnerSpectatingFreshnessAndRecovery() {
+        let transport = PresenceFixtureTransport()
+        let sharing = FriendSharingSession(configuration: .init(appID: String(repeating: "0", count: 32),
+            channel: "spectator-test", uid: 1, remoteUID: 2, token: "offline-fixture"),
+            transport: transport, authenticatedMode: false)
+        sharing.watchPartner()
+        XCTAssertFalse(sharing.watchingPartner)
+        sharing.start()
+        sharing.watchPartner()
+        XCTAssertTrue(sharing.watchingPartner)
+        sharing.updateSpectatorFreshness(received: 0, at: 10)
+        XCTAssertFalse(sharing.spectatorLive)
+        sharing.updateSpectatorFreshness(received: 1, at: 11)
+        XCTAssertTrue(sharing.spectatorLive)
+        sharing.updateSpectatorFreshness(received: 1, at: 14)
+        XCTAssertFalse(sharing.spectatorLive)
+        sharing.updateSpectatorFreshness(received: 2, at: 15)
+        XCTAssertTrue(sharing.spectatorLive)
+        transport.event?(.reconnecting)
+        sharing.updateSpectatorFreshness(received: 2, at: 15.1)
+        XCTAssertFalse(sharing.spectatorLive)
+        sharing.stopWatchingPartner()
+        XCTAssertTrue(sharing.active)
+        XCTAssertFalse(sharing.watchingPartner)
+        sharing.stop()
+        XCTAssertFalse(sharing.spectatorLive)
+    }
+
+    func testSpectatorCanvasDoesNotStealCompanionPixels() {
+        let companion = UIView(frame: CGRect(x: 0, y: 0, width: 240, height: 160))
+        let spectator = UIView(frame: companion.frame)
+        let first = FriendSharingCanvasPresenter()
+        let second = FriendSharingCanvasPresenter()
+        let pixels = Data(repeating: 255, count: SharingFrame.byteCount)
+        XCTAssertTrue(first.present(pixels, in: companion))
+        XCTAssertTrue(second.present(pixels, in: spectator))
+        XCTAssertEqual(companion.subviews.count, 1)
+        XCTAssertEqual(spectator.subviews.count, 1)
+        second.clear()
+        XCTAssertTrue(first.isVisible)
+        XCTAssertEqual(companion.subviews.count, 1)
+        XCTAssertTrue(spectator.subviews.isEmpty)
+        first.clear()
+    }
+
     func testFriendSessionOwnsPresenceAuthorizationAndRecoveryLifecycle() throws {
         let transport = PresenceFixtureTransport()
         let sharing = FriendSharingSession(configuration: .init(appID: String(repeating: "0", count: 32),
