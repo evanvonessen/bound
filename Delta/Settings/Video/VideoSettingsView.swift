@@ -15,7 +15,7 @@ struct VideoSettingsView: View
     // Keep Delta's existing preference so upgrades, reset and config export
     // retain the same renderer choice.
     @AppStorage("metal")
-    private var usesMetal = false
+    private var usesMetal = true
 
     @AppStorage(Settings.Name.supportsExternalDisplays.rawValue)
     private var supportsExternalDisplays: Bool = true

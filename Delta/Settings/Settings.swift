@@ -87,6 +87,7 @@ struct Settings
                         #keyPath(UserDefaults.opensGamesInNewWindow): false,
                         #keyPath(UserDefaults.cheatSorting): "name",
                         #keyPath(UserDefaults.cheatSortDescending): false,
+                        ExperimentalFeatures.shared.metal.key: true,
                         Settings.preferredCoreSettingsKey(for: .ds): MelonDS.core.identifier]
     }
 
