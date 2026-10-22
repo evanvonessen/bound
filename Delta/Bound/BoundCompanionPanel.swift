@@ -379,6 +379,27 @@ final class BoundCompanionCoordinator {
             soulBanner.widthAnchor.constraint(lessThanOrEqualTo: owner.view.safeAreaLayoutGuide.widthAnchor, constant: -24)
         ])
         sharing.soulLink.bannerChanged = { [weak soulBanner] message in soulBanner?.show(message) }
+        let deathNotice = UIHostingController(rootView: BoundSoulDeathNotice(session: sharing.soulLink))
+        deathNotice.sizingOptions = [.intrinsicContentSize]
+        deathNotice.view.backgroundColor = .clear
+        owner.addChild(deathNotice); owner.view.addSubview(deathNotice.view); deathNotice.didMove(toParent: owner)
+        deathNotice.view.translatesAutoresizingMaskIntoConstraints = false
+        let deathWidth = deathNotice.view.widthAnchor.constraint(equalTo: owner.view.safeAreaLayoutGuide.widthAnchor, constant: -32)
+        deathWidth.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            deathWidth,
+            deathNotice.view.topAnchor.constraint(equalTo: owner.view.safeAreaLayoutGuide.topAnchor, constant: 40),
+            deathNotice.view.centerXAnchor.constraint(equalTo: owner.view.safeAreaLayoutGuide.centerXAnchor),
+            deathNotice.view.widthAnchor.constraint(lessThanOrEqualToConstant: 400)
+        ])
+        sharing.soulLink.canPresentDeathMoment = { [weak self, weak owner, weak noticeView = deathNotice.view] in
+            guard let self, let owner else { return false }
+            let visible = owner.view.window?.windowScene?.hasKeyboardFocus == true && owner.presentedViewController == nil
+                && !self.state.showingFriends && !self.state.showingSettings && !self.isEditingNotes && !self.isEditingText
+            if visible, let noticeView { owner.view.bringSubviewToFront(noticeView) }
+            return visible
+        }
+
         sharing.interactions.canPresent = { [weak self, weak owner] in
             guard let self, let owner else { return false }
             return owner.emulatorCore?.state == .running && owner.view.window?.windowScene?.hasKeyboardFocus == true

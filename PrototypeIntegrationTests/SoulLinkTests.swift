@@ -164,6 +164,7 @@ final class SoulLinkTests: XCTestCase {
         aProbe.configure(core: nil, url: aURL); bProbe.configure(core: nil, url: bURL)
         var time = ProcessInfo.processInfo.systemUptime
         let a = BoundSoulSession(probe: aProbe, clock: { time }), b = BoundSoulSession(probe: bProbe, clock: { time })
+        a.canPresentDeathMoment = { true }; b.canPresentDeathMoment = { true }
         a.setConnection(owner: "A", room: room); b.setConnection(owner: "B", room: room)
         a.connected = { true }; b.connected = { true }
         var ab: [Data] = [], ba: [Data] = []
@@ -187,7 +188,12 @@ final class SoulLinkTests: XCTestCase {
         XCTAssertTrue(a.paired); XCTAssertTrue(b.paired)
         XCTAssertEqual(bProbe.read().ledger?.dead, ["area:100"])
         XCTAssertTrue(bProbe.read().ledger?.denied.contains(mon(2).identity) == true)
-        b.receive(oldAlive)
+        a.tick(); b.tick()
+        XCTAssertEqual(a.deathMoment?.slot, "area:100"); XCTAssertEqual(b.deathMoment?.slot, "area:100")
+        a.dismissDeathMoment(); b.dismissDeathMoment()
+        b.receive(oldAlive); a.tick(); b.tick()
+        XCTAssertNil(a.deathMoment); XCTAssertNil(b.deathMoment)
+        XCTAssertEqual(a.graveyard.count, 1); XCTAssertEqual(b.graveyard.count, 1)
         XCTAssertEqual(bProbe.read().ledger?.dead, ["area:100"])
         a.endRun()
         let aa = ab; ab.removeAll(); aa.forEach { b.receive($0) }
@@ -356,6 +362,128 @@ final class SoulLinkTests: XCTestCase {
         for index in 0..<100 { callbacks.receivePresence(Data([UInt8(index)]), uid: 2) }
         XCTAssertEqual(callbacks.takeInteractions().messages, [packet, legacy])
         XCTAssertEqual(callbacks.takeLatestPresence(), Data([99]))
+    }
+    func testNativeFaintCreatesOnePersistentMemorialAndHealingNeverRepeatsIt() throws {
+        var value = makeLedger(); value.partnerAcquisitions = ["area:100"]; value.partnerNames = ["area:100":"Buddy"]
+        try value.observe([mon(1)], registering: true, fainted: [])
+        try value.observe([mon(1, hp: 0)], registering: false, fainted: [])
+        let first = try XCTUnwrap(value.memorials?.first)
+        XCTAssertEqual(first.names, "Mon1 ↔ Buddy"); XCTAssertFalse(first.announced); XCTAssertNotNil(first.recordedAt)
+        try value.observe([mon(1, hp: 30)], registering: true, fainted: [])
+        try value.observe([mon(1, hp: 0)], registering: false, fainted: [mon(1).identity])
+        XCTAssertEqual(value.memorials, [first]); XCTAssertEqual(value.denied, [mon(1).identity])
+        let restored = try JSONDecoder().decode(BoundSoulLedger.self, from: JSONEncoder().encode(value))
+        XCTAssertEqual(restored.memorials, [first]); XCTAssertTrue(restored.valid)
+    }
+    func testLatePartnerNameEnrichesMemorialWithoutRenamingOrReplayingIt() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        var value = makeLedger(); try value.observe([mon(1)], registering: true, fainted: [])
+        try JSONEncoder().encode(value).write(to: file)
+        let probe = BoundSoulProbe(); probe.configure(core: nil, url: file)
+        let bits = BoundSoulLedger.bits(["area:100"])
+        try probe.merge(run: value.run, rows: [], losses: bits, acquired: bits)
+        XCTAssertEqual(probe.read().ledger?.memorials?.first?.partnerLabel, "Partner’s Pokémon")
+        try probe.acknowledgeDeath(run: value.run, slot: "area:100")
+        try probe.merge(run: value.run, rows: [.init(slot: "area:100", name: "Buddy", dead: true)], losses: bits, acquired: bits)
+        XCTAssertEqual(probe.read().ledger?.memorials?.first?.partnerName, "Buddy")
+        try probe.merge(run: value.run, rows: [.init(slot: "area:100", name: "Renamed", dead: false)], losses: bits, acquired: bits)
+        XCTAssertEqual(probe.read().ledger?.memorials?.first?.partnerName, "Buddy")
+        XCTAssertEqual(probe.read().ledger?.memorials?.first?.announced, true)
+        XCTAssertEqual(probe.read().ledger?.memorials?.count, 1)
+    }
+    func testLegacyDeathsBecomeQuietHistoryAndNewLossesStillAnnounce() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        var value = makeLedger(); value.dead = ["area:100"]
+        try JSONEncoder().encode(value).write(to: file)
+        let probe = BoundSoulProbe(); probe.configure(core: nil, url: file)
+        let historical = try XCTUnwrap(probe.read().ledger?.memorials?.first)
+        XCTAssertTrue(historical.announced); XCTAssertNil(historical.recordedAt)
+        try probe.merge(run: value.run, rows: [], losses: BoundSoulLedger.bits(["area:100","area:101"]))
+        let pending = try XCTUnwrap(probe.read().ledger?.memorials?.filter { !$0.announced })
+        XCTAssertEqual(pending.map(\.slot), ["area:101"])
+        XCTAssertEqual(probe.read().ledger?.memorials?.count, 2)
+    }
+    func testAcknowledgementSurvivesRestartAndCannotAffectAnotherRun() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        var value = makeLedger(); try value.observe([mon(1, hp: 0)], registering: true, fainted: [])
+        try JSONEncoder().encode(value).write(to: file)
+        let probe = BoundSoulProbe(); probe.configure(core: nil, url: file)
+        XCTAssertFalse(try XCTUnwrap(probe.read().ledger?.memorials?.first).announced)
+        try probe.acknowledgeDeath(run: UUID(), slot: "area:100")
+        XCTAssertFalse(try XCTUnwrap(probe.read().ledger?.memorials?.first).announced)
+        try probe.acknowledgeDeath(run: value.run, slot: "area:100")
+        let reopened = BoundSoulProbe(); reopened.configure(core: nil, url: file)
+        XCTAssertTrue(try XCTUnwrap(reopened.read().ledger?.memorials?.first).announced)
+        XCTAssertEqual(reopened.read().ledger?.dead, ["area:100"])
+    }
+    func testFailedAcknowledgementRetainsPendingMomentAndLatchesPause() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("run.json")
+        var value = makeLedger(); try value.observe([mon(1, hp: 0)], registering: true, fainted: [])
+        try JSONEncoder().encode(value).write(to: file)
+        let probe = BoundSoulProbe(); probe.configure(core: nil, url: file)
+        try FileManager.default.removeItem(at: file); try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try probe.acknowledgeDeath(run: value.run, slot: "area:100"))
+        XCTAssertNotNil(probe.read().error); XCTAssertEqual(probe.read().ledger, value)
+    }
+    @MainActor
+    func testDeathQueueWaitsForGameplayAndAcknowledgesEachVisibleMomentOnce() throws {
+        let old = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer { UserDefaults.standard.set(old, forKey: BoundMultiplayerFeatures.key) }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        var value = makeLedger(); try value.observe([mon(1, hp: 0), mon(2, area: 101, hp: 0)], registering: true, fainted: [])
+        try JSONEncoder().encode(value).write(to: file)
+        let probe = BoundSoulProbe(); probe.configure(core: nil, url: file)
+        var time: TimeInterval = 100, visible = false
+        let session = BoundSoulSession(probe: probe, clock: { time })
+        session.canPresentDeathMoment = { visible }
+        session.tick(); XCTAssertNil(session.deathMoment)
+        visible = true; session.tick(); XCTAssertEqual(session.deathMoment?.slot, "area:100")
+        time += 3; visible = false; session.tick(); XCTAssertNil(session.deathMoment)
+        XCTAssertFalse(try XCTUnwrap(probe.read().ledger?.memorials?.first).announced)
+        time += 100; visible = true; session.tick(); XCTAssertEqual(session.deathMoment?.slot, "area:100")
+        time += 6.9; session.tick(); XCTAssertEqual(session.deathMoment?.slot, "area:100")
+        time += 0.2; session.tick(); XCTAssertEqual(session.deathMoment?.slot, "area:101")
+        session.dismissDeathMoment(); session.tick(); XCTAssertNil(session.deathMoment)
+        XCTAssertTrue(session.graveyard.allSatisfy(\.announced))
+        session.peerGone(); session.tick(); XCTAssertNil(session.deathMoment)
+        XCTAssertEqual(session.graveyard.count, 2)
+    }
+    @MainActor
+    func testDeathMomentAndGraveyardRender() throws {
+        let old = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer { UserDefaults.standard.set(old, forKey: BoundMultiplayerFeatures.key) }
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("DeathMomentQA")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        var value = makeLedger(); value.partnerAcquisitions = ["area:100"]; value.partnerNames = ["area:100":"Bulbasaur"]
+        try value.observe([mon(1, hp: 0)], registering: true, fainted: [])
+        let file = root.appendingPathComponent("render-run.json"); try JSONEncoder().encode(value).write(to: file)
+        let probe = BoundSoulProbe(); probe.configure(core: nil, url: file)
+        let session = BoundSoulSession(probe: probe, areaNames: [100:"Route 2"])
+        session.canPresentDeathMoment = { true }; session.tick()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first { $0.isKeyWindow }, window = UIWindow(windowScene: scene)
+        func capture<V: View>(_ view: V, name: String) throws {
+            let host = UIHostingController(rootView: view); window.rootViewController = host
+            window.makeKeyAndVisible(); host.view.layoutIfNeeded(); RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+            try XCTUnwrap(image.pngData()).write(to: root.appendingPathComponent(name + ".png"))
+            let attachment = XCTAttachment(image: image); attachment.name = name
+            attachment.lifetime = .keepAlways; add(attachment)
+        }
+        try capture(VStack { BoundSoulDeathNotice(session: session); Spacer() }.padding(20).background(Color.gray.opacity(0.15)), name: "death-moment")
+        session.dismissDeathMoment()
+        try capture(NavigationStack { BoundSoulGraveyardView(session: session) }, name: "graveyard")
+        window.isHidden = true; previous?.makeKeyAndVisible()
+        XCTAssertEqual(session.graveyard.count, 1); XCTAssertNil(session.deathMoment)
     }
     func testPartyAndCompressedBoxFormatsAndEggMetadata() {
         var party = Data(repeating: 0, count: 100)

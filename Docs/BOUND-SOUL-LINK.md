@@ -43,6 +43,30 @@ A legacy peer triggers a pause and an update message. No new ROM is required: th
 tracking through the existing native Soul Link observation/enforcement adapter;
 the integrated game and shared-progression ABI remain unchanged.
 
+## Death moments and graveyard
+
+A newly committed local or partner loss queues a silent **SOUL LINK BROKEN**
+card over gameplay with both linked names and their encounter area. It fades in,
+can be dismissed, and clears after seven visible seconds. Gameplay and controller
+inputs continue. Reduced Motion removes the transition, and VoiceOver receives
+an announcement. Cards wait while Friends/settings/text editing obscure the game
+or the app loses focus; hidden time never consumes their display time.
+
+Each device acknowledges its own presentation in the existing atomic run journal.
+Multiple losses queue separately. An unseen moment survives restart; dismissal,
+repeated packets, healing and old emulator states cannot replay an acknowledged
+loss or revive the pair. A failed journal write pauses the run and keeps the
+moment pending. Existing pre-feature losses enter the graveyard quietly rather
+than replaying every old death.
+
+**Friends → Soul Link → Graveyard** retains every lost area/egg pair, both names
+and the time this device first recorded the loss. That time is not a synchronized
+server death time; historical losses have no invented date. Names freeze when
+known; a delayed partner name or later catch can fill a missing one. The graveyard
+remains accessible after ending the run and is preserved in its finished-run
+archive. No new ROM, native rules or wire version is needed; existing BSL2 losses
+remain the shared authority. All memorial metadata stays in the local journal.
+
 ## Encounter and egg rules
 
 - An area is the game's native **met location**, such as Route 2 or Viridian
@@ -128,6 +152,16 @@ with both complete bitmaps occupy 884 bytes. Identities and Pokémon data stay l
 BSL1 is recognized only to explain the required app update, never as BSL2 state.
 
 ## Verification
+
+The death-moment update passed **44 selected checks**: 33 Soul Link tests,
+10 shared-world tests and the silent native faint/catch/rollback fixture. These
+cover paired announcements, persistence and acknowledgement, quiet legacy
+history, late names, queued display time, failure preservation and rendered
+card/graveyard screenshots. Debug simulator and unsigned iPhone Release builds
+passed. All 17,061 pinned source files, the game ABI import and native Soul Link
+shim checks are unchanged. Evidence and working save copies remain under
+`.build/death-moments-*`. This is simulator/local-session validation, not a
+physical two-phone/Agora acceptance run.
 
 The paired encounter update passed 37 selected checks: 26 Soul Link rules/UI/
 protocol checks, 10 shared-world checks and the actual native Soul Link capture,

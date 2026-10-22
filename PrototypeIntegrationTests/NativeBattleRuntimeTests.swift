@@ -573,6 +573,9 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertEqual(first[1], first[2])
         XCTAssertTrue(probe.read().ledger?.dead.contains(starter.slot) == true, "Native faint latch survives healing")
         XCTAssertEqual(BoundVBABattleBridge.playerHP().first?.intValue, 0)
+        XCTAssertEqual(probe.read().ledger?.memorials?.count, 1)
+        XCTAssertEqual(probe.read().ledger?.memorials?.first?.slot, starter.slot)
+        XCTAssertEqual(probe.read().ledger?.memorials?.first?.announced, false)
         BoundVBABattleBridge.qaFinishSoulCheck()
         _ = core.resume(); try await Task.sleep(for: .milliseconds(100)); _ = core.pause()
         XCTAssertTrue(BoundVBABattleBridge.qaStartSoulCheck()); _ = core.resume()
@@ -591,6 +594,8 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertTrue(reopened.read().ledger?.dead.contains(starter.slot) == true)
         XCTAssertEqual(BoundVBABattleBridge.playerHP().first?.intValue, 0, "Old-state load and journal reload cannot revive the link")
         XCTAssertNil(reopened.read().error)
+        XCTAssertEqual(reopened.read().ledger?.memorials?.count, 1, "The real native loss queues one moment despite healing and raw-state rollback")
+        try reopened.acknowledgeDeath(run: try XCTUnwrap(reopened.read().ledger?.run), slot: starter.slot)
         for mode in 1...3 {
             let beforeCount = reopened.read().ledger?.records.count ?? 0
             XCTAssertTrue(BoundVBABattleBridge.qaStartSoulCatch(UInt(mode))); _ = core.resume()

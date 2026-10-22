@@ -1,0 +1,50 @@
+{
+  "client_date": "2026-10-21",
+  "feature": "dramatic Soul Link deaths and shared graveyard",
+  "game_rom_changed": false,
+  "wire_changed": false,
+  "soul_wire_version": 2,
+  "journal_version": 1,
+  "old_journals_compatible": true,
+  "behavior": [
+    "Silent dismissible SOUL LINK BROKEN card with both names and encounter area",
+    "Seven visible seconds per loss; multiple losses queue independently",
+    "Pending moments survive restarts; persisted local acknowledgement prevents replay",
+    "Both peers derive events from existing shared loss bitmap",
+    "Old losses become quiet historical memorials",
+    "Memorial names freeze when known and fill missing delayed names",
+    "Graveyard survives ending and archival; game rules remain unchanged",
+    "Reduced Motion suppresses fade; VoiceOver announcement; no added audio or automatic gameplay pause"
+  ],
+  "validation": {
+    "tests": 44,
+    "soul_link_tests": 33,
+    "shared_world_tests": 10,
+    "native_runtime_tests": 1,
+    "failures": 0,
+    "skips": 0,
+    "debug_simulator_build": true,
+    "unsigned_iphone_release_build": true,
+    "pinned_sources_unchanged": 17061,
+    "game_abi_check": true,
+    "native_shim_check": true,
+    "screenshots_visually_checked": [
+      "death-moment",
+      "graveyard"
+    ],
+    "audio_disabled_in_runtime_fixture": true,
+    "original_rom_and_seed_unchanged": true
+  },
+  "evidence": {
+    "bundle": ".build/death-moments-tests.xcresult",
+    "log": ".build/death-moments-tests.log",
+    "release_log": ".build/death-moments-release.log",
+    "files": ".build/death-moments-evidence/manifest.json"
+  },
+  "limits": [
+    "Paired announcements use production session/packet code locally",
+    "Native faint and rollback checked with actual VBA-M in a disposable simulator",
+    "No physical-device or real Agora gameplay acceptance claim",
+    "Recorded dates are local observation times, not synchronized server death times"
+  ]
+}

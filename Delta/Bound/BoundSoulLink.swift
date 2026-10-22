@@ -83,6 +83,20 @@ struct BoundSoulRecord: Codable, Equatable, Sendable {
     var identities: Set<BoundSoulIdentity> { aliases.union([identity]) }
 }
 
+struct BoundSoulDeath: Codable, Equatable, Identifiable, Sendable {
+    let slot: String
+    let recordedAt: Date?
+    var localName: String?
+    var partnerName: String?
+    var announced: Bool
+    var localCaught: Bool?
+    var partnerCaught: Bool?
+    var id: String { slot }
+    var localLabel: String { localName ?? (localCaught == true ? "Your Pokémon" : "No catch yet") }
+    var partnerLabel: String { partnerName ?? (partnerCaught == false ? "No catch yet" : "Partner’s Pokémon") }
+    var names: String { localLabel + " ↔ " + partnerLabel }
+}
+
 struct BoundSoulLedger: Codable, Equatable, Sendable {
     static let version = 1
     var version = Self.version
@@ -96,6 +110,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
     // Optional fields preserve journals written before paired encounter tracking.
     var partnerAcquisitions: Set<String>?
     var partnerNames: [String: String]?
+    var memorials: [BoundSoulDeath]?
     var partnerSlots: Set<String> { partnerAcquisitions ?? [] }
     var acquired: Set<String> { Set(records.filter(\.eligible).map(\.slot)) }
     var acquisitionBits: Data { Self.bits(acquired) }
@@ -112,6 +127,9 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
         && dead.allSatisfy(Self.validSlot)
         && partnerSlots.count <= 2304 && partnerSlots.allSatisfy(Self.validSlot)
         && (partnerNames ?? [:]).allSatisfy { partnerSlots.contains($0.key) && $0.value.count <= 20 }
+        && (memorials ?? []).count <= 2304
+        && Set((memorials ?? []).map(\.slot)).count == (memorials ?? []).count
+        && (memorials ?? []).allSatisfy { dead.contains($0.slot) && ($0.recordedAt?.timeIntervalSince1970.isFinite ?? true) && ($0.localName?.count ?? 0) <= 20 && ($0.partnerName?.count ?? 0) <= 20 }
         && Set(records.filter(\.eligible).map(\.slot)).count == records.filter(\.eligible).count
     }
     var lossBits: Data { Self.bits(dead) }
@@ -133,7 +151,33 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
     var denied: Set<BoundSoulIdentity> {
         Set(records.filter { !$0.eligible || dead.contains($0.slot) }.flatMap(\.identities))
     }
+    /// Existing journal losses are quiet history; only newly committed losses queue a moment.
+    mutating func recordDeaths(previous: Set<String>, at date: Date = Date()) {
+        guard !dead.isEmpty else { return }
+        var entries = memorials ?? []
+        let local = Dictionary(uniqueKeysWithValues: records.filter(\.eligible).map { ($0.slot, $0.name) })
+        var indices = Dictionary(uniqueKeysWithValues: entries.enumerated().map { ($0.element.slot, $0.offset) })
+        for slot in dead.sorted() {
+            if let index = indices[slot] {
+                // A delayed rotating name or a later catch can fill a missing name,
+                // but renaming/evolving never rewrites a known memorial name.
+                if local[slot] != nil { entries[index].localCaught = true }
+                if partnerSlots.contains(slot) { entries[index].partnerCaught = true }
+                else if entries[index].partnerCaught == nil, partnerAcquisitions != nil { entries[index].partnerCaught = false }
+                if entries[index].localName == nil { entries[index].localName = local[slot] }
+                if entries[index].partnerName == nil { entries[index].partnerName = partnerNames?[slot] }
+            } else {
+                let historical = previous.contains(slot)
+                indices[slot] = entries.count
+                entries.append(.init(slot: slot, recordedAt: historical ? nil : date,
+                                     localName: local[slot], partnerName: partnerNames?[slot], announced: historical,
+                                     localCaught: local[slot] != nil, partnerCaught: partnerAcquisitions == nil ? nil : partnerSlots.contains(slot)))
+            }
+        }
+        memorials = entries
+    }
     mutating func observe(_ mons: [BoundSoulMon], registering: Bool, fainted: Set<BoundSoulIdentity>) throws {
+        let previousDeaths = dead
         for mon in mons {
             if let index = records.firstIndex(where: { $0.identities.contains(mon.identity) }) {
                 records[index].name = mon.name
@@ -159,6 +203,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
                 dead.insert(record.slot)
             }
         }
+        recordDeaths(previous: previousDeaths)
         guard valid else { throw Error.capacity }
     }
     enum Error: Swift.Error { case capacity, corrupt }
@@ -280,9 +325,10 @@ final class BoundSoulProbe: @unchecked Sendable {
         guard let url, FileManager.default.fileExists(atPath: url.path) else { return }
         do {
             let data = try Data(contentsOf: url)
-            guard data.count <= 1_048_576 else { throw BoundSoulLedger.Error.corrupt }
-            let value = try JSONDecoder().decode(BoundSoulLedger.self, from: data)
+            guard data.count <= 2_097_152 else { throw BoundSoulLedger.Error.corrupt }
+            var value = try JSONDecoder().decode(BoundSoulLedger.self, from: data)
             guard value.valid else { throw BoundSoulLedger.Error.corrupt }
+            value.recordDeaths(previous: value.dead)
             ledger = value; snapshot.ledger = value
         } catch { snapshot.error = "Soul Link record couldn’t be read. Your run is paused." }
     }
@@ -349,7 +395,15 @@ final class BoundSoulProbe: @unchecked Sendable {
         }
         value.dead.formUnion(BoundSoulLedger.losses(losses))
         value.dead.formUnion(rows.filter(\.dead).map(\.slot))
+        value.recordDeaths(previous: previous.dead)
         if value != previous { try persist(value); ledger = value; snapshot.ledger = value }
+    }
+    func acknowledgeDeath(run: UUID, slot: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard var value = ledger, value.run == run,
+              let index = value.memorials?.firstIndex(where: { $0.slot == slot }), value.memorials?[index].announced == false else { return }
+        value.memorials?[index].announced = true
+        try persist(value); ledger = value; snapshot.ledger = value
     }
     func read() -> Snapshot { lock.lock(); defer { lock.unlock() }; return snapshot }
     func receive(_ core: EmulatorCore) {
@@ -409,6 +463,15 @@ final class BoundSoulSession: ObservableObject {
     let probe: BoundSoulProbe
     @Published private(set) var status = "Receive your starter, then connect to your partner."
     @Published private(set) var ledger: BoundSoulLedger?
+    @Published private(set) var deathMoment: BoundSoulDeath?
+    private var deathMomentStarted: TimeInterval?
+    var canPresentDeathMoment: (() -> Bool)?
+    var graveyard: [BoundSoulDeath] {
+        (ledger?.memorials ?? []).sorted {
+            if $0.recordedAt != $1.recordedAt { return ($0.recordedAt ?? .distantPast) > ($1.recordedAt ?? .distantPast) }
+            return $0.slot < $1.slot
+        }
+    }
     @Published private(set) var incoming: UUID?
     @Published private(set) var offered: UUID?
     var encounters: [BoundSoulEncounter] {
@@ -458,6 +521,7 @@ final class BoundSoulSession: ObservableObject {
     }
     func bind(core: EmulatorCore?, gameID: String) {
         guard self.core !== core || self.gameID != gameID else { return }
+        deathMoment = nil; deathMomentStarted = nil
         self.core = core; self.gameID = gameID; supported = false
         confirmed = false; lastPeer = 0; offered = nil; incoming = nil; cursor = 0
         let url = core.map { _ in Self.directory.appendingPathComponent(Self.hash(gameID) + ".json") }
@@ -589,11 +653,31 @@ final class BoundSoulSession: ObservableObject {
         incompatiblePeer = false; confirmed = false; lastPeer = 0; epoch = UUID(); peerEpoch = nil
         proposedEpoch = nil; retiredEpochs = []
     }
+    func dismissDeathMoment() {
+        guard let moment = deathMoment, let ledger else { return }
+        do {
+            try probe.acknowledgeDeath(run: ledger.run, slot: moment.slot)
+            self.ledger = probe.read().ledger; deathMoment = nil; deathMomentStarted = nil
+        } catch { status = "Couldn’t preserve this Soul Link moment."; _ = core?.pause() }
+    }
+    private func updateDeathMoment(at now: TimeInterval) {
+        guard BoundMultiplayerFeatures.isEnabled, active, ledger?.offering == false,
+              probe.read().error == nil, canPresentDeathMoment?() == true else {
+            if deathMoment != nil { deathMoment = nil; deathMomentStarted = nil }
+            return
+        }
+        if deathMoment != nil, let began = deathMomentStarted, now - began >= 7 { dismissDeathMoment() }
+        guard probe.read().error == nil else { return }
+        let pending = (ledger?.memorials ?? []).filter { !$0.announced }
+        let next = pending.first
+        if next?.slot != deathMoment?.slot { deathMoment = next; deathMomentStarted = next == nil ? nil : now }
+        else if deathMoment != next { deathMoment = next }
+    }
     func tick(at time: TimeInterval? = nil) {
         let now = time ?? clock()
         if proposedEpoch != nil, now - proposalAt > 1 { peerGone() }
         probe.setPreviewEnabled(BoundMultiplayerFeatures.isEnabled)
-        defer { bannerChanged?((probe.read().error != nil || (active && !paired)) ? status : nil) }
+        defer { updateDeathMoment(at: now); bannerChanged?((probe.read().error != nil || (active && !paired)) ? status : nil) }
         let snapshot = probe.read(); if snapshot.ledger != ledger { ledger = snapshot.ledger }
         canStart = BoundMultiplayerFeatures.isEnabled && supported && snapshot.ready && snapshot.mons.count == 1
             && !snapshot.mons.contains(where: { $0.eggOrigin || ($0.hp ?? 0) <= 0 })
@@ -660,6 +744,12 @@ struct BoundSoulControls: View {
                         LabeledContent("Paired encounters", value: "\(session.encounters.filter { $0.state == .linked }.count) linked")
                     }
                     .accessibilityIdentifier("bound.soul-link.encounters")
+                    NavigationLink {
+                        BoundSoulGraveyardView(session: session)
+                    } label: {
+                        LabeledContent("Graveyard", value: "\(session.graveyard.count) lost")
+                    }
+                    .accessibilityIdentifier("bound.soul-link.graveyard")
                 }
             }
             .confirmationDialog("End this Soul Link run?", isPresented: $ending, titleVisibility: .visible) {
@@ -706,6 +796,72 @@ struct BoundSoulEncountersView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("bound.soul-link.encounter." + row.slot)
+    }
+}
+
+struct BoundSoulGraveyardView: View {
+    @ObservedObject var session: BoundSoulSession
+    var body: some View {
+        List {
+            if session.graveyard.isEmpty {
+                ContentUnavailableView("No lost pairs", systemImage: "heart.fill")
+            }
+            ForEach(session.graveyard) { loss in
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(BoundSoulControls.title(loss.slot, names: session.areaNames), systemImage: "heart.slash.fill")
+                        .font(.headline).foregroundStyle(.red)
+                    Text("You: " + loss.localLabel)
+                    Text("Partner: " + loss.partnerLabel)
+                    if let date = loss.recordedAt { Text(date, format: .dateTime.month().day().hour().minute()).font(.caption).foregroundStyle(.secondary) }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("bound.soul-link.memorial." + loss.slot)
+            }
+        }
+        .navigationTitle("Graveyard")
+        .accessibilityIdentifier("bound.soul-link.graveyard-list")
+    }
+}
+
+/// A quiet, dismissible in-game card; it does not pause the core or intercept controls.
+struct BoundSoulDeathNotice: View {
+    @ObservedObject var session: BoundSoulSession
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        Group {
+            if let loss = session.deathMoment {
+                VStack(spacing: 8) {
+                    HStack(alignment: .top) {
+                        Image(systemName: "heart.slash.fill").font(.title2).foregroundStyle(.red)
+                        Spacer()
+                        Button { session.dismissDeathMoment() } label: {
+                            Image(systemName: "xmark").padding(10).contentShape(Rectangle())
+                        }
+                        .accessibilityLabel("Dismiss death announcement")
+                        .accessibilityIdentifier("bound.soul-link.death-dismiss")
+                    }
+                    Text("SOUL LINK BROKEN").font(.headline).tracking(2)
+                    Text(loss.names).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(BoundSoulControls.title(loss.slot, names: session.areaNames)).font(.subheadline)
+                    Text("Together, remembered.").font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity)
+                .environment(\.colorScheme, .dark)
+                .foregroundStyle(.white)
+                .background(.black.opacity(0.94), in: RoundedRectangle(cornerRadius: 20))
+                .overlay { RoundedRectangle(cornerRadius: 20).stroke(.red.opacity(0.7), lineWidth: 1) }
+                .shadow(color: .red.opacity(0.2), radius: 14)
+                .accessibilityIdentifier("bound.soul-link.death-moment")
+                .id(loss.slot)
+                .onAppear {
+                    UIAccessibility.post(notification: .announcement, argument: "Soul Link broken. " + loss.names + ". " + BoundSoulControls.title(loss.slot, names: session.areaNames))
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: session.deathMoment?.slot)
     }
 }
 
