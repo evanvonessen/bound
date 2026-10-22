@@ -261,7 +261,7 @@ struct BoundAccountSocialSettings: View {
     @State private var email = ""
     @State private var password = ""
     @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option2
-    private var usesUpdatedUI: Bool { uiVersion == .option2 }
+    private var usesUpdatedUI: Bool { BoundMacWorkspacePlatform.isEnabled || uiVersion == .option2 }
     var body: some View {
         Section("Bound account") {
             if account.deletionPending && usesUpdatedUI {

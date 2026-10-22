@@ -317,17 +317,55 @@ final class MacWorkspaceUITests: XCTestCase {
         defer { XCUIDevice.shared.orientation = .portrait }
         let app = launchDiagnosticGame(arguments: [
             "--bound-ui-mac-workspace",
-            "--bound-ui-no-animations"
+            "--bound-ui-no-animations",
+            // Argument-domain values leave the saved iPhone UI preference intact.
+            "-bound.ui.version.v1", "1"
         ])
+        defer { app.terminate() }
 
         let workspace = element("bound.mac-workspace", in: app)
         XCTAssertTrue(workspace.waitForExistence(timeout: 20))
+        openWorkspaceActions(in: app)
+        let friends = app.buttons["bound.mac-friends"].firstMatch
+        XCTAssertTrue(friends.waitForExistence(timeout: 5))
+        friends.tap()
+        XCTAssertTrue(app.navigationBars["Friends"].waitForExistence(timeout: 5))
+        assertAccountEntry(in: app)
+        if app.buttons["bound.account-security"].exists {
+            let add = app.buttons["bound.add-friend-open"]
+            let heading = element("bound.friends-list-heading", in: app)
+            XCTAssertTrue(add.waitForExistence(timeout: 5), "Mac Friends must use the header Add action with UI Version 1")
+            XCTAssertTrue(heading.exists)
+            XCTAssertGreaterThan(add.frame.minX, heading.frame.maxX)
+            XCTAssertEqual(add.frame.midY, heading.frame.midY, accuracy: 4)
+            XCTAssertFalse(app.buttons["Sign out"].exists, "Mac Friends should keep account actions in Settings")
+        }
+        app.navigationBars["Friends"].buttons["Done"].tap()
+        XCTAssertTrue(workspace.waitForExistence(timeout: 5))
+
         openWorkspaceActions(in: app)
         let settings = app.buttons["bound.mac-settings"].firstMatch
         XCTAssertTrue(settings.waitForExistence(timeout: 5), "Mac workspace Settings must be reachable")
         settings.tap()
 
         XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
+        let settingsForm = app.collectionViews.firstMatch
+        let experimental = app.switches["bound.settings-experimental-features"]
+        for _ in 0..<4 where !experimental.isHittable { settingsForm.swipeUp() }
+        XCTAssertTrue(experimental.waitForExistence(timeout: 5))
+        XCTAssertEqual(experimental.label, "Enable Experimental Multiplayer")
+        let developer = app.switches["bound.settings-developer-features"]
+        XCTAssertTrue(developer.exists)
+        XCTAssertLessThan(developer.frame.maxY, experimental.frame.midY)
+
+        let accountEntry = app.buttons["bound.settings-account"]
+        for _ in 0..<4 where !accountEntry.isHittable { settingsForm.swipeDown() }
+        XCTAssertTrue(accountEntry.waitForExistence(timeout: 5))
+        accountEntry.tap()
+        XCTAssertTrue(app.navigationBars["Account & Sync"].waitForExistence(timeout: 5))
+        assertAccountEntry(in: app)
+        app.navigationBars["Account & Sync"].buttons.firstMatch.tap()
+
         let controlsEntry = app.buttons["bound.settings-controls"]
         XCTAssertTrue(controlsEntry.waitForExistence(timeout: 5))
         controlsEntry.tap()
@@ -347,7 +385,26 @@ final class MacWorkspaceUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Player 1"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["This Device"].waitForExistence(timeout: 5),
                       "Player 1 bindings must show the built-in touch controller without requiring external hardware")
-        app.terminate()
+    }
+
+    private func assertAccountEntry(in app: XCUIApplication,
+                                    file: StaticString = #filePath, line: UInt = #line) {
+        let security = app.buttons["bound.account-security"]
+        if security.exists {
+            XCTAssertEqual(security.label, "Account and Security", file: file, line: line)
+            XCTAssertEqual(app.buttons.matching(identifier: "bound.account-security").count, 1,
+                           "Account management has one entry point", file: file, line: line)
+            for identifier in ["bound.account-username", "bound.account-email", "bound.account-reset-password"] {
+                XCTAssertFalse(element(identifier, in: app).exists,
+                               "Account controls belong inside Account and Security", file: file, line: line)
+            }
+        } else {
+            XCTAssertTrue(app.textFields["account.signin.email"].waitForExistence(timeout: 5), file: file, line: line)
+            XCTAssertTrue(app.secureTextFields["account.signin.password"].exists, file: file, line: line)
+            XCTAssertTrue(app.buttons["account.signin.forgot-password"].exists, file: file, line: line)
+            XCTAssertFalse(app.buttons["account.signin.submit"].isEnabled,
+                           "The signed-out Mac form must not submit empty credentials", file: file, line: line)
+        }
     }
 
     private func launchDiagnosticGame(arguments: [String]) -> XCUIApplication {

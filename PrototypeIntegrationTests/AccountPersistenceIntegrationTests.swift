@@ -45,7 +45,7 @@ final class AccountPersistenceIntegrationTests: XCTestCase {
         XCTAssertTrue(observations[1].cancelled)
     }
 
-    func testFriendsSheetRendersOption2AndPreservesOption1WithLongUsername() async throws {
+    func testFriendsSheetRendersMacAndOption2WhilePreservingIPhoneOption1() async throws {
         let previousVersion = UserDefaults.standard.object(forKey: BoundUIVersionPreferences.key)
         BoundUIVersionPreferences().version = .option2
 
@@ -72,7 +72,7 @@ final class AccountPersistenceIntegrationTests: XCTestCase {
         }, observeAccount: { OnboardingObservation($0) })
         let sharing = FriendSharingSession(configuration: nil, authenticatedMode: true)
         let host = UIHostingController(rootView: BoundFriendsSheet(sharing: sharing,
-            onboarding: onboarding, account: account))
+            onboarding: onboarding, account: account, isMacWorkspace: false))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previousWindow = scene.windows.first(where: \.isKeyWindow)
         let window = UIWindow(windowScene: scene)
@@ -104,13 +104,15 @@ final class AccountPersistenceIntegrationTests: XCTestCase {
         XCTAssertEqual(onboarding.rooms, [room])
         XCTAssertEqual(onboarding.accountUsername, "LongUsernameForLayoutTestingABCDE")
 
-        func attach(_ name: String) throws {
+        func attach(_ name: String, size: CGSize = CGSize(width: 393, height: 852)) throws {
+            window.frame = CGRect(origin: .zero, size: size)
+            host.view.frame = window.bounds
             host.view.setNeedsLayout()
             host.view.layoutIfNeeded()
             RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.6))
-            let renderer = UIGraphicsImageRenderer(size: CGSize(width: 393, height: 852))
+            let renderer = UIGraphicsImageRenderer(size: size)
             let image = renderer.image { _ in
-                host.view.drawHierarchy(in: CGRect(x: 0, y: 0, width: 393, height: 852), afterScreenUpdates: true)
+                host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true)
             }
             XCTAssertGreaterThan(try XCTUnwrap(image.pngData()).count, 5000)
             let attachment = XCTAttachment(image: image)
@@ -121,8 +123,14 @@ final class AccountPersistenceIntegrationTests: XCTestCase {
 
         try attach("Friends-option2-long-username")
         BoundUIVersionPreferences().version = .option1
-        host.rootView = BoundFriendsSheet(sharing: sharing, onboarding: onboarding, account: account)
+        host.rootView = BoundFriendsSheet(sharing: sharing, onboarding: onboarding, account: account,
+                                         isMacWorkspace: false)
         try attach("Friends-option1-preservation")
+        host.rootView = BoundFriendsSheet(sharing: sharing, onboarding: onboarding, account: account,
+                                         isMacWorkspace: true)
+        try attach("Friends-Mac-option1-long-username", size: CGSize(width: 1024, height: 768))
+        XCTAssertEqual(BoundUIVersionPreferences().version, .option1,
+                       "Rendering the Mac Friends layout must preserve the saved iPhone UI version")
     }
 
     private func token(owner: UUID, expires: TimeInterval = 3600) throws -> String {

@@ -1800,12 +1800,15 @@ struct BoundFriendsSheet: View {
     @State private var showingAddFriend = false
     @State private var roomIDsBeforeAdding: Set<String> = []
     var closed: () -> Void = {}
-    private var usesUpdatedUI: Bool { uiVersion == .option2 }
+    private let isMacWorkspace: Bool
+    private var usesUpdatedUI: Bool { isMacWorkspace || uiVersion == .option2 }
 
-    init(sharing: FriendSharingSession, onboarding: FriendOnboarding, account: BoundFriendAccount, closed: @escaping () -> Void = {}) {
+    init(sharing: FriendSharingSession, onboarding: FriendOnboarding, account: BoundFriendAccount,
+         isMacWorkspace: Bool = BoundMacWorkspacePlatform.isEnabled, closed: @escaping () -> Void = {}) {
         self.sharing = sharing
         self.onboarding = onboarding
         self.account = account
+        self.isMacWorkspace = isMacWorkspace
         self.closed = closed
     }
 
