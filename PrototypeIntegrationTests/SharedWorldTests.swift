@@ -3,25 +3,37 @@ import XCTest
 
 final class SharedWorldTests: XCTestCase {
     private func state(_ value: UInt8 = 0) -> BoundWorldState {
-        .init(group: 3, number: 43, flags: Data(repeating: value, count: 800))
+        .init(group: 3, number: 43, checkpoints: Data(repeating: value, count: 800))
     }
     func testPacketRoundTripAndMaximumSize() throws {
         var value = state(255)
         value.boulders = Data((0..<16).flatMap { [UInt8($0 + 1),3,10,0,31,0] })
         let packet = BoundWorldPacket(sender: UUID(), receiver: UUID(), sequence: UInt64.max, state: value)
         let data = try XCTUnwrap(packet.encoded())
-        XCTAssertEqual(data.count, 943); XCTAssertEqual(BoundWorldPacket.decode(data), packet)
+        XCTAssertEqual(data.count, 967); XCTAssertEqual(BoundWorldPacket.decode(data), packet)
         XCTAssertEqual(BoundWorldPacket.decode(try XCTUnwrap(BoundWorldPacket(sender: UUID(), receiver: nil, sequence: 1, state: state()).encoded()))?.receiver, nil)
     }
     func testMalformedSnapshotsAndTruncationsAreRejected() throws {
         let valid = try XCTUnwrap(BoundWorldPacket(sender: UUID(), receiver: UUID(), sequence: 1, state: state()).encoded())
         for count in 0..<valid.count { XCTAssertNil(BoundWorldPacket.decode(Data(valid.prefix(count)))) }
-        var wrong = valid; wrong[44] = 43; XCTAssertNil(BoundWorldPacket.decode(wrong))
-        wrong = valid; wrong[846] = 17; XCTAssertNil(BoundWorldPacket.decode(wrong))
+        var wrong = valid; wrong[68] = 43; XCTAssertNil(BoundWorldPacket.decode(wrong))
+        wrong = valid; wrong[870] = 17; XCTAssertNil(BoundWorldPacket.decode(wrong))
         wrong = valid; wrong.append(0); XCTAssertNil(BoundWorldPacket.decode(wrong))
         XCTAssertNil(BoundWorldPacket(sender: UUID(), receiver: nil, sequence: 0, state: state()).encoded())
-        var bad = state(); bad.flags.removeLast()
+        var bad = state(); bad.checkpoints.removeLast()
         XCTAssertNil(BoundWorldPacket(sender: UUID(), receiver: nil, sequence: 1, state: bad).encoded())
+    }
+    func testMismatchedGameContractAndLegacyPacketsAreRejected() throws {
+        let data = try XCTUnwrap(BoundWorldPacket(sender: UUID(), receiver: nil, sequence: 1, state: state()).encoded())
+        for index in [4, 20, 22, 24, 26] {
+            var wrong = data; wrong[index] ^= 1
+            XCTAssertNil(BoundWorldPacket.decode(wrong), "Different ruleset, ABI, checkpoint or save versions must not connect")
+        }
+        var legacy = data; legacy[3] = Character("1").asciiValue!
+        XCTAssertNil(BoundWorldPacket.decode(legacy))
+        var duplicate = state()
+        duplicate.boulders = Data([1,3,10,0,31,0,1,3,11,0,31,0])
+        XCTAssertFalse(duplicate.valid)
     }
     func testBothPlayersMustCompleteFreshHandshake() {
         var a = BoundWorldTimeline(), b = BoundWorldTimeline()
@@ -31,6 +43,20 @@ final class SharedWorldTests: XCTestCase {
         b.receive(.init(sender: a.epoch, receiver: b.epoch, sequence: 2, state: state()), at: 2)
         XCTAssertTrue(a.fresh(at: 2)); XCTAssertTrue(b.fresh(at: 2))
         XCTAssertFalse(a.fresh(at: 5)); XCTAssertFalse(a.fresh(at: 1))
+    }
+    func testGameRollbackAndHeapResetInvalidateTheCaptureGeneration() {
+        var clock = BoundWorldSourceClock()
+        XCTAssertTrue(clock.admit(40)); XCTAssertTrue(clock.admit(42))
+        XCTAssertFalse(clock.admit(2)); XCTAssertEqual(clock.generation, 1)
+        XCTAssertTrue(clock.admit(4)); XCTAssertFalse(clock.admit(3))
+    }
+    func testPausedGameOutputCannotRefreshProgressIndefinitely() {
+        var clock = BoundWorldSourceClock()
+        XCTAssertTrue(clock.admit(2))
+        for _ in 0..<179 { XCTAssertTrue(clock.admit(2)) }
+        XCTAssertFalse(clock.admit(2)); XCTAssertEqual(clock.generation, 1)
+        XCTAssertFalse(clock.admit(2)); XCTAssertEqual(clock.generation, 1)
+        XCTAssertTrue(clock.admit(4))
     }
     func testReconnectReplayAndReorderedPacketsCannotOpenGates() {
         var a = BoundWorldTimeline(); let peer = UUID(), oldEpoch = a.epoch

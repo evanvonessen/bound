@@ -1,4 +1,15 @@
-# Shared world progression (Radical Red 4.1)
+# Game-owned shared world progression (ABI 1)
+
+This worktree requires the matching `rrbin-integrated.gba` build from
+`/Users/evandev/dev/integratedred`. The cartridge contains the progression rules,
+native entry points, snapshot producer and permanent waiting dialogue. Bound
+imports generated release metadata, reads a versioned game snapshot and writes
+only the declared peer-data port. It no longer ships or installs the shared
+world C payload. The original unchanged ROM remains a separate solo artifact.
+
+Build/import instructions and the precise contract are in
+`/Users/evandev/dev/integratedred/docs/integrated-multiplayer.md`. Neither
+worktree is merged or published by this task.
 
 Enable Experimental Features, connect to a friend and enable Live Friend Sprites
 on both devices. The supported exact-ROM multiplayer profile now uses both
@@ -42,11 +53,13 @@ those requires verified native predicates, rather than substituting partner RAM.
 
 ## Admission and lifecycle
 
-`BWP1` is a separate binary message on the existing authenticated, expected-peer
-Agora interaction stream. It carries 800 bytes of bounded event/trainer predicates,
-map identity and up to sixteen boulder positions. Maximum 943 bytes, with send attempts bounded to twice
+`BWP2` is a separate binary message on the existing authenticated, expected-peer
+Agora interaction stream. It includes a ruleset UUID, ABI and checkpoint/save
+versions, 800 opaque checkpoint bytes, map identity and up to sixteen boulder
+positions. Maximum 967 bytes, with send attempts bounded to twice
 per second even when the transport fails. Presence packets still contain only poses.
-Both local ROMs must pass the existing exact SHA-256 profile. No backend/config,
+Both local ROMs must pass the generated exact integrated-release SHA-256 profile.
+Unknown versions, BWP1 and mismatched rulesets are rejected. No backend/config,
 signing, account or dependency changes are needed.
 
 Each binding/reconnect gets a new UUID challenge. Only an acknowledgment of the
@@ -58,62 +71,58 @@ reliable-stream backlog cannot reopen a gate. A completed-frame lease also expir
 main-thread policy delivery stalls. Without fresh progress, native player movement
 and trainer launches wait; native battles and menus keep running. Explicitly
 ending multiplayer or disabling the feature restores ordinary solo behavior.
-Waiting dialogue uses only native opcodes/text in inactive link-queue RAM
-(`03004200`), which ordinary save states serialize. It remains dismissible after
-a restore without multiplayer ROM hooks; native link setup initializes the queue
-before a trade/battle.
+Waiting dialogue resides permanently in the game ROM and remains dismissible
+after restoring a waiting state with the host session ended. The game reserves
+2 KiB through its native allocator for two committed output buffers. Bound can
+read the previous complete frame while the game writes the next one.
 
-Only the completed-frame owner accesses the bridge. The new original Thumb shim
-occupies verified empty loaded-ROM bytes `09ff6000..09ff8000`, separate from Soul
-Link, invitation and native trade/battle code. It changes no cartridge file and
-writes no save progress. Base-hash verification removes owned patches from a copy,
-so Soul Link, invitations and native trades/battles can coexist. Save-state
-rollback reports current progress; there is no monotonic union of earned flags.
+The peer-data port is outside emulator save states, so loading an old state
+cannot restore expired peer authority. A game-output rewind/reset rotates the
+network challenge; stalled output expires after 180 completed core frames.
+The 128 KiB battery-save format is unchanged. Raw emulator states require the
+exact integrated ROM build; use a cold boot and Continue for existing batteries.
+
+Only the completed-frame owner accesses the bridge. Game instructions are
+composed into `09ff0000..09ff4000` during the cartridge build. Bound writes only
+the declared 1 KiB host-data port at `09ff4000`; it does not change the cartridge
+file or earned save progress. Base-hash verification reconstructs the original
+view in a temporary copy for existing native bridge admission. Soul Link,
+invitations and native trade/battle retain their separate adapters.
 
 ## Verification
 
-`PrototypeTools/build-shared-world.py --check` verifies reproducible original glue.
-`PrototypeTools/verify-shared-world.py --rom <private-ROM> --output <ignored-report>`
-executes the real ARM predicates, native trainer dispatcher/check command and
-expanded flag accessors. The terrain engine return is controlled in that test;
-it is not a full game playthrough. Dependencies for this optional check are
-Unicorn 2.1.4, installed only in ignored disposable tooling.
+`PrototypeTools/build-shared-world.py --check` verifies imported metadata and
+Swift compatibility constants. `PrototypeTools/verify-shared-world.py
+--game-source ../integratedred --rom ../integratedred/build/rrbin-integrated.gba
+--output <ignored-report>` delegates ARM execution to the game-owned verifier.
+There is no second gameplay implementation or app-generated gameplay capsule.
 
-`SharedWorldTests` covers bounded packets, malformed/truncated messages, both
-handshakes, stale/reordered/retired packets, one-sided reconnect and save rollback.
-`NativeBattleRuntimeTests/testActualSharedWorldCollisionAndNativeCoexistence`
-uses the supplied private simulator fixture (`BOUND_WORLD_RUNTIME=1`), cold-boots
-VBA-M, installs both hook owners, verifies native link admission, and checks actual
-movement is blocked with no peer and released with matching progress. It verifies
-original flags/ROM/seed preservation, plus saving/restoring the native waiting
-window after removing both ROM hook owners. Native invitation, interaction, presence,
-cable and Soul Link regressions remain part of the focused test run.
+`SharedWorldTests` covers BWP2 bounds and compatibility rejection, handshake,
+stale/reordered/retired packets, reconnect, save rollback, frozen output and
+game-output generation changes. The native VBA-M tests cold-boot the matching
+ROM with a disposable battery, exercise actual movement stop/release and both
+trainer entry paths, and restore the permanent waiting dialogue after the host
+session ends. Immutable cartridge hashes must match before and after every
+shared-world attach/update/detach. Native invitation, interaction, presence,
+cable and Soul Link regressions are included.
 
-`NativeBattleRuntimeTests/testActualSharedWorldSightlineLaunchWaits` exercises
-the second launch command and its save-state recovery in the actual VBA-M core.
-The isolated multi_red native gameplay fixture also uses real Route24 movement
-and automatic trainer approach: one local trainer-1 win shows the wait dialogue;
-matching peer progress opens movement and starts Lass Ali's Jigglypuff battle.
-The fixture warps to the bridge and seeds the local win, with controlled peer
-snapshots. It does not simulate a natural pair of completed wins over a network.
+The integrated multi_red gameplay fixture additionally proves actual Route 24
+movement and automatic trainer approach: one seeded local trainer-1 win shows
+the wait dialogue; matching peer progress opens movement and starts Lass Ali's
+Jigglypuff battle. Loading a prior ready state with a disconnected current host
+port cannot restore permission. Native warp and local-win seeding prepare these
+fixtures; controlled peer input is held fresh. This is not a natural networked
+pair of completed victories.
 
-Sightline-fix verification: **62 focused integration tests, zero failures or
-skips**, **53 ARM checks**, and a reproducible **2,140-byte** capsule. The native
-launch dispatch slot is checked, owned and restored alongside the existing
-hooks. The capsule matches multi_red's maintained source and generated bytes.
-Debug simulator and unsigned iPhone Release builds pass; all 17,061 pinned
-source files still verify. The dedicated simulator uses disposable ROM/save
-fixtures and preserves their input bytes.
+This variant passed 65 selected integration tests with no failures or skips,
+67 game-owned ARMv4T checks, Debug simulator and unsigned iPhone Release builds,
+and integrity checks for all 17,061 pinned source files.
+
+Final evidence is recorded in `Docs/INTEGRATED-MULTIPLAYER-VALIDATION.json`, with
+full build logs and XCTest bundles retained under this worktree's `.build/`.
+Earlier 61/62-test reports and app-installed capsule receipts document the prior
+architecture and do not establish this cartridge variant.
 
 Two physical devices, separate networks, paired normal-app Nugget Bridge battles,
 complete Strength puzzles and all custom story gates remain runtime acceptance
 limits. Simulator/ARM checks must not be described as those playthroughs.
-
-Initial 2026-10-21 publication verification, before the sightline fix:
-**61 focused integration tests, zero failures**;
-**45 ARM gate/ABI checks**; Debug simulator and unsigned iPhone Release builds
-passed. Actual native movement stop/release, hook coexistence and restoring the
-waiting dialogue without ROM hooks passed. All **17,061** pinned source files,
-932-byte native link guest and 376-byte Soul Link guest remain unchanged. The
-source, Debug and Release cloud configuration hashes match. Detailed local logs
-and receipts remain ignored under `.build/shared-world-*` in the feature worktree.

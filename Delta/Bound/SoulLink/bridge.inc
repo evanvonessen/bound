@@ -13,16 +13,16 @@ bool soulResident() {
 }
 bool soulOriginalHash(uint8_t digest[32]) {
     if(!rom) return false;
-    if(!soulHooked()&&!soulResident()&&!worldOwnsROM()) { CC_SHA256(rom,0x2000000,digest); return true; }
+    if(!soulHooked()&&!soulResident()&&!gameDescriptorPresent(rom)) { CC_SHA256(rom,0x2000000,digest); return true; }
     // The base ROM is verified again for native link admission without removing
     // eligibility hooks, even while the core is paused between session owners.
     NSMutableData *base=[NSMutableData dataWithBytes:rom length:0x2000000];
     auto *p=(uint8_t *)base.mutableBytes;
-    worldRestoreBase(p);
     if(soulHooked()||soulResident()) {
         memcpy(p+0x3FBE8,soulOriginalGet,8); memcpy(p+0x4037C,soulOriginalSet,8);
         memset(p+SoulStart,0xFF,SoulEnd-SoulStart);
     }
+    worldRestoreBase(p);
     CC_SHA256(p,0x2000000,digest); return true;
 }
 }

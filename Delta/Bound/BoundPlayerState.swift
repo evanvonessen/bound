@@ -49,7 +49,7 @@ struct BoundPlayerStateReading: Equatable, Sendable {
 }
 
 final class BoundPlayerROMProfile: Sendable {
-    static let supportedSHA256 = "689299664a954c12dad66e03c2d18446b348cb31bd98b395c87b9b514b288066"
+    static let supportedSHA256 = BoundWorldContract.romSHA256
     enum ProfileError: Error { case unsupportedROM }
     private let rom: Data
     let sceneAssets = BoundPlayerSceneAssets()

@@ -163,10 +163,9 @@ final class NativeBattleRuntimeTests:XCTestCase {
         core.rate = 8; XCTAssertTrue(core.start()); await fulfillment(of: [driver.booted], timeout: 90)
         _ = core.pause(); core.rate = 1; driver.play(moves: false)
         XCTAssertTrue(BoundVBABattleBridge.installSharedWorld())
-        XCTAssertTrue(BoundVBABattleBridge.installSoulLink(), "Both independent hook owners must admit the same base hash")
-        XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady(), "Native trade/battle admission strips both owned hooks when verifying the original ROM")
+        XCTAssertEqual(BoundVBABattleBridge.qaSharedWorldImmutableDigest(), Data(SHA256.hash(data: originalROM)), "Attaching the ABI must not install game instructions")
         let state = BoundVBABattleBridge.sharedWorldSnapshot()
-        let flags = try XCTUnwrap(state["flags"] as? Data)
+        let flags = try XCTUnwrap(state["checkpoints"] as? Data)
         XCTAssertEqual(flags.count, 800)
         func position() throws -> BoundPlayerState.Point {
             guard let memory = BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }) else { throw NSError(domain: "snapshot", code: 1) }
@@ -181,9 +180,9 @@ final class NativeBattleRuntimeTests:XCTestCase {
             core.deltaCore.emulatorBridge.deactivateInput(input, playerIndex: 0)
         }
         _ = core.pause(); XCTAssertEqual(try position(), initial, "A missing partner must block real native player movement in every direction")
-        XCTAssertEqual(world.read()?.flags, flags, "The production completed-frame mailbox must publish a usable local snapshot")
+        XCTAssertEqual(world.read()?.checkpoints, flags, "The production completed-frame mailbox must publish a usable local snapshot")
         let peer = BoundWorldState(group: try XCTUnwrap(state["group"] as? UInt8), number: try XCTUnwrap(state["number"] as? UInt8),
-                                   flags: flags, boulders: state["boulders"] as? Data ?? Data())
+                                   checkpoints: flags, boulders: state["boulders"] as? Data ?? Data())
         world.publishPolicy(enabled: true, peer: peer, fresh: true)
         _ = core.resume()
         var moved = false
@@ -196,15 +195,21 @@ final class NativeBattleRuntimeTests:XCTestCase {
             _ = core.resume()
         }
         XCTAssertTrue(moved, "Fresh matching partner progress must restore ordinary native movement")
-        XCTAssertEqual(BoundVBABattleBridge.sharedWorldSnapshot()["flags"] as? Data, flags, "Collision gates must never edit earned progress")
+        XCTAssertEqual(BoundVBABattleBridge.sharedWorldSnapshot()["checkpoints"] as? Data, flags, "Collision gates must never edit earned progress")
+        XCTAssertEqual(BoundVBABattleBridge.qaSharedWorldImmutableDigest(), Data(SHA256.hash(data: originalROM)), "All session updates are confined to the declared host data port")
+        BoundVBABattleBridge.closeSharedWorld()
+        XCTAssertEqual(BoundVBABattleBridge.qaSharedWorldImmutableDigest(), Data(SHA256.hash(data: originalROM)), "Closing the ABI must preserve permanent game instructions")
+        XCTAssertTrue(BoundVBABattleBridge.installSharedWorld())
+        XCTAssertTrue(BoundVBABattleBridge.installSoulLink(), "The integrated game and Soul Link must coexist")
+        XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady(), "Native link admission must validate the integrated game's base view")
         BoundVBABattleBridge.setSharedWorldPeer(Data(), group: 0, number: 0, boulders: Data(), fresh: false)
         XCTAssertTrue(sightline ? BoundVBABattleBridge.qaStartSharedWorldSightlineWait() : BoundVBABattleBridge.qaStartSharedWorldWait())
         world.publishPolicy(enabled: true, peer: nil, fresh: false)
-        // The native trainer command must stage the waiting RAM script first.
+        // The native trainer command must enter the permanent waiting game script first.
         _ = core.resume(); try await Task.sleep(for: .milliseconds(350)); _ = core.pause()
         let pointer = try XCTUnwrap(core.deltaCore.emulatorBridge.readMemory?(at: 0xEB8, size: 4))
         let address = pointer.enumerated().reduce(0) { $0 | Int($1.element) << ($1.offset * 8) }
-        XCTAssertTrue((0x03004200..<0x03004220).contains(address), "The native denied-trainer script must already be waiting in serialized RAM")
+        XCTAssertTrue((0x08000000..<0x0A000000).contains(address), "The native denied-trainer script must reside in the permanent game ROM")
         let waitURL = output.appendingPathComponent("waiting.sgm"); core.saveSaveState(to: waitURL)
         world.publishPolicy(enabled: false, peer: nil, fresh: false)
         BoundVBABattleBridge.closeSharedWorld(); BoundVBABattleBridge.closeSoulLink()
@@ -217,7 +222,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
             try await Task.sleep(for: .milliseconds(100))
         }
         _ = core.pause()
-        XCTAssertTrue(BoundVBABattleBridge.friendDialogueReady(), "The saved native waiting window must release normally with all multiplayer ROM code removed")
+        XCTAssertTrue(BoundVBABattleBridge.friendDialogueReady(), "The saved native waiting window must release normally after the host session is ended")
         XCTAssertEqual(try Data(contentsOf: rom), originalROM); XCTAssertEqual(try Data(contentsOf: seed), originalSeed)
     }
 

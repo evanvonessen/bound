@@ -1,0 +1,137 @@
+{
+  "schema": 1,
+  "passed": true,
+  "kind": "multiplayer game variant; not byte-identical reconstruction",
+  "baseline_sha256": "689299664a954c12dad66e03c2d18446b348cb31bd98b395c87b9b514b288066",
+  "integrated_sha256": "9f0740e30ae7f71da3d993fb3c2ad84dadfe1dd23f1d08480f81582692567dde",
+  "rom_size": 33554432,
+  "code_bytes": 5284,
+  "code_sha256": "1f857f9d83f53ccd6e6911e9e24b73ba7cd80f62c3a6b3210a5dab60bb0168c0",
+  "contract": {
+    "schema": 1,
+    "abi_major": 1,
+    "abi_minor": 0,
+    "wire_version": 2,
+    "checkpoint_format": 1,
+    "battery_save_version": 1,
+    "save_state_layout": 1,
+    "ruleset_id": "a2c74639d5ef4c9fa34b7e1f0199a841",
+    "game_family_id": "689299664a954c12dad66e03c2d18446",
+    "descriptor_offset": 33513216,
+    "descriptor_size": 128,
+    "host_port_offset": 33505280,
+    "host_port_size": 1024,
+    "snapshot_address": 33554432,
+    "snapshot_size": 960,
+    "reserved_heap_bytes": 2048,
+    "source_of_truth": "integratedred/source/multiplayer",
+    "snapshot_region_size": 2048,
+    "snapshot_buffer_offset": 64,
+    "snapshot_buffers": 2
+  },
+  "symbols": {
+    "BoundWorldCheckTrainer": 167708881,
+    "BoundWorldCollision": 167707593,
+    "BoundWorldCollisionEntry": 167707569,
+    "BoundWorldDoTrainer": 167708825,
+    "BoundWorldFlag": 167707521,
+    "BoundWorldOriginalCollision": 167707573,
+    "BoundWorldOriginalFlag": 167707361,
+    "BoundWorldTrainer": 167708729,
+    "GameFieldFrame": 167709129,
+    "GameInitHeap": 167708985,
+    "GamePolicy": 167707073,
+    "GameWaitScript": 167710020,
+    "enabled": 167707181,
+    "fresh": 167707237,
+    "hostValid": 167706817,
+    "peerFlag": 167707267,
+    "reserved": 167706773,
+    "save": 167706653,
+    "templates": 167706693,
+    "trainerPending": 167707377,
+    "word": 167706625
+  },
+  "source_sha256": {
+    "game/game_runtime.c": "c4e92c455452472fd35f844f7fda48a506d8fc67e3d178009bf7b11ca956002d",
+    "shared_world/shared_world.c": "e30ea56bd6fb6291ccff869864a086f2e43cd2ea33740c4e217df06e12ceb7e0"
+  },
+  "definitions": [
+    {
+      "definition": "GameInitHeap",
+      "offset": 11136,
+      "size": 8,
+      "original_hex": "00b5044a1060044a",
+      "sha256": "7a4d7f5140c93e3dfb8b46839f0ad7a72b5abaa24d53ee4abca413dcc01caf55"
+    },
+    {
+      "definition": "GameFieldFrame",
+      "offset": 353656,
+      "size": 8,
+      "original_hex": "00b513f095fa20f0",
+      "sha256": "97b9f4dd495dffca8da82047cf40633d0af1941c7681b912a4fb4b21f9013355"
+    },
+    {
+      "definition": "BoundWorldFlag",
+      "offset": 452304,
+      "size": 8,
+      "original_hex": "10b50004040c201c",
+      "sha256": "1372333266aee446b636c8ec952e3aa1f802270a96e2d80528325303f4d70088"
+    },
+    {
+      "definition": "native player collision",
+      "offset": 407212,
+      "size": 12,
+      "original_hex": "f0b557464e464546e0b4061c",
+      "sha256": "50cf6280331986e6fb745f35cd72078bd443a3441c4ab49e160f30ace0ba6519"
+    },
+    {
+      "definition": "BoundWorldTrainer",
+      "offset": 1440548,
+      "size": 4,
+      "original_hex": "c5c20608",
+      "sha256": "b9e6033dc6fb0ff7931dbd82fa99d6cf036c1b03d63c89bf9c062a5b80db0752"
+    },
+    {
+      "definition": "BoundWorldDoTrainer",
+      "offset": 1440552,
+      "size": 4,
+      "original_hex": "d9c20608",
+      "sha256": "802a3fc8e9054357094bbbb626d74a253a024a2ed7e6837f29698578628e0f72"
+    },
+    {
+      "definition": "BoundWorldCheckTrainer",
+      "offset": 1440564,
+      "size": 4,
+      "original_hex": "0dc30608",
+      "sha256": "ee1fdb15a452b5a12cda0e98d0a4f2c0dcd74626d2a2b4d49f18c492f54110b5"
+    },
+    {
+      "definition": "compiled multiplayer game code",
+      "offset": 33488896,
+      "size": 5284,
+      "original_hex": null,
+      "sha256": "1f857f9d83f53ccd6e6911e9e24b73ba7cd80f62c3a6b3210a5dab60bb0168c0"
+    },
+    {
+      "definition": "host data port",
+      "offset": 33505280,
+      "size": 1024,
+      "original_hex": null,
+      "sha256": "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+    },
+    {
+      "definition": "versioned game descriptor",
+      "offset": 33513216,
+      "size": 128,
+      "original_hex": null,
+      "sha256": "835127ad6094beded088d8eeefa9b59840069d86d49db4a279a93c13bd9018dc"
+    }
+  ],
+  "cache_key": "b2bb631231ca2017e8f08877176f8fd27a625670aa1e338d53d8f90ddf57f315",
+  "cache_hit": true,
+  "native_binding_scope": "Exact RR4.1 adapter in the game build. Bound uses the exported data ABI only.",
+  "save_compatibility": "Battery-save format unchanged. Legacy emulator save states require cold boot; the native allocator rejects the old RAM layout without overwriting it.",
+  "bound_abi_header_sha256": "4d7becd607f9a4c83c6190f0c02da55fc43c302ef160c12fbfe6a35960a60b92",
+  "contract_sha256": "f3ebd5d50bb362d8ae5ad327a0d6c7ef4b7a63b7cb7f012022c500f7c762ade0"
+}

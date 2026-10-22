@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "feature": "Game-owned shared progression and versioned Bound ABI",
+  "publication": "isolated codex/integratedbound worktree; no merge or push authorized",
+  "rom_sha256": "9f0740e30ae7f71da3d993fb3c2ad84dadfe1dd23f1d08480f81582692567dde",
+  "game_code_sha256": "1f857f9d83f53ccd6e6911e9e24b73ba7cd80f62c3a6b3210a5dab60bb0168c0",
+  "contract": {
+    "schema": 1,
+    "abi_major": 1,
+    "abi_minor": 0,
+    "wire_version": 2,
+    "checkpoint_format": 1,
+    "battery_save_version": 1,
+    "save_state_layout": 1,
+    "ruleset_id": "a2c74639d5ef4c9fa34b7e1f0199a841",
+    "game_family_id": "689299664a954c12dad66e03c2d18446",
+    "descriptor_offset": 33513216,
+    "descriptor_size": 128,
+    "host_port_offset": 33505280,
+    "host_port_size": 1024,
+    "snapshot_address": 33554432,
+    "snapshot_size": 960,
+    "reserved_heap_bytes": 2048,
+    "source_of_truth": "integratedred/source/multiplayer",
+    "snapshot_region_size": 2048,
+    "snapshot_buffer_offset": 64,
+    "snapshot_buffers": 2
+  },
+  "checks": {
+    "xctest": {
+      "total": 65,
+      "passed": 65,
+      "failed": 0,
+      "skipped": 0,
+      "log": ".build/integrated-world-double-buffer-tests.log",
+      "bundle": ".build/integrated-world-double-buffer.xcresult"
+    },
+    "game_native_armv4t": {
+      "checks": 67,
+      "game_report": "../integratedred/analysis/integrated_multiplayer_native.json"
+    },
+    "pinned_dependency_sources": {
+      "files": 17061,
+      "passed": true,
+      "log": ".build/integrated-pinned-sources.log"
+    },
+    "metadata_import": {
+      "passed": true,
+      "tool": "PrototypeTools/build-shared-world.py --check"
+    },
+    "debug_simulator_build": {
+      "passed": true,
+      "log": ".build/integrated-debug-double-buffer-final.log"
+    },
+    "unsigned_iphone_release": {
+      "passed": true,
+      "log": ".build/integrated-release-double-buffer.log",
+      "derived_data": ".build/IntegratedRelease"
+    }
+  },
+  "evidence_preservation": {
+    "simulator": "D4629B3E-2DC6-4B29-84D7-59819142A4DD",
+    "fixture_scope": "new dedicated QA device; disposable copied ROM and battery only",
+    "native_saves": "dedicated simulator Documents/FullAppGameplayQA/shared-world-*/",
+    "earlier_failed_receipts": [
+      ".build/integrated-world.xcresult",
+      ".build/integrated-world-tests.log",
+      ".build/integrated-debug-double-buffer-build.log"
+    ]
+  },
+  "limits": [
+    "Unsigned iPhone compilation is not physical-device runtime proof.",
+    "Peer packet/handshake tests and controlled native peer inputs are not a two-device networked playthrough.",
+    "This migrates shared progression; Soul Link and trade/battle adapters retain their separate implementation.",
+    "Custom scene-variable gates, forced warps and every late-game route remain outside the established coverage."
+  ]
+}

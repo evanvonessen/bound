@@ -58,75 +58,46 @@ static uint8_t soulQAScriptBackup[128];
 #endif
 
 @implementation BoundVBABattleBridge
+// Attaches to the game's ABI; never installs/restores gameplay instructions.
 + (BOOL)installSharedWorld {
     if(worldOwnsROM()) return YES;
-    if(!rom||!workRAM||!internalRAM||armed||inviteActive) return NO;
-    uint8_t digest[32]; soulOriginalHash(digest);
+    if(!rom||!workRAM||!internalRAM||armed||inviteActive||!gameDescriptorPresent(rom)) return NO;
+    uint8_t digest[32];soulOriginalHash(digest);
     const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
         0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
     if(memcmp(digest,expected,32)) return NO;
-    for(size_t i=WorldStart;i<WorldEnd;i++) if(rom[i]!=0xFF) return NO;
-    if(word(rom+WorldTrainerSlot)!=0x0806C2C5 || word(rom+WorldDoTrainerSlot)!=0x0806C2D9 || word(rom+WorldCheckSlot)!=0x0806C30D) return NO;
-    memcpy(worldFlagOriginal,rom+0x6E6D0,8); memcpy(worldCollisionOriginal,rom+0x636AC,12);
-    worldDoTrainerOriginal=word(rom+WorldDoTrainerSlot); worldTrainerOriginal=word(rom+WorldTrainerSlot); worldCheckOriginal=word(rom+WorldCheckSlot);
-    memcpy(rom+WorldStart,BoundSharedWorldCode,sizeof(BoundSharedWorldCode));
-    worldFlagThunk[0]=0; worldFlagThunk[1]=0x4B; worldFlagThunk[2]=0x18; worldFlagThunk[3]=0x47;
-    put32(worldFlagThunk+4,BoundWorldFlagAddress);
-    // push r3; ldr r3,[pc,#4]; bx r3; nop; target. Entry pops r3.
-    const uint8_t entry[]={0x08,0xB4,0x01,0x4B,0x18,0x47,0xC0,0x46};
-    memcpy(worldCollisionThunk,entry,8); put32(worldCollisionThunk+8,BoundWorldCollisionEntryAddress);
-    memcpy(rom+0x6E6D0,worldFlagThunk,8); memcpy(rom+0x636AC,worldCollisionThunk,12);
-    put32(rom+WorldDoTrainerSlot,BoundWorldDoTrainerAddress); put32(rom+WorldTrainerSlot,BoundWorldTrainerAddress); put32(rom+WorldCheckSlot,BoundWorldCheckTrainerAddress);
-    memset(rom+WorldPolicy,0,1024); put32(rom+WorldPolicy,0x31575042); worldROM=rom;
+    if(GameSnapshotAddress<0x02000000||GameSnapshotAddress+GameSnapshotRegionSize>0x02040000) return NO;
+    const auto *p=workRAM+GameSnapshotAddress-0x02000000;
+    if(word(p)!=0x31434D52||half(p+4)!=GameABIMajor||half(p+6)>GameABIMinor||word(p+8)!=GameSnapshotRegionSize) return NO;
+    worldROM=rom;
+    if(![self sharedWorldSnapshot][@"checkpoints"]) { worldROM=nullptr; return NO; }worldSequence=0;[[NSUUID UUID] getUUIDBytes:worldSession];
+    worldWritePolicy(false,[NSData data],0,0,[NSData data],false);
     return YES;
 }
 + (NSDictionary<NSString *,id> *)sharedWorldSnapshot {
-    uint8_t *save=worldSave();
-    if(!worldOwnsROM()||!save) return @{};
-    NSMutableData *flags=[NSMutableData dataWithLength:800]; auto *p=(uint8_t *)flags.mutableBytes;
-    memcpy(p,save+0xEE0,0x900/8); memcpy(p+0x900/8,workRAM+0x3B174,0x1000/8);
-    NSMutableData *boulders=[NSMutableData data];
-    const uint32_t events=word(workRAM+0x36E00);
-    if(events>=0x08000000&&events<0x09FFFFEC) {
-        auto *e=rom+events-0x08000000; unsigned count=e[0]; uint32_t objects=word(e+4);
-        if(count<=64 && objects>=0x08000000 && objects<=0x0A000000-count*24) {
-            for(unsigned i=0;i<count;i++) {
-                auto *o=rom+objects-0x08000000+i*24; if(o[1]!=97) continue;
-                unsigned flag=half(o+20);
-                if(flag&&flag<0x1900&&(p[flag/8]&(1u<<(flag&7)))) continue;
-                uint8_t b[6]={o[0],uint8_t(o[8]&15)}; put16(b+2,half(o+4)); put16(b+4,half(o+6));
-                // The game's saved map templates retain offscreen movements.
-                for(unsigned j=0;j<64;j++) {
-                    auto *saved=save+0x8E0+j*24;
-                    if(saved[0]==o[0]&&saved[1]==97) { put16(b+2,half(saved+4)); put16(b+4,half(saved+6)); break; }
-                }
-                for(unsigned j=0;j<16;j++) {
-                    auto *live=workRAM+0x36E38+j*36;
-                    if((live[0]&1)&&live[8]==o[0]&&live[9]==save[5]&&live[10]==save[4]) {
-                        b[1]=uint8_t(live[11]&15); put16(b+2,half(live+16)-7); put16(b+4,half(live+18)-7); break;
-                    }
-                }
-                [boulders appendBytes:b length:6];
-            }
-        }
-    }
-    return @{@"flags":flags,@"group":@(save[4]),@"number":@(save[5]),@"boulders":boulders};
+    if(!worldOwnsROM()||!workRAM) return @{};
+    const auto *control=workRAM+GameSnapshotAddress-0x02000000;
+    if(word(control)!=0x31434D52||half(control+4)!=GameABIMajor||half(control+6)>GameABIMinor
+       ||word(control+8)!=GameSnapshotRegionSize||word(control+16)!=GameSnapshotSize||word(control+12)>1) return @{};
+    const uint32_t index=word(control+12);
+    const auto *p=control+64+index*GameSnapshotSize;
+    const uint32_t sequence=word(p+12);
+    if(!sequence||(sequence&1)||word(p)!=0x31534D52||half(p+4)!=GameABIMajor||half(p+6)>GameABIMinor
+       ||word(p+8)!=GameSnapshotSize||word(p+20)!=1||p[24]>=43||p[26]>16
+       ||memcmp(p+32,GameRulesetID,16)||word(p+48)!=1||word(p+52)!=1||word(p+56)!=1) return @{};
+    NSData *checkpoints=[NSData dataWithBytes:p+64 length:800];NSData *boulders=[NSData dataWithBytes:p+864 length:p[26]*6];
+    if(word(p+12)!=sequence||word(control+12)!=index) return @{};
+    return @{@"checkpoints":checkpoints,@"group":@(p[24]),@"number":@(p[25]),@"boulders":boulders,@"sequence":@(sequence),@"frame":@(word(p+16))};
 }
-+ (void)setSharedWorldPeer:(NSData *)flags group:(NSUInteger)group number:(NSUInteger)number boulders:(NSData *)boulders fresh:(BOOL)fresh {
-    if(!worldOwnsROM()) return;
-    auto *p=rom+WorldPolicy;
-    put32(p+4,1); put32(p+8,fresh?180:0); put32(p+12,fresh?1:0);
-    p[16]=uint8_t(group); p[17]=uint8_t(number);
-    memset(p+18,0,800); if(flags.length==800) memcpy(p+18,flags.bytes,800);
-    p[818]=0; p[819]=0;
-    if(boulders.length%6==0&&boulders.length<=96) { p[818]=uint8_t(boulders.length/6); memcpy(p+820,boulders.bytes,boulders.length); }
++ (void)setSharedWorldPeer:(NSData *)checkpoints group:(NSUInteger)group number:(NSUInteger)number boulders:(NSData *)boulders fresh:(BOOL)fresh {
+    worldWritePolicy(true,checkpoints,unsigned(group),unsigned(number),boulders,fresh);
 }
 + (void)advanceSharedWorld {
-    if(worldOwnsROM()) { auto *p=rom+WorldPolicy; uint32_t lease=word(p+8); if(lease) put32(p+8,lease-1); }
+    if(worldOwnsROM()) { auto *p=rom+GameHostOffset+64;uint32_t lease=word(p+8);if(lease) put32(p+8,lease-1); }
 }
 + (void)closeSharedWorld {
-    if(worldOwnsROM()) worldRestoreBase(rom);
-    worldROM=nullptr;
+    // The permanent game module and serialized guest return addresses stay valid.
+    worldWritePolicy(false,[NSData data],0,0,[NSData data],false);worldROM=nullptr;
 }
 + (void)resetFriendDialogueOwner {
     // A temporary detach may rebind the same loaded cartridge. Let its native
@@ -482,6 +453,13 @@ static uint8_t soulQAScriptBackup[128];
 }
 
 #if DEBUG && TARGET_OS_SIMULATOR
++ (NSData *)qaSharedWorldImmutableDigest {
+    if(!rom) return [NSData data];
+    NSMutableData *copy=[NSMutableData dataWithBytes:rom length:0x2000000];
+    memset((uint8_t *)copy.mutableBytes+GameHostOffset,0,GameHostSize);
+    uint8_t digest[32];CC_SHA256(copy.bytes,CC_LONG(copy.length),digest);
+    return [NSData dataWithBytes:digest length:32];
+}
 + (BOOL)qaStartSharedWorldWait {
     if(!worldOwnsROM()||![self friendDialogueReady]) return NO;
     const uint8_t script[]={0x5C,0,0x6E,0,0,0,0,0,0,0,0,0,0,0,0x02};

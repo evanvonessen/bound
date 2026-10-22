@@ -34,6 +34,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)enforceSoulLink;
 + (void)closeSoulLink;
 #if DEBUG && TARGET_OS_SIMULATOR
++ (NSData *)qaSharedWorldImmutableDigest;
 + (BOOL)qaStartSharedWorldWait;
 + (BOOL)qaStartSharedWorldSightlineWait;
 + (BOOL)qaStartSoulCheck;
