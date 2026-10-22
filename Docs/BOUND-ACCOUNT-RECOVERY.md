@@ -57,11 +57,12 @@ recovery assets byte-for-byte. The page is already published.
 
 The requested Resend sending domain, `auth.evanvonessen.com`, has been created in
 North Virginia with ID `2798323b-2565-40fc-8da9-4e6ee5cd3e69`. Activation is still
-pending: the Squarespace DNS records have not been saved, the domain is not yet
-verified, and Supabase SMTP awaits a new scoped API key. Squarespace briefly
-reported a reauthentication screen during DNS editing; browser control was
-then interrupted by other use before the record form could be completed. No recovery email has
-been sent. The sending domain does not change the recovery-page URL above.
+pending. All three DNS records below were saved in Squarespace after explicit
+human confirmation, and live DNS queries returned the exact TXT value and CNAME
+targets. Existing root website and Google mail records were left unchanged.
+Resend verification and Supabase SMTP and redirect configuration remain pending.
+No recovery email has been sent. The sending domain does not change the
+recovery-page URL above.
 
 Resend supplied these DNS records for the `evanvonessen.com` zone:
 
