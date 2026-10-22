@@ -17,15 +17,36 @@ The workflow is managed in App Store Connect, not by the local manifest:
 
 [Default workflow](https://appstoreconnect.apple.com/teams/9d720eb1-930c-481d-addb-7aca59955ee5/xcode-cloud/products/8a247e82-d842-45d7-b913-eb52ea163861/workflows/B7F71582-2706-4334-BA13-532900F2DF55).
 
-## Delivery after Codex publishes
+## On-demand releases
 
-After a validated code change is published to `origin/main`, check that the
-Cloud run for that exact commit reaches TestFlight. If Cloud's usage limit
-blocks the run, report delivery as blocked and stop delivery work. Normal code
-validation, commits and pushes may continue. Do not automatically create a local
-distribution archive or upload from this Mac, including through Xcode Organizer,
-when Cloud minutes are exhausted or Cloud otherwise cannot deliver. Leave the
-existing Cloud workflow in place for when capacity becomes available.
+Normal commits and pushes do not start or require TestFlight builds. Continue
+local focused checks and Release validation for app changes, then batch changes
+until the user asks for a TestFlight build or delivery. Documentation-only
+updates do not need an app build.
+
+The Default workflow is enabled with **Manual Start - Branch: main** as its only
+start condition. Branch-change, schedule, pull-request and tag triggers are not
+configured. **Clean is off**, allowing derived-data/cache restoration, and the
+only action is **Archive - iOS**. A separate Build - iOS action was removed
+because the distribution archive already builds the app. Keep the existing
+internal distribution post-action. Use a clean build only to diagnose a concrete
+cache issue, then restore caching; do not routinely pay for clean builds.
+
+For a requested release:
+
+1. Select the requested validated commit on main and verify the remote hash.
+2. Inspect existing queued/running builds and upload receipts for that commit.
+   Reuse an existing build; do not start duplicates or retry an uncertain upload.
+3. Check available Cloud minutes. If exhausted, report the blocker and stop
+   delivery work. Do not start a run just to test this procedure.
+4. Manually start one Default workflow run for the requested main revision.
+   Verify its recorded commit matches; do not substitute a newer moving main.
+5. Verify Apple processing and the internal TestFlight post-action for that
+   exact build. A successful push or archive alone is not completed delivery.
+
+Do not poll Cloud after every ordinary push. Do not automatically create a local
+distribution archive or upload from this Mac, including through Organizer, when
+Cloud cannot deliver. The workflow remains available for requested releases.
 
 A local upload requires an explicit human request for that upload. Implementing,
 committing or pushing a change alone does not authorize a local upload. After
@@ -36,7 +57,7 @@ python3 PrototypeTools/deliver-testflight.py --revision <published-commit> --che
 python3 PrototypeTools/deliver-testflight.py --revision <published-commit> --upload
 ```
 
-The Cloud check is part of the Codex publication procedure in `AGENTS.md`.
+The on-demand release policy is recorded in `AGENTS.md`.
 The local commands above are manual delivery tools, not an automatic fallback,
 a Git hook or an unattended service. They require this Mac, Xcode, network access
 and a working developer account in Xcode. They do not purchase Cloud minutes.
