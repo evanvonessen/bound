@@ -62,9 +62,9 @@ send, with Forge and sending enabled, receiving disabled, and tracking not
 configured. All three DNS records below were saved in Squarespace after explicit
 human confirmation, and live DNS queries returned the exact TXT value and CNAME
 targets. Existing root website and Google mail records were left unchanged.
-Supabase SMTP credentials and Auth URL configuration still await human action.
-No test recovery email has been sent. The sending domain does not change the
-recovery-page URL above.
+Supabase Auth URLs and custom SMTP are saved and verified in the dashboard.
+Recovery email delivery has passed a live test, including the user's confirmation
+of receipt. The sending domain does not change the recovery-page URL above.
 
 Resend supplied these DNS records for the `evanvonessen.com` zone:
 
@@ -76,7 +76,7 @@ Resend supplied these DNS records for the `evanvonessen.com` zone:
 
 These are public DNS values. Receiving remains disabled. Preserve the existing
 website and Google records at the root domain; no root DMARC change is required.
-Configure Supabase custom SMTP as follows:
+Supabase custom SMTP is enabled with these saved settings:
 
 | Setting | Value |
 | --- | --- |
@@ -84,31 +84,32 @@ Configure Supabase custom SMTP as follows:
 | Host | `smtp.resend.com` |
 | Port | `465` |
 | Username | `resend` |
-| Password | A new Resend sending API key scoped to this domain |
+| Password | Resend API key with Sending access scoped to this domain |
 
-Enter the API key only in Supabase's secret SMTP password field, never in source,
+The account owner entered the API key in Supabase's secret SMTP password field,
+and the saved configuration was verified to persist. No SMTP key is included in source,
 documentation, app configuration or build settings. Keep email link tracking off.
 
-The Supabase Auth dashboard still showed an empty redirect allowlist and
-`http://localhost:3000` as the Site URL. Add the exact HTTPS recovery URL above to
-the allowed redirects and replace the placeholder Site URL with the production
-site. The default recovery email template was verified live to use
-`{{ .ConfirmationURL }}`. Preserve that action link so Supabase verifies the link
-before redirecting to the page with its recovery access token. The page does not
-accept a direct `token_hash` or PKCE-code callback. An unapproved recovery redirect
-falls back to the Site URL.
+After explicit human confirmation, Supabase Auth URL configuration was saved and
+verified in the dashboard with a successful update confirmation. The redirect
+allowlist contains exactly one URL:
+`https://evanvonessen.github.io/bound/reset-password.html`. The Site URL is
+`https://evanvonessen.github.io/bound/`. The default recovery email template was
+verified live to use `{{ .ConfirmationURL }}`. Preserve that action link so
+Supabase verifies the link before redirecting to the page with its recovery
+access token. The page does not accept a direct `token_hash` or PKCE-code
+callback. An unapproved recovery redirect falls back to the Site URL.
 
-Custom SMTP was disabled at the latest dashboard check. Its non-secret fields
-are prepared in a browser draft, but credentials and activation are not saved.
-The Resend SMTP endpoint accepted a verified TLS 1.3 connection on port 465;
-authenticated sending is not yet tested. Supabase's default email
-service is limited to authorized project-team addresses. Domain verification and
-published static assets alone do not establish working recovery delivery. The
+The Resend SMTP endpoint accepted a verified TLS 1.3 connection on port 465.
+A live Supabase recovery request for an explicitly owned Bound account returned
+HTTP 200. Resend showed the matching email as **Delivered**, and the user
+confirmed receiving it. This verifies the configured recovery mail path without
+consuming the recovery link or changing the account's password. The
 password-protected email endpoint is deployed; live account mutation remains
 unverified.
 
-Use an explicitly owned QA account to verify email delivery, the recovery link,
-password update, expired/reused links, rate limits and subsequent native sign-in.
+Use an explicitly owned QA account to verify the recovery link, password update,
+expired/reused links, rate limits and subsequent native sign-in.
 No private Auth/service keys are needed in the page; the public client key matches
 `Delta/Bound/cloud-configuration.json` and is verified by the page tests.
 
@@ -124,9 +125,10 @@ References: [Supabase recovery flow](https://supabase.com/docs/reference/javascr
 The October 21 Resend setup checks passed all 14 browser recovery tests, verified
 the three hosted assets against local bytes, built the ordinary `Bound.xcodeproj`
 / `Bound` target for Release iPhone, and verified all 17,061 pinned source files.
-The Release log is `.build/resend-setup/release-iphone.log`. No email delivery,
-real password change, subsequent native sign-in or physical-device recovery was
-tested; provider activation remains pending as described above.
+The Release log is `.build/resend-setup/release-iphone.log`. The subsequent live
+recovery request passed, Resend confirmed delivery, and the user confirmed
+receipt. Recovery-link consumption, a real password change, subsequent native
+sign-in and physical-device recovery remain untested.
 
 The 2026-10-21 recovery/sync fix passed 88 focused native tests, 36 browser/
 Dropbox-handler tests, and the account recovery navigation UI test in both UI
@@ -134,9 +136,9 @@ versions. The unsigned Release iPhone build and all 17,061 pinned source checks
 also passed. Evidence is under `.build/account-sync-fix/`, including
 `final-native-tests.xcresult`, `recovery-ui-tests.xcresult`, and
 `release-iphone.log`. The Simulator was isolated from personal app data.
-No recovery email, real password change, Dropbox consent, cross-device save
-restore, or physical-device validation was performed. Server activation remains
-pending as described above; successful local tests do not activate the service.
+That earlier test run did not send recovery email or exercise a real password
+change, Dropbox consent, cross-device save restore or physical-device behavior.
+The live mail delivery verification above was performed separately.
 
 - `node --test PrototypeTools/password-reset.test.mjs` exercises the actual browser
   controller and wiring with synthetic credentials and injected network responses.
@@ -157,6 +159,6 @@ Release iPhone build, all 17,061 pinned source integrity checks, and diff checks
 Native evidence is in `.build/account-email/final-security-tests.xcresult`; logs are
 in `.build/account-email/`. Native execution used an isolated, ad-hoc-signed
 simulator. That run did not exercise live email delivery, hosted redirects, or
-physical-device recovery. The October 21 check above verifies static hosting only;
-email delivery, authenticated recovery completion, and physical-device recovery
-remain untested. See [backend deployment details](../Backend/account-security/README.md).
+physical-device recovery. The October 21 setup above now verifies static hosting
+and live email delivery; authenticated recovery completion and physical-device
+recovery remain untested. See [backend deployment details](../Backend/account-security/README.md).
