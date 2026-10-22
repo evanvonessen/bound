@@ -112,6 +112,10 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
     var nextEgg = 1
     var offering = false
     var ended = false
+    /// A solo Nuzlocke uses the same native catch/death enforcement without a peer.
+    /// Absent on every existing paired journal.
+    var soloOwner: UUID?
+    var isSolo: Bool { soloOwner != nil }
     // Optional fields preserve journals written before paired encounter tracking.
     var partnerAcquisitions: Set<String>?
     var partnerNames: [String: String]?
@@ -463,9 +467,10 @@ final class BoundSoulProbe: @unchecked Sendable {
     }
     /// Called only after the cartridge's new-game handshake has durably paired
     /// both players. No starter exists yet; ordinary play enrolls it later.
-    func startPreparedRun(run: UUID, binding: String) throws {
+    func startPreparedRun(run: UUID, binding: String, soloOwner: UUID? = nil) throws {
         lock.lock(); defer { lock.unlock() }
-        if let ledger, ledger.run == run, ledger.binding == binding, !ledger.ended { return }
+        guard snapshot.error == nil else { throw BoundSoulLedger.Error.corrupt }
+        if let ledger, ledger.run == run, ledger.binding == binding, ledger.soloOwner == soloOwner, !ledger.ended { return }
         guard ledger == nil || ledger?.ended == true else { throw BoundSoulLedger.Error.corrupt }
         if let old = ledger, let url {
             let archive = url.deletingLastPathComponent().appendingPathComponent("Finished Runs", isDirectory: true)
@@ -475,7 +480,8 @@ final class BoundSoulProbe: @unchecked Sendable {
                 try JSONEncoder().encode(old).write(to: destination, options: .atomic)
             }
         }
-        let value = BoundSoulLedger(run: run, binding: binding)
+        var value = BoundSoulLedger(run: run, binding: binding)
+        value.soloOwner = soloOwner
         try persist(value); ledger = value; snapshot.ledger = value
     }
     func endRun() throws {
@@ -665,6 +671,7 @@ final class BoundSoulSession: ObservableObject {
         if !cartridgeManagesPause { _ = core?.pause() }
     }
     var active: Bool { ledger != nil && ledger?.ended == false }
+    var solo: Bool { ledger?.isSolo == true }
     var paired: Bool { confirmed && clock() - lastPeer < 3 }
     func permitsNativeActivity(_ activity: BoundFriendInteractionPacket.Activity) -> Bool {
         activity == .battle || !active
@@ -681,6 +688,14 @@ final class BoundSoulSession: ObservableObject {
         guard let binding else { throw BoundSoulLedger.Error.corrupt }
         try probe.startPreparedRun(run: run, binding: binding)
         ledger = probe.read().ledger
+    }
+    func startSoloRun(run: UUID, owner: UUID) throws {
+        guard !gameID.isEmpty else { throw BoundSoulLedger.Error.corrupt }
+        try probe.startPreparedRun(run:run, binding:Self.soloBinding(owner:owner, gameID:gameID), soloOwner:owner)
+        ledger = probe.read().ledger
+    }
+    nonisolated static func soloBinding(owner: UUID, gameID: String) -> String {
+        hash("solo:" + owner.uuidString.lowercased() + ":" + gameID)
     }
     init(probe: BoundSoulProbe = BoundSoulProbe(), clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }, areaNames: [Int: String] = [:], teamSnapshot: (() -> BoundSoulProbe.Snapshot)? = nil) {
         self.teamSnapshot = teamSnapshot ?? { probe.read() }
@@ -720,13 +735,14 @@ final class BoundSoulSession: ObservableObject {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Soul Link", isDirectory: true)
     }
-    static func hash(_ value: String) -> String { SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined() }
+    nonisolated static func hash(_ value: String) -> String { SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined() }
     func setConnection(owner: String?, room: String?) {
         let value = owner.flatMap { owner in room.map { Self.hash(owner + ":" + $0) } }
         if value != connection { peerGone(); offered = nil; incoming = nil; connection = value }
         binding = value
     }
     private func transmit(_ kind: BoundSoulPacket.Kind, run: UUID, rows: [BoundSoulRow] = []) {
+        guard !solo else { return }
         if let data = BoundSoulPacket(version: 2, run: run, kind: kind, rows: rows,
                                       losses: ledger?.lossBits ?? Data(repeating: 0, count: 288),
                                       acquired: ledger?.acquisitionBits ?? Data(repeating: 0, count: 288),
@@ -754,6 +770,7 @@ final class BoundSoulSession: ObservableObject {
         incoming = nil
     }
     func receive(_ data: Data) {
+        guard !solo else { return }
         guard BoundMultiplayerFeatures.isEnabled, connected?() == true, let binding else { return }
         if data.starts(with: BoundSoulTeamPacket.prefix) {
             guard let packet = BoundSoulTeamPacket.decode(data), let ledger, !ledger.ended,
@@ -828,7 +845,7 @@ final class BoundSoulSession: ObservableObject {
             try probe.endRun(); ledger = probe.read().ledger
             if let ledger { transmit(.end, run: ledger.run) }
             status = "Soul Link ended. Your run record is kept."; offered = nil; incoming = nil
-            if cartridgeManagesPause && wasRunning { core?.resume() }
+            if (cartridgeManagesPause || ledger?.isSolo == true) && wasRunning { core?.resume() }
         } catch { status = "Couldn’t save the end of this run." }
     }
     func cancelInvitation() {
@@ -890,7 +907,7 @@ final class BoundSoulSession: ObservableObject {
         let now = time ?? clock()
         if proposedEpoch != nil, now - proposalAt > 1 { peerGone() }
         probe.setPreviewEnabled(BoundMultiplayerFeatures.isEnabled)
-        defer { updateTeams(at: now); updateDeathMoment(at: now); bannerChanged?(!cartridgeManagesPause && (probe.read().error != nil || (active && !paired)) ? status : nil) }
+        defer { updateTeams(at: now); updateDeathMoment(at: now); bannerChanged?(!cartridgeManagesPause && (probe.read().error != nil || (active && !solo && !paired)) ? status : nil) }
         let snapshot = probe.read(); if snapshot.ledger != ledger { ledger = snapshot.ledger }
         if let ledger { probe.timeline.observeSoul(ledger) }
         canStart = BoundMultiplayerFeatures.isEnabled && supported && snapshot.ready && snapshot.mons.count == 1
@@ -907,6 +924,10 @@ final class BoundSoulSession: ObservableObject {
                 status = canStart ? "Ready to start Soul Link." : "Start a new game, receive only your starter, and connect to your partner."
             }
             if let offered, now - sent > 1 { sent = now; transmit(.offer, run: offered) }
+            return
+        }
+        if ledger.isSolo {
+            status = ledger.ended ? "Nuzlocke ended. Your run record is kept." : "Solo Nuzlocke active"
             return
         }
         let transportReady = BoundMultiplayerFeatures.isEnabled && connected?() == true && binding == ledger.binding
@@ -1109,7 +1130,7 @@ struct BoundSoulGraveyardView: View {
                     Label(BoundSoulControls.title(loss.slot, names: session.areaNames), systemImage: "heart.slash.fill")
                         .font(.headline).foregroundStyle(.red)
                     Text("You: " + loss.localLabel)
-                    Text("Partner: " + loss.partnerLabel)
+                    if !session.solo { Text("Partner: " + loss.partnerLabel) }
                     if let date = loss.recordedAt { Text(date, format: .dateTime.month().day().hour().minute()).font(.caption).foregroundStyle(.secondary) }
                 }
                 .accessibilityElement(children: .combine)
@@ -1138,11 +1159,11 @@ struct BoundSoulDeathNotice: View {
                         .accessibilityLabel("Dismiss death announcement")
                         .accessibilityIdentifier("bound.soul-link.death-dismiss")
                     }
-                    Text("SOUL LINK BROKEN").font(.headline).tracking(2)
-                    Text(loss.names).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
+                    Text(session.solo ? "POKÉMON LOST" : "SOUL LINK BROKEN").font(.headline).tracking(2)
+                    Text(session.solo ? loss.localLabel:loss.names).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(BoundSoulControls.title(loss.slot, names: session.areaNames)).font(.subheadline)
-                    Text("Together, remembered.").font(.caption).foregroundStyle(.secondary)
+                    if !session.solo { Text("Together, remembered.").font(.caption).foregroundStyle(.secondary) }
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity)
@@ -1154,7 +1175,7 @@ struct BoundSoulDeathNotice: View {
                 .accessibilityIdentifier("bound.soul-link.death-moment")
                 .id(loss.slot)
                 .onAppear {
-                    UIAccessibility.post(notification: .announcement, argument: "Soul Link broken. " + loss.names + ". " + BoundSoulControls.title(loss.slot, names: session.areaNames))
+                    UIAccessibility.post(notification: .announcement, argument: (session.solo ? "Pokémon lost. " + loss.localLabel : "Soul Link broken. " + loss.names) + ". " + BoundSoulControls.title(loss.slot, names: session.areaNames))
                 }
                 .transition(.opacity)
             }
@@ -1275,7 +1296,7 @@ final class BoundRunTimeline: @unchecked Sendable {
             // Undated migrated losses are historical, not fabricated new events.
             guard let date = death.recordedAt else { continue }
             append(id: "death:\(ledger.run.uuidString):\(death.slot)", kind: .death,
-                   title: "Linked pair lost", detail: death.names, at: date)
+                   title: ledger.isSolo ? "Pokémon lost":"Linked pair lost", detail: ledger.isSolo ? death.localLabel:death.names, at: date)
         }
     }
 }

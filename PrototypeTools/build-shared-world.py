@@ -24,7 +24,7 @@ else:
  if sha(header_path.read_bytes())!=m['bound_abi_header_sha256']:raise SystemExit('Generated ABI header changed')
 c=m['contract']
 supported={'abi_major':1,'abi_minor':0,'wire_version':2,'checkpoint_format':1,
-           'battery_save_version':1,'save_state_layout':2,'snapshot_size':960,
+           'battery_save_version':1,'save_state_layout':3,'snapshot_size':960,
            'snapshot_region_size':2048,'snapshot_buffer_offset':64,'snapshot_buffers':2,
            'host_port_size':1024,'reserved_heap_bytes':4096,
            'ui_abi_major':1,'ui_abi_minor':0,'ui_host_port_size':2048,'ui_snapshot_size':256}

@@ -9,6 +9,7 @@ enum BoundROMCommand: UInt32 {
     case none, listFriends, pair, cancel, submitSettings, checkpoint, resume
     case battle, trade, startSoulLink, endSoulLink, watch, timeline, accept, decline
     case recoveryChoice, page, newGameReady
+    case lobbyCreate, lobbyInvite, lobbyReady, lobbyStart, lobbyLeave, lobbyAccept, lobbyDecline, lobbyOpen, lobbySolo
 }
 enum BoundROMStatus: UInt32 { case idle, waiting, accepted, declined, complete, unavailable, busy, recovery, timeline, invitation }
 
@@ -48,6 +49,9 @@ struct BoundROMRequest: Equatable, Sendable {
     let flags: UInt32
     let frame: UInt32
     let requestID: UInt32
+    var lobbyMode: UInt32 = 0
+    var selectedRooms: [UUID] = []
+    var soloChoice = false
     var safeField: Bool { flags & 1 != 0 }
     var newGame: Bool { flags & 2 != 0 }
     var paused: Bool { flags & 4 != 0 }
@@ -56,10 +60,15 @@ struct BoundROMRequest: Equatable, Sendable {
               let command = BoundROMCommand(rawValue: BoundROMBytes.word(data,12)) else { return nil }
         let sequence = BoundROMBytes.word(data,8)
         guard sequence > 0, sequence & 1 == 0 else { return nil }
+        let mode = BoundROMBytes.word(data,100), count = BoundROMBytes.word(data,104), solo = BoundROMBytes.word(data,156)
+        guard mode <= 1, count <= 3, solo <= 1 else { return nil }
+        let rooms = (0..<Int(count)).map { BoundROMBytes.uuid(data,108 + $0 * 16) }
+        guard Set(rooms).count == rooms.count, !rooms.contains(BoundROMBytes.zero) else { return nil }
         return .init(sequence: sequence, command: command, friendIndex: BoundROMBytes.word(data,16),
             argument: BoundROMBytes.word(data,20), identifier: BoundROMBytes.uuid(data,24),
             settings: data.subdata(in:40..<72), flags: BoundROMBytes.word(data,80),
-            frame: BoundROMBytes.word(data,84), requestID: BoundROMBytes.word(data,88))
+            frame: BoundROMBytes.word(data,84), requestID: BoundROMBytes.word(data,88),
+            lobbyMode: mode, selectedRooms: rooms, soloChoice: solo == 1)
     }
 }
 
@@ -84,6 +93,12 @@ struct BoundROMHostState: Equatable, Sendable {
     var message = ""
     var friends: [Friend] = []
     var page: UInt32 = 0
+    var lobby: BoundLobbySnapshot?
+    var lobbyOwner: UUID?
+    var lobbyJoined = false
+    var lobbyInvitation = false
+    var lobbyRejoinAvailable = false
+    var solo = false
     func encoded(sequence: UInt32) -> Data {
         var data = Data(repeating: 0, count: 2048)
         data.replaceSubrange(0..<8, with: [82,85,73,49,1,0,0,0])
@@ -107,6 +122,30 @@ struct BoundROMHostState: Equatable, Sendable {
             BoundROMBytes.put(friend.room, into: &data, at:offset)
             BoundROMBytes.text(friend.name, into: &data, at:offset + 16, size:32)
             BoundROMBytes.put(friend.status, into: &data, at:offset + 48)
+        }
+        BoundROMBytes.put(0x3159424C, into: &data, at:1360)
+        data[1364] = 1; data[1366] = 48; data[1367] = 1 // version 1, 304 bytes
+        let member = lobbyOwner.flatMap { lobby?.member($0) }
+        let lobbyFlags: UInt32 = (lobbyJoined && member?.joined == true ? 1:0) | (lobbyOwner != nil && lobby?.creatorID == lobbyOwner ? 2:0)
+            | (member?.ready == true ? 4:0) | (lobby?.started == true ? 8:0) | (lobbyInvitation ? 16:0) | (solo ? 32:0) | (lobbyRejoinAvailable ? 64:0)
+        BoundROMBytes.put(lobbyFlags, into: &data, at:1368)
+        let members = lobby?.members.filter { $0.state != "declined" }.prefix(4) ?? []
+        BoundROMBytes.put(UInt32(members.count), into: &data, at:1372)
+        BoundROMBytes.put(lobby?.lobbyID, into: &data, at:1376)
+        BoundROMBytes.text(lobby.flatMap { value in value.creatorID.flatMap { value.member($0)?.displayName } } ?? "Friend", into: &data, at:1392, size:32)
+        let pairs = Set(members.compactMap { person -> String? in
+            guard let partner = person.partnerOwnerID else { return nil }
+            return [person.ownerID.uuidString, partner.uuidString].sorted().joined(separator:":")
+        }).sorted()
+        for (index, person) in members.enumerated() {
+            let offset = 1424 + index * 60
+            BoundROMBytes.put(person.ownerID, into:&data, at:offset)
+            BoundROMBytes.text(person.displayName, into:&data, at:offset+16, size:32)
+            let flags: UInt32 = (person.online ? 1:0) | (person.ready ? 2:0) | (person.ownerID == lobbyOwner ? 4:0) | (person.ownerID == lobby?.creatorID ? 8:0)
+            BoundROMBytes.put(flags, into:&data, at:offset+48)
+            let key = person.partnerOwnerID.map { [person.ownerID.uuidString, $0.uuidString].sorted().joined(separator:":") }
+            let slot = key.flatMap { pairs.firstIndex(of:$0) }.map { UInt32($0+1) } ?? 0
+            BoundROMBytes.put(slot, into:&data, at:offset+52)
         }
         return data
     }
@@ -220,6 +259,29 @@ enum BoundROMCheckpointReadiness {
     }
 }
 
+/// Loading a lobby never supplies authority to advance somebody else's run.
+/// Pending solo setup may boot its native title/intro UI, with gameplay and
+/// battery writes fenced until that core proves a fresh New Game setup.
+enum BoundSoloRunAdmission: Equatable {
+    case play, setup, pendingSetup, wrongOwner, journalRecovery, conflictingRun
+    static func evaluate(_ run: BoundSoloRunRecord, owner: UUID?, ledger: BoundSoulLedger?,
+                         journalError: String?, hasPairedState: Bool, newGameProof: Bool) -> Self {
+        guard !hasPairedState, !run.ended else { return .conflictingRun }
+        guard run.owner == owner else { return .wrongOwner }
+        guard journalError == nil else { return .journalRecovery }
+        let matching = ledger.map {
+            $0.valid && !$0.ended && !$0.offering && $0.run == run.id && $0.soloOwner == run.owner
+            && $0.binding == BoundSoulSession.soloBinding(owner:run.owner, gameID:run.gameID)
+        } == true
+        if run.settings.isEmpty {
+            if let ledger, !ledger.ended,
+               !matching || !ledger.records.isEmpty || !ledger.dead.isEmpty { return .journalRecovery }
+            return newGameProof ? .setup:.pendingSetup
+        }
+        return matching ? .play:.journalRecovery
+    }
+}
+
 /// Coordinates durable services requested by the cartridge. The only inputs to
 /// setup are a native new-game choice and the authenticated friend-room channel.
 @MainActor
@@ -255,6 +317,17 @@ final class BoundROMMultiplayerCoordinator {
     private let account: BoundFriendAccount
     private let store: BoundMultiplayerSaveStore
     private let leaseClient = BoundRunLeaseClient()
+    let lobby = BoundLobbySession()
+    private let soloStore = BoundSoloRunStore.shared
+    private var soloRun: BoundSoloRunRecord?
+    private var soloStorageProtected = false
+    private var soloPauseOwned = false
+    private var soloAdmissionFailure: String?
+    private var soloRecoveryBlocked = false {
+        didSet { if oldValue != soloRecoveryBlocked { updateWorkingStateAuthority() } }
+    }
+    private var lobbyTransportSnapshot: BoundLobbySnapshot?
+    private var pendingLobbyCommand: BoundROMCommand?
     private var grant: BoundRunLeaseGrant?
     private var validatedFence: UInt64?
     private var anchorBaselineValidated = false
@@ -301,6 +374,7 @@ final class BoundROMMultiplayerCoordinator {
     private var wasConnected = false
     private var lastSuspensionRevision: String?
     private var pendingAction: BoundROMCommand?
+    private var pendingLobbyTarget: UUID?
     private var pendingActionAt: TimeInterval = 0
     private var error: String?
     private var lastEventCount = 0
@@ -313,6 +387,7 @@ final class BoundROMMultiplayerCoordinator {
     init(sharing: FriendSharingSession, onboarding: FriendOnboarding, account: BoundFriendAccount,
          store: BoundMultiplayerSaveStore = .shared) {
         self.sharing = sharing; self.onboarding = onboarding; self.account = account; self.store = store
+        lobby.changed = { [weak self] in self?.synchronizeLobbyTransport() }
         sharing.multiplayerPacketReceiver = { [weak self] in self?.receive($0) }
         let timer = Timer(timeInterval:0.1,repeats:true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -327,9 +402,9 @@ final class BoundROMMultiplayerCoordinator {
     private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
     private var identity: BoundMultiplayerRunIdentity? { manifest?.identity ?? setup?.identity ?? incoming?.manifest.identity }
     private var setupURL: URL? { game.map { store.directory(gameID:$0.identifier).appendingPathComponent("setup.json") } }
-    var protectsRun: Bool { manifest != nil || setup != nil || error != nil }
+    var protectsRun: Bool { manifest != nil || setup != nil || soloRun?.ended == false || error != nil }
     private func updateWorkingStateAuthority() {
-        let allowed = !protectedStorage || workingStateAuthorized
+        let allowed = (!protectedStorage || workingStateAuthorized) && !soloRecoveryBlocked
         sharing.soulLink.probe.setNativeObservationAllowed(allowed)
         if let game, game.type == .gba {
             saveFenceReady = BoundVBABattleBridge.setROMGameSaveAllowed(allowed, for:game.gameSaveURL)
@@ -348,7 +423,11 @@ final class BoundROMMultiplayerCoordinator {
         verification?.cancel(); leaseTask?.cancel(); leaseTask = nil; grant = nil; validatedFence = nil
         leaseOperation = UUID()
         anchorBaselineValidated = false; baselineHistory = nil
+        sharing.clearAuthenticatedLobby(reconnectPair:false, identity:{ [weak account] in account?.session })
         self.core = core; self.game = game; verified = false; probe.configure(core:core)
+        soloRun = nil; soloStorageProtected = false; soloPauseOwned = false; soloAdmissionFailure = nil; soloRecoveryBlocked = false
+        pendingLobbyCommand = nil; lobbyTransportSnapshot = nil
+        lobby.bind(session:account.session,gameID:game?.identifier ?? "")
         servicesActive = core != nil; transportWasConnected = false
         protectedStorage = game.map { store.hasRun(gameID:$0.identifier) } ?? false; lastInboxScanAt = -.infinity
         host = BoundROMHostState(); channel.reset(); selectedRoom = nil; peerOwner = nil; peerHello = nil
@@ -357,12 +436,21 @@ final class BoundROMMultiplayerCoordinator {
         endingRun = false
         lastRequest = 0; newGame = false; error = nil; pendingSnapshot = nil; didRestore = false; head = nil
         validatedSnapshot = false; workingStateAuthorized = false
-        wasConnected = false; lastSuspensionRevision = nil; pendingAction = nil
+        wasConnected = false; lastSuspensionRevision = nil; pendingAction = nil; pendingLobbyTarget = nil
         sharing.soulLink.cartridgeManagesPause = false
         guard let core, let game, game.type == .gba else { return }
+        // Detect even an unreadable solo record before asynchronous ROM checks
+        // or any independently verified Soul probe can observe another frame.
+        soloStorageProtected = BoundSoloSyncGuard.protects(gameID:game.identifier)
+        if soloStorageProtected {
+            soloRecoveryBlocked = true
+            if core.state == .running { soloPauseOwned = core.pause() }
+        }
         do {
+            soloRun = try soloStore.load(gameID:game.identifier)
             let savedManifest = try store.manifest(gameID:game.identifier)
             manifest = savedManifest?.ended == true ? nil:savedManifest
+            guard soloRun?.ended != false || manifest == nil else { throw BoundMultiplayerSaveStore.Failure.conflict }
             finishedRun = savedManifest?.ended == true ? savedManifest?.identity.run:nil
             incoming = try store.inspectIncoming(gameID:game.identifier)
             if incoming != nil { finishedRun = nil }
@@ -372,6 +460,9 @@ final class BoundROMMultiplayerCoordinator {
                 guard bytes.count <= 16_384 else { throw BoundMultiplayerSaveStore.Failure.corrupt }
                 setup = try JSONDecoder().decode(Setup.self,from:bytes)
                 guard setup?.identity.valid == true, setup?.identity.gameID == game.identifier else { throw BoundMultiplayerSaveStore.Failure.corrupt }
+            }
+            guard soloRun?.ended != false || (manifest == nil && incoming == nil && setup == nil) else {
+                throw BoundMultiplayerSaveStore.Failure.conflict
             }
             selectedRoom = identity?.roomID
             if let manifest {
@@ -425,9 +516,87 @@ final class BoundROMMultiplayerCoordinator {
                 self.host.recovery = self.error != nil; self.host.message = self.error ?? ""
                 self.probe.publish(self.host)
             }
-            if valid && self.saveFenceReady && pausedForVerification && self.servicesActive && UIApplication.shared.applicationState == .active { core.resume() }
+            if valid && self.saveFenceReady && pausedForVerification && !self.soloRecoveryBlocked
+                && self.servicesActive && UIApplication.shared.applicationState == .active { core.resume() }
+            // Solo admission owns its pause and only releases it after the
+            // current account and original journal have been checked in tick.
+            if valid && self.soloStorageProtected { self.tick() }
             if let room = self.selectedRoom { self.onboarding.setMultiplayerPartner(roomID:room) }
         }
+    }
+    private func synchronizeLobbyTransport() {
+        guard BoundMultiplayerFeatures.isEnabled, servicesActive, let snapshot = lobby.snapshot,
+              lobby.joined, let owner = account.session?.owner, let member = snapshot.member(owner),
+              let token = lobby.memberToken else {
+            if lobbyTransportSnapshot != nil {
+                sharing.clearAuthenticatedLobby(identity:{ [weak account] in account?.session })
+                lobbyTransportSnapshot = nil
+            }
+            return
+        }
+        sharing.configureAuthenticatedLobby(lobbyID:snapshot.lobbyID,memberToken:token,
+            pairedRoomID:member.mode == "soulLink" ? selectedRoom:nil,
+            partnerID:member.mode == "soulLink" ? member.partnerOwnerID:nil,
+            identity:{ [weak account] in account?.session })
+        sharing.setAutomaticMultiplayerConnection(true)
+        if let previous = lobbyTransportSnapshot, previous != snapshot { sharing.refreshLobbyMembership() }
+        lobbyTransportSnapshot = snapshot
+    }
+    private func createSoloRun() throws {
+        guard let game, let owner = account.session?.owner, manifest == nil, incoming == nil, setup == nil else {
+            throw BoundMultiplayerSaveStore.Failure.conflict
+        }
+        if let current = soloRun, !current.ended {
+            guard current.owner == owner else { throw BoundMultiplayerSaveStore.Failure.ownerMismatch }
+            return
+        }
+        guard newGame else { throw BoundMultiplayerSaveStore.Failure.conflict }
+        soloRun = try soloStore.begin(gameID:game.identifier,owner:owner,gameSaveURL:game.gameSaveURL)
+        selectedRoom = nil; onboarding.setMultiplayerPartner(roomID:nil)
+    }
+    private func handleLobby(_ request: BoundROMRequest) throws {
+        let solo = soloRun?.ended == false
+        switch request.command {
+        case .lobbySolo:
+            try createSoloRun()
+            if request.argument == 1 { lobby.accept(run:soloRun?.id,solo:true,partnerRoom:nil) }
+        case .lobbyCreate:
+            if request.argument == 1 { try createSoloRun() }
+            else if identity == nil {
+                guard let friend = onboarding.rooms.first(where:{ UUID(uuidString:$0.roomID) == request.identifier }), !solo else {
+                    throw BoundMultiplayerSaveStore.Failure.conflict
+                }
+                selectRoom(friend.roomID)
+            }
+            lobby.create(run:manifest?.identity.run ?? (soloRun?.ended == false ? soloRun?.id:nil),solo:soloRun?.ended == false,
+                         partnerRoom:soloRun?.ended == false ? nil:selectedRoom,extraRooms:request.selectedRooms)
+        case .lobbyAccept:
+            if identity == nil, !solo {
+                guard let friend = onboarding.rooms.first(where:{ UUID(uuidString:$0.roomID) == request.identifier }) else {
+                    throw BoundMultiplayerSaveStore.Failure.conflict
+                }
+                selectRoom(friend.roomID)
+            }
+            lobby.accept(run:manifest?.identity.run ?? (solo ? soloRun?.id:nil),solo:solo,partnerRoom:solo ? nil:selectedRoom)
+        case .lobbyInvite: lobby.invite(request.selectedRooms)
+        case .lobbyReady: lobby.setReady(request.argument != 0)
+        case .lobbyStart: lobby.start()
+        case .lobbyLeave:
+            let wasRunning = core?.state == .running
+            try restoreFriendlyBattleBeforeSaving(resume:false)
+            if manifest != nil, !suspend() { throw BoundMultiplayerSaveStore.Failure.incomplete }
+            if manifest == nil, setup != nil { send(.cancel, setup!.identity.run); try cancelSetup() }
+            host.connected = false; probe.publish(host)
+            if wasRunning, core?.state == .paused, !sharing.nativeBattle.protectsTemporaryState,
+               UIApplication.shared.applicationState == .active { core?.resume() }
+            lobby.leave()
+        case .lobbyDecline: lobby.decline()
+        case .lobbyOpen:
+            lobby.clearMessage()
+        default: return
+        }
+        pendingLobbyCommand = request.command
+        host.status = lobby.busy ? .waiting:.complete
     }
     private func persistSetup() throws {
         guard let setup, let url = setupURL else { throw BoundMultiplayerSaveStore.Failure.corrupt }
@@ -834,14 +1003,24 @@ final class BoundROMMultiplayerCoordinator {
     }
     private func handle(_ request: BoundROMRequest) throws {
         guard request.requestID != 0, request.requestID != lastRequest else { return }
+        if request.command.rawValue >= BoundROMCommand.lobbyCreate.rawValue {
+            guard !lobby.busy else { return }
+            lastRequest = request.requestID; host.acknowledgedRequest = request.requestID
+            do { try handleLobby(request) }
+            catch { host.status = .unavailable; host.message = error.localizedDescription }
+            return
+        }
         lastRequest = request.requestID; host.acknowledgedRequest = request.requestID
         switch request.command {
         case .newGameReady:
-            guard manifest == nil, incoming == nil else { host.status = .waiting; return }
+            guard manifest == nil, incoming == nil, soloRun?.ended != false else { host.status = .waiting; return }
             newGame = true; host.status = .idle
         case .listFriends:
             timelinePage = 0; host.status = .idle; onboarding.refresh()
         case .pair, .startSoulLink:
+            guard soloRun?.ended != false else {
+                host.status = .unavailable; host.message = "Continue your Solo Nuzlocke."; return
+            }
             guard BoundMultiplayerFeatures.isEnabled, newGame, manifest == nil,
                   let room = onboarding.rooms.first(where: { UUID(uuidString:$0.roomID) == request.identifier }) else {
                 host.status = .unavailable; host.message = "Start Soul Link from a new game."; return
@@ -856,19 +1035,36 @@ final class BoundROMMultiplayerCoordinator {
             }
             else { host.status = .waiting; host.message = "Run preserved. Close the game to suspend." }
         case .submitSettings:
+            if let solo = soloRun, !solo.ended, let game, let owner = account.session?.owner {
+                guard solo.owner == owner, request.newGame, Self.validSettings(request.settings) else {
+                    host.status = .unavailable; host.message = "Finish this run's original setup."; return
+                }
+                try sharing.soulLink.startSoloRun(run:solo.id,owner:owner)
+                soloRun = try soloStore.commit(gameID:game.identifier,owner:owner,settings:request.settings)
+                newGame = false; host.status = .complete
+                return
+            }
             guard var current = setup, current.accepted, current.identity.settingsOwner == account.session?.owner,
-                  !current.settingsCommitted, request.newGame, Self.validSettings(request.settings) else { return }
+                  !current.settingsCommitted, request.newGame, Self.validSettings(request.settings) else {
+                host.status = .unavailable; host.message = "Waiting for the original run setup."; return
+            }
             current.identity.settings = request.settings; current.settingsCommitted = true
             setup = current; try persistSetup()
         case .checkpoint: try requestCheckpoint(interruptBattle:true); host.status = .waiting
         case .resume: host.status = .waiting
         case .watch, .battle, .trade:
+            if lobby.joined, request.command != .watch,
+               lobby.snapshot?.members.contains(where:{ $0.ownerID == request.identifier && $0.joined }) == true {
+                pendingLobbyTarget = request.identifier
+                pendingAction = request.command; pendingActionAt = now; host.status = .complete
+                return
+            }
             guard let room = onboarding.rooms.first(where: { UUID(uuidString:$0.roomID) == request.identifier }),
                   identity == nil || identity?.roomID == room.roomID else {
                 host.status = .unavailable; host.message = "Choose your connected friend."; return
             }
             selectRoom(room.roomID)
-            pendingAction = request.command; pendingActionAt = now; host.status = .complete
+            pendingLobbyTarget = nil; pendingAction = request.command; pendingActionAt = now; host.status = .complete
         case .timeline, .page:
             if request.command == .timeline { timelinePage = 0 }
             else { timelinePage = max(0,timelinePage + (request.argument == 0 ? -1:1)) }
@@ -876,7 +1072,13 @@ final class BoundROMMultiplayerCoordinator {
         case .accept: sharing.interactions.accept()
         case .decline: sharing.interactions.decline()
         case .endSoulLink:
-            if manifest == nil { host.status = .complete }
+            if let solo = soloRun, !solo.ended, let game, let owner = account.session?.owner {
+                guard solo.owner == owner else { throw BoundMultiplayerSaveStore.Failure.ownerMismatch }
+                sharing.soulLink.endRun()
+                guard sharing.soulLink.ledger?.ended == true else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+                soloRun = try soloStore.end(gameID:game.identifier,owner:owner); host.status = .complete
+            }
+            else if manifest == nil { host.status = .complete }
             else { try requestEndRun() }
         case .recoveryChoice:
             if request.argument == 0 {
@@ -890,7 +1092,7 @@ final class BoundROMMultiplayerCoordinator {
                 host.status = .waiting
             } else if request.argument == 2 { suspend(); host.message = "Run suspended. You can close the game." }
             else if request.argument == 3 { leaseRetryAt = 0; ensureLease(transfer:true) }
-        case .none: break
+        case .none, .lobbyCreate, .lobbyInvite, .lobbyReady, .lobbyStart, .lobbyLeave, .lobbyAccept, .lobbyDecline, .lobbyOpen, .lobbySolo: break
         }
     }
     private func restoreSnapshotIfNeeded() throws {
@@ -962,6 +1164,22 @@ final class BoundROMMultiplayerCoordinator {
     }
     func tick() {
         guard verified, saveFenceReady, let core, let game else { return }
+        let request = probe.read()
+        lobby.bind(session:account.session,gameID:game.identifier)
+        // Native actions own the next RPC slot. A slow background poll must not
+        // continually jump ahead of a pending cartridge command.
+        defer {
+            let awaitingCommand = request.map {
+                $0.command.rawValue >= BoundROMCommand.lobbyCreate.rawValue && $0.requestID != 0 && $0.requestID != lastRequest
+            } ?? false
+            let active = BoundMultiplayerFeatures.isEnabled && servicesActive && UIApplication.shared.applicationState == .active
+            if active, pendingLobbyCommand == nil, !awaitingCommand {
+                if lobby.joined, let run = manifest?.identity.run ?? (soloRun?.ended == false ? soloRun?.id:nil) {
+                    lobby.configureRun(run:run,solo:soloRun?.ended == false,partnerRoom:soloRun?.ended == false ? nil:selectedRoom)
+                }
+                lobby.tick(active:true, now:now)
+            }
+        }
         host.enabled = BoundMultiplayerFeatures.isEnabled
         host.linked = manifest != nil || incoming != nil || protectedStorage
         host.ended = finishedRun != nil && !host.linked && setup == nil
@@ -970,8 +1188,73 @@ final class BoundROMMultiplayerCoordinator {
         host.run = identity?.run ?? finishedRun; host.localSeed = identity?.localSeed ?? 0; host.partnerSeed = identity?.partnerSeed ?? 0
         if let identity, identity.settings.count == 32 { host.settings = identity.settings }
         host.chooser = setup?.accepted == true && setup?.identity.settingsOwner == account.session?.owner
-        if setup?.accepted == true, manifest == nil, error == nil { host.status = .accepted }
+        if setup?.accepted == true, manifest == nil, error == nil,
+           !lobby.joined || lobby.snapshot?.started == true { host.status = .accepted }
         host.setupCommitted = manifest != nil
+        host.lobbyOwner = account.session?.owner
+        host.lobbyJoined = lobby.joined
+        host.lobby = lobby.joined ? lobby.snapshot:lobby.invitation
+        let invitationState = lobby.invitation?.member(account.session?.owner)?.state
+        host.lobbyInvitation = !lobby.joined && invitationState == "invited"
+        host.lobbyRejoinAvailable = !lobby.joined && ["left", "joined"].contains(invitationState ?? "")
+        host.solo = soloRun?.ended == false
+        if let solo = soloRun, !solo.ended {
+            host.run = solo.id; host.localSeed = solo.seed; host.partnerSeed = 0
+            host.chooser = solo.settings.isEmpty; host.setupCommitted = solo.settings.count == 32
+            if !solo.settings.isEmpty { host.settings = solo.settings }
+            let freshSetup = newGame || (request?.newGame == true && request?.safeField == false)
+            let soul = sharing.soulLink.probe.read()
+            let admission = BoundSoloRunAdmission.evaluate(solo, owner:account.session?.owner,
+                ledger:soul.ledger, journalError:soul.error,
+                hasPairedState:manifest != nil || incoming != nil || setup != nil, newGameProof:freshSetup)
+            let failure: String?
+            switch admission {
+            case .wrongOwner: failure = "Sign in to the account that owns this Nuzlocke run."
+            case .journalRecovery: failure = "This Nuzlocke needs its original active run record."
+            case .conflictingRun: failure = "This game has conflicting run records. Original files were kept."
+            case .play, .setup, .pendingSetup: failure = error
+            }
+            if let failure {
+                soloAdmissionFailure = failure; soloRecoveryBlocked = true
+                host.connected = false; host.recovery = true; host.status = .recovery; host.message = failure
+                if core.state == .running { soloPauseOwned = core.pause() || soloPauseOwned }
+                probe.publish(host); return
+            }
+            if let previous = soloAdmissionFailure {
+                soloAdmissionFailure = nil
+                if host.message == previous { host.message = "" }
+                if host.status == .recovery { host.status = .idle }
+            }
+            // A pending manifest only permits native title/New Game UI. The
+            // ROM's pending-solo gate blocks Continue/field callbacks, even
+            // with experimental multiplayer disabled. No save or Soul event
+            // is accepted until this core reports its own fresh setup proof.
+            soloRecoveryBlocked = admission == .pendingSetup
+            if admission == .setup { newGame = true }
+            host.recovery = false
+            probe.publish(host)
+            if soloPauseOwned, core.state == .paused, saveFenceReady, servicesActive,
+               UIApplication.shared.applicationState == .active, !sharing.nativeBattle.protectsTemporaryState {
+                soloPauseOwned = false; core.resume()
+            }
+        } else if soloStorageProtected, soloRun == nil {
+            // Failure to decode a manifest must never turn a protected local
+            // save into an ordinary game. Reopening after repair revalidates it.
+            soloRecoveryBlocked = true; host.connected = false; host.recovery = true; host.status = .recovery
+            host.message = error ?? "The solo Nuzlocke record needs recovery. Original files were kept."
+            if core.state == .running { soloPauseOwned = core.pause() || soloPauseOwned }
+            probe.publish(host); return
+        }
+        if pendingLobbyCommand != nil, !lobby.busy {
+            host.status = lobby.message == nil ? .complete:.unavailable
+            host.message = lobby.message ?? ""
+            pendingLobbyCommand = nil
+        }
+        // A pair can negotiate while its lobby waits, but only its own acceptance
+        // releases native difficulty selection after the lobby starts.
+        if lobby.joined, lobby.snapshot?.started == true, setup?.accepted == true, manifest == nil {
+            host.status = .accepted
+        }
         let transportConnected = sharing.connectedRoomID == selectedRoom && selectedRoom != nil && !sharing.reconnecting
         if transportWasConnected && !transportConnected {
             channel.reset(); peerHello = nil; peerHelloAt = -.infinity; reconciled = false
@@ -1007,7 +1290,6 @@ final class BoundROMMultiplayerCoordinator {
             host.page = UInt32(timelinePage)
             host.friends = events.dropFirst(timelinePage*12).prefix(12).map { .init(room:BoundROMBytes.zero,name:$0.title) }
         }
-        let request = probe.read()
         do {
             if manifest == nil, incoming == nil, now - lastInboxScanAt > 1 {
                 lastInboxScanAt = now; protectedStorage = store.hasRun(gameID:game.identifier)
@@ -1063,8 +1345,13 @@ final class BoundROMMultiplayerCoordinator {
             }
             if let action = pendingAction, request?.safeField == true, request?.paused == false {
                 if now - pendingActionAt > 15 {
-                    pendingAction = nil
+                    pendingAction = nil; pendingLobbyTarget = nil
                     sharing.interactions.activityEnded(action == .watch ? "Friend video is unavailable." : "Stand beside your friend and face them.")
+                }
+                else if let target = pendingLobbyTarget {
+                    if sharing.requestLobbyActivity(ownerID:target,activity:action == .battle ? .battle:.trade) {
+                        pendingAction = nil; pendingLobbyTarget = nil
+                    }
                 }
                 else if sharing.connectedRoomID == selectedRoom {
                     if action == .watch { watch?(); if sharing.watchingPartner { pendingAction = nil } }

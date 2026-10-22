@@ -10,16 +10,28 @@ struct FriendSharingTokenLease: CustomStringConvertible, CustomDebugStringConver
     let token: String
     let issuedAt: TimeInterval
     let expiresAt: TimeInterval
+    let lobbyID: UUID?
+    let members: [FriendSharingLobbyMember]?
+    let membershipRevision: String?
+
+    init(roomID: String, ownerID: UUID, appID: String, channel: String, uid: UInt, remoteUID: UInt,
+         token: String, issuedAt: TimeInterval, expiresAt: TimeInterval, lobbyID: UUID? = nil,
+         members: [FriendSharingLobbyMember]? = nil, membershipRevision: String? = nil) {
+        self.roomID = roomID; self.ownerID = ownerID; self.appID = appID; self.channel = channel
+        self.uid = uid; self.remoteUID = remoteUID; self.token = token
+        self.issuedAt = issuedAt; self.expiresAt = expiresAt
+        self.lobbyID = lobbyID; self.members = members; self.membershipRevision = membershipRevision
+    }
 
     var description: String { "FriendSharingTokenLease(redacted)" }
     var debugDescription: String { description }
     var customMirror: Mirror { Mirror(self, children: ["credential": "redacted"]) }
 
     var configuration: FriendSharingConfiguration {
-        .init(appID: appID, channel: channel, uid: uid, remoteUID: remoteUID, token: token)
+        .init(appID: appID, channel: channel, uid: uid, remoteUID: remoteUID, token: token, lobbyID: lobbyID, members: members)
     }
     func valid(room: String, owner: UUID, now: TimeInterval = Date().timeIntervalSince1970) -> Bool {
-        roomID == room && ownerID == owner && configuration.isValid && issuedAt.isFinite && expiresAt.isFinite &&
+        roomID == room && ownerID == owner && configuration.isValid && (lobbyID == nil || configuration.lobbyRoute?.local?.ownerID == owner) && issuedAt.isFinite && expiresAt.isFinite &&
         issuedAt <= now + 5 && issuedAt >= now - 30 && expiresAt > now + 30 && expiresAt - issuedAt <= 120 && expiresAt > issuedAt
     }
 }
@@ -50,6 +62,15 @@ enum FriendSharingTokens {
         let data = try await perform(try session.friendSharingRequest(roomID: room))
         let lease = try JSONDecoder().decode(FriendSharingTokenLease.self, from: data)
         guard lease.valid(room: room, owner: session.owner) else { throw FriendSharingTokenError.unavailable }
+        return lease
+    }
+
+    static func fetchLobby(lobbyID: UUID, memberToken: UUID, session: AppCloudSession) async throws -> FriendSharingTokenLease {
+        let data = try await perform(try session.lobbySharingRequest(lobbyID: lobbyID, memberToken: memberToken))
+        let lease = try JSONDecoder().decode(FriendSharingTokenLease.self, from: data)
+        guard lease.lobbyID == lobbyID, lease.valid(room: lobbyID.uuidString.lowercased(), owner: session.owner) else {
+            throw FriendSharingTokenError.unavailable
+        }
         return lease
     }
 

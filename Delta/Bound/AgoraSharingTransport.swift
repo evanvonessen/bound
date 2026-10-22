@@ -24,6 +24,7 @@ struct AgoraSharingTimestamp {
 
 enum FriendSharingEvent: Equatable, Sendable {
     case joined, remoteFrame, remoteGone, reconnecting, rejoined, tokenNeeded
+    case lobbyPeerGone(UInt), lobbyPeerJoined(UInt)
     case connection(state: Int, reason: Int)
     case failed(FriendSharingFailure)
 }
@@ -32,7 +33,8 @@ enum FriendSharingEvent: Equatable, Sendable {
 // without a per-frame Task. The display-synchronized receiver consumes it on main;
 // engine/UI ownership stays on main and publication uses displayed game frames.
 final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoFrameDelegate, @unchecked Sendable {
-    let remoteUID: UInt
+    private var videoUID: UInt
+    var remoteUID: UInt { lock.lock(); defer { lock.unlock() }; return videoUID }
     let event: @Sendable (FriendSharingEvent, UInt?) -> Void
     private let lock = NSLock()
     private var count = 0
@@ -53,16 +55,70 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
     private var interactionFailed = false
     private var interactionFailureReported = false
     private var battleChannel: AgoraBattleChannel?
-    func setBattleChannel(_ channel: AgoraBattleChannel?) { lock.lock(); battleChannel=channel; lock.unlock() }
+    private var battleUID: UInt = 0
+    private var lobbyRoute: FriendSharingLobbyRoute?
+    private var lobbyFramers: [UInt: FriendSharingLobbyFramer] = [:]
+    private var lobbyPresence: [UInt: Data] = [:]
+    private var lobbyInteractions: [(UInt, Data)] = []
+    private var lobbyFailures = Set<UInt>()
+    func configureLobby(_ route: FriendSharingLobbyRoute?, remoteUID: UInt) {
+        lock.lock(); defer { lock.unlock() }
+        let changed = Set((lobbyRoute?.members ?? []).map(\.uid) + (route?.members ?? []).map(\.uid)).filter {
+            lobbyRoute?.member($0) != route?.member($0)
+        }
+        for uid in changed { lobbyFramers[uid] = nil; lobbyPresence[uid] = nil }
+        lobbyInteractions.removeAll { changed.contains($0.0) }
+        lobbyFailures.subtract(changed)
+        if videoUID != remoteUID { latestPixels = nil; count = 0; firstRendered = false; frameGeneration &+= 1 }
+        lobbyRoute = route; videoUID = remoteUID
+    }
+    func setBattleChannel(_ channel: AgoraBattleChannel?, uid: UInt? = nil) {
+        lock.lock(); battleChannel = channel; battleUID = uid ?? videoUID; lock.unlock()
+    }
+    func takeLobbyPresence() -> [UInt: Data] {
+        lock.lock(); defer { lock.unlock() }
+        let result = lobbyPresence; lobbyPresence.removeAll(keepingCapacity: true); return result
+    }
+    func takeLobbyInteractions() -> (messages: [(UInt, Data)], failures: Set<UInt>) {
+        lock.lock(); defer { lock.unlock() }
+        let result = (lobbyInteractions, lobbyFailures)
+        lobbyInteractions.removeAll(keepingCapacity: true); lobbyFailures.removeAll(keepingCapacity: true)
+        return result
+    }
+    func receiveLobbyData(_ data: Data, uid: UInt) {
+        lock.lock(); defer { lock.unlock() }
+        guard acceptsFrames, !suspended, let route = lobbyRoute, route.member(uid) != nil,
+              uid != route.localUID, !lobbyFailures.contains(uid) else { return }
+        var framer = lobbyFramers[uid] ?? FriendSharingLobbyFramer()
+        guard let envelopes = framer.consume(data) else { lobbyFailures.insert(uid); lobbyFramers[uid] = nil; return }
+        lobbyFramers[uid] = framer
+        for envelope in envelopes {
+            guard let payload = FriendSharingLobbyEnvelope.decode(envelope, from: uid, route: route) else { continue }
+            if Self.isInteraction(payload) {
+                guard lobbyInteractions.filter({ $0.0 == uid }).count < 64 else {
+                    lobbyInteractions.removeAll { $0.0 == uid }; lobbyFailures.insert(uid); continue
+                }
+                lobbyInteractions.append((uid, payload))
+            } else if BoundPresencePacket.decode(payload) != nil {
+                lobbyPresence[uid] = payload; presencePackets += 1
+            }
+        }
+    }
+    private static func isInteraction(_ data: Data) -> Bool {
+        data.starts(with: BoundFriendInteractionPacket.prefix) || data.starts(with: BoundBattleControlPacket.prefix)
+        || BoundSoulPacket.recognizes(data) || data.starts(with: BoundWorldPacket.prefix) || data.starts(with: Data("BRM1".utf8))
+    }
     func rtcEngine(_ engine: AgoraRtcEngineKit, receiveRdtMessageFromUid uid: UInt, type: AgoraRdtStreamType, data: Data) {
-        guard uid == remoteUID, (type == .data || type == .cmd), data.count <= 131072 else { return }
-        lock.lock(); let channel=battleChannel; lock.unlock(); channel?.receive(data)
+        lock.lock(); let grouped = lobbyRoute != nil, channel = uid == battleUID ? battleChannel : nil; lock.unlock()
+        if grouped && type == .data { receiveLobbyData(data, uid: uid); return }
+        guard (!grouped || type == .cmd), (type == .data || type == .cmd), data.count <= 131072 else { return }
+        channel?.receive(data)
     }
     func rtcEngine(_ engine: AgoraRtcEngineKit, didOccurRdtMessageStateFromUid uid: UInt, state: AgoraRdtState) {
-        guard uid == remoteUID else { return }
-        NSLog("Bound battle RDT state: %ld",state.rawValue)
         if state == .broken || state == .pending {
-            lock.lock(); let channel=battleChannel; lock.unlock(); channel?.failed()
+            lock.lock(); let channel = uid == battleUID ? battleChannel : nil
+            if state == .broken, lobbyRoute?.member(uid) != nil { lobbyFailures.insert(uid); lobbyPresence[uid] = nil; lobbyFramers[uid] = nil; lobbyInteractions.removeAll { $0.0 == uid } }
+            lock.unlock(); channel?.failed()
         }
     }
     func takeInteractions() -> (messages: [Data], failed: Bool) {
@@ -76,7 +132,7 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
         guard uid == remoteUID, (data.starts(with: BoundFriendInteractionPacket.prefix) || data.starts(with: BoundBattleControlPacket.prefix) || BoundSoulPacket.recognizes(data) || data.starts(with: BoundWorldPacket.prefix) || data.starts(with: Data("BRM1".utf8))),
               data.count <= BoundFriendInteractionPacket.maximumBytes else { return }
         lock.lock(); defer { lock.unlock() }
-        guard acceptsFrames, !suspended, !interactionFailed else { return }
+        guard acceptsFrames, !suspended, !interactionFailed, lobbyRoute == nil else { return }
         guard interactions.count < 64 else {
             interactions.removeAll(keepingCapacity: true); interactionFailed = true; return
         }
@@ -87,7 +143,7 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
         guard uid == remoteUID else { return }
         lock.lock(); interactionFailed = true; interactions.removeAll(keepingCapacity: true); lock.unlock()
     }
-    func suspendFrames() { lock.lock(); suspended = true; frameGeneration &+= 1; count = 0; latestPixels = nil; latestPresence = nil; interactions.removeAll(keepingCapacity: true); interactionFailed = false; interactionFailureReported = false; pixelEvidence = [:]; lock.unlock() }
+    func suspendFrames() { lock.lock(); suspended = true; frameGeneration &+= 1; count = 0; latestPixels = nil; latestPresence = nil; lobbyPresence.removeAll(); lobbyInteractions.removeAll(); lobbyFramers.removeAll(); lobbyFailures.removeAll(); interactions.removeAll(keepingCapacity: true); interactionFailed = false; interactionFailureReported = false; pixelEvidence = [:]; lock.unlock() }
     func resumeFrames() { lock.lock(); suspended = false; frameGeneration &+= 1; count = 0; latestPixels = nil; pixelEvidence = [:]; lock.unlock() }
     private var pixelEvidence: [String: Int] = [:]
     private var firstRendered = false
@@ -103,7 +159,7 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
     func receivePresence(_ data: Data, uid: UInt) {
         guard uid == remoteUID, !data.isEmpty, data.count <= BoundPresencePacket.maximumBytes else { return }
         lock.lock(); defer { lock.unlock() }
-        guard acceptsFrames, !suspended else { return }
+        guard acceptsFrames, !suspended, lobbyRoute == nil else { return }
         latestPresence = data.withUnsafeBytes { Data($0) }; presencePackets += 1
     }
     func rtcEngine(_ engine: AgoraRtcEngineKit, receiveStreamMessageFromUid uid: UInt, streamId: Int, data: Data) {
@@ -127,10 +183,10 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
         return (lastReceivedAt, lastConvertedAt)
     }
     init(remoteUID: UInt, event: @escaping @Sendable (FriendSharingEvent, UInt?) -> Void) {
-        self.remoteUID = remoteUID; self.event = event
+        self.videoUID = remoteUID; self.event = event
     }
     var receivedFrames: Int { lock.lock(); defer { lock.unlock() }; return count }
-    func resetFrames(enabled: Bool) { lock.lock(); count = 0; frameGeneration &+= 1; acceptsFrames = enabled; convertedFrames = 0; replacedFrames = 0; busyDrops = 0; staleDrops = 0; lastReceivedAt = nil; lastConvertedAt = nil; pixelEvidence = [:]; firstRendered = false; latestPixels = nil; latestPresence = nil; interactions.removeAll(keepingCapacity: true); interactionFailed = false; interactionFailureReported = false; lock.unlock() }
+    func resetFrames(enabled: Bool) { lock.lock(); count = 0; frameGeneration &+= 1; acceptsFrames = enabled; convertedFrames = 0; replacedFrames = 0; busyDrops = 0; staleDrops = 0; lastReceivedAt = nil; lastConvertedAt = nil; pixelEvidence = [:]; firstRendered = false; latestPixels = nil; latestPresence = nil; lobbyPresence.removeAll(); lobbyInteractions.removeAll(); lobbyFramers.removeAll(); lobbyFailures.removeAll(); interactions.removeAll(keepingCapacity: true); interactionFailed = false; interactionFailureReported = false; lock.unlock() }
     func onRenderVideoFrame(_ videoFrame: AgoraOutputVideoFrame, uid: UInt, channelId: String) -> Bool {
         guard uid == remoteUID else { return false }
         let convert = { () -> Data? in
@@ -240,10 +296,14 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
         #if DEBUG
         lock.lock()
         sdkEvidence["sdkPeerJoins", default: 0] += 1
-        if uid == remoteUID { sdkEvidence["sdkExpectedPeerJoins", default: 0] += 1 }
+        if uid == videoUID { sdkEvidence["sdkExpectedPeerJoins", default: 0] += 1 }
         lock.unlock()
         #endif
-        if uid == remoteUID { resetFrames(enabled: true); event(.remoteFrame, uid) }
+        lock.lock(); let grouped = lobbyRoute != nil, authorized = lobbyRoute?.member(uid) != nil; lock.unlock()
+        if grouped {
+            if authorized { event(.lobbyPeerJoined(uid), uid) }
+            if uid == remoteUID { event(.remoteFrame, uid) }
+        } else if uid == remoteUID { resetFrames(enabled: true); event(.remoteFrame, uid) }
     }
     #if DEBUG
     func rtcEngine(_ engine: AgoraRtcEngineKit, firstLocalVideoFramePublishedWithElapsed elapsed: Int,
@@ -276,7 +336,11 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
     }
     #endif
     func rtcEngine(_ engine: AgoraRtcEngineKit, didOfflineOfUid uid: UInt, reason: AgoraUserOfflineReason) {
-        if uid == remoteUID { resetFrames(enabled: false); event(.remoteGone, uid) }
+        lock.lock(); let grouped = lobbyRoute != nil, authorized = lobbyRoute?.member(uid) != nil
+        if grouped { lobbyPresence[uid] = nil; lobbyFramers[uid] = nil; lobbyInteractions.removeAll { $0.0 == uid } }
+        lock.unlock()
+        if grouped { if authorized { event(.lobbyPeerGone(uid), uid) } }
+        else if uid == remoteUID { resetFrames(enabled: false); event(.remoteGone, uid) }
     }
     func rtcEngine(_ engine: AgoraRtcEngineKit, didOccurError errorCode: AgoraErrorCode) { event(.failed(.init(.sdkError, code: Int(errorCode.rawValue))), nil) }
     func rtcEngineConnectionDidLost(_ engine: AgoraRtcEngineKit) { connectionLost() }
@@ -374,6 +438,9 @@ final class AgoraSharingTransport: FriendSharingTransport {
     private var generation = UUID()
     private weak var remoteView: UIView?
     private var remoteUID: UInt = 0
+    private var lobbyRoute: FriendSharingLobbyRoute?
+    private var lobbyPresenceReceiver: (@MainActor (UInt, Data) -> Void)?
+    private var lobbyInteractionReceiver: (@MainActor (UInt, Data?) -> Void)?
     private var joined = false
     private var recovering = false
     private var recoveryCount = 0
@@ -515,7 +582,7 @@ final class AgoraSharingTransport: FriendSharingTransport {
         recoveryCount = 0; recoverySuccessCount = 0; sdkRejoinCallbacks = 0; lastRecoveryReason = nil
         eventHandler = event
         let run = UUID(); generation = run
-        self.remoteView = remoteView; remoteUID = configuration.remoteUID
+        self.remoteView = remoteView; remoteUID = configuration.remoteUID; lobbyRoute = configuration.lobbyRoute
         let proxy = AgoraSharingCallbacks(remoteUID: configuration.remoteUID) { [weak self] value, uid in
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.generation == run, self.engine != nil else { return }
@@ -531,6 +598,11 @@ final class AgoraSharingTransport: FriendSharingTransport {
                         self.bindRemote()
                     }
                 case .remoteGone: self.clearRemote(); if !self.recovering { event(.remoteGone) }
+                case .lobbyPeerGone(let peer):
+                    if peer == self.remoteUID { self.clearRemote() }
+                    if !self.recovering { event(.lobbyPeerGone(peer)) }
+                case .lobbyPeerJoined(let peer):
+                    if !self.recovering { event(.lobbyPeerJoined(peer)) }
                 case .connection(let state, let reason):
                     self.lastConnectionState = state; self.lastConnectionReason = reason
                     if state == Int(AgoraConnectionState.reconnecting.rawValue) { self.lastRecoveryReason = reason }
@@ -546,6 +618,7 @@ final class AgoraSharingTransport: FriendSharingTransport {
                 }
             }
         }
+        proxy.configureLobby(configuration.lobbyRoute, remoteUID: configuration.remoteUID)
         callbacks = proxy
         let config = AgoraRtcEngineConfig()
         config.appId = configuration.appID
@@ -697,24 +770,38 @@ final class AgoraSharingTransport: FriendSharingTransport {
     }
     func setPresenceReceiver(_ receiver: (@MainActor (Data) -> Void)?) { presenceReceiver = receiver }
     func pollPresence() {
-        guard joined, !recovering, let data = callbacks?.takeLatestPresence() else { return }
-        presenceReceiver?(data)
+        guard joined, !recovering else { return }
+        if lobbyRoute != nil {
+            for (uid, data) in callbacks?.takeLobbyPresence() ?? [:] { lobbyPresenceReceiver?(uid, data) }
+        } else if let data = callbacks?.takeLatestPresence() { presenceReceiver?(data) }
     }
     func makeBattleChannel(receiver: @escaping @Sendable (Data) -> Void, failed: @escaping @Sendable () -> Void) -> (any BoundBattleChannel)? {
-        guard joined, !recovering, let engine, remoteUID != 0 else { return nil }
+        makeBattleChannel(to: remoteUID, receiver: receiver, failed: failed)
+    }
+    func makeBattleChannel(to uid: UInt, receiver: @escaping @Sendable (Data) -> Void, failed: @escaping @Sendable () -> Void) -> (any BoundBattleChannel)? {
+        guard joined, !recovering, let engine, uid != 0,
+              lobbyRoute.map({ $0.member(uid) != nil && uid != $0.localUID }) ?? (uid == remoteUID) else { return nil }
         battleChannel?.close()
-        let channel = AgoraBattleChannel(engine: engine, uid: remoteUID, receiver: receiver, failure: failed)
-        battleChannel = channel; callbacks?.setBattleChannel(channel)
+        let channel = AgoraBattleChannel(engine: engine, uid: uid, receiver: receiver, failure: failed)
+        battleChannel = channel; callbacks?.setBattleChannel(channel, uid: uid)
         return channel
     }
     func setInteractionReceiver(_ receiver: (@MainActor (Data?) -> Void)?) { interactionReceiver = receiver }
     func pollInteractions() {
-        guard joined, !recovering, let pending = callbacks?.takeInteractions() else { return }
+        guard joined, !recovering else { return }
+        if lobbyRoute != nil {
+            if let pending = callbacks?.takeLobbyInteractions() {
+                for uid in pending.failures { lobbyInteractionReceiver?(uid, nil) }
+                for (uid, data) in pending.messages where !pending.failures.contains(uid) { lobbyInteractionReceiver?(uid, data) }
+            }
+            return
+        }
+        guard let pending = callbacks?.takeInteractions() else { return }
         if pending.failed { interactionReceiver?(nil); return }
         for data in pending.messages { interactionReceiver?(data) }
     }
     func sendInteraction(_ data: Data) -> Bool {
-        guard joined, !recovering, (data.starts(with: BoundFriendInteractionPacket.prefix) || data.starts(with: BoundBattleControlPacket.prefix) || BoundSoulPacket.recognizes(data) || data.starts(with: BoundWorldPacket.prefix) || data.starts(with: Data("BRM1".utf8))),
+        guard lobbyRoute == nil, joined, !recovering, (data.starts(with: BoundFriendInteractionPacket.prefix) || data.starts(with: BoundBattleControlPacket.prefix) || BoundSoulPacket.recognizes(data) || data.starts(with: BoundWorldPacket.prefix) || data.starts(with: Data("BRM1".utf8))),
               data.count <= BoundFriendInteractionPacket.maximumBytes,
               let engine, engine.getConnectionState() == .connected else { return false }
         if interactionStream == nil {
@@ -726,7 +813,7 @@ final class AgoraSharingTransport: FriendSharingTransport {
         return engine.sendStreamMessage(interactionStream, data: data) == 0
     }
     func sendPresence(_ data: Data) -> Bool {
-        guard joined, !recovering, !data.isEmpty, data.count <= BoundPresencePacket.maximumBytes,
+        guard lobbyRoute == nil, joined, !recovering, !data.isEmpty, data.count <= BoundPresencePacket.maximumBytes,
               let engine, engine.getConnectionState() == .connected else { return false }
         if presenceStream == nil {
             var stream = 0
@@ -741,6 +828,26 @@ final class AgoraSharingTransport: FriendSharingTransport {
         presenceSendResult = Int(result)
         guard result == 0 else { return false }
         sentPresence += 1; return true
+    }
+    func setLobbyReceivers(presence: (@MainActor (UInt, Data) -> Void)?, interaction: (@MainActor (UInt, Data?) -> Void)?) {
+        lobbyPresenceReceiver = presence; lobbyInteractionReceiver = interaction
+    }
+    func updateLobbyConfiguration(_ configuration: FriendSharingConfiguration) -> Bool {
+        guard let route = configuration.lobbyRoute, route.isValid, let old = lobbyRoute,
+              old.lobbyID == route.lobbyID, old.local == route.local else { return false }
+        lobbyRoute = route
+        if remoteUID != configuration.remoteUID { clearRemote(); remoteUID = configuration.remoteUID }
+        callbacks?.configureLobby(route, remoteUID: remoteUID)
+        if joined && !recovering { bindRemote() }
+        return true
+    }
+    func sendLobby(_ data: Data, to uid: UInt) -> Bool {
+        guard joined, !recovering, let route = lobbyRoute, let local = route.local,
+              let peer = route.member(uid), uid != route.localUID,
+              let envelope = FriendSharingLobbyEnvelope(lobbyID: route.lobbyID, senderSession: local.sessionID,
+                 receiverSession: peer.sessionID, payload: data).encoded(),
+              let engine, engine.getConnectionState() == .connected else { return false }
+        return engine.sendRdtMessage(Int(uid), type: .data, data: envelope) == 0
     }
     func renewToken(_ token: String) -> Bool { engine?.renewToken(token) == 0 }
 
@@ -758,7 +865,7 @@ final class AgoraSharingTransport: FriendSharingTransport {
             engine.delegate = nil
             AgoraRtcEngineKit.destroy()
         }
-        engine = nil; callbacks = nil; remoteView = nil; publishedFrames = 0
+        engine = nil; callbacks = nil; remoteView = nil; lobbyRoute = nil; publishedFrames = 0
         lastPublishedAt = nil; lastPresentedAt = nil
         timestamps = AgoraSharingTimestamp()
     }

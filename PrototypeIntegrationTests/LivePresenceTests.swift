@@ -15,10 +15,19 @@ private final class PresenceFixtureTransport: FriendSharingTransport {
     var receiver: (@MainActor (Data) -> Void)?
     var event: (@MainActor (FriendSharingEvent) -> Void)?
     var packets: [Data] = []
+    var lobbyPresenceReceiver: (@MainActor (UInt, Data) -> Void)?
+    var lobbyInteractionReceiver: (@MainActor (UInt, Data?) -> Void)?
+    var lobbyPackets: [(UInt, Data)] = []
+    var starts = 0
+    func setLobbyReceivers(presence: (@MainActor (UInt, Data) -> Void)?, interaction: (@MainActor (UInt, Data?) -> Void)?) {
+        lobbyPresenceReceiver = presence; lobbyInteractionReceiver = interaction
+    }
+    func sendLobby(_ data: Data, to uid: UInt) -> Bool { lobbyPackets.append((uid, data)); return true }
+    func updateLobbyConfiguration(_ configuration: FriendSharingConfiguration) -> Bool { true }
     func setPresenceReceiver(_ receiver: (@MainActor (Data) -> Void)?) { self.receiver = receiver }
     func sendPresence(_ data: Data) -> Bool { packets.append(data); return true }
     func start(configuration: FriendSharingConfiguration, remoteView: UIView,
-               event: @escaping @MainActor (FriendSharingEvent) -> Void) { self.event = event; event(.joined) }
+               event: @escaping @MainActor (FriendSharingEvent) -> Void) { self.event = event; starts += 1; event(.joined) }
     func stop() { event = nil }
     func renewToken(_ token: String) -> Bool { true }
     func recordRecoveryTimeout() {}
@@ -43,11 +52,11 @@ final class LivePresenceTests: XCTestCase {
         super.tearDown()
     }
 
-    func reading(x: Int = 104, map: Int = 3, elevation: Int = 0) -> BoundPlayerStateReading {
+    func reading(x: Int = 104, map: Int = 3, elevation: Int = 0, facing: String = "South") -> BoundPlayerStateReading {
         let sprite = BoundPlayerSprite(width: 16, height: 32, tiles: Data(repeating: 0x11, count: 256),
             palette: Data(repeating: 0, count: 32), flipX: false, flipY: false, priority: 2, romAddress: 0x08123450)
         var player = BoundPlayerState(mapGroup: 4, mapNumber: map, tile: .init(x: x / 16, y: 6),
-            previousTile: .init(x: x / 16, y: 6), facing: "South", elevation: elevation, graphicsID: 0,
+            previousTile: .init(x: x / 16, y: 6), facing: facing, elevation: elevation, graphicsID: 0,
             runningState: 0, tileTransitionState: 0)
         player.scene = .init(worldFoot: .init(x: x, y: 112), camera: .init(x: 16, y: -24), appearance: sprite,
             background: .init(tiles: Data(repeating: 0, count: 32768), layers: []), objects: [])
@@ -63,6 +72,231 @@ final class LivePresenceTests: XCTestCase {
     func session() -> BoundLivePresenceSession {
         let session = BoundLivePresenceSession(); session.setROMVerified(true)
         session.setEnabled(true); session.start { _ in true }; return session
+    }
+
+    private func lobbyMembers() -> [FriendSharingLobbyMember] {
+        (1...4).map { .init(ownerID: UUID(), uid: UInt($0), sessionID: UUID()) }
+    }
+
+    func testLobbyEnvelopeAuthenticatesRecipientSenderAndMembershipIncarnation() throws {
+        let members = lobbyMembers(), lobby = UUID(), data = Data("BRM1private-pair".utf8)
+        let route = FriendSharingLobbyRoute(lobbyID: lobby, localUID: 1, members: members)
+        let envelope = try XCTUnwrap(FriendSharingLobbyEnvelope(lobbyID: lobby, senderSession: members[1].sessionID,
+            receiverSession: members[0].sessionID, payload: data).encoded())
+        XCTAssertEqual(FriendSharingLobbyEnvelope.decode(envelope, from: 2, route: route), data)
+        XCTAssertNil(FriendSharingLobbyEnvelope.decode(envelope, from: 3, route: route), "A third friend cannot claim the partner's sender session")
+        XCTAssertNil(FriendSharingLobbyEnvelope.decode(envelope, from: 2,
+            route: .init(lobbyID: lobby, localUID: 3, members: members)), "The other pair cannot receive private run packets")
+        var rejoined = members
+        rejoined[1] = .init(ownerID: members[1].ownerID, uid: 2, sessionID: UUID())
+        XCTAssertNil(FriendSharingLobbyEnvelope.decode(envelope, from: 2,
+            route: .init(lobbyID: lobby, localUID: 1, members: rejoined)), "Rejoined UID cannot replay its old incarnation")
+        XCTAssertFalse(FriendSharingLobbyRoute(lobbyID: lobby, localUID: 1, members: members + [members[0]]).isValid)
+        XCTAssertNil(FriendSharingLobbyEnvelope(lobbyID: lobby, senderSession: UUID(), receiverSession: UUID(),
+            payload: Data(repeating: 0, count: 1025)).encoded())
+    }
+
+    func testLobbyFramingHandlesSplitCombinedAndMalformedRDTWrites() throws {
+        let members = lobbyMembers(), lobby = UUID()
+        let packet = try XCTUnwrap(FriendSharingLobbyEnvelope(lobbyID: lobby, senderSession: members[1].sessionID,
+            receiverSession: members[0].sessionID, payload: Data("BRM1first".utf8)).encoded())
+        var framer = FriendSharingLobbyFramer()
+        XCTAssertEqual(framer.consume(Data(packet.prefix(3))), [])
+        XCTAssertEqual(framer.consume(Data(packet.dropFirst(3)) + packet), [packet, packet])
+        XCTAssertNil(framer.consume(Data("invalid".utf8)))
+        XCTAssertEqual(framer.consume(packet), [packet], "Invalid input clears its bounded pending buffer")
+    }
+
+    func testLobbyMailboxesKeepThreePeersIndependentAndDropDepartedSessions() throws {
+        let members = lobbyMembers(), lobby = UUID(), receiver = session()
+        let callbacks = AgoraSharingCallbacks(remoteUID: 2) { _, _ in }
+        let route = FriendSharingLobbyRoute(lobbyID: lobby, localUID: 1, members: members)
+        callbacks.configureLobby(route, remoteUID: 2)
+        for uid in UInt(2)...4 {
+            let payload = try packet(receiver, peer: UUID(), reading: reading(x: Int(uid) * 16 + 104))
+            let wire = try XCTUnwrap(FriendSharingLobbyEnvelope(lobbyID: lobby, senderSession: members[Int(uid)-1].sessionID,
+                receiverSession: members[0].sessionID, payload: payload).encoded())
+            callbacks.receiveLobbyData(wire, uid: uid)
+        }
+        XCTAssertEqual(Set(callbacks.takeLobbyPresence().keys), [2, 3, 4])
+        let privatePacket = Data("BRM1pair".utf8)
+        let wire = try XCTUnwrap(FriendSharingLobbyEnvelope(lobbyID: lobby, senderSession: members[1].sessionID,
+            receiverSession: members[0].sessionID, payload: privatePacket).encoded())
+        callbacks.receiveLobbyData(wire, uid: 3)
+        XCTAssertTrue(callbacks.takeLobbyInteractions().messages.isEmpty)
+        callbacks.receiveLobbyData(wire, uid: 2)
+        callbacks.configureLobby(.init(lobbyID: lobby, localUID: 1, members: members.filter { $0.uid != 2 }), remoteUID: 3)
+        XCTAssertTrue(callbacks.takeLobbyInteractions().messages.isEmpty, "Removing membership clears already queued packets")
+        callbacks.receiveLobbyData(wire, uid: 2)
+        XCTAssertTrue(callbacks.takeLobbyInteractions().messages.isEmpty)
+    }
+
+    func testThreeLiveSpritesUseIndependentFreshnessAndRestoreChallenges() throws {
+        let parent = session(), peers = [UInt(2): session(), 3: session(), 4: session()]
+        parent.setGroupSessions(peers)
+        parent.consume(reading(), at: 20)
+        for (uid, presence) in peers {
+            presence.receive(try packet(presence, peer: UUID(), reading: reading(x: Int(uid) * 16 + 104)), at: 20)
+        }
+        XCTAssertEqual(parent.renderingSessions.compactMap { $0.pose(at: 20.01) }.count, 3)
+        peers[2]?.peerGone()
+        XCTAssertEqual(parent.renderingSessions.compactMap { $0.pose(at: 20.01) }.count, 2, "One friend leaving cannot withdraw the others")
+        parent.invalidateLocal()
+        XCTAssertTrue(parent.renderingSessions.allSatisfy { $0.pose(at: 20.01) == nil }, "A save restore fences every peer's old poses")
+    }
+
+    func testGroupTransportKeepsPairPacketsPrivateAndDoesNotReconnectForOtherPair() async throws {
+        let members = lobbyMembers(), lobby = UUID(), now = Date().timeIntervalSince1970
+        let claims = try JSONSerialization.data(withJSONObject: ["sub": members[0].ownerID.uuidString.lowercased(), "exp": now + 3600])
+        let encoded = claims.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        let identity = try AppCloudSession(owner: members[0].ownerID, key: "fixture", token: "e30." + encoded + ".fixture")
+        let transport = PresenceFixtureTransport()
+        var roster = members
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            lobbyTokenFetcher: { _, _, _ in
+                .init(roomID: lobby.uuidString.lowercased(), ownerID: members[0].ownerID,
+                      appID: String(repeating: "a", count: 32), channel: "lobby", uid: 1, remoteUID: 2,
+                      token: "fixture", issuedAt: Date().timeIntervalSince1970, expiresAt: Date().timeIntervalSince1970 + 60,
+                      lobbyID: lobby, members: roster, membershipRevision: "1")
+            })
+        defer { sharing.stop() }
+        sharing.configureAuthenticatedLobby(lobbyID: lobby, memberToken: UUID(), pairedRoomID: "pair-A",
+                                            partnerID: members[1].ownerID, identity: { identity })
+        sharing.setAutomaticMultiplayerConnection(true)
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(sharing.connectedRoomID, "pair-A")
+        XCTAssertEqual(sharing.connectedLobbyID, lobby)
+        XCTAssertEqual(sharing.livePresence.groupSessions.count, 3)
+        let payload = Data("BRM1fixture".utf8)
+        XCTAssertTrue(sharing.sendMultiplayerPacket(payload))
+        XCTAssertEqual(transport.lobbyPackets.last?.0, 2)
+        var received: [Data] = []
+        sharing.multiplayerPacketReceiver = { received.append($0) }
+        transport.lobbyInteractionReceiver?(3, payload)
+        transport.lobbyInteractionReceiver?(4, payload)
+        XCTAssertTrue(received.isEmpty)
+        transport.lobbyInteractionReceiver?(2, payload)
+        XCTAssertEqual(received, [payload])
+        sharing.livePresence.setROMVerified(true)
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        var epochs: [UInt: UUID] = [:]
+        for (uid, presence) in sharing.livePresence.groupSessions {
+            let epoch = UUID(); epochs[uid] = epoch
+            let target = reading(x: uid == 3 ? 120 : 152, facing: "West")
+            presence.consume(reading(facing: "East"), at: timestamp - 0.06)
+            presence.receive(try packet(presence, peer: epoch, time: timestamp - 0.06, reading: target), at: timestamp - 0.06)
+            presence.consume(reading(facing: "East"), at: timestamp)
+            presence.receive(try packet(presence, peer: epoch, sequence: 2, time: timestamp, reading: target), at: timestamp)
+        }
+        XCTAssertTrue(sharing.interactions.canInteract, "Press A targets the one friend being faced")
+        XCTAssertTrue(sharing.requestLobbyActivity(ownerID: members[2].ownerID, activity: .battle))
+        XCTAssertEqual(transport.lobbyPackets.last?.0, 3, "Nearby battle targets a friend outside the Soul Link pair")
+        XCTAssertEqual(sharing.connectedRoomID, "pair-A", "Targeted battle cannot replace durable pair ownership")
+        let invitation = try XCTUnwrap(transport.lobbyPackets.last.flatMap { BoundFriendInteractionPacket.decode($0.1) })
+        XCTAssertEqual(invitation.receiver, epochs[3])
+        sharing.interactions.cancel()
+        let partnerSession = sharing.livePresence.groupSessions[2]
+        sharing.configureAuthenticatedRoom("pair-A", identity: { identity })
+        roster.removeAll { $0.uid == 4 }
+        sharing.refreshLobbyMembership()
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(transport.starts, 1)
+        XCTAssertTrue(partnerSession === sharing.livePresence.groupSessions[2])
+        XCTAssertEqual(Set(sharing.livePresence.groupSessions.keys), [2, 3])
+        XCTAssertEqual(sharing.connectedRoomID, "pair-A")
+    }
+
+    func testFourPlayerSoulTrafficStaysWithinTwoPairsDuringFriendlyActivity() async throws {
+        let members = lobbyMembers(), lobby = UUID(), runs = [UUID(), UUID()]
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("four-soul-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var sessions: [FriendSharingSession] = [], transports: [PresenceFixtureTransport] = []
+        defer { sessions.forEach { $0.stop() } }
+        for index in 0..<4 {
+            let member = members[index], partner = members[index ^ 1]
+            let claims = try JSONSerialization.data(withJSONObject: ["sub": member.ownerID.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
+            let encoded = claims.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+            let identity = try AppCloudSession(owner: member.ownerID, key: "fixture", token: "e30." + encoded + ".fixture")
+            let transport = PresenceFixtureTransport()
+            let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+                lobbyTokenFetcher: { _, _, _ in
+                    .init(roomID: lobby.uuidString.lowercased(), ownerID: member.ownerID,
+                          appID: String(repeating: "a", count: 32), channel: "four-soul", uid: member.uid, remoteUID: partner.uid,
+                          token: "fixture", issuedAt: Date().timeIntervalSince1970, expiresAt: Date().timeIntervalSince1970 + 60,
+                          lobbyID: lobby, members: members, membershipRevision: "1")
+                })
+            sharing.configureAuthenticatedLobby(lobbyID: lobby, memberToken: UUID(), pairedRoomID: "pair-\(index / 2)",
+                                                partnerID: partner.ownerID, identity: { identity })
+            sharing.setAutomaticMultiplayerConnection(true)
+            sessions.append(sharing); transports.append(transport)
+        }
+        for _ in 0..<30 { await Task.yield() }
+        for (index, sharing) in sessions.enumerated() {
+            XCTAssertEqual(sharing.connectedLobbyID, lobby)
+            sharing.soulLink.probe.configure(core: nil, url: root.appendingPathComponent("\(index).json"))
+            try sharing.soulLink.startPreparedRun(run: runs[index / 2])
+        }
+        var lastSoul: [UInt: BoundSoulPacket] = [:]
+        func deliver() {
+            for (index, transport) in transports.enumerated() {
+                let pending = transport.lobbyPackets; transport.lobbyPackets.removeAll()
+                for (target, data) in pending {
+                    if let packet = BoundSoulPacket.decode(data) { lastSoul[UInt(index + 1)] = packet }
+                    transports[Int(target) - 1].lobbyInteractionReceiver?(UInt(index + 1), data)
+                }
+            }
+        }
+        for _ in 0..<5 {
+            sessions.forEach { $0.soulLink.tick() }; deliver()
+            try await Task.sleep(for: .milliseconds(300))
+        }
+        XCTAssertTrue(sessions.allSatisfy { $0.soulLink.paired })
+        // Only A and C enter friendly activity. Their actual Soul Link partners
+        // B and D keep receiving the ordinary run heartbeat.
+        sessions[0].soulLink.nativeActivity = { true }; sessions[2].soulLink.nativeActivity = { true }
+        for _ in 0..<4 {
+            sessions.forEach { $0.soulLink.tick() }; deliver()
+            try await Task.sleep(for: .milliseconds(300))
+        }
+        XCTAssertTrue(sessions.allSatisfy { $0.soulLink.paired })
+        XCTAssertEqual(sessions.map { $0.soulLink.ledger?.run }, [runs[0], runs[0], runs[1], runs[1]])
+        let template = try XCTUnwrap(lastSoul[2])
+        let death = try XCTUnwrap(BoundSoulPacket(version: 2, run: runs[0], kind: .state,
+            rows: [.init(slot: "area:100", name: "Fixture", dead: true)],
+            losses: BoundSoulLedger.bits(["area:100"]), sender: template.sender, receiver: template.receiver).encoded())
+        transports[0].lobbyInteractionReceiver?(3, death)
+        XCTAssertTrue(sessions[0].soulLink.probe.read().ledger?.dead.isEmpty == true,
+                      "Even a packet with the correct pair run and challenge cannot arrive through another friend's UID")
+        transports[0].lobbyInteractionReceiver?(2, death)
+        XCTAssertEqual(sessions[0].soulLink.probe.read().ledger?.dead, ["area:100"], "Actual partner deaths remain permanent during friendly activity")
+        XCTAssertTrue(sessions[2].soulLink.probe.read().ledger?.dead.isEmpty == true)
+        XCTAssertTrue(sessions[3].soulLink.probe.read().ledger?.dead.isEmpty == true)
+    }
+
+    func testSoloSessionIgnoresOtherMembersAndPreservesCorruptJournal() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("solo-session-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("run.json"), probe = BoundSoulProbe(), owner = UUID(), run = UUID()
+        probe.configure(core: nil, url: url)
+        try probe.startPreparedRun(run: run, binding: String(repeating: "a", count: 64), soloOwner: owner)
+        let session = BoundSoulSession(probe: probe)
+        session.connected = { false }; session.tick(); session.peerGone(); session.tick()
+        XCTAssertTrue(session.active); XCTAssertTrue(session.solo); XCTAssertFalse(session.paired)
+        XCTAssertEqual(session.status, "Solo Nuzlocke active")
+        let before = try Data(contentsOf: url)
+        session.connected = { true }; session.setConnection(owner: owner.uuidString, room: "unrelated-lobby-friend")
+        let death = try XCTUnwrap(BoundSoulPacket(version: 2, run: run, kind: .state,
+            rows: [.init(slot: "area:100", name: "Foreign", dead: true)], losses: BoundSoulLedger.bits(["area:100"])).encoded())
+        session.receive(death)
+        XCTAssertTrue(probe.read().ledger?.dead.isEmpty == true)
+        XCTAssertEqual(try Data(contentsOf: url), before)
+        let corruptURL = root.appendingPathComponent("corrupt.json"), corrupt = Data("damaged journal".utf8)
+        try corrupt.write(to: corruptURL)
+        let damaged = BoundSoulProbe(); damaged.configure(core: nil, url: corruptURL)
+        XCTAssertThrowsError(try damaged.startPreparedRun(run: UUID(), binding: String(repeating: "a", count: 64), soloOwner: owner))
+        XCTAssertEqual(try Data(contentsOf: corruptURL), corrupt)
     }
 
     func testInteractionAdmissionUsesFreshSettledSamplesAndInvalidatesOnRestore() throws {

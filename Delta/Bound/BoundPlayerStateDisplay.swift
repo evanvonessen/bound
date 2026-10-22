@@ -136,6 +136,9 @@ final class BoundPlayerStateDisplay {
     let recordingSession = BoundRecordedPlayerSession()
     let recordedPlayerOverlay = BoundRecordedPlayerOverlay(frame: .zero)
     let livePlayerOverlay = BoundRecordedPlayerOverlay(frame: .zero)
+    private let extraLivePlayerOverlays = [BoundRecordedPlayerOverlay(frame: .zero), BoundRecordedPlayerOverlay(frame: .zero)]
+    private var livePlayerOverlays: [BoundRecordedPlayerOverlay] { [livePlayerOverlay] + extraLivePlayerOverlays }
+    private func clearLivePlayers() { livePlayerOverlays.forEach { $0.show(pose: nil, scene: nil) } }
     private weak var presence: BoundLivePresenceSession?
     private var currentReading: BoundPlayerStateReading?
     private weak var owner: UIViewController?
@@ -171,6 +174,7 @@ final class BoundPlayerStateDisplay {
         })
         recordingSession.demandChanged = { [weak self] in self?.refreshPreference() }
         livePlayerOverlay.accessibilityIdentifier = "bound.live-player"
+        for (index, overlay) in extraLivePlayerOverlays.enumerated() { overlay.accessibilityIdentifier = "bound.live-player-\(index + 2)" }
     }
     deinit {
         timer?.invalidate(); loadTask?.cancel()
@@ -187,7 +191,7 @@ final class BoundPlayerStateDisplay {
         presence = session
         session.setROMVerified(profile != nil && supportsCore)
         session.demandChanged = { [weak self] in self?.refreshPreference() }
-        session.presentationChanged = { [weak self] in self?.livePlayerOverlay.show(pose: nil, scene: nil) }
+        session.presentationChanged = { [weak self] in self?.clearLivePlayers() }
         refreshPreference()
     }
     func bind(core: EmulatorCore?) {
@@ -295,13 +299,20 @@ final class BoundPlayerStateDisplay {
         let now = ProcessInfo.processInfo.systemUptime
         if let presence, let reading = currentReading, reading.status == .live,
            let lastFrameAt, now - lastFrameAt <= 0.5, let profile, let viewer = reading.player {
-            let pose = presence.pose(at: now), rendered = pose?.rendered(profile: profile, viewer: viewer)
-            livePlayerOverlay.show(pose: rendered, scene: viewer.scene)
-            presence.observePresentation(pose: pose, viewer: viewer, frameResolved: rendered != nil,
-                                         visiblePixels: livePlayerOverlay.visiblePixels, at: now)
+            let sessions = presence.renderingSessions
+            for (index, overlay) in livePlayerOverlays.enumerated() {
+                guard index < sessions.count else { overlay.show(pose: nil, scene: nil); continue }
+                let session = sessions[index], pose = session.pose(at: now)
+                let rendered = pose?.rendered(profile: profile, viewer: viewer)
+                overlay.show(pose: rendered, scene: viewer.scene)
+                session.observePresentation(pose: pose, viewer: viewer, frameResolved: rendered != nil,
+                                            visiblePixels: overlay.visiblePixels, at: now)
+            }
         } else {
-            livePlayerOverlay.show(pose: nil, scene: nil)
-            presence?.observePresentation(pose: nil, viewer: nil, frameResolved: false, visiblePixels: 0, at: now)
+            clearLivePlayers()
+            presence?.renderingSessions.forEach {
+                $0.observePresentation(pose: nil, viewer: nil, frameResolved: false, visiblePixels: 0, at: now)
+            }
         }
     }
 
@@ -312,12 +323,13 @@ final class BoundPlayerStateDisplay {
         }
         recordedPlayerOverlay.frame = gameView.bounds
         gameView.bringSubviewToFront(recordedPlayerOverlay)
-        if livePlayerOverlay.superview !== gameView {
-            livePlayerOverlay.removeFromSuperview(); gameView.addSubview(livePlayerOverlay)
-            livePlayerOverlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        for overlay in livePlayerOverlays {
+            if overlay.superview !== gameView {
+                overlay.removeFromSuperview(); gameView.addSubview(overlay)
+                overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            }
+            overlay.frame = gameView.bounds; gameView.bringSubviewToFront(overlay)
         }
-        livePlayerOverlay.frame = gameView.bounds
-        gameView.bringSubviewToFront(livePlayerOverlay)
         guard !hud.isHidden else { return }
         let safe = owner.view.bounds.inset(by: owner.view.safeAreaInsets)
         let game = gameView.convert(gameView.bounds, to: owner.view).intersection(safe)
@@ -333,7 +345,7 @@ final class BoundPlayerStateDisplay {
         stateObservation = nil; core = nil; profile = nil
         presence?.setROMVerified(false)
         currentReading = nil; presence?.invalidateLocal(); presence?.consume(.inactive(.stopped, "Playback is stopped"))
-        livePlayerOverlay.show(pose: nil, scene: nil)
+        clearLivePlayers()
         recordingSession.clear(); recordedPlayerOverlay.show(pose: nil, scene: nil)
         probe.configure(coreID: nil, profile: nil, active: false, status: .stopped, detail: "Playback is stopped")
         hud.update(.inactive(.stopped, "Playback is stopped")); hud.isHidden = true

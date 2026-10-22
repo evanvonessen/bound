@@ -85,6 +85,12 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
     func friendSharingRequest(roomID: String) throws -> URLRequest {
         try request(path: "/functions/v1/agora-token", body: ["roomID": roomID])
     }
+    func lobbySharingRequest(lobbyID: UUID, memberToken: UUID) throws -> URLRequest {
+        try request(path: "/functions/v1/agora-token", body: ["lobbyID": lobbyID.uuidString.lowercased(), "memberToken": memberToken.uuidString.lowercased()])
+    }
+    func lobbyRequest(action: String, payload: [String: Any]) throws -> URLRequest {
+        try request(path: "/rest/v1/rpc/bound_lobby_v1", body: ["action": action, "payload": payload])
+    }
     func runLeaseRequest(action: String, payload: [String: Any]) throws -> URLRequest {
         try request(path: "/rest/v1/rpc/bound_run_lease_v1", body: ["action": action, "payload": payload])
     }

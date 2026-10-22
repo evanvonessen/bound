@@ -92,6 +92,8 @@ final class BoundFriendInteractionSession {
     private(set) var requestID: UUID?
     var changed: (() -> Void)?
     var context: (() -> Context?)?
+    var contextForPeer: ((UUID) -> Context?)?
+    var anchoredPeerSession: UUID? { anchor?.peerSession }
     var send: ((Data) -> Bool)?
     /// The native activity adapter can consume this agreement. No save, RAM or
     /// battle result is changed by the invitation layer itself.
@@ -182,7 +184,7 @@ final class BoundFriendInteractionSession {
     }
     func receive(_ data: Data, at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         guard BoundMultiplayerFeatures.isEnabled, connected, let packet = Packet.decode(data), !retired.contains(packet.id),
-              let current = context?() ?? (packet.action == .request ? nil:anchor),
+              let current = (contextForPeer?(packet.sender) ?? (contextForPeer == nil ? context?() : nil)) ?? (packet.action == .request ? nil:anchor),
               packet.sender == current.peerSession, packet.receiver == current.localSession else { return }
         if packet.action == .request {
             if packet.id == requestID { return } // Duplicate delivery is idempotent.

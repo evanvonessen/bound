@@ -44,7 +44,7 @@ extension GameSave: Syncable
     }
     
     public var syncableFiles: Set<File> {
-        guard let game = self.game else { return [] }
+        guard let game = self.game, !BoundSoloSyncGuard.protects(gameID: game.identifier) else { return [] }
         
         let packages = BoundMultiplayerSaveStore.shared
         let protectedRun = packages.hasRun(gameID: game.identifier)
@@ -87,6 +87,7 @@ extension GameSave: Syncable
         // self.game may be nil if being downloaded, so don't enforce it.
         // guard let identifier = self.game?.identifier else { return false }
         
+        if let game, BoundSoloSyncGuard.protects(gameID: game.identifier) { return false }
         return self.game?.identifier != Game.melonDSBIOSIdentifier && self.game?.identifier != Game.melonDSDSiBIOSIdentifier
     }
     
@@ -133,6 +134,7 @@ extension GameSave: Syncable
                 throw ValidationError.nilRelationshipObjects(keys: [#keyPath(GameSave.game)])
             }
         }
+        if let game { try BoundSoloSyncGuard.requireCloudAllowed(gameID: game.identifier) }
         if let game, record.remoteMetadata?[HarmonyMetadataKey("boundMultiplayerRun")] != nil ||
             BoundMultiplayerSaveStore.shared.hasRun(gameID: game.identifier) {
             multiplayerDownloadDirectory = try BoundMultiplayerSaveStore.shared.stageDownload(
@@ -145,6 +147,7 @@ extension GameSave: Syncable
     {
         multiplayerDownloadDirectory = nil
         multiplayerUploadDirectory = nil
+        if let game { try BoundSoloSyncGuard.requireCloudAllowed(gameID: game.identifier) }
         if let game, BoundMultiplayerSaveStore.shared.hasRun(gameID: game.identifier) {
             // SyncManager installs this owner only after draining the previous
             // account's coordinator. Never back up another player's run when

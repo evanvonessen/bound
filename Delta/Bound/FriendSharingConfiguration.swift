@@ -12,12 +12,95 @@ struct FriendSharingFailure: Equatable, Sendable {
     init(_ kind: Kind, code: Int? = nil) { self.kind = kind; self.code = code }
 }
 
+/// Server-authorized lobby membership. A new join gets a fresh session even if
+/// its small Agora UID is reused, so queued messages cannot target a successor.
+struct FriendSharingLobbyMember: Codable, Equatable, Sendable {
+    let ownerID: UUID
+    let uid: UInt
+    let sessionID: UUID
+}
+
+struct FriendSharingLobbyRoute: Equatable, Sendable {
+    let lobbyID: UUID
+    let localUID: UInt
+    let members: [FriendSharingLobbyMember]
+    var local: FriendSharingLobbyMember? { members.first { $0.uid == localUID } }
+    func member(_ uid: UInt) -> FriendSharingLobbyMember? { members.first { $0.uid == uid } }
+    var isValid: Bool {
+        (1...4).contains(members.count) && local != nil
+        && members.allSatisfy { (1...4).contains($0.uid) }
+        && Set(members.map(\.uid)).count == members.count
+        && Set(members.map(\.ownerID)).count == members.count
+        && Set(members.map(\.sessionID)).count == members.count
+    }
+}
+
+/// RDT's data stream can combine or split writes. Every bounded envelope is
+/// addressed to one membership incarnation; UID authentication comes from RTC.
+struct FriendSharingLobbyEnvelope {
+    static let prefix = Data("BGL1".utf8)
+    static let headerSize = 54
+    static let maximumBytes = headerSize + 1024
+    let lobbyID: UUID
+    let senderSession: UUID
+    let receiverSession: UUID
+    let payload: Data
+    func encoded() -> Data? {
+        guard !payload.isEmpty, payload.count <= 1024 else { return nil }
+        let count = UInt16(Self.headerSize + payload.count)
+        var data = Self.prefix + Data([UInt8(count & 255), UInt8(count >> 8)])
+        for id in [lobbyID, senderSession, receiverSession] {
+            var bytes = id.uuid
+            withUnsafeBytes(of: &bytes) { data.append(contentsOf: $0) }
+        }
+        data.append(payload); return data
+    }
+    static func decode(_ data: Data, from uid: UInt, route: FriendSharingLobbyRoute) -> Data? {
+        guard route.isValid, uid != route.localUID, let sender = route.member(uid), let receiver = route.local,
+              data.count > headerSize, data.count <= maximumBytes, data.starts(with: prefix),
+              (Int(data[4]) | (Int(data[5]) << 8)) == data.count else { return nil }
+        let expected = Self(lobbyID: route.lobbyID, senderSession: sender.sessionID,
+                            receiverSession: receiver.sessionID, payload: Data(data.dropFirst(headerSize)))
+        guard expected.encoded() == data else { return nil }
+        return expected.payload
+    }
+}
+
+struct FriendSharingLobbyFramer {
+    private var pending = Data()
+    mutating func consume(_ data: Data) -> [Data]? {
+        guard !data.isEmpty, data.count <= 65536, pending.count + data.count <= 66560 else { pending.removeAll(); return nil }
+        pending.append(data)
+        var messages: [Data] = []
+        while pending.count >= 6 {
+            guard pending.starts(with: FriendSharingLobbyEnvelope.prefix) else { pending.removeAll(); return nil }
+            let size = Int(pending[4]) | Int(pending[5]) << 8
+            guard size > FriendSharingLobbyEnvelope.headerSize, size <= FriendSharingLobbyEnvelope.maximumBytes else { pending.removeAll(); return nil }
+            guard pending.count >= size else { break }
+            messages.append(Data(pending.prefix(size)))
+            pending = Data(pending.dropFirst(size))
+        }
+        return messages
+    }
+}
+
 struct FriendSharingConfiguration: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable, Decodable {
     let appID: String
     let channel: String
     let uid: UInt
     let remoteUID: UInt
     let token: String
+    let lobbyID: UUID?
+    let members: [FriendSharingLobbyMember]?
+    init(appID: String, channel: String, uid: UInt, remoteUID: UInt, token: String,
+         lobbyID: UUID? = nil, members: [FriendSharingLobbyMember]? = nil) {
+        self.appID = appID; self.channel = channel; self.uid = uid; self.remoteUID = remoteUID; self.token = token
+        self.lobbyID = lobbyID; self.members = members
+    }
+    var lobbyRoute: FriendSharingLobbyRoute? {
+        guard let lobbyID, let members else { return nil }
+        return .init(lobbyID: lobbyID, localUID: uid, members: members)
+    }
 
     var description: String { "FriendSharingConfiguration(redacted)" }
     var debugDescription: String { description }
@@ -27,8 +110,10 @@ struct FriendSharingConfiguration: CustomStringConvertible, CustomDebugStringCon
         appID.count == 32 && appID.utf8.allSatisfy { (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }
         && !channel.isEmpty && channel.utf8.count <= 64
         && !channel.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
-        && uid > 0 && uid <= UInt(UInt32.max) && remoteUID > 0 && remoteUID <= UInt(UInt32.max)
+        && uid > 0 && uid <= UInt(UInt32.max) && remoteUID <= UInt(UInt32.max)
         && uid != remoteUID && !token.isEmpty && token.utf8.count <= 8192
+        && (lobbyID == nil ? members == nil && remoteUID > 0 : lobbyRoute?.isValid == true
+            && (remoteUID == 0 || lobbyRoute?.member(remoteUID) != nil))
     }
 
     static var authenticationRequested: Bool {

@@ -120,6 +120,110 @@ final class LivePresenceRuntimeTests: XCTestCase {
         super.tearDown()
     }
 
+    func testActualVBAMRendersThreeLobbyPeersAndOneDepartureKeepsOthersLive() async throws {
+        continueAfterFailure = false
+        guard ProcessInfo.processInfo.environment["BOUND_ROM_MULTIPLAYER_RUNTIME"] == "1" else {
+            throw XCTSkip("Requires the explicit owned-simulator ROM fixture")
+        }
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let rom = root.appendingPathComponent("RadicalRed.gba"), seed = root.appendingPathComponent("seed.sav")
+        let originalROM = try Data(contentsOf: rom), originalSeed = try Data(contentsOf: seed)
+        let profile = try BoundPlayerROMProfile(rom: originalROM)
+        let output = root.appendingPathComponent("four-presence-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let battery = output.appendingPathComponent("work.sav"); try originalSeed.write(to: battery)
+        let core = try XCTUnwrap(EmulatorCore(game: PresenceRuntimeGame(fileURL: rom, gameSaveURL: battery), options: [.metal: true]))
+        core.audioManager.isEnabled = false; core.audioManager.mixesWithOtherAudio = true
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let oldWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene), owner = UIViewController(), gameView = GameView()
+        window.rootViewController = owner; window.makeKeyAndVisible(); owner.view.frame = window.bounds
+        gameView.frame = CGRect(x: 0, y: 150, width: window.bounds.width, height: window.bounds.width * 2 / 3)
+        owner.view.addSubview(gameView); core.add(gameView)
+        let display = BoundPlayerStateDisplay(), presence = BoundLivePresenceSession()
+        presence.setEnabled(true); presence.start { _ in true }
+        display.attachPresence(presence); display.install(in: owner); display.bind(core: core)
+        display.layout(in: owner, gameView: gameView)
+        defer {
+            presence.stop(); display.stop(); _ = core.stop(); window.isHidden = true; oldWindow?.makeKeyAndVisible()
+        }
+        let probe = display.probe, booted = expectation(description: "Actual cartridge overworld for four-person rendering")
+        var frame = 0, bootFinished = false, previousMask = 0
+        core.updateHandler = { core in
+            frame += 1
+            if let reading = probe.receive(core), reading.status == .live, reading.player?.scene != nil, !bootFinished {
+                bootFinished = true; booted.fulfill()
+            }
+            let mask = (1300..<1302).contains(frame) ? 8 : (1600..<1602).contains(frame) || (2200..<2202).contains(frame) ? 1 : 0
+            for bit in [1, 8] where (mask & bit) != (previousMask & bit) {
+                if mask & bit != 0 { core.deltaCore.emulatorBridge.activateInput(bit, value: 1, playerIndex: 0) }
+                else { core.deltaCore.emulatorBridge.deactivateInput(bit, playerIndex: 0) }
+            }
+            previousMask = mask
+        }
+        core.rate = 8; XCTAssertTrue(core.start()); core.deltaCore.emulatorBridge.audioRenderer = nil
+        await fulfillment(of: [booted], timeout: 90)
+        XCTAssertTrue(core.pause()); core.rate = 1
+        core.updateHandler = { _ = probe.receive($0) }
+        XCTAssertTrue(core.resume())
+        for _ in 0..<100 {
+            display.refreshDisplay()
+            if display.hud.reading.status == .live, display.hud.reading.player?.scene != nil { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let reading = display.hud.reading, viewer = try XCTUnwrap(reading.player)
+        let localPose = try XCTUnwrap(BoundPresencePose(reading: reading))
+        let originalTile = viewer.tile
+        let candidateOverlay = BoundRecordedPlayerOverlay(frame: gameView.bounds)
+        var poses: [BoundPresencePose] = []
+        for (dx, dy) in [(16,0),(-16,0),(0,16),(0,-16),(32,0),(-32,0),(16,16),(-16,16),(0,32)] {
+            var pose = localPose; pose.x += Double(dx); pose.y += Double(dy)
+            candidateOverlay.show(pose: pose.rendered(profile: profile, viewer: viewer), scene: viewer.scene)
+            if candidateOverlay.visiblePixels > 20 { poses.append(pose) }
+            if poses.count == 3 { break }
+        }
+        XCTAssertEqual(poses.count, 3, "The real cartridge camera and occlusion must admit three distinct nearby sprite positions")
+        var peers: [UInt: BoundLivePresenceSession] = [:], epochs: [UInt: UUID] = [:]
+        for uid in UInt(2)...4 { peers[uid] = BoundLivePresenceSession(); epochs[uid] = UUID() }
+        presence.setGroupSessions(peers)
+        for child in peers.values { child.start { _ in true } }
+        func overlays() -> [BoundRecordedPlayerOverlay] {
+            gameView.subviews.compactMap { $0 as? BoundRecordedPlayerOverlay }.filter { $0.accessibilityIdentifier?.hasPrefix("bound.live-player") == true }
+        }
+        var sequence: UInt64 = 0
+        func presentPeers() throws {
+            let now = ProcessInfo.processInfo.systemUptime; sequence += 1
+            for (uid, child) in presence.groupSessions {
+                let data = try XCTUnwrap(BoundPresencePacket(version: 1, rom: BoundPlayerROMProfile.supportedSHA256,
+                    sender: try XCTUnwrap(epochs[uid]), receiver: child.epoch, sequence: sequence, time: now,
+                    pose: poses[Int(uid) - 2]).encoded())
+                child.receive(data, at: now)
+            }
+            display.refreshDisplay(); display.layout(in: owner, gameView: gameView)
+        }
+        for _ in 0..<20 { try presentPeers(); try await Task.sleep(for: .milliseconds(25)) }
+        XCTAssertEqual(overlays().filter { $0.visiblePixels > 20 }.count, 3)
+        let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+        let attachment = XCTAttachment(image: image); attachment.name = "Actual VBA-M three lobby sprites"; attachment.lifetime = .keepAlways; add(attachment)
+        try image.pngData()?.write(to: output.appendingPathComponent("three-peers.png"))
+        let preserved = peers[3]?.epoch
+        peers[2] = nil; presence.setGroupSessions(peers)
+        for _ in 0..<8 { try presentPeers(); try await Task.sleep(for: .milliseconds(25)) }
+        XCTAssertEqual(overlays().filter { $0.visiblePixels > 20 }.count, 2)
+        XCTAssertEqual(peers[3]?.epoch, preserved, "Unrelated departure cannot reset another peer's challenge")
+        XCTAssertEqual(core.state, .running)
+        var moved = false
+        for input in [16,32,64,128] {
+            core.deltaCore.emulatorBridge.activateInput(input, value: 1, playerIndex: 0)
+            for _ in 0..<12 { try presentPeers(); try await Task.sleep(for: .milliseconds(25)) }
+            core.deltaCore.emulatorBridge.deactivateInput(input, playerIndex: 0)
+            if let tile = display.hud.reading.player?.tile, tile != originalTile { moved = true; break }
+        }
+        XCTAssertTrue(moved, "Leaving a lobby peer must preserve ordinary native movement")
+        XCTAssertEqual(try Data(contentsOf: rom), originalROM); XCTAssertEqual(try Data(contentsOf: seed), originalSeed)
+        XCTAssertEqual(try Data(contentsOf: battery), originalSeed)
+    }
+
     func testTwoVBAMInstancesExchangeLivePoses() async throws {
         let env = ProcessInfo.processInfo.environment
         guard let peer = env["BOUND_PAIR_PEER"], ["A", "B"].contains(peer),

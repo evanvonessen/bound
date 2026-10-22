@@ -28,7 +28,10 @@ export function createTokenHandler({appID, certificate, publishableKey, rooms, s
     if(!/^Bearer [A-Za-z0-9._-]{16,8192}$/.test(authorization)) return response(401,{error:'unauthorized'});
     let body;
     try { body=await boundedJSON(request.body,256,requestTimeoutMs); } catch { return response(400,{error:'invalid_request'}); }
-    if(!body||Array.isArray(body)||Object.keys(body).length!==1||!roomPattern.test(body.roomID??'')) return response(400,{error:'invalid_request'});
+    const isLobby=body && !Array.isArray(body) && Object.keys(body).length===2 &&
+      uuid.test(body.lobbyID??'') && uuid.test(body.memberToken??'');
+    const isPair=body && !Array.isArray(body) && Object.keys(body).length===1 && roomPattern.test(body.roomID??'');
+    if(!isLobby&&!isPair) return response(400,{error:'invalid_request'});
     let user;
     try {
       const auth=await fetchImpl(`${origin}/auth/v1/user`,{headers:{Authorization:authorization,apikey:publishableKey},redirect:'error',signal:AbortSignal.timeout(5000)});
@@ -44,8 +47,37 @@ export function createTokenHandler({appID, certificate, publishableKey, rooms, s
         body:'{}',redirect:'error',signal:AbortSignal.timeout(5000)});
       if (!gate.ok || await boundedJSON(gate.body,32) !== true) return response(403,{error:'forbidden'});
     } catch { return response(503,{error:'identity_unavailable'}); }
-    let channel, uid, remoteUID;
-    if(Object.hasOwn(rooms,body.roomID)) {
+    let channel, uid, remoteUID, members, membershipRevision, ttl=60;
+    if(isLobby) {
+      try {
+        const membershipRequestedAt=performance.now();
+        const result=await fetchImpl(`${origin}/rest/v1/rpc/bound_lobby_v1`,{
+          method:'POST',headers:{Authorization:authorization,apikey:publishableKey,'Content-Type':'application/json'},
+          body:JSON.stringify({action:'room',payload:{lobbyID:body.lobbyID,memberToken:body.memberToken}}),redirect:'error',signal:AbortSignal.timeout(5000)});
+        if(!result.ok) return response(403,{error:'forbidden'});
+        const resolved=await boundedJSON(result.body,4096), room=resolved?.room;
+        if(resolved?.ok!==true || room?.lobbyID!==body.lobbyID.toLowerCase() ||
+          room.channel!==`bound_lobby_${body.lobbyID.toLowerCase().replaceAll('-','')}` ||
+          ![1,2,3,4].includes(room.uid) || !Array.isArray(room.members) || room.members.length<1 || room.members.length>4 ||
+          !/^[1-9][0-9]{0,18}$/.test(room.membershipRevision??'') ||
+          !Number.isFinite(room.serverTime) || !Number.isFinite(room.expiresAt)) return response(403,{error:'forbidden'});
+        // A token cannot outlive the presence authority that allowed it. Count
+        // the complete RPC round trip conservatively, including streamed JSON.
+        ttl=Math.min(60,Math.floor(room.expiresAt-room.serverTime-(performance.now()-membershipRequestedAt)/1000)-1);
+        if(ttl<=30) return response(403,{error:'membership_expired'});
+        const owners=new Set(),uids=new Set(),sessions=new Set();
+        for(const member of room.members) {
+          if(!uuid.test(member?.ownerID??'') || ![1,2,3,4].includes(member.uid) || !uuid.test(member.sessionID??'') ||
+            !/^[1-9][0-9]{0,18}$/.test(member.generation??'') || owners.has(member.ownerID.toLowerCase()) || uids.has(member.uid) || sessions.has(member.sessionID.toLowerCase()))
+            return response(403,{error:'forbidden'});
+          owners.add(member.ownerID.toLowerCase());uids.add(member.uid);sessions.add(member.sessionID.toLowerCase());
+        }
+        const local=room.members.find(m=>m.ownerID.toLowerCase()===user.id.toLowerCase());
+        if(!local || local.uid!==room.uid) return response(403,{error:'forbidden'});
+        channel=room.channel;uid=room.uid;members=room.members;membershipRevision=room.membershipRevision;
+        remoteUID=members.find(m=>m.ownerID===room.partnerOwnerID && m.uid!==uid)?.uid ?? members.find(m=>m.uid!==uid)?.uid ?? 0;
+      } catch { return response(503,{error:'membership_unavailable'}); }
+    } else if(Object.hasOwn(rooms??{},body.roomID)) {
       // Retire legacy static-room bypasses; every lease needs the checked friend RPC.
       return response(403,{error:'forbidden'});
     } else {
@@ -65,9 +97,10 @@ export function createTokenHandler({appID, certificate, publishableKey, rooms, s
       } catch { return response(503,{error:'membership_unavailable'}); }
     }
     try {
-      const issuedAt=now(); const token=sign({appID,certificate,channel,uid,ttl:60});
+      const issuedAt=now(); const token=sign({appID,certificate,channel,uid,ttl});
       if(typeof token!=='string'||token.length<16||token.length>8192) throw Error();
-      return response(200,{roomID:body.roomID,ownerID:user.id,appID,channel,uid,remoteUID,token,issuedAt,expiresAt:issuedAt+60});
+      return response(200,{roomID:isLobby?body.lobbyID:body.roomID,ownerID:user.id,appID,channel,uid,remoteUID,token,issuedAt,expiresAt:issuedAt+ttl,
+        ...(isLobby?{lobbyID:body.lobbyID,members,membershipRevision}:{})});
     } catch { return response(503,{error:'issuance_unavailable'}); }
   };
 }

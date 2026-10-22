@@ -65,7 +65,7 @@ UUID; a new game uses a different run identity.
 
 Bound imports the data-only ABI exported by `multi_red`; it does not embed a second
 game implementation. The UI ports are separate from BWP2 shared-world data. The new
-reserved heap/save-state layout is version 2; original battery saves remain version
+reserved heap/save-state layout is version 3; original battery saves remain version
 1. Exact integrated-ROM admission, data sizes and descriptor bytes are checked
 before publishing host data. Old solo batteries and completed/working recovery
 originals are preserved.

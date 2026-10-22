@@ -629,6 +629,12 @@ final class NativeBattleRuntimeTests:XCTestCase {
     }
 
     func testActualSoulLinkNativeHPAndStateRecovery() async throws {
+        try await runActualSoulNativeHPAndStateRecovery(solo: false)
+    }
+    func testActualSoloNuzlockeNativeHPAndStateRecovery() async throws {
+        try await runActualSoulNativeHPAndStateRecovery(solo: true)
+    }
+    private func runActualSoulNativeHPAndStateRecovery(solo: Bool) async throws {
         continueAfterFailure = false
         guard ProcessInfo.processInfo.environment["BOUND_SOUL_RUNTIME"] == "1" else {
             throw XCTSkip("Requires the explicit owned-simulator Soul Link fixture")
@@ -647,6 +653,10 @@ final class NativeBattleRuntimeTests:XCTestCase {
         view.frame = CGRect(x: 0, y: 150, width: window.bounds.width, height: window.bounds.width * 2/3); core.add(view)
         let driver = NativeBattleDriver(core: core, profile: profile), probe = BoundSoulProbe()
         let journal = output.appendingPathComponent("run.json")
+        let soloSession = solo ? BoundSoulSession(probe: probe) : nil
+        soloSession?.bind(core: core, gameID: output.lastPathComponent)
+        // Keep the disposable journal path while exercising the real session's
+        // core pause boundary, rather than changing a saved user's run.
         probe.configure(core: core, url: journal); probe.setVerified(true); probe.setPreviewEnabled(true)
         core.audioManager.pausesOtherAudio = false; core.audioManager.mixesWithOtherAudio = true; core.audioManager.isEnabled = false
         core.updateHandler = { core in
@@ -666,8 +676,22 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertTrue(probe.read().ready, "Wait for the Soul Link observation cadence after the first native overworld frame")
         XCTAssertEqual(probe.read().mons.count, 1, "Only the disposable starter is owned")
         let before = output.appendingPathComponent("before.state"); core.saveSaveState(to: before)
-        try probe.start(run: UUID(), binding: String(repeating: "a", count: 64))
+        if solo { try probe.startPreparedRun(run: UUID(), binding: String(repeating: "a", count: 64), soloOwner: UUID()) }
+        else { try probe.start(run: UUID(), binding: String(repeating: "a", count: 64)) }
         _ = core.resume(); try await Task.sleep(for: .milliseconds(150)); _ = core.pause()
+        if let soloSession {
+            soloSession.tick()
+            soloSession.connected = { false }; soloSession.setConnection(owner: nil, room: nil)
+            let original = try XCTUnwrap(probe.read().ledger)
+            let foreignDeath = try XCTUnwrap(BoundSoulPacket(version: 2, run: original.run, kind: .state,
+                rows: [.init(slot: "area:100", name: "Foreign", dead: true)], losses: BoundSoulLedger.bits(["area:100"])).encoded())
+            soloSession.receive(foreignDeath)
+            XCTAssertEqual(probe.read().ledger, original, "Other lobby members never contribute deaths to a solo journal")
+            XCTAssertTrue(core.resume()); soloSession.peerGone(); soloSession.tick()
+            XCTAssertTrue(soloSession.active); XCTAssertTrue(soloSession.solo); XCTAssertFalse(soloSession.paired)
+            XCTAssertEqual(core.state, .running, "A solo run keeps playing without a connected partner")
+            XCTAssertTrue(core.pause())
+        }
         let starter = try XCTUnwrap(probe.read().ledger?.records.first)
         let starterTeam = try XCTUnwrap(probe.read().team)
         XCTAssertEqual(starterTeam.party.count,1)

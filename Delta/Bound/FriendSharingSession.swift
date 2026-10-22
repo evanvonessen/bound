@@ -180,6 +180,10 @@ protocol FriendSharingTransport: SharingTransport {
     func sendInteraction(_ data: Data) -> Bool
     func pollInteractions()
     func makeBattleChannel(receiver: @escaping @Sendable (Data) -> Void, failed: @escaping @Sendable () -> Void) -> (any BoundBattleChannel)?
+    func setLobbyReceivers(presence: (@MainActor (UInt, Data) -> Void)?, interaction: (@MainActor (UInt, Data?) -> Void)?)
+    func sendLobby(_ data: Data, to uid: UInt) -> Bool
+    func updateLobbyConfiguration(_ configuration: FriendSharingConfiguration) -> Bool
+    func makeBattleChannel(to uid: UInt, receiver: @escaping @Sendable (Data) -> Void, failed: @escaping @Sendable () -> Void) -> (any BoundBattleChannel)?
     var publishedFrames: Int { get }
     var receivedFrames: Int { get }
     var diagnostics: [String: Any] { get }
@@ -202,6 +206,10 @@ extension FriendSharingTransport {
     func sendInteraction(_ data: Data) -> Bool { false }
     func pollInteractions() {}
     func makeBattleChannel(receiver: @escaping @Sendable (Data) -> Void, failed: @escaping @Sendable () -> Void) -> (any BoundBattleChannel)? { nil }
+    func setLobbyReceivers(presence: (@MainActor (UInt, Data) -> Void)?, interaction: (@MainActor (UInt, Data?) -> Void)?) {}
+    func sendLobby(_ data: Data, to uid: UInt) -> Bool { false }
+    func updateLobbyConfiguration(_ configuration: FriendSharingConfiguration) -> Bool { false }
+    func makeBattleChannel(to uid: UInt, receiver: @escaping @Sendable (Data) -> Void, failed: @escaping @Sendable () -> Void) -> (any BoundBattleChannel)? { makeBattleChannel(receiver: receiver, failed: failed) }
     var diagnostics: [String: Any] { [:] }
     var frameTiming: FriendSharingFrameTiming? { nil }
     func setSpectatorView(_ view: UIView?) {}
@@ -230,10 +238,31 @@ final class FriendSharingSession: ObservableObject {
     private(set) var authenticatedMode: Bool
     private var roomProvider: () -> String?
     private let tokenFetcher: @MainActor (String, AppCloudSession) async throws -> FriendSharingTokenLease
+    private let lobbyTokenFetcher: @MainActor (UUID, UUID, AppCloudSession) async throws -> FriendSharingTokenLease
     var isConfigured: Bool { authenticatedMode || configuration != nil }
     var authenticatedSession: (() -> AppCloudSession?)?
     var multiplayerPacketReceiver: ((Data) -> Void)?
-    var connectedRoomID: String? { active ? authRoom : nil }
+    private struct LobbyConnection: Equatable {
+        let id: UUID
+        let memberToken: UUID
+        let pairedRoomID: String?
+        let partnerID: UUID?
+    }
+    private var lobbyConnection: LobbyConnection?
+    private var battlePeerUID: UInt?
+    private var requestedLobbyPeerEpoch: UUID?
+    var connectedLobbyID: UUID? { active && joined && !reconnecting ? lobbyConnection?.id : nil }
+    var connectedRoomID: String? { active ? (lobbyConnection == nil ? authRoom : lobbyConnection?.pairedRoomID) : nil }
+    private var isLobby: Bool { configuration?.lobbyID != nil }
+    private var partnerUID: UInt? {
+        guard isLobby, let partnerID = lobbyConnection?.partnerID else { return nil }
+        return configuration?.members?.first { $0.ownerID == partnerID }?.uid
+    }
+    private var pendingBattlePeerUID: UInt? {
+        guard let epoch = interactions.anchoredPeerSession else { return nil }
+        return livePresence.groupSessions.first { $0.value.peerEpoch == epoch }?.key
+    }
+
     private var automaticMultiplayerConnection = false
     private var startedForMultiplayer = false
     private var tokenTask: Task<Void, Never>?
@@ -335,9 +364,10 @@ final class FriendSharingSession: ObservableObject {
          scheduler: (any SharingScheduler)? = nil,
          authenticatedMode: Bool = FriendSharingConfiguration.authenticationRequested,
          roomProvider: @escaping () -> String? = { FriendSharingTokens.room() },
-         tokenFetcher: @escaping @MainActor (String, AppCloudSession) async throws -> FriendSharingTokenLease = { try await FriendSharingTokens.fetch(room: $0, session: $1) }) {
+         tokenFetcher: @escaping @MainActor (String, AppCloudSession) async throws -> FriendSharingTokenLease = { try await FriendSharingTokens.fetch(room: $0, session: $1) },
+         lobbyTokenFetcher: @escaping @MainActor (UUID, UUID, AppCloudSession) async throws -> FriendSharingTokenLease = { try await FriendSharingTokens.fetchLobby(lobbyID: $0, memberToken: $1, session: $2) }) {
         self.authenticatedMode = authenticatedMode
-        self.roomProvider = roomProvider; self.tokenFetcher = tokenFetcher
+        self.roomProvider = roomProvider; self.tokenFetcher = tokenFetcher; self.lobbyTokenFetcher = lobbyTokenFetcher
         self.configuration = authenticatedMode ? nil : configuration
         let transport = transport ?? AgoraSharingTransport()
         self.transport = transport
@@ -346,14 +376,28 @@ final class FriendSharingSession: ObservableObject {
         self.sharing = try! SharingSession(transport: transport, scheduler: scheduler,
                                           minimumPublicationInterval: FriendSharingCadence.interval)
         remoteView.backgroundColor = .black
-        nativeBattle.makeChannel = { [weak self] receiver, failed in self?.transport.makeBattleChannel(receiver: receiver, failed: failed) }
-        nativeBattle.sendControl = { [weak self] data in self?.transport.sendInteraction(data) == true }
+        nativeBattle.makeChannel = { [weak self] receiver, failed in
+            guard let self else { return nil }
+            if self.isLobby {
+                guard let uid = self.battlePeerUID else { return nil }
+                return self.transport.makeBattleChannel(to: uid, receiver: receiver, failed: failed)
+            }
+            return self.transport.makeBattleChannel(receiver: receiver, failed: failed)
+        }
+        nativeBattle.sendControl = { [weak self] data in
+            guard let self else { return false }
+            if self.isLobby {
+                guard let uid = self.battlePeerUID ?? self.pendingBattlePeerUID else { return false }
+                return self.transport.sendLobby(data, to: uid)
+            }
+            return self.transport.sendInteraction(data)
+        }
         nativeBattle.soulProbe = soulLink.probe
-        sharedWorld.send = { [weak self] data in self?.transport.sendInteraction(data) == true }
-        soulLink.send = { [weak self] data in self?.transport.sendInteraction(data) == true }
+        sharedWorld.send = { [weak self] data in self?.sendPairedInteraction(data) == true }
+        soulLink.send = { [weak self] data in self?.sendPairedInteraction(data) == true }
         soulLink.connected = { [weak self] in
             guard let self else { return false }
-            return self.active && self.joined && !self.reconnecting && !self.backgrounded
+            return self.active && self.joined && !self.reconnecting && !self.backgrounded && (!self.isLobby || self.partnerUID != nil)
         }
         soulLink.nativeActivity = { [weak nativeBattle] in nativeBattle?.isActive == true }
         interactions.agreed = { [weak self] activity, id, initiator in
@@ -361,10 +405,31 @@ final class FriendSharingSession: ObservableObject {
             guard self.soulLink.permitsNativeActivity(activity) else {
                 self.interactions.activityEnded("Trades with friends are unavailable during Soul Link."); return
             }
+            if self.isLobby {
+                guard let uid = self.pendingBattlePeerUID else { self.interactions.activityEnded("Friend connection ended"); return }
+                self.battlePeerUID = uid
+            }
             self.nativeBattle.begin(activity: activity, id: id, initiator: initiator)
         }
         interactions.cancelActivity = { [weak nativeBattle] in nativeBattle?.cancel() }
-        interactions.context = { [weak livePresence] in livePresence?.interactionContext() }
+        interactions.context = { [weak self] in
+            guard let self else { return nil }
+            if !self.isLobby { return self.livePresence.interactionContext() }
+            if let epoch = self.requestedLobbyPeerEpoch {
+                return self.livePresence.groupSessions.values.first { $0.peerEpoch == epoch }?.interactionContext()
+            }
+            if let epoch = self.interactions.anchoredPeerSession, self.interactions.phase != .idle {
+                return self.livePresence.groupSessions.values.first { $0.peerEpoch == epoch }?.interactionContext()
+            }
+            // Overlapping peers are ambiguous; do not silently pick a friend.
+            let facing = self.livePresence.groupSessions.values.compactMap { $0.interactionContext() }.filter { $0.local.isFacing($0.peer) }
+            return facing.count == 1 ? facing.first : nil
+        }
+        interactions.contextForPeer = { [weak self] epoch in
+            guard let self else { return nil }
+            if !self.isLobby { return self.livePresence.peerEpoch == epoch ? self.livePresence.interactionContext() : nil }
+            return self.livePresence.groupSessions.values.first { $0.peerEpoch == epoch }?.interactionContext()
+        }
         livePresence.retainsNativeDialoguePose = { [weak interactions] in
             guard let interactions,interactions.nativeDialogueManaged else { return false }
             return [.choosing,.incoming,.outgoing,.confirming,.agreed,.ended].contains(interactions.phase)
@@ -423,11 +488,113 @@ final class FriendSharingSession: ObservableObject {
     /// Entering the UI-owned authenticated flow permanently leaves temporary
     /// mode for this owner. Sign-out cannot silently restore a retained RTC token.
     func configureAuthenticatedRoom(_ room: String?, identity: @escaping () -> AppCloudSession?) {
+        // Account/friend refreshes may reassert the paired room while a lobby
+        // owns transport. Only explicit lobby departure switches channels.
+        if lobbyConnection != nil {
+            if authenticatedSession?()?.owner == identity()?.owner { authenticatedSession = identity; return }
+            stop(); lobbyConnection = nil
+        }
         automaticMultiplayerConnection = false; startedForMultiplayer = false
         stop()
         authenticatedMode = true; configuration = nil
+        lobbyConnection = nil
         roomProvider = { room }; authenticatedSession = identity
         status = room == nil ? "Add a friend to share" : "Game sharing ready"
+    }
+
+    func configureAuthenticatedLobby(lobbyID: UUID, memberToken: UUID, pairedRoomID: String?, partnerID: UUID?,
+                                     identity: @escaping () -> AppCloudSession?) {
+        let next = LobbyConnection(id: lobbyID, memberToken: memberToken, pairedRoomID: pairedRoomID, partnerID: partnerID)
+        if lobbyConnection?.id == lobbyID && lobbyConnection?.memberToken == memberToken {
+            lobbyConnection = next; authenticatedSession = identity
+            if let configuration { applyLobbyMembers(configuration) }
+            soulLink.setConnection(owner: identity()?.owner.uuidString, room: pairedRoomID)
+            return
+        }
+        stop()
+        lobbyConnection = next; authenticatedMode = true; configuration = nil
+        roomProvider = { lobbyID.uuidString.lowercased() }; authenticatedSession = identity
+        status = "Lobby ready"
+    }
+
+    func clearAuthenticatedLobby(reconnectPair: Bool = true, identity: @escaping () -> AppCloudSession?) {
+        guard let lobbyConnection else { return }
+        let reconnect = automaticMultiplayerConnection
+        self.lobbyConnection = nil
+        configureAuthenticatedRoom(reconnectPair ? lobbyConnection.pairedRoomID : nil, identity: identity)
+        setAutomaticMultiplayerConnection(reconnectPair && reconnect && lobbyConnection.pairedRoomID != nil)
+    }
+
+    @discardableResult
+    func requestLobbyActivity(ownerID: UUID, activity: BoundFriendInteractionPacket.Activity) -> Bool {
+        guard isLobby, active, joined, !reconnecting, !backgrounded, interactions.phase == .idle,
+              soulLink.permitsNativeActivity(activity),
+              let uid = configuration?.members?.first(where: { $0.ownerID == ownerID })?.uid,
+              let context = livePresence.groupSessions[uid]?.interactionContext(), context.local.isFacing(context.peer) else { return false }
+        requestedLobbyPeerEpoch = context.peerSession
+        defer { requestedLobbyPeerEpoch = nil }
+        guard interactions.open() else { return false }
+        interactions.request(activity)
+        return interactions.phase == .outgoing
+    }
+
+    func refreshLobbyMembership() {
+        guard lobbyConnection != nil, active, joined else { return }
+        requestToken(initial: false)
+    }
+
+    private func sendPairedInteraction(_ data: Data) -> Bool {
+        if isLobby {
+            guard let uid = partnerUID else { return false }
+            return transport.sendLobby(data, to: uid)
+        }
+        return transport.sendInteraction(data)
+    }
+
+    private func receiveLobbyInteraction(_ data: Data?, from uid: UInt) {
+        guard isLobby, configuration?.lobbyRoute?.member(uid) != nil else { return }
+        guard let data else { lobbyPeerGone(uid); return }
+        if data.starts(with: BoundFriendInteractionPacket.prefix) {
+            guard let packet = BoundFriendInteractionPacket.decode(data),
+                  livePresence.groupSessions[uid]?.peerEpoch == packet.sender else { return }
+            interactions.receive(data)
+        } else if data.starts(with: BoundBattleControlPacket.prefix) {
+            if uid == (nativeBattle.isActive ? battlePeerUID : pendingBattlePeerUID) { nativeBattle.receive(data) }
+        } else if uid == partnerUID {
+            if data.starts(with: BoundWorldPacket.prefix) { sharedWorld.receive(data) }
+            else if BoundSoulPacket.recognizes(data) { soulLink.receive(data) }
+            else if data.starts(with: Data("BRM1".utf8)) { multiplayerPacketReceiver?(data) }
+        }
+    }
+
+    private func lobbyPeerGone(_ uid: UInt) {
+        if uid == battlePeerUID || uid == pendingBattlePeerUID { nativeBattle.cancel(); interactions.invalidate(); battlePeerUID = nil }
+        livePresence.groupSessions[uid]?.peerGone()
+        if uid == partnerUID { sharedWorld.peerGone(); soulLink.peerGone() }
+        if uid == configuration?.remoteUID { invalidateSpectatorVideo() }
+    }
+
+    private func applyLobbyMembers(_ next: FriendSharingConfiguration) {
+        guard let route = next.lobbyRoute else { return }
+        let oldMembers = configuration?.members ?? []
+        var sessions = livePresence.groupSessions
+        for (uid, _) in sessions where route.member(uid) == nil || oldMembers.first(where: { $0.uid == uid }) != route.member(uid) {
+            lobbyPeerGone(uid); sessions[uid]?.stop(); sessions[uid] = nil
+        }
+        if configuration?.remoteUID != next.remoteUID { invalidateSpectatorVideo() }
+        configuration = next
+        for peer in route.members where peer.uid != route.localUID && sessions[peer.uid] == nil {
+            sessions[peer.uid] = BoundLivePresenceSession()
+        }
+        livePresence.setGroupSessions(sessions)
+        if joined {
+            for (uid, presence) in sessions where !presence.connected {
+                presence.start { [weak self] data in
+                    guard let self, self.active, self.joined, !self.reconnecting, !self.backgrounded else { return false }
+                    return self.transport.sendLobby(data, to: uid)
+                }
+            }
+        }
     }
 
     func start() {
@@ -461,7 +628,7 @@ final class FriendSharingSession: ObservableObject {
     func sendMultiplayerPacket(_ data: Data) -> Bool {
         guard BoundMultiplayerFeatures.isEnabled, data.starts(with: Data("BRM1".utf8)), data.count <= 1024,
               active, joined, !reconnecting, !backgrounded else { return false }
-        return transport.sendInteraction(data)
+        return sendPairedInteraction(data)
     }
 
     private func beginStart() {
@@ -483,7 +650,7 @@ final class FriendSharingSession: ObservableObject {
 
     private func startTransport() {
         guard !backgrounded, let configuration else { return }
-        soulLink.setConnection(owner: tokenOwner?.uuidString ?? (authenticatedMode ? nil : String(configuration.uid)), room: authRoom ?? configuration.channel)
+        soulLink.setConnection(owner: tokenOwner?.uuidString ?? (authenticatedMode ? nil : String(configuration.uid)), room: lobbyConnection == nil ? (authRoom ?? configuration.channel) : lobbyConnection?.pairedRoomID)
         generation = UUID()
         let run = generation
         receivedFrames = 0; publishedFrames = 0; remoteVisible = false
@@ -507,6 +674,13 @@ final class FriendSharingSession: ObservableObject {
             }
             else { self.sharedWorld.peerGone(); self.soulLink.peerGone(); self.nativeBattle.cancel(); self.interactions.stop(message: "Invitation connection lost") }
         }
+        transport.setLobbyReceivers(presence: { [weak self] uid, data in
+            guard BoundMultiplayerFeatures.isEnabled, let self, self.generation == run, self.active, self.joined, !self.reconnecting else { return }
+            self.livePresence.groupSessions[uid]?.receive(data)
+        }, interaction: { [weak self] uid, data in
+            guard BoundMultiplayerFeatures.isEnabled, let self, self.generation == run, self.active, self.joined, !self.reconnecting else { return }
+            self.receiveLobbyInteraction(data, from: uid)
+        })
         transport.start(configuration: configuration, remoteView: remoteView) { [weak self] event in
             guard let self, self.generation == run, self.active else { return }
             switch event {
@@ -518,6 +692,8 @@ final class FriendSharingSession: ObservableObject {
             case .remoteFrame:
                 self.receivedFrames += 1
                 // Freshness is established by the decoded-frame clock below.
+            case .lobbyPeerGone(let uid): self.lobbyPeerGone(uid)
+            case .lobbyPeerJoined(let uid): self.livePresence.groupSessions[uid]?.peerGone()
             case .remoteGone:
                 self.invalidateSpectatorVideo()
                 self.sharedWorld.peerGone(); self.soulLink.peerGone()
@@ -588,24 +764,37 @@ final class FriendSharingSession: ObservableObject {
             return
         }
         let run = generation
-        let fetcher = tokenFetcher
+        let fetcher = tokenFetcher, lobbyFetcher = lobbyTokenFetcher, lobby = lobbyConnection
         tokenTask = Task { [weak self] in
             do {
-                let lease = try await fetcher(room, identity)
+                let lease: FriendSharingTokenLease
+                if let lobby { lease = try await lobbyFetcher(lobby.id, lobby.memberToken, identity) }
+                else { lease = try await fetcher(room, identity) }
                 try Task.checkCancellation()
                 guard let self, self.generation == run, self.active else { return }
                 guard lease.valid(room: room, owner: owner), self.authenticatedSession?()?.owner == owner else {
                     self.tokenTask = nil; self.stop(); self.status = "Sign in to share"; return
                 }
                 self.tokenTask = nil
+                let next: FriendSharingConfiguration
+                if let route = lease.configuration.lobbyRoute {
+                    let selected = route.members.first { $0.ownerID == lobby?.partnerID }?.uid
+                        ?? route.members.first { $0.uid != route.localUID }?.uid ?? 0
+                    next = .init(appID: lease.appID, channel: lease.channel, uid: lease.uid, remoteUID: selected,
+                                 token: lease.token, lobbyID: lease.lobbyID, members: lease.members)
+                } else { next = lease.configuration }
                 if initial {
-                    self.configuration = lease.configuration
+                    self.configuration = next
                     self.startTransport()
                 } else {
                     guard let previous = self.configuration, previous.appID == lease.appID, previous.channel == lease.channel,
-                          previous.uid == lease.uid, previous.remoteUID == lease.remoteUID,
+                          previous.uid == lease.uid, previous.lobbyID == lease.lobbyID,
+                          (self.isLobby || previous.remoteUID == lease.remoteUID),
                           self.transport.renewToken(lease.token) else { throw FriendSharingTokenError.unavailable }
-                    self.configuration = lease.configuration
+                    if self.isLobby {
+                        guard self.transport.updateLobbyConfiguration(next) else { throw FriendSharingTokenError.unavailable }
+                        self.applyLobbyMembers(next)
+                    } else { self.configuration = next }
                     self.tokenRenewals += 1
                 }
                 guard self.active else { return }
@@ -658,7 +847,7 @@ final class FriendSharingSession: ObservableObject {
             if self.authenticatedMode && (self.authenticatedSession?()?.owner != self.tokenOwner || (self.tokenExpiry ?? 0) <= Date().timeIntervalSince1970) {
                 self.stop(); self.status = "Sign in to share"; return
             }
-            self.sharedWorld.tick(enabled: BoundMultiplayerFeatures.isEnabled && self.livePresence.enabled && self.active, connected: self.joined && !self.reconnecting && !self.backgrounded)
+            self.sharedWorld.tick(enabled: BoundMultiplayerFeatures.isEnabled && self.livePresence.enabled && self.active && (!self.isLobby || self.partnerUID != nil), connected: self.joined && !self.reconnecting && !self.backgrounded)
             self.transport.pollPresence()
             self.livePresence.tick()
             self.transport.pollInteractions()
@@ -687,8 +876,19 @@ final class FriendSharingSession: ObservableObject {
         livePresence.setEnabled(true)
         interactions.start { [weak self] data in
             guard let self, self.active, self.joined, !self.reconnecting, !self.backgrounded else { return false }
+            if self.isLobby {
+                guard let packet = BoundFriendInteractionPacket.decode(data),
+                      let uid = self.livePresence.groupSessions.first(where: { $0.value.peerEpoch == packet.receiver })?.key else { return false }
+                return self.transport.sendLobby(data, to: uid)
+            }
             return self.transport.sendInteraction(data)
         }
+        if isLobby, let configuration {
+            livePresence.start { _ in true }
+            applyLobbyMembers(configuration)
+            return
+        }
+        livePresence.setGroupSessions([:])
         livePresence.start { [weak self] data in
             guard let self, self.active, self.joined, !self.reconnecting, !self.backgrounded else { return false }
             return self.transport.sendPresence(data)
@@ -716,7 +916,7 @@ final class FriendSharingSession: ObservableObject {
         if clearReconnectIntent { sharedWorld.stop() } else { sharedWorld.peerGone() }
         soulLink.peerGone()
         nativeBattle.cancel(resume: !backgrounded); interactions.stop(); transport.setInteractionReceiver(nil)
-        livePresence.stop(); transport.setPresenceReceiver(nil)
+        livePresence.stop(); livePresence.setGroupSessions([:]); transport.setPresenceReceiver(nil); transport.setLobbyReceivers(presence: nil, interaction: nil); battlePeerUID = nil
         generation = UUID()
         tokenTask?.cancel(); tokenTask = nil
         tokenDeadline?.cancel(); tokenDeadline = nil
@@ -791,7 +991,7 @@ final class FriendSharingSession: ObservableObject {
         }
         sharedWorld.peerGone(); soulLink.peerGone()
         nativeBattle.cancel(resume: false); interactions.stop(); livePresence.stop()
-        transport.setInteractionReceiver(nil); transport.setPresenceReceiver(nil)
+        transport.setInteractionReceiver(nil); transport.setPresenceReceiver(nil); transport.setLobbyReceivers(presence: nil, interaction: nil)
         stopWatchingPartner()
         generation = UUID()
         tokenTask?.cancel(); tokenTask = nil

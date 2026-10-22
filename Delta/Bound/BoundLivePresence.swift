@@ -84,6 +84,22 @@ final class BoundLivePresenceSession: ObservableObject {
     private(set) var rejectedPackets = 0
     private(set) var peerEpoch: UUID?
     private(set) var bufferedSamples = 0
+    private(set) var groupSessions: [UInt: BoundLivePresenceSession] = [:]
+    var renderingSessions: [BoundLivePresenceSession] {
+        groupSessions.isEmpty ? [self] : groupSessions.keys.sorted().compactMap { groupSessions[$0] }
+    }
+    func setGroupSessions(_ sessions: [UInt: BoundLivePresenceSession]) {
+        precondition(sessions.count <= 3 && sessions.values.allSatisfy { $0 !== self && $0.groupSessions.isEmpty })
+        guard sessions.count != groupSessions.count || sessions.contains(where: { groupSessions[$0.key] !== $0.value }) else { return }
+        for (uid, old) in groupSessions where sessions[uid] !== old { old.stop() }
+        groupSessions = sessions
+        for session in sessions.values {
+            session.setEnabled(enabled); session.setROMVerified(romVerified)
+            session.retainsNativeDialoguePose = { [weak self] in self?.retainsNativeDialoguePose?() == true }
+            session.presentationChanged = { [weak self] in self?.presentationChanged?() }
+        }
+        presentationChanged?(); demandChanged?()
+    }
     var demandChanged: (() -> Void)?
     var retainsNativeDialoguePose: (() -> Bool)?
     var presentationChanged: (() -> Void)?
@@ -111,6 +127,7 @@ final class BoundLivePresenceSession: ObservableObject {
     private var samples: [Sample] = []
 
     func setEnabled(_ requested: Bool) {
+        groupSessions.values.forEach { $0.setEnabled(requested) }
         let value = requested && BoundMultiplayerFeatures.isEnabled
         guard value != enabled else { return }
         enabled = value; resetTimeline()
@@ -124,15 +141,18 @@ final class BoundLivePresenceSession: ObservableObject {
         updateStatus(); demandChanged?(); presentationChanged?()
     }
     func stop() {
+        groupSessions.values.forEach { $0.stop() }
         localPose = nil
         if connected && enabled { publish(at: ProcessInfo.processInfo.systemUptime, force: true) }
         connected = false; send = nil; resetTimeline()
         updateStatus(); demandChanged?(); presentationChanged?()
     }
     func invalidateLocal() {
+        groupSessions.values.forEach { $0.invalidateLocal() }
         resetTimeline(); updateStatus(); presentationChanged?()
     }
     func peerGone() {
+        groupSessions.values.forEach { $0.peerGone() }
         resetTimeline(); updateStatus(); presentationChanged?()
     }
     private func resetTimeline() {
@@ -150,6 +170,7 @@ final class BoundLivePresenceSession: ObservableObject {
     }
 
     func consume(_ reading: BoundPlayerStateReading, at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        groupSessions.values.forEach { $0.consume(reading, at: now) }
         readerStatus = reading.status.rawValue
         let previousPose=localPose
         localPose=needsReader && romVerified ? BoundPresencePose(reading:reading):nil
@@ -172,11 +193,13 @@ final class BoundLivePresenceSession: ObservableObject {
         if localPose == nil { presentationChanged?() }
     }
     func setROMVerified(_ value: Bool) {
+        groupSessions.values.forEach { $0.setROMVerified(value) }
         guard value != romVerified else { return }
         romVerified = value; invalidateLocal()
     }
 
     func tick(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        groupSessions.values.forEach { $0.tick(at: now) }
         guard BoundMultiplayerFeatures.isEnabled, connected, now.isFinite, now >= 0 else { return }
         if let proposalAt, now - proposalAt > 0.3 { proposedPeer = nil; self.proposalAt = nil }
         if let lastReceived, now - lastReceived > Self.timeout {
