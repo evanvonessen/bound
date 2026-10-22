@@ -179,6 +179,14 @@ struct SettingsView: View {
                                         }
                                     }
                                     .accessibilityIdentifier("bound.website-link")
+                                    Link(destination: URL(string: "https://evanvonessen.github.io/bound/current/changelog.html")!) {
+                                        SettingsRow(label: Text("Changelog"), systemImage: "list.bullet.rectangle", color: .blue) {
+                                            Image(systemName: "arrow.up.right")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .accessibilityIdentifier("bound.changelog-link")
                                     Link(destination: URL(string: "https://evanvonessen.github.io/bound/current/privacy.html")!) {
                                         SettingsRow(label: Text("Privacy Policy"), systemImage: "hand.raised", color: .blue) {
                                             Image(systemName: "arrow.up.right")

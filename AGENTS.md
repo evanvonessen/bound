@@ -45,3 +45,5 @@ Keep `Docs/site/current/changelog.html` current when adding user-facing changes.
 Use brief bullets grouped by the date each change is added, newest date first,
 with no times. Use America/Los_Angeles calendar dates. Preserve the plain HTML
 style of the current site and keep earlier entries as a running history.
+Within each date, separate Radical Red multiplayer changes from general Bound
+changes under their own labels.

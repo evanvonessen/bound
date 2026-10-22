@@ -9,7 +9,8 @@ Directory case is significant on the Linux deployment runner.
 The plain website lives at `https://evanvonessen.github.io/bound/current/`.
 The current app's About settings link to that site, its `privacy.html`, and its
 `moderation.html`. The site contains contact, privacy, community information and a
-dated changelog at `current/changelog.html`.
+dated changelog at `current/changelog.html`, also linked from About settings.
+Each date separates Radical Red multiplayer additions from general Bound updates.
 
 ## Build 12 review URLs — preserve
 
