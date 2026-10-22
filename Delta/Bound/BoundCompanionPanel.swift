@@ -1797,7 +1797,6 @@ struct BoundFriendsSheet: View {
     @State private var reportingRoom: FriendRoom?
     @State private var blockingRoom: FriendRoom?
     @State private var removingRoom: FriendRoom?
-    @State private var showingUsernameHelp = false
     @State private var showingAddFriend = false
     @State private var showingEmailChange = false
     @State private var roomIDsBeforeAdding: Set<String> = []
@@ -1823,6 +1822,11 @@ struct BoundFriendsSheet: View {
                         BoundAccountSignInFields(account: account, email: $email, password: $password) { onboarding.synchronizeAccount() }
                     } else {
                         BoundAccountEmailText(account: account) { showingEmailChange = true }
+                        NavigationLink("Change username") {
+                            BoundUsernameSettings().boundSettingsPage()
+                        }
+                        .disabled(account.busy || account.deletionPending)
+                        .accessibilityIdentifier("bound.friends-change-username")
                         BoundAccountPasswordResetLink(account: account)
                         NavigationLink("Account security") { BoundAccountSecurityView(account: account) }
                             .accessibilityIdentifier("bound.account-security")
@@ -1835,35 +1839,15 @@ struct BoundFriendsSheet: View {
                     }
                 } header: {
                     if account.session != nil {
-                        Group {
-                            if usesUpdatedUI {
-                                HStack(spacing: 6) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(onboarding.accountUsername.map { "Hello \($0)" } ?? "Hello")
-                                        .lineLimit(2).minimumScaleFactor(0.75)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .accessibilityIdentifier("bound.friends-greeting")
-                                    if showingUsernameHelp {
-                                        Text("Change your username in Settings → Account & Sync.")
-                                            .font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                            .accessibilityIdentifier("bound.username-help-message")
-                                    }
-                                }
+                        HStack(spacing: 6) {
+                            Text(onboarding.accountUsername.map { "Hello \($0)" } ?? "Hello")
+                                .lineLimit(2).minimumScaleFactor(0.75)
+                                .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                Spacer(minLength: 2)
-                                if !showingUsernameHelp {
-                                    Button { showingUsernameHelp = true } label: {
-                                        Image(systemName: "info.circle").font(.body)
-                                            .frame(minWidth: 44, minHeight: 44)
-                                            .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.borderless)
-                                    .accessibilityLabel("How to change your username")
-                                    .accessibilityIdentifier("bound.username-help")
-                                }
+                                .accessibilityIdentifier("bound.friends-greeting")
+                            if usesUpdatedUI {
                                 Button {
-                                    guard usesUpdatedUI, account.session != nil else { return }
+                                    guard account.session != nil else { return }
                                     roomIDsBeforeAdding = Set(onboarding.rooms.map(\.roomID))
                                     friendUsername = ""
                                     showingAddFriend = true
@@ -1877,28 +1861,6 @@ struct BoundFriendsSheet: View {
                                 .buttonStyle(.borderless)
                                 .accessibilityLabel("Add friend")
                                 .accessibilityIdentifier("bound.add-friend-open")
-                                }
-                            } else {
-                                HStack(spacing: 8) {
-                                Text(onboarding.accountUsername.map { "Hello \($0)" } ?? "Hello")
-                                    .accessibilityIdentifier("bound.friends-greeting")
-                                if showingUsernameHelp {
-                                    Text("Change your username in Settings → Account & Sync.")
-                                        .font(.caption).fixedSize(horizontal: false, vertical: true)
-                                        .accessibilityIdentifier("bound.username-help-message")
-                                } else {
-                                    Button {
-                                        showingUsernameHelp = true
-                                    } label: {
-                                        Image(systemName: "info.circle")
-                                            .font(.body)
-                                            .frame(minWidth: 44, minHeight: 44)
-                                    }
-                                    .buttonStyle(.borderless)
-                                    .accessibilityLabel("How to change your username")
-                                    .accessibilityIdentifier("bound.username-help")
-                                }
-                                }
                             }
                         }
                         .textCase(nil)
@@ -1985,23 +1947,16 @@ struct BoundFriendsSheet: View {
             onboarding.refresh()
         }
         .onChange(of: uiVersion) { _, _ in
-            if !usesUpdatedUI { showingAddFriend = false; showingUsernameHelp = false }
+            if !usesUpdatedUI { showingAddFriend = false }
         }
         .onChange(of: account.session?.owner) { _, _ in
-            showingUsernameHelp = false
             showingAddFriend = false
-        }
-        .task(id: showingUsernameHelp) {
-            guard showingUsernameHelp else { return }
-            do { try await Task.sleep(for: .seconds(10)) }
-            catch { return }
-            showingUsernameHelp = false
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { onboarding.open(sharing: sharing, existing: { account.session }) }
-            else { showingUsernameHelp = false; onboarding.close() }
+            else { onboarding.close() }
         }
-        .onDisappear { password = ""; showingUsernameHelp = false; onboarding.close(); closed() }
+        .onDisappear { password = ""; onboarding.close(); closed() }
         .interactiveDismissDisabled(account.busy)
         .sheet(item: $reportingRoom) { room in BoundReportView(onboarding: onboarding, room: room) }
         .sheet(isPresented: $showingAddFriend) {

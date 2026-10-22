@@ -332,7 +332,7 @@ struct BoundAccountSocialSettings: View {
     }
 }
 
-private struct BoundUsernameSettings: View {
+struct BoundUsernameSettings: View {
     @ObservedObject private var profile = BoundAccountProfile.shared
     @Environment(\.scenePhase) private var phase
     @State private var username = ""
