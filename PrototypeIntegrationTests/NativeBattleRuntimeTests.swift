@@ -519,6 +519,113 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertEqual(try Data(contentsOf:rom),originalROM); XCTAssertEqual(try Data(contentsOf:seed),originalSeed)
     }
 
+    func testActualROMMultiplayerMailboxAndPauseGate() async throws {
+        continueAfterFailure = false
+        guard ProcessInfo.processInfo.environment["BOUND_ROM_MULTIPLAYER_RUNTIME"] == "1" else {
+            throw XCTSkip("Requires the explicit owned-simulator ROM multiplayer fixture")
+        }
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let rom = root.appendingPathComponent("RadicalRed.gba"), seed = root.appendingPathComponent("seed.sav")
+        let originalROM = try Data(contentsOf: rom), originalSeed = try Data(contentsOf: seed)
+        let profile = try BoundPlayerROMProfile(rom: originalROM)
+        let output = root.appendingPathComponent("rom-multiplayer-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let battery = output.appendingPathComponent("work.sav"); try originalSeed.write(to: battery)
+        let core = try XCTUnwrap(EmulatorCore(game: NativeBattleGame(fileURL: rom, gameSaveURL: battery), options: [.metal:true]))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first { $0.isKeyWindow }, window = UIWindow(windowScene: scene), owner = UIViewController(), view = GameView()
+        window.rootViewController = owner; window.makeKeyAndVisible(); owner.view.addSubview(view)
+        view.frame = CGRect(x: 0, y: 150, width: window.bounds.width, height: window.bounds.width * 2/3); core.add(view)
+        let driver = NativeBattleDriver(core: core, profile: profile), probe = BoundROMMultiplayerProbe()
+        probe.configure(core: core); probe.setVerified(true)
+        core.audioManager.pausesOtherAudio = false; core.audioManager.mixesWithOtherAudio = true; core.audioManager.isEnabled = false
+        core.updateHandler = { core in driver.receive(core); probe.receive(core) }
+        defer {
+            _ = core.pause(); probe.configure(core:nil); _ = core.stop()
+            _ = BoundVBABattleBridge.setROMGameSaveAllowed(true,for:battery)
+            window.isHidden = true; previous?.makeKeyAndVisible()
+        }
+        core.rate = 8; XCTAssertTrue(core.start()); core.deltaCore.emulatorBridge.audioRenderer = nil
+        await fulfillment(of: [driver.booted], timeout: 90)
+        _ = core.pause(); core.rate = 1; driver.play(moves:false)
+        func position() throws -> BoundPlayerState.Point {
+            guard let memory = BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }) else { throw NSError(domain:"snapshot",code:1) }
+            return try XCTUnwrap(BoundPlayerStateDecoder.read(profile:profile,memory:memory,frame:1).player?.tile)
+        }
+        func waitForPause(_ paused: Bool) async throws {
+            for _ in 0..<80 {
+                if probe.read()?.paused == paused { return }
+                try await Task.sleep(for:.milliseconds(25))
+            }
+            XCTFail("The native mailbox must publish its pause gate while guest frames continue")
+        }
+        let initial = try position()
+        var host = BoundROMHostState(); host.enabled = true; host.linked = true; host.run = UUID()
+        host.message = "Waiting for friend"
+        probe.publish(host); _ = core.resume(); try await waitForPause(true)
+        let pausedFrame = try XCTUnwrap(probe.read()).frame
+        for input in [64,128,32,16] {
+            core.deltaCore.emulatorBridge.activateInput(input,value:1,playerIndex:0)
+            try await Task.sleep(for:.milliseconds(220))
+            core.deltaCore.emulatorBridge.deactivateInput(input,playerIndex:0)
+        }
+        _ = core.pause()
+        XCTAssertEqual(try position(),initial,"A disconnected linked run must block native movement")
+        XCTAssertGreaterThan(try XCTUnwrap(probe.read()).frame,pausedFrame,"The mailbox keeps processing while gameplay is paused")
+        host.connected = true; probe.publish(host); _ = core.resume(); try await waitForPause(false)
+        var moved = false
+        for input in [64,128,32,16] {
+            probe.publish(host)
+            core.deltaCore.emulatorBridge.activateInput(input,value:1,playerIndex:0)
+            try await Task.sleep(for:.milliseconds(220))
+            core.deltaCore.emulatorBridge.deactivateInput(input,playerIndex:0)
+            _ = core.pause(); moved = try position() != initial
+            if moved { break }; _ = core.resume()
+        }
+        XCTAssertTrue(moved,"A fresh connected host restores native movement")
+        host.enabled = false; probe.publish(host); _ = core.resume(); try await waitForPause(true); _ = core.pause()
+        let disabledPosition = try position()
+        _ = core.resume()
+        for input in [64,128,32,16] {
+            core.deltaCore.emulatorBridge.activateInput(input,value:1,playerIndex:0)
+            try await Task.sleep(for:.milliseconds(220))
+            core.deltaCore.emulatorBridge.deactivateInput(input,playerIndex:0)
+        }
+        _ = core.pause()
+        XCTAssertEqual(try position(),disabledPosition,"Disabling services must preserve a linked run's pause fence")
+        let suspended = output.appendingPathComponent("paused.state")
+        core.saveSaveState(to:suspended)
+        XCTAssertTrue(BoundVBABattleBridge.setROMGameSaveAllowed(false,for:battery))
+        let protectedBytes = Data(repeating:0xA5,count:originalSeed.count)
+        try protectedBytes.write(to:battery)
+        core.deltaCore.emulatorBridge.saveGameSave(to:battery)
+        XCTAssertEqual(try Data(contentsOf:battery),protectedBytes,"A direct bridge save cannot overwrite an unauthorized battery")
+        let alias = output.appendingPathComponent("battery-alias.sav")
+        try FileManager.default.createSymbolicLink(at:alias,withDestinationURL:battery)
+        core.deltaCore.emulatorBridge.saveGameSave(to:alias)
+        XCTAssertEqual(try Data(contentsOf:battery),protectedBytes,"Canonical destination aliases share the same fence")
+        let export = output.appendingPathComponent("unrelated-export.sav")
+        core.deltaCore.emulatorBridge.saveGameSave(to:export)
+        XCTAssertEqual(try Data(contentsOf:export).count,originalSeed.count,"The exact-path fence leaves unrelated exports available")
+        XCTAssertTrue(core.stop()); probe.configure(core:core); probe.setVerified(true)
+        XCTAssertEqual(try Data(contentsOf:battery),protectedBytes,"Core.stop must cross the same battery fence")
+        XCTAssertTrue(core.start()); _ = core.pause()
+        try core.load(DeltaCore.SaveState(fileURL:suspended,gameType:.gba))
+        _ = core.resume(); try await waitForPause(true)
+        for input in [64,128,32,16] {
+            core.deltaCore.emulatorBridge.activateInput(input,value:1,playerIndex:0)
+            try await Task.sleep(for:.milliseconds(220))
+            core.deltaCore.emulatorBridge.deactivateInput(input,playerIndex:0)
+        }
+        _ = core.pause()
+        XCTAssertEqual(try position(),disabledPosition,"A cold core restoring a linked state must wait for a fresh host lease")
+        XCTAssertEqual(try Data(contentsOf:battery),protectedBytes,"Restart and restored guest frames retain the blocked destination")
+        XCTAssertTrue(BoundVBABattleBridge.setROMGameSaveAllowed(true,for:battery))
+        core.deltaCore.emulatorBridge.saveGameSave(to:battery)
+        XCTAssertEqual(try Data(contentsOf:battery),try Data(contentsOf:export),"Authorized battery writes reach the original core implementation")
+        XCTAssertEqual(try Data(contentsOf:rom),originalROM); XCTAssertEqual(try Data(contentsOf:seed),originalSeed)
+    }
+
     func testActualSoulLinkNativeHPAndStateRecovery() async throws {
         continueAfterFailure = false
         guard ProcessInfo.processInfo.environment["BOUND_SOUL_RUNTIME"] == "1" else {
@@ -565,7 +672,12 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertEqual(starterTeam.party.first?.slot,starter.slot)
         XCTAssertGreaterThan(starterTeam.party.first?.level ?? 0,0)
         XCTAssertGreaterThan(starterTeam.party.first?.maxHP ?? 0,0)
+        probe.setNativeObservationAllowed(false)
         XCTAssertTrue(BoundVBABattleBridge.qaStartSoulCheck()); _ = core.resume()
+        try await Task.sleep(for:.milliseconds(150)); _ = core.pause()
+        XCTAssertFalse(probe.read().ledger?.dead.contains(starter.slot) == true,
+                       "Unauthorized working RAM must not alter the durable Soul Link journal")
+        probe.setNativeObservationAllowed(true); _ = core.resume()
         for _ in 0..<100 {
             try await Task.sleep(for: .milliseconds(25))
             if probe.read().ledger?.dead.contains(starter.slot) == true { break }

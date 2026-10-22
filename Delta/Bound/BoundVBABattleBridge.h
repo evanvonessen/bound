@@ -2,6 +2,12 @@
 NS_ASSUME_NONNULL_BEGIN
 /// Paused core or completed-frame owner only. Network callbacks never access RAM.
 @interface BoundVBABattleBridge : NSObject
+/// Thread-safe battery admission fence. Blocked paths remain blocked until
+/// explicitly authorized, including after their core has stopped or unbound.
++ (BOOL)setROMGameSaveAllowed:(BOOL)allowed forURL:(NSURL *)url NS_SWIFT_NAME(setROMGameSaveAllowed(_:for:));
++ (BOOL)installROMMultiplayer;
++ (NSData *)romMultiplayerSnapshot;
++ (void)setROMMultiplayerHost:(NSData *)data;
 + (BOOL)installSharedWorld;
 + (NSDictionary<NSString *,id> *)sharedWorldSnapshot;
 + (void)setSharedWorldPeer:(NSData *)flags group:(NSUInteger)group number:(NSUInteger)number boulders:(NSData *)boulders fresh:(BOOL)fresh;

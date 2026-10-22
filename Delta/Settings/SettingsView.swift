@@ -135,7 +135,7 @@ struct SettingsView: View {
                         NavigationLink {
                             Form {
                                 ControlsSection()
-                                if experimentalFeaturesEnabled {
+                                if experimentalFeaturesEnabled && developerFeaturesEnabled {
                                     BoundPlayerStateSetting()
                                     if let session = gameplay?.recordedPlayer { BoundRecordedPlayerControls(session: session) }
                                     if let session = gameplay?.livePresence { BoundLivePresenceControls(session: session) }

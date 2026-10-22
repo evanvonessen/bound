@@ -232,6 +232,10 @@ final class FriendSharingSession: ObservableObject {
     private let tokenFetcher: @MainActor (String, AppCloudSession) async throws -> FriendSharingTokenLease
     var isConfigured: Bool { authenticatedMode || configuration != nil }
     var authenticatedSession: (() -> AppCloudSession?)?
+    var multiplayerPacketReceiver: ((Data) -> Void)?
+    var connectedRoomID: String? { active ? authRoom : nil }
+    private var automaticMultiplayerConnection = false
+    private var startedForMultiplayer = false
     private var tokenTask: Task<Void, Never>?
     private var tokenDeadline: (any SharingCancellation)?
     private var tokenOwner: UUID?
@@ -377,6 +381,7 @@ final class FriendSharingSession: ObservableObject {
 
     private func refreshExperimentalFeatures() {
         if BoundMultiplayerFeatures.isEnabled {
+            livePresence.setEnabled(true)
             if active && joined && !reconnecting && !backgrounded { startPresence() }
         } else {
             // Cancel restores a battle snapshot before its cable/consent channel closes.
@@ -390,6 +395,7 @@ final class FriendSharingSession: ObservableObject {
             }
             sharedWorld.stop()
             livePresence.setEnabled(false); livePresence.stop(); livePresence.connectionCheck.stop()
+            setAutomaticMultiplayerConnection(false)
         }
     }
 
@@ -416,6 +422,7 @@ final class FriendSharingSession: ObservableObject {
     /// Entering the UI-owned authenticated flow permanently leaves temporary
     /// mode for this owner. Sign-out cannot silently restore a retained RTC token.
     func configureAuthenticatedRoom(_ room: String?, identity: @escaping () -> AppCloudSession?) {
+        automaticMultiplayerConnection = false; startedForMultiplayer = false
         stop()
         authenticatedMode = true; configuration = nil
         roomProvider = { room }; authenticatedSession = identity
@@ -424,8 +431,36 @@ final class FriendSharingSession: ObservableObject {
 
     func start() {
         BoundMainActorDisposal.drainPending()
+        startedForMultiplayer = false
+        guard !active else { return }
         clearForegroundReconnectIntent()
         beginStart()
+    }
+
+    /// The ROM selects an authenticated friend; this connection never sends a
+    /// Jiggle and keeps retrying while that selection remains current.
+    func setAutomaticMultiplayerConnection(_ requested: Bool) {
+        let enabled = requested && BoundMultiplayerFeatures.isEnabled && authenticatedMode
+        automaticMultiplayerConnection = enabled
+        guard enabled else {
+            if startedForMultiplayer {
+                startedForMultiplayer = false
+                stop()
+            }
+            return
+        }
+        guard let room = roomProvider(), let identity = authenticatedSession?() else { return }
+        foregroundReconnectIntent = ForegroundReconnectIntent(room: room, owner: identity.owner)
+        guard !backgrounded, !active, foregroundReconnectRetry == nil else { return }
+        startedForMultiplayer = true
+        beginStart()
+    }
+
+    @discardableResult
+    func sendMultiplayerPacket(_ data: Data) -> Bool {
+        guard BoundMultiplayerFeatures.isEnabled, data.starts(with: Data("BRM1".utf8)), data.count <= 1024,
+              active, joined, !reconnecting, !backgrounded else { return false }
+        return transport.sendInteraction(data)
     }
 
     private func beginStart() {
@@ -436,6 +471,9 @@ final class FriendSharingSession: ObservableObject {
             }
             generation = UUID(); active = true; status = "Authorizing sharing"
             authRoom = room; tokenOwner = identity.owner; tokenRenewals = 0
+            if automaticMultiplayerConnection {
+                foregroundReconnectIntent = ForegroundReconnectIntent(room: room, owner: identity.owner)
+            }
             requestToken(initial: true)
             return
         }
@@ -463,6 +501,7 @@ final class FriendSharingSession: ObservableObject {
                 if data.starts(with: BoundWorldPacket.prefix) { self.sharedWorld.receive(data) }
                 else if BoundSoulPacket.recognizes(data) { self.soulLink.receive(data) }
                 else if data.starts(with: BoundBattleControlPacket.prefix) { self.nativeBattle.receive(data) }
+                else if data.starts(with: Data("BRM1".utf8)) { self.multiplayerPacketReceiver?(data) }
                 else { self.interactions.receive(data) }
             }
             else { self.sharedWorld.peerGone(); self.soulLink.peerGone(); self.nativeBattle.cancel(); self.interactions.stop(message: "Invitation connection lost") }
@@ -644,6 +683,7 @@ final class FriendSharingSession: ObservableObject {
 
     private func startPresence() {
         guard BoundMultiplayerFeatures.isEnabled else { return }
+        livePresence.setEnabled(true)
         interactions.start { [weak self] data in
             guard let self, self.active, self.joined, !self.reconnecting, !self.backgrounded else { return false }
             return self.transport.sendInteraction(data)
@@ -748,6 +788,9 @@ final class FriendSharingSession: ObservableObject {
         guard foregroundReconnectIntent != nil, !backgrounded, hasValidForegroundReconnectIntent else {
             stop(); status = failureStatus.replacingOccurrences(of: " · Retrying", with: " · Retry"); writeEvidence(); return
         }
+        sharedWorld.peerGone(); soulLink.peerGone()
+        nativeBattle.cancel(resume: false); interactions.stop(); livePresence.stop()
+        transport.setInteractionReceiver(nil); transport.setPresenceReceiver(nil)
         stopWatchingPartner()
         generation = UUID()
         tokenTask?.cancel(); tokenTask = nil

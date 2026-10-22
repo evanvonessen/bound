@@ -1107,6 +1107,33 @@ extension PlaybackSharingTests {
         session.stop()
     }
 
+    func testROMPartnerRetriesInitialAuthorizationWithoutBackgroundTransition() async throws {
+        let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer {
+            UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key)
+            NotificationCenter.default.post(name: BoundMultiplayerFeatures.didChange, object: nil)
+        }
+        let fixture = ForegroundReconnectFixture()
+        fixture.failNextTokenRequest = true
+        let session = authenticatedReconnectSession(fixture)
+        session.configureAuthenticatedRoom(fixture.room, identity: { try? fixture.identity() })
+        session.setAutomaticMultiplayerConnection(true)
+        try await wait(0.1)
+        XCTAssertFalse(session.active)
+        XCTAssertEqual(fixture.tokenRequests, 1)
+        session.setAutomaticMultiplayerConnection(true)
+        try await wait(0.1)
+        XCTAssertEqual(fixture.tokenRequests, 1, "Repeated ROM demand respects the retry backoff")
+        try await wait(1.2)
+        XCTAssertTrue(session.joined)
+        XCTAssertEqual(fixture.tokenRequests, 2)
+        session.setAutomaticMultiplayerConnection(false)
+        XCTAssertFalse(session.active, "Disabling a ROM-owned connection stops its transport")
+        try await wait(0.05)
+        XCTAssertEqual(fixture.tokenRequests, 2)
+    }
+
     func testFalseLegacyPreferenceDoesNotStartInactiveSharingOrBlockRestoration() async throws {
         let key = BoundLegacyPreferences.experimentalFeaturesKey
         let previous = UserDefaults.standard.object(forKey: key)

@@ -14,11 +14,13 @@ void worldRestoreBase(uint8_t *p) {
     // Hash admission strips dynamic data, then verifies the complete integrated
     // release before reconstructing the base view for the other native bridges.
     memset(p+GameHostOffset,0,GameHostSize);
+    memset(p+GameUIHostOffset,0,GameUIHostSize);
     uint8_t digest[32]; CC_SHA256(p,0x2000000,digest);
     if(memcmp(digest,GameCanonicalSHA256,32)) return;
     for(const auto &entry:GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size);
     memset(p+GameCodeStart,0xFF,GameCodeEnd-GameCodeStart);
     memset(p+GameHostOffset,0xFF,GameHostSize);
+    memset(p+GameUIHostOffset,0xFF,GameUIHostSize);
     memset(p+GameDescriptorOffset,0xFF,sizeof(GameDescriptor));
 }
 void worldWritePolicy(bool enabled,NSData *checkpoints,unsigned group,unsigned number,NSData *boulders,bool fresh) {

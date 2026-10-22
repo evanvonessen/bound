@@ -16,6 +16,11 @@ import Roxas
 @objc(GameSave)
 public class GameSave: _GameSave 
 {
+    // Harmony calls awakeFromSync before moving downloaded files. Keep all
+    // multiplayer downloads in an inbox until the ROM can restore them safely.
+    private var multiplayerDownloadDirectory: URL?
+    private var multiplayerUploadDirectory: URL?
+
     public override func awakeFromInsert()
     {
         super.awakeFromInsert()
@@ -41,7 +46,16 @@ extension GameSave: Syncable
     public var syncableFiles: Set<File> {
         guard let game = self.game else { return [] }
         
-        var files: Set<File> = [File(identifier: "gameSave", fileURL: game.gameSaveURL)]
+        let packages = BoundMultiplayerSaveStore.shared
+        let protectedRun = packages.hasRun(gameID: game.identifier)
+        let transferDirectory = multiplayerDownloadDirectory ?? multiplayerUploadDirectory
+        let packageURL = transferDirectory?.appendingPathComponent("complete.boundrun")
+            ?? (protectedRun ? packages.cloudURL(gameID: game.identifier)
+                : packages.directory(gameID: game.identifier).appendingPathComponent("no-active-package.boundrun"))
+        let batteryURL = transferDirectory?.appendingPathComponent("game.sav")
+            ?? (protectedRun ? packages.cloudBatteryURL(gameID: game.identifier) : game.gameSaveURL)
+        var files: Set<File> = [File(identifier: "gameSave", fileURL: batteryURL),
+                               File(identifier: BoundMultiplayerSaveStore.packageIdentifier, fileURL: packageURL)]
         
         if game.type == .gbc
         {
@@ -56,7 +70,13 @@ extension GameSave: Syncable
         guard let game = self.game else { return [:] }
         
         // Use self.identifier to always link with exact matching game.
-        return [.gameID: self.identifier, .gameName: game.name]
+        var metadata: [HarmonyMetadataKey: String] = [.gameID: self.identifier, .gameName: game.name]
+        if let manifest = try? BoundMultiplayerSaveStore.shared.manifest(gameID: game.identifier), !manifest.ended {
+            metadata[HarmonyMetadataKey("boundMultiplayerRun")] = manifest.identity.run.uuidString
+            metadata[HarmonyMetadataKey("boundMultiplayerOwner")] = manifest.identity.owner.uuidString
+            metadata[HarmonyMetadataKey("boundMultiplayerVersion")] = "1"
+        }
+        return metadata
     }
     
     public var syncableLocalizedName: String? {
@@ -112,6 +132,31 @@ extension GameSave: Syncable
             {
                 throw ValidationError.nilRelationshipObjects(keys: [#keyPath(GameSave.game)])
             }
+        }
+        if let game, record.remoteMetadata?[HarmonyMetadataKey("boundMultiplayerRun")] != nil ||
+            BoundMultiplayerSaveStore.shared.hasRun(gameID: game.identifier) {
+            multiplayerDownloadDirectory = try BoundMultiplayerSaveStore.shared.stageDownload(
+                gameID: game.identifier, version: record.remoteVersion?.identifier ?? UUID().uuidString,
+                run: record.remoteMetadata?[HarmonyMetadataKey("boundMultiplayerRun")].flatMap(UUID.init(uuidString:)))
+        }
+    }
+
+    public func prepareForSync(_ record: AnyRecord) throws
+    {
+        multiplayerDownloadDirectory = nil
+        multiplayerUploadDirectory = nil
+        if let game, BoundMultiplayerSaveStore.shared.hasRun(gameID: game.identifier) {
+            // SyncManager installs this owner only after draining the previous
+            // account's coordinator. Never back up another player's run when
+            // the user switches Bound/Dropbox accounts on the same device.
+            guard let manifest = try BoundMultiplayerSaveStore.shared.manifest(gameID: game.identifier),
+                  let syncOwner = UserDefaults.standard.string(forKey: "bound.dropbox.harmony-owner.v1").flatMap(UUID.init(uuidString:)),
+                  syncOwner == manifest.identity.owner else { throw BoundMultiplayerSaveStore.Failure.ownerMismatch }
+            // Upload only a self-contained completed checkpoint. Missing or
+            // corrupt packages fail closed while local saving remains available.
+            let snapshot = try BoundMultiplayerSaveStore.shared.snapshotCloudExport(gameID: game.identifier)
+            multiplayerUploadDirectory = snapshot
+            self.sha1 = try RSTHasher.sha1HashOfFile(at: snapshot.appendingPathComponent("game.sav"))
         }
     }
     

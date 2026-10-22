@@ -3,12 +3,51 @@
 #import <DeltaCore/DeltaCore-Swift.h>
 #import <GBADeltaCore/GBADeltaCore.h>
 #import <CommonCrypto/CommonDigest.h>
+#import <objc/runtime.h>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
+#include <set>
+#include <string>
 #include "NativeBattle/BoundBattleEntryCode.h"
 
 extern uint8_t *rom,*workRAM,*internalRAM,*ioMem;
 namespace {
+// Bound owns this interception; upstream core sources and dependency pins stay
+// unchanged. Every write, including stop() and guest save callbacks, crosses the
+// same bridge selector. The lock covers the original write so a newly blocked
+// path cannot race an in-flight disk write after this setter returns.
+using GameSaveWriter=void (*)(id,SEL,NSURL *);
+struct GameSaveFence {
+    std::mutex lock;
+    std::set<std::string> blockedPaths;
+    GameSaveWriter writer=nullptr;
+};
+GameSaveFence &gameSaveFence() { static GameSaveFence value; return value; }
+std::string canonicalSavePath(NSURL *url) {
+    if(!url.isFileURL) return {};
+    NSString *path=url.URLByStandardizingPath.URLByResolvingSymlinksInPath.path;
+    const char *bytes=path.fileSystemRepresentation;
+    return bytes ? std::string(bytes):std::string();
+}
+void fencedGameSave(id bridge,SEL selector,NSURL *url) {
+    auto &fence=gameSaveFence();
+    std::lock_guard<std::mutex> lock(fence.lock);
+    const auto path=canonicalSavePath(url);
+    if(path.empty()||fence.blockedPaths.count(path)||!fence.writer) return;
+    fence.writer(bridge,selector,url);
+}
+bool installGameSaveFence() {
+    auto &fence=gameSaveFence();
+    if(fence.writer) return true;
+    Method method=class_getInstanceMethod(NSClassFromString(@"GBAEmulatorBridge"),@selector(saveGameSaveToURL:));
+    if(!method) return false;
+    NSMethodSignature *signature=[NSMethodSignature signatureWithObjCTypes:method_getTypeEncoding(method)];
+    if(signature.numberOfArguments!=3||strcmp(signature.methodReturnType,@encode(void))
+       ||[signature getArgumentTypeAtIndex:2][0]!='@') return false;
+    fence.writer=reinterpret_cast<GameSaveWriter>(method_setImplementation(method,reinterpret_cast<IMP>(fencedGameSave)));
+    return fence.writer!=nullptr;
+}
 constexpr size_t RegionOffset=0x1FFF800,RegionSize=0x800;
 constexpr uint32_t ScriptAddress=0x09FFFC00,MailboxMagic=0x314D4642;
 constexpr size_t Mailbox=0x4030;
@@ -52,12 +91,63 @@ NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
 #include "SharedWorld/bridge.inc"
 #include "SoulLink/bridge.inc"
 #include "NativeBattle/invitation.inc"
+namespace {
+uint8_t *romUIOwner=nullptr;
+bool ownsROMUI() { return romUIOwner==rom && gameDescriptorPresent(rom); }
+}
 #if DEBUG && TARGET_OS_SIMULATOR
 #include "SoulLink/BoundSoulQACode.h"
 static uint8_t soulQAScriptBackup[128];
 #endif
 
 @implementation BoundVBABattleBridge
++ (void)load {
+    // Intercept before any core can start an unguarded battery write. Paths are
+    // initially allowed; protected games register their fence during binding.
+    auto &fence=gameSaveFence();
+    std::lock_guard<std::mutex> lock(fence.lock);
+    installGameSaveFence();
+}
++ (BOOL)setROMGameSaveAllowed:(BOOL)allowed forURL:(NSURL *)url {
+    auto &fence=gameSaveFence();
+    std::lock_guard<std::mutex> lock(fence.lock);
+    const auto path=canonicalSavePath(url);
+    if(path.empty()||!installGameSaveFence()) return NO;
+    if(allowed) fence.blockedPaths.erase(path);
+    else fence.blockedPaths.insert(path);
+    return YES;
+}
++ (BOOL)installROMMultiplayer {
+    if(ownsROMUI()) return YES;
+    if(!rom||!workRAM||!internalRAM||!gameDescriptorPresent(rom)) return NO;
+    uint8_t digest[32]; soulOriginalHash(digest);
+    const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
+        0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
+    if(memcmp(digest,expected,32)) return NO;
+    if(GameUIRequestAddress<0x02000000||GameUIRequestAddress+GameUIRequestSize>0x02040000
+       ||GameUIHostOffset+GameUIHostSize>0x2000000) return NO;
+    romUIOwner=rom; return YES;
+}
++ (NSData *)romMultiplayerSnapshot {
+    if(!ownsROMUI()||!workRAM) return [NSData data];
+    const auto *p=workRAM+GameUIRequestAddress-0x02000000;
+    const uint32_t sequence=word(p+8);
+    if(word(p)!=0x31525552||half(p+4)!=1||half(p+6)!=0||!sequence||(sequence&1)) return [NSData data];
+    NSData *copy=[NSData dataWithBytes:p length:GameUIRequestSize];
+    if(word(p+8)!=sequence) return [NSData data];
+    return copy;
+}
++ (void)setROMMultiplayerHost:(NSData *)data {
+    if(!ownsROMUI()||data.length!=GameUIHostSize) return;
+    const auto *source=static_cast<const uint8_t *>(data.bytes);
+    const uint32_t sequence=word(source+8);
+    if(word(source)!=0x31495552||half(source+4)!=1||half(source+6)!=0||!sequence||(sequence&1)
+       ||word(source+24)>20||word(source+312)>180) return;
+    auto *destination=rom+GameUIHostOffset;
+    put32(destination+8,sequence-1);
+    memcpy(destination,source,8);memcpy(destination+12,source+12,GameUIHostSize-12);
+    put32(destination+8,sequence);
+}
 // Attaches to the game's ABI; never installs/restores gameplay instructions.
 + (BOOL)installSharedWorld {
     if(worldOwnsROM()) return YES;
@@ -84,7 +174,7 @@ static uint8_t soulQAScriptBackup[128];
     const uint32_t sequence=word(p+12);
     if(!sequence||(sequence&1)||word(p)!=0x31534D52||half(p+4)!=GameABIMajor||half(p+6)>GameABIMinor
        ||word(p+8)!=GameSnapshotSize||word(p+20)!=1||p[24]>=43||p[26]>16
-       ||memcmp(p+32,GameRulesetID,16)||word(p+48)!=1||word(p+52)!=1||word(p+56)!=1) return @{};
+       ||memcmp(p+32,GameRulesetID,16)||word(p+48)!=1||word(p+52)!=1||word(p+56)!=GameSaveStateLayout) return @{};
     NSData *checkpoints=[NSData dataWithBytes:p+64 length:800];NSData *boulders=[NSData dataWithBytes:p+864 length:p[26]*6];
     if(word(p+12)!=sequence||word(control+12)!=index) return @{};
     return @{@"checkpoints":checkpoints,@"group":@(p[24]),@"number":@(p[25]),@"boulders":boulders,@"sequence":@(sequence),@"frame":@(word(p+16))};

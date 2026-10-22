@@ -809,6 +809,7 @@ extension GameViewController
                 pauseViewController.cheatCodesItem = nil
             }
             
+            if !boundPermitsIndependentStateLoad { pauseViewController.loadStateItem = nil }
             self.pauseViewController = pauseViewController
             
         default: break
@@ -908,6 +909,7 @@ extension GameViewController
         
         guard let rawValue = change?[.oldKey] as? Int, let previousState = EmulatorCore.State(rawValue: rawValue) else { return }
         
+        if !boundPermitsIndependentStateLoad { _deepLinkResumingSaveState = nil }
         if let saveState = _deepLinkResumingSaveState, let emulatorCore = self.emulatorCore, emulatorCore.state == .running
         {
             emulatorCore.pause()
@@ -1338,6 +1340,21 @@ private extension GameViewController
     }
 }
 
+extension GameViewController {
+    /// Package metadata can change after the cartridge battery was already
+    /// uploaded. A completed paired checkpoint is independently sync-worthy.
+    func boundDidCompleteMultiplayerCheckpoint() {
+        guard let game = game as? Game else { return }
+        let id = game.objectID
+        DatabaseManager.shared.performBackgroundTask { context in
+            guard let game = try? context.existingObject(with: id) as? Game,
+                  let save = game.gameSave else { return }
+            save.modifiedDate = Date()
+            try? context.save()
+        }
+    }
+}
+
 //MARK: - Game Saves -
 /// Game Saves
 private extension GameViewController
@@ -1508,8 +1525,15 @@ extension GameViewController: SaveStatesViewControllerDelegate
         }
     }
     
+    private var boundPermitsIndependentStateLoad: Bool {
+        guard boundCompanion.sharing.soulLink.permitsIndependentStateLoading else { return false }
+        guard let id = (game as? Game)?.identifier else { return true }
+        return !BoundSoulSession.hasProtectedRun(gameID: id) && !BoundMultiplayerSaveStore.shared.hasRun(gameID: id)
+    }
+
     @discardableResult private func load(_ saveState: SaveStateProtocol) -> Bool
     {
+        guard boundPermitsIndependentStateLoad else { return false }
         boundCompanion.sharing.nativeBattle.cancel()
         guard !boundCompanion.sharing.nativeBattle.blocksAutoSave else { return false }
         let isRunning = (self.emulatorCore?.state == .running)

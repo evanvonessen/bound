@@ -323,6 +323,79 @@ final class FriendModerationIntegrationTests: XCTestCase {
 
 @MainActor
 final class FriendTapToShareIntegrationTests: XCTestCase {
+    func testROMPartnerConnectsWithoutOpeningFriendsOrSendingJiggleAndStopsOnOwnerChange() async throws {
+        let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer {
+            UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key)
+            NotificationCenter.default.post(name: BoundMultiplayerFeatures.didChange, object: nil)
+        }
+        var identity: AppCloudSession? = try makeIdentity(owner: UUID())
+        let room = FriendRoom(roomID: UUID().uuidString, displayName: "ROM Friend")
+        let transport = FriendTapSharingTransport()
+        var requests = 0
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            tokenFetcher: { room, session in
+                requests += 1
+                return self.makeLease(room: room, owner: session.owner, request: requests)
+            })
+        var observation: OnboardingObservation?
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            XCTAssertEqual(action, "list")
+            return FriendResponse(ok: true, rooms: [room])
+        }, sendJiggle: { _, _ in XCTFail("ROM connection must not send a Jiggle"); return "" },
+            observeAccount: { observation = OnboardingObservation($0); return observation! })
+        onboarding.setMultiplayerServiceActive(true, sharing: sharing, existing: { identity })
+        onboarding.setMultiplayerPartner(roomID: UUID().uuidString)
+        await waitUntil { !onboarding.busy }
+        XCTAssertEqual(requests, 0, "An unlisted room cannot obtain a transport lease")
+        onboarding.setMultiplayerPartner(roomID: room.roomID)
+        await waitUntil { sharing.joined }
+        XCTAssertEqual(requests, 1)
+        XCTAssertEqual(sharing.connectedRoomID, room.roomID)
+        XCTAssertTrue(sharing.livePresence.enabled)
+        XCTAssertTrue(sharing.livePresence.connected)
+        onboarding.close()
+        XCTAssertFalse(try XCTUnwrap(observation).cancelled, "Closing Friends cannot stop ROM services")
+        observation?.fire()
+        XCTAssertEqual(requests, 1, "Observation cannot restart a joined partner")
+        identity = try makeIdentity(owner: UUID())
+        observation?.fire()
+        await waitUntil { !onboarding.busy }
+        XCTAssertFalse(sharing.active)
+        XCTAssertNil(onboarding.multiplayerPartnerRoomID)
+        XCTAssertEqual(requests, 1, "A different account cannot inherit the run's partner")
+        onboarding.setMultiplayerServiceActive(false, sharing: sharing, existing: { identity })
+        XCTAssertTrue(try XCTUnwrap(observation).cancelled)
+        sharing.stop()
+    }
+
+    func testDisablingROMServicesPreservesExplicitOrdinaryVideoSharing() async throws {
+        let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer {
+            UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key)
+            NotificationCenter.default.post(name: BoundMultiplayerFeatures.didChange, object: nil)
+        }
+        let identity = try makeIdentity(owner: UUID())
+        let room = FriendRoom(roomID: UUID().uuidString, displayName: "Video Friend")
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+            tokenFetcher: { room, identity in self.makeLease(room: room, owner: identity.owner, request: 1) })
+        let onboarding = FriendOnboarding(call: { _, _, _ in FriendResponse(ok: true, rooms: [room]) },
+            sendJiggle: { _, _ in "" }, observeAccount: { OnboardingObservation($0) })
+        onboarding.setMultiplayerServiceActive(true, sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+        onboarding.setMultiplayerPartner(roomID: room.roomID)
+        await waitUntil { sharing.joined }
+        onboarding.select(room, startSharing: true)
+        BoundMultiplayerFeatures.setEnabled(false)
+        onboarding.setMultiplayerServiceActive(false, sharing: sharing, existing: { identity })
+        XCTAssertTrue(sharing.joined, "Explicit friend video remains available when multiplayer is disabled")
+        XCTAssertFalse(sharing.livePresence.connected)
+        XCTAssertFalse(sharing.interactions.connected)
+        sharing.stop(); onboarding.close()
+    }
+
     func testFriendTapStartsOnceSwitchesRoomsAndCanRetryAfterStop() async throws {
         let owner = UUID()
         let identity = try makeIdentity(owner: owner)
@@ -812,5 +885,177 @@ private final class FriendTapSharingTransport: FriendSharingTransport {
     func stop() {}
     func send(_ frame: SharingFrame, completion: @escaping @MainActor (Result<Void, SharingFailure>) -> Void) -> any SharingCancellation {
         OnboardingObservation({})
+    }
+}
+
+private actor RunLeaseClientFixture {
+    let owner: UUID
+    let token = UUID()
+    var failNext = false
+    var invalidOwner = false
+    var holdRenewal = false
+    var pendingRenewal: CheckedContinuation<Void, Never>?
+    var requests: [String] = []
+    var actions: [String] = []
+    var anchorVersion: UInt64 = 0
+    var checkpointID: String?
+    var checkpointHistory: String?
+    var historyDigest: String?
+    var loseReply = false
+    var regressReply = false
+    var ended = false
+    init(owner: UUID) { self.owner = owner }
+    func failOnce() { failNext = true }
+    func rejectOwner() { invalidOwner = true }
+    func hold() { holdRenewal = true }
+    func resume() { holdRenewal = false; pendingRenewal?.resume(); pendingRenewal = nil }
+    func loseOnce() { loseReply = true }
+    func regressOnce() { regressReply = true }
+    var isWaiting: Bool { pendingRenewal != nil }
+    func perform(_ request: URLRequest) async throws -> Data {
+        let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+        let action = try XCTUnwrap(body["action"] as? String)
+        let payload = try XCTUnwrap(body["payload"] as? [String: Any])
+        actions.append(action)
+        if action == "release" { return Data("{\"ok\":true}".utf8) }
+        if action == "end" {
+            ended = true
+            if loseReply { loseReply = false; throw BoundRunLeaseError.unavailable }
+            return Data("{\"ok\":true}".utf8)
+        }
+        if ended { return Data("{\"ok\":false,\"error\":\"run_ended\"}".utf8) }
+        if let id = payload["requestID"] as? String { requests.append(id) }
+        if failNext { failNext = false; throw BoundRunLeaseError.unavailable }
+        if action == "renew", holdRenewal { await withCheckedContinuation { pendingRenewal = $0 } }
+        if action == "history", let digest = payload["history"] as? String, digest != historyDigest {
+            historyDigest = digest; anchorVersion += 1
+        }
+        if action == "checkpoint", let id = payload["checkpointID"] as? String, id != checkpointID {
+            checkpointID = id; checkpointHistory = payload["history"] as? String; anchorVersion += 1
+        }
+        if loseReply { loseReply = false; throw BoundRunLeaseError.unavailable }
+        let regressed = regressReply; regressReply = false
+        let now = Date().timeIntervalSince1970
+        return try JSONSerialization.data(withJSONObject: ["ok": true,
+            "ownerID": (invalidOwner ? UUID() : owner).uuidString,
+            "runID": try XCTUnwrap(payload["runID"]), "deviceID": try XCTUnwrap(payload["deviceID"]),
+            "token": token.uuidString, "fence": "1", "serverTime": now, "expiresAt": now + 60,
+            "anchorVersion": regressed ? "0" : String(anchorVersion),
+            "checkpointID": regressed ? NSNull() : checkpointID.map { $0 as Any } ?? NSNull(),
+            "checkpointHistory": regressed ? NSNull() : checkpointHistory.map { $0 as Any } ?? NSNull(),
+            "historyDigest": regressed ? NSNull() : historyDigest.map { $0 as Any } ?? NSNull()])
+    }
+}
+
+@MainActor
+final class RunLeaseClientTests: XCTestCase {
+    private func identity(owner: UUID) throws -> AppCloudSession {
+        let data = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
+        let payload = data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        return try AppCloudSession(owner: owner, key: "fixture", token: "fixture." + payload + ".signature")
+    }
+    func testUncertainAcquireReusesRequestAndRenewReleaseInvalidateOldGrants() async throws {
+        let owner = UUID(), run = UUID(), device = UUID(), session = try identity(owner: owner)
+        let fixture = RunLeaseClientFixture(owner: owner)
+        let client = BoundRunLeaseClient(perform: { try await fixture.perform($0) }, device: { device })
+        await fixture.failOnce()
+        do { _ = try await client.acquire(runID: run, session: session); XCTFail("Expected transport failure") }
+        catch BoundRunLeaseError.unavailable {}
+        let grant = try await client.acquire(runID: run, session: session, allowTransfer: true)
+        let requests = await fixture.requests
+        XCTAssertEqual(requests.count, 2); XCTAssertEqual(requests[0], requests[1])
+        XCTAssertEqual(grant.ownerID, owner); XCTAssertEqual(grant.runID, run); XCTAssertEqual(grant.deviceID, device)
+        XCTAssertTrue(grant.isCurrent); XCTAssertTrue(grant.allowsTransfer)
+        XCTAssertGreaterThan(grant.remaining, 50); XCTAssertLessThanOrEqual(grant.remaining, 55)
+        let token = await fixture.token
+        XCTAssertFalse(String(describing: grant).contains(token.uuidString))
+        let renewed = try await client.renew(grant: grant, session: session)
+        XCTAssertFalse(grant.isCurrent); XCTAssertTrue(renewed.isCurrent)
+        try await client.release(grant: renewed, session: session)
+        XCTAssertFalse(renewed.isCurrent)
+    }
+    func testWrongAccountReplyAndLateRenewalCannotGrantAuthority() async throws {
+        let owner = UUID(), run = UUID(), device = UUID(), session = try identity(owner: owner)
+        let badFixture = RunLeaseClientFixture(owner: owner)
+        await badFixture.rejectOwner()
+        let badClient = BoundRunLeaseClient(perform: { try await badFixture.perform($0) }, device: { device })
+        do { _ = try await badClient.acquire(runID: run, session: session); XCTFail("Wrong owner reply must fail") }
+        catch BoundRunLeaseError.unavailable {}
+        let fixture = RunLeaseClientFixture(owner: owner)
+        let client = BoundRunLeaseClient(perform: { try await fixture.perform($0) }, device: { device })
+        let grant = try await client.acquire(runID: run, session: session)
+        await fixture.hold()
+        let renewal = Task { try await client.renew(grant: grant, session: session) }
+        for _ in 0..<100 {
+            if await fixture.isWaiting { break }
+            await Task.yield()
+        }
+        let waiting = await fixture.isWaiting
+        XCTAssertTrue(waiting)
+        let release = Task { try await client.release(grant: grant, session: session) }
+        for _ in 0..<100 {
+            if !grant.isCurrent { break }
+            await Task.yield()
+        }
+        XCTAssertFalse(grant.isCurrent)
+        await fixture.resume()
+        do { _ = try await renewal.value; XCTFail("Late renewal cannot revive released authority") }
+        catch BoundRunLeaseError.leaseExpired {}
+        try await release.value
+        XCTAssertFalse(grant.isCurrent)
+    }
+    func testHistoryAndCheckpointAnchorsSurviveUncertainRepliesAndRejectRegression() async throws {
+        let owner = UUID(), run = UUID(), device = UUID(), session = try identity(owner: owner)
+        let fixture = RunLeaseClientFixture(owner: owner)
+        let client = BoundRunLeaseClient(perform: { try await fixture.perform($0) }, device: { device })
+        let initial = try await client.acquire(runID: run, session: session)
+        let digest = String(repeating: "a", count: 64), checkpoint = UUID()
+        await fixture.loseOnce()
+        do { _ = try await client.recordHistory(grant: initial, digest: digest, session: session); XCTFail("Expected uncertain reply") }
+        catch BoundRunLeaseError.unavailable {}
+        let anchored = try await client.recordHistory(grant: initial, digest: digest, session: session)
+        XCTAssertEqual(anchored.anchorVersion, 1); XCTAssertEqual(anchored.historyDigest, digest)
+        XCTAssertNil(anchored.checkpointID); XCTAssertFalse(initial.isCurrent)
+        let committed = try await client.checkpoint(grant: anchored, checkpointID: checkpoint, predecessor: nil, history: digest, session: session)
+        XCTAssertEqual(committed.checkpointID, checkpoint); XCTAssertEqual(committed.checkpointHistory, digest)
+        XCTAssertEqual(committed.anchorVersion, 2); XCTAssertFalse(anchored.isCurrent)
+        let renewed = try await client.renew(grant: committed, session: session)
+        XCTAssertEqual(renewed.checkpointID, checkpoint); XCTAssertEqual(renewed.historyDigest, digest)
+        await fixture.regressOnce()
+        do { _ = try await client.renew(grant: renewed, session: session); XCTFail("Server response cannot regress remembered anchors") }
+        catch BoundRunLeaseError.anchorConflict {}
+        XCTAssertFalse(renewed.isCurrent)
+    }
+    func testQueuedAnchorMutationCannotUseGrantSupersededByRenewal() async throws {
+        let owner = UUID(), run = UUID(), device = UUID(), session = try identity(owner: owner)
+        let fixture = RunLeaseClientFixture(owner: owner)
+        let client = BoundRunLeaseClient(perform: { try await fixture.perform($0) }, device: { device })
+        let grant = try await client.acquire(runID: run, session: session)
+        await fixture.hold()
+        let renewal = Task { try await client.renew(grant: grant, session: session) }
+        for _ in 0..<100 { if await fixture.isWaiting { break }; await Task.yield() }
+        let anchor = Task { try await client.recordHistory(grant: grant, digest: String(repeating: "b", count: 64), session: session) }
+        for _ in 0..<10 { await Task.yield() }
+        let before = await fixture.actions
+        XCTAssertEqual(before, ["acquire", "renew"])
+        await fixture.resume()
+        let renewed = try await renewal.value
+        do { _ = try await anchor.value; XCTFail("Queued write must revalidate authority") }
+        catch BoundRunLeaseError.leaseExpired {}
+        XCTAssertTrue(renewed.isCurrent)
+    }
+    func testPermanentEndInvalidatesAuthorityAndRetriesAnUncertainReply() async throws {
+        let owner = UUID(), run = UUID(), device = UUID(), session = try identity(owner: owner)
+        let fixture = RunLeaseClientFixture(owner: owner)
+        let client = BoundRunLeaseClient(perform: { try await fixture.perform($0) }, device: { device })
+        let grant = try await client.acquire(runID: run, session: session)
+        await fixture.loseOnce()
+        do { try await client.end(grant: grant, session: session); XCTFail("Expected uncertain end reply") }
+        catch BoundRunLeaseError.unavailable {}
+        XCTAssertFalse(grant.isCurrent)
+        try await client.end(grant: grant, session: session)
+        try await client.release(grant: grant, session: session)
+        do { _ = try await client.acquire(runID: run, session: session, allowTransfer: true); XCTFail("Ended runs never reacquire") }
+        catch BoundRunLeaseError.runEnded {}
     }
 }

@@ -407,6 +407,7 @@ final class BoundSoulProbe: @unchecked Sendable {
     private let lock = NSRecursiveLock()
     private var previewEnabled = false
     private var verified = false
+    private var nativeObservationAllowed = true
     private var coreID: ObjectIdentifier?
     private var url: URL?
     private var ledger: BoundSoulLedger?
@@ -434,6 +435,7 @@ final class BoundSoulProbe: @unchecked Sendable {
     }
     func setPreviewEnabled(_ value: Bool) { lock.lock(); previewEnabled = value; lock.unlock() }
     func setVerified(_ value: Bool) { lock.lock(); verified = value; lock.unlock() }
+    func setNativeObservationAllowed(_ value: Bool) { lock.lock(); nativeObservationAllowed = value; lock.unlock() }
     func start(run: UUID, binding: String, offering: Bool = false) throws {
         lock.lock(); defer { lock.unlock() }
         guard snapshot.ready, (ledger == nil || ledger?.ended == true), snapshot.mons.count == 1, let starter = snapshot.mons.first,
@@ -447,6 +449,23 @@ final class BoundSoulProbe: @unchecked Sendable {
             let destination = archive.appendingPathComponent(old.run.uuidString + ".json")
             if !FileManager.default.fileExists(atPath: destination.path) { try JSONEncoder().encode(old).write(to: destination, options: .atomic) }
         }
+        try persist(value); ledger = value; snapshot.ledger = value
+    }
+    /// Called only after the cartridge's new-game handshake has durably paired
+    /// both players. No starter exists yet; ordinary play enrolls it later.
+    func startPreparedRun(run: UUID, binding: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        if let ledger, ledger.run == run, ledger.binding == binding, !ledger.ended { return }
+        guard ledger == nil || ledger?.ended == true else { throw BoundSoulLedger.Error.corrupt }
+        if let old = ledger, let url {
+            let archive = url.deletingLastPathComponent().appendingPathComponent("Finished Runs", isDirectory: true)
+            try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+            let destination = archive.appendingPathComponent(old.run.uuidString + ".json")
+            if !FileManager.default.fileExists(atPath: destination.path) {
+                try JSONEncoder().encode(old).write(to: destination, options: .atomic)
+            }
+        }
+        let value = BoundSoulLedger(run: run, binding: binding)
         try persist(value); ledger = value; snapshot.ledger = value
     }
     func endRun() throws {
@@ -508,7 +527,8 @@ final class BoundSoulProbe: @unchecked Sendable {
     func read() -> Snapshot { lock.lock(); defer { lock.unlock() }; return snapshot }
     func receive(_ core: EmulatorCore) {
         lock.lock(); defer { lock.unlock() }
-        guard verified, (previewEnabled || (ledger != nil && ledger?.ended == false)), coreID == ObjectIdentifier(core) else { return }
+        guard verified, nativeObservationAllowed,
+              (previewEnabled || (ledger != nil && ledger?.ended == false)), coreID == ObjectIdentifier(core) else { return }
         frame += 1
         // No ROM/RAM access on unrelated cores or before exact file verification.
         guard core.deltaCore.identifier == "com.rileytestut.GBADeltaCore" else { return }
@@ -619,9 +639,31 @@ final class BoundSoulSession: ObservableObject {
     var send: ((Data) -> Bool)?
     var connected: (() -> Bool)?
     var nativeActivity: (() -> Bool)?
+    /// ROM-driven runs use the cartridge's callback gate for a visible native
+    /// disconnect dialogue while all gameplay callbacks remain suspended.
+    var cartridgeManagesPause = false
+    private(set) var recoveryError: String?
+    func retryRecovery() { recoveryError = nil }
+    private func haltForRecovery() {
+        recoveryError = status
+        if !cartridgeManagesPause { _ = core?.pause() }
+    }
     var active: Bool { ledger != nil && ledger?.ended == false }
     var paired: Bool { confirmed && clock() - lastPeer < 3 }
     var permitsNativeActivity: Bool { !active }
+    var permitsIndependentStateLoading: Bool { !active && probe.read().error == nil }
+    static func hasProtectedRun(gameID: String) -> Bool {
+        let url = directory.appendingPathComponent(hash(gameID) + ".json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        guard let bytes = try? Data(contentsOf: url), bytes.count <= 2_097_152,
+              let ledger = try? JSONDecoder().decode(BoundSoulLedger.self, from: bytes), ledger.valid else { return true }
+        return !ledger.ended
+    }
+    func startPreparedRun(run: UUID) throws {
+        guard let binding else { throw BoundSoulLedger.Error.corrupt }
+        try probe.startPreparedRun(run: run, binding: binding)
+        ledger = probe.read().ledger
+    }
     init(probe: BoundSoulProbe = BoundSoulProbe(), clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }, areaNames: [Int: String] = [:], teamSnapshot: (() -> BoundSoulProbe.Snapshot)? = nil) {
         self.teamSnapshot = teamSnapshot ?? { probe.read() }
         self.areaNames = areaNames; self.clock = clock; self.probe = probe; self.ledger = probe.read().ledger
@@ -637,7 +679,7 @@ final class BoundSoulSession: ObservableObject {
     }
     func bind(core: EmulatorCore?, gameID: String) {
         guard self.core !== core || self.gameID != gameID else { return }
-        deathMoment = nil; deathMomentStarted = nil
+        deathMoment = nil; deathMomentStarted = nil; recoveryError = nil
         peerGone(); localTeam = nil; localTeamCurrent = false
         self.core = core; self.gameID = gameID; supported = false
         confirmed = false; lastPeer = 0; offered = nil; incoming = nil; cursor = 0
@@ -705,7 +747,7 @@ final class BoundSoulSession: ObservableObject {
         }
         if data.starts(with: BoundSoulPacket.legacyPrefix) || (data.starts(with: BoundSoulPacket.prefix) && data.count > 4 && data[4] != 2) {
             incompatiblePeer = true; confirmed = false; canStart = false
-            status = "Both players need the latest Bound for paired encounters."; _ = core?.pause(); return
+            status = "Both players need the latest Bound for paired encounters."; haltForRecovery(); return
         }
         guard let packet = BoundSoulPacket.decode(data) else { return }
         if ledger?.run == packet.run, ledger?.ended == true, packet.kind != .end { return }
@@ -724,7 +766,7 @@ final class BoundSoulSession: ObservableObject {
         // An old alive packet can never mark a reconnected partner ready.
         if ledger?.run == packet.run, ledger?.binding == binding, packet.kind == .state {
             do { try probe.merge(run: packet.run, rows: packet.rows, losses: packet.losses); ledger = probe.read().ledger }
-            catch { status = "Couldn’t preserve your partner’s Soul Link record."; _ = core?.pause(); return }
+            catch { status = "Couldn’t preserve your partner’s Soul Link record."; haltForRecovery(); return }
         }
         if !fresh && ![.offer, .end].contains(packet.kind) { return }
         switch packet.kind {
@@ -739,7 +781,7 @@ final class BoundSoulSession: ObservableObject {
         case .accept:
             if let ledger, ledger.run == packet.run, ledger.binding == binding {
                 do { try probe.markAccepted(); self.ledger = probe.read().ledger }
-                catch { status = "Couldn’t save Soul Link acceptance."; _ = core?.pause(); return }
+                catch { status = "Couldn’t save Soul Link acceptance."; haltForRecovery(); return }
                 offered = nil; transmit(.confirm, run: ledger.run); confirmed = true; lastPeer = clock()
             }
             else if offered == packet.run, canStart {
@@ -756,17 +798,19 @@ final class BoundSoulSession: ObservableObject {
                 try probe.markAccepted(); offered = nil
                 self.ledger = probe.read().ledger
                 confirmed = true; lastPeer = clock()
-            } catch { status = "Couldn’t preserve your partner’s Soul Link record."; _ = core?.pause() }
+            } catch { status = "Couldn’t preserve your partner’s Soul Link record."; haltForRecovery() }
         case .decline:
             if ledger?.run == packet.run, ledger?.offering == true { cancelInvitation() }
         }
     }
     func endRun() {
+        let wasRunning = core?.state == .running
         if let core, core.state == .running, !core.pause() { status = "Couldn’t pause this run safely."; return }
         do {
             try probe.endRun(); ledger = probe.read().ledger
             if let ledger { transmit(.end, run: ledger.run) }
             status = "Soul Link ended. Your run record is kept."; offered = nil; incoming = nil
+            if cartridgeManagesPause && wasRunning { core?.resume() }
         } catch { status = "Couldn’t save the end of this run." }
     }
     func cancelInvitation() {
@@ -809,7 +853,7 @@ final class BoundSoulSession: ObservableObject {
         do {
             try probe.acknowledgeDeath(run: ledger.run, slot: moment.slot)
             self.ledger = probe.read().ledger; deathMoment = nil; deathMomentStarted = nil
-        } catch { status = "Couldn’t preserve this Soul Link moment."; _ = core?.pause() }
+        } catch { status = "Couldn’t preserve this Soul Link moment."; haltForRecovery() }
     }
     private func updateDeathMoment(at now: TimeInterval) {
         guard BoundMultiplayerFeatures.isEnabled, active, ledger?.offering == false,
@@ -828,7 +872,7 @@ final class BoundSoulSession: ObservableObject {
         let now = time ?? clock()
         if proposedEpoch != nil, now - proposalAt > 1 { peerGone() }
         probe.setPreviewEnabled(BoundMultiplayerFeatures.isEnabled)
-        defer { updateTeams(at: now); updateDeathMoment(at: now); bannerChanged?((probe.read().error != nil || (active && !paired)) ? status : nil) }
+        defer { updateTeams(at: now); updateDeathMoment(at: now); bannerChanged?(!cartridgeManagesPause && (probe.read().error != nil || (active && !paired)) ? status : nil) }
         let snapshot = probe.read(); if snapshot.ledger != ledger { ledger = snapshot.ledger }
         if let ledger { probe.timeline.observeSoul(ledger) }
         canStart = BoundMultiplayerFeatures.isEnabled && supported && snapshot.ready && snapshot.mons.count == 1
@@ -836,9 +880,9 @@ final class BoundSoulSession: ObservableObject {
             && (ledger == nil || ledger?.ended == true) && binding != nil && connected?() == true && nativeActivity?() != true
         if incompatiblePeer {
             canStart = false
-            status = "Both players need the latest Bound for paired encounters."; _ = core?.pause(); return
+            status = "Both players need the latest Bound for paired encounters."; haltForRecovery(); return
         }
-        if let error = snapshot.error { status = error; _ = core?.pause(); return }
+        if let error = snapshot.error { status = error; haltForRecovery(); return }
         if incoming != nil, now - offeredAt > 30 { incoming = nil }
         guard let ledger else {
             if offered == nil && incoming == nil {
@@ -851,7 +895,7 @@ final class BoundSoulSession: ObservableObject {
         if ledger.ended { status = "Soul Link ended. Your run record is kept." }
         else if !transportReady || !confirmed || now - lastPeer > 3 {
             status = "Soul Link paused. Reconnect to your partner to continue."
-            if core?.state == .running { _ = core?.pause() }
+            if !cartridgeManagesPause, core?.state == .running { _ = core?.pause() }
         } else { status = "Soul Link active" }
         guard transportReady, now - sent >= 0.25 else { return }
         sent = now

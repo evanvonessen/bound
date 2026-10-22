@@ -326,8 +326,9 @@ final class BoundLivePresenceSession: ObservableObject {
 struct BoundLivePresenceControls: View {
     @ObservedObject var session: BoundLivePresenceSession
     @AppStorage(BoundMultiplayerFeatures.key) private var experimentalFeaturesEnabled = false
+    @AppStorage(BoundDeveloperFeatures.key) private var developerFeaturesEnabled = false
     var body: some View {
-        if experimentalFeaturesEnabled { controls }
+        if experimentalFeaturesEnabled && developerFeaturesEnabled { controls }
     }
     private var controls: some View {
         Section("Live player sprites") {

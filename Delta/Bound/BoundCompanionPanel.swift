@@ -291,6 +291,7 @@ final class BoundCompanionCoordinator {
     let onboarding: FriendOnboarding
     let account: BoundFriendAccount
     let state: BoundCompanionState
+    lazy var romMultiplayer = BoundROMMultiplayerCoordinator(sharing: sharing, onboarding: onboarding, account: account)
     init(state: BoundCompanionState? = nil) {
         self.state = state ?? BoundCompanionState()
         #if DEBUG && targetEnvironment(simulator)
@@ -344,6 +345,7 @@ final class BoundCompanionCoordinator {
     private var keyboardHeight: CGFloat = 0
     private var observers: [NSObjectProtocol] = []
     private var foregroundTask: Task<Void, Never>?
+    private var multiplayerServicesForeground = true
     private var gestures: BoundPiPGestures?
     private var geometry: BoundPiPLayout?
     private var previousScreenLayout: BoundScreenLayout?
@@ -437,6 +439,11 @@ final class BoundCompanionCoordinator {
         state.editControls = { [weak self] in self?.editControls() }
         state.selectionChanged = { [weak self] in self?.cancelInteractions() }
         state.sharingChanged = { [weak self] in self?.tap.setEnabled($0) }
+        for name in [BoundMultiplayerFeatures.didChange, Settings.didResetNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshMultiplayerServices() }
+            })
+        }
         // Every observer below explicitly requests OperationQueue.main. The main-queue
         // contract is synchronous, so assume MainActor isolation inside the callback
         // to preserve immediate controller handoffs and lifecycle updates.
@@ -695,8 +702,21 @@ final class BoundCompanionCoordinator {
         macHost = host
     }
     func bind(core: EmulatorCore?, gameID: String) {
+        defer { refreshMultiplayerServices() }
         sharing.nativeBattle.bind(core: core, gameID: gameID, interactions: sharing.interactions)
         sharing.soulLink.bind(core: core, gameID: gameID)
+        romMultiplayer.bind(core: core, game: owner?.game as? Game)
+        romMultiplayer.watch = { [weak self, weak owner] in
+            guard let self, let owner, owner.presentedViewController == nil else { return }
+            self.sharing.watchPartner()
+            guard self.sharing.watchingPartner else { return }
+            owner.present(UIHostingController(rootView: BoundPartnerSpectatorView(sharing: self.sharing)), animated: true)
+        }
+        romMultiplayer.didRestoreSnapshot = { [weak owner] in
+            guard let owner, let core = owner.emulatorCore else { return }
+            owner.boundRRDexDidLoadSaveState(core: core)
+        }
+        romMultiplayer.didCompleteCheckpoint = { [weak owner] in owner?.boundDidCompleteMultiplayerCheckpoint() }
         sharing.nativeBattle.tradeCompleted = { [weak soul = sharing.soulLink] id, count in
             soul?.probe.timeline.append(id: "trade:" + id.uuidString, kind: .trade,
                                         title: count == 1 ? "Trade completed" : "\(count) trades completed")
@@ -720,13 +740,14 @@ final class BoundCompanionCoordinator {
         guard let core else { boundCore = nil; state.emulationDetails = nil; return }
         state.emulationDetails = BoundEmulationDetails(packageName: core.deltaCore.name, packageIdentifier: core.deltaCore.identifier, packageVersion: core.deltaCore.version)
         boundCore = core
-        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe, soul = sharing.soulLink.probe, world = sharing.sharedWorld.probe, dialogue = friendInteractionPanel?.probe
+        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe, soul = sharing.soulLink.probe, world = sharing.sharedWorld.probe, dialogue = friendInteractionPanel?.probe, romService = romMultiplayer.probe
         #if DEBUG && targetEnvironment(simulator)
         let tradeQA = BoundFullAppGameplayQA.current?.tradeProbe
         BoundFullAppGameplayQA.current?.configureTrade(core:core)
         #endif
-        core.updateHandler = { [weak tap, weak reader, weak battle, weak soul, weak world, weak dialogue] core in
+        core.updateHandler = { [weak tap, weak reader, weak battle, weak soul, weak world, weak dialogue, weak romService] core in
             previous?(core)
+            romService?.receive(core)
             world?.receive(core)
             dialogue?.receive(core)
             reader?.receive(core)
@@ -740,6 +761,11 @@ final class BoundCompanionCoordinator {
         #if DEBUG && targetEnvironment(simulator)
         if usesLocalPairedFixture { sharing.start() }
         #endif
+    }
+    private func refreshMultiplayerServices() {
+        if !BoundMultiplayerFeatures.isEnabled { romMultiplayer.suspend() }
+        onboarding.setMultiplayerServiceActive(multiplayerServicesForeground && boundCore != nil,
+            sharing: sharing, existing: { [weak account] in account?.session })
     }
     func layout(in bounds: CGRect, safeArea: UIEdgeInsets, controllerSize: CGSize) -> CGRect? {
         guard let owner else { return nil }
@@ -1382,6 +1408,8 @@ final class BoundCompanionCoordinator {
     }
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
     func foreground() {
+        romMultiplayer.setServiceActive(true)
+        multiplayerServicesForeground = true
         foregroundTask?.cancel()
         scheduleNotesDismissalIfNeeded()
         if state.content == .dex || (macHost != nil && state.macSidebarVisible
@@ -1396,24 +1424,31 @@ final class BoundCompanionCoordinator {
                 await self.account.refreshIfNeeded()
                 guard !Task.isCancelled else { return }
                 self.sharing.foreground()
+                self.refreshMultiplayerServices()
                 self.foregroundTask = nil
             }
             return
         }
         sharing.foreground()
+        refreshMultiplayerServices()
         #if DEBUG && targetEnvironment(simulator)
         if usesLocalPairedFixture { sharing.start() }
         #endif
     }
     func background() {
+        romMultiplayer.setServiceActive(false)
+        multiplayerServicesForeground = false
         foregroundTask?.cancel(); foregroundTask = nil
         landscapeArrangement.finish(save: false, resume: false); landscapeCompanion.finishArrangement(save: false, resume: false)
         notesDismissalTask?.cancel(); notesDismissalTask = nil
         let pendingAction = pendingControllerReferenceAction
         cancelInteractions(); pendingControllerReferenceAction = pendingAction
-        tap.setEnabled(false); sharing.background(); onboarding.close()
+        tap.setEnabled(false); sharing.background(); refreshMultiplayerServices(); onboarding.close()
     }
     func stop() {
+        romMultiplayer.setServiceActive(false)
+        multiplayerServicesForeground = false
+        refreshMultiplayerServices()
         playerStateDisplay.stop()
         foregroundTask?.cancel(); foregroundTask = nil
         notesDismissalTask?.cancel(); notesDismissalTask = nil; pendingControllerReferenceAction = nil
@@ -1798,6 +1833,7 @@ struct BoundFriendsSheet: View {
     @State private var removingRoom: FriendRoom?
     @State private var showingAddFriend = false
     @State private var roomIDsBeforeAdding: Set<String> = []
+    @AppStorage(BoundDeveloperFeatures.key) private var developerFeaturesEnabled = false
     var closed: () -> Void = {}
 
     init(sharing: FriendSharingSession, onboarding: FriendOnboarding, account: BoundFriendAccount,
@@ -1884,10 +1920,12 @@ struct BoundFriendsSheet: View {
                             }
                         }
                     }
-                    BoundLivePresenceControls(session: sharing.livePresence)
-                    BoundSoulControls(session: sharing.soulLink)
-                    BoundRunTimelineControls(timeline: sharing.soulLink.probe.timeline)
-                    BoundPartnerSpectatorControls(sharing: sharing)
+                    if developerFeaturesEnabled {
+                        BoundLivePresenceControls(session: sharing.livePresence)
+                        BoundSoulControls(session: sharing.soulLink)
+                        BoundRunTimelineControls(timeline: sharing.soulLink.probe.timeline)
+                        BoundPartnerSpectatorControls(sharing: sharing)
+                    }
                 }
             }.navigationTitle("Friends")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(account.busy) } }
@@ -2340,28 +2378,33 @@ struct BoundPartnerSpectatorControls: View {
             .accessibilityIdentifier("bound.watch-partner")
         }
         .fullScreenCover(isPresented: $showing, onDismiss: { sharing.stopWatchingPartner() }) {
-            NavigationStack {
-                ZStack {
-                    Color.black.ignoresSafeArea()
-                    BoundRemoteCanvas(view: sharing.spectatorView, hidesAccessibilityChildren: true)
-                        .aspectRatio(1.5, contentMode: .fit)
-                        .opacity(sharing.spectatorLive ? 1 : 0)
-                    if !sharing.spectatorLive {
-                        Text(sharing.reconnecting ? "Reconnecting…" : "Waiting for live partner video…")
-                            .foregroundStyle(.white)
-                    }
-                }
-                .navigationTitle(sharing.spectatorLive ? "Partner · Live" : "Partner")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Close") { showing = false }
-                    }
+            BoundPartnerSpectatorView(sharing: sharing)
+        }
+    }
+}
+
+struct BoundPartnerSpectatorView: View {
+    @ObservedObject var sharing: FriendSharingSession
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                BoundRemoteCanvas(view: sharing.spectatorView, hidesAccessibilityChildren: true)
+                    .aspectRatio(1.5, contentMode: .fit)
+                    .opacity(sharing.spectatorLive ? 1 : 0)
+                if !sharing.spectatorLive {
+                    Text(sharing.reconnecting ? "Reconnecting…" : "Waiting for live partner video…")
+                        .foregroundStyle(.white)
                 }
             }
-            .onChange(of: sharing.watchingPartner) { _, watching in
-                if !watching { showing = false }
+            .navigationTitle(sharing.spectatorLive ? "Partner · Live" : "Partner")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } }
             }
         }
+        .onChange(of: sharing.watchingPartner) { _, watching in if !watching { dismiss() } }
+        .onDisappear { sharing.stopWatchingPartner() }
     }
 }

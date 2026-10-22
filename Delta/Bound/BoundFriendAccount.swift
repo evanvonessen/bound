@@ -85,6 +85,9 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
     func friendSharingRequest(roomID: String) throws -> URLRequest {
         try request(path: "/functions/v1/agora-token", body: ["roomID": roomID])
     }
+    func runLeaseRequest(action: String, payload: [String: Any]) throws -> URLRequest {
+        try request(path: "/rest/v1/rpc/bound_run_lease_v1", body: ["action": action, "payload": payload])
+    }
     func dropboxLinkRequest(action: String, code: String? = nil, verifier: String? = nil) throws -> URLRequest {
         var body = ["action": action]
         if let code { body["code"] = code }

@@ -390,6 +390,21 @@ final class LivePresenceTests: XCTestCase {
         staleReceiver(old); XCTAssertNil(presence.pose())
     }
 
+    func testROMServicePacketsUseBoundedReliableQueueAndExpectedPeer() {
+        let callbacks = AgoraSharingCallbacks(remoteUID: 2) { _, _ in }
+        let packet = Data("BRM1fixture".utf8)
+        callbacks.receiveInteraction(packet, uid: 3)
+        XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
+        callbacks.receiveInteraction(Data("BRM1".utf8) + Data(repeating: 0, count: 1024), uid: 2)
+        XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
+        callbacks.receiveInteraction(packet, uid: 2)
+        XCTAssertEqual(callbacks.takeInteractions().messages, [packet])
+        XCTAssertNil(callbacks.takeLatestPresence(), "ROM actions must never replace the movement mailbox")
+        callbacks.suspendFrames()
+        callbacks.receiveInteraction(packet, uid: 2)
+        XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
+    }
+
     func testPresentationDiagnosticsAreOptInAndNeverExportCoordinatesOrArtwork() throws {
         let session = session(), viewer = try XCTUnwrap(reading().player)
         let a = try XCTUnwrap(BoundPresencePose(reading: reading()))
@@ -503,7 +518,7 @@ extension LivePresenceTests {
 
         BoundMultiplayerFeatures.setEnabled(true)
         XCTAssertTrue(sharing.livePresence.connected)
-        XCTAssertFalse(sharing.livePresence.enabled, "Sprites require a fresh user choice")
+        XCTAssertTrue(sharing.livePresence.enabled, "The master multiplayer switch enables sprites automatically")
         UserDefaults.standard.removeObject(forKey: BoundMultiplayerFeatures.key)
         NotificationCenter.default.post(name: Settings.didResetNotification, object: nil)
         XCTAssertFalse(sharing.livePresence.connected)

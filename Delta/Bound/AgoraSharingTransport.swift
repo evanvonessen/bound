@@ -73,7 +73,7 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
         return (result, failed)
     }
     func receiveInteraction(_ data: Data, uid: UInt) {
-        guard uid == remoteUID, (data.starts(with: BoundFriendInteractionPacket.prefix) || data.starts(with: BoundBattleControlPacket.prefix) || BoundSoulPacket.recognizes(data) || data.starts(with: BoundWorldPacket.prefix)),
+        guard uid == remoteUID, (data.starts(with: BoundFriendInteractionPacket.prefix) || data.starts(with: BoundBattleControlPacket.prefix) || BoundSoulPacket.recognizes(data) || data.starts(with: BoundWorldPacket.prefix) || data.starts(with: Data("BRM1".utf8))),
               data.count <= BoundFriendInteractionPacket.maximumBytes else { return }
         lock.lock(); defer { lock.unlock() }
         guard acceptsFrames, !suspended, !interactionFailed else { return }
@@ -107,7 +107,7 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
         latestPresence = data.withUnsafeBytes { Data($0) }; presencePackets += 1
     }
     func rtcEngine(_ engine: AgoraRtcEngineKit, receiveStreamMessageFromUid uid: UInt, streamId: Int, data: Data) {
-        if (data.starts(with: BoundFriendInteractionPacket.prefix) || data.starts(with: BoundBattleControlPacket.prefix) || BoundSoulPacket.recognizes(data) || data.starts(with: BoundWorldPacket.prefix)) { receiveInteraction(data, uid: uid) }
+        if (data.starts(with: BoundFriendInteractionPacket.prefix) || data.starts(with: BoundBattleControlPacket.prefix) || BoundSoulPacket.recognizes(data) || data.starts(with: BoundWorldPacket.prefix) || data.starts(with: Data("BRM1".utf8))) { receiveInteraction(data, uid: uid) }
         else { receivePresence(data, uid: uid) }
     }
     var diagnostics: [String: Int] {
@@ -714,7 +714,7 @@ final class AgoraSharingTransport: FriendSharingTransport {
         for data in pending.messages { interactionReceiver?(data) }
     }
     func sendInteraction(_ data: Data) -> Bool {
-        guard joined, !recovering, (data.starts(with: BoundFriendInteractionPacket.prefix) || data.starts(with: BoundBattleControlPacket.prefix) || BoundSoulPacket.recognizes(data) || data.starts(with: BoundWorldPacket.prefix)),
+        guard joined, !recovering, (data.starts(with: BoundFriendInteractionPacket.prefix) || data.starts(with: BoundBattleControlPacket.prefix) || BoundSoulPacket.recognizes(data) || data.starts(with: BoundWorldPacket.prefix) || data.starts(with: Data("BRM1".utf8))),
               data.count <= BoundFriendInteractionPacket.maximumBytes,
               let engine, engine.getConnectionState() == .connected else { return false }
         if interactionStream == nil {

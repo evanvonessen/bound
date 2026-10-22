@@ -32,6 +32,11 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		503000000000000000000009 /* ROMMultiplayerContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50300000000000000000000A; };
+		503000000000000000000007 /* MultiplayerSavePackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000008; };
+		503000000000000000000005 /* BoundRunLease.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000006; };
+		503000000000000000000003 /* BoundMultiplayerSavePackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000004; };
+		503000000000000000000001 /* BoundROMMultiplayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000002; };
         501200000000000000000003 /* SharedWorldTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 501200000000000000000004; };
         501200000000000000000001 /* BoundSharedProgression.swift in Sources */ = {isa = PBXBuildFile; fileRef = 501200000000000000000002; };
 		501100000000000000000001 /* BoundSoulLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 501100000000000000000002; };
@@ -862,6 +867,11 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		50300000000000000000000A /* ROMMultiplayerContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ROMMultiplayerContractTests.swift; sourceTree = "<group>"; };
+		503000000000000000000008 /* MultiplayerSavePackageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiplayerSavePackageTests.swift; sourceTree = "<group>"; };
+		503000000000000000000006 /* BoundRunLease.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundRunLease.swift; sourceTree = "<group>"; };
+		503000000000000000000004 /* BoundMultiplayerSavePackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundMultiplayerSavePackage.swift; sourceTree = "<group>"; };
+		503000000000000000000002 /* BoundROMMultiplayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMMultiplayer.swift; sourceTree = "<group>"; };
         501200000000000000000004 /* SharedWorldTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedWorldTests.swift; sourceTree = "<group>"; };
         501200000000000000000002 /* BoundSharedProgression.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundSharedProgression.swift; sourceTree = "<group>"; };
 		501100000000000000000002 /* BoundSoulLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundSoulLink.swift; sourceTree = "<group>"; };
@@ -1452,6 +1462,8 @@
 				A15E00000000000000000003 /* LivePresenceTests.swift */,
 				A15F00000000000000000005 /* FriendInteractionTests.swift */,
 				501100000000000000000004 /* SoulLinkTests.swift */,
+				50300000000000000000000A /* ROMMultiplayerContractTests.swift */,
+				503000000000000000000008 /* MultiplayerSavePackageTests.swift */,
                 501200000000000000000004 /* SharedWorldTests.swift */,
 				B4771000000000000000000C /* NativeBattleRuntimeTests.swift */,
 				A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */,
@@ -1581,6 +1593,9 @@
 				B47710000000000000000008 /* AgoraBattleChannel.swift */,
 				B47710000000000000000006 /* BoundNativeBattle.swift */,
 				501100000000000000000002 /* BoundSoulLink.swift */,
+				503000000000000000000006 /* BoundRunLease.swift */,
+				503000000000000000000004 /* BoundMultiplayerSavePackage.swift */,
+				503000000000000000000002 /* BoundROMMultiplayer.swift */,
                 501200000000000000000002 /* BoundSharedProgression.swift */,
 				B47710000000000000000004 /* BoundBattleCable.swift */,
 				A15F00000000000000000003 /* BoundFriendInteractionPanel.swift */,
@@ -3271,6 +3286,8 @@
 				A15E00000000000000000004 /* LivePresenceTests.swift in Sources */,
 				A15F00000000000000000006 /* FriendInteractionTests.swift in Sources */,
 				501100000000000000000003 /* SoulLinkTests.swift in Sources */,
+				503000000000000000000009 /* ROMMultiplayerContractTests.swift in Sources */,
+				503000000000000000000007 /* MultiplayerSavePackageTests.swift in Sources */,
                 501200000000000000000003 /* SharedWorldTests.swift in Sources */,
 				B4771000000000000000000D /* NativeBattleRuntimeTests.swift in Sources */,
 				A15E0000000000000000000A /* PresenceConnectionCheckTests.swift in Sources */,
@@ -3596,6 +3613,9 @@
 				B47710000000000000000009 /* AgoraBattleChannel.swift in Sources */,
 				B47710000000000000000007 /* BoundNativeBattle.swift in Sources */,
 				501100000000000000000001 /* BoundSoulLink.swift in Sources */,
+				503000000000000000000005 /* BoundRunLease.swift in Sources */,
+				503000000000000000000003 /* BoundMultiplayerSavePackage.swift in Sources */,
+				503000000000000000000001 /* BoundROMMultiplayer.swift in Sources */,
                 501200000000000000000001 /* BoundSharedProgression.swift in Sources */,
 				B47710000000000000000005 /* BoundBattleCable.swift in Sources */,
 				A15F00000000000000000004 /* BoundFriendInteractionPanel.swift in Sources */,
