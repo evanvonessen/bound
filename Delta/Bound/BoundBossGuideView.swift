@@ -1730,7 +1730,7 @@ private struct BoundBossWeaknessDetail: View {
     var body: some View {
         NavigationStack {
             BoundRRDexMatchups(pokemon: pokemon, catalog: catalog, highlightsExtremes: true)
-                .navigationTitle("Type matchups")
+                .navigationTitle("Type Matchups")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
@@ -1927,7 +1927,7 @@ private struct BoundBossPicker: View {
             .background(Color.black)
             .foregroundStyle(.white)
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Boss, location, or Pokémon")
-            .navigationTitle("Choose boss")
+            .navigationTitle("Choose Boss")
             .toolbarBackground(Color.black, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
@@ -2122,10 +2122,10 @@ private struct BoundBossGuideInfo: View {
                 Text("For the rival's Squirtle team, the player chose a Fire-type starter. Gyro Ball and Trick Room teams generally use zero Speed IVs in the source.")
                 Text("After becoming Champion, non-postgame scaling trainers gain two levels.")
             }
-            Section("Level caps") {
+            Section("Level Caps") {
                 ForEach(catalog.levelCaps, id: \.stage) { LabeledContent($0.stage, value: String($0.level)) }
             }
-            Section("Trainer order") {
+            Section("Trainer Order") {
                 ForEach(Array(catalog.trainerOrder.enumerated()), id: \.offset) { _, entry in
                     VStack(alignment: .leading) {
                         Text(entry.name)
@@ -2142,6 +2142,6 @@ private struct BoundBossGuideInfo: View {
                 Text("Boss teams use the Default guide, independently of the Dex's current save.").font(.footnote)
                 Text("Pokémon characters and artwork belong to their respective owners.").font(.footnote)
             }
-        }.navigationTitle("Guide information")
+        }.navigationTitle("Guide Information")
     }
 }

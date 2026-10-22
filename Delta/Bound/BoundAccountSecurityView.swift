@@ -120,7 +120,7 @@ struct BoundAccountSecurityView: View {
                 .accessibilityIdentifier("account.security.totp.enroll")
             }
         } header: {
-            Text("Two-factor authentication")
+            Text("Two-Factor Authentication")
         }
     }
 
@@ -159,7 +159,7 @@ struct BoundAccountSecurityView: View {
             .disabled(unavailable)
             .accessibilityIdentifier("account.security.totp.cancel")
         } header: {
-            Text("Complete authenticator setup")
+            Text("Complete Authenticator Setup")
         } footer: {
             Text("Enter the current six-digit code from the authenticator you just added.")
         }
@@ -187,7 +187,7 @@ struct BoundAccountSecurityView: View {
                 .disabled(unavailable || verificationCode.count != 6)
                 .accessibilityIdentifier("account.security.step-up.verify")
         } header: {
-            Text("Verify your identity")
+            Text("Verify Your Identity")
         }
     }
 

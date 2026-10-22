@@ -136,7 +136,7 @@ final class BoundRecordedPlayerSession: ObservableObject {
 struct BoundRecordedPlayerControls: View {
     @ObservedObject var session: BoundRecordedPlayerSession
     var body: some View {
-        Section("Recorded player") {
+        Section("Recorded Player") {
             Text(session.message).font(.footnote).foregroundStyle(.secondary)
             if session.mode == .recording {
                 Button("Finish recording") { session.finishRecording() }

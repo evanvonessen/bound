@@ -978,9 +978,9 @@ struct BoundSoulEncountersView: View {
             if !session.paired { Section { Text(session.status).font(.caption) } }
             let rows = session.encounters.filter { search.isEmpty || BoundSoulControls.title($0.slot, names: session.areaNames).localizedCaseInsensitiveContains(search) || ($0.localName ?? "").localizedCaseInsensitiveContains(search) || ($0.partnerName ?? "").localizedCaseInsensitiveContains(search) }
             Section("Encounters") { ForEach(rows.filter(\.occupied)) { row in encounter(row) } }
-            Section("Available areas") { ForEach(rows.filter { !$0.occupied }) { row in encounter(row) } }
+            Section("Available Areas") { ForEach(rows.filter { !$0.occupied }) { row in encounter(row) } }
         }
-        .navigationTitle("Paired encounters")
+        .navigationTitle("Paired Encounters")
         .searchable(text: $search, prompt: "Area or Pokémon")
         .accessibilityIdentifier("bound.soul-link.encounter-list")
     }
@@ -1013,7 +1013,7 @@ struct BoundSoulTeamDashboard: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .top)
             }
-            Section("Linked pairs") {
+            Section("Linked Pairs") {
                 ForEach(session.encounters.filter(\.occupied)) { pair in
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -1034,7 +1034,7 @@ struct BoundSoulTeamDashboard: View {
                 NavigationLink("Graveyard") { BoundSoulGraveyardView(session: session) }
             }
         }
-        .navigationTitle("Shared team")
+        .navigationTitle("Shared Team")
         .accessibilityIdentifier("bound.soul-link.team-dashboard")
         .task { dex = await Task.detached(priority: .utility) { BoundRRDexCatalog.bundled }.value }
     }
@@ -1291,7 +1291,7 @@ struct BoundRunTimelineView: View {
                 } icon: { Image(systemName: event.symbol) }
             }
         }
-        .navigationTitle("Run timeline")
+        .navigationTitle("Run Timeline")
         .accessibilityIdentifier("bound.run-timeline")
         .onAppear { load() }
         .onReceive(refresh) { _ in load() }

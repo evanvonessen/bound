@@ -11,7 +11,7 @@ struct BoundAppearanceSettings: View {
     var includeAbout = true
     var body: some View {
         if includeAppearance && !BoundFeatureVisibility.simplifiedSettings {
-        Section("Screen layout") {
+        Section("Screen Layout") {
             Picker("Screen arrangement", selection: Binding(get: {
                 BoundScreenLayout(rawValue: screenLayoutRaw) ?? BoundAppearancePreferences.defaultScreenLayout
             }, set: { BoundAppearancePreferences().screenLayout = $0 })) {
@@ -31,7 +31,7 @@ struct BoundAppearanceSettings: View {
                 .accessibilityIdentifier("bound.button-haptics")
             Toggle("Control stick feedback", isOn: Binding(get: { sticks }, set: { Settings.isThumbstickHapticFeedbackEnabled = $0 }))
                 .accessibilityIdentifier("bound.stick-haptics")
-        } header: { Text("Touch feedback") }
+        } header: { Text("Touch Feedback") }
         }
         if includeAbout {
         Section {

@@ -1959,7 +1959,7 @@ struct BoundFriendsSheet: View {
                         .disabled(account.session == nil || onboarding.busy || !BoundSocialAPI.validUsername(friendUsername.trimmingCharacters(in: .whitespacesAndNewlines)))
                         .accessibilityIdentifier("bound.add-friend")
                 }
-                .navigationTitle("Add a friend")
+                .navigationTitle("Add a Friend")
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingAddFriend = false } } }
             }
             .presentationDetents([.medium])
@@ -2181,7 +2181,7 @@ struct BoundChangeEmailView: View {
                     Section { Text(account.emailChangeStatus).accessibilityIdentifier("account.email-change.status") }
                 }
             }
-            .navigationTitle("Change email")
+            .navigationTitle("Change Email")
             .toolbar { ToolbarItem(placement: .cancellationAction) {
                 Button(changed ? "Done" : "Cancel") { submission?.cancel(); currentPassword = ""; dismiss() }
                     .disabled(account.changingEmail)
@@ -2258,7 +2258,7 @@ struct BoundForgotPasswordView: View {
                 }
             }
         }
-        .navigationTitle("Reset password")
+        .navigationTitle("Reset Password")
         .task(id: account.session?.owner) {
             if forCurrentAccount { await account.loadEmailAddress() }
         }

@@ -331,7 +331,7 @@ struct BoundLivePresenceControls: View {
         if experimentalFeaturesEnabled && developerFeaturesEnabled { controls }
     }
     private var controls: some View {
-        Section("Live player sprites") {
+        Section("Live Player Sprites") {
             Toggle("Show friend on map", isOn: Binding(get: { session.enabled }, set: { session.setEnabled($0) }))
                 .accessibilityIdentifier("bound.live-presence-enabled")
             Text(session.status).font(.footnote).foregroundStyle(.secondary)
