@@ -52,19 +52,60 @@ account sessions are never replaced by the browser's recovery credentials.
 ## Live configuration and release verification
 
 On October 21, 2026, the hosted `reset-password.html`, `password-reset.js`, and
-`password-reset.css` all returned HTTP 200 and matched the local recovery assets.
-The page is already published. The Supabase Auth dashboard still showed an empty
-redirect allowlist and `http://localhost:3000` as the Site URL. Add the exact HTTPS
-recovery URL above to the allowed redirects and review the placeholder Site URL.
-An unapproved recovery redirect falls back to the Site URL, so the published page
-alone does not complete recovery setup. Confirm that the recovery email template
-links through `ConfirmationURL` / the configured redirect.
+`password-reset.css` all returned HTTP 200 without redirects and matched the local
+recovery assets byte-for-byte. The page is already published.
 
-The same dashboard showed custom SMTP disabled. Supabase's default email service
-is limited to authorized project-team addresses; configure a mail provider before
-expecting recovery delivery to ordinary Bound accounts. No recovery email has been
-sent or global Auth settings changed by this check. The password-protected email
-endpoint is deployed; live account mutation remains unverified.
+The requested Resend sending domain, `auth.evanvonessen.com`, has been created in
+North Virginia with ID `2798323b-2565-40fc-8da9-4e6ee5cd3e69`. At 6:42 p.m. PDT on
+October 21, 2026, the Resend dashboard showed the domain verified and ready to
+send, with Forge and sending enabled, receiving disabled, and tracking not
+configured. All three DNS records below were saved in Squarespace after explicit
+human confirmation, and live DNS queries returned the exact TXT value and CNAME
+targets. Existing root website and Google mail records were left unchanged.
+Supabase SMTP credentials and Auth URL configuration still await human action.
+No test recovery email has been sent. The sending domain does not change the
+recovery-page URL above.
+
+Resend supplied these DNS records for the `evanvonessen.com` zone:
+
+| Type | Host | Value |
+| --- | --- | --- |
+| TXT | `resend._domainkey.auth` | `p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDV8eoPAUcmYzxVHp2Eq35zOESlDOT/WfjayuX+L3AR0prCrjKenwwnDLiqLF1I0Uvr4IzdQ15LEt8KA4Ppm0eAsD3lFK+NwoozOMg4LlUYiwl8Xg6XxYMe+3npXpCZBYkZ1L1kAS9bE8h8XMfbtB9VNMm6hL/iohKpLO4SOxhmKwIDAQAB` |
+| CNAME | `rsend.auth` | `rsend.forge.rmta.net` |
+| CNAME | `send.auth` | `send.forge.rmta.net` |
+
+These are public DNS values. Receiving remains disabled. Preserve the existing
+website and Google records at the root domain; no root DMARC change is required.
+Configure Supabase custom SMTP as follows:
+
+| Setting | Value |
+| --- | --- |
+| Sender | `Bound <noreply@auth.evanvonessen.com>` |
+| Host | `smtp.resend.com` |
+| Port | `465` |
+| Username | `resend` |
+| Password | A new Resend sending API key scoped to this domain |
+
+Enter the API key only in Supabase's secret SMTP password field, never in source,
+documentation, app configuration or build settings. Keep email link tracking off.
+
+The Supabase Auth dashboard still showed an empty redirect allowlist and
+`http://localhost:3000` as the Site URL. Add the exact HTTPS recovery URL above to
+the allowed redirects and replace the placeholder Site URL with the production
+site. The default recovery email template was verified live to use
+`{{ .ConfirmationURL }}`. Preserve that action link so Supabase verifies the link
+before redirecting to the page with its recovery access token. The page does not
+accept a direct `token_hash` or PKCE-code callback. An unapproved recovery redirect
+falls back to the Site URL.
+
+Custom SMTP was disabled at the latest dashboard check. Its non-secret fields
+are prepared in a browser draft, but credentials and activation are not saved.
+The Resend SMTP endpoint accepted a verified TLS 1.3 connection on port 465;
+authenticated sending is not yet tested. Supabase's default email
+service is limited to authorized project-team addresses. Domain verification and
+published static assets alone do not establish working recovery delivery. The
+password-protected email endpoint is deployed; live account mutation remains
+unverified.
 
 Use an explicitly owned QA account to verify email delivery, the recovery link,
 password update, expired/reused links, rate limits and subsequent native sign-in.
@@ -73,10 +114,19 @@ No private Auth/service keys are needed in the page; the public client key match
 
 References: [Supabase recovery flow](https://supabase.com/docs/reference/javascript/auth-resetpasswordforemail),
 [Auth redirects](https://supabase.com/docs/guides/auth/redirect-urls),
-[SMTP delivery restrictions](https://supabase.com/docs/guides/auth/auth-smtp), and
+[SMTP delivery restrictions](https://supabase.com/docs/guides/auth/auth-smtp),
+[Resend SMTP setup](https://resend.com/docs/send-with-supabase-smtp),
+[Supabase email templates](https://supabase.com/docs/guides/auth/auth-email-templates), and
 [Auth REST contract](https://github.com/supabase/auth/blob/master/openapi.yaml).
 
 ## Validation
+
+The October 21 Resend setup checks passed all 14 browser recovery tests, verified
+the three hosted assets against local bytes, built the ordinary `Bound.xcodeproj`
+/ `Bound` target for Release iPhone, and verified all 17,061 pinned source files.
+The Release log is `.build/resend-setup/release-iphone.log`. No email delivery,
+real password change, subsequent native sign-in or physical-device recovery was
+tested; provider activation remains pending as described above.
 
 The 2026-10-21 recovery/sync fix passed 88 focused native tests, 36 browser/
 Dropbox-handler tests, and the account recovery navigation UI test in both UI
