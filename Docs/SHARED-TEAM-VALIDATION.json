@@ -1,0 +1,54 @@
+{
+  "client_date": "2026-10-21",
+  "feature": "shared Soul Link team dashboard and paired encounter integration",
+  "entry": "Friends > Soul Link > Shared team",
+  "game_rom_changed": false,
+  "game_abi_changed": false,
+  "soul_wire_version": 2,
+  "optional_team_wire": "BST1 version 1",
+  "journal_changed": false,
+  "behavior": [
+    "Both six-member parties with bundled sprites, nicknames, levels and HP bars",
+    "Linked pair membership in party, box, off team, waiting or fainted",
+    "Existing paired encounters and graveyard available directly from dashboard",
+    "Unknown, battle/menu, paused, expired and ended-run data never labelled live",
+    "Shared death bits override cached healthy HP",
+    "Fresh run/room/challenge and increasing sequence required",
+    "Complete boxed slot bitmap and party fit in 897 bytes; send at most once per second",
+    "Egg species, level and HP concealed; extra catches retain existing exclusion rules",
+    "Transient team data never changes either game, save, catch eligibility or death journal"
+  ],
+  "validation": {
+    "selected_tests": 49,
+    "soul_link_tests": 38,
+    "shared_world_tests": 10,
+    "native_runtime_tests": 1,
+    "failures": 0,
+    "skips": 0,
+    "debug_simulator_build": true,
+    "unsigned_release_iphone_build": true,
+    "combined_with_latest_main_library": true,
+    "pinned_source_files_unchanged": 17061,
+    "game_abi_import_check": true,
+    "soul_native_shim_check": true,
+    "screenshots_visually_checked": [
+      "two-player-dashboard",
+      "shared-team"
+    ],
+    "audio_disabled_in_native_fixture": true,
+    "original_rom_and_seed_unchanged": true
+  },
+  "evidence": {
+    "test_bundle": ".build/shared-team-publish-tests.xcresult",
+    "test_log": ".build/shared-team-publish-tests.log",
+    "debug_log": ".build/shared-team-debug-publish.log",
+    "release_log": ".build/shared-team-merged-release.log",
+    "preserved_files": ".build/shared-team-evidence/manifest.json"
+  },
+  "limits": [
+    "Two-peer dashboard sessions use production protocol/session code with controlled team observations",
+    "One actual VBA-M instance verifies native party levels/HP and compressed-PC catch membership",
+    "Field party snapshots are current; battle/menu data is explicitly last-seen",
+    "No physical two-phone or real Agora gameplay/performance acceptance claim"
+  ]
+}

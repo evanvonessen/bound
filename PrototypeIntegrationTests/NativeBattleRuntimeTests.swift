@@ -560,6 +560,11 @@ final class NativeBattleRuntimeTests:XCTestCase {
         try probe.start(run: UUID(), binding: String(repeating: "a", count: 64))
         _ = core.resume(); try await Task.sleep(for: .milliseconds(150)); _ = core.pause()
         let starter = try XCTUnwrap(probe.read().ledger?.records.first)
+        let starterTeam = try XCTUnwrap(probe.read().team)
+        XCTAssertEqual(starterTeam.party.count,1)
+        XCTAssertEqual(starterTeam.party.first?.slot,starter.slot)
+        XCTAssertGreaterThan(starterTeam.party.first?.level ?? 0,0)
+        XCTAssertGreaterThan(starterTeam.party.first?.maxHP ?? 0,0)
         XCTAssertTrue(BoundVBABattleBridge.qaStartSoulCheck()); _ = core.resume()
         for _ in 0..<100 {
             try await Task.sleep(for: .milliseconds(25))
@@ -620,6 +625,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
                 XCTAssertTrue(record.eligible)
                 let boxed = try XCTUnwrap(reopened.read().mons.first { $0.identity == record.identity })
                 XCTAssertNil(boxed.hp, "Read the real native 58-byte compressed PC catch")
+                XCTAssertTrue(BoundSoulLedger.losses(try XCTUnwrap(reopened.read().team).boxed).contains(record.slot), "The dashboard identifies the actual native PC catch")
             }
             BoundVBABattleBridge.qaFinishSoulCheck()
         }

@@ -43,6 +43,37 @@ A legacy peer triggers a pause and an update message. No new ROM is required: th
 tracking through the existing native Soul Link observation/enforcement adapter;
 the integrated game and shared-progression ABI remain unchanged.
 
+## Shared team dashboard
+
+Open **Friends → Soul Link → Shared team**. Both six-Pokémon parties appear
+side by side with bundled species sprites, nicknames, levels and HP bars. Each
+encounter pair shows **In party**, **Boxed**, **Off team**, **Waiting for catch**,
+or **Fainted** on each side. The dashboard links directly to Paired encounters
+and Graveyard. Extra ineligible catches are displayed as unusable; an unlinked
+entry never claims another encounter slot. Eggs hide species, levels and HP.
+
+Team reads come from the existing completed-frame Soul Link probe, with cached
+PC decoding. Only verified native overworld snapshots are published as current;
+battle/menu/paused data and snapshots older than three seconds show **Last seen**.
+Party/box labels also carry that marker when stale. Losses immediately override
+healthy-looking cached HP. Ending the run removes the live designation.
+Disconnect, room/game change and a new challenge clear the partner snapshot;
+replayed packets cannot replace newer team data. Team data is transient and
+never written into either player's game or rule journal.
+
+The optional **BST1** channel carries a complete party and a 288-byte bitmap of
+currently boxed eligible slots at most once per second. It has its own increasing
+sequence and must match the active BSL2 run, both fresh challenges and the local
+room binding. Its maximum valid six-member packet is 897 bytes, within the
+existing 1,024-byte reliable mailbox limit. The header is `BST1` at 0, version 1
+at 4, run UUID at 5, sender UUID at 21, receiver UUID at 37, 64-bit little-endian
+sequence at 53, field-current byte at 61, party count at 62, boxed bits at 63,
+and member records at 351. Each member has 16-bit slot (65535 means unlinked),
+16-bit species, level byte, 16-bit HP/maxHP, egg/barred flag byte, UTF-8 name
+length and bounded name. BSL2 encounter and death bits remain the authority;
+BST1 never acquires slots or changes deaths. An older BSL2 peer remains usable
+and simply has no shared-team feed. No new ROM or game ABI is needed.
+
 ## Death moments and graveyard
 
 A newly committed local or partner loss queues a silent **SOUL LINK BROKEN**
@@ -152,6 +183,18 @@ with both complete bitmaps occupy 884 bytes. Identities and Pokémon data stay l
 BSL1 is recognized only to explain the required app update, never as BSL2 state.
 
 ## Verification
+
+The shared team update passed **49 selected checks**: 38 Soul Link tests,
+10 shared-world tests and the silent native runtime fixture. They cover bounded
+six-member packets, full boxed-slot data, replay/wrong-run/challenge rejection,
+reconnect/expiry and ended-run labels, actual native level/HP and PC metadata,
+and rendered local/two-peer dashboards. All encounter, death and shared-world
+regressions passed. Debug simulator and unsigned iPhone Release builds passed;
+17,061 pinned sources, game ABI import and native shim checks are unchanged.
+Full screenshots, result bundles and working save copies remain under
+`.build/shared-team-*`. The two-peer dashboard check uses production session/
+packet code with controlled team observations; the native party/PC check uses
+one actual VBA-M instance. It is not a physical two-phone/Agora acceptance run.
 
 The death-moment update passed **44 selected checks**: 33 Soul Link tests,
 10 shared-world tests and the silent native faint/catch/rollback fixture. These

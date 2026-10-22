@@ -31,6 +31,9 @@ struct BoundSoulMon: Equatable, Sendable {
     let eggOrigin: Bool
     let isEgg: Bool
     let hp: Int?
+    var level: Int? = nil
+    var maxHP: Int? = nil
+    var inParty = false
     static func text(_ data: Data) -> String {
         data.prefix(while: { $0 != 255 }).map { b -> String in
             switch b {
@@ -68,7 +71,9 @@ struct BoundSoulMon: Equatable, Sendable {
             let eggOrigin = isEgg || (half(misc + 2) & 127) == 0 || data[offset + misc + 1] == 253
             let name = text(data.subdata(in: (offset + 8)..<(offset + 18)))
             return .init(identity: identity, species: species, name: name.isEmpty ? "Pokémon" : name,
-                         area: Int(data[offset + misc + 1]), eggOrigin: eggOrigin, isEgg: isEgg, hp: stride == 100 && half(88) > 0 ? half(86) : nil)
+                         area: Int(data[offset + misc + 1]), eggOrigin: eggOrigin, isEgg: isEgg, hp: stride == 100 && half(88) > 0 ? half(86) : nil,
+                         level: stride == 100 && (1...100).contains(Int(data[offset + 84])) ? Int(data[offset + 84]) : nil,
+                         maxHP: stride == 100 && half(88) > 0 ? half(88) : nil, inParty: stride == 100)
         }
     }
 }
@@ -220,7 +225,7 @@ struct BoundSoulRow: Codable, Equatable, Sendable {
 struct BoundSoulPacket: Sendable {
     static let prefix = Data([0x42, 0x53, 0x4C, 0x32])
     static let legacyPrefix = Data([0x42, 0x53, 0x4C, 0x31])
-    static func recognizes(_ data: Data) -> Bool { data.starts(with: prefix) || data.starts(with: legacyPrefix) }
+    static func recognizes(_ data: Data) -> Bool { data.starts(with: prefix) || data.starts(with: legacyPrefix) || data.starts(with: BoundSoulTeamPacket.prefix) }
     enum Kind: String, CaseIterable { case offer, accept, confirm, decline, state, end }
     let version: Int
     let run: UUID
@@ -276,6 +281,97 @@ struct BoundSoulPacket: Sendable {
     }
 }
 
+struct BoundSoulTeamMember: Equatable, Sendable {
+    var slot: String?
+    var name: String
+    var species: Int
+    var level: Int?
+    var hp: Int?
+    var maxHP: Int?
+    var isEgg = false
+    var barred = false
+    var valid: Bool {
+        (slot == nil || BoundSoulLedger.validSlot(slot!)) && !name.isEmpty && name.count <= 20 && name.utf8.count <= 80
+        && (0...4095).contains(species) && (level == nil || (1...100).contains(level!))
+        && ((hp == nil && maxHP == nil) || (hp != nil && maxHP != nil && (1...65535).contains(maxHP!) && (0...maxHP!).contains(hp!)))
+    }
+}
+struct BoundSoulTeam: Equatable, Sendable {
+    var party: [BoundSoulTeamMember]
+    var boxed = Data(repeating: 0, count: 288)
+    var fieldReady = true
+    var valid: Bool {
+        party.count <= 6 && party.allSatisfy(\.valid) && boxed.count == 288
+        && Set(party.compactMap(\.slot)).count == party.compactMap(\.slot).count
+        && Set(party.compactMap(\.slot)).isDisjoint(with: BoundSoulLedger.losses(boxed))
+    }
+    static func capture(mons: [BoundSoulMon], ledger: BoundSoulLedger) -> Self? {
+        let records = Dictionary(uniqueKeysWithValues: ledger.records.flatMap { record in record.identities.map { ($0, record) } })
+        let denied = ledger.denied
+        var usedSlots: Set<String> = []
+        let party = mons.filter(\.inParty).map { mon -> BoundSoulTeamMember in
+            let record = records[mon.identity]
+            let slot = record.flatMap { $0.eligible && usedSlots.insert($0.slot).inserted ? $0.slot : nil }
+            return .init(slot: slot, name: mon.name,
+                         species: mon.isEgg ? 0 : mon.species, level: mon.isEgg ? nil : mon.level,
+                         hp: mon.isEgg ? nil : mon.hp, maxHP: mon.isEgg ? nil : mon.maxHP,
+                         isEgg: mon.isEgg, barred: denied.contains(mon.identity))
+        }
+        let boxes = Set(mons.filter { !$0.inParty }.compactMap { mon -> String? in
+            guard let record = records[mon.identity], record.eligible else { return nil }; return record.slot
+        })
+        let result = Self(party: party, boxed: BoundSoulLedger.bits(boxes))
+        return result.valid ? result : nil
+    }
+}
+/// Optional presentation channel. BSL2 remains the authority for acquired/dead slots.
+struct BoundSoulTeamPacket: Sendable {
+    static let prefix = Data("BST1".utf8)
+    let run: UUID
+    let sender: UUID
+    let receiver: UUID
+    let sequence: UInt64
+    let team: BoundSoulTeam
+    func encoded() -> Data? {
+        guard team.valid, sequence > 0 else { return nil }
+        var data = Self.prefix; data.append(1)
+        for uuid in [run, sender, receiver] { var bytes = uuid.uuid; withUnsafeBytes(of: &bytes) { data.append(contentsOf: $0) } }
+        for shift in stride(from: 0, to: 64, by: 8) { data.append(UInt8(truncatingIfNeeded: sequence >> shift)) }
+        data.append(team.fieldReady ? 1 : 0); data.append(UInt8(team.party.count)); data.append(team.boxed)
+        func half(_ value: Int) { data.append(UInt8(truncatingIfNeeded: value)); data.append(UInt8(truncatingIfNeeded: value >> 8)) }
+        for member in team.party {
+            let parts = member.slot?.split(separator: ":")
+            let slot = parts.map { Int($0[1])! + ($0[0] == "egg" ? 255 : 0) } ?? 65535
+            half(slot); half(member.species); data.append(UInt8(member.level ?? 0))
+            half(member.hp ?? 0); half(member.maxHP ?? 0)
+            data.append((member.isEgg ? 1 : 0) | (member.barred ? 2 : 0))
+            let name = Data(member.name.utf8); data.append(UInt8(name.count)); data.append(name)
+        }
+        return data.count <= 1024 ? data : nil
+    }
+    static func decode(_ data: Data) -> Self? {
+        guard (351...1024).contains(data.count), data.starts(with: prefix), data[4] == 1, data[61] <= 1, data[62] <= 6 else { return nil }
+        func uuid(_ n: Int) -> UUID { let b = Array(data[n..<n+16]); return UUID(uuid:(b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],b[11],b[12],b[13],b[14],b[15])) }
+        func half(_ n: Int) -> Int { Int(data[n]) | Int(data[n+1]) << 8 }
+        let sequence = (0..<8).reduce(UInt64(0)) { $0 | UInt64(data[53+$1]) << ($1*8) }
+        var offset = 351, party: [BoundSoulTeamMember] = []
+        for _ in 0..<Int(data[62]) {
+            guard offset + 11 <= data.count else { return nil }
+            let slot = half(offset), species = half(offset+2), level = Int(data[offset+4])
+            let hp = half(offset+5), maxHP = half(offset+7), flags = data[offset+9], length = Int(data[offset+10]); offset += 11
+            guard (slot < 2304 || slot == 65535), flags <= 3, length <= 80, offset + length <= data.count,
+                  let name = String(data: data[offset..<offset+length], encoding: .utf8) else { return nil }
+            party.append(.init(slot: slot == 65535 ? nil : slot < 256 ? "area:\(slot)" : "egg:\(slot-255)", name: name, species: species,
+                               level: level == 0 ? nil : level, hp: maxHP == 0 && hp == 0 ? nil : hp, maxHP: maxHP == 0 ? nil : maxHP,
+                               isEgg: flags & 1 != 0, barred: flags & 2 != 0))
+            offset += length
+        }
+        let team = BoundSoulTeam(party: party, boxed: data.subdata(in: 63..<351), fieldReady: data[61] == 1)
+        guard offset == data.count, sequence > 0, team.valid else { return nil }
+        return .init(run: uuid(5), sender: uuid(21), receiver: uuid(37), sequence: sequence, team: team)
+    }
+}
+
 struct BoundSoulEncounter: Identifiable, Equatable {
     enum State: String { case available = "Available", localOnly = "Waiting for partner", partnerOnly = "Waiting for you", linked = "Linked", lost = "Fainted", syncing = "Syncing partner" }
     let slot: String
@@ -301,6 +397,8 @@ final class BoundSoulProbe: @unchecked Sendable {
     struct Snapshot: Sendable {
         var ready = false
         var mons: [BoundSoulMon] = []
+        var team: BoundSoulTeam?
+        var teamCapturedAt: TimeInterval?
         var ledger: BoundSoulLedger?
         var error: String?
         var activeDenied = false
@@ -447,6 +545,10 @@ final class BoundSoulProbe: @unchecked Sendable {
             let previous = value
             try value.observe(ready && boxesChanged ? party + cachedBoxes : party, registering: ready, fainted: fainted)
             if value != previous { try persist(value); ledger = value; snapshot.ledger = value }
+            if ready && (snapshot.team == nil || frame % 15 == 0 || boxesChanged || value != previous) {
+                snapshot.team = BoundSoulTeam.capture(mons: snapshot.mons, ledger: value)
+                snapshot.teamCapturedAt = ProcessInfo.processInfo.systemUptime
+            }
             BoundVBABattleBridge.acknowledgeSoulLinkFaints()
             let policy = value.denied.sorted().reduce(into: Data()) { $0.append($1.bytes) }
             if policy != lastPolicy || !installed {
@@ -463,6 +565,14 @@ final class BoundSoulSession: ObservableObject {
     let probe: BoundSoulProbe
     @Published private(set) var status = "Receive your starter, then connect to your partner."
     @Published private(set) var ledger: BoundSoulLedger?
+    @Published private(set) var localTeam: BoundSoulTeam?
+    @Published private(set) var partnerTeam: BoundSoulTeam?
+    @Published private(set) var localTeamCurrent = false
+    @Published private(set) var partnerTeamCurrent = false
+    private var lastTeamSent: TimeInterval = -.infinity
+    private var teamSequence: UInt64 = 0
+    private var peerTeamSequence: UInt64 = 0
+    private var peerTeamAt: TimeInterval?
     @Published private(set) var deathMoment: BoundSoulDeath?
     private var deathMomentStarted: TimeInterval?
     var canPresentDeathMoment: (() -> Bool)?
@@ -482,6 +592,7 @@ final class BoundSoulSession: ObservableObject {
     @Published private(set) var canStart = false
     @Published private(set) var areaNames: [Int: String] = [:]
     private let clock: () -> TimeInterval
+    private let teamSnapshot: () -> BoundSoulProbe.Snapshot
     private weak var core: EmulatorCore?
     private var gameID = ""
     private var supported = false
@@ -507,7 +618,8 @@ final class BoundSoulSession: ObservableObject {
     var active: Bool { ledger != nil && ledger?.ended == false }
     var paired: Bool { confirmed && clock() - lastPeer < 3 }
     var permitsNativeActivity: Bool { !active }
-    init(probe: BoundSoulProbe = BoundSoulProbe(), clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }, areaNames: [Int: String] = [:]) {
+    init(probe: BoundSoulProbe = BoundSoulProbe(), clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }, areaNames: [Int: String] = [:], teamSnapshot: (() -> BoundSoulProbe.Snapshot)? = nil) {
+        self.teamSnapshot = teamSnapshot ?? { probe.read() }
         self.areaNames = areaNames; self.clock = clock; self.probe = probe; self.ledger = probe.read().ledger
         let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -522,6 +634,7 @@ final class BoundSoulSession: ObservableObject {
     func bind(core: EmulatorCore?, gameID: String) {
         guard self.core !== core || self.gameID != gameID else { return }
         deathMoment = nil; deathMomentStarted = nil
+        peerGone(); localTeam = nil; localTeamCurrent = false
         self.core = core; self.gameID = gameID; supported = false
         confirmed = false; lastPeer = 0; offered = nil; incoming = nil; cursor = 0
         let url = core.map { _ in Self.directory.appendingPathComponent(Self.hash(gameID) + ".json") }
@@ -578,6 +691,14 @@ final class BoundSoulSession: ObservableObject {
     }
     func receive(_ data: Data) {
         guard BoundMultiplayerFeatures.isEnabled, connected?() == true, let binding else { return }
+        if data.starts(with: BoundSoulTeamPacket.prefix) {
+            guard let packet = BoundSoulTeamPacket.decode(data), let ledger, !ledger.ended,
+                  ledger.run == packet.run, ledger.binding == binding, paired,
+                  packet.receiver == epoch, packet.sender == peerEpoch, packet.sequence > peerTeamSequence else { return }
+            partnerTeam = packet.team; peerTeamSequence = packet.sequence; peerTeamAt = clock()
+            partnerTeamCurrent = packet.team.fieldReady
+            return
+        }
         if data.starts(with: BoundSoulPacket.legacyPrefix) || (data.starts(with: BoundSoulPacket.prefix) && data.count > 4 && data[4] != 2) {
             incompatiblePeer = true; confirmed = false; canStart = false
             status = "Both players need the latest Bound for paired encounters."; _ = core?.pause(); return
@@ -590,6 +711,7 @@ final class BoundSoulSession: ObservableObject {
             if let old = peerEpoch, old != packet.sender {
                 retiredEpochs.append(old); if retiredEpochs.count > 16 { retiredEpochs.removeFirst() }
             }
+            if peerEpoch != packet.sender { partnerTeam = nil; peerTeamAt = nil; peerTeamSequence = 0; partnerTeamCurrent = false }
             peerEpoch = packet.sender; proposedEpoch = nil
         } else if proposedEpoch == nil {
             proposedEpoch = packet.sender; proposalAt = clock()
@@ -650,8 +772,33 @@ final class BoundSoulSession: ObservableObject {
         catch { status = "Couldn’t cancel the Soul Link invitation." }
     }
     func peerGone() {
+        partnerTeam = nil; peerTeamAt = nil; peerTeamSequence = 0; partnerTeamCurrent = false
+        teamSequence = 0; lastTeamSent = -.infinity
         incompatiblePeer = false; confirmed = false; lastPeer = 0; epoch = UUID(); peerEpoch = nil
         proposedEpoch = nil; retiredEpochs = []
+    }
+    private func updateTeams(at now: TimeInterval) {
+        let snapshot = teamSnapshot()
+        if localTeam != snapshot.team { localTeam = snapshot.team }
+        localTeamCurrent = active && BoundMultiplayerFeatures.isEnabled && snapshot.error == nil && (core == nil || core?.state == .running) && snapshot.ready && snapshot.teamCapturedAt.map { now - $0 >= 0 && now - $0 < 3 } == true
+        partnerTeamCurrent = active && BoundMultiplayerFeatures.isEnabled && paired && peerTeamAt.map { now - $0 >= 0 && now - $0 < 3 } == true && partnerTeam?.fieldReady == true
+        guard active, ledger?.offering == false, snapshot.error == nil, BoundMultiplayerFeatures.isEnabled, connected?() == true,
+              ledger?.binding == binding, paired, let peerEpoch, let run = ledger?.run,
+              var team = localTeam, now - lastTeamSent >= 1, teamSequence < UInt64.max else { return }
+        team.fieldReady = localTeamCurrent
+        teamSequence += 1; lastTeamSent = now
+        if let data = BoundSoulTeamPacket(run: run, sender: epoch, receiver: peerEpoch, sequence: teamSequence, team: team).encoded() { _ = send?(data) }
+    }
+    func teamLocation(slot: String, partner: Bool) -> String {
+        guard let ledger else { return "Syncing" }
+        if ledger.dead.contains(slot) { return "Fainted" }
+        let caught = partner ? ledger.partnerSlots.contains(slot) : ledger.acquired.contains(slot)
+        guard caught else { return partner && ledger.partnerAcquisitions == nil ? "Syncing" : "Waiting for catch" }
+        guard let team = partner ? partnerTeam : localTeam else { return "Syncing" }
+        let prefix = (partner ? partnerTeamCurrent : localTeamCurrent) ? "" : "Last seen: "
+        if team.party.contains(where: { $0.slot == slot }) { return prefix + "In party" }
+        if BoundSoulLedger.losses(team.boxed).contains(slot) { return prefix + "Boxed" }
+        return prefix + "Off team"
     }
     func dismissDeathMoment() {
         guard let moment = deathMoment, let ledger else { return }
@@ -677,7 +824,7 @@ final class BoundSoulSession: ObservableObject {
         let now = time ?? clock()
         if proposedEpoch != nil, now - proposalAt > 1 { peerGone() }
         probe.setPreviewEnabled(BoundMultiplayerFeatures.isEnabled)
-        defer { updateDeathMoment(at: now); bannerChanged?((probe.read().error != nil || (active && !paired)) ? status : nil) }
+        defer { updateTeams(at: now); updateDeathMoment(at: now); bannerChanged?((probe.read().error != nil || (active && !paired)) ? status : nil) }
         let snapshot = probe.read(); if snapshot.ledger != ledger { ledger = snapshot.ledger }
         canStart = BoundMultiplayerFeatures.isEnabled && supported && snapshot.ready && snapshot.mons.count == 1
             && !snapshot.mons.contains(where: { $0.eggOrigin || ($0.hp ?? 0) <= 0 })
@@ -739,6 +886,10 @@ struct BoundSoulControls: View {
                     if ledger.offering { Button("Cancel invitation", role: .cancel) { session.cancelInvitation() } }
                     else if !ledger.ended { Button("End Soul Link run", role: .destructive) { ending = true } }
                     NavigationLink {
+                        BoundSoulTeamDashboard(session: session)
+                    } label: { Label("Shared team", systemImage: "person.2.fill") }
+                    .accessibilityIdentifier("bound.soul-link.team")
+                    NavigationLink {
                         BoundSoulEncountersView(session: session)
                     } label: {
                         LabeledContent("Paired encounters", value: "\(session.encounters.filter { $0.state == .linked }.count) linked")
@@ -796,6 +947,86 @@ struct BoundSoulEncountersView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("bound.soul-link.encounter." + row.slot)
+    }
+}
+
+struct BoundSoulTeamDashboard: View {
+    @ObservedObject var session: BoundSoulSession
+    @State private var dex: BoundRRDexCatalog?
+    var body: some View {
+        List {
+            Section {
+                Text(session.status).font(.caption)
+                HStack {
+                    teamColumn(title: "You", team: session.localTeam, current: session.localTeamCurrent)
+                    Divider()
+                    teamColumn(title: "Partner", team: session.partnerTeam, current: session.partnerTeamCurrent)
+                }
+                .frame(maxWidth: .infinity, alignment: .top)
+            }
+            Section("Linked pairs") {
+                ForEach(session.encounters.filter(\.occupied)) { pair in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text(BoundSoulControls.title(pair.slot, names: session.areaNames)).font(.headline)
+                            Spacer()
+                            Text(pair.state.rawValue).font(.caption).foregroundStyle(pair.state == .lost ? Color.red : Color.secondary)
+                        }
+                        HStack(alignment: .top) {
+                            pairSide(name: pair.localName, location: session.teamLocation(slot: pair.slot, partner: false))
+                            Image(systemName: pair.state == .lost ? "heart.slash.fill" : "link").foregroundStyle(.secondary)
+                            pairSide(name: pair.partnerName, location: session.teamLocation(slot: pair.slot, partner: true))
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("bound.soul-link.team-pair." + pair.slot)
+                }
+                NavigationLink("Paired encounters") { BoundSoulEncountersView(session: session) }
+                NavigationLink("Graveyard") { BoundSoulGraveyardView(session: session) }
+            }
+        }
+        .navigationTitle("Shared team")
+        .accessibilityIdentifier("bound.soul-link.team-dashboard")
+        .task { dex = await Task.detached(priority: .utility) { BoundRRDexCatalog.bundled }.value }
+    }
+    private func pairSide(name: String?, location: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(name ?? "No catch yet").font(.subheadline).fixedSize(horizontal: false, vertical: true)
+            Text(location).font(.caption).foregroundStyle(.secondary)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+    private func teamColumn(title: String, team: BoundSoulTeam?, current: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.headline)
+            Text(current ? "Live" : team == nil ? "Waiting for team" : "Last seen").font(.caption).foregroundStyle(.secondary)
+            if let team {
+                ForEach(Array(team.party.enumerated()), id: \.offset) { _, member in
+                    let lost = member.barred || member.slot.map { session.ledger?.dead.contains($0) == true } == true
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(alignment: .top, spacing: 4) {
+                            if !member.isEgg, let sprite = dex?.pokemon(id: member.species)?.sprite, let bytes = Data(base64Encoded: sprite), let image = UIImage(data: bytes) {
+                                Image(uiImage: image).interpolation(.none).resizable().scaledToFit().frame(width: 32, height: 32).accessibilityHidden(true)
+                            }
+                            Text(member.name).font(.subheadline.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                        }
+                        if member.isEgg { Text("Egg").font(.caption) }
+                        else {
+                            if let level = member.level { Text("Lv. \(level)").font(.caption).foregroundStyle(.secondary) }
+                            if let hp = member.hp, let maxHP = member.maxHP {
+                                Text("\(lost ? 0 : hp)/\(maxHP) HP").font(.caption).monospacedDigit()
+                                ProgressView(value: Double(lost ? 0 : hp), total: Double(maxHP)).tint(lost ? .red : .green)
+                            }
+                        }
+                        if lost { Text("Unusable").font(.caption).foregroundStyle(.red) }
+                        else if member.slot == nil { Text("Unlinked").font(.caption).foregroundStyle(.secondary) }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("bound.soul-link.team-member." + title + "." + member.name)
+                }
+                if team.party.isEmpty { Text("No party Pokémon").font(.caption).foregroundStyle(.secondary) }
+            }
+            Spacer(minLength: 0)
+        }.frame(maxWidth: .infinity, alignment: .topLeading)
     }
 }
 

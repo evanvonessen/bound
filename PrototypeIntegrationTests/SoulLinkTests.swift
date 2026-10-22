@@ -485,14 +485,163 @@ final class SoulLinkTests: XCTestCase {
         window.isHidden = true; previous?.makeKeyAndVisible()
         XCTAssertEqual(session.graveyard.count, 1); XCTAssertNil(session.deathMoment)
     }
+    private func teamMember(slot: String? = "area:100", name: String = "Bulbasaur", hp: Int = 30) -> BoundSoulTeamMember {
+        .init(slot: slot, name: name, species: 1, level: 12, hp: hp, maxHP: 40)
+    }
+    func testTeamCaptureKeepsPartyOrderBoxesAliasesAndExcludedCatches() throws {
+        var ledger = makeLedger()
+        let party = BoundSoulMon(identity: mon(1).identity, species: 1, name: "Starter", area: 100, eggOrigin: false, isEgg: false, hp: 30, level: 12, maxHP: 40, inParty: true)
+        let extra = BoundSoulMon(identity: mon(2).identity, species: 4, name: "Extra", area: 100, eggOrigin: false, isEgg: false, hp: 30, level: 10, maxHP: 35, inParty: true)
+        let boxed = mon(3, area: 101, hp: nil)
+        let egg = BoundSoulMon(identity: mon(4).identity, species: 25, name: "Egg", area: 102, eggOrigin: true, isEgg: true, hp: 0, level: 1, maxHP: 10, inParty: true)
+        try ledger.observe([party,extra,boxed,egg], registering: true, fainted: [])
+        XCTAssertEqual(try XCTUnwrap(BoundSoulTeam.capture(mons: [party,party], ledger: ledger)).party.compactMap(\.slot),["area:100"])
+        let team = try XCTUnwrap(BoundSoulTeam.capture(mons: [party,extra,boxed,egg], ledger: ledger))
+        XCTAssertEqual(team.party.map(\.name), ["Starter","Extra","Egg"])
+        XCTAssertEqual(team.party[0].slot,"area:100"); XCTAssertNil(team.party[1].slot); XCTAssertTrue(team.party[1].barred)
+        XCTAssertEqual(BoundSoulLedger.losses(team.boxed),["area:101"])
+        XCTAssertEqual(team.party[2].species,0); XCTAssertNil(team.party[2].level); XCTAssertNil(team.party[2].hp)
+        ledger.dead.insert("area:100")
+        XCTAssertTrue(try XCTUnwrap(BoundSoulTeam.capture(mons: [party], ledger: ledger)).party[0].barred)
+    }
+    func testTeamPacketCarriesSixMembersAndCompleteBoxesWithinLimit() throws {
+        let party = (0..<6).map { teamMember(slot:"area:\($0)", name:String(repeating:"🐉",count:20),hp:$0) }
+        let team = BoundSoulTeam(party:party,boxed:BoundSoulLedger.bits(["area:255","egg:2048"]))
+        let packet = BoundSoulTeamPacket(run:UUID(),sender:UUID(),receiver:UUID(),sequence:123,team:team)
+        let data = try XCTUnwrap(packet.encoded()); XCTAssertLessThanOrEqual(data.count,1024)
+        let decoded = try XCTUnwrap(BoundSoulTeamPacket.decode(data))
+        XCTAssertEqual(decoded.team,team); XCTAssertEqual(decoded.run,packet.run); XCTAssertEqual(decoded.sender,packet.sender)
+        XCTAssertEqual(decoded.receiver,packet.receiver); XCTAssertEqual(decoded.sequence,123)
+        XCTAssertTrue(BoundSoulPacket.recognizes(data))
+        for count in 0..<data.count { XCTAssertNil(BoundSoulTeamPacket.decode(Data(data.prefix(count)))) }
+        var trailing = data; trailing.append(0); XCTAssertNil(BoundSoulTeamPacket.decode(trailing))
+        for (index,byte) in [(4,UInt8(2)),(61,2),(62,7),(352,255),(355,101),(360,4),(361,255),(362,255)] {
+            var bad = data; bad[index] = byte; XCTAssertNil(BoundSoulTeamPacket.decode(bad))
+        }
+    }
+    func testInvalidTeamDoesNotOverrideSharedRulesOrEnterMailbox() throws {
+        var invalid = BoundSoulTeam(party:[teamMember(),teamMember()])
+        XCTAssertFalse(invalid.valid)
+        invalid = .init(party:[teamMember()],boxed:BoundSoulLedger.bits(["area:100"]))
+        XCTAssertFalse(invalid.valid)
+        var member = teamMember(); member.hp = 100; XCTAssertFalse(member.valid)
+        member = teamMember(); member.name = ""; XCTAssertFalse(member.valid)
+        let team = BoundSoulTeam(party:[teamMember()])
+        XCTAssertNil(BoundSoulTeamPacket(run:UUID(),sender:UUID(),receiver:UUID(),sequence:0,team:team).encoded())
+        let callbacks = AgoraSharingCallbacks(remoteUID:2) { _,_ in }
+        let data = try XCTUnwrap(BoundSoulTeamPacket(run:UUID(),sender:UUID(),receiver:UUID(),sequence:1,team:team).encoded())
+        callbacks.receiveInteraction(data,uid:99); XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
+        callbacks.receiveInteraction(data,uid:2); XCTAssertEqual(callbacks.takeInteractions().messages,[data])
+    }
+    @MainActor
+    func testPairedDashboardTracksTeamsRejectsReplayAndExpiresDisconnectedSnapshots() throws {
+        let old = UserDefaults.standard.object(forKey:BoundMultiplayerFeatures.key); BoundMultiplayerFeatures.setEnabled(true)
+        defer { UserDefaults.standard.set(old,forKey:BoundMultiplayerFeatures.key) }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let run = UUID(), room = UUID().uuidString
+        var left = BoundSoulLedger(run:run,binding:BoundSoulSession.hash("A:"+room))
+        var right = BoundSoulLedger(run:run,binding:BoundSoulSession.hash("B:"+room))
+        try left.observe([mon(1),mon(2,area:101)],registering:true,fainted:[])
+        try right.observe([mon(3),mon(4,area:101)],registering:true,fainted:[])
+        left.records[0].name = "Bulbasaur"; left.records[1].name = "Pikachu"
+        right.records[0].name = "Charmander"; right.records[1].name = "Squirtle"
+        let au = root.appendingPathComponent("a.json"), bu = root.appendingPathComponent("b.json")
+        try JSONEncoder().encode(left).write(to:au); try JSONEncoder().encode(right).write(to:bu)
+        let ap = BoundSoulProbe(),bp = BoundSoulProbe(); ap.configure(core:nil,url:au); bp.configure(core:nil,url:bu)
+        var time = ProcessInfo.processInfo.systemUptime
+        var at = BoundSoulProbe.Snapshot(),bt = BoundSoulProbe.Snapshot()
+        at.ready = true; bt.ready = true
+        at.team = .init(party:[teamMember()],boxed:BoundSoulLedger.bits(["area:101"]))
+        bt.team = .init(party:[teamMember(name:"Charmander",hp:12)],boxed:BoundSoulLedger.bits(["area:101"]))
+        bt.team?.party[0].species = 4
+        let a = BoundSoulSession(probe:ap,clock:{time},areaNames:[100:"Route 2",101:"Viridian Forest"],teamSnapshot:{at})
+        let b = BoundSoulSession(probe:bp,clock:{time},teamSnapshot:{bt})
+        a.setConnection(owner:"A",room:room); b.setConnection(owner:"B",room:room)
+        a.connected = {true}; b.connected = {true}
+        var ab:[Data] = [],ba:[Data] = [],oldPacket:Data?
+        a.send = {ab.append($0); return true}; b.send = {ba.append($0); return true}
+        func pump(_ count:Int) {
+            for _ in 0..<count {
+                time += 0.4; at.teamCapturedAt = time; bt.teamCapturedAt = time
+                a.tick(); b.tick(); let aa = ab,bb = ba; ab.removeAll(); ba.removeAll()
+                if let packet = bb.last(where:{$0.starts(with:BoundSoulTeamPacket.prefix)}) {oldPacket = packet}
+                aa.forEach {b.receive($0)}; bb.forEach {a.receive($0)}
+            }
+        }
+        pump(5)
+        XCTAssertEqual(a.partnerTeam?.party.first?.name,"Charmander"); XCTAssertTrue(a.partnerTeamCurrent)
+        XCTAssertEqual(a.teamLocation(slot:"area:100",partner:true),"In party")
+        XCTAssertEqual(a.teamLocation(slot:"area:101",partner:true),"Boxed")
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap {$0 as? UIWindowScene}.first)
+        let previous = scene.windows.first {$0.isKeyWindow},window = UIWindow(windowScene:scene)
+        let host = UIHostingController(rootView:NavigationStack {BoundSoulTeamDashboard(session:a)})
+        window.rootViewController = host; window.makeKeyAndVisible(); host.view.layoutIfNeeded()
+        RunLoop.main.run(until:Date().addingTimeInterval(0.8))
+        let image = UIGraphicsImageRenderer(bounds:window.bounds).image {_ in window.drawHierarchy(in:window.bounds,afterScreenUpdates:true)}
+        let evidence = FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("SharedTeamQA")
+        try FileManager.default.createDirectory(at:evidence,withIntermediateDirectories:true)
+        try XCTUnwrap(image.pngData()).write(to:evidence.appendingPathComponent("two-player-dashboard.png"))
+        let attachment = XCTAttachment(image:image); attachment.lifetime = .keepAlways; add(attachment)
+        window.isHidden = true; previous?.makeKeyAndVisible()
+        let saved = try XCTUnwrap(oldPacket), prior = try XCTUnwrap(BoundSoulTeamPacket.decode(saved))
+        bt.team?.party[0].hp = 5; pump(4)
+        XCTAssertEqual(a.partnerTeam?.party.first?.hp,5)
+        a.receive(saved); XCTAssertEqual(a.partnerTeam?.party.first?.hp,5)
+        let wrongRun = try XCTUnwrap(BoundSoulTeamPacket(run:UUID(),sender:prior.sender,receiver:prior.receiver,sequence:999,team:prior.team).encoded())
+        a.receive(wrongRun); XCTAssertEqual(a.partnerTeam?.party.first?.hp,5)
+        let wrongReceiver = try XCTUnwrap(BoundSoulTeamPacket(run:run,sender:prior.sender,receiver:UUID(),sequence:999,team:prior.team).encoded())
+        a.receive(wrongReceiver); XCTAssertEqual(a.partnerTeam?.party.first?.hp,5)
+        let wrongSender = try XCTUnwrap(BoundSoulTeamPacket(run:run,sender:UUID(),receiver:prior.receiver,sequence:999,team:prior.team).encoded())
+        a.receive(wrongSender); XCTAssertEqual(a.partnerTeam?.party.first?.hp,5)
+        bt.ready = false; pump(3); XCTAssertFalse(a.partnerTeamCurrent, "Battle/menu data is never labelled live")
+        bt.ready = true; pump(3); XCTAssertTrue(a.partnerTeamCurrent)
+        // A fresh loss overrides a formerly healthy team display immediately.
+        try ap.merge(run:run,rows:[],losses:BoundSoulLedger.bits(["area:100"]))
+        a.tick(); XCTAssertEqual(a.teamLocation(slot:"area:100",partner:true),"Fainted")
+        time += 3.1; a.tick(); XCTAssertFalse(a.partnerTeamCurrent)
+        XCTAssertEqual(a.teamLocation(slot:"area:101",partner:true),"Last seen: Boxed")
+        a.peerGone(); a.receive(saved); XCTAssertNil(a.partnerTeam); XCTAssertFalse(a.partnerTeamCurrent)
+        pump(5); XCTAssertNotNil(a.partnerTeam)
+        a.receive(saved); XCTAssertEqual(a.partnerTeam?.party.first?.hp,5)
+        a.endRun(); a.tick(); XCTAssertFalse(a.localTeamCurrent); XCTAssertFalse(a.partnerTeamCurrent)
+        a.setConnection(owner:"A",room:"another room"); a.receive(saved); XCTAssertNil(a.partnerTeam)
+    }
+    @MainActor
+    func testSharedTeamDashboardRendersLocalPartyAndExistingEncounters() throws {
+        let old = UserDefaults.standard.object(forKey:BoundMultiplayerFeatures.key); BoundMultiplayerFeatures.setEnabled(true)
+        defer {UserDefaults.standard.set(old,forKey:BoundMultiplayerFeatures.key)}
+        let root = FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("SharedTeamQA")
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        var value = makeLedger(); try value.observe([mon(1),mon(2,area:101)],registering:true,fainted:[])
+        value.partnerAcquisitions = ["area:100"]; value.partnerNames = ["area:100":"Charmander"]
+        let file = root.appendingPathComponent("render-run.json"); try JSONEncoder().encode(value).write(to:file)
+        let probe = BoundSoulProbe(); probe.configure(core:nil,url:file)
+        var snapshot = BoundSoulProbe.Snapshot(); snapshot.ready = true; snapshot.teamCapturedAt = ProcessInfo.processInfo.systemUptime
+        snapshot.team = .init(party:[teamMember()],boxed:BoundSoulLedger.bits(["area:101"]))
+        let session = BoundSoulSession(probe:probe,areaNames:[100:"Route 2",101:"Viridian Forest"],teamSnapshot:{snapshot}); session.tick()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap {$0 as? UIWindowScene}.first)
+        let previous = scene.windows.first {$0.isKeyWindow},window = UIWindow(windowScene:scene)
+        let host = UIHostingController(rootView:NavigationStack {BoundSoulTeamDashboard(session:session)})
+        window.rootViewController = host; window.makeKeyAndVisible(); host.view.layoutIfNeeded()
+        RunLoop.main.run(until:Date().addingTimeInterval(0.8))
+        let image = UIGraphicsImageRenderer(bounds:window.bounds).image {_ in window.drawHierarchy(in:window.bounds,afterScreenUpdates:true)}
+        try XCTUnwrap(image.pngData()).write(to:root.appendingPathComponent("shared-team.png"))
+        let attachment = XCTAttachment(image:image); attachment.lifetime = .keepAlways; add(attachment)
+        window.isHidden = true; previous?.makeKeyAndVisible()
+        XCTAssertEqual(session.localTeam?.party.count,1); XCTAssertEqual(session.encounters.count,2)
+        XCTAssertEqual(session.teamLocation(slot:"area:101",partner:false),"Boxed")
+    }
     func testPartyAndCompressedBoxFormatsAndEggMetadata() {
         var party = Data(repeating: 0, count: 100)
-        party[0] = 1; party[4] = 42; party[19] = 2; party[32] = 1; party[69] = 100; party[70] = 5; party[86] = 30; party[88] = 60; party[8] = 187; party[9] = 255
+        party[0] = 1; party[4] = 42; party[19] = 2; party[32] = 1; party[69] = 100; party[70] = 5; party[84] = 14; party[86] = 30; party[88] = 60; party[8] = 187; party[9] = 255
         var box = Data(repeating: 0, count: 58)
         box.replaceSubrange(0..<28, with: party[0..<28]); box[28] = 1; box[51] = 100; box[52] = 5
         let a = BoundSoulMon.decode(party, stride: 100).first
         let b = BoundSoulMon.decode(box, stride: 58).first
         XCTAssertEqual(a?.identity, b?.identity); XCTAssertEqual(a?.area, b?.area); XCTAssertEqual(a?.name, "A")
+        XCTAssertEqual(a?.level,14); XCTAssertEqual(a?.maxHP,60); XCTAssertEqual(a?.inParty,true); XCTAssertEqual(b?.inParty,false)
         XCTAssertEqual(a?.hp, 30); XCTAssertNil(b?.hp); XCTAssertEqual(a?.eggOrigin, false)
         party[70] = 0
         XCTAssertEqual(BoundSoulMon.decode(party, stride: 100).first?.eggOrigin, true)
