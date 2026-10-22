@@ -244,13 +244,13 @@ final class FriendSharingSession: ObservableObject {
     @Published private(set) var spectatorLive = false
     private var spectatorFrameCount = 0
     private var spectatorLastFrame: TimeInterval?
+    private var lastConvertedFrame: TimeInterval?
 
     func watchPartner() {
         guard active, joined, !reconnecting else { return }
         watchingPartner = true
         spectatorLive = false
-        spectatorFrameCount = transport.receivedFrames
-        spectatorLastFrame = nil
+        invalidateSpectatorVideo()
         spectatorView.backgroundColor = .black
         transport.setSpectatorView(spectatorView)
     }
@@ -258,7 +258,6 @@ final class FriendSharingSession: ObservableObject {
     func stopWatchingPartner() {
         watchingPartner = false
         spectatorLive = false
-        spectatorLastFrame = nil
         transport.setSpectatorView(nil)
     }
 
@@ -266,17 +265,33 @@ final class FriendSharingSession: ObservableObject {
         spectatorLive = false
         spectatorLastFrame = nil
         spectatorFrameCount = transport.receivedFrames
+        lastConvertedFrame = transport.frameTiming?.converted
+        remoteVisible = false
     }
 
     func updateSpectatorFreshness(received: Int, at timestamp: TimeInterval) {
-        if received != spectatorFrameCount {
-            spectatorFrameCount = received
+        if let timing = transport.frameTiming {
+            // SDK arrival counts include invalid/busy conversions. Only a new,
+            // detached pixel frame may refresh the production Live indicator.
+            if let converted = timing.converted, converted != lastConvertedFrame {
+                lastConvertedFrame = converted
+                spectatorLastFrame = converted
+            }
+        } else if received != spectatorFrameCount {
+            // Deterministic transports without SDK timing report decoded frames.
             spectatorLastFrame = received > 0 ? timestamp : nil
         }
-        let fresh = watchingPartner && joined && !reconnecting &&
-            spectatorLastFrame.map { timestamp - $0 < 3 } == true
-        if spectatorLive != fresh { spectatorLive = fresh }
+        spectatorFrameCount = received
+        let fresh = joined && !reconnecting && spectatorLastFrame.map {
+            timestamp >= $0 && timestamp - $0 < 3
+        } == true
+        if remoteVisible != fresh { remoteVisible = fresh }
+        if spectatorLive != (watchingPartner && fresh) { spectatorLive = watchingPartner && fresh }
+        guard active else { return }
+        if reconnecting { status = "Reconnecting…" }
+        else if joined { status = fresh ? "Receiving game video" : "Waiting for fresh friend video" }
     }
+
     private let transport: any FriendSharingTransport
     private let sharing: SharingSession
     private let scheduler: any SharingScheduler
@@ -458,8 +473,7 @@ final class FriendSharingSession: ObservableObject {
                 self.beginReceiving(run: run)
             case .remoteFrame:
                 self.receivedFrames += 1
-                self.remoteVisible = true
-                self.status = "Receiving game video"
+                // Freshness is established by the decoded-frame clock below.
             case .remoteGone:
                 self.invalidateSpectatorVideo()
                 self.sharedWorld.peerGone(); self.soulLink.peerGone()
@@ -568,6 +582,7 @@ final class FriendSharingSession: ObservableObject {
     }
 
     private func beginRecovery(run: UUID) {
+        invalidateSpectatorVideo()
         guard !reconnecting else { return } // Repeated SDK events never extend the deadline.
         sharedWorld.peerGone()
         reconnecting = true; joined = false; recoveryAttempts += 1
@@ -610,9 +625,6 @@ final class FriendSharingSession: ObservableObject {
             let cadence = self.receiverCadence.tick(at: timestamp)
             let received = self.transport.receivedFrames
             self.updateSpectatorFreshness(received: received, at: timestamp)
-            let visible = received > 0
-            if self.remoteVisible != visible { self.remoteVisible = visible }
-            if visible && self.status != "Receiving game video" { self.status = "Receiving game video" }
             if cadence.statistics {
                 if self.publishedFrames != self.transport.publishedFrames { self.publishedFrames = self.transport.publishedFrames }
                 if self.receivedFrames != received { self.receivedFrames = received }
@@ -652,6 +664,7 @@ final class FriendSharingSession: ObservableObject {
 
     private func stop(clearReconnectIntent: Bool) {
         stopWatchingPartner()
+        invalidateSpectatorVideo()
         BoundMainActorDisposal.drainPending()
         foregroundReconnectRetry?.cancel(); foregroundReconnectRetry = nil
         if clearReconnectIntent { foregroundReconnectIntent = nil; foregroundReconnectAttempts = 0 }

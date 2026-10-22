@@ -6,6 +6,7 @@ import UIKit
 private final class PresenceFixtureTransport: FriendSharingTransport {
     var publishedFrames = 0
     var receivedFrames = 0
+    var frameTiming: FriendSharingFrameTiming?
     var receiver: (@MainActor (Data) -> Void)?
     var event: (@MainActor (FriendSharingEvent) -> Void)?
     var packets: [Data] = []
@@ -288,6 +289,36 @@ final class LivePresenceTests: XCTestCase {
         XCTAssertFalse(sharing.watchingPartner)
         sharing.stop()
         XCTAssertFalse(sharing.spectatorLive)
+    }
+
+    func testDecodedVideoFreshnessRejectsInvalidFramesAndRequiresFreshPixelsAfterPeerDeparture() {
+        let transport = PresenceFixtureTransport()
+        let sharing = FriendSharingSession(configuration: .init(appID: String(repeating: "0", count: 32),
+            channel: "recovery-test", uid: 1, remoteUID: 2, token: "offline-fixture"), transport: transport, authenticatedMode: false)
+        sharing.start(); defer { sharing.stop() }
+        transport.frameTiming = .init(received: 10, converted: nil, presented: nil, published: nil)
+        sharing.watchPartner()
+        sharing.updateSpectatorFreshness(received: 1, at: 10)
+        XCTAssertFalse(sharing.remoteVisible); XCTAssertFalse(sharing.spectatorLive)
+        transport.frameTiming = .init(received: 11, converted: 11, presented: nil, published: nil)
+        sharing.updateSpectatorFreshness(received: 2, at: 11)
+        XCTAssertTrue(sharing.remoteVisible); XCTAssertTrue(sharing.spectatorLive)
+        transport.frameTiming = .init(received: 14, converted: 11, presented: nil, published: nil)
+        sharing.updateSpectatorFreshness(received: 30, at: 14)
+        XCTAssertFalse(sharing.remoteVisible); XCTAssertFalse(sharing.spectatorLive)
+        transport.event?(.remoteGone)
+        sharing.updateSpectatorFreshness(received: 30, at: 14.1)
+        XCTAssertFalse(sharing.remoteVisible)
+        transport.frameTiming = .init(received: 15, converted: 15, presented: nil, published: nil)
+        sharing.updateSpectatorFreshness(received: 31, at: 15)
+        XCTAssertTrue(sharing.remoteVisible)
+        transport.event?(.reconnecting)
+        sharing.updateSpectatorFreshness(received: 31, at: 15.1)
+        XCTAssertFalse(sharing.remoteVisible)
+        XCTAssertEqual(sharing.status, "Reconnecting…")
+        transport.event?(.rejoined)
+        sharing.updateSpectatorFreshness(received: 31, at: 15.2)
+        XCTAssertFalse(sharing.remoteVisible)
     }
 
     func testSpectatorCanvasDoesNotStealCompanionPixels() {
