@@ -126,3 +126,22 @@ architecture and do not establish this cartridge variant.
 Two physical devices, separate networks, paired normal-app Nugget Bridge battles,
 complete Strength puzzles and all custom story gates remain runtime acceptance
 limits. Simulator/ARM checks must not be described as those playthroughs.
+
+## Paired Bound check
+
+The two-player simulator check passed with audio disabled. Two independent
+Bound/VBA-M processes exchanged their real checkpoint snapshots through the
+production `BoundSharedProgression` and BWP2 handshake over a local reliable
+relay. Both players completed the native first-trainer battle. Trainer #2 showed
+the game's waiting dialogue for neither win, A-only and B-only; both players
+entered trainer #2's native battle only after both first wins were present.
+
+The fixture uses native Route 24 warps, initially cleared bridge flags, a
+level-14 disposable Chikorita with boosted cached stats, and player A's own
+before/after-win emulator states to exercise both asymmetric cases. No host code
+awards the victory flags. The valid paired run took about 140 seconds. Screenshots,
+working batteries, raw states, XCTest bundles and prior failed fixture attempts
+are retained under `.build/paired-bridge-*`. The compact receipt is
+[PAIRED-NUGGET-BRIDGE-VALIDATION.json](PAIRED-NUGGET-BRIDGE-VALIDATION.json).
+This does not establish physical-device, Agora or normal-app invitation flow
+acceptance. All source and evidence remain in the unmerged worktrees.

@@ -56,6 +56,19 @@
       "passed": true,
       "log": ".build/integrated-release-double-buffer.log",
       "derived_data": ".build/IntegratedRelease"
+    },
+    "paired_nugget_bridge": {
+      "passed": true,
+      "players": 2,
+      "native_tests": 2,
+      "audio": "disabled",
+      "matrix": [
+        "00: both blocked",
+        "10: both blocked",
+        "01: both blocked",
+        "11: both enter trainer #2"
+      ],
+      "report": "Docs/PAIRED-NUGGET-BRIDGE-VALIDATION.json"
     }
   },
   "evidence_preservation": {

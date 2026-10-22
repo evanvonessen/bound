@@ -475,6 +475,45 @@ static uint8_t soulQAScriptBackup[128];
     internalRAM[0x4280]=0x5D; internalRAM[0x4281]=0x02;
     return YES;
 }
++ (BOOL)qaPrepareNuggetBridgeFixture {
+    if(!worldOwnsROM()||!overworld()||workRAM[0x24029]!=1) return NO;
+    const uint32_t save=word(internalRAM+0x5008);
+    if(save<0x02000000||save>0x0203D000) return NO;
+    auto *s=workRAM+save-0x02000000;
+    // Fixture setup only: neither player starts with a bridge victory. Wins
+    // thereafter must come from the real native battle/post-battle scripts.
+    const unsigned flags[]={0x56e,0x57b,0x55c,0x57a,0x590};
+    for(unsigned id:flags) s[0xEE0+id/8]&=uint8_t(~(1u<<(id%8)));
+    auto *mon=workRAM+0x24284;
+    // Keep Chikorita inside the first badge's level cap. A level-100 fixture
+    // can disobey under RR rules; use boosted stats at a valid early level.
+    if(half(mon+32)!=152) return NO;
+    put32(mon+36,1612);mon[84]=14; // Native medium-slow level-14 experience.
+    put32(mon+80,0);put16(mon+86,500);put16(mon+88,500);
+    for(unsigned offset=90;offset<100;offset+=2) put16(mon+offset,500);
+    return YES;
+}
++ (BOOL)qaWarpNuggetBridge:(NSUInteger)y {
+    if(!worldOwnsROM()||!overworld()||(y!=29&&y!=33)) return NO;
+    // Use the cartridge's warp opcode, rather than replacing map/battle logic.
+    const uint8_t script[]={0x39,3,43,255,11,0,uint8_t(y),0,0x02};
+    memcpy(internalRAM+0x4280,script,sizeof(script));
+    memset(internalRAM+0xEB0,0,0x74);internalRAM[0xEB1]=1;put32(internalRAM+0xEB8,0x03004280);
+    put32(internalRAM+0xF0C,0x0815F9B4);put32(internalRAM+0xF10,0x0815FD08);
+    internalRAM[0xEA8]=0;internalRAM[0xF9C]=1;
+    return YES;
+}
++ (NSDictionary<NSString *,id> *)qaNuggetBridgeStatus {
+    if(!workRAM||!internalRAM) return @{};
+    const uint32_t save=word(internalRAM+0x5008);
+    if(save<0x02000000||save>0x0203D000) return @{};
+    const auto *s=workRAM+save-0x02000000;
+    return @{@"firstWin":@((s[0xEE0+0x56e/8]>>(0x56e%8))&1),
+             @"secondWin":@((s[0xEE0+0x57b/8]>>(0x57b%8))&1),
+             @"opponent":@(half(workRAM+0x386AE)),@"battle":@([self isInBattle]),
+             @"group":@(s[4]),@"number":@(s[5]),@"x":@(int16_t(half(s))),@"y":@(int16_t(half(s+2))),
+             @"script":@(word(internalRAM+0xEB8)),@"ready":@(overworld())};
+}
 + (BOOL)qaStartSoulCheck {
     if(!soulHooked() || !overworld()) return NO;
     memcpy(rom+SoulStart,BoundSoulQACode,sizeof(BoundSoulQACode));

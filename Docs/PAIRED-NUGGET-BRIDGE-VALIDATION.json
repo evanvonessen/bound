@@ -1,0 +1,142 @@
+{
+  "schema": 1,
+  "passed": true,
+  "rom_sha256": "9f0740e30ae7f71da3d993fb3c2ad84dadfe1dd23f1d08480f81582692567dde",
+  "two_independent_bound_processes": true,
+  "audio": "disabled",
+  "elapsed_seconds": 140.3953659160179,
+  "peers": {
+    "A": {
+      "peer": "A",
+      "stage": "done",
+      "nativeBattleEntries": [
+        110,
+        123
+      ],
+      "phase": 10,
+      "cases": [
+        {
+          "nativeBattleEntries": [],
+          "peerFirstWin": false,
+          "case": "neither-won",
+          "localFirstWin": false,
+          "trainer2Battle": false
+        },
+        {
+          "case": "only-a-won",
+          "localFirstWin": true,
+          "peerFirstWin": false,
+          "trainer2Battle": false,
+          "nativeBattleEntries": [
+            110
+          ]
+        },
+        {
+          "case": "only-b-won",
+          "peerFirstWin": true,
+          "trainer2Battle": false,
+          "localFirstWin": false,
+          "nativeBattleEntries": [
+            110
+          ]
+        },
+        {
+          "nativeBattleEntries": [
+            110,
+            123
+          ],
+          "trainer2Battle": true,
+          "case": "both-won",
+          "localFirstWin": true,
+          "peerFirstWin": true
+        }
+      ],
+      "sharedWorld": true,
+      "romSHA256": "9f0740e30ae7f71da3d993fb3c2ad84dadfe1dd23f1d08480f81582692567dde",
+      "fixture": "Native warp, cleared initial flags and boosted disposable party; both first wins are awarded by real battles. Local reliable relay carries production BWP2 packets."
+    },
+    "B": {
+      "cases": [
+        {
+          "localFirstWin": false,
+          "peerFirstWin": false,
+          "case": "neither-won",
+          "trainer2Battle": false,
+          "nativeBattleEntries": []
+        },
+        {
+          "peerFirstWin": true,
+          "trainer2Battle": false,
+          "case": "only-a-won",
+          "localFirstWin": false,
+          "nativeBattleEntries": []
+        },
+        {
+          "nativeBattleEntries": [
+            110
+          ],
+          "localFirstWin": true,
+          "peerFirstWin": false,
+          "trainer2Battle": false,
+          "case": "only-b-won"
+        },
+        {
+          "nativeBattleEntries": [
+            110,
+            123
+          ],
+          "case": "both-won",
+          "localFirstWin": true,
+          "trainer2Battle": true,
+          "peerFirstWin": true
+        }
+      ],
+      "phase": 10,
+      "stage": "done",
+      "nativeBattleEntries": [
+        110,
+        123
+      ],
+      "peer": "B",
+      "sharedWorld": true,
+      "romSHA256": "9f0740e30ae7f71da3d993fb3c2ad84dadfe1dd23f1d08480f81582692567dde",
+      "fixture": "Native warp, cleared initial flags and boosted disposable party; both first wins are awarded by real battles. Local reliable relay carries production BWP2 packets."
+    }
+  },
+  "run_path": ".build/paired-bridge-run-silent-7",
+  "saved_evidence": ".build/paired-bridge-evidence/",
+  "simulators": [
+    "D4629B3E-2DC6-4B29-84D7-59819142A4DD",
+    "80E95526-04BC-4B78-A1A6-BE6B5C21FD90"
+  ],
+  "setup": "Two cold boots from disposable seed copies; native warp to Route 24, initial bridge flags cleared, Chikorita level 14 and boosted cached stats. Neither victory flag was awarded by the host. Both trainer-1 wins came from actual battles. Player A reloaded its own before/after-win states to check both asymmetric combinations.",
+  "assertions": [
+    "Actual automatic sightline and final native battle launch are exercised.",
+    "Both players show the permanent game waiting dialogue for 00, 10 and 01.",
+    "Both enter native trainer 0x7b only for 11; each also entered trainer 0x6e and earned its first flag.",
+    "Production BoundSharedProgression, BWP2 compatibility/handshake, probe and game ABI carry real peer checkpoint snapshots.",
+    "Loaded-ROM immutable hashes and input cartridge/battery bytes are preserved."
+  ],
+  "limits": [
+    "Host loopback reliable relay; this is not Agora delivery, a physical-phone run or normal-app friendship/invitation UI acceptance.",
+    "Warp, boosted party and saved-state fixtures are controlled test preparation, not an unmodified-difficulty playthrough."
+  ],
+  "prior_attempts_preserved": [
+    ".build/paired-bridge-run-1/",
+    ".build/paired-bridge-run-silent-2/",
+    ".build/paired-bridge-run-silent-3/",
+    ".build/paired-bridge-run-silent-4/",
+    ".build/paired-bridge-run-silent-5/",
+    ".build/paired-bridge-run-silent-6/"
+  ],
+  "additional_checks": {
+    "packet_tests": {
+      "count": 10,
+      "failures": 0,
+      "skips": 0,
+      "log": ".build/paired-bridge-protocol.log"
+    },
+    "pinned_sources": 17061,
+    "contract_check": "unchanged game/app manifest pairing verified"
+  }
+}

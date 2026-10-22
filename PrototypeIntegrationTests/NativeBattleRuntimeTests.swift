@@ -113,6 +113,40 @@ private final class NativeTradeDriver:@unchecked Sendable {
     }
 }
 
+/// Captures native state only on the completed-frame owner. The test thread
+/// changes bounded input requests, never reads a running core directly.
+private final class BridgePairDriver: @unchecked Sendable {
+    private let lock = NSLock()
+    private var frame = 0, lastMask = 0, wasBattle = false, up = false, autoA = false
+    private var value: [String: Any] = [:], opponents: [Int] = []
+    func input(up: Bool = false, autoA: Bool = false) {
+        lock.lock(); self.up = up; self.autoA = autoA; lock.unlock()
+    }
+    var observation: [String: Any] { lock.lock(); defer { lock.unlock() }; return value }
+    var entries: [Int] { lock.lock(); defer { lock.unlock() }; return opponents }
+    func receive(_ core: EmulatorCore) {
+        frame += 1
+        if core.audioManager.isEnabled { core.audioManager.isEnabled = false }
+        let state = BoundVBABattleBridge.qaNuggetBridgeStatus()
+        let battle = state["battle"] as? Bool == true
+        lock.lock()
+        value = state
+        if battle && !wasBattle { opponents.append(state["opponent"] as? Int ?? -1) }
+        let up = up, autoA = autoA
+        lock.unlock()
+        wasBattle = battle
+        // Never tap A in an idle field: after dismissing a denied encounter,
+        // that would immediately talk to the adjacent trainer again.
+        let talking = state["ready"] as? Bool != true
+        let mask = (up ? 64 : 0) | (autoA && talking && frame % 24 < 2 ? 1 : 0)
+        for bit in [1,64] where mask & bit != lastMask & bit {
+            if mask & bit != 0 { core.deltaCore.emulatorBridge.activateInput(bit, value: 1, playerIndex: 0) }
+            else { core.deltaCore.emulatorBridge.deactivateInput(bit, playerIndex: 0) }
+        }
+        lastMask = mask
+    }
+}
+
 @MainActor
 final class NativeBattleRuntimeTests:XCTestCase {
     private var previousExperimentalFeature: Any?
@@ -129,6 +163,204 @@ final class NativeBattleRuntimeTests:XCTestCase {
 
     func testActualSharedWorldCollisionAndNativeCoexistence() async throws {
         try await verifySharedWorldRuntime(sightline: false)
+    }
+
+    func testTwoPlayerNuggetBridgePrerequisite() async throws {
+        continueAfterFailure = false
+        let env = ProcessInfo.processInfo.environment
+        guard env["BOUND_SHARED_WORLD_PAIR"] == "1",
+              let peer = env["BOUND_NATIVE_BATTLE_PEER"], ["A","B"].contains(peer),
+              let port = env["BOUND_NATIVE_BATTLE_PORT"].flatMap(Int.init),
+              let relayPort = env["BOUND_NATIVE_BATTLE_RELAY_PORT"].flatMap(UInt16.init) else {
+            throw XCTSkip("Requires two dedicated simulators and the --shared-world coordinator")
+        }
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let rom = root.appendingPathComponent("RadicalRed.gba"), seed = root.appendingPathComponent("seed.sav")
+        let originalROM = try Data(contentsOf: rom), originalSeed = try Data(contentsOf: seed)
+        let output = root.appendingPathComponent("paired-nugget-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let battery = output.appendingPathComponent("work.sav"); try originalSeed.write(to: battery)
+        let profile = try BoundPlayerROMProfile(rom: originalROM)
+        let core = try XCTUnwrap(EmulatorCore(game: NativeBattleGame(fileURL: rom, gameSaveURL: battery), options: [.metal: true]))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first { $0.isKeyWindow }, window = UIWindow(windowScene: scene), owner = UIViewController(), view = GameView()
+        window.rootViewController = owner; window.makeKeyAndVisible(); owner.view.addSubview(view)
+        view.frame = CGRect(x: 0, y: 150, width: window.bounds.width, height: window.bounds.width * 2/3); core.add(view)
+        let boot = NativeBattleDriver(core: core, profile: profile), driver = BridgePairDriver()
+        let world = BoundSharedProgression(), probe = world.probe
+        var channel: NativeBattleRelayChannel?, transportFailed = false
+        var cases: [[String: Any]] = []
+        var pumping = true
+        core.audioManager.pausesOtherAudio = false
+        core.audioManager.mixesWithOtherAudio = true
+        core.audioManager.isEnabled = false
+        core.updateHandler = { core in
+            if core.audioManager.isEnabled { core.audioManager.isEnabled = false }
+            boot.receive(core)
+        }
+        defer {
+            pumping = false; channel?.close(); world.stop(); _ = core.pause()
+            BoundVBABattleBridge.closeSharedWorld(); _ = core.stop()
+            window.isHidden = true; previous?.makeKeyAndVisible()
+        }
+        core.rate = 8; XCTAssertTrue(core.start())
+        core.deltaCore.emulatorBridge.audioRenderer = nil
+        await fulfillment(of: [boot.booted], timeout: 90)
+        _ = core.pause(); core.rate = 4
+        world.bind(core: core)
+        core.updateHandler = { core in probe.receive(core); driver.receive(core) }
+        channel = NativeBattleRelayChannel(port: relayPort, peer: peer, receive: { data in
+            Task { @MainActor in world.receive(data) }
+        }, failed: { Task { @MainActor in transportFailed = true } })
+        world.send = { channel?.send($0) == true }
+        let pump = Task { @MainActor in
+            while pumping && !Task.isCancelled {
+                world.tick(enabled: true, connected: true)
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        defer { pump.cancel() }
+        _ = core.resume()
+        func wait(_ label: String, seconds: Int = 15, _ condition: () -> Bool) async throws {
+            for _ in 0..<(seconds * 20) {
+                if condition() { return }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            XCTFail("\(peer) \(label): \(driver.observation), battles \(driver.entries), transport failed \(transportFailed)")
+            throw NSError(domain: "PairedBridgeTimeout", code: 1)
+        }
+        func barrier(_ phase: Int) async throws {
+            _ = try await request(port: port, peer: peer, body: ["stage":"running","phase":phase,"cases":cases])
+            for _ in 0..<2400 {
+                let value = try await request(port: port)
+                if let peers = value["peers"] as? [String:[String:Any]], peers.count == 2,
+                   peers.values.allSatisfy({ ($0["phase"] as? Int ?? -1) >= phase }) { return }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            XCTFail("\(peer) pair barrier \(phase) timed out")
+            throw NSError(domain: "PairedBridgeBarrier", code: phase)
+        }
+        func fresh(local: Bool, remote: Bool) async throws {
+            try await wait("fresh real checkpoint packets local=\(local) remote=\(remote)") {
+                guard let state = world.timeline.state, world.timeline.fresh(at: ProcessInfo.processInfo.systemUptime),
+                      let own = probe.read() else { return false }
+                return (own.checkpoints[0x56e/8] & (1 << (0x56e%8)) != 0) == local
+                    && (state.checkpoints[0x56e/8] & (1 << (0x56e%8)) != 0) == remote
+            }
+        }
+        func warp(_ y: Int) async throws {
+            driver.input(); _ = core.pause()
+            XCTAssertTrue(BoundVBABattleBridge.qaWarpNuggetBridge(UInt(y)), "Warp fixture requires idle native field: \(BoundVBABattleBridge.qaNuggetBridgeStatus())")
+            _ = core.resume()
+            try await wait("native Route 24 warp") {
+                let s = driver.observation
+                return s["ready"] as? Bool == true && s["group"] as? Int == 3 && s["number"] as? Int == 43 && s["y"] as? Int == y
+            }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        func capture(_ name: String) throws {
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+            let attachment = XCTAttachment(image: image); attachment.name = peer + " " + name; attachment.lifetime = .keepAlways; add(attachment)
+            try image.pngData()?.write(to: output.appendingPathComponent(name + ".png"))
+            core.saveSaveState(to: output.appendingPathComponent(name + ".sgm"))
+        }
+        func attemptSecond(_ name: String, local: Bool, remote: Bool, allowed: Bool) async throws {
+            // Restore this same player's earned state between independent
+            // attempts. The current peer-data port is deliberately not restored.
+            let origin = output.appendingPathComponent(name + "-origin.sgm")
+            _ = core.pause(); core.saveSaveState(to: origin); _ = core.resume()
+            try await warp(29); try await fresh(local: local, remote: remote)
+            if allowed { try await barrier(8) }
+            let before = driver.entries.count
+            driver.input(up: true)
+            try await wait("trainer #2 native approach") {
+                let s = driver.observation
+                return driver.entries.count > before || (s["opponent"] as? Int == 0x7b && s["ready"] as? Bool == false)
+            }
+            driver.input(autoA: true)
+            if allowed {
+                try await wait("trainer #2 real battle entry", seconds: 25) { driver.entries.count > before }
+                driver.input(); _ = core.pause()
+                XCTAssertEqual(driver.entries.last, 0x7b)
+                XCTAssertTrue(BoundVBABattleBridge.isInBattle())
+            } else {
+                // Advance the trainer's ordinary introduction to its final
+                // launch command, where automatic sightlines enforce the gate.
+                try await wait("trainer #2 reaches the final launch guard") {
+                    let script = driver.observation["script"] as? Int ?? 0
+                    return driver.entries.count > before || (0x09ff0000..<0x09ff4000).contains(script)
+                }
+                driver.input(); try await Task.sleep(for: .milliseconds(500)); _ = core.pause()
+                XCTAssertEqual(driver.entries.count, before, "Trainer #2 must stay blocked for \(name)")
+                let state = BoundVBABattleBridge.qaNuggetBridgeStatus()
+                NSLog("Paired bridge %@ %@ result %@",peer,name,String(describing:state))
+                try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted,.sortedKeys]).write(to: output.appendingPathComponent(name + "-native.json"))
+                try capture(name + "-observed")
+                XCTAssertFalse(BoundVBABattleBridge.isInBattle())
+                let script = try XCTUnwrap(state["script"] as? Int)
+                XCTAssertTrue((0x09ff0000..<0x09ff4000).contains(script), "The game must display its real waiting dialogue: \(state)")
+                XCTAssertEqual(state["secondWin"] as? Int, 0)
+            }
+            XCTAssertEqual(BoundVBABattleBridge.qaSharedWorldImmutableDigest(), Data(SHA256.hash(data: originalROM)))
+            try capture(name)
+            cases.append(["case":name,"localFirstWin":local,"peerFirstWin":remote,"trainer2Battle":allowed,"nativeBattleEntries":driver.entries])
+            if !allowed {
+                driver.input()
+                try core.load(DeltaCore.SaveState(fileURL: origin, gameType: .gba)); _ = core.resume()
+                try await fresh(local: local, remote: remote)
+            }
+        }
+        func winFirst() async throws {
+            try await warp(33)
+            let before = driver.entries.count
+            driver.input(up: true)
+            try await wait("trainer #1 native approach") {
+                let s = driver.observation
+                return driver.entries.count > before || (s["opponent"] as? Int == 0x6e && s["ready"] as? Bool == false)
+            }
+            driver.input(autoA: true)
+            try await wait("trainer #1 real battle starts", seconds: 25) { driver.entries.count > before }
+            XCTAssertEqual(driver.entries.last, 0x6e)
+            try await wait("trainer #1 native victory flag and overworld return", seconds: 75) {
+                let s = driver.observation
+                return s["firstWin"] as? Int == 1 && s["ready"] as? Bool == true && s["battle"] as? Bool == false
+            }
+            driver.input(); _ = core.pause(); try capture("earned-first-win"); _ = core.resume()
+        }
+        try await wait("game ABI attachment") { probe.read() != nil }
+        _ = core.pause(); XCTAssertTrue(BoundVBABattleBridge.qaPrepareNuggetBridgeFixture()); _ = core.resume()
+        try await warp(33); try await fresh(local: false, remote: false)
+        let initial = output.appendingPathComponent("initial.sgm"), earned = output.appendingPathComponent("earned.sgm")
+        _ = core.pause(); core.saveSaveState(to: initial); _ = core.resume()
+        try await barrier(0)
+        try await attemptSecond("neither-won", local: false, remote: false, allowed: false)
+        try await barrier(1)
+        if peer == "A" { try await winFirst() }
+        try await barrier(2)
+        try await attemptSecond("only-a-won", local: peer == "A", remote: peer == "B", allowed: false)
+        try await barrier(3)
+        if peer == "A" {
+            _ = core.pause(); core.saveSaveState(to: earned)
+            try core.load(DeltaCore.SaveState(fileURL: initial, gameType: .gba)); _ = core.resume()
+        }
+        try await barrier(4)
+        if peer == "B" { try await winFirst() }
+        try await barrier(5)
+        try await attemptSecond("only-b-won", local: peer == "B", remote: peer == "A", allowed: false)
+        try await barrier(6)
+        if peer == "A" {
+            _ = core.pause(); try core.load(DeltaCore.SaveState(fileURL: earned, gameType: .gba)); _ = core.resume()
+        }
+        try await barrier(7)
+        try await attemptSecond("both-won", local: true, remote: true, allowed: true)
+        try await barrier(9)
+        XCTAssertFalse(transportFailed)
+        XCTAssertEqual(try Data(contentsOf: rom), originalROM); XCTAssertEqual(try Data(contentsOf: seed), originalSeed)
+        let report: [String: Any] = ["stage":"done","phase":10,"sharedWorld":true,"peer":peer,"cases":cases,
+                                   "nativeBattleEntries":driver.entries,"romSHA256":BoundPlayerROMProfile.supportedSHA256,
+                                   "fixture":"Native warp, cleared initial flags and boosted disposable party; both first wins are awarded by real battles. Local reliable relay carries production BWP2 packets."]
+        try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted,.sortedKeys]).write(to: output.appendingPathComponent("report.json"))
+        _ = try await request(port: port, peer: peer, body: report)
     }
 
     func testActualSharedWorldSightlineLaunchWaits() async throws {
