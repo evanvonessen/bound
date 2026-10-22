@@ -45,9 +45,9 @@ final class AccountPersistenceIntegrationTests: XCTestCase {
         XCTAssertTrue(observations[1].cancelled)
     }
 
-    func testFriendsSheetRendersMacAndOption2WhilePreservingIPhoneOption1() async throws {
+    func testFriendsSheetUsesSharedLayoutAcrossUIVersionsAndMultiplayerStates() async throws {
         let previousVersion = UserDefaults.standard.object(forKey: BoundUIVersionPreferences.key)
-        BoundUIVersionPreferences().version = .option2
+        let previousExperimental = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
 
         let namespace = "Bound.FriendsSheetRenderTest." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
@@ -72,7 +72,7 @@ final class AccountPersistenceIntegrationTests: XCTestCase {
         }, observeAccount: { OnboardingObservation($0) })
         let sharing = FriendSharingSession(configuration: nil, authenticatedMode: true)
         let host = UIHostingController(rootView: BoundFriendsSheet(sharing: sharing,
-            onboarding: onboarding, account: account, isMacWorkspace: false))
+            onboarding: onboarding, account: account))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previousWindow = scene.windows.first(where: \.isKeyWindow)
         let window = UIWindow(windowScene: scene)
@@ -95,6 +95,12 @@ final class AccountPersistenceIntegrationTests: XCTestCase {
             } else {
                 UserDefaults.standard.removeObject(forKey: BoundUIVersionPreferences.key)
             }
+            if let previousExperimental {
+                UserDefaults.standard.set(previousExperimental, forKey: BoundMultiplayerFeatures.key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: BoundMultiplayerFeatures.key)
+            }
+            NotificationCenter.default.post(name: BoundMultiplayerFeatures.didChange, object: nil)
         }
 
         for _ in 0..<100 {
@@ -121,16 +127,19 @@ final class AccountPersistenceIntegrationTests: XCTestCase {
             add(attachment)
         }
 
-        try attach("Friends-option2-long-username")
-        BoundUIVersionPreferences().version = .option1
-        host.rootView = BoundFriendsSheet(sharing: sharing, onboarding: onboarding, account: account,
-                                         isMacWorkspace: false)
-        try attach("Friends-option1-preservation")
-        host.rootView = BoundFriendsSheet(sharing: sharing, onboarding: onboarding, account: account,
-                                         isMacWorkspace: true)
-        try attach("Friends-Mac-option1-long-username", size: CGSize(width: 1024, height: 768))
-        XCTAssertEqual(BoundUIVersionPreferences().version, .option1,
-                       "Rendering the Mac Friends layout must preserve the saved iPhone UI version")
+        for (layout, size) in [("iPhone", CGSize(width: 393, height: 852)),
+                               ("Mac", CGSize(width: 1024, height: 768))] {
+            for version in BoundUIVersion.allCases {
+                BoundUIVersionPreferences().version = version
+                for experimental in [false, true] {
+                    BoundMultiplayerFeatures.setEnabled(experimental)
+                    host.rootView = BoundFriendsSheet(sharing: sharing, onboarding: onboarding, account: account)
+                    try attach("Friends-\(layout)-option\(version.rawValue)-multiplayer-\(experimental ? "on" : "off")", size: size)
+                    XCTAssertEqual(BoundUIVersionPreferences().version, version,
+                                   "Friends organization must not rewrite the saved appearance preference")
+                }
+            }
+        }
     }
 
     private func token(owner: UUID, expires: TimeInterval = 3600) throws -> String {

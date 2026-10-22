@@ -260,11 +260,9 @@ struct BoundAccountSocialSettings: View {
     @ObservedObject private var notifications = BoundJiggleNotifications.shared
     @State private var email = ""
     @State private var password = ""
-    @AppStorage(BoundUIVersionPreferences.key) private var uiVersion = BoundUIVersion.option2
-    private var usesUpdatedUI: Bool { BoundMacWorkspacePlatform.isEnabled || uiVersion == .option2 }
     var body: some View {
         Section("Bound account") {
-            if account.deletionPending && usesUpdatedUI {
+            if account.deletionPending {
                 Button("Retry account deletion", role: .destructive) { retryAccountDeletion() }
                 .disabled(account.busy)
                 .accessibilityIdentifier("bound.account-delete-retry")
@@ -280,15 +278,13 @@ struct BoundAccountSocialSettings: View {
                 Button("Sign out", role: .destructive) { signOut() }
                     .disabled(account.busy || account.deletionPending)
                     .accessibilityIdentifier("bound.account-sign-out")
-                if usesUpdatedUI {
-                    NavigationLink {
-                        BoundDeleteAccountView(account: account) { prepareForAccountRemoval() }
-                    } label: {
-                        Text("Delete account").foregroundStyle(.red)
-                    }
-                    .disabled(account.busy)
-                    .accessibilityIdentifier("bound.account-delete")
+                NavigationLink {
+                    BoundDeleteAccountView(account: account) { prepareForAccountRemoval() }
+                } label: {
+                    Text("Delete account").foregroundStyle(.red)
                 }
+                .disabled(account.busy)
+                .accessibilityIdentifier("bound.account-delete")
             } else {
                 BoundAccountSignInFields(account: account, email: $email, password: $password)
                 Text(account.status).font(.caption)
@@ -305,7 +301,7 @@ struct BoundAccountSocialSettings: View {
     }
 
     private func retryAccountDeletion() {
-        guard usesUpdatedUI, account.deletionPending, !account.busy else { return }
+        guard account.deletionPending, !account.busy else { return }
         prepareForAccountRemoval()
         Task { await account.resumeAccountDeletion() }
     }

@@ -59,6 +59,8 @@ struct BoundAccountSecurityView: View {
             }
         }
         .navigationTitle("Account and Security")
+        .navigationBarTitleDisplayMode(.inline)
+        .boundSettingsPage()
         .sheet(isPresented: $showingEmailChange) {
             BoundChangeEmailView(account: account, emailChanged: emailChanged)
                 .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)

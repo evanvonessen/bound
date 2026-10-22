@@ -338,6 +338,12 @@ final class MacWorkspaceUITests: XCTestCase {
             XCTAssertTrue(heading.exists)
             XCTAssertGreaterThan(add.frame.minX, heading.frame.maxX)
             XCTAssertEqual(add.frame.midY, heading.frame.midY, accuracy: 4)
+            for secondary in [app.switches["bound.live-presence-enabled"],
+                              app.buttons["bound.soul-link.start"], app.buttons["bound.watch-partner"]]
+                where secondary.exists && !secondary.frame.isEmpty {
+                XCTAssertLessThan(heading.frame.maxY, secondary.frame.minY,
+                                  "Friends and Add must precede secondary multiplayer controls")
+            }
             XCTAssertFalse(app.buttons["Sign out"].exists, "Mac Friends should keep account actions in Settings")
         }
         app.navigationBars["Friends"].buttons["Done"].tap()
