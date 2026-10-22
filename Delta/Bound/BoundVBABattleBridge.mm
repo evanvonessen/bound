@@ -66,9 +66,9 @@ static uint8_t soulQAScriptBackup[128];
         0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
     if(memcmp(digest,expected,32)) return NO;
     for(size_t i=WorldStart;i<WorldEnd;i++) if(rom[i]!=0xFF) return NO;
-    if(word(rom+WorldTrainerSlot)!=0x0806C2C5 || word(rom+WorldCheckSlot)!=0x0806C30D) return NO;
+    if(word(rom+WorldTrainerSlot)!=0x0806C2C5 || word(rom+WorldDoTrainerSlot)!=0x0806C2D9 || word(rom+WorldCheckSlot)!=0x0806C30D) return NO;
     memcpy(worldFlagOriginal,rom+0x6E6D0,8); memcpy(worldCollisionOriginal,rom+0x636AC,12);
-    worldTrainerOriginal=word(rom+WorldTrainerSlot); worldCheckOriginal=word(rom+WorldCheckSlot);
+    worldDoTrainerOriginal=word(rom+WorldDoTrainerSlot); worldTrainerOriginal=word(rom+WorldTrainerSlot); worldCheckOriginal=word(rom+WorldCheckSlot);
     memcpy(rom+WorldStart,BoundSharedWorldCode,sizeof(BoundSharedWorldCode));
     worldFlagThunk[0]=0; worldFlagThunk[1]=0x4B; worldFlagThunk[2]=0x18; worldFlagThunk[3]=0x47;
     put32(worldFlagThunk+4,BoundWorldFlagAddress);
@@ -76,7 +76,7 @@ static uint8_t soulQAScriptBackup[128];
     const uint8_t entry[]={0x08,0xB4,0x01,0x4B,0x18,0x47,0xC0,0x46};
     memcpy(worldCollisionThunk,entry,8); put32(worldCollisionThunk+8,BoundWorldCollisionEntryAddress);
     memcpy(rom+0x6E6D0,worldFlagThunk,8); memcpy(rom+0x636AC,worldCollisionThunk,12);
-    put32(rom+WorldTrainerSlot,BoundWorldTrainerAddress); put32(rom+WorldCheckSlot,BoundWorldCheckTrainerAddress);
+    put32(rom+WorldDoTrainerSlot,BoundWorldDoTrainerAddress); put32(rom+WorldTrainerSlot,BoundWorldTrainerAddress); put32(rom+WorldCheckSlot,BoundWorldCheckTrainerAddress);
     memset(rom+WorldPolicy,0,1024); put32(rom+WorldPolicy,0x31575042); worldROM=rom;
     return YES;
 }
@@ -489,6 +489,12 @@ static uint8_t soulQAScriptBackup[128];
     memset(internalRAM+0xEB0,0,0x74); internalRAM[0xEB1]=1; put32(internalRAM+0xEB8,0x03004280);
     put32(internalRAM+0xF0C,0x0815F9B4); put32(internalRAM+0xF10,0x0815FD08);
     internalRAM[0xEA8]=0; internalRAM[0xF9C]=1;
+    return YES;
+}
++ (BOOL)qaStartSharedWorldSightlineWait {
+    if(![self qaStartSharedWorldWait]) return NO;
+    // Automatic trainer encounters bypass opcode 0x5C and launch with 0x5D.
+    internalRAM[0x4280]=0x5D; internalRAM[0x4281]=0x02;
     return YES;
 }
 + (BOOL)qaStartSoulCheck {

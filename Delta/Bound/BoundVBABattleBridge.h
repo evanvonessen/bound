@@ -35,6 +35,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)closeSoulLink;
 #if DEBUG && TARGET_OS_SIMULATOR
 + (BOOL)qaStartSharedWorldWait;
++ (BOOL)qaStartSharedWorldSightlineWait;
 + (BOOL)qaStartSoulCheck;
 + (BOOL)qaStartSoulCatch:(NSUInteger)mode;
 + (NSArray<NSNumber *> *)qaSoulCheckResult;

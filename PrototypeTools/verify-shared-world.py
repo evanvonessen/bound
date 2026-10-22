@@ -25,10 +25,12 @@ put(0x03005008,0x02010000);put(0x02010004,3,1);put(0x02010005,43,1)
 g=read(0x083526A8+3*4);header=read(g+43*4);u.mem_write(0x02036DFC,bytes(u.mem_read(header,28)))
 obj=0x02036E38;put(obj,0x10001);put(obj+8,255,1);put(obj+11,3,1)
 policy=0x09FF7000;put(policy,0x31575042);put(policy+4,1);put(policy+8,180);put(policy+12,1);put(policy+16,3,1);put(policy+17,43,1)
-checks=[];native_collision=0;collision_directions=[]
+checks=[];native_collision=0;collision_directions=[];launch_calls=[]
 def hook(uc,address,size,data):
  if address==0x080636B8:
   collision_directions.append(uc.reg_read(UC_ARM_REG_R3)&255);uc.reg_write(UC_ARM_REG_R0,native_collision);uc.reg_write(UC_ARM_REG_PC,0x08063763)
+ if address==0x0806C2D8:
+  launch_calls.append(read(0x020386AE,2));uc.reg_write(UC_ARM_REG_R0,1);uc.reg_write(UC_ARM_REG_PC,uc.reg_read(UC_ARM_REG_LR))
  if address==0x0A000000:uc.emu_stop()
 u.hook_add(UC_HOOK_CODE,hook)
 def call(addr,*args):
@@ -80,6 +82,21 @@ check('partner win never substitutes for my missing earlier win',read(ctx+8),0x0
 flag(0x56E,1,0);put(ctx+8,0x081A9637)
 check('native prerequisite comparison stays pending',call(syms['BoundWorldCheckTrainer'],ctx),0);check('peer missing trainer clears native comparison',read(ctx+2,1),0)
 flag(0x56E,peer=1);put(ctx+8,0x081A9637);call(syms['BoundWorldCheckTrainer'],ctx);check('native prerequisite comparison opens after both wins',read(ctx+2,1),1)
+# Sightline detection bypasses trainerbattle (0x5C). Verify the separate 0x5D
+# launch guard and its final freshness recheck. The allowed launch continuation
+# is observed here; actual battle entry is covered by the mGBA gameplay test.
+flag(0x56E,1,0);put(0x020386AE,0x7B,2);put(ctx+8,0x081A4FCC)
+check('automatic trainer launch waits for earlier peer win',call(syms['BoundWorldDoTrainer'],ctx),0)
+check('automatic denial starts native waiting script',read(ctx+8),0x03004200)
+check('automatic denial never calls battle launch',len(launch_calls),0)
+flag(0x56E,peer=1);put(ctx+8,0x081A4FCC)
+check('both wins delegate automatic launch',call(syms['BoundWorldDoTrainer'],ctx),1)
+check('automatic launch uses the actual configured opponent',launch_calls,[0x7B])
+put(policy+8,0);put(ctx+8,0x081A4FCC)
+check('peer expiry during introduction blocks final launch',call(syms['BoundWorldDoTrainer'],ctx),0)
+check('expired introduction redirects to native waiting',read(ctx+8),0x03004200)
+check('expired introduction never launches another battle',len(launch_calls),1)
+put(policy+8,180)
 # Real map object hide flag (Nugget Bridge Rocket), unchanged local ownership.
 flag(0x31,1,0);check('removed story NPC remains a shared obstacle',collision(12,15),1)
 flag(0x31,peer=1);check('both story NPC clears open tile',collision(12,15),0)

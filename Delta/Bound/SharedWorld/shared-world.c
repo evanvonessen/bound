@@ -125,32 +125,45 @@ u32 BoundWorldCollision(const u8 *obj,s16 x,s16 y,u8 direction) {
 }
 /* Original handlers stay intact. Replacing their dispatch slots avoids
  * relocating BL/PC-relative instructions or changing script opcodes. */
-u32 BoundWorldTrainer(u8 *ctx) {
-    const u8 *s=save(),*script=(const u8 *)word(ctx+8); unsigned trainer,i,j;
-    if(enabled()) {
-        int blocked=!fresh();
-        if(s && s[4]==3 && s[5]==43 && romPointer((u32)script,5)) {
-            trainer=half(script+1);
-            if(trainer>=0x4000) trainer=((u16 (*)(u16))0x0806E569)(trainer);
-            for(i=0;i<5;i++) if(trainer==bridgeTrainers[i]) for(j=0;j<i;j++) if(bridgePending(j)) blocked=1;
-        }
-        if(blocked) {
-            /* Inactive link-queue RAM is serialized in ordinary save states.
-             * These are exclusively original native field opcodes: a restored
-             * window remains self-contained even without any Bound ROM hook.
-             * Native link preparation reinitializes this queue before use. */
-            static const u8 script[]={0x69,0x67,0x20,0x42,0x00,0x03,0x66,0x6D,0x6B,0x02};
-            static const u8 text[]="Wait for your friend\nto reach this point.";
-            for(i=0;i<sizeof(script);i++) WAIT_SCRIPT[i]=script[i];
-            for(i=0;i<sizeof(text)-1;i++) {
-                unsigned c=text[i];
-                WAIT_SCRIPT[32+i]= c>='A'&&c<='Z' ? c-'A'+0xBB : c>='a'&&c<='z' ? c-'a'+0xD5 : c=='\n' ? 0xFE : c=='.' ? 0xAD : 0;
-            }
-            WAIT_SCRIPT[32+sizeof(text)-1]=0xFF;
-            *(const u8 **)(ctx+8)=WAIT_SCRIPT; return 0;
-        }
+static int trainerPending(unsigned trainer) {
+    const u8 *s=save(); unsigned i,j;
+    if(!enabled()) return 0;
+    if(!fresh()) return 1;
+    if(s && s[4]==3 && s[5]==43) {
+        for(i=0;i<5;i++) if(trainer==bridgeTrainers[i])
+            for(j=0;j<i;j++) if(bridgePending(j)) return 1;
     }
+    return 0;
+}
+static u32 waitForPeer(u8 *ctx) {
+    /* Native RAM script survives save-state restoration and releases the
+     * trainer approach lock without awarding a win or starting a battle. */
+    static const u8 script[]={0x69,0x67,0x20,0x42,0x00,0x03,0x66,0x6D,0x6B,0x02};
+    static const u8 text[]="Wait for your friend\nto reach this point.";
+    unsigned i;
+    for(i=0;i<sizeof(script);i++) WAIT_SCRIPT[i]=script[i];
+    for(i=0;i<sizeof(text)-1;i++) {
+        unsigned c=text[i];
+        WAIT_SCRIPT[32+i]= c>='A'&&c<='Z' ? c-'A'+0xBB : c>='a'&&c<='z' ? c-'a'+0xD5 : c=='\n' ? 0xFE : c=='.' ? 0xAD : 0;
+    }
+    WAIT_SCRIPT[32+sizeof(text)-1]=0xFF;
+    *(const u8 **)(ctx+8)=WAIT_SCRIPT; return 0;
+}
+u32 BoundWorldTrainer(u8 *ctx) {
+    const u8 *script=(const u8 *)word(ctx+8); unsigned trainer=0;
+    if(romPointer((u32)script,5)) {
+        trainer=half(script+1);
+        if(trainer>=0x4000) trainer=((u16 (*)(u16))0x0806E569)(trainer);
+    }
+    if(trainerPending(trainer)) return waitForPeer(ctx);
     return ((u32 (*)(u8 *))0x0806C2C5)(ctx);
+}
+u32 BoundWorldDoTrainer(u8 *ctx) {
+    /* Automatic sightline encounters configure the trainer directly and bypass
+     * opcode 0x5C. The native 0x5D launch consumes gTrainerBattleOpponent_A;
+     * recheck here as well, including peer expiry during the intro dialogue. */
+    if(trainerPending(half((const u8 *)0x020386AE))) return waitForPeer(ctx);
+    return ((u32 (*)(u8 *))0x0806C2D9)(ctx);
 }
 u32 BoundWorldCheckTrainer(u8 *ctx) {
     const u8 *script=(const u8 *)word(ctx+8); unsigned trainer=half(script);

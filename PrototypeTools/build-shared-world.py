@@ -9,7 +9,7 @@ with tempfile.TemporaryDirectory(prefix='bound-shared-world-') as t:
  subprocess.run([tool+'gcc','-mcpu=arm7tdmi','-mthumb','-Os','-ffreestanding','-fno-builtin','-fno-jump-tables','-nostdlib','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Wl,--build-id=none','-Wl,-T,'+str(ld),'-o',str(out/'world.elf'),str(root/'Delta/Bound/SharedWorld/shared-world.c')],check=True)
  subprocess.run([tool+'objcopy','-O','binary',str(out/'world.elf'),str(out/'world.bin')],check=True)
  code=(out/'world.bin').read_bytes();assert len(code)<0xF00
- names=['BoundWorldFlag','BoundWorldCollisionEntry','BoundWorldTrainer','BoundWorldCheckTrainer']
+ names=['BoundWorldFlag','BoundWorldCollisionEntry','BoundWorldTrainer','BoundWorldDoTrainer','BoundWorldCheckTrainer']
  syms={c[2]:int(c[0],16)|1 for l in subprocess.check_output([tool+'nm','-n',str(out/'world.elf')],text=True).splitlines() if len(c:=l.split())==3 and c[2] in names}
  h='// Generated from SharedWorld/shared-world.c. Original Bound Thumb code.\n#pragma once\n'
  for n,v in syms.items():h+=f'static const uint32_t {n}Address=0x{v:08X};\n'

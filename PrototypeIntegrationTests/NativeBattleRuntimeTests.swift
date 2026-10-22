@@ -128,6 +128,14 @@ final class NativeBattleRuntimeTests:XCTestCase {
     }
 
     func testActualSharedWorldCollisionAndNativeCoexistence() async throws {
+        try await verifySharedWorldRuntime(sightline: false)
+    }
+
+    func testActualSharedWorldSightlineLaunchWaits() async throws {
+        try await verifySharedWorldRuntime(sightline: true)
+    }
+
+    private func verifySharedWorldRuntime(sightline: Bool) async throws {
         continueAfterFailure = false
         guard ProcessInfo.processInfo.environment["BOUND_WORLD_RUNTIME"] == "1" else {
             throw XCTSkip("Requires the explicit owned-simulator shared world fixture")
@@ -190,7 +198,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertTrue(moved, "Fresh matching partner progress must restore ordinary native movement")
         XCTAssertEqual(BoundVBABattleBridge.sharedWorldSnapshot()["flags"] as? Data, flags, "Collision gates must never edit earned progress")
         BoundVBABattleBridge.setSharedWorldPeer(Data(), group: 0, number: 0, boulders: Data(), fresh: false)
-        XCTAssertTrue(BoundVBABattleBridge.qaStartSharedWorldWait())
+        XCTAssertTrue(sightline ? BoundVBABattleBridge.qaStartSharedWorldSightlineWait() : BoundVBABattleBridge.qaStartSharedWorldWait())
         world.publishPolicy(enabled: true, peer: nil, fresh: false)
         // The native trainer command must stage the waiting RAM script first.
         _ = core.resume(); try await Task.sleep(for: .milliseconds(350)); _ = core.pause()
