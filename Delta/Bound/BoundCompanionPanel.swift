@@ -2056,13 +2056,6 @@ struct BoundAccountSignInFields: View {
                 }
                 .disabled(email.isEmpty || password.isEmpty)
                 .accessibilityIdentifier("account.signin.submit")
-                if account.passkeysAvailable {
-                    Button("Sign in with a passkey") {
-                        Task { await account.signInWithPasskey(); signedIn() }
-                    }
-                    .disabled(account.securityBusy)
-                    .accessibilityIdentifier("account.signin.passkey")
-                }
                 NavigationLink("Forgot password?") {
                     BoundForgotPasswordView(account: account, email: $email)
                 }

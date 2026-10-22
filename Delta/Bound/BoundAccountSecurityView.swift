@@ -12,7 +12,6 @@ struct BoundAccountSecurityView: View {
     @State private var submission: Task<Void, Never>?
     @State private var operationID = UUID()
     @State private var factorToRemove: String?
-    @State private var passkeyToRemove: String?
     @State private var showingEmailChange = false
 
     private var authenticatorFactors: [BoundSecurityFactor] {
@@ -48,7 +47,6 @@ struct BoundAccountSecurityView: View {
                     enrollmentSection(enrollment)
                 }
                 if needsVerification { verificationSection }
-                passkeysSection
                 if account.securityBusy { Section { ProgressView("Updating account security…") } }
                 if !account.securityStatus.isEmpty {
                     Section {
@@ -91,18 +89,6 @@ struct BoundAccountSecurityView: View {
             Button("Cancel", role: .cancel) { factorToRemove = nil }
         } message: {
             Text("This authenticator will no longer protect your Bound account. Keep another sign-in method available.")
-        }
-        .confirmationDialog("Remove passkey?", isPresented: Binding(
-            get: { passkeyToRemove != nil }, set: { if !$0 { passkeyToRemove = nil } }
-        ), titleVisibility: .visible) {
-            Button("Remove passkey", role: .destructive) {
-                guard let passkeyID = passkeyToRemove else { return }
-                passkeyToRemove = nil
-                perform { _ = await account.deletePasskey(id: passkeyID) }
-            }
-            Button("Cancel", role: .cancel) { passkeyToRemove = nil }
-        } message: {
-            Text("This passkey will no longer sign in to your Bound account. Your password stays available.")
         }
     }
 
@@ -205,38 +191,6 @@ struct BoundAccountSecurityView: View {
         }
     }
 
-    private var passkeysSection: some View {
-        Section {
-            if account.passkeys.isEmpty {
-                Text("No passkeys added").foregroundStyle(.secondary)
-                    .accessibilityIdentifier("account.security.passkeys.empty")
-            }
-            ForEach(account.passkeys) { passkey in
-                HStack {
-                    Text(passkey.name.isEmpty ? "Passkey" : passkey.name)
-                    Spacer()
-                    Button("Remove", role: .destructive) { passkeyToRemove = passkey.id }
-                        .disabled(unavailable || needsVerification)
-                        .accessibilityLabel("Remove \(passkey.name.isEmpty ? "passkey" : passkey.name)")
-                        .accessibilityIdentifier("account.security.passkey.remove.\(passkey.id)")
-                }
-            }
-            if account.passkeysAvailable {
-                Button("Add passkey") {
-                    perform { _ = await account.registerPasskey(name: "") }
-                }
-                .disabled(unavailable || needsVerification)
-                .accessibilityIdentifier("account.security.passkey.add")
-            } else {
-                Text("Passkeys are not available for this account service yet.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .accessibilityIdentifier("account.security.passkeys.unavailable")
-            }
-        } header: {
-            Text("Passkeys")
-        }
-    }
-
     private func verifyEnrollment() {
         guard !unavailable, enrollmentCode.count == 6 else { return }
         let code = enrollmentCode; enrollmentCode = ""
@@ -261,7 +215,7 @@ struct BoundAccountSecurityView: View {
 
     private func clearInputs() {
         enrollmentCode = ""; verificationCode = ""; selectedFactorID = nil
-        factorToRemove = nil; passkeyToRemove = nil
+        factorToRemove = nil
     }
 
     private static func qrCode(_ value: String) -> UIImage? {

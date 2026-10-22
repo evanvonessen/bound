@@ -4,9 +4,11 @@ The existing iOS app selects the workspace when `ProcessInfo.processInfo.isiOSAp
 
 During gameplay, the game fills the available height beside a collapsible right sidebar. There is no left navigation rail, top toolbar, or bottom status bar. Floating controls at the top right provide the workspace actions menu and sidebar toggle. Library opens the existing game chooser; Game menu opens the existing pause, save-state, and fast-forward controls. Friends and Settings use the existing screens, with explicit pause/resume handling for direct presentation from the workspace.
 
-Mac always uses the updated Friends and account layout, including when the saved iPhone UI Version is Option 1. Friends places Add beside the Friends list heading. Both Friends and Settings → Account & Sync open Account and Security for username, email, password recovery, authenticator and passkey controls. The shared Settings switch is labeled Enable Experimental Multiplayer. These account controls remain available with multiplayer disabled; passkey activation still requires the domain configuration described in `BOUND-ACCOUNT-SECURITY.md`. The saved iPhone UI Version is preserved.
+Mac and both iPhone UI versions share the current Friends and account layout. Friends places Add beside the Friends list heading, above the secondary multiplayer controls. Both Friends and Settings → Account & Sync open Account and Security for username, email, password recovery and authenticator controls. Passkey controls are hidden on every platform. The shared Settings switch is labeled Enable Experimental Multiplayer. Account controls remain available with multiplayer disabled. The saved iPhone UI Version is preserved.
 
 The sidebar has three independent regions: Friend video at the top, Dex/Docs in the middle, and Notes/Types at the bottom. Friend video fills its region above a single Connect/Disconnect button, without the previous heading or card frame. The handle on the sidebar's left edge changes its width while reserving usable gameplay space. A second handle between Friend and the middle region redistributes their height. The bottom region scales with the window height. Hiding the sidebar gives its space back to gameplay and preserves the selected content and pane sizes for reopening.
+
+The workspace menu includes Friend Gameplay and Multiview visibility switches for mouse and trackpad use. Each hides or restores its own region while preserving the other region, reference selections, and divider position. Hiding Friend gameplay keeps its sharing connection active, matching the existing controller visibility actions.
 
 Dex and Docs use the same `BoundRRDexView` and `BoundBossGuideView` as iPhone, with their existing catalogs, per-game selections, separate saved layouts, and UI Version setting. Visited middle references retain their learnset/tab choices and scroll positions using the same retained-view wrapper as iPhone; hidden references cannot receive taps or refresh the game save. Choosing Notes or Types in the bottom region leaves the middle reference mounted and visible. The references are hosted at normal size without the floating-PiP scaler or Dynamic Island inset. There is no separate Mac dataset or extra reference information. Notes and the type chart also reuse their existing views. The Mac type chart fits and centers the entire image inside its own viewport at the minimum zoom, adapts when that viewport resizes, and retains zoom and pan controls. The existing iPhone chart layout remains unchanged.
 
@@ -31,6 +33,15 @@ Migration preserves complete cache directories. If the destination already exist
 For an isolated QA build, override `BOUND_APP_BUNDLE_IDENTIFIER` with a dedicated identifier using compatible signing settings. Only the app target derives its `PRODUCT_BUNDLE_IDENTIFIER` from this setting; the default remains `com.evanvonessen.bound`, and dependency bundle identities remain unchanged. Install through Xcode's Designed-for-iPad destination and run without a debugger. Validate the actual cache file paths, RunningBoard suspension, and foreground recovery with the same process ID; merely switching windows or exercising the Simulator layout is insufficient.
 
 ## Verification
+
+Current-feature parity verification on October 22, 2026: 38 focused account,
+workspace geometry and controller tests passed. All three Mac workspace UI cases
+passed, including the final sidebar rerun after excluding hidden reference
+controls from accessibility. The tests cover menu visibility switches, retained
+references, resizing, continued fixture playback and shared Settings. Passkey UI
+removal was also inspected in the main iPhone Simulator. Unsigned Release builds
+passed for iPhone and the Designed-for-iPad Mac destination; this run did not
+verify physical-device or native-Mac runtime behavior.
 
 Debug builds accept `--bound-ui-mac-workspace` to exercise the desktop layout on a dedicated iPad Simulator. Release builds ignore that override. `MacWorkspaceGeometryTests` covers layout containment, sidebar width limits, and full-size gameplay when the sidebar is hidden; controller routing tests cover independent middle and bottom selections. `MacWorkspaceUITests` covers the persistent friend viewport, retained Dex state, independent bottom content, both resize handles, sidebar collapse/reopening, type-chart containment, and menu/sheet navigation. The ordinary-iOS test runs without the override on a separate iPhone Simulator.
 

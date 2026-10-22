@@ -76,6 +76,11 @@ struct BoundMacWorkspaceView: View {
                     .accessibilityIdentifier("bound.mac-friends")
                 Button("Settings", systemImage: "gearshape", action: showSettings)
                     .accessibilityIdentifier("bound.mac-settings")
+                Divider()
+                Toggle("Friend Gameplay", isOn: $state.macFriendVisible)
+                    .accessibilityIdentifier("bound.mac-friend-visible")
+                Toggle("Multiview", isOn: $state.macReferenceVisible)
+                    .accessibilityIdentifier("bound.mac-multiview-visible")
             } label: {
                 Image(systemName: "ellipsis").frame(width: 36, height: 36)
             }
@@ -145,6 +150,7 @@ struct BoundMacWorkspaceView: View {
             .frame(height: state.macReferenceVisible ? max(0, height - topHeight - 12) : 0, alignment: .top)
             .opacity(state.macReferenceVisible ? 1 : 0)
             .allowsHitTesting(referenceIsVisible)
+            .accessibilityElement(children: referenceIsVisible ? .contain : .ignore)
             .accessibilityHidden(!referenceIsVisible)
             .clipped()
             if !state.macReferenceVisible {

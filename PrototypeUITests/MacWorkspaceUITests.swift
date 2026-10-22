@@ -234,6 +234,46 @@ final class MacWorkspaceUITests: XCTestCase {
                       "The Types box must coexist with the middle Dex.")
         assertContained(chart, in: bottom, context: "before sidebar resizing")
 
+        let visibleFriendFrame = friend.frame
+        openWorkspaceActions(in: app)
+        let friendVisibility = element("bound.mac-friend-visible", in: app)
+        XCTAssertTrue(friendVisibility.waitForExistence(timeout: 5))
+        friendVisibility.tap()
+        XCTAssertTrue(app.buttons["bound.mac-show-friend"].waitForExistence(timeout: 5),
+                      "The workspace menu must hide Friend gameplay independently.")
+        XCTAssertFalse(app.buttons["bound.mac-friends-connect"].exists)
+        XCTAssertTrue(app.buttons["bound.mac-dex"].isHittable)
+        XCTAssertTrue(app.buttons["bound.mac-types"].isHittable)
+        assertContained(chart, in: bottom, context: "with Friend gameplay hidden")
+        assertGameplayContinues(game, context: "with Friend gameplay hidden")
+
+        openWorkspaceActions(in: app)
+        element("bound.mac-friend-visible", in: app).tap()
+        XCTAssertTrue(app.buttons["bound.mac-friends-connect"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["bound.mac-show-friend"].exists)
+        XCTAssertEqual(friend.frame.height, visibleFriendFrame.height, accuracy: 1)
+
+        openWorkspaceActions(in: app)
+        let multiviewVisibility = element("bound.mac-multiview-visible", in: app)
+        XCTAssertTrue(multiviewVisibility.waitForExistence(timeout: 5))
+        multiviewVisibility.tap()
+        XCTAssertTrue(app.buttons["bound.mac-show-multiview"].waitForExistence(timeout: 5),
+                      "The workspace menu must hide Multiview independently.")
+        XCTAssertFalse(app.buttons["bound.mac-dex"].isHittable)
+        XCTAssertFalse(app.buttons["bound.mac-types"].isHittable)
+        XCTAssertTrue(app.buttons["bound.mac-friends-connect"].exists)
+        XCTAssertGreaterThan(friend.frame.height, visibleFriendFrame.height)
+        assertGameplayContinues(game, context: "with Multiview hidden")
+
+        openWorkspaceActions(in: app)
+        element("bound.mac-multiview-visible", in: app).tap()
+        XCTAssertTrue(app.buttons["bound.mac-dex"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["bound.mac-types"].isHittable)
+        XCTAssertFalse(app.buttons["bound.mac-show-multiview"].exists)
+        XCTAssertEqual(friend.frame.height, visibleFriendFrame.height, accuracy: 1)
+        XCTAssertTrue(element("bound.rrdex", in: app).exists)
+        assertContained(chart, in: bottom, context: "after restoring Multiview")
+
         let initialFriendWidth = friend.frame.width
         let initialGameWidth = game.frame.width
         let sidebarResize = element("bound.mac-sidebar-resize", in: app)
