@@ -1,8 +1,24 @@
 import XCTest
+import CoreData
 @testable import Delta
 
 @MainActor
 final class BoundROMUpdateLifecycleTests: XCTestCase {
+    func testBundledROMIsImportedWithoutDuplicatingExistingGame() async throws {
+        let content = try BoundROMUpdateContent(data: Data(contentsOf: XCTUnwrap(Bundle(for: Game.self).url(forResource: "rrbin-integrated", withExtension: "gba"))), expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
+        let context = DatabaseManager.shared.viewContext
+        let request = Game.fetchRequest() as! NSFetchRequest<Game>
+        request.predicate = NSPredicate(format: "identifier == %@", content.gameID)
+        for _ in 0..<100 {
+            if try context.count(for: request) == 1 { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(try context.count(for: request), 1)
+        BoundROMUpdateManager.shared.checkNow()
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(try context.count(for: request), 1)
+    }
+
     func testResetWaitsForManualRestoreAndPreventsNewRestoresUntilFinished() async throws {
         let sync = SyncManager.shared
         guard sync.coordinator == nil else { throw XCTSkip("Requires the isolated signed-out QA app") }

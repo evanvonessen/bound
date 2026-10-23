@@ -28,6 +28,8 @@ final class BoundROMUpdateManager: ObservableObject {
     var canApply: () -> Bool = { false }
     private let defaults: UserDefaults
     private let storage: BoundROMUpdateStorage
+    private var bundledImportInProgress = false
+    private var bundledImportStarted = false
     private var started = false
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
@@ -102,8 +104,85 @@ final class BoundROMUpdateManager: ObservableObject {
         defaults.set(false, forKey: Self.enabledKey); isEnabled = false
         status = "Automatic updates are off."
     }
+    /// Each cartridge keeps its content-addressed identity and existing saves.
+    /// Never enroll an older cartridge in the reset-on-update folder workflow.
+    private func installBundledROMIfNeeded() {
+        guard !bundledImportStarted, !isApplying, !isChecking, DatabaseManager.shared.isStarted,
+              UIApplication.shared.applicationState == .active,
+              let url = Bundle.main.url(forResource: "rrbin-integrated", withExtension: "gba") else { return }
+        bundledImportStarted = true
+        bundledImportInProgress = true
+        Task { @MainActor in
+            defer { bundledImportInProgress = false; if isEnabled { checkNow() } }
+            do {
+                let data = try await Task.detached(priority: .utility) {
+                    let data = try Data(contentsOf: url)
+                    _ = try BoundROMUpdateContent(data: data, expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
+                    _ = try BoundPlayerROMProfile(rom: data)
+                    return data
+                }.value
+                let content = try BoundROMUpdateContent(data: data, expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
+                if try !games(matching: [content.gameID]).isEmpty { return }
+                let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let copy = folder.appendingPathComponent("Multi Red " + String(content.sha256.prefix(8)) + ".gba")
+                try data.write(to: copy, options: .atomic)
+                let succeeded = await withCheckedContinuation { continuation in
+                    DatabaseManager.shared.importGames(at: [copy]) { _, errors in
+                        try? FileManager.default.removeItem(at: folder)
+                        continuation.resume(returning: errors.isEmpty)
+                    }
+                }
+                if !succeeded { status = "Couldn’t install the included ROM. Reopen Bound to retry." }
+
+            } catch {
+                status = error.localizedDescription
+            }
+        }
+    }
+
+    func clearSaves(for game: Game, completion: @escaping (Error?) -> Void) {
+        guard !isApplying, !isChecking, !bundledImportInProgress else { completion(BoundROMUpdateError.busy); return }
+        isApplying = true
+        SyncManager.shared.performROMUpdate { finish in
+            defer { self.isApplying = false; finish() }
+            do {
+                BoundROMUpdateActivity.close(gameID: game.identifier)
+                let context = DatabaseManager.shared.newBackgroundContext()
+                try context.performAndWait {
+                    let record = try context.existingObject(with: game.objectID) as! Game
+                    let stem = BoundMultiplayerSaveStore.hash(Data(record.identifier.utf8))
+                    var paths = [record.gameSaveURL,
+                        record.gameSaveURL.deletingPathExtension().appendingPathExtension("rtc"),
+                        DatabaseManager.saveStatesDirectoryURL.appendingPathComponent(record.identifier),
+                        BoundMultiplayerSaveStore.shared.directory(gameID: record.identifier),
+                        self.storage.support.appendingPathComponent("Soul Link/" + stem + ".json"),
+                        self.storage.support.appendingPathComponent("Soul Link/" + stem + ".timeline.json")]
+                    let recovery = self.storage.support.appendingPathComponent("Friend Battles")
+                    if FileManager.default.fileExists(atPath: recovery.path) {
+                        for journal in try FileManager.default.contentsOfDirectory(at: recovery, includingPropertiesForKeys: nil) where journal.pathExtension == "json" {
+                            let values = try JSONSerialization.jsonObject(with: Data(contentsOf: journal)) as? [String: String]
+                            guard values?["gameID"] == record.identifier else { continue }
+                            guard let name = values?["state"], UUID(uuidString: URL(fileURLWithPath: name).deletingPathExtension().lastPathComponent) != nil,
+                                  name == URL(fileURLWithPath: name).lastPathComponent, name.hasSuffix(".state") else { throw BoundROMUpdateError.unsafePath }
+                            paths += [journal, recovery.appendingPathComponent(name)]
+                        }
+                    }
+                    try self.storage.clearSaveFiles(paths) {
+                        record.previewSaveState = nil
+                        for state in record.saveStates { context.delete(state) }
+                        if let save = record.gameSave { context.delete(save); record.gameSave = nil }
+                        do { try context.save() } catch { context.rollback(); throw error }
+                    }
+                }
+                completion(nil)
+            } catch { completion(error) }
+        }
+    }
+
     func checkNow() {
-        guard !isChecking, !needsGameSelection, UIApplication.shared.applicationState == .active,
+        installBundledROMIfNeeded()
+        guard !bundledImportInProgress, !isChecking, !needsGameSelection, UIApplication.shared.applicationState == .active,
               isEnabled || stagedBookmark != nil || FileManager.default.fileExists(atPath: storage.journalURL.path) else { return }
         guard DatabaseManager.shared.isStarted else { status = "Waiting for the game library."; return }
         isChecking = true

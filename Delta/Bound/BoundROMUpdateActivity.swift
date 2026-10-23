@@ -10,6 +10,13 @@ enum BoundROMUpdateActivity {
         controllers.allObjects.allSatisfy { $0.game == nil }
     }
 
+    static func close(gameID: String) {
+        for controller in controllers.allObjects where (controller.game as? Game)?.identifier == gameID {
+            controller.emulatorCore?.stop()
+            controller.game = nil
+        }
+    }
+
     static func bindingChanged(_ controller: DeltaCore.GameViewController) {
         controllers.add(controller)
         if canApply {
