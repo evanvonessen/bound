@@ -3,7 +3,7 @@
 This server runtime replaces Agora's gameplay data path. It hosts a small room
 for verified Bound accounts while each phone continues to emulate, accept input,
 render and play audio locally. Agora remains available for ordinary friend video;
-Dropbox saves and Supabase account/run ownership remain separate.
+Dropbox saves remain separate. The default legacy mode keeps the existing Supabase account bridge; the new self-hosted mode makes Nakama the account authority.
 
 The runtime works with Nakama or Nakama Enterprise on Heroic Cloud. The native
 transport uses secure WebSockets, which is also available in browsers. This
@@ -11,6 +11,26 @@ does not make browser gameplay or larger friend groups an implemented feature:
 the current friend authorization service, ROM protocol and app interaction still
 select a pair. The room runtime and wire envelope support two through eight
 authorized members without relying on one globally selected remote user.
+
+## Self-hosted account mode
+
+`BOUND_ACCOUNT_MODE=nakama` enables the private account gateway in
+`../selfhost/`. `BOUND_GATEWAY_SECRET` authorizes server-only account RPCs and
+native session issuance; it must never reach the app. Nakama issues both access
+and refresh tokens. The compatibility gateway reads the native `uid` and
+`vrs.session_id` / `vrs.aal` claims and verifies every bearer with Nakama plus its
+private revocation journal. Account UUIDs remain the Bound owner UUIDs.
+
+Email confirmation, recovery capabilities, session rotation and encrypted TOTP
+factors use Nakama private storage. The gateway sends email through Resend.
+Self-hosted gameplay admission checks the Nakama UUID directly and does not
+accept the legacy `bound:<owner>` custom-identity mapping. The legacy deployment
+remains available until explicitly retired; do not set this mode on it.
+
+Only `/ws` is exposed from Nakama. Keep account RPCs, native REST auth, gRPC and
+the console private. The account runtime denies player-session calls to the
+private RPC even when a player knows its name. Use the deployment and import
+instructions in `../selfhost/README.md` for the replacement server.
 
 ## Build and focused checks
 

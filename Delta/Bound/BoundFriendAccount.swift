@@ -5,11 +5,69 @@ import Security
 import UIKit
 #endif
 
+/// Build-time selection keeps existing installs on the current backend until cutover.
+/// An explicit invalid override never falls back to another account authority.
+struct BoundBackendConfiguration: Equatable, Sendable {
+    enum Kind: String, Sendable { case legacy, selfhost }
+    static let legacyOrigin = "https://qevnxhngdtlyihhmvnjv.supabase.co"
+    static let bundled = try? resolve(info: Bundle.main.infoDictionary ?? [:])
+    let kind: Kind
+    let origin: String
+
+    static func resolve(info: [String: Any]) throws -> Self {
+        func setting(_ key: String, placeholder: String) throws -> String? {
+            guard let value = info[key] else { return nil }
+            guard let text = value as? String else { throw BoundFriendError.unavailable }
+            if text.isEmpty || text == placeholder { return nil }
+            return text
+        }
+        let selected = try setting("BoundBackendKind", placeholder: "$(BOUND_BACKEND_KIND)")
+        let endpoint = try setting("BoundBackendURL", placeholder: "$(BOUND_BACKEND_URL)")
+        guard let kind = Kind(rawValue: selected ?? "legacy") else { throw BoundFriendError.unavailable }
+        if kind == .legacy {
+            guard endpoint == nil || endpoint == legacyOrigin else { throw BoundFriendError.unavailable }
+            return Self(kind: kind, origin: legacyOrigin)
+        }
+        guard let endpoint, endpoint.utf8.count <= 2048,
+              let components = URLComponents(string: endpoint), components.scheme == "https",
+              components.user == nil, components.password == nil,
+              components.query == nil, components.fragment == nil,
+              components.port == nil || components.port == 443,
+              components.path.isEmpty || components.path == "/",
+              let host = components.host, !host.isEmpty, host == host.lowercased(),
+              host.split(separator: ".", omittingEmptySubsequences: false).allSatisfy({
+                  !$0.isEmpty && !$0.hasPrefix("-") && !$0.hasSuffix("-") &&
+                  $0.utf8.allSatisfy { (97...122).contains($0) || (48...57).contains($0) || $0 == 45 }
+              }), components.url != nil else { throw BoundFriendError.unavailable }
+        let origin = "https://" + host
+        guard origin != legacyOrigin else { throw BoundFriendError.unavailable }
+        return Self(kind: kind, origin: origin)
+    }
+    static func current() throws -> Self {
+        guard let bundled else { throw BoundFriendError.unavailable }
+        return bundled
+    }
+    func url(path: String) throws -> URL {
+        guard path.hasPrefix("/"), !path.hasPrefix("//"),
+              let url = URL(string: origin + path), url.scheme == "https", url.host == URL(string: origin)?.host else {
+            throw BoundFriendError.unavailable
+        }
+        return url
+    }
+    func applyAPIKey(_ key: String, to request: inout URLRequest) {
+        if kind == .legacy { request.setValue(key, forHTTPHeaderField: "apikey") }
+    }
+    func claims(_ claims: [String: Any]) -> [String: Any] {
+        kind == .selfhost ? (claims["vrs"] as? [String: Any] ?? [:]) : claims
+    }
+}
+
 /// A session-scoped snapshot lets existing friend-service holders use renewed credentials.
 /// Signing out invalidates all copies, without affecting a different account instance.
 struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
     let owner: UUID
     private let key: String
+    private let backend: BoundBackendConfiguration
     private let snapshot: Snapshot
     var expiresAt: Date { snapshot.read().expiry }
 
@@ -28,15 +86,18 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
         }
     }
 
-    init(owner: UUID, key: String, token: String) throws {
-        try self.init(owner: owner, key: key, token: token, allowExpired: false)
+    init(owner: UUID, key: String, token: String, backend: BoundBackendConfiguration? = nil) throws {
+        try self.init(owner: owner, key: key, token: token, allowExpired: false, backend: backend)
     }
-    fileprivate init(owner: UUID, key: String, token: String, allowExpired: Bool) throws {
-        let expiry = try Self.expiry(token: token, owner: owner)
+    fileprivate init(owner: UUID, key: String, token: String, allowExpired: Bool,
+                     backend: BoundBackendConfiguration? = nil) throws {
+        let backend = try backend ?? BoundBackendConfiguration.current()
+        let expiry = try Self.expiry(token: token, owner: owner, backend: backend)
         guard allowExpired || expiry > Date() else { throw BoundFriendError.signIn }
-        self.owner = owner; self.key = key; snapshot = Snapshot(token: token, expiry: expiry)
+        self.owner = owner; self.key = key; self.backend = backend
+        snapshot = Snapshot(token: token, expiry: expiry)
     }
-    private static func expiry(token: String, owner: UUID) throws -> Date {
+    private static func expiry(token: String, owner: UUID, backend: BoundBackendConfiguration) throws -> Date {
         let parts = token.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 3, parts.allSatisfy({ !$0.isEmpty }), token.utf8.count <= 16384 else { throw BoundFriendError.signIn }
         var encoded = String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
@@ -44,11 +105,11 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
         guard let bytes = Data(base64Encoded: encoded),
               let claims = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
               let expiry = claims["exp"] as? Double, expiry.isFinite,
-              claims["sub"] as? String == owner.uuidString.lowercased() else { throw BoundFriendError.signIn }
+              claims[backend.kind == .selfhost ? "uid" : "sub"] as? String == owner.uuidString.lowercased() else { throw BoundFriendError.signIn }
         return Date(timeIntervalSince1970: expiry)
     }
     fileprivate func renew(token: String) throws {
-        let expiry = try Self.expiry(token: token, owner: owner)
+        let expiry = try Self.expiry(token: token, owner: owner, backend: backend)
         guard expiry > Date() else { throw BoundFriendError.signIn }
         snapshot.update(token: token, expiry: expiry)
     }
@@ -65,10 +126,10 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
     }
     private func request(path: String, body: [String: Any]) throws -> URLRequest {
         let token = try validToken()
-        var request = URLRequest(url: URL(string: BoundFriendAccount.origin + path)!)
+        var request = URLRequest(url: try backend.url(path: path))
         request.httpMethod = "POST"; request.timeoutInterval = 10
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(key, forHTTPHeaderField: "apikey")
+        backend.applyAPIKey(key, to: &request)
         request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
@@ -163,12 +224,13 @@ struct BoundKeychainSessionStorage: BoundSessionStorage {
     var calls = Calls()
     var defaults: UserDefaults = .standard
     var service = (Bundle.main.bundleIdentifier ?? "Bound") + ".friend-account"
+    var origin = BoundFriendAccount.origin
     // A non-secret logout marker prevents resurrection if Keychain deletion fails while locked.
-    private var logoutKey: String { service + ".signed-out." + BoundFriendAccount.origin }
+    private var logoutKey: String { service + ".signed-out." + origin }
     private var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: service,
-         kSecAttrAccount as String: BoundFriendAccount.origin,
+         kSecAttrAccount as String: origin,
          kSecAttrSynchronizable as String: false]
     }
     func read() throws -> Data? {
@@ -254,7 +316,7 @@ struct BoundTOTPEnrollment: CustomStringConvertible, CustomDebugStringConvertibl
 
 @MainActor
 final class BoundFriendAccount: ObservableObject {
-    nonisolated static let origin = "https://qevnxhngdtlyihhmvnjv.supabase.co"
+    nonisolated static let origin = BoundBackendConfiguration.bundled?.origin ?? "invalid-backend-configuration"
     // All production game coordinators share one owner of the rotating refresh token.
     static let shared = BoundFriendAccount()
     nonisolated static let willSignOutNotification = Notification.Name("BoundFriendAccountWillSignOut")
@@ -358,6 +420,8 @@ final class BoundFriendAccount: ObservableObject {
         timer?.cancel(); refreshTask?.cancel(); enrollmentCleanupTask?.cancel()
     }
     nonisolated static func bundledKey() throws -> String {
+        let backend = try BoundBackendConfiguration.current()
+        if backend.kind == .selfhost { return "" }
         guard let url = Bundle.main.url(forResource: "cloud-configuration", withExtension: "json"),
               let config = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
               config["origin"] as? String == origin,
@@ -499,9 +563,9 @@ final class BoundFriendAccount: ObservableObject {
         }
     }
     private func tokenRequest(grant: String, key: String, body: [String: String]) throws -> URLRequest {
-        var request = URLRequest(url: URL(string: Self.origin + "/auth/v1/token?grant_type=" + grant)!)
+        var request = URLRequest(url: try BoundBackendConfiguration.current().url(path: "/auth/v1/token?grant_type=" + grant))
         request.httpMethod = "POST"; request.timeoutInterval = 10
-        request.setValue(key, forHTTPHeaderField: "apikey")
+        try BoundBackendConfiguration.current().applyAPIKey(key, to: &request)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
@@ -513,7 +577,7 @@ final class BoundFriendAccount: ObservableObject {
         var value = String(parts[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         value += String(repeating: "=", count: (4 - value.count % 4) % 4)
         guard let data = Data(base64Encoded: value), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return object["aal"] as? String
+        return BoundBackendConfiguration.bundled?.claims(object)["aal"] as? String
     }
     private static func factors(in user: [String: Any]) throws -> [BoundSecurityFactor] {
         // Older Auth responses omit factors when none exist. Present malformed data is rejected.
@@ -558,9 +622,9 @@ final class BoundFriendAccount: ObservableObject {
     }
     private func securityRequest(path: String, method: String = "POST", body: [String: Any] = [:], identity: AppCloudSession? = nil) throws -> URLRequest {
         if let identity { return try identity.accountSecurityRequest(path: path, method: method, body: body) }
-        var request = URLRequest(url: URL(string: Self.origin + "/auth/v1/" + path)!)
+        var request = URLRequest(url: try BoundBackendConfiguration.current().url(path: "/auth/v1/" + path))
         request.httpMethod = method; request.timeoutInterval = 10
-        request.setValue(try configuration(), forHTTPHeaderField: "apikey")
+        try BoundBackendConfiguration.current().applyAPIKey(configuration(), to: &request)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if method != "GET" && method != "DELETE" { request.httpBody = try JSONSerialization.data(withJSONObject: body) }
         return request
@@ -886,7 +950,7 @@ final class BoundFriendAccount: ObservableObject {
         encoded += String(repeating: "=", count: (4 - encoded.count % 4) % 4)
         guard let bytes = Data(base64Encoded: encoded),
               let claims = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-              let email = claims["email"] as? String else { return nil }
+              let email = BoundBackendConfiguration.bundled?.claims(claims)["email"] as? String else { return nil }
         return normalizedEmail(email)
     }
     private static func accountEmail(_ data: Data, owner: UUID, token: String) -> String? {
@@ -1021,12 +1085,12 @@ final class BoundFriendAccount: ObservableObject {
         }
         do {
             let key = try configuration()
-            var components = URLComponents(string: Self.origin + "/auth/v1/recover")!
+            var components = URLComponents(url: try BoundBackendConfiguration.current().url(path: "/auth/v1/recover"), resolvingAgainstBaseURL: false)!
             components.queryItems = [URLQueryItem(name: "redirect_to", value: Self.passwordRecoveryRedirect)]
             var request = URLRequest(url: components.url!)
             request.httpMethod = "POST"; request.timeoutInterval = 10
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue(key, forHTTPHeaderField: "apikey")
+            try BoundBackendConfiguration.current().applyAPIKey(key, to: &request)
             request.httpBody = try JSONSerialization.data(withJSONObject: ["email": normalized])
             nextPasswordResetAt = Date().addingTimeInterval(60)
             let response = try await transport(request)
@@ -1038,7 +1102,7 @@ final class BoundFriendAccount: ObservableObject {
                     : "Could not request a reset link. Check your connection and try again later."
                 return false
             }
-            // Supabase intentionally returns the same response for unknown emails.
+            // Account recovery returns the same response for unknown emails.
             passwordResetStatus = "If an account uses that email, a password reset link will arrive shortly. Check your inbox and spam folder."
             return true
         } catch {
@@ -1111,11 +1175,11 @@ final class BoundFriendAccount: ObservableObject {
     }
     private static let usernameTakenMessage = "That username is already taken. Choose another."
 
-    /// Builds a username-based request using only the configured publishable key.
+    /// Builds a username-based request for the selected account authority.
     static func signupRequest(email: String, password: String, username: String, key: String) throws -> URLRequest {
-        var request = URLRequest(url: URL(string: origin + "/auth/v1/signup")!)
+        var request = URLRequest(url: try BoundBackendConfiguration.current().url(path: "/auth/v1/signup"))
         request.httpMethod = "POST"; request.timeoutInterval = 10
-        request.setValue(key, forHTTPHeaderField: "apikey")
+        try BoundBackendConfiguration.current().applyAPIKey(key, to: &request)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String: Any] = ["email": email, "password": password]
         body["data"] = ["bound_username_v1": username]
@@ -1124,9 +1188,9 @@ final class BoundFriendAccount: ObservableObject {
     }
 
     static func usernameAvailabilityRequest(username: String, key: String) throws -> URLRequest {
-        var request = URLRequest(url: URL(string: origin + "/rest/v1/rpc/bound_username_available")!)
+        var request = URLRequest(url: try BoundBackendConfiguration.current().url(path: "/rest/v1/rpc/bound_username_available"))
         request.httpMethod = "POST"; request.timeoutInterval = 10
-        request.setValue(key, forHTTPHeaderField: "apikey")
+        try BoundBackendConfiguration.current().applyAPIKey(key, to: &request)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["username": username])
         return request
@@ -1215,9 +1279,9 @@ final class BoundFriendAccount: ObservableObject {
         let run = generation; busy = true
         defer { if generation == run { busy = false } }
         do {
-            var request = URLRequest(url: URL(string: Self.origin + "/functions/v1/delete-account")!)
+            var request = URLRequest(url: try BoundBackendConfiguration.current().url(path: "/functions/v1/delete-account"))
             request.httpMethod = "POST"; request.timeoutInterval = 10
-            request.setValue(try configuration(), forHTTPHeaderField: "apikey")
+            try BoundBackendConfiguration.current().applyAPIKey(configuration(), to: &request)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: ["operationToken": record.operation])
             await performDeletion(request, run: run, beginning: false)

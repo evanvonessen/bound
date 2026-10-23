@@ -220,7 +220,7 @@ struct BoundSoulRow: Codable, Equatable, Sendable {
     let dead: Bool
     var valid: Bool { BoundSoulLedger.validSlot(slot) && name.count <= 20 && name.utf8.count <= 80 }
 }
-/// BSL2 carries both complete bitmaps in every heartbeat, under Agora's 1 KiB limit.
+/// BSL2 carries both complete bitmaps in every heartbeat within the gameplay packet limit.
 /// Names rotate independently; they never determine whether a catch is occupied.
 struct BoundSoulPacket: Sendable {
     static let prefix = Data([0x42, 0x53, 0x4C, 0x32])
@@ -392,7 +392,7 @@ struct BoundSoulEncounter: Identifiable, Equatable {
 }
 
 /// The frame owner commits catch/death changes before allowing another frame.
-/// Only main updates peer tombstones; neither Agora nor SwiftUI accesses live RAM.
+/// Only main updates peer tombstones; neither networking callbacks nor SwiftUI accesses live RAM.
 final class BoundSoulProbe: @unchecked Sendable {
     struct Snapshot: Sendable {
         var ready = false

@@ -1,0 +1,23 @@
+{
+    email {$TLS_EMAIL}
+    admin off
+}
+
+{$BOUND_HOSTNAME} {
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        -Server
+    }
+    # Only gameplay sockets are public. Native auth and runtime HTTP-key RPCs
+    # remain on the private container network behind the account gateway.
+    handle /ws {
+        reverse_proxy nakama:7350
+    }
+    handle {
+        reverse_proxy gateway:8080 {
+            header_up X-Bound-Client-IP {remote_host}
+        }
+    }
+}

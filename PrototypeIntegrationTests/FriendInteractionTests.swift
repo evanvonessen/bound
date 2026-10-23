@@ -187,20 +187,6 @@ final class FriendInteractionTests: XCTestCase {
         XCTAssertEqual(AnyInput(try XCTUnwrap(coreMapping.input(forControllerInput:MFiGameController.Input.a))),AnyInput(GBAGameInput.a))
     }
 
-    func testReliableMailboxCannotLoseInvitationsToMovementOrUntrustedPeers() {
-        let callbacks = AgoraSharingCallbacks(remoteUID:2) { _,_ in }
-        let p = peers(); p.a.open(at:10); p.a.request(.battle,at:10)
-        let packet = p.aPackets[0]
-        callbacks.receiveInteraction(packet,uid:9); XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
-        callbacks.receiveInteraction(packet,uid:2)
-        for index in 0..<100 { callbacks.receivePresence(Data([UInt8(index)]),uid:2) }
-        XCTAssertEqual(callbacks.takeInteractions().messages,[packet]); XCTAssertEqual(callbacks.takeLatestPresence(),Data([99]))
-        for _ in 0..<65 { callbacks.receiveInteraction(packet,uid:2) }
-        let overflow = callbacks.takeInteractions(); XCTAssertTrue(overflow.failed); XCTAssertTrue(overflow.messages.isEmpty)
-        callbacks.resetFrames(enabled:true); callbacks.receiveInteraction(packet,uid:2)
-        callbacks.suspendFrames(); XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
-        callbacks.receiveInteraction(packet,uid:2); XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
-    }
     func testInvitationAttachmentNeverCreatesAnAppPopup() {
         let p=peers(), panel=BoundFriendInteractionPanel(session:peers().a)
         XCTAssertTrue(panel.isHidden)
@@ -251,23 +237,6 @@ final class BattleCableTests:XCTestCase {
         incoming.receive(malformed)
         incoming.close(); XCTAssertFalse(incoming.send(Data([1])))
         XCTAssertFalse(outgoing.send(Data(repeating:1,count:4097)))
-    }
-    func testRDTCallbacksMayFragmentAndCombineWireFrames() throws {
-        let sent=Box(),id=UUID()
-        let wire=BoundBattleWire(id:id,receive:{ _ in },failed:{ XCTFail() })
-        wire.setSender { sent.add($0); return true }
-        XCTAssertTrue(wire.send(Data([8,0,1,2,3,4,5,6])))
-        XCTAssertTrue(wire.send(Data([4,4,0,0])))
-        let packets=sent.snapshot,combined=packets[0]+packets[1]
-        var split=BoundBattleRDTFramer(),result:[Data]=[]
-        for byte in combined { result += try XCTUnwrap(split.consume(Data([byte]))) }
-        XCTAssertEqual(result,packets)
-        var joined=BoundBattleRDTFramer()
-        XCTAssertEqual(joined.consume(combined),packets)
-        var invalid=BoundBattleRDTFramer()
-        XCTAssertNil(invalid.consume(Data(repeating:255,count:30)))
-        var huge=BoundBattleRDTFramer()
-        XCTAssertNil(huge.consume(Data(repeating:0,count:131073)))
     }
     func testWireFailsClosedOnUnboundedReordering() {
         let id=UUID(),sent=Box(),failures=Box()

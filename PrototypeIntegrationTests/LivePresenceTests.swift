@@ -265,19 +265,6 @@ final class LivePresenceTests: XCTestCase {
         XCTAssertNil(BoundPresencePacket.decode(try XCTUnwrap(outgoing.last))?.pose)
     }
 
-    func testSDKMailboxBoundsExpectedPeerAndClearsOnLoss() {
-        let mailbox = AgoraSharingCallbacks(remoteUID: 2) { _, _ in }
-        mailbox.receivePresence(Data([1]), uid: 3); XCTAssertNil(mailbox.takeLatestPresence())
-        mailbox.receivePresence(Data(repeating: 1, count: 769), uid: 2); XCTAssertNil(mailbox.takeLatestPresence())
-        mailbox.receivePresence(Data([1]), uid: 2); mailbox.receivePresence(Data([2]), uid: 2)
-        XCTAssertEqual(mailbox.takeLatestPresence(), Data([2])); XCTAssertNil(mailbox.takeLatestPresence())
-        mailbox.receivePresence(Data([3]), uid: 2); mailbox.suspendFrames()
-        XCTAssertNil(mailbox.takeLatestPresence()); mailbox.receivePresence(Data([4]), uid: 2)
-        XCTAssertNil(mailbox.takeLatestPresence())
-        mailbox.resumeFrames(); mailbox.receivePresence(Data([5]), uid: 2)
-        XCTAssertEqual(mailbox.takeLatestPresence(), Data([5]))
-    }
-
     func testUnverifiedLocalROMCannotAdvertiseCoordinates() throws {
         let session = BoundLivePresenceSession(); var outgoing: [Data] = []
         session.setEnabled(true); session.start { outgoing.append($0); return true }
@@ -426,21 +413,6 @@ final class LivePresenceTests: XCTestCase {
         let old = try packet(presence, peer: UUID(), reading: reading())
         sharing.stop(); XCTAssertFalse(presence.connected); XCTAssertNil(transport.receiver)
         staleReceiver(old); XCTAssertNil(presence.pose())
-    }
-
-    func testROMServicePacketsUseBoundedReliableQueueAndExpectedPeer() {
-        let callbacks = AgoraSharingCallbacks(remoteUID: 2) { _, _ in }
-        let packet = Data("BRM1fixture".utf8)
-        callbacks.receiveInteraction(packet, uid: 3)
-        XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
-        callbacks.receiveInteraction(Data("BRM1".utf8) + Data(repeating: 0, count: 1024), uid: 2)
-        XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
-        callbacks.receiveInteraction(packet, uid: 2)
-        XCTAssertEqual(callbacks.takeInteractions().messages, [packet])
-        XCTAssertNil(callbacks.takeLatestPresence(), "ROM actions must never replace the movement mailbox")
-        callbacks.suspendFrames()
-        callbacks.receiveInteraction(packet, uid: 2)
-        XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
     }
 
     func testPresentationDiagnosticsAreOptInAndNeverExportCoordinatesOrArtwork() throws {
