@@ -6,7 +6,7 @@ COPY types ./types
 COPY src ./src
 RUN npm run build
 
-FROM registry.heroiclabs.com/heroiclabs/nakama:3.41.0
+FROM heroiclabs/nakama:3.41.0
 COPY --from=builder /backend/build/index.js /nakama/data/modules/index.js
 COPY heroic/nakama-config.yml /nakama/data/bound.yml
 # Supply database/auth secrets and runtime.env through the deployment's secret

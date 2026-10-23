@@ -77,6 +77,14 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
 @MainActor private final class NakamaFrameCancellation: SharingCancellation { func cancel() {} }
 
 @MainActor final class NakamaSharingTransportTests: XCTestCase {
+    func testAgoraMediaHasNoGameplayChannel() {
+        let media: any FriendSharingTransport = AgoraSharingTransport()
+        XCTAssertFalse(media.sendPresence(Data([1])))
+        XCTAssertFalse(media.sendInteraction(Data("BRM1fixture".utf8)))
+        XCTAssertNil(media.makeBattleChannel(receiver: { _ in }, failed: {}))
+        XCTAssertEqual(media.presenceConnectionCheck.kind, .unavailable)
+    }
+
     private let owner = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
     private let peer = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
     private let room = UUID(uuidString: "33333333-3333-4333-8333-333333333333")!

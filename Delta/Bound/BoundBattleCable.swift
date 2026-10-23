@@ -7,8 +7,8 @@ protocol BoundBattleChannel: AnyObject, Sendable {
     func close()
 }
 
-/// RDT delivery is reliable; explicit numbering also protects the native byte
-/// stream from duplicate/reordered callbacks. A wrong activity never reaches RAM.
+/// Explicit numbering protects the native byte stream from duplicate/reordered
+/// messages. A wrong activity never reaches RAM.
 final class BoundBattleWire: @unchecked Sendable {
     static let prefix = Data([0x42,0x46,0x53,0x31]) // BFS1
     private let lock = NSLock()
@@ -68,28 +68,6 @@ final class BoundBattleWire: @unchecked Sendable {
         return "sent=\(outgoing) received=\(expected-1) pending=\(pending.count) active=\(active)"
     }
     func close() { lock.lock(); active=false; sender=nil; pending.removeAll(); pendingBytes=0; lock.unlock() }
-}
-
-/// RDT is a data stream: one callback may split or combine our wire frames.
-/// Preserve complete commands when SDK callback boundaries differ.
-struct BoundBattleRDTFramer {
-    private var buffered=Data()
-    mutating func consume(_ data:Data)->[Data]? {
-        guard data.count<=131072,buffered.count+data.count<=135198 else { return nil }
-        buffered.append(data)
-        var frames:[Data]=[]
-        while buffered.count>=30 {
-            guard buffered.starts(with:BoundBattleWire.prefix) else { return nil }
-            let first=buffered.startIndex
-            let count=(Int(buffered[buffered.index(first,offsetBy:28)])<<8)|Int(buffered[buffered.index(first,offsetBy:29)])
-            guard count>0,count<=4096 else { return nil }
-            let total=count+30
-            guard buffered.count>=total else { break }
-            frames.append(Data(buffered.prefix(total)))
-            buffered.removeFirst(total)
-        }
-        return frames
-    }
 }
 
 /// Only native battle/link command records enter the emulated link queues.

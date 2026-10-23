@@ -7,6 +7,67 @@ import Security
 /// Synthetic credentials exercise the native Keychain and account lifecycle; no backend is contacted.
 @MainActor
 final class AccountPersistenceIntegrationTests: XCTestCase {
+    func testBackendSelectionFailsClosedAndDefaultsToCurrentService() throws {
+        let legacy = try BoundBackendConfiguration.resolve(info: [:])
+        XCTAssertEqual(legacy.kind, .legacy)
+        XCTAssertEqual(legacy.origin, BoundBackendConfiguration.legacyOrigin)
+        XCTAssertEqual(try BoundBackendConfiguration.resolve(info: [
+            "BoundBackendKind": "$(BOUND_BACKEND_KIND)", "BoundBackendURL": "$(BOUND_BACKEND_URL)"
+        ]), legacy)
+        for endpoint in ["", "http://bound.example", "https://user@bound.example", "https://bound.example/path",
+                         "https://bound.example?key=value", "https://bound.example#fragment", "https://bound.example:7350",
+                         BoundBackendConfiguration.legacyOrigin] {
+            XCTAssertThrowsError(try BoundBackendConfiguration.resolve(info: [
+                "BoundBackendKind": "selfhost", "BoundBackendURL": endpoint
+            ]))
+        }
+        XCTAssertThrowsError(try BoundBackendConfiguration.resolve(info: ["BoundBackendKind": "unknown"]))
+        XCTAssertThrowsError(try BoundBackendConfiguration.resolve(info: ["BoundBackendURL": "https://bound.example"]))
+    }
+
+    func testSelfhostSessionUsesNakamaOwnerAndSelectedOrigin() throws {
+        let backend = try BoundBackendConfiguration.resolve(info: [
+            "BoundBackendKind": "selfhost", "BoundBackendURL": "https://bound.example:443/"
+        ])
+        let owner = UUID()
+        let claims: [String: Any] = ["uid": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 600,
+                                     "vrs": ["aal": "aal2", "email": "fixture@example.com"]]
+        let payload = try JSONSerialization.data(withJSONObject: claims).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        let token = "fixture." + payload + ".signature"
+        let identity = try AppCloudSession(owner: owner, key: "legacy-key-must-not-leak", token: token, backend: backend)
+        let request = try identity.friendSharingRequest(roomID: UUID().uuidString)
+        XCTAssertEqual(request.url?.absoluteString, "https://bound.example/functions/v1/agora-token")
+        XCTAssertNil(request.value(forHTTPHeaderField: "apikey"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer " + token)
+        XCTAssertEqual(backend.claims(claims)["aal"] as? String, "aal2")
+        XCTAssertEqual(backend.claims(claims)["email"] as? String, "fixture@example.com")
+        XCTAssertThrowsError(try AppCloudSession(owner: UUID(), key: "", token: token, backend: backend))
+        XCTAssertThrowsError(try AppCloudSession(owner: owner, key: "", token: token,
+            backend: BoundBackendConfiguration.resolve(info: [:])))
+    }
+
+    func testBackendKeychainItemsUseSeparateOrigins() throws {
+        let namespace = "Bound.BackendIsolation." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: namespace))
+        defer { defaults.removePersistentDomain(forName: namespace) }
+        var origins: [String] = []
+        var calls = BoundKeychainSessionStorage.Calls()
+        calls.copy = { query, _ in
+            origins.append((query as NSDictionary)[kSecAttrAccount] as? String ?? "")
+            return errSecItemNotFound
+        }
+        calls.delete = { _ in errSecSuccess }
+        let legacy = BoundKeychainSessionStorage(calls: calls, defaults: defaults, service: namespace,
+            origin: BoundBackendConfiguration.legacyOrigin)
+        let selfhost = BoundKeychainSessionStorage(calls: calls, defaults: defaults, service: namespace,
+            origin: "https://bound.example")
+        _ = try legacy.read(); _ = try selfhost.read()
+        try selfhost.remove()
+        _ = try legacy.read(); _ = try selfhost.read()
+        XCTAssertEqual(origins, [BoundBackendConfiguration.legacyOrigin, "https://bound.example", BoundBackendConfiguration.legacyOrigin])
+    }
+
     func testFriendsObservationStopsOnCloseAndResumesWithoutLosingOwnerChanges() throws {
         let sharing = FriendSharingSession(configuration: nil, authenticatedMode: true)
         var observations: [OnboardingObservation] = []

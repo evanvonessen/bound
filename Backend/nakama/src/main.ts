@@ -85,8 +85,12 @@ namespace BoundRooms {
         return ticket as Ticket;
     }
 
-    function ownerForUser(nk: nkruntime.Nakama, userID: string): string {
+    function ownerForUser(ctx: nkruntime.Context, nk: nkruntime.Nakama, userID: string): string {
         const account = nk.accountGetId(userID);
+        if (BoundAccounts.enabled(ctx)) {
+            if (!uuid.test(userID) || account.user.userId !== userID || account.disableTime || !account.user.metadata.bound_email_confirmed_at || account.user.metadata.bound_deleted_at) reject("Bound account required");
+            return userID;
+        }
         const customID = account.customId;
         if (typeof customID !== "string" || customID.substr(0, 6) !== "bound:" || !uuid.test(customID.substr(6))) reject("Bound account required");
         return customID.substr(6);
@@ -112,7 +116,7 @@ namespace BoundRooms {
         try { request = JSON.parse(payload); } catch (_) { reject("Invalid room request", 3); }
         if (!object(request) || Object.keys(request).join(",") !== "ticket") reject("Invalid room request", 3);
         const ticket = verifyTicket(ctx, nk, request.ticket);
-        if (ownerForUser(nk, ctx.userId) !== ticket.ownerID) reject("Account does not match admission ticket");
+        if (ownerForUser(ctx, nk, ctx.userId) !== ticket.ownerID) reject("Account does not match admission ticket");
         const read = { collection: directory, key: ticket.roomID, userId: systemUser };
         for (let attempt = 0; attempt < 3; attempt++) {
             const records = nk.storageRead([read]);
@@ -200,7 +204,7 @@ namespace BoundRooms {
         matchJoinAttempt: function (ctx, _logger, nk, _dispatcher, _tick, state, presence, metadata) {
             try {
                 const ticket = verifyTicket(ctx, nk, metadata.bound_ticket);
-                if (ticket.roomID !== state.roomID || !sameMembers(ticket.members, state.members) || ownerForUser(nk, presence.userId) !== ticket.ownerID) reject("Room access denied");
+                if (ticket.roomID !== state.roomID || !sameMembers(ticket.members, state.members) || ownerForUser(ctx, nk, presence.userId) !== ticket.ownerID) reject("Room access denied");
                 const duplicate = Object.keys(state.sessions).some(function (key) {
                     return key !== presence.sessionId && state.sessions[key].ownerID === ticket.ownerID && state.sessions[key].expiresAt > seconds();
                 });
@@ -309,7 +313,13 @@ namespace BoundRooms {
 
 // Nakama resolves registered callbacks by global function identity when it
 // creates another JS VM. Namespace properties alone are not discoverable.
-var boundAuthenticate = BoundRooms.authenticate;
+function boundAuthenticate(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, request: nkruntime.AuthenticateCustomRequest): nkruntime.AuthenticateCustomRequest | void {
+    return BoundAccounts.enabled(ctx) ? BoundAccounts.authenticate(ctx, logger, nk, request) : BoundRooms.authenticate(ctx, logger, nk, request);
+}
+function boundRefresh(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, request: any): any {
+    if (!ctx || !BoundAccounts.enabled(ctx)) return boundDeny();
+    return BoundAccounts.refresh(ctx, logger, nk, request);
+}
 var boundRoomRPC = BoundRooms.roomRPC;
 var boundMatchInit = BoundRooms.match.matchInit;
 var boundMatchJoinAttempt = BoundRooms.match.matchJoinAttempt;
@@ -322,10 +332,12 @@ function boundDeny(): never { throw { message: "Use the Bound account bridge", c
 
 function InitModule(ctx: nkruntime.Context, logger: nkruntime.Logger, _nk: nkruntime.Nakama, initializer: nkruntime.Initializer): void {
     if (!ctx.env.BOUND_NAKAMA_BRIDGE_SECRET || ctx.env.BOUND_NAKAMA_BRIDGE_SECRET.length < 32) throw Error("BOUND_NAKAMA_BRIDGE_SECRET must be configured with at least 32 characters");
+    const selfhost = BoundAccounts.enabled(ctx);
+    if (selfhost && (!ctx.env.BOUND_GATEWAY_SECRET || ctx.env.BOUND_GATEWAY_SECRET.length < 32)) throw Error("BOUND_GATEWAY_SECRET must be configured");
     initializer.registerBeforeAuthenticateCustom(boundAuthenticate);
     initializer.registerBeforeAuthenticateApple(boundDeny);
     initializer.registerBeforeAuthenticate(boundDeny);
-    initializer.registerBeforeSessionRefresh(boundDeny);
+    initializer.registerBeforeSessionRefresh(boundRefresh);
     initializer.registerBeforeAuthenticateDevice(boundDeny);
     initializer.registerBeforeAuthenticateEmail(boundDeny);
     initializer.registerBeforeAuthenticateFacebook(boundDeny);
@@ -340,12 +352,22 @@ function InitModule(ctx: nkruntime.Context, logger: nkruntime.Logger, _nk: nkrun
     initializer.registerBeforeLinkApple(boundDeny);
     initializer.registerBeforeLinkDevice(boundDeny);
     initializer.registerBeforeLinkEmail(boundDeny);
+    initializer.registerBeforeUnlinkEmail(boundDeny);
     initializer.registerBeforeLinkFacebook(boundDeny);
     initializer.registerBeforeLinkFacebookInstantGame(boundDeny);
     initializer.registerBeforeLinkGameCenter(boundDeny);
     initializer.registerBeforeLinkGoogle(boundDeny);
     initializer.registerBeforeLinkSteam(boundDeny);
     initializer.registerRtBefore("MatchCreate", boundDeny);
+    // Nakama extracts callback identifiers from top-level InitModule statements;
+    // mode checks belong inside the callback, never in conditional registration.
+    initializer.registerRpc("bound_account_v1", boundAccountRPC);
+    initializer.registerBeforeUpdateAccount(boundDeny);
+    initializer.registerBeforeDeleteAccount(boundDeny);
+    // Bound storage is exclusively server-owned. A client must not create a
+    // fresh reserved-key record with its own write permissions.
+    initializer.registerBeforeWriteStorageObjects(boundDeny);
+    initializer.registerBeforeDeleteStorageObjects(boundDeny);
     initializer.registerRpc("bound_room_v1", boundRoomRPC);
     initializer.registerMatch("bound_room_v1", {
         matchInit: boundMatchInit,

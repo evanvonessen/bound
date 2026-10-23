@@ -64,6 +64,6 @@ export function fixture(roomMembers = members) {
   const frame = (body = 'fixture', targetOwnerID) => ({ v: 1, body: Buffer.from(body).toString('base64'), ...(targetOwnerID ? { targetOwnerID } : {}) });
   const loop = messages => api.match.matchLoop(ctx, logger, nk, dispatcher, 0, state, messages);
   const init = () => context.InitModule(ctx, logger, nk, new Proxy({}, { get: (_target, name) => (...args) => { registrations[name] = args; } }));
-  return { api, ctx, logger, nk, dispatcher, logs, broadcasts, kicks, registrations, active, stored, discarded,
+  return { api, accounts: context.BoundAccounts, ctx, logger, nk, dispatcher, logs, broadcasts, kicks, registrations, active, stored, discarded,
     ticket, join, message, frame, loop, init, state, presence, now: value => { now = value; } };
 }

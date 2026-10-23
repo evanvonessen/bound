@@ -1,0 +1,91 @@
+name: bound
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+services:
+  postgres:
+    image: postgres:17.6-alpine3.22
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nakama
+      POSTGRES_DB: nakama
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run configure.py first}
+    command: [postgres, -c, max_connections=40, -c, shared_buffers=128MB, -c, work_mem=4MB]
+    volumes: [postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U nakama -d nakama"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 512m
+    logging: *logging
+    networks: [private]
+
+  nakama:
+    build: { context: ../nakama }
+    restart: unless-stopped
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - /nakama/nakama migrate up --config /run/secrets/nakama.yml && exec /nakama/nakama --config /run/secrets/nakama.yml --runtime.js_min_count 1 --runtime.js_max_count 4
+    volumes: ["./secrets/nakama.yml:/run/secrets/nakama.yml:ro"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, /nakama/nakama, healthcheck]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+    mem_limit: 640m
+    logging: *logging
+    networks: [private]
+
+  gateway:
+    build: { context: .., dockerfile: selfhost/Dockerfile }
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+      TRUST_PROXY: "true"
+      FILE_DIRECTORY: /var/lib/bound/files
+    volumes: [files:/var/lib/bound/files]
+    depends_on:
+      nakama: { condition: service_healthy }
+    read_only: true
+    tmpfs: [/tmp:size=16m]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    mem_limit: 256m
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+    logging: *logging
+    networks: [private, egress]
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    environment:
+      BOUND_HOSTNAME: ${BOUND_HOSTNAME:?Run configure.py first}
+      TLS_EMAIL: ${TLS_EMAIL:?Run configure.py first}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      gateway: { condition: service_healthy }
+    mem_limit: 128m
+    logging: *logging
+    networks: [private, egress]
+
+networks:
+  private: { internal: true }
+  egress: {}
+volumes:
+  postgres: {}
+  files: {}
+  caddy_data: {}
+  caddy_config: {}

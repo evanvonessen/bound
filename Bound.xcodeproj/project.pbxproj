@@ -488,7 +488,6 @@
 		A15E00000000000000000002 /* BoundLivePresence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000001 /* BoundLivePresence.swift */; };
 		A15F00000000000000000002 /* BoundFriendInteraction.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15F00000000000000000001 /* BoundFriendInteraction.swift */; };
 		B47710000000000000000002 /* BoundVBABattleBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = B47710000000000000000001 /* BoundVBABattleBridge.mm */; };
-		B47710000000000000000009 /* AgoraBattleChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B47710000000000000000008 /* AgoraBattleChannel.swift */; };
 		B47710000000000000000007 /* BoundNativeBattle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B47710000000000000000006 /* BoundNativeBattle.swift */; };
 		B47710000000000000000005 /* BoundBattleCable.swift in Sources */ = {isa = PBXBuildFile; fileRef = B47710000000000000000004 /* BoundBattleCable.swift */; };
 		A15F00000000000000000004 /* BoundFriendInteractionPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15F00000000000000000003 /* BoundFriendInteractionPanel.swift */; };
@@ -1353,7 +1352,6 @@
 		A15F00000000000000000001 /* BoundFriendInteraction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundFriendInteraction.swift; sourceTree = "<group>"; };
 		B47710000000000000000001 /* BoundVBABattleBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = BoundVBABattleBridge.mm; sourceTree = "<group>"; };
 		B47710000000000000000003 /* BoundVBABattleBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = BoundVBABattleBridge.h; sourceTree = "<group>"; };
-		B47710000000000000000008 /* AgoraBattleChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgoraBattleChannel.swift; sourceTree = "<group>"; };
 		B47710000000000000000006 /* BoundNativeBattle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundNativeBattle.swift; sourceTree = "<group>"; };
 		B47710000000000000000004 /* BoundBattleCable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundBattleCable.swift; sourceTree = "<group>"; };
 		A15F00000000000000000003 /* BoundFriendInteractionPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundFriendInteractionPanel.swift; sourceTree = "<group>"; };
@@ -1624,7 +1622,6 @@
 				A15F00000000000000000001 /* BoundFriendInteraction.swift */,
 				B47710000000000000000001 /* BoundVBABattleBridge.mm */,
 				B47710000000000000000003 /* BoundVBABattleBridge.h */,
-				B47710000000000000000008 /* AgoraBattleChannel.swift */,
 				B47710000000000000000006 /* BoundNativeBattle.swift */,
 				501100000000000000000002 /* BoundSoulLink.swift */,
 				503000000000000000000006 /* BoundRunLease.swift */,
@@ -3657,7 +3654,6 @@
 				A15E00000000000000000002 /* BoundLivePresence.swift in Sources */,
 				A15F00000000000000000002 /* BoundFriendInteraction.swift in Sources */,
 				B47710000000000000000002 /* BoundVBABattleBridge.mm in Sources */,
-				B47710000000000000000009 /* AgoraBattleChannel.swift in Sources */,
 				B47710000000000000000007 /* BoundNativeBattle.swift in Sources */,
 				501100000000000000000001 /* BoundSoulLink.swift in Sources */,
 				503000000000000000000005 /* BoundRunLease.swift in Sources */,

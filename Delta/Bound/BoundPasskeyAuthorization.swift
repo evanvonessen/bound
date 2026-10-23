@@ -21,7 +21,7 @@ enum BoundPasskeyAuthorization {
     private static var active: Ceremony?
     static var isConfigured: Bool { configuredRelyingPartyID != nil }
 
-    /// This public configuration must agree with Supabase and the app's signed
+    /// This public configuration must agree with the account service and the app's signed
     /// webcredentials entitlement. Never derive the trusted RP from a response.
     private static var configuredRelyingPartyID: String? {
         guard let url = Bundle.main.url(forResource: "cloud-configuration", withExtension: "json"),

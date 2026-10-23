@@ -430,18 +430,6 @@ final class SoulLinkTests: XCTestCase {
         XCTAssertEqual(synced.first { $0.slot == "area:100" }?.state, .localOnly)
         XCTAssertEqual(synced.first { $0.slot == "area:101" }?.state, .available)
     }
-    func testSoulPacketsUseAuthenticatedReliableMailboxIncludingLegacyUpdateNotice() throws {
-        let callbacks = AgoraSharingCallbacks(remoteUID: 2) { _,_ in }
-        let packet = try XCTUnwrap(BoundSoulPacket(version: 2, run: UUID(), kind: .state).encoded())
-        callbacks.receiveInteraction(packet, uid: 99)
-        XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
-        callbacks.receiveInteraction(packet, uid: 2)
-        let legacy = BoundSoulPacket.legacyPrefix + Data("legacy state".utf8)
-        callbacks.receiveInteraction(legacy, uid: 2)
-        for index in 0..<100 { callbacks.receivePresence(Data([UInt8(index)]), uid: 2) }
-        XCTAssertEqual(callbacks.takeInteractions().messages, [packet, legacy])
-        XCTAssertEqual(callbacks.takeLatestPresence(), Data([99]))
-    }
     func testNativeFaintCreatesOnePersistentMemorialAndHealingNeverRepeatsIt() throws {
         var value = makeLedger(); value.partnerAcquisitions = ["area:100"]; value.partnerNames = ["area:100":"Buddy"]
         try value.observe([mon(1)], registering: true, fainted: [])
@@ -598,7 +586,7 @@ final class SoulLinkTests: XCTestCase {
             var bad = data; bad[index] = byte; XCTAssertNil(BoundSoulTeamPacket.decode(bad))
         }
     }
-    func testInvalidTeamDoesNotOverrideSharedRulesOrEnterMailbox() throws {
+    func testInvalidTeamDoesNotOverrideSharedRules() throws {
         var invalid = BoundSoulTeam(party:[teamMember(),teamMember()])
         XCTAssertFalse(invalid.valid)
         invalid = .init(party:[teamMember()],boxed:BoundSoulLedger.bits(["area:100"]))
@@ -607,10 +595,6 @@ final class SoulLinkTests: XCTestCase {
         member = teamMember(); member.name = ""; XCTAssertFalse(member.valid)
         let team = BoundSoulTeam(party:[teamMember()])
         XCTAssertNil(BoundSoulTeamPacket(run:UUID(),sender:UUID(),receiver:UUID(),sequence:0,team:team).encoded())
-        let callbacks = AgoraSharingCallbacks(remoteUID:2) { _,_ in }
-        let data = try XCTUnwrap(BoundSoulTeamPacket(run:UUID(),sender:UUID(),receiver:UUID(),sequence:1,team:team).encoded())
-        callbacks.receiveInteraction(data,uid:99); XCTAssertTrue(callbacks.takeInteractions().messages.isEmpty)
-        callbacks.receiveInteraction(data,uid:2); XCTAssertEqual(callbacks.takeInteractions().messages,[data])
     }
     @MainActor
     func testPairedDashboardTracksTeamsRejectsReplayAndExpiresDisconnectedSnapshots() throws {
