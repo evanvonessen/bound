@@ -182,6 +182,104 @@ private func actualPiPHitObstacles(in game: XCUIElement) throws -> [CGRect] {
     return rectangles
 }
 
+/// Xcode 27 can report a clipped SwiftUI row as hittable and turn tap() into
+/// scrolling. Position the whole row in the measured viewport before acting.
+private func revealROMUpdateSettingsControl(_ control: XCUIElement, in app: XCUIApplication,
+                                           searchUpward: Bool = true,
+                                           file: StaticString = #filePath, line: UInt = #line) {
+    let form = app.collectionViews.firstMatch
+    XCTAssertTrue(form.waitForExistence(timeout: 5), file: file, line: line)
+    func viewport() -> CGRect {
+        let bounds = form.frame.intersection(app.frame)
+        var top = bounds.minY
+        for bar in app.navigationBars.allElementsBoundByIndex {
+            let frame = bar.frame
+            if !frame.isEmpty && frame.intersects(bounds) { top = max(top, frame.maxY) }
+        }
+        return CGRect(x: bounds.minX + 4, y: top + 8,
+                      width: max(0, bounds.width - 8), height: max(0, bounds.maxY - top - 32))
+    }
+    Thread.sleep(forTimeInterval: 0.25)
+    for _ in 0..<14 {
+        let visible = viewport()
+        let frame = control.exists ? control.frame : .zero
+        if !frame.isEmpty && visible.contains(frame) && control.isHittable {
+            Thread.sleep(forTimeInterval: 0.25)
+            let settled = control.frame
+            if viewport().contains(settled), abs(settled.minY - frame.minY) < 1,
+               abs(settled.maxY - frame.maxY) < 1 { return }
+            continue
+        }
+        guard visible.width > 0, visible.height > 80 else { break }
+        let upward = frame.isEmpty ? searchUpward : frame.midY > visible.midY
+        let startY = visible.minY + visible.height * (upward ? 0.75 : 0.25)
+        let endY = visible.minY + visible.height * (upward ? 0.25 : 0.75)
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: visible.midX - app.frame.minX, dy: startY - app.frame.minY))
+        let end = origin.withOffset(CGVector(dx: visible.midX - app.frame.minX, dy: endY - app.frame.minY))
+        start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.15)
+        Thread.sleep(forTimeInterval: 0.25)
+    }
+    XCTAssertTrue(control.waitForExistence(timeout: 5), file: file, line: line)
+    XCTAssertFalse(control.frame.isEmpty, file: file, line: line)
+    XCTAssertTrue(viewport().contains(control.frame),
+                  "Control must be fully below navigation and inside the visible form: \(control.frame), viewport \(viewport())",
+                  file: file, line: line)
+    XCTAssertTrue(control.isHittable, file: file, line: line)
+}
+
+/// Shared settings are exercised from the library and the forced Mac workspace.
+/// This stays offline: it opens the folder picker without selecting a directory
+/// or starting OAuth. The caller terminates the disposable QA app afterward.
+func assertROMUpdateAndDebuggingSettings(in app: XCUIApplication) {
+    func reveal(_ control: XCUIElement, upward: Bool = true) {
+        revealROMUpdateSettingsControl(control, in: app, searchUpward: upward)
+    }
+    let reset = app.buttons["bound.settings-reset-defaults"]
+    reveal(reset)
+    reset.tap()
+    let debugging = app.switches["bound.settings-debugging-features"]
+    reveal(debugging)
+    let disabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "0"), object: debugging)
+    XCTAssertEqual(XCTWaiter.wait(for: [disabled], timeout: 5), .completed)
+    XCTAssertEqual(debugging.label, "Debugging Features")
+    XCTAssertFalse(app.buttons["bound.github-sign-in"].exists)
+    let developer = app.switches["bound.settings-developer-features"]
+    let multiplayer = app.switches["bound.settings-experimental-features"]
+    XCTAssertTrue(developer.exists)
+    XCTAssertTrue(multiplayer.exists)
+    XCTAssertEqual(multiplayer.label, "Enable Experimental Multiplayer")
+    XCTAssertLessThan(developer.frame.midY, multiplayer.frame.midY)
+    XCTAssertLessThan(multiplayer.frame.midY, debugging.frame.midY)
+    debugging.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+    XCTAssertEqual(developer.value as? String, "0", "Debugging remains independent of Developer Features")
+    XCTAssertEqual(multiplayer.value as? String, "0", "Debugging must not enable multiplayer")
+    let login = app.buttons["bound.github-sign-in"]
+    reveal(login)
+    XCTAssertEqual(login.label, "Sign In to GitHub")
+    XCTAssertTrue(login.isEnabled, "Fresh QA installs should expose login without starting a network request")
+    reveal(debugging, upward: false)
+    debugging.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+    XCTAssertTrue(login.waitForNonExistence(timeout: 5))
+
+    let account = app.buttons["bound.settings-account"]
+    reveal(account, upward: false)
+    account.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+    XCTAssertTrue(app.navigationBars["Account, Friends, & Sync"].waitForExistence(timeout: 5))
+    let folder = app.buttons["bound.rom-updates-choose-folder"]
+    reveal(folder)
+    XCTAssertTrue(["Choose iCloud Folder", "Change Folder"].contains(folder.label))
+    if app.buttons["bound.rom-updates-disable"].exists {
+        XCTAssertTrue(app.buttons["bound.rom-updates-check"].exists)
+    } else {
+        XCTAssertFalse(app.buttons["bound.rom-updates-check"].exists)
+    }
+    folder.tap()
+    XCTAssertTrue(app.buttons["DOCPicker.actionButton"].firstMatch.waitForExistence(timeout: 15),
+                  "Both UI versions must open the system folder picker")
+
+}
+
 final class CompanionUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -1022,6 +1120,119 @@ final class CompanionUITests: XCTestCase {
         XCTAssertFalse(app.buttons["bound.settings-interface"].exists)
         XCTAssertFalse(app.alerts["Unable to Reset Settings"].exists)
         app.buttons["bound.settings-close"].tap()
+    }
+
+    func testROMUpdatesAndDebuggingFeaturesFromIPhoneSettings() throws {
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations"]
+        app.launch()
+        defer { app.terminate() }
+        let close = app.buttons["Close"]
+        if close.waitForExistence(timeout: 2) { close.tap() }
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 15))
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
+        assertROMUpdateAndDebuggingSettings(in: app)
+        screenshot("iPhone-ROM-updates-settings")
+    }
+
+    /// Opt in with BOUND_ROM_UPDATE_QA=1 in the test runner environment.
+    /// Requires a fresh updater receipt, Documents/ROMUpdateQA/rrbin-integrated.gba,
+    /// and the disposable integrated-ROM library fixture BoundROMUpdateOldQA.
+    /// The harness verifies the resulting library files and backup after this test.
+    func testROMUpdateFolderEnrollmentReplacesExistingGameAndRechecks() throws {
+        guard ProcessInfo.processInfo.environment["BOUND_ROM_UPDATE_QA"] == "1" else {
+            throw XCTSkip("Set BOUND_ROM_UPDATE_QA=1 only after staging the disposable integrated-ROM update fixtures.")
+        }
+        let process = try XCTUnwrap(NSClassFromString("XCUIApplicationProcess"))
+        var originals: [(Method, IMP)] = []
+        for name in ["shouldSkipPreEventQuiescence", "shouldSkipPostEventQuiescence"] {
+            let method = try XCTUnwrap(class_getInstanceMethod(process, NSSelectorFromString(name)))
+            let skip: @convention(block) (AnyObject) -> Bool = { _ in true }
+            originals.append((method, method_setImplementation(method, imp_implementationWithBlock(skip))))
+        }
+        defer { for (method, original) in originals { imp_removeBlock(method_setImplementation(method, original)) } }
+        let app = XCUIApplication()
+        app.launchArguments = ["--bound-ui-no-animations"]
+        app.launch()
+        defer { app.terminate() }
+        let close = app.buttons["Close"]
+        if close.waitForExistence(timeout: 2) { close.tap() }
+        XCTAssertTrue(libraryGame(named: "BoundROMUpdateOldQA", in: app).waitForExistence(timeout: 15),
+                      "Stage the disposable old integrated ROM before this test")
+        let closeSearch = app.buttons["close"].firstMatch
+        XCTAssertTrue(closeSearch.waitForExistence(timeout: 5)); closeSearch.tap()
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
+        app.buttons["Settings"].tap()
+        XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
+        func reveal(_ control: XCUIElement) {
+            revealROMUpdateSettingsControl(control, in: app)
+        }
+        let account = app.buttons["bound.settings-account"]
+        reveal(account)
+        account.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.navigationBars["Account, Friends, & Sync"].waitForExistence(timeout: 5))
+        let choose = app.buttons["bound.rom-updates-choose-folder"]
+        reveal(choose)
+        XCTAssertEqual(choose.label, "Choose iCloud Folder", "This test requires initial updater enrollment")
+        screenshot("ROM-update-before-folder")
+        choose.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.buttons["DOCPicker.actionButton"].firstMatch.waitForExistence(timeout: 15))
+
+        let folder = app.cells.matching(NSPredicate(format: "label BEGINSWITH %@", "ROMUpdateQA")).firstMatch
+        let folderTitle = app.navigationBars.descendants(matching: .any).matching(NSPredicate(format: "label == %@ OR label == %@", "ROMUpdateQA", "ROMUpdateQA, Actions Menu")).firstMatch
+        // Files remembers its last location, including a folder from a cancelled selection.
+        if !folderTitle.exists {
+            if !folder.exists {
+                let local = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "On My iPhone")).firstMatch
+                if !local.exists, app.buttons["Browse"].firstMatch.exists { app.buttons["Browse"].firstMatch.tap() }
+                if local.waitForExistence(timeout: 3) { local.tap() }
+                let containers = app.cells.matching(NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@", "Delta Bound", "Bound"))
+                XCTAssertTrue(containers.firstMatch.waitForExistence(timeout: 15))
+                for index in 0..<containers.count {
+                    containers.element(boundBy: index).tap()
+                    if folder.waitForExistence(timeout: 3) { break }
+                    app.buttons["DOC.navBarButton.backInHistory"].tap()
+                }
+            }
+            XCTAssertTrue(folder.waitForExistence(timeout: 10)); folder.tap()
+        }
+        XCTAssertTrue(folderTitle.waitForExistence(timeout: 10), "Wait until the picker enters the staged update folder")
+        screenshot("ROM-update-selected-folder")
+        let action = app.buttons["DOCPicker.actionButton"].firstMatch
+        let open = action.waitForExistence(timeout: 3) ? action : app.buttons["Open"].firstMatch
+        XCTAssertTrue(open.waitForExistence(timeout: 5)); XCTAssertTrue(open.isEnabled); open.tap()
+
+        let picker = app.navigationBars["Game to Update"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 30))
+        let oldButton = app.buttons["BoundROMUpdateOldQA"].firstMatch
+        let oldGame = oldButton.waitForExistence(timeout: 2) ? oldButton : app.staticTexts["BoundROMUpdateOldQA"].firstMatch
+        reveal(oldGame); oldGame.tap()
+        screenshot("ROM-update-existing-game-selected")
+        app.buttons["bound.rom-updates-confirm-game"].tap()
+        let confirm = app.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@",
+            "bound.rom-updates-confirm-enrollment", "Enable Automatic Updates")).firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5)); confirm.tap()
+        XCTAssertTrue(picker.waitForNonExistence(timeout: 10))
+        let status = app.staticTexts["bound.rom-updates-status"]
+        reveal(status)
+        let updated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "ROM updated. Previous saves are backed up."), object: status)
+        XCTAssertEqual(XCTWaiter.wait(for: [updated], timeout: 60), .completed)
+        screenshot("ROM-update-existing-game-completed")
+
+        let check = app.buttons["bound.rom-updates-check"]
+        XCTAssertTrue(check.waitForExistence(timeout: 5)); XCTAssertTrue(check.isEnabled); check.tap()
+        let current = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "ROM is up to date."), object: status)
+        XCTAssertEqual(XCTWaiter.wait(for: [current], timeout: 30), .completed)
+        screenshot("ROM-update-second-check-current")
     }
 
     func testExperimentalMultiplayerSwitchPlacementPersistenceAndVisibility() throws {

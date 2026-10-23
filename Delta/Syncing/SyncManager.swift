@@ -141,6 +141,9 @@ final class SyncManager
     private static let boundOwnerKey = "bound.dropbox.harmony-owner.v1"
     private var startingCoordinator: SyncCoordinator?
     private var coordinatorWaitingToStop: SyncCoordinator?
+    private var pendingROMUpdates = 0
+    private var manualRecordMutations = 0
+    private var waitingROMUpdate: (() -> Void)?
     
     private init()
     {
@@ -311,11 +314,63 @@ extension SyncManager
         }
     }
     
+    /// Drain network work while retaining Harmony's change observer, so the
+    /// replacement and deleted saves still produce normal sync records.
+    @MainActor func performROMUpdate(_ operation: @escaping (@escaping () -> Void) -> Void)
+    {
+        pendingROMUpdates += 1
+        enqueueControlOperation { finishControl in
+            let apply = {
+                var finished = false
+                operation {
+                    DispatchQueue.main.async {
+                        guard !finished else { return }
+                        finished = true
+                        self.pendingROMUpdates -= 1
+                        finishControl()
+                        self.sync()
+                    }
+                }
+            }
+            let drained = {
+                if self.manualRecordMutations == 0 { apply() }
+                else { self.waitingROMUpdate = apply }
+            }
+            if let coordinator = self.coordinator {
+                coordinator.cancelSyncing {
+                    DispatchQueue.main.async { drained() }
+                }
+                self.syncProgress?.cancel()
+                self.syncProgress = nil
+            } else { drained() }
+        }
+    }
+
+    /// Manual version restoration uses Harmony's separate operation queue.
+    /// Include it in the ROM update fence without stopping record observation.
+    @MainActor func beginManualRecordMutation() -> (() -> Void)?
+    {
+        guard pendingROMUpdates == 0 else { return nil }
+        manualRecordMutations += 1
+        var finished = false
+        return {
+            DispatchQueue.main.async {
+                guard !finished else { return }
+                finished = true
+                self.manualRecordMutations -= 1
+                if self.manualRecordMutations == 0, let pending = self.waitingROMUpdate {
+                    self.waitingROMUpdate = nil
+                    pending()
+                }
+            }
+        }
+    }
+
     func sync()
     {
         guard Thread.isMainThread else { DispatchQueue.main.async { self.sync() }; return }
         // Account boundaries stop scheduling immediately, before queued teardown.
-        guard !isChangingBoundAccount, Self.currentBoundService != nil,
+        guard pendingROMUpdates == 0, !isChangingBoundAccount, Self.currentBoundService != nil,
               MainActor.assumeIsolated({ BoundFriendAccount.shared.session != nil && !BoundFriendAccount.shared.deletionPending }),
               !UserDefaults.standard.shouldRepairDatabase else { return }
         

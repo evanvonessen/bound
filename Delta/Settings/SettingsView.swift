@@ -248,6 +248,8 @@ struct SettingsView: View {
                                 BoundMultiplayerFeatures.setEnabled(enabled)
                             }
 
+                        BoundDebuggingSettingsRows()
+
                         if developerFeaturesEnabled {
                             Button("Export All Config") {
                                 exportingConfiguration = true
@@ -466,6 +468,7 @@ struct BoundAccountFriendsSyncSettings: View {
                 BoundFriendsListSections(sharing: context.sharing, onboarding: context.onboarding, account: context.account)
             }
             DeltaSyncSettingsSection()
+            BoundROMUpdateSettingsSection()
             if let username = context.signedInUsername {
                 Section {} footer: {
                     Text("Signed in to \(username)")
@@ -478,6 +481,7 @@ struct BoundAccountFriendsSyncSettings: View {
                 }
             }
         }
+        .boundROMUpdateSettingsPresentation()
         .navigationTitle("Account, Friends, & Sync")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { context.open() }

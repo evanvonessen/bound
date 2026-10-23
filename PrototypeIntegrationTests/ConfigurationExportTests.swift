@@ -83,6 +83,12 @@ final class ConfigurationExportTests: XCTestCase {
             "bound.rrdex.choice.v1.fixture-rom": Data([1, 2, 3]),
             "bound.fast-forward.enabled.v1.fixture-rom": true,
             "rom.fixture.identifier": "fixture-rom",
+            "bound.rom-updates.folder-bookmark.v1": Data("private-rom-folder-bookmark".utf8),
+            "bound.rom-updates.folder-name.v1": "Private ROM Folder",
+            "bound.rom-updates.enabled.v1": true,
+            "bound.rom-updates.enrollment-game.v1": "private-enrollment-game",
+            (Bundle.main.bundleIdentifier ?? "Bound") + ".github.signed-out": true,
+            BoundDebuggingFeatures.key: true,
             BoundDeveloperFeatures.key: true
         ]
         for (key, value) in protectedValues { defaults.set(value, forKey: key) }
@@ -138,6 +144,9 @@ final class ConfigurationExportTests: XCTestCase {
         }
         XCTAssertFalse(jsonText.contains("private notes"))
         XCTAssertFalse(jsonText.contains("fixture-rom"))
+        XCTAssertFalse(jsonText.contains("Private ROM Folder"))
+        XCTAssertFalse(jsonText.contains("private-enrollment-game"))
+        XCTAssertFalse(jsonText.contains(Data("private-rom-folder-bookmark".utf8).base64EncodedString()))
         XCTAssertEqual(defaults.dictionaryRepresentation().count, before.count, "Export must not add, remove, or migrate preferences.")
         for (key, value) in before {
             XCTAssertEqual(defaults.object(forKey: key) as? NSObject, value as? NSObject,
@@ -269,6 +278,8 @@ final class ConfigurationExportTests: XCTestCase {
         let (defaults, suite) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(true, forKey: BoundDeveloperFeatures.key)
+        XCTAssertFalse(defaults.bool(forKey: BoundDebuggingFeatures.key))
+        defaults.set(true, forKey: BoundDebuggingFeatures.key)
         let protected: [String: Any] = [
             "com.evanvonessen.bound.friend-account.signed-out.fixture": true,
             "syncingService": "boundCloud",
@@ -281,6 +292,7 @@ final class ConfigurationExportTests: XCTestCase {
         Settings.resetPreferenceValues(in: defaults)
 
         XCTAssertFalse(defaults.bool(forKey: BoundDeveloperFeatures.key))
+        XCTAssertFalse(defaults.bool(forKey: BoundDebuggingFeatures.key))
         for (key, value) in protected {
             XCTAssertEqual(defaults.object(forKey: key) as? NSObject, value as? NSObject,
                            "Reset must preserve protected user data at \(key).")

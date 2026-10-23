@@ -6,6 +6,8 @@
 	<string>$(BOUND_BACKEND_KIND)</string>
 	<key>BoundBackendURL</key>
 	<string>$(BOUND_BACKEND_URL)</string>
+	<key>BOUND_GITHUB_CLIENT_ID</key>
+	<string>Ov23liuiNhnZoNsWzfUL</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDocumentTypes</key>

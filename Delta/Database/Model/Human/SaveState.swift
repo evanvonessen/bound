@@ -132,7 +132,11 @@ extension SaveState: Syncable
     
     public var syncableMetadata: [HarmonyMetadataKey : String] {
         guard let game = self.game else { return [:] }
-        return [.gameID: game.identifier, .gameName: game.name, .coreID: self.coreIdentifier, .verifiedGameID: game.identifier].compactMapValues { $0 }
+        var metadata: [HarmonyMetadataKey: String] = [.gameID: game.identifier, .gameName: game.name, .coreID: self.coreIdentifier, .verifiedGameID: game.identifier].compactMapValues { $0 }
+        if let generation = BoundROMUpdateRegistry.generation(for: game.identifier) {
+            metadata[HarmonyMetadataKey("boundROMGeneration")] = generation
+        }
+        return metadata
     }
     
     public var syncableLocalizedName: String? {
@@ -142,6 +146,11 @@ extension SaveState: Syncable
     public func awakeFromSync(_ record: AnyRecord) throws
     {
         let verifiedGameID = record.remoteMetadata?[.verifiedGameID]
+        if let gameID = verifiedGameID ?? record.remoteMetadata?[.gameID] ?? self.game?.identifier {
+            try BoundROMUpdateRegistry.validateDownload(gameID: gameID,
+                generation: record.remoteMetadata?[HarmonyMetadataKey("boundROMGeneration")], isSave: true,
+                remoteLocked: record.perform { $0.remoteRecord?.isLocked ?? true })
+        }
         
         do
         {

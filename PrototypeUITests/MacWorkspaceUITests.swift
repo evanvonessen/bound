@@ -353,6 +353,20 @@ final class MacWorkspaceUITests: XCTestCase {
         app.terminate()
     }
 
+    func testROMUpdatesAndDebuggingFeaturesFromMacWorkspaceSettings() throws {
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = launchDiagnosticGame(arguments: ["--bound-ui-mac-workspace", "--bound-ui-no-animations"])
+        defer { app.terminate() }
+        XCTAssertTrue(element("bound.mac-workspace", in: app).waitForExistence(timeout: 20))
+        openWorkspaceActions(in: app)
+        let settings = app.buttons["bound.mac-settings"].firstMatch
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.tap()
+        XCTAssertTrue(element("bound.settings-root", in: app).waitForExistence(timeout: 10))
+        assertROMUpdateAndDebuggingSettings(in: app)
+        attachScreenshot(named: "Mac-ROM-updates-settings", from: app)
+    }
+
     func testMacWorkspaceSettingsExposeSharedControllerOptionsAndBindings() throws {
         defer { XCUIDevice.shared.orientation = .portrait }
         let app = launchDiagnosticGame(arguments: [

@@ -32,6 +32,14 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		53BC601F0D3B84D686006D98 /* BoundROMUpdateLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E30B4E74E195196F96EF6AA6 /* BoundROMUpdateLifecycleTests.swift */; };
+		CA44EE91DE2A83A0C6EC7C4F /* BoundROMUpdateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC30F861A4B600C26EC1B96D /* BoundROMUpdateTests.swift */; };
+		70EC871F843FF9D527947B75 /* BoundGitHubAccountTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 308B1B85AAFFFB2E0CF0A6EB /* BoundGitHubAccountTests.swift */; };
+		9CE8C4BB68D6CDA7F659BBE8 /* BoundROMUpdateActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3BFA93C4603920FA85C227F /* BoundROMUpdateActivity.swift */; };
+		255AE2AD644F19CBED699C76 /* BoundROMUpdateSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC775929E14A26F3B8307A26 /* BoundROMUpdateSettings.swift */; };
+		9474CB7B24B808266C5DAACB /* BoundROMUpdateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DADB04F2BCDA6A197AA7F7F /* BoundROMUpdateManager.swift */; };
+		0FC606D95C2C74C3A1BA8474 /* BoundROMUpdateStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9231483D777DADAFDDAE6D0 /* BoundROMUpdateStorage.swift */; };
+		9AF18DFBD985AD5D4468DAD9 /* BoundGitHubAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0E4F6CC6BABCBBDC9229AD /* BoundGitHubAccount.swift */; };
 		D16900000000000000000004 /* NakamaSharingTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16800000000000000000004 /* NakamaSharingTransportTests.swift */; };
 		D16900000000000000000003 /* BoundNakamaClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16800000000000000000003 /* BoundNakamaClientTests.swift */; };
 		D16900000000000000000002 /* BoundNakamaSharingTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16800000000000000000002 /* BoundNakamaSharingTransport.swift */; };
@@ -871,6 +879,14 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		E30B4E74E195196F96EF6AA6 /* BoundROMUpdateLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMUpdateLifecycleTests.swift; sourceTree = "<group>"; };
+		EC30F861A4B600C26EC1B96D /* BoundROMUpdateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMUpdateTests.swift; sourceTree = "<group>"; };
+		308B1B85AAFFFB2E0CF0A6EB /* BoundGitHubAccountTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundGitHubAccountTests.swift; sourceTree = "<group>"; };
+		D3BFA93C4603920FA85C227F /* BoundROMUpdateActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMUpdateActivity.swift; sourceTree = "<group>"; };
+		AC775929E14A26F3B8307A26 /* BoundROMUpdateSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMUpdateSettings.swift; sourceTree = "<group>"; };
+		8DADB04F2BCDA6A197AA7F7F /* BoundROMUpdateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMUpdateManager.swift; sourceTree = "<group>"; };
+		A9231483D777DADAFDDAE6D0 /* BoundROMUpdateStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMUpdateStorage.swift; sourceTree = "<group>"; };
+		5C0E4F6CC6BABCBBDC9229AD /* BoundGitHubAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundGitHubAccount.swift; sourceTree = "<group>"; };
 		D16800000000000000000004 /* NakamaSharingTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "NakamaSharingTransportTests.swift"; path = "PrototypeIntegrationTests/NakamaSharingTransportTests.swift"; sourceTree = SOURCE_ROOT; };
 		D16800000000000000000003 /* BoundNakamaClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "BoundNakamaClientTests.swift"; path = "PrototypeIntegrationTests/BoundNakamaClientTests.swift"; sourceTree = SOURCE_ROOT; };
 		D16800000000000000000002 /* BoundNakamaSharingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundNakamaSharingTransport.swift; sourceTree = "<group>"; };
@@ -1480,6 +1496,9 @@
 				A15E00000000000000000005 /* LivePresenceRuntimeTests.swift */,
 				35733EA11CCE9FF25284EFB8 /* AppearanceIntegrationTests.swift */,
 				79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */,
+				E30B4E74E195196F96EF6AA6 /* BoundROMUpdateLifecycleTests.swift */,
+				EC30F861A4B600C26EC1B96D /* BoundROMUpdateTests.swift */,
+				308B1B85AAFFFB2E0CF0A6EB /* BoundGitHubAccountTests.swift */,
 				C1D82587FA554BF8B7A9E409 /* MultiviewDexNavigationTests.swift */,
 				5EE41698681944B29CE0B89C /* SettingsResetTests.swift */,
 				B6D6920D53544AE59F218B53 /* ControllerButtonPlacementTests.swift */,
@@ -1607,6 +1626,11 @@
 				501100000000000000000002 /* BoundSoulLink.swift */,
 				503000000000000000000006 /* BoundRunLease.swift */,
 				503000000000000000000004 /* BoundMultiplayerSavePackage.swift */,
+				D3BFA93C4603920FA85C227F /* BoundROMUpdateActivity.swift */,
+				AC775929E14A26F3B8307A26 /* BoundROMUpdateSettings.swift */,
+				8DADB04F2BCDA6A197AA7F7F /* BoundROMUpdateManager.swift */,
+				A9231483D777DADAFDDAE6D0 /* BoundROMUpdateStorage.swift */,
+				5C0E4F6CC6BABCBBDC9229AD /* BoundGitHubAccount.swift */,
 				503000000000000000000002 /* BoundROMMultiplayer.swift */,
                 501200000000000000000002 /* BoundSharedProgression.swift */,
 				B47710000000000000000004 /* BoundBattleCable.swift */,
@@ -3308,6 +3332,9 @@
 				A15E00000000000000000006 /* LivePresenceRuntimeTests.swift in Sources */,
 				273B677E21CFB932EFA82ACD /* AppearanceIntegrationTests.swift in Sources */,
 				0DCC5A17E990440B949F4582 /* ConfigurationExportTests.swift in Sources */,
+				53BC601F0D3B84D686006D98 /* BoundROMUpdateLifecycleTests.swift in Sources */,
+				CA44EE91DE2A83A0C6EC7C4F /* BoundROMUpdateTests.swift in Sources */,
+				70EC871F843FF9D527947B75 /* BoundGitHubAccountTests.swift in Sources */,
 				4C2097EAF620479EAF50EA68 /* MultiviewDexNavigationTests.swift in Sources */,
 				5269C7C7055548F49212555B /* SettingsResetTests.swift in Sources */,
 				54F6C0C0B35A4D60AF6A63C3 /* ControllerButtonPlacementTests.swift in Sources */,
@@ -3631,6 +3658,11 @@
 				501100000000000000000001 /* BoundSoulLink.swift in Sources */,
 				503000000000000000000005 /* BoundRunLease.swift in Sources */,
 				503000000000000000000003 /* BoundMultiplayerSavePackage.swift in Sources */,
+				9CE8C4BB68D6CDA7F659BBE8 /* BoundROMUpdateActivity.swift in Sources */,
+				255AE2AD644F19CBED699C76 /* BoundROMUpdateSettings.swift in Sources */,
+				9474CB7B24B808266C5DAACB /* BoundROMUpdateManager.swift in Sources */,
+				0FC606D95C2C74C3A1BA8474 /* BoundROMUpdateStorage.swift in Sources */,
+				9AF18DFBD985AD5D4468DAD9 /* BoundGitHubAccount.swift in Sources */,
 				503000000000000000000001 /* BoundROMMultiplayer.swift in Sources */,
                 501200000000000000000001 /* BoundSharedProgression.swift in Sources */,
 				B47710000000000000000005 /* BoundBattleCable.swift in Sources */,

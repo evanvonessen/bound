@@ -197,13 +197,16 @@ class GameViewController: DeltaCore.GameViewController
     var boundFastForwardPreferences = BoundFastForwardPreferences()
     /// Assumed to be Delta.Game instance
     override var game: GameProtocol? {
-        willSet {
+        get { super.game }
+        set {
+            guard newValue == nil || !BoundROMUpdateManager.shared.isApplying else { return }
+            let oldValue = super.game
             self.emulatorCore?.removeObserver(self, forKeyPath: #keyPath(EmulatorCore.state), context: &kvoContext)
             
-            let game = self.game as? Game
-            NotificationCenter.default.removeObserver(self, name: .NSManagedObjectContextDidSave, object: game?.managedObjectContext)
-        }
-        didSet {
+            let previousGame = self.game as? Game
+            NotificationCenter.default.removeObserver(self, name: .NSManagedObjectContextDidSave, object: previousGame?.managedObjectContext)
+            super.game = newValue
+            BoundROMUpdateActivity.bindingChanged(self)
             self.emulatorCore?.addObserver(self, forKeyPath: #keyPath(EmulatorCore.state), options: [.old], context: &kvoContext)
             
             let game = self.game as? Game

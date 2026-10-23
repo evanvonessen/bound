@@ -272,6 +272,7 @@ extension Game: Syncable
     
     public func awakeFromSync(_ record: AnyRecord) throws
     {
+        try BoundROMUpdateRegistry.validateDownload(gameID: self.identifier, generation: nil, isSave: false)
         guard let gameCollection = self.gameCollection else { throw SyncValidationError.incorrectGameCollection(nil) }
         
         if gameCollection.identifier != self.type.rawValue

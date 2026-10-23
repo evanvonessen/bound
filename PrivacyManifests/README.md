@@ -14,6 +14,12 @@ required-reason API accesses, elapsed-time scheduling, or SDWebImage request/cac
 call sites. Refreshed only these five source hashes. Manifest declarations,
 dependency pins, runtime source, and the broader review limits below are unchanged.
 
+Rechecked 2026-10-22 for the iCloud ROM update launch guard. The change to
+`GameCollectionViewController.swift` adds an in-memory update-state check and an
+error alert. It adds no required-reason API access and does not change SDWebImage
+request or cache handling. Refreshed that integration hash only; the SDK manifest
+declarations and dependency pins remain unchanged.
+
 ## SDWebImage 3.8.3
 
 The committed CocoaPods lock identifies 3.8.3. The required-reason API scan of `Pods/SDWebImage/SDWebImage` found file-metadata access in `SDImageCache.m`:
