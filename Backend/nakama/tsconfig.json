@@ -1,0 +1,12 @@
+{
+  "files": ["types/nakama-runtime.d.ts", "types/nakama-3.41-compat.d.ts", "src/main.ts"],
+  "compilerOptions": {
+    "target": "es5",
+    "lib": ["es5"],
+    "outFile": "build/index.js",
+    "strict": true,
+    "noEmitOnError": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  }
+}

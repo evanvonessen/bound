@@ -6,7 +6,7 @@ import Darwin
 /// A whitelist of numeric SDK observations, never the SDK's configuration,
 /// channel, UID, token, video geometry, image or diagnostic dictionary.
 struct BoundPresenceTransportCheck: Codable, Equatable, Sendable {
-    enum Kind: String, Codable, Sendable { case agora, fixture, unavailable }
+    enum Kind: String, Codable, Sendable { case agora, nakama, fixture, unavailable }
     var kind = Kind.unavailable
     var streamCreated = false
     var createResult: Int?

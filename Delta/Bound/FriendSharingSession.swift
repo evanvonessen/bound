@@ -172,6 +172,7 @@ struct FriendSharingFrameTiming {
 
 @MainActor
 protocol FriendSharingTransport: SharingTransport {
+    var videoPublishing: Bool { get }
     var presenceConnectionCheck: BoundPresenceTransportCheck { get }
     func setPresenceReceiver(_ receiver: (@MainActor (Data) -> Void)?)
     func sendPresence(_ data: Data) -> Bool
@@ -194,6 +195,7 @@ protocol FriendSharingTransport: SharingTransport {
 }
 
 extension FriendSharingTransport {
+    var videoPublishing: Bool { true }
     var presenceConnectionCheck: BoundPresenceTransportCheck { .init() }
     func setPresenceReceiver(_ receiver: (@MainActor (Data) -> Void)?) {}
     func sendPresence(_ data: Data) -> Bool { false }
@@ -222,6 +224,7 @@ final class FriendSharingSession: ObservableObject {
     @Published private(set) var active = false
     @Published private(set) var joined = false
     @Published private(set) var reconnecting = false
+    @Published private(set) var videoPublishing = false
     // Numeric counters feed diagnostics, not the production companion UI.
     private(set) var receivedFrames = 0
     private(set) var publishedFrames = 0
@@ -230,6 +233,7 @@ final class FriendSharingSession: ObservableObject {
     private(set) var authenticatedMode: Bool
     private var roomProvider: () -> String?
     private let tokenFetcher: @MainActor (String, AppCloudSession) async throws -> FriendSharingTokenLease
+    private let nakamaFetcher: @MainActor (String, AppCloudSession) async throws -> BoundNakamaConfiguration
     var isConfigured: Bool { authenticatedMode || configuration != nil }
     var authenticatedSession: (() -> AppCloudSession?)?
     var multiplayerPacketReceiver: ((Data) -> Void)?
@@ -297,7 +301,10 @@ final class FriendSharingSession: ObservableObject {
         if spectatorLive != (watchingPartner && fresh) { spectatorLive = watchingPartner && fresh }
         guard active else { return }
         if reconnecting { status = "Reconnecting…" }
-        else if joined { status = fresh ? "Receiving game video" : "Waiting for fresh friend video" }
+        else if joined {
+            status = transport is BoundNakamaSharingTransport && !videoPublishing && !watchingPartner
+                ? "Multiplayer connected" : fresh ? "Receiving game video" : "Waiting for fresh friend video"
+        }
     }
 
     private let transport: any FriendSharingTransport
@@ -335,16 +342,33 @@ final class FriendSharingSession: ObservableObject {
          scheduler: (any SharingScheduler)? = nil,
          authenticatedMode: Bool = FriendSharingConfiguration.authenticationRequested,
          roomProvider: @escaping () -> String? = { FriendSharingTokens.room() },
-         tokenFetcher: @escaping @MainActor (String, AppCloudSession) async throws -> FriendSharingTokenLease = { try await FriendSharingTokens.fetch(room: $0, session: $1) }) {
+         tokenFetcher: @escaping @MainActor (String, AppCloudSession) async throws -> FriendSharingTokenLease = { try await FriendSharingTokens.fetch(room: $0, session: $1) },
+         nakamaFetcher: @escaping @MainActor (String, AppCloudSession) async throws -> BoundNakamaConfiguration = { try await BoundNakamaAuthorization.fetch(room: $0, session: $1) }) {
         self.authenticatedMode = authenticatedMode
         self.roomProvider = roomProvider; self.tokenFetcher = tokenFetcher
+        self.nakamaFetcher = nakamaFetcher
         self.configuration = authenticatedMode ? nil : configuration
-        let transport = transport ?? AgoraSharingTransport()
-        self.transport = transport
+        let resolvedTransport: any FriendSharingTransport
+        if let supplied = transport { resolvedTransport = supplied }
+        else if !authenticatedMode, configuration != nil { resolvedTransport = AgoraSharingTransport() }
+        else { resolvedTransport = BoundNakamaSharingTransport() }
+        self.transport = resolvedTransport
         let scheduler = scheduler ?? FriendSharingScheduler()
         self.scheduler = scheduler
-        self.sharing = try! SharingSession(transport: transport, scheduler: scheduler,
+        self.sharing = try! SharingSession(transport: resolvedTransport, scheduler: scheduler,
                                           minimumPublicationInterval: FriendSharingCadence.interval)
+        if let nakama = resolvedTransport as? BoundNakamaSharingTransport {
+            nakama.videoAuthorization = { [weak self] in
+                guard let self, let room = self.authRoom, let owner = self.tokenOwner,
+                      let identity = self.authenticatedSession?(), identity.owner == owner else { throw FriendSharingTokenError.unavailable }
+                let lease = try await self.tokenFetcher(room, identity)
+                guard lease.valid(room: room, owner: owner), self.authenticatedSession?()?.isSameSession(as: identity) == true else {
+                    throw FriendSharingTokenError.unavailable
+                }
+                return lease
+            }
+            nakama.videoStateChanged = { [weak self, weak nakama] in self?.videoPublishing = nakama?.videoPublishing == true }
+        }
         remoteView.backgroundColor = .black
         nativeBattle.makeChannel = { [weak self] receiver, failed in self?.transport.makeBattleChannel(receiver: receiver, failed: failed) }
         nativeBattle.sendControl = { [weak self] data in self?.transport.sendInteraction(data) == true }
@@ -382,6 +406,9 @@ final class FriendSharingSession: ObservableObject {
 
     private func refreshExperimentalFeatures() {
         if BoundMultiplayerFeatures.isEnabled {
+            if active, authenticatedMode, transport is BoundNakamaSharingTransport {
+                stop(); beginStart(); return
+            }
             livePresence.setEnabled(true)
             if active && joined && !reconnecting && !backgrounded { startPresence() }
         } else {
@@ -397,6 +424,9 @@ final class FriendSharingSession: ObservableObject {
             sharedWorld.stop()
             livePresence.setEnabled(false); livePresence.stop(); livePresence.connectionCheck.stop()
             setAutomaticMultiplayerConnection(false)
+            if active, authenticatedMode, transport is BoundNakamaSharingTransport {
+                stop(); beginStart()
+            }
         }
     }
 
@@ -492,6 +522,8 @@ final class FriendSharingSession: ObservableObject {
         reconnecting = false; recoveryAttempts = 0; recoveryCompletions = 0; recoveryTimeouts = 0
         captureClock = FriendSharingCaptureClock()
         active = true; status = "Connecting"
+        if let nakama = transport as? BoundNakamaSharingTransport { nakama.setVideoRequired(!startedForMultiplayer) }
+        videoPublishing = transport.videoPublishing
         transport.setPresenceReceiver { [weak self] data in
             guard BoundMultiplayerFeatures.isEnabled, let self, self.generation == run, self.active, self.joined, !self.reconnecting else { return }
             self.livePresence.receive(data)
@@ -521,6 +553,7 @@ final class FriendSharingSession: ObservableObject {
             case .remoteGone:
                 self.invalidateSpectatorVideo()
                 self.sharedWorld.peerGone(); self.soulLink.peerGone()
+                self.nativeBattle.cancel(resume: !self.backgrounded)
                 self.interactions.invalidate()
                 self.livePresence.peerGone()
                 self.remoteVisible = false
@@ -560,7 +593,7 @@ final class FriendSharingSession: ObservableObject {
             sharing.stop()
             return
         }
-        guard active, joined, !backgrounded else { return }
+        guard active, joined, !backgrounded, videoPublishing else { return }
         do {
             let token: SharingSessionToken
             if let current = publicationToken { token = current }
@@ -582,6 +615,10 @@ final class FriendSharingSession: ObservableObject {
     }
 
     private func requestToken(initial: Bool) {
+        if transport is BoundNakamaSharingTransport, BoundMultiplayerFeatures.isEnabled {
+            requestNakamaToken(initial: initial)
+            return
+        }
         guard tokenTask == nil, active, let room = authRoom, let owner = tokenOwner,
               let identity = authenticatedSession?(), identity.owner == owner else {
             if tokenTask == nil { stop(); status = "Sign in to share" }
@@ -621,6 +658,48 @@ final class FriendSharingSession: ObservableObject {
                 guard let self, self.generation == run, self.active else { return }
                 self.tokenTask = nil
                 self.handleForegroundReconnectFailure(run: run, status: "Sharing authorization unavailable · Retrying")
+            }
+        }
+    }
+
+    private func requestNakamaToken(initial: Bool) {
+        guard tokenTask == nil, active, let room = authRoom, let owner = tokenOwner,
+              let identity = authenticatedSession?(), identity.owner == owner,
+              let nakama = transport as? BoundNakamaSharingTransport else { return }
+        let run = generation, fetcher = nakamaFetcher
+        tokenTask = Task { [weak self] in
+            do {
+                let lease = try await fetcher(room, identity)
+                try Task.checkCancellation()
+                guard let self, self.generation == run, self.active else { return }
+                guard let roomID = UUID(uuidString: room), lease.isValid(room: roomID, owner: owner),
+                      self.authenticatedSession?()?.isSameSession(as: identity) == true else { throw FriendSharingTokenError.unavailable }
+                self.tokenTask = nil
+                if initial {
+                    nakama.configureGameplay(lease)
+                    // The shared session retains its legacy display identity;
+                    // this placeholder never opens Agora or authorizes gameplay.
+                    let localRole: UInt = lease.members.sorted { $0.uuidString < $1.uuidString }.first == owner ? 1 : 2
+                    self.configuration = .init(appID: String(repeating: "0", count: 32),
+                        channel: "nakama_" + roomID.uuidString.lowercased(), uid: localRole,
+                        remoteUID: localRole == 1 ? 2 : 1, token: "nakama")
+                    self.startTransport()
+                } else {
+                    guard nakama.renewGameplay(lease) else { throw FriendSharingTokenError.unavailable }
+                    self.tokenRenewals += 1
+                }
+                guard self.active else { return }
+                self.tokenExpiry = lease.expiresAt
+                let renewalRun = self.generation
+                self.tokenDeadline?.cancel()
+                self.tokenDeadline = self.scheduler.schedule(at: self.scheduler.now + max(1, min(40, lease.expiresAt - Date().timeIntervalSince1970 - 30))) { [weak self] in
+                    guard let self, self.generation == renewalRun, self.active else { return }
+                    self.requestToken(initial: false)
+                }
+            } catch {
+                guard let self, self.generation == run, self.active else { return }
+                self.tokenTask = nil
+                self.handleForegroundReconnectFailure(run: run, status: "Multiplayer unavailable · Retrying")
             }
         }
     }
@@ -730,7 +809,7 @@ final class FriendSharingSession: ObservableObject {
         publicationToken = nil
         sourceFrameNumber = 0; sourceButtons = 0
         transport.stop()
-        active = false; joined = false; remoteVisible = false; receivedFrames = 0
+        active = false; joined = false; videoPublishing = false; remoteVisible = false; receivedFrames = 0
         status = !isConfigured ? "Friend screen" : "Game sharing stopped"
         writeEvidence()
     }
@@ -802,7 +881,7 @@ final class FriendSharingSession: ObservableObject {
         recoveryID = nil; recoveryDeadline?.cancel(); recoveryDeadline = nil
         reconnecting = false; sharing.stop(); publicationToken = nil
         sourceFrameNumber = 0; sourceButtons = 0; transport.stop()
-        active = false; joined = false; remoteVisible = false; receivedFrames = 0
+        active = false; joined = false; videoPublishing = false; remoteVisible = false; receivedFrames = 0
         status = failureStatus
         scheduleForegroundReconnectRetry()
         writeEvidence()

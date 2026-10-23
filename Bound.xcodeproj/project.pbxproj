@@ -32,6 +32,11 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		D16900000000000000000004 /* NakamaSharingTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16800000000000000000004 /* NakamaSharingTransportTests.swift */; };
+		D16900000000000000000003 /* BoundNakamaClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16800000000000000000003 /* BoundNakamaClientTests.swift */; };
+		D16900000000000000000002 /* BoundNakamaSharingTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16800000000000000000002 /* BoundNakamaSharingTransport.swift */; };
+		D16900000000000000000001 /* BoundNakamaAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16800000000000000000001 /* BoundNakamaAuthorization.swift */; };
+		D16900000000000000000000 /* BoundNakamaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16800000000000000000000 /* BoundNakamaClient.swift */; };
 		503000000000000000000009 /* ROMMultiplayerContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50300000000000000000000A; };
 		503000000000000000000007 /* MultiplayerSavePackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000008; };
 		503000000000000000000005 /* BoundRunLease.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000006; };
@@ -867,6 +872,11 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		D16800000000000000000004 /* NakamaSharingTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "NakamaSharingTransportTests.swift"; path = "PrototypeIntegrationTests/NakamaSharingTransportTests.swift"; sourceTree = SOURCE_ROOT; };
+		D16800000000000000000003 /* BoundNakamaClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = "BoundNakamaClientTests.swift"; path = "PrototypeIntegrationTests/BoundNakamaClientTests.swift"; sourceTree = SOURCE_ROOT; };
+		D16800000000000000000002 /* BoundNakamaSharingTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundNakamaSharingTransport.swift; sourceTree = "<group>"; };
+		D16800000000000000000001 /* BoundNakamaAuthorization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundNakamaAuthorization.swift; sourceTree = "<group>"; };
+		D16800000000000000000000 /* BoundNakamaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundNakamaClient.swift; sourceTree = "<group>"; };
 		50300000000000000000000A /* ROMMultiplayerContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ROMMultiplayerContractTests.swift; sourceTree = "<group>"; };
 		503000000000000000000008 /* MultiplayerSavePackageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiplayerSavePackageTests.swift; sourceTree = "<group>"; };
 		503000000000000000000006 /* BoundRunLease.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundRunLease.swift; sourceTree = "<group>"; };
@@ -1456,6 +1466,8 @@
 			isa = PBXGroup;
 			children = (
 				5DD465FEC61E429CA4EAC9AB /* SourceAndLicenseTests.swift */,
+				D16800000000000000000004 /* NakamaSharingTransportTests.swift */,
+				D16800000000000000000003 /* BoundNakamaClientTests.swift */,
 				E519E2BAF174403DB37DB3A5 /* PlaybackSharingTests.swift */,
 				3DB42D13CD4642F59F46B8EE /* PlayerStateTests.swift */,
 				18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */,
@@ -1543,6 +1555,9 @@
 				CD57C331890EA530190F8FB0 /* FriendOnboarding.swift */,
 				5A0C6786CF517CB9DDCDEA08 /* FriendSharingConfiguration.swift */,
 				45AF939F3DBFF779500FB019 /* FriendSharingSession.swift */,
+				D16800000000000000000002 /* BoundNakamaSharingTransport.swift */,
+				D16800000000000000000001 /* BoundNakamaAuthorization.swift */,
+				D16800000000000000000000 /* BoundNakamaClient.swift */,
 				26C47EB2F43565AEDD44B055 /* FriendSharingTokens.swift */,
 				8B8FA67C55D07173D3644813 /* SharingFrame.swift */,
 				D96152E9343BCC1B73A10C62 /* SharingInterfaces.swift */,
@@ -3280,6 +3295,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				59CF946CE2E3410795B06A0E /* SourceAndLicenseTests.swift in Sources */,
+				D16900000000000000000004 /* NakamaSharingTransportTests.swift in Sources */,
+				D16900000000000000000003 /* BoundNakamaClientTests.swift in Sources */,
 				074EAD7F7AE78C628F0977A8 /* PlaybackSharingTests.swift in Sources */,
 				87214F8B08E34E1699AB1A1A /* PlayerStateTests.swift in Sources */,
 				18BC10A8D7EF4D1397B91706 /* RecordedPlayerTests.swift in Sources */,
@@ -3569,6 +3586,9 @@
 				E8A7206B7421C6BC0900D58C /* FriendOnboarding.swift in Sources */,
 				72E6585EF2788D220A64B750 /* FriendSharingConfiguration.swift in Sources */,
 				79C3209DFBBC08312D236440 /* FriendSharingSession.swift in Sources */,
+				D16900000000000000000002 /* BoundNakamaSharingTransport.swift in Sources */,
+				D16900000000000000000001 /* BoundNakamaAuthorization.swift in Sources */,
+				D16900000000000000000000 /* BoundNakamaClient.swift in Sources */,
 				0FACF7086F87199C6306CC15 /* FriendSharingTokens.swift in Sources */,
 				6775DA71ADC1948B36D0A009 /* SharingFrame.swift in Sources */,
 				6C5D344C353DE653833A32A3 /* SharingInterfaces.swift in Sources */,

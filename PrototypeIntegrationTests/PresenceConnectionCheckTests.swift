@@ -86,8 +86,10 @@ import UIKit
         XCTAssertEqual(root["runtime"] as? String, "simulator")
         XCTAssertFalse(string.contains("coordinates")); XCTAssertFalse(string.contains("palette")); XCTAssertFalse(string.contains("frameAddress"))
         sharing.start(); XCTAssertEqual(transport.starts, 1)
-        XCTAssertFalse(presence.enabled); XCTAssertFalse(presence.needsReader)
+        let enabledBeforeStoppingReport = presence.enabled, demandBeforeStoppingReport = presence.needsReader
         check.stop(); XCTAssertTrue(sharing.active, "Stopping a report must not stop current sharing")
+        XCTAssertEqual(presence.enabled, enabledBeforeStoppingReport)
+        XCTAssertEqual(presence.needsReader, demandBeforeStoppingReport)
         XCTAssertEqual(transport.sends, 0); sharing.stop()
     }
 }

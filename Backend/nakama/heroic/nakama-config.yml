@@ -1,0 +1,15 @@
+# Merge these fields into the Heroic Cloud deployment's Nakama configuration.
+# Set BOUND_NAKAMA_BRIDGE_SECRET separately as a Runtime secret variable.
+runtime:
+  js_entrypoint: "index.js"
+session:
+  # Existing sockets last through membership-ticket refresh. Admission itself
+  # still expires within 90 seconds unless the broker reauthorizes the player.
+  token_expiry_sec: 7200
+socket:
+  # JSON match envelopes base64-encode an already encoded binary gameplay body.
+  # Nakama's 4096-byte default cannot carry the supported battle frame size.
+  max_message_size_bytes: 32768
+  max_request_size_bytes: 32768
+logger:
+  level: "INFO"

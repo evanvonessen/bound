@@ -1,0 +1,15 @@
+{
+  "name": "bound-nakama-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bound's authenticated gameplay room runtime for Nakama and Heroic Cloud",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "export:heroic": "npm run build && node scripts/export-heroic.mjs",
+    "smoke:local": "node tools/local-smoke.mjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

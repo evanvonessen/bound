@@ -663,8 +663,8 @@ final class BoundCompanionCoordinator {
             }
             owner.view.addSubview(controls); self.controls = controls
         }
-        sharing.$joined.combineLatest(sharing.$active).sink { [weak self] joined, active in
-            self?.tap.setEnabled(joined && active)
+        sharing.$joined.combineLatest(sharing.$active, sharing.$videoPublishing).sink { [weak self] joined, active, video in
+            self?.tap.setEnabled(joined && active && video)
         }.store(in: &subscriptions)
         if macHost == nil {
             gestures = BoundPiPGestures(view: owner.view, shouldReceive: { [weak self] touch in self?.shouldReceive(touch) ?? false },
