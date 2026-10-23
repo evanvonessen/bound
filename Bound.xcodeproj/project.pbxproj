@@ -2695,6 +2695,7 @@
 				BFFA71D31AAC406100EE9DD1 /* Sources */,
 				BFFA71D41AAC406100EE9DD1 /* Frameworks */,
 				BFFA71D51AAC406100EE9DD1 /* Resources */,
+				B0CD23000000000000000001 /* Bundle Development ROM */,
 				0E0279E4F38215820BB0C9A0 /* [CP] Copy Pods Resources */,
 				BF08DC3325CE07C3007A9CF4 /* Embed Frameworks */,
 			);
@@ -3187,6 +3188,20 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+        B0CD23000000000000000001 /* Bundle Development ROM */ = {
+            isa = PBXShellScriptBuildPhase;
+            alwaysOutOfDate = 1;
+            buildActionMask = 2147483647;
+            files = ();
+            inputPaths = ();
+            outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/rrbin-integrated.gba");
+            name = "Bundle Development ROM";
+            runOnlyForDeploymentPostprocessing = 0;
+            shellPath = /bin/sh;
+            shellScript = "python3 \"$SRCROOT/PrototypeTools/bundle-development-rom.py\"";
+            showEnvVarsInLog = 0;
+        };
+
 		0E0279E4F38215820BB0C9A0 /* [CP] Copy Pods Resources */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;

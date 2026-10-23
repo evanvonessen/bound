@@ -36,6 +36,43 @@ final class BoundROMUpdateTests: XCTestCase {
         .init(generation: generation, localNormal: localNormal, remoteNormal: remoteNormal, conflicted: conflicted, locked: locked)
     }
 
+    func testClearSavesOnlyRemovesSelectedFilesAndRetainsBackup() throws {
+        let f = try fixture()
+        let selected = try f.file("Database/Games/selected.sav", Data([1, 2]))
+        let other = try f.file("Database/Games/other.sav", Data([3]))
+        let rom = try f.file("Database/Games/selected.gba", Data([4]))
+        let state = try f.file("Database/Save States/selected/manual", Data([5]))
+        var committed = false
+        try f.storage.clearSaveFiles([selected, state.deletingLastPathComponent()]) { committed = true }
+        XCTAssertTrue(committed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: selected.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: state.path))
+        XCTAssertEqual(try Data(contentsOf: other), Data([3]))
+        XCTAssertEqual(try Data(contentsOf: rom), Data([4]))
+        let backups = try FileManager.default.contentsOfDirectory(at: f.storage.root.appendingPathComponent("Cleared Saves"), includingPropertiesForKeys: nil)
+        XCTAssertEqual(try Data(contentsOf: backups[0].appendingPathComponent("0")), Data([1, 2]))
+    }
+
+    func testClearSavesRestoresFilesIfDatabaseCommitFails() throws {
+        let f = try fixture()
+        let selected = try f.file("Database/Games/selected.sav", Data([1, 2]))
+        XCTAssertThrowsError(try f.storage.clearSaveFiles([selected]) { throw BoundROMUpdateError.storage })
+        XCTAssertEqual(try Data(contentsOf: selected), Data([1, 2]))
+    }
+
+    func testClearSavesRejectsPathsOutsideSaveStorage() throws {
+        let f = try fixture()
+        XCTAssertThrowsError(try f.storage.clearSaveFiles([f.root.appendingPathComponent("outside")]) {})
+    }
+
+    func testBundledCartridgeMatchesCommittedContract() throws {
+        let bundle = Bundle(for: Game.self)
+        let url = try XCTUnwrap(bundle.url(forResource: "rrbin-integrated", withExtension: "gba"))
+        let data = try Data(contentsOf: url)
+        _ = try BoundROMUpdateContent(data: data, expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
+        _ = try BoundPlayerROMProfile(rom: data)
+    }
+
     func testROMCandidateRejectsPartialAndWrongContentWithoutTouchingOriginals() throws {
         let f = try fixture(), bytes = Data(repeating: 3, count: 64)
         let original = try f.file("Games/original.sav", Data([8, 9]))

@@ -646,6 +646,9 @@ private extension GameCollectionViewController
                     alertController.addAction(UIAlertAction(title: NSLocalizedString("Restart", comment: ""), style: .destructive, handler: { (action) in
                         launchGame(ignoringErrors: [LaunchError.alreadyRunning, LaunchError.multiplayerSessionActive(nil)])
                     }))
+                    alertController.addAction(UIAlertAction(title: NSLocalizedString("Clear Saves…", comment: ""), style: .destructive) { [weak self] _ in
+                        self?.confirmClearSaves(for: game)
+                    })
                     self.present(alertController, animated: true)
                     
                 case .biosNotFound:
@@ -842,6 +845,10 @@ private extension GameCollectionViewController
             self.exportSaveFile(for: game)
         }
         
+        let clearSavesAction = UIAction(title: NSLocalizedString("Clear Saves…", comment: ""), image: UIImage(symbolNameIfAvailable: "trash"), attributes: .destructive) { [weak self] _ in
+            self?.confirmClearSaves(for: game)
+        }
+
         let deleteAction = UIAction(title: NSLocalizedString("Delete", comment: ""), image: UIImage(symbolNameIfAvailable: "trash"), attributes: .destructive) { [unowned self] action in
             self.delete(game)
         }
@@ -849,7 +856,7 @@ private extension GameCollectionViewController
         let openMenu = UIMenu(title: "", options: .displayInline, children: [openNewWindowAction])
         let openActions = UIApplication.shared.supportsMultipleScenes ? [openMenu] : []
         
-        let saveFileMenu = UIMenu(title: NSLocalizedString("Manage Save File", comment: ""), image: UIImage(symbolNameIfAvailable: "doc"), children: [importSaveFile, exportSaveFile])
+        let saveFileMenu = UIMenu(title: NSLocalizedString("Manage Save File", comment: ""), image: UIImage(symbolNameIfAvailable: "doc"), children: [importSaveFile, exportSaveFile, clearSavesAction])
         
         // Hide save states option if using RetroAchievements and Hardcore Mode.
         let savesActions = (AchievementsManager.shared.isAuthenticated && Settings.features.retroAchievements.isHardcoreModeEnabled) ? [saveFileMenu] : [saveStatesAction, saveFileMenu]
@@ -1169,6 +1176,23 @@ private extension GameCollectionViewController
         self.present(activityViewController, animated: true, completion: nil)
     }
     
+    func confirmClearSaves(for game: Game)
+    {
+        let alert = UIAlertController(title: "Clear Saves for \(game.name)?", message: "This closes the game and clears its saved progress, save states, and local multiplayer recovery. Other games are unaffected.", preferredStyle: .alert)
+        alert.addAction(.cancel)
+        alert.addAction(UIAlertAction(title: "Clear Saves", style: .destructive) { [weak self] _ in
+            guard let self else { return }
+            if self.activeEmulatorCore?.game.fileURL == game.fileURL { self.activeSaveState = nil }
+            BoundROMUpdateManager.shared.clearSaves(for: game) { error in
+                let result: UIAlertController
+                if let error { result = UIAlertController(title: "Couldn’t Clear Saves", error: error) }
+                else { result = UIAlertController(title: "Saves Cleared", message: game.name, preferredStyle: .alert); result.addAction(.ok) }
+                self.present(result, animated: true)
+            }
+        })
+        present(alert, animated: true)
+    }
+
     func importSaveFile(for game: Game)
     {
         self._importingSaveFileGame = game

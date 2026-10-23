@@ -97,6 +97,34 @@ final class BoundROMUpdateStorage {
         let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return .init(root: support.appendingPathComponent("ROM Updates", isDirectory: true), documents: documents, support: support)
     }
+    /// Keep a verified local recovery copy; remove only explicitly selected paths.
+    func clearSaveFiles(_ urls: [URL], commit: () throws -> Void) throws {
+        let sources = try urls.map { try source(for: $0, remove: true) }
+        let backup = root.appendingPathComponent("Cleared Saves/" + UUID().uuidString)
+        try fm.createDirectory(at: backup, withIntermediateDirectories: true)
+        var copies: [(URL, URL)] = []
+        for (index, source) in sources.enumerated() {
+            let original = try resolve(source.path)
+            guard fm.fileExists(atPath: original.path) else { continue }
+            let copy = backup.appendingPathComponent(String(index))
+            let before = try inventory(original)
+            try fm.copyItem(at: original, to: copy)
+            guard try inventory(copy) == before, try inventory(original) == before else { throw BoundROMUpdateError.changedBackup }
+            copies.append((original, copy))
+        }
+        try JSONEncoder().encode(sources).write(to: backup.appendingPathComponent("sources.json"), options: .atomic)
+        do {
+            for (original, _) in copies { try fm.removeItem(at: original) }
+            try commit()
+        } catch {
+            for (original, copy) in copies where !fm.fileExists(atPath: original.path) {
+                try fm.createDirectory(at: original.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fm.copyItem(at: copy, to: original)
+            }
+            throw error
+        }
+    }
+
     func state() throws -> State {
         guard fm.fileExists(atPath: stateURL.path) else { return .init() }
         return try JSONDecoder().decode(State.self, from: Data(contentsOf: stateURL))
