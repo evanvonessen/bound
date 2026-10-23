@@ -51,6 +51,65 @@ final class RecordedPlayerTests: XCTestCase {
         return .init(frame: frame, status: .live, detail: "Fixture", player: player)
     }
 
+    func testScriptLockedFieldKeepsSceneAndMasksOnlyNativeWindowTiles() throws {
+        var work = Data(repeating: 0, count: 0x40000)
+        var internalRAM = Data(repeating: 0, count: 0x8000)
+        func bytes(_ value: Int, _ count: Int = 4) -> [UInt8] {
+            (0..<count).map { UInt8(truncatingIfNeeded: value >> ($0 * 8)) }
+        }
+        func put(_ value: Int, _ address: Int, _ count: Int = 4) {
+            if address >= 0x03000000 {
+                let offset = address - 0x03000000
+                internalRAM.replaceSubrange(offset..<offset + count, with: bytes(value, count))
+            } else {
+                let offset = address - 0x02000000
+                work.replaceSubrange(offset..<offset + count, with: bytes(value, count))
+            }
+        }
+        let sprite = 0x0202063C
+        put(0x08010000, sprite + 8); put(0x08011000, sprite + 12)
+        put(120, sprite + 0x20, 2); put(112, sprite + 0x22, 2)
+        put(0xF8, sprite + 0x28, 1); put(0xF0, sprite + 0x29, 1)
+        put(3, sprite + 0x3E, 1); put(2 << 10, sprite + 4, 2)
+        put(0x08001000, 0x02036DFC)
+        put(0x100, 0x03000000, 2) // Native text BG0 remains enabled.
+        put(0x02010000, 0x030008EC)
+        put(0xF038, 0x02010000 + (15 * 32 + 14) * 2, 2)
+        let rom: [Int: [UInt8]] = [
+            0x08001000: bytes(0) + bytes(0) + bytes(0) + bytes(0) + bytes(0x08002000) + bytes(0x08003000),
+            0x08002000: bytes(0) + bytes(0x08004000),
+            0x08003000: bytes(0) + bytes(0x08009000),
+            0x08004000: Array(repeating: 0, count: 640 * 32),
+            0x08009000: Array(repeating: 0, count: 384 * 32),
+            0x08010000: bytes(0x08010010), 0x08010010: bytes(0),
+            0x08011000: bytes(0x08012000) + bytes(256),
+            0x08012000: Array(repeating: 0x11, count: 256)
+        ]
+        let player = try XCTUnwrap(reading(frame: 1).player)
+        let assets = BoundPlayerSceneAssets()
+        func decode() -> BoundPlayerScene? {
+            BoundPlayerSceneDecoder.read(player: player,
+                memory: BoundGBAMemorySnapshot(copyingWorkRAM: work, internalRAM: internalRAM)!,
+                rom: { address, count in
+                    guard let value = rom[address], value.count == count else { return nil }
+                    return value
+                }, assets: assets)
+        }
+        let unlocked = try XCTUnwrap(decode())
+        put(1, 0x03000F9C, 1) // Mom, friend prompts and ordinary scripts lock controls.
+        let dialogue = try XCTUnwrap(decode())
+        XCTAssertEqual(dialogue.worldFoot, unlocked.worldFoot)
+        XCTAssertEqual(dialogue.appearance, unlocked.appearance)
+        XCTAssertTrue(dialogue.background.covers(x: 112, y: 120, priority: 2))
+        XCTAssertFalse(dialogue.background.covers(x: 112, y: 96, priority: 2))
+        let rendered = BoundRecordedPlayerRasterizer.rgba(pose: pose(), scene: dialogue).0
+        XCTAssertTrue(stride(from: 3, to: rendered.count, by: 4).contains { rendered[$0] != 0 },
+                      "Dialogue must not hide the entire friend")
+        put(0, 0x02010000 + (15 * 32 + 14) * 2, 2)
+        XCTAssertFalse(try XCTUnwrap(decode()).background.covers(x: 112, y: 120, priority: 2),
+                       "Closing a window removes its occlusion")
+    }
+
     func testCameraMovesByOnePixelAcrossDestinationTileAndSignedWrap() {
         func camera(x: Int = 6, y: Int = 6, rx: Int = 0, ry: Int = 0, total: Int = 0) -> BoundPlayerState.Point {
             BoundPlayerSceneDecoder.camera(save: .init(x: x, y: y), residual: .init(x: rx, y: ry),

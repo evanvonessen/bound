@@ -41,6 +41,7 @@ struct BoundPlayerBackground: Equatable, Sendable {
         let scrollX: Int
         let scrollY: Int
         let map: Data
+        var masksWholeTiles = false
     }
     let tiles: Data
     let layers: [Layer]
@@ -50,6 +51,8 @@ struct BoundPlayerBackground: Equatable, Sendable {
             let px = (x + layer.scrollX) & 255, py = (y + layer.scrollY) & 255
             let offset = ((py / 8) * 32 + px / 8) * 2
             let entry = Int(layer.map[offset]) | Int(layer.map[offset + 1]) << 8
+            // Native BG0 windows own their occupied tiles, including borders.
+            if layer.masksWholeTiles { if entry != 0 { return true }; continue }
             let tx = entry & 0x400 != 0 ? 7 - (px & 7) : px & 7
             let ty = entry & 0x800 != 0 ? 7 - (py & 7) : py & 7
             let index = (entry & 1023) * 32 + ty * 4 + tx / 2
@@ -157,16 +160,20 @@ enum BoundPlayerSceneDecoder {
     }
 
     static func read(player: BoundPlayerState, memory: BoundGBAMemorySnapshot, profile: BoundPlayerROMProfile) -> BoundPlayerScene? {
-        let rom = profile.bytes
-        guard memory.bytes(at: 0x03000F9C, count: 1) == [0], // Field menu / script controls lock.
-              let avatar = memory.bytes(at: 0x02037078, count: 8), avatar[0] & 0x1E == 0,
+        read(player: player, memory: memory, rom: profile.bytes, assets: profile.sceneAssets)
+    }
+
+    static func read(player: BoundPlayerState, memory: BoundGBAMemorySnapshot,
+                     rom: (Int, Int) -> [UInt8]?, assets: BoundPlayerSceneAssets) -> BoundPlayerScene? {
+        // Script/control locks stop movement, not the visible field or its sprites.
+        guard let avatar = memory.bytes(at: 0x02037078, count: 8), avatar[0] & 0x1E == 0,
               let raw = memory.bytes(at: 0x0202063C + Int(avatar[4]) * 68, count: 68),
               let appearance = sprite(raw, memory: memory, rom: rom), appearance.width == 16, appearance.height == 32,
               BoundSceneBytes.signed(raw, 0x24) == 0, BoundSceneBytes.signed(raw, 0x26) == 0,
               let offsetBytes = memory.bytes(at: 0x02021BC8, count: 4), raw[0x3E] & 2 != 0,
               let cameraBytes = memory.bytes(at: 0x03005060, count: 16),
               let header = memory.bytes(at: 0x02036DFC, count: 4),
-              let tiles = profile.sceneAssets.tiles(layout: BoundSceneBytes.word(header), rom: rom),
+              let tiles = assets.tiles(layout: BoundSceneBytes.word(header), rom: rom),
               let regs = memory.bytes(at: 0x03000000, count: 0x40) else { return nil }
         let residual = BoundPlayerState.Point(x: Int(Int32(bitPattern: UInt32(BoundSceneBytes.word(cameraBytes)))),
                                              y: Int(Int32(bitPattern: UInt32(BoundSceneBytes.word(cameraBytes, 4)))))
@@ -188,6 +195,16 @@ enum BoundPlayerSceneDecoder {
                   let map = memory.bytes(at: BoundSceneBytes.word(pointer), count: 2048) else { return nil }
             layers.append(.init(priority: control & 3, scrollX: BoundSceneBytes.half(regs, 0x10 + bg * 4),
                                 scrollY: BoundSceneBytes.half(regs, 0x12 + bg * 4), map: Data(map)))
+        }
+        // GetBgTilemapBuffer(0) reads this native BG configuration pointer.
+        // UI windows use RAM-generated tiles rather than the map tileset.
+        if BoundSceneBytes.half(regs) & 0x100 != 0 {
+            let control = BoundSceneBytes.half(regs, 8)
+            guard control & 0xC080 == 0,
+                  let pointer = memory.bytes(at: 0x030008EC, count: 4),
+                  let map = memory.bytes(at: BoundSceneBytes.word(pointer), count: 2048) else { return nil }
+            layers.append(.init(priority: control & 3, scrollX: BoundSceneBytes.half(regs, 0x10),
+                                scrollY: BoundSceneBytes.half(regs, 0x12), map: Data(map), masksWholeTiles: true))
         }
         var objects: [BoundPlayerSceneObject] = []
         for slot in 0..<16 {

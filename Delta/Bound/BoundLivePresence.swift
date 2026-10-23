@@ -44,6 +44,27 @@ struct BoundPresencePose: Codable, Equatable, Sendable {
     }
 }
 
+/// Occupancy comes from the newest authenticated sample, never the delayed
+/// drawing interpolation. A walking sprite occupies both ends of its step.
+struct BoundPresenceCollision: Equatable, Sendable {
+    let mapGroup: Int
+    let mapNumber: Int
+    let elevation: Int
+    let current: BoundPlayerState.Point
+    let previous: BoundPlayerState.Point
+
+    init?(pose: BoundPresencePose) {
+        guard pose.isValid else { return nil }
+        let x = (pose.x - 8) / 16, y = (pose.y - 16) / 16
+        let low = BoundPlayerState.Point(x: Int(floor(x)), y: Int(floor(y)))
+        let high = BoundPlayerState.Point(x: Int(ceil(x)), y: Int(ceil(y)))
+        guard [low.x, low.y, high.x, high.y].allSatisfy({ (-7...1030).contains($0) }),
+              abs(high.x - low.x) + abs(high.y - low.y) <= 1 else { return nil }
+        mapGroup = pose.mapGroup; mapNumber = pose.mapNumber; elevation = pose.elevation
+        current = low; previous = high
+    }
+}
+
 struct BoundPresencePacket: Codable, Equatable, Sendable {
     static let maximumBytes = 768
     let version: Int
@@ -264,7 +285,7 @@ final class BoundLivePresenceSession: ObservableObject {
     }
 
     func pose(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundPresencePose? {
-        guard needsReader, let lastReceived, now - lastReceived <= Self.timeout,
+        guard needsReader, let lastReceived, now >= lastReceived, now - lastReceived <= Self.timeout,
               let offset = clockOffset, let first = samples.first, let last = samples.last else { return nil }
         let target = now - offset - 0.1
         if target <= first.time { return first.pose }
@@ -276,8 +297,17 @@ final class BoundLivePresenceSession: ObservableObject {
             pose.x += (b.pose.x - pose.x) * fraction; pose.y += (b.pose.y - pose.y) * fraction
             return pose
         }
-        return target - last.time <= 0.25 ? last.pose : nil
+        // Freeze at the last confirmed position during a short packet gap.
+        // The session deadline above and explicit withdrawals still remove it.
+        return last.pose
     }
+    func collision(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundPresenceCollision? {
+        guard needsReader, romVerified, peerEpoch != nil, let lastReceived,
+              now >= lastReceived, now - lastReceived <= Self.timeout,
+              let last = samples.last else { return nil }
+        return BoundPresenceCollision(pose: last.pose)
+    }
+
     private static func continuous(_ a: BoundPresencePose, _ b: BoundPresencePose) -> Bool {
         a.mapGroup == b.mapGroup && a.mapNumber == b.mapNumber && a.elevation == b.elevation
         && abs(a.x - b.x) + abs(a.y - b.y) <= 32

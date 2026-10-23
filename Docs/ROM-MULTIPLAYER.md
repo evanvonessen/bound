@@ -39,10 +39,20 @@ it does not end the run. Independent emulator save-state loading is blocked for
 active or unresolved linked saves.
 
 The in-game Save success callback requests a paired checkpoint. Automatic requests
-follow timeline events and periodically while playing. Both cartridges freeze
-before negotiating the shared digest, flush separate batteries and persist separate
-snapshots/receipts. Both durable receipts are required for completion. Lost commit
-messages can be replayed after reopening. Local suspension snapshots preserve more
+follow timeline events and periodically while playing. Automatic requests require
+both players to report an idle, stationary field without an active script, dialogue,
+fade or battle. Native Save requests wait for that same safe point. Both cartridges
+freeze before negotiating the shared digest, flush separate batteries and persist
+separate snapshots/receipts. A battle or script that starts before the freeze cancels
+the attempt through an authenticated request/acknowledgement: both parties must
+confirm that neither has prepared a receipt before gameplay is released. A delayed
+request for a cancelled ID cannot restart capture, and automatic retry waits ten
+seconds. Eight seconds without readiness starts cancellation; eight more without
+its acknowledgement opens recovery instead of leaving a saving message indefinitely.
+Once either durable receipt exists, cancellation cannot discard it. The existing
+commit/recovery path retains both saves; a thirty-second durable wait opens recovery.
+Both durable receipts are required for completion. Lost commit messages can be
+replayed after reopening. Local suspension snapshots preserve more
 recent working progress without becoming incomplete cloud backups. See
 [MULTIPLAYER-SAVE-PACKAGES.md](MULTIPLAYER-SAVE-PACKAGES.md).
 

@@ -116,6 +116,80 @@ final class ROMMultiplayerContractTests: XCTestCase {
             localPaused: true, peerPaused: false, peerPendingMatches: false, historyMatches: true, fresh: false), .wait,
             "Restarted transactions still require a fresh authenticated channel")
     }
+    func testBattleOrDialoguePauseCannotBeMistakenForCheckpointReadiness() {
+        for (localSafe, peerSafe) in [(false, true), (true, false), (false, false)] {
+            XCTAssertEqual(BoundROMCheckpointReadiness.stage(localStored: false, partnerStored: false,
+                peerCommitted: false, localPaused: true, peerPaused: true, peerPendingMatches: true,
+                historyMatches: true, fresh: true, localSafe: localSafe, peerSafe: peerSafe), .wait,
+                "A generic pause screen is insufficient: both cartridges must freeze a native safe field frame")
+        }
+        XCTAssertEqual(BoundROMCheckpointReadiness.stage(localStored: true, partnerStored: true,
+            peerCommitted: true, localPaused: true, peerPaused: false, peerPendingMatches: false,
+            historyMatches: false, fresh: true, localSafe: false, peerSafe: false), .finish,
+            "An already durable commit must remain recoverable without recapturing a changed field")
+    }
+
+    func testLateRivalBattleCancelsBeforeEitherPlayerPrepares() {
+        var waitingPlayer = BoundROMCheckpointCancellation()
+        let battlingPlayer = BoundROMCheckpointCancellation()
+        XCTAssertEqual(waitingPlayer.action(at: 1, startedAt: 0, localSafe: true, peerSafe: false, durable: false), .request)
+        XCTAssertEqual(waitingPlayer.request(at: 1, durable: false), .request)
+        XCTAssertEqual(waitingPlayer.action(at: 2, startedAt: 0, localSafe: true, peerSafe: true, durable: false), .wait,
+            "A later safe heartbeat cannot restart capture after cancellation has been sent")
+        XCTAssertEqual(battlingPlayer.receive(acknowledgement: false, durable: false), .acknowledge,
+            "The battling player can promise no prepared save and release its request")
+        XCTAssertEqual(waitingPlayer.receive(acknowledgement: true, durable: false), .finish)
+    }
+
+    func testCheckpointCancellationRequiresAcknowledgementAndHandlesCrossedRequests() {
+        var first = BoundROMCheckpointCancellation(), second = BoundROMCheckpointCancellation()
+        XCTAssertEqual(first.receive(acknowledgement: true, durable: false), .wait,
+            "An unsolicited acknowledgement cannot end an active checkpoint")
+        XCTAssertEqual(first.request(at: 10, durable: false), .request)
+        XCTAssertEqual(second.request(at: 10, durable: false), .request)
+        XCTAssertEqual(first.receive(acknowledgement: false, durable: false), .acknowledge)
+        XCTAssertEqual(second.receive(acknowledgement: false, durable: false), .acknowledge)
+        XCTAssertEqual(first.receive(acknowledgement: true, durable: false), .finish)
+        XCTAssertEqual(second.receive(acknowledgement: true, durable: false), .finish)
+    }
+
+    func testCheckpointCancellationNeverDiscardsAPreparedOrCommittedReceipt() {
+        var cancellation = BoundROMCheckpointCancellation()
+        XCTAssertEqual(cancellation.request(at: 1, durable: true), .recover)
+        XCTAssertNil(cancellation.requestedAt, "A durable transaction never enters the cancellable state")
+        XCTAssertEqual(cancellation.request(at: 2, durable: false), .request)
+        XCTAssertEqual(cancellation.receive(acknowledgement: false, durable: true), .recover)
+        XCTAssertEqual(cancellation.receive(acknowledgement: true, durable: true), .recover,
+            "A peer's cancellation acknowledgement cannot roll back bytes prepared while it was in flight")
+        XCTAssertEqual(cancellation.action(at: 3, startedAt: 0, localSafe: true, peerSafe: true, durable: true), .recover)
+    }
+
+    func testUnresponsiveCheckpointIsBoundedWithoutTreatingTimeoutAsConsent() {
+        var cancellation = BoundROMCheckpointCancellation()
+        XCTAssertEqual(cancellation.action(at: 7.9, startedAt: 0, localSafe: true, peerSafe: nil, durable: false), .wait)
+        XCTAssertEqual(cancellation.action(at: 8, startedAt: 0, localSafe: true, peerSafe: nil, durable: false), .request)
+        XCTAssertEqual(cancellation.request(at: 8, durable: false), .request)
+        XCTAssertEqual(cancellation.request(at: 12, durable: false), .request)
+        XCTAssertEqual(cancellation.requestedAt, 8, "Retransmission cannot extend the deadline")
+        XCTAssertEqual(cancellation.action(at: 16, startedAt: 0, localSafe: true, peerSafe: nil, durable: false), .recover,
+            "A missing abort acknowledgement preserves the pause instead of resuming a possibly prepared peer")
+        let prepared = BoundROMCheckpointCancellation()
+        XCTAssertEqual(prepared.action(at: 30, startedAt: 0, localSafe: false, peerSafe: false, durable: true), .recover,
+            "Prepared bytes are retained and the indefinite saving message becomes explicit recovery")
+    }
+
+    func testCheckpointSafeFlagIsSeparateFromGenericPauseAndFieldFlags() throws {
+        var bytes = Data(repeating: 0, count: 256)
+        bytes.replaceSubrange(0..<8, with: [82, 85, 82, 49, 1, 0, 0, 0])
+        word(2, 8, &bytes); word(5, 80, &bytes)
+        let old = try XCTUnwrap(BoundROMRequest.decode(bytes))
+        XCTAssertTrue(old.safeField); XCTAssertTrue(old.paused); XCTAssertFalse(old.checkpointSafe)
+        word(69, 80, &bytes)
+        XCTAssertTrue(try XCTUnwrap(BoundROMRequest.decode(bytes)).checkpointSafe)
+        XCTAssertEqual(BoundROMPacket.Kind.cancel.rawValue, 9, "Existing packet kinds keep their wire values")
+        XCTAssertEqual(BoundROMPacket.Kind.checkpointCancel.rawValue, 10)
+    }
+
     private func word(_ value: UInt32, _ offset: Int, _ data: inout Data) {
         for i in 0..<4 { data[offset+i] = UInt8(truncatingIfNeeded: value >> (i*8)) }
     }

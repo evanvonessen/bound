@@ -58,6 +58,41 @@ final class MultiplayerSavePackageTests: XCTestCase {
         let reopened = BoundMultiplayerSaveStore(root: store.root, support: store.support, deviceID: store.deviceID)
         XCTAssertEqual(try reopened.preparedCheckpoints(gameID: identity.gameID).first?.receipt, receipt)
     }
+    func testCancellationChecksDiskWhenPreparedReceiptWasNotReturnedToCaller() throws {
+        let (store, identity, save) = try fixture()
+        let checkpoint = UUID()
+        XCTAssertFalse(BoundROMCheckpointCancellation.persistedRecordMayExist(store: store,
+            gameID: identity.gameID, checkpoint: checkpoint))
+        // Model an atomic prepared write followed by an uncertain return/fsync:
+        // the coordinator has no receipt, but the persisted record is present.
+        _ = try store.prepare(gameID: identity.gameID, checkpointID: checkpoint, predecessor: nil,
+            sharedEventDigest: String(repeating: "c", count: 64), gameSaveURL: save)
+        let durable = BoundROMCheckpointCancellation.persistedRecordMayExist(store: store,
+            gameID: identity.gameID, checkpoint: checkpoint)
+        XCTAssertTrue(durable)
+        var cancellation = BoundROMCheckpointCancellation()
+        XCTAssertEqual(cancellation.request(at: 0, durable: durable), .recover)
+        XCTAssertEqual(cancellation.receive(acknowledgement: false, durable: durable), .recover)
+        let reopened = BoundMultiplayerSaveStore(root: store.root, support: store.support, deviceID: store.deviceID)
+        let retained = try XCTUnwrap(reopened.checkpoint(gameID: identity.gameID, id: checkpoint))
+        XCTAssertFalse(retained.complete)
+        let complete = try reopened.commit(gameID: identity.gameID, checkpointID: checkpoint,
+            partnerReceipt: peer(retained.receipt, identity: identity))
+        XCTAssertTrue(complete.complete, "The uncertain prepare remains recoverable rather than being discarded")
+        XCTAssertTrue(BoundROMCheckpointCancellation.persistedRecordMayExist(store: reopened,
+            gameID: identity.gameID, checkpoint: checkpoint))
+    }
+    func testCancellationFailsClosedWhenPreparedRecordCannotBeRead() throws {
+        let (store, identity, save) = try fixture()
+        let receipt = try store.prepare(gameID: identity.gameID, checkpointID: UUID(), predecessor: nil,
+            sharedEventDigest: String(repeating: "c", count: 64), gameSaveURL: save)
+        let prepared = store.directory(gameID: identity.gameID).appendingPathComponent("Checkpoints")
+            .appendingPathComponent(receipt.checkpoint.uuidString + ".prepared.json")
+        try Data("incomplete file".utf8).write(to: prepared)
+        XCTAssertTrue(BoundROMCheckpointCancellation.persistedRecordMayExist(store: store,
+            gameID: identity.gameID, checkpoint: receipt.checkpoint),
+            "Unreadable prepared bytes are uncertainty, never permission to cancel and resume")
+    }
     func testBothReceiptsMustAgreeAndPreviousCheckpointsRemain() throws {
         let (store, identity, save) = try fixture()
         let first = try complete(store, identity, save)

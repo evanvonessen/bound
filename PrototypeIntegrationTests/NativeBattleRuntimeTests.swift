@@ -474,7 +474,8 @@ final class NativeBattleRuntimeTests:XCTestCase {
         let previous=scene.windows.first { $0.isKeyWindow }, window=UIWindow(windowScene:scene), owner=UIViewController(), view=GameView()
         window.rootViewController=owner; window.makeKeyAndVisible(); owner.view.addSubview(view)
         view.frame=CGRect(x:0,y:150,width:window.bounds.width,height:window.bounds.width*2/3); core.add(view)
-        let driver=NativeBattleDriver(core:core,profile:try BoundPlayerROMProfile(rom:originalROM)),probe=BoundFriendDialogueProbe()
+        let profile=try BoundPlayerROMProfile(rom:originalROM)
+        let driver=NativeBattleDriver(core:core,profile:profile),probe=BoundFriendDialogueProbe()
         probe.configure(core:core)
         core.updateHandler={ core in driver.receive(core); probe.receive(core) }
         defer {
@@ -501,6 +502,22 @@ final class NativeBattleRuntimeTests:XCTestCase {
             probe.show(request)
             try await wait { probe.read().menuReady }
             try await Task.sleep(for:.milliseconds(350))
+            _=core.pause()
+            let memory=try XCTUnwrap(BoundGBAMemorySnapshot.capture(readMemory: {
+                core.deltaCore.emulatorBridge.readMemory?(at:$0,size:$1)
+            }))
+            let reading=BoundPlayerStateDecoder.read(profile:profile,memory:memory,frame:1,includeScene:true)
+            XCTAssertEqual(reading.status,.live,"Native text windows retain the field identity")
+            if reading.player?.scene == nil {
+                try Data(memory.workRAM).write(to:output.appendingPathComponent("dialogue-ewram.bin"))
+                try Data(memory.internalRAM).write(to:output.appendingPathComponent("dialogue-iwram.bin"))
+                print("DIALOGUE_SCENE_DIAGNOSTICS",output.path)
+            }
+            let nativeScene=try XCTUnwrap(reading.player?.scene,"Native dialogue must retain the friend-rendering scene")
+            XCTAssertNotNil(BoundPresencePose(reading:reading),"Dialogue must continue publishing the standing player's appearance")
+            XCTAssertTrue(nativeScene.background.layers.contains { $0.masksWholeTiles && $0.map.contains { $0 != 0 } },
+                          "Native window tiles mask sprites without hiding the entire field")
+            _=core.resume()
             if button==128 { try await press(128) }
             try await press(button==2 ? 2:1)
             try await wait { probe.read().id==request.id }

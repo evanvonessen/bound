@@ -51,6 +51,7 @@ struct BoundROMRequest: Equatable, Sendable {
     var safeField: Bool { flags & 1 != 0 }
     var newGame: Bool { flags & 2 != 0 }
     var paused: Bool { flags & 4 != 0 }
+    var checkpointSafe: Bool { flags & 64 != 0 }
     static func decode(_ data: Data) -> Self? {
         guard data.count == 256, data.prefix(8) == Data([82,85,82,49,1,0,0,0]),
               let command = BoundROMCommand(rawValue: BoundROMBytes.word(data,12)) else { return nil }
@@ -83,6 +84,7 @@ struct BoundROMHostState: Equatable, Sendable {
     var partnerName = "friend"
     var message = ""
     var friends: [Friend] = []
+    var peerCollision: BoundPresenceCollision?
     var page: UInt32 = 0
     func encoded(sequence: UInt32) -> Data {
         var data = Data(repeating: 0, count: 2048)
@@ -107,6 +109,16 @@ struct BoundROMHostState: Equatable, Sendable {
             BoundROMBytes.put(friend.room, into: &data, at:offset)
             BoundROMBytes.text(friend.name, into: &data, at:offset + 16, size:32)
             BoundROMBytes.put(friend.status, into: &data, at:offset + 48)
+        }
+        if enabled, let peerCollision {
+            BoundROMBytes.put(1, into: &data, at:1360)
+            data[1364] = UInt8(peerCollision.mapGroup); data[1365] = UInt8(peerCollision.mapNumber)
+            data[1366] = UInt8(peerCollision.elevation)
+            for (offset, value) in [(1368, peerCollision.current.x), (1370, peerCollision.current.y),
+                                    (1372, peerCollision.previous.x), (1374, peerCollision.previous.y)] {
+                let bits = UInt16(bitPattern: Int16(value))
+                data[offset] = UInt8(truncatingIfNeeded: bits); data[offset + 1] = UInt8(bits >> 8)
+            }
         }
         return data
     }
@@ -192,7 +204,7 @@ final class BoundROMMultiplayerProbe: @unchecked Sendable {
 /// A fresh nonce acknowledgement and monotonic sequence are required for every
 /// state-changing message, including replayed durable checkpoint receipts.
 struct BoundROMPacket: Equatable, Sendable {
-    enum Kind: UInt8 { case hello, proposal, accepted, settings, ready, checkpoint, prepared, committed, end, cancel }
+    enum Kind: UInt8 { case hello, proposal, accepted, settings, ready, checkpoint, prepared, committed, end, cancel, checkpointCancel }
     static let prefix = Data("BRM1".utf8)
     let kind: Kind
     let owner: UUID
@@ -258,11 +270,42 @@ enum BoundROMCheckpointStage: Equatable { case wait, capture, commit, finish }
 enum BoundROMCheckpointReadiness {
     static func stage(localStored: Bool, partnerStored: Bool, peerCommitted: Bool,
                       localPaused: Bool, peerPaused: Bool, peerPendingMatches: Bool,
-                      historyMatches: Bool, fresh: Bool) -> BoundROMCheckpointStage {
+                      historyMatches: Bool, fresh: Bool, localSafe: Bool = true, peerSafe: Bool = true) -> BoundROMCheckpointStage {
         guard localPaused && fresh else { return .wait }
-        if !localStored { return peerPaused && peerPendingMatches && historyMatches ? .capture:.wait }
+        if !localStored { return localSafe && peerSafe && peerPaused && peerPendingMatches && historyMatches ? .capture:.wait }
         guard partnerStored else { return .wait }
         return peerCommitted ? .finish:.commit
+    }
+}
+
+/// Cancellation is a two-party promise that neither player has prepared bytes.
+/// Once either durable receipt exists, only the existing recovery/commit path is
+/// allowed. A missing acknowledgement is never interpreted as permission to run.
+struct BoundROMCheckpointCancellation {
+    enum Action: Equatable { case wait, request, acknowledge, finish, recover }
+    static let timeout: TimeInterval = 8
+    static func persistedRecordMayExist(store: BoundMultiplayerSaveStore, gameID: String, checkpoint: UUID) -> Bool {
+        do { return try store.checkpoint(gameID:gameID,id:checkpoint) != nil }
+        catch { return true }
+    }
+    private(set) var requestedAt: TimeInterval?
+    mutating func request(at now: TimeInterval, durable: Bool) -> Action {
+        guard !durable else { return .recover }
+        if requestedAt == nil { requestedAt = now }
+        return .request
+    }
+    func receive(acknowledgement: Bool, durable: Bool) -> Action {
+        guard !durable else { return .recover }
+        if acknowledgement { return requestedAt == nil ? .wait : .finish }
+        return .acknowledge
+    }
+    func action(at now: TimeInterval, startedAt: TimeInterval, localSafe: Bool,
+                peerSafe: Bool?, durable: Bool) -> Action {
+        if let requestedAt {
+            return durable || now - requestedAt >= Self.timeout ? .recover : .wait
+        }
+        if durable { return now - startedAt >= 30 ? .recover : .wait }
+        return !localSafe || peerSafe == false || now - startedAt >= Self.timeout ? .request : .wait
     }
 }
 
@@ -278,6 +321,7 @@ final class BoundROMMultiplayerCoordinator {
         var pending: UUID?
         var history: String?
         var paused: Bool
+        var checkpointSafe: Bool?
         var ready: Bool
         var device: UUID
         var fence: UInt64
@@ -293,6 +337,11 @@ final class BoundROMMultiplayerCoordinator {
         var id: UUID
         var predecessor: UUID?
         var history: String
+    }
+    struct CheckpointCancel: Codable {
+        var run: UUID
+        var transaction: Checkpoint
+        var acknowledgement: Bool
     }
     let probe = BoundROMMultiplayerProbe()
     private weak var core: EmulatorCore?
@@ -333,6 +382,11 @@ final class BoundROMMultiplayerCoordinator {
     private var newGame = false
     private var lastSent: TimeInterval = -.infinity
     private var checkpoint: Checkpoint?
+    private var checkpointStartedAt: TimeInterval?
+    private var checkpointCaptureAttempted = false
+    private var checkpointCancellation = BoundROMCheckpointCancellation()
+    private var cancelledCheckpoints: [UUID: Checkpoint] = [:]
+    private var checkpointRetryAt: TimeInterval = 0
     private var localReceipt: BoundMultiplayerCheckpointReceipt?
     private var partnerReceipt: BoundMultiplayerCheckpointReceipt?
     private var head: BoundMultiplayerSavePackage?
@@ -402,6 +456,7 @@ final class BoundROMMultiplayerCoordinator {
         host = BoundROMHostState(); channel.reset(); selectedRoom = nil; peerOwner = nil; peerHello = nil
         peerHelloAt = -.infinity; peerFence = 0; reconciled = false; peerCommitted = false
         setup = nil; manifest = nil; incoming = nil; finishedRun = nil; checkpoint = nil; localReceipt = nil; partnerReceipt = nil
+        checkpointStartedAt = nil; checkpointCaptureAttempted = false; checkpointCancellation = .init(); cancelledCheckpoints = [:]; checkpointRetryAt = 0
         endingRun = false
         lastRequest = 0; newGame = false; error = nil; pendingSnapshot = nil; didRestore = false; head = nil
         validatedSnapshot = false; workingStateAuthorized = false
@@ -439,6 +494,7 @@ final class BoundROMMultiplayerCoordinator {
             if let pending = prepared.first {
                 checkpoint = .init(id:pending.payload.checkpoint,predecessor:pending.payload.predecessor,history:pending.payload.sharedEventDigest)
                 localReceipt = pending.receipt; pendingSnapshot = pending.payload.files["checkpoint.state"]?.data
+                checkpointStartedAt = now
             } else { pendingSnapshot = head?.payload.files["checkpoint.state"]?.data }
             if let manifest, manifest.deviceOwner == store.deviceID {
                 if let suspension = try store.validateSuspensionForResume(gameID:game.identifier,
@@ -542,6 +598,7 @@ final class BoundROMMultiplayerCoordinator {
         error = nil; host.recovery = false; host.transferRequired = false; host.message = ""
         protectedStorage = false
         checkpoint = nil; localReceipt = nil; partnerReceipt = nil; peerCommitted = false; host.saving = false
+        checkpointStartedAt = nil; checkpointCaptureAttempted = false; checkpointCancellation = .init(); cancelledCheckpoints = [:]
         pendingSnapshot = nil; validatedSnapshot = false; workingStateAuthorized = false
         if let grant, let session = account.session {
             Task { [leaseClient] in try? await leaseClient.release(grant:grant,session:session) }
@@ -786,23 +843,38 @@ final class BoundROMMultiplayerCoordinator {
                 let request = try JSONDecoder().decode(Checkpoint.self,from:packet.body)
                 guard manifest != nil, request.predecessor == head?.payload.checkpoint,
                       BoundMultiplayerSaveStore.isDigest(request.history) else { return }
-                if let checkpoint, checkpoint != request {
-                    // Only the deterministic coordinator allocates checkpoint IDs.
-                    guard localReceipt == nil, packet.owner.uuidString < owner.uuidString else { return }
+                if let cancelled = cancelledCheckpoints[request.id] {
+                    send(.checkpointCancel,CheckpointCancel(run:manifest!.identity.run,transaction:cancelled,acknowledgement:true))
+                    return
                 }
-                try restoreFriendlyBattleBeforeSaving()
-                checkpoint = request; host.saving = true
+                if let checkpoint, checkpoint != request {
+                    // Only the deterministic coordinator arbitrates simultaneous requests.
+                    guard !checkpointHasDurableReceipt, packet.owner.uuidString < owner.uuidString else { return }
+                }
+                installCheckpoint(request)
+                if probe.read()?.checkpointSafe != true || sharing.nativeBattle.blocksAutoSave {
+                    cancelCheckpoint()
+                }
             case .prepared:
                 let receipt = try JSONDecoder().decode(BoundMultiplayerCheckpointReceipt.self,from:packet.body)
                 guard let checkpoint, receipt.run == manifest?.identity.run, receipt.checkpoint == checkpoint.id,
                       receipt.owner == packet.owner, receipt.sharedEventDigest == checkpoint.history else { return }
+                if partnerReceipt == nil { checkpointStartedAt = now }
                 partnerReceipt = receipt
+                if checkpointCancellation.requestedAt != nil { checkpointRecovery() }
             case .committed:
                 let receipt = try JSONDecoder().decode(BoundMultiplayerCheckpointReceipt.self,from:packet.body)
                 guard let checkpoint, receipt.run == manifest?.identity.run, receipt.checkpoint == checkpoint.id,
                       receipt.owner == packet.owner, receipt.sharedEventDigest == checkpoint.history,
                       partnerReceipt == nil || partnerReceipt == receipt else { return }
+                if !peerCommitted { checkpointStartedAt = now }
                 partnerReceipt = receipt; peerCommitted = true
+                if checkpointCancellation.requestedAt != nil { checkpointRecovery() }
+            case .checkpointCancel:
+                let cancellation = try JSONDecoder().decode(CheckpointCancel.self,from:packet.body)
+                guard cancellation.run == manifest?.identity.run,
+                      BoundMultiplayerSaveStore.isDigest(cancellation.transaction.history) else { return }
+                receiveCheckpointCancellation(cancellation)
             case .end:
                 let id = try JSONDecoder().decode(UUID.self,from:packet.body)
                 if manifest?.identity.run == id { try requestEndRun() }
@@ -829,26 +901,110 @@ final class BoundROMMultiplayerCoordinator {
             throw BoundMultiplayerSaveStore.Failure.incomplete
         }
     }
-    private func requestCheckpoint(interruptBattle: Bool = false) throws {
-        guard checkpoint == nil, let manifest, let history = historyDigest(), channel.fresh(at:now) else { return }
-        if interruptBattle { try restoreFriendlyBattleBeforeSaving() }
-        else if sharing.nativeBattle.blocksAutoSave { return }
-        // The lower account UUID arbitrates simultaneous requests. It owns no
-        // partner save and has no gameplay authority outside this transaction.
-        if manifest.identity.owner.uuidString < manifest.identity.partner.uuidString {
-            checkpoint = .init(id:UUID(),predecessor:head?.payload.checkpoint,history:history)
-        } else {
-            send(.checkpoint,Checkpoint(id:UUID(),predecessor:head?.payload.checkpoint,history:history))
+    private var checkpointHasDurableReceipt: Bool {
+        checkpointCaptureAttempted || localReceipt != nil || partnerReceipt != nil || (checkpoint != nil && head?.payload.checkpoint == checkpoint?.id)
+    }
+    private func persistedCheckpointMayExist(_ id: UUID) -> Bool {
+        guard let game else { return true }
+        // Atomic rename can succeed before a later fsync reports failure. Never
+        // promise cancellation based solely on an absent in-memory receipt.
+        return BoundROMCheckpointCancellation.persistedRecordMayExist(store:store,gameID:game.identifier,checkpoint:id)
+    }
+    private func installCheckpoint(_ value: Checkpoint) {
+        if checkpoint?.id != value.id {
+            checkpointStartedAt = now; checkpointCaptureAttempted = false; checkpointCancellation = .init()
+        }
+        checkpoint = value; host.saving = true; host.status = .waiting
+    }
+    private static let checkpointRecoveryMessage = "Paired save could not finish. Retry recovery to keep both saves safe."
+    private func checkpointRecovery() {
+        host.saving = false
+        if error == nil { error = Self.checkpointRecoveryMessage }
+    }
+    private func cancelCheckpoint() {
+        guard let checkpoint, let manifest else { return }
+        switch checkpointCancellation.request(at:now,durable:checkpointHasDurableReceipt || persistedCheckpointMayExist(checkpoint.id)) {
+        case .request:
+            send(.checkpointCancel,CheckpointCancel(run:manifest.identity.run,transaction:checkpoint,acknowledgement:false))
+        case .recover: checkpointRecovery()
+        default: break
         }
     }
+    private func rememberCheckpointCancellation(_ cancelled: Checkpoint) {
+        cancelledCheckpoints[cancelled.id] = cancelled
+        // Nonce/sequence admission rejects old-channel replays; retain recent
+        // transaction IDs for retransmissions inside this channel as well.
+        if cancelledCheckpoints.count > 64, let old = cancelledCheckpoints.keys.first(where: { $0 != cancelled.id }) {
+            cancelledCheckpoints.removeValue(forKey:old)
+        }
+    }
+    private func finishCheckpointCancellation(_ cancelled: Checkpoint) {
+        rememberCheckpointCancellation(cancelled)
+        if checkpoint?.id == cancelled.id {
+            if error == Self.checkpointRecoveryMessage { error = nil }
+            checkpoint = nil; checkpointStartedAt = nil; checkpointCaptureAttempted = false; checkpointCancellation = .init()
+            host.saving = false; host.status = .unavailable
+            host.message = "Save deferred. Both players must be free to move."
+            checkpointRetryAt = now + 10
+        }
+    }
+    private func receiveCheckpointCancellation(_ value: CheckpointCancel) {
+        let cancelled = value.transaction
+        if let old = cancelledCheckpoints[cancelled.id] {
+            if !value.acknowledgement {
+                send(.checkpointCancel,CheckpointCancel(run:value.run,transaction:old,acknowledgement:true))
+            }
+            return
+        }
+        guard cancelled.predecessor == head?.payload.checkpoint else { return }
+        guard checkpoint?.id == cancelled.id else {
+            guard !persistedCheckpointMayExist(cancelled.id) else { checkpointRecovery(); return }
+            // We never accepted this superseded proposal, so no capture for it
+            // can race our acknowledgement. Do not cancel a different attempt.
+            if !value.acknowledgement {
+                rememberCheckpointCancellation(cancelled)
+                send(.checkpointCancel,CheckpointCancel(run:value.run,transaction:cancelled,acknowledgement:true))
+            }
+            return
+        }
+        switch checkpointCancellation.receive(acknowledgement:value.acknowledgement,
+            durable:checkpointHasDurableReceipt || persistedCheckpointMayExist(cancelled.id)) {
+        case .acknowledge:
+            finishCheckpointCancellation(cancelled)
+            send(.checkpointCancel,CheckpointCancel(run:value.run,transaction:cancelled,acknowledgement:true))
+        case .finish: finishCheckpointCancellation(cancelled)
+        case .recover:
+            if let localReceipt { send(head?.payload.checkpoint == cancelled.id ? .committed:.prepared,localReceipt) }
+            checkpointRecovery()
+        default: break
+        }
+    }
+    @discardableResult private func requestCheckpoint() -> Bool {
+        guard checkpoint == nil, now >= checkpointRetryAt, let manifest, let history = historyDigest(),
+              channel.fresh(at:now), now - peerHelloAt < 3,
+              probe.read()?.checkpointSafe == true, peerHello?.checkpointSafe == true,
+              !sharing.nativeBattle.blocksAutoSave else { return false }
+        installCheckpoint(.init(id:UUID(),predecessor:head?.payload.checkpoint,history:history))
+        if let checkpoint { send(.checkpoint,checkpoint) }
+        return true
+    }
     private func advanceCheckpoint(_ request: BoundROMRequest?) throws {
-        guard var checkpoint, let manifest, let game, let core, grant?.isCurrent == true else { return }
-        try restoreFriendlyBattleBeforeSaving()
+        guard var checkpoint, let manifest, let game, let core else { return }
+        if checkpointStartedAt == nil { checkpointStartedAt = now }
+        let peerSafe = now - peerHelloAt < 3 ? peerHello?.checkpointSafe : nil
+        switch checkpointCancellation.action(at:now,startedAt:checkpointStartedAt!,
+            localSafe:request?.checkpointSafe == true && !sharing.nativeBattle.blocksAutoSave,
+            peerSafe:peerSafe,durable:checkpointHasDurableReceipt) {
+        case .request: cancelCheckpoint(); return
+        case .recover: checkpointRecovery(); return
+        default: break
+        }
+        guard checkpointCancellation.requestedAt == nil, grant?.isCurrent == true else { return }
         host.saving = true
         let history = historyDigest()
         // Negotiate the digest only after both cartridges have frozen. An event
         // in the frame before the save request must belong to this checkpoint.
-        if localReceipt == nil, partnerReceipt == nil, let history, checkpoint.history != history,
+        if !checkpointHasDurableReceipt, let history, checkpoint.history != history,
            request?.paused == true, peerHello?.paused == true, peerHello?.pending == checkpoint.id,
            peerHello?.history == history, channel.fresh(at:now),
            manifest.identity.owner.uuidString < manifest.identity.partner.uuidString {
@@ -859,7 +1015,9 @@ final class BoundROMMultiplayerCoordinator {
             peerPendingMatches:peerHello?.pending == checkpoint.id,
             historyMatches:history == checkpoint.history && peerHello?.history == history
                 && anchorBaselineValidated && grant?.historyDigest == checkpoint.history,
-            fresh:channel.fresh(at:now))
+            fresh:channel.fresh(at:now) && now - peerHelloAt < 3,
+            localSafe:request?.checkpointSafe == true && !sharing.nativeBattle.blocksAutoSave,
+            peerSafe:peerHello?.checkpointSafe == true)
         guard stage != .wait else { return }
         if stage == .capture {
             guard workingStateAuthorized else { return }
@@ -872,6 +1030,7 @@ final class BoundROMMultiplayerCoordinator {
             core.deltaCore.emulatorBridge.saveGameSave(to:game.gameSaveURL)
             var additional = ["checkpoint.state":state]
             if let setup { additional["setup.json"] = try BoundMultiplayerSaveStore.encode(setup) }
+            checkpointCaptureAttempted = true
             localReceipt = try store.prepare(gameID:game.identifier,checkpointID:checkpoint.id,
                 predecessor:checkpoint.predecessor,sharedEventDigest:checkpoint.history,gameSaveURL:game.gameSaveURL,additionalFiles:additional)
         }
@@ -883,6 +1042,7 @@ final class BoundROMMultiplayerCoordinator {
             if peerCommitted {
                 if let localReceipt { send(.committed,localReceipt) }
                 self.checkpoint = nil; localReceipt = nil; self.partnerReceipt = nil; peerCommitted = false
+                checkpointStartedAt = nil; checkpointCaptureAttempted = false; checkpointCancellation = .init()
                 host.saving = false; host.status = .complete; lastAutomaticCheckpoint = now
             }
         }
@@ -919,7 +1079,11 @@ final class BoundROMMultiplayerCoordinator {
                   !current.settingsCommitted, request.newGame, Self.validSettings(request.settings) else { return }
             current.identity.settings = request.settings; current.settingsCommitted = true
             setup = current; try persistSetup()
-        case .checkpoint: try requestCheckpoint(interruptBattle:true); host.status = .waiting
+        case .checkpoint:
+            if requestCheckpoint() { host.status = .waiting }
+            else if checkpoint == nil {
+                host.status = .unavailable; host.message = "Save deferred. Both players must be free to move."
+            }
         case .resume: host.status = .waiting
         case .watch, .battle, .trade:
             guard let room = onboarding.rooms.first(where: { UUID(uuidString:$0.roomID) == request.identifier }),
@@ -940,6 +1104,9 @@ final class BoundROMMultiplayerCoordinator {
         case .recoveryChoice:
             if request.argument == 0 {
                 error = nil; validatedFence = nil; sharing.soulLink.retryRecovery()
+                checkpointStartedAt = now
+                if checkpointHasDurableReceipt { checkpointCancellation = .init() }
+                else if checkpointCancellation.requestedAt != nil { checkpointCancellation = .init(); cancelCheckpoint() }
                 leaseRetryAt = 0; ensureLease(); host.status = .waiting
             }
             else if request.argument == 1, let head {
@@ -1042,9 +1209,12 @@ final class BoundROMMultiplayerCoordinator {
             && peerHello?.ready == true
             && (manifest == nil || sharing.soulLink.paired && reconciled && peerHello?.history == historyDigest())
             && (manifest == nil || workingStateAuthorized)
-            && peerHello?.checkpoint == head?.payload.checkpoint && peerHello?.pending == nil && checkpoint == nil
+            && peerHello?.checkpoint == head?.payload.checkpoint
+            && (peerHello?.pending == nil || peerHello?.pending.map { cancelledCheckpoints[$0] != nil } == true) && checkpoint == nil
         if !channel.fresh(at:now) { reconciled = false }
         defer {
+            host.peerCollision = host.enabled && servicesActive && UIApplication.shared.applicationState == .active
+                ? sharing.livePresence.collision(at: now) : nil
             if host.enabled && servicesActive && !host.recovery && !host.saving {
                 friendsRefresh.apply(to: &host, onboarding: onboarding)
             }
@@ -1093,7 +1263,7 @@ final class BoundROMMultiplayerCoordinator {
                 if now - lastSent >= 0.5, let selectedRoom, let device = try? BoundMultiplayerDeviceIdentity.current() {
                     lastSent = now
                     send(.hello,Hello(room:selectedRoom,newGame:false,run:identity?.run,checkpoint:head?.payload.checkpoint,
-                        pending:checkpoint?.id,history:historyDigest(),paused:request?.paused == true,ready:false,
+                        pending:checkpoint?.id,history:historyDigest(),paused:request?.paused == true,checkpointSafe:request?.checkpointSafe == true,ready:false,
                         device:device,fence:grant?.isCurrent == true ? grant!.fence:0))
                 }
                 return
@@ -1140,10 +1310,10 @@ final class BoundROMMultiplayerCoordinator {
             }
             try advanceCheckpoint(request)
             try synchronizeAnchors()
-            if host.connected, manifest != nil, request?.safeField == true, !host.saving {
+            if host.connected, manifest != nil, request?.checkpointSafe == true, peerHello?.checkpointSafe == true, !host.saving {
                 let count = sharing.soulLink.probe.timeline.read().events.count
                 if count != lastEventCount || now - lastAutomaticCheckpoint > 60 {
-                    lastEventCount = count; try requestCheckpoint()
+                    if requestCheckpoint() { lastEventCount = count }
                 }
             }
             if manifest != nil, workingStateAuthorized,
@@ -1160,7 +1330,7 @@ final class BoundROMMultiplayerCoordinator {
             lastSent = now
             send(.hello,Hello(room:selectedRoom,newGame:newGame && manifest == nil && incoming == nil,run:identity?.run,checkpoint:head?.payload.checkpoint,
                 pending:checkpoint?.id,history:historyDigest(),paused:request?.paused == true,
-                ready:anchorsReady && error == nil && !host.transferRequired && (manifest == nil || workingStateAuthorized),
+                checkpointSafe:request?.checkpointSafe == true,ready:anchorsReady && error == nil && !host.transferRequired && (manifest == nil || workingStateAuthorized),
                 device:device,fence:grant?.isCurrent == true ? grant!.fence:0))
             if let finishedRun { send(.end,finishedRun) }
             if let current = setup, manifest == nil {
@@ -1174,7 +1344,9 @@ final class BoundROMMultiplayerCoordinator {
                 send(.ready,SetupAck(run:current.identity.run,digest:setupDigest(current.identity)))
             }
             if let checkpoint {
-                send(.checkpoint,checkpoint)
+                if checkpointCancellation.requestedAt != nil, !checkpointHasDurableReceipt, let manifest {
+                    send(.checkpointCancel,CheckpointCancel(run:manifest.identity.run,transaction:checkpoint,acknowledgement:false))
+                } else { send(.checkpoint,checkpoint) }
                 if let localReceipt { send(head?.payload.checkpoint == checkpoint.id ? .committed:.prepared,localReceipt) }
             } else if let head {
                 send(.committed,head.receipt)
