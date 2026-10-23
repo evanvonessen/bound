@@ -105,17 +105,71 @@ final class MacWorkspaceControllerRoutingTests: XCTestCase {
             captured.input(forControllerInput: MFiGameController.Input.up))), .boundFocusUp)
     }
 
-    func testControllerModeOrMultiviewEnablesMacNavigationUntilSettingsSheetOpens() {
+    func testMacNavigationRequiresAllowMultiviewAndNoSettingsOrFriendsSheet() {
         XCTAssertTrue(BoundMacControllerActionRouting.isEnabled(
-            controllerMode: true, multiview: false, showingFriends: false, showingSettings: false))
-        XCTAssertTrue(BoundMacControllerActionRouting.isEnabled(
-            controllerMode: false, multiview: true, showingFriends: false, showingSettings: false))
+            multiview: true, showingFriends: false, showingSettings: false))
         XCTAssertFalse(BoundMacControllerActionRouting.isEnabled(
-            controllerMode: false, multiview: false, showingFriends: false, showingSettings: false))
+            multiview: false, showingFriends: false, showingSettings: false))
         XCTAssertFalse(BoundMacControllerActionRouting.isEnabled(
-            controllerMode: true, multiview: false, showingFriends: true, showingSettings: false))
+            multiview: true, showingFriends: true, showingSettings: false))
         XCTAssertFalse(BoundMacControllerActionRouting.isEnabled(
-            controllerMode: false, multiview: true, showingFriends: false, showingSettings: true))
+            multiview: true, showingFriends: false, showingSettings: true))
+    }
+
+    func testMacGamepadStartsInGameplayAndToggleChangesFocusWithoutHidingReference() {
+        let state = BoundCompanionState()
+        XCTAssertFalse(state.macControllerFocused)
+        XCTAssertTrue(BoundMacControllerActionRouting.allowsPanelAction(.toggleBoundMultiview,
+            controllerType: .mfi, multiview: true, state: state))
+        XCTAssertFalse(BoundMacControllerActionRouting.allowsPanelAction(.boundNextView,
+            controllerType: .mfi, multiview: true, state: state))
+        BoundMacControllerActionRouting.apply(.toggleBoundMultiview, to: state)
+        XCTAssertTrue(state.macControllerFocused)
+        XCTAssertTrue(state.macSidebarVisible)
+        XCTAssertTrue(state.macReferenceVisible)
+        XCTAssertTrue(BoundMacControllerActionRouting.allowsPanelAction(.boundNextView,
+            controllerType: .mfi, multiview: true, state: state))
+        BoundMacControllerActionRouting.apply(.toggleBoundMultiview, to: state)
+        XCTAssertFalse(state.macControllerFocused)
+        XCTAssertTrue(state.macSidebarVisible)
+        XCTAssertTrue(state.macReferenceVisible)
+    }
+
+    func testMacUnavailableReferencesAndSheetsClearFocusWithoutReacquiringIt() {
+        let state = BoundCompanionState()
+        for change in [
+            { (value: Bool) in state.macSidebarVisible = !value },
+            { (value: Bool) in state.macReferenceVisible = !value },
+            { (value: Bool) in state.showingFriends = value },
+            { (value: Bool) in state.showingSettings = value }
+        ] {
+            state.macControllerFocused = true
+            change(true)
+            XCTAssertFalse(state.macControllerFocused)
+            XCTAssertFalse(BoundMacControllerActionRouting.canToggleFocus(multiview: true, state: state))
+            change(false)
+            XCTAssertFalse(state.macControllerFocused, "Reopening the sidebar or dismissing a sheet must preserve gameplay control.")
+            XCTAssertTrue(BoundMacControllerActionRouting.canToggleFocus(multiview: true, state: state))
+        }
+        state.macControllerFocused = true
+        state.resetPresentation()
+        XCTAssertFalse(state.macControllerFocused)
+    }
+
+    func testMacOptOutBlocksEveryPanelBindingWhileExplicitKeyboardShortcutsStillWorkWhenEnabled() {
+        let state = BoundCompanionState()
+        state.macControllerFocused = true
+        for action in ActionInput.configurableActions where action.isBoundPanelAction {
+            for type in [GameControllerInputType.mfi, .keyboard] {
+                XCTAssertFalse(BoundMacControllerActionRouting.allowsPanelAction(action,
+                    controllerType: type, multiview: false, state: state), "Disabled: \(action)")
+            }
+        }
+        state.macControllerFocused = false
+        XCTAssertTrue(BoundMacControllerActionRouting.allowsPanelAction(.boundShowDex,
+            controllerType: .keyboard, multiview: true, state: state))
+        XCTAssertFalse(BoundMacControllerActionRouting.allowsPanelAction(.boundShowDex,
+            controllerType: .mfi, multiview: true, state: state))
     }
 
     func testMacReferenceActionsKeepMiddleAndBottomSelectionsIndependent() {
@@ -164,6 +218,7 @@ final class MacWorkspaceControllerRoutingTests: XCTestCase {
         BoundMacControllerActionRouting.apply(.toggleBoundFriend, to: state)
         XCTAssertTrue(state.macFriendVisible)
         BoundMacControllerActionRouting.apply(.toggleBoundMultiview, to: state)
-        XCTAssertFalse(state.macReferenceVisible)
+        XCTAssertTrue(state.macReferenceVisible)
+        XCTAssertTrue(state.macControllerFocused)
     }
 }

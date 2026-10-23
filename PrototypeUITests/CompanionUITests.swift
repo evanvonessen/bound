@@ -3259,16 +3259,19 @@ final class CompanionUITests: XCTestCase {
             let accountSettings = app.buttons["bound.settings-account"]
             XCTAssertTrue(accountSettings.waitForExistence(timeout: 10))
             accountSettings.tap()
-            XCTAssertTrue(app.navigationBars["Account & Sync"].waitForExistence(timeout: 5))
-            assertSettingsCloseAtTop(in: app, navigationTitle: "Account & Sync")
+            XCTAssertTrue(app.navigationBars["Account, Friends, & Sync"].waitForExistence(timeout: 5))
+            assertSettingsCloseAtTop(in: app, navigationTitle: "Account, Friends, & Sync")
 
             // This QA check must never sign out a saved account or alter its state.
             if app.descendants(matching: .any).matching(identifier: "bound.account-username").firstMatch.exists ||
                 app.buttons["bound.account-sign-out"].exists {
                 app.terminate()
-                throw XCTSkip("Account & Sync is signed in; keep this check read-only for saved accounts.")
+                throw XCTSkip("Account, Friends, & Sync is signed in; keep this check read-only for saved accounts.")
             }
 
+            XCTAssertFalse(app.staticTexts["bound.account-signed-in-footer"].exists,
+                           "Signed-out accounts must not retain a username footer.")
+            XCTAssertFalse(app.buttons["bound.add-friend-open"].exists)
             screenshot("Library-Account-Sign-In-Option-\(version)")
             let email = app.textFields["account.signin.email"]
             let password = app.secureTextFields["account.signin.password"]
@@ -3286,7 +3289,7 @@ final class CompanionUITests: XCTestCase {
                            "Forgot password carries the entered account email into recovery.")
             XCTAssertTrue(app.buttons["account.recovery.submit"].isEnabled)
             // Check discovery and navigation without sending a real recovery email.
-            app.navigationBars["Reset password"].buttons.firstMatch.tap()
+            app.navigationBars["Reset Password"].buttons.firstMatch.tap()
             XCTAssertTrue(email.waitForExistence(timeout: 5))
 
             app.buttons["account.signin.create-account"].tap()
@@ -3311,19 +3314,19 @@ final class CompanionUITests: XCTestCase {
             password.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: fixturePassword.count))
             XCTAssertFalse(submit.isEnabled)
 
-            app.navigationBars["Account & Sync"].buttons.firstMatch.tap()
+            app.navigationBars["Account, Friends, & Sync"].buttons.firstMatch.tap()
             XCTAssertTrue(accountSettings.waitForExistence(timeout: 5), "Back returns to the Settings list.")
             accountSettings.tap()
-            XCTAssertTrue(app.navigationBars["Account & Sync"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.navigationBars["Account, Friends, & Sync"].waitForExistence(timeout: 5))
             let reopenedSubmit = app.buttons["account.signin.submit"]
             XCTAssertTrue(app.textFields["account.signin.email"].waitForExistence(timeout: 5))
             XCTAssertTrue(app.secureTextFields["account.signin.password"].exists)
-            XCTAssertFalse(reopenedSubmit.isEnabled, "Reopening Account & Sync does not restore the password.")
+            XCTAssertFalse(reopenedSubmit.isEnabled, "Reopening Account, Friends, & Sync does not restore the password.")
 
-            app.navigationBars["Account & Sync"].buttons.firstMatch.tap()
+            app.navigationBars["Account, Friends, & Sync"].buttons.firstMatch.tap()
             XCTAssertTrue(accountSettings.waitForExistence(timeout: 5))
             app.buttons["bound.settings-close"].tap()
-            XCTAssertTrue(settings.waitForExistence(timeout: 5), "Done returns from Account & Sync to the game library.")
+            XCTAssertTrue(settings.waitForExistence(timeout: 5), "Done returns from Account, Friends, & Sync to the game library.")
             app.terminate()
         }
     }
@@ -6006,7 +6009,7 @@ final class ReleaseSmokeUITests: XCTestCase {
 
         settings.tap()
         element("bound.settings-account", in: app).tap()
-        XCTAssertTrue(app.navigationBars["Account & Sync"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Account, Friends, & Sync"].waitForExistence(timeout: 5))
         let deltaSync = element("bound.delta-sync-settings", in: app)
         XCTAssertTrue(deltaSync.waitForExistence(timeout: 5))
         deltaSync.tap()

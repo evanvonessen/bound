@@ -69,7 +69,7 @@ final class BoundDropboxOAuth: NSObject, ASWebAuthenticationPresentationContextP
         case signIn, notLinked, notConfigured, unavailable, rateLimited, secondFactorRequired, changed, cancelled
         var errorDescription: String? {
             switch self {
-            case .signIn: return "Sign in to your Bound account in Account & Sync before connecting Dropbox."
+            case .signIn: return "Sign in to your Bound account in Account, Friends, & Sync before connecting Dropbox."
             case .notLinked: return "Connect Dropbox to your Bound account to enable cloud sync."
             case .notConfigured: return "Dropbox sync is unavailable because Bound’s connection service has not been set up yet. Please try again later."
             case .unavailable: return "Dropbox connection is unavailable. Check your connection and try again."

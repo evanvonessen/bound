@@ -1015,6 +1015,235 @@ final class StockControlAndGestureTests: XCTestCase {
         XCTAssertTrue(gameController.didRequestPauseMenu, "A button bound to Menu must request Bound's pause menu")
     }
 
+    /// Run this case separately with the test host's --bound-ui-mac-workspace
+    /// argument so the ordinary iPhone receiver regression keeps its real path.
+    func testMacMultiviewToggleTransfersRealControllerInputWithoutHidingSidebar() async throws {
+        guard BoundMacWorkspacePlatform.isEnabled else {
+            throw XCTSkip("Run this case with --bound-ui-mac-workspace to exercise the Mac receiver path")
+        }
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let directory = DatabaseManager.gamesDirectoryURL
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let filename = "mac-controller-focus-\(UUID().uuidString).gba"
+        let gameURL = directory.appendingPathComponent(filename)
+        try FileManager.default.copyItem(at: fixture, to: gameURL)
+        defer { try? FileManager.default.removeItem(at: gameURL) }
+
+        let modelURL = try XCTUnwrap(Bundle(for: DatabaseManager.self).url(forResource: "Delta", withExtension: "momd"))
+        let model = try XCTUnwrap(NSManagedObjectModel(contentsOf: modelURL))
+        let context = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
+        context.persistentStoreCoordinator = NSPersistentStoreCoordinator(managedObjectModel: model)
+        defer { context.reset() }
+        let game = Game(entity: try XCTUnwrap(model.entitiesByName["Game"]), insertInto: context)
+        game.type = .gba
+        game.filename = filename
+        game.identifier = UUID().uuidString
+        game.name = "Mac Controller Focus Fixture"
+
+        let defaults = UserDefaults.standard
+        let mode = BoundControllerModePreferences()
+        let automatic = BoundControllerMultiviewPreferences()
+        let previousMode = defaults.object(forKey: BoundControllerModePreferences.key)
+        let previousAutomatic = defaults.object(forKey: BoundControllerMultiviewPreferences.key)
+        let previousMultiplayer = defaults.object(forKey: BoundMultiplayerFeatures.key)
+        let previousLocalPlayer = Settings.localControllerPlayerIndex
+        mode.isEnabled = false
+        automatic.isEnabled = true
+        BoundMultiplayerFeatures.setEnabled(false)
+        defer {
+            for (key, value) in [(BoundControllerModePreferences.key, previousMode),
+                                 (BoundControllerMultiviewPreferences.key, previousAutomatic),
+                                 (BoundMultiplayerFeatures.key, previousMultiplayer)] {
+                if let value { defaults.set(value, forKey: key) }
+                else { defaults.removeObject(forKey: key) }
+            }
+            Settings.localControllerPlayerIndex = previousLocalPlayer
+            NotificationCenter.default.post(name: BoundAppearancePreferences.didChangeNotification, object: nil)
+            NotificationCenter.default.post(name: BoundMultiplayerFeatures.didChange, object: nil)
+        }
+
+        let manager = ExternalGameControllerManager.shared
+        let previousAssignment = manager.automaticallyAssignsPlayerIndexes
+        let previousControllers = manager.connectedControllers.map { ($0, $0.playerIndex) }
+        let configuration = GCVirtualController.Configuration()
+        configuration.elements = [GCInputButtonA, GCInputButtonB, GCInputLeftShoulder,
+                                  GCInputRightShoulder, GCInputDirectionPad]
+        configuration.isHidden = true
+        let virtualController = GCVirtualController(configuration: configuration)
+        defer { virtualController.disconnect() }
+        do {
+            try await virtualController.connect()
+        } catch {
+            throw XCTSkip("The simulator did not provide a virtual game controller: \(error.localizedDescription)")
+        }
+        let physicalController = try XCTUnwrap(virtualController.controller)
+        let connect = NSSelectorFromString("mfiGameControllerDidConnect:")
+        let disconnect = NSSelectorFromString("mfiGameControllerDidDisconnect:")
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let gameController = BoundControllerMenuProbe()
+        defer {
+            if manager.connectedControllers.contains(where: { ($0 as? MFiGameController)?.controller === physicalController }) {
+                manager.perform(disconnect, with: Notification(name: .GCControllerDidDisconnect, object: physicalController))
+            }
+            manager.automaticallyAssignsPlayerIndexes = previousAssignment
+            previousControllers.forEach { $0.0.playerIndex = $0.1 }
+            gameController.boundCompanionForTesting.stop()
+            gameController.emulatorCore?.stop()
+            gameController.game = nil
+            window.rootViewController = nil
+            window.isHidden = true
+            previousWindow?.makeKey()
+        }
+        manager.automaticallyAssignsPlayerIndexes = false
+        manager.connectedControllers.forEach { $0.playerIndex = nil }
+        if !manager.connectedControllers.contains(where: { ($0 as? MFiGameController)?.controller === physicalController }) {
+            XCTAssertTrue(manager.responds(to: connect))
+            manager.perform(connect, with: Notification(name: .GCControllerDidConnect, object: physicalController))
+        }
+        let external = try XCTUnwrap(manager.connectedControllers.first {
+            ($0 as? MFiGameController)?.controller === physicalController
+        })
+        external.playerIndex = 0
+
+        // Use the real saved mapping path so preference notifications and
+        // controller refreshes cannot silently replace a hand-injected mapping.
+        let mappingsContext = DatabaseManager.shared.viewContext
+        let previousRecord = GameControllerInputMapping.inputMapping(forPlayer: 0, gameType: .gba,
+            controllerType: external.inputType, in: mappingsContext)
+        let previousMapping = previousRecord?.deltaCoreInputMapping
+        let mappingEntity = try XCTUnwrap(NSEntityDescription.entity(forEntityName: "GameControllerInputMapping", in: mappingsContext))
+        let record = previousRecord ?? GameControllerInputMapping(entity: mappingEntity, insertInto: mappingsContext)
+        defer {
+            if let previousMapping { record.deltaCoreInputMapping = previousMapping }
+            else { mappingsContext.delete(record) }
+            mappingsContext.processPendingChanges()
+        }
+        var mapping = DeltaCore.GameControllerInputMapping(gameControllerInputType: external.inputType)
+        mapping.set(StandardGameControllerInput.up, forControllerInput: MFiGameController.Input.up)
+        mapping.set(StandardGameControllerInput.down, forControllerInput: MFiGameController.Input.down)
+        mapping.set(StandardGameControllerInput.a, forControllerInput: MFiGameController.Input.a)
+        mapping.set(StandardGameControllerInput.b, forControllerInput: MFiGameController.Input.b)
+        mapping.set(ActionInput.toggleBoundMultiview, forControllerInput: MFiGameController.Input.rightShoulder)
+        record.deltaCoreInputMapping = mapping
+        record.gameType = .gba
+        record.gameControllerInputType = external.inputType
+        record.playerIndex = 0
+
+        window.rootViewController = gameController
+        window.makeKeyAndVisible()
+        gameController.game = game
+        gameController.view.bounds = CGRect(x: 0, y: 0, width: 1024, height: 768)
+        gameController.view.setNeedsLayout()
+        gameController.view.layoutIfNeeded()
+        gameController.refreshBoundControllerPreferences()
+        let core = try XCTUnwrap(gameController.emulatorCore)
+        if core.state == .stopped { core.start() }
+        if core.state == .paused { core.resume() }
+        XCTAssertEqual(core.state, .running)
+        XCTAssertTrue(scene.hasKeyboardFocus)
+        let companion = gameController.boundCompanionForTesting
+        XCTAssertTrue(companion.isMacWorkspace)
+        XCTAssertTrue(companion.state.macSidebarVisible)
+        XCTAssertTrue(companion.state.macReferenceVisible)
+        XCTAssertFalse(companion.state.macControllerFocused)
+        XCTAssertFalse(companion.automaticControllerMultiviewAvailable,
+                       "A visible Mac sidebar must leave the controller with gameplay until the user toggles it")
+        let bridge = try XCTUnwrap(core.deltaCore.emulatorBridge as? NSObject)
+        func nativeInputs() throws -> UInt32 {
+            try XCTUnwrap(bridge.value(forKey: "activatedInputs") as? NSNumber).uint32Value
+        }
+        func toggle() {
+            external.activate(MFiGameController.Input.rightShoulder)
+            external.deactivate(MFiGameController.Input.rightShoulder)
+        }
+        func assertSidebarVisible(file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertTrue(companion.state.macSidebarVisible, file: file, line: line)
+            XCTAssertTrue(companion.state.macReferenceVisible, file: file, line: line)
+        }
+        var commands: [BoundControllerNavigationCommand] = []
+        let observation = NotificationCenter.default.addObserver(forName: BoundControllerNavigationEvent.notificationName,
+                                                                 object: nil, queue: .main) { notification in
+            if let command = BoundControllerNavigationEvent.command(from: notification, gameID: game.identifier, content: .dex) {
+                commands.append(command)
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(observation) }
+
+        core.deltaCore.emulatorBridge.resetInputs()
+        external.activate(MFiGameController.Input.up)
+        let heldDirection = try nativeInputs()
+        XCTAssertNotEqual(heldDirection, 0)
+        XCTAssertTrue(commands.isEmpty, "Gameplay directions must not navigate the visible sidebar")
+        toggle()
+        XCTAssertTrue(companion.state.macControllerFocused)
+        XCTAssertTrue(companion.automaticControllerMultiviewAvailable)
+        assertSidebarVisible()
+        XCTAssertEqual(try nativeInputs(), 0, "Switching focus must release a held game direction immediately")
+        external.deactivate(MFiGameController.Input.up)
+        external.activate(MFiGameController.Input.down)
+        XCTAssertEqual(try nativeInputs(), 0, "Sidebar navigation cannot also move the game")
+        XCTAssertEqual(commands.last, .focusDown)
+        external.deactivate(MFiGameController.Input.down)
+
+        // Types has no selection sheet, allowing A's real capture to be checked
+        // without introducing a modal presentation into this handoff regression.
+        companion.state.macReference = .types
+        external.activate(MFiGameController.Input.a)
+        XCTAssertEqual(try nativeInputs(), 0, "Sidebar A cannot leak through as game A")
+        external.deactivate(MFiGameController.Input.a)
+        companion.state.macReference = .dex
+        external.activate(MFiGameController.Input.up)
+        XCTAssertEqual(try nativeInputs(), 0)
+        toggle()
+        XCTAssertFalse(companion.state.macControllerFocused)
+        assertSidebarVisible()
+        XCTAssertEqual(try nativeInputs(), heldDirection,
+                       "Returning to game control must resume a still-held direction before another layout frame")
+        external.deactivate(MFiGameController.Input.up)
+        XCTAssertEqual(try nativeInputs(), 0)
+        external.activate(MFiGameController.Input.a)
+        XCTAssertNotEqual(try nativeInputs(), 0, "A must return to gameplay after the second toggle")
+        external.deactivate(MFiGameController.Input.a)
+
+        toggle()
+        XCTAssertTrue(companion.state.macControllerFocused)
+        automatic.isEnabled = false
+        XCTAssertFalse(companion.state.macControllerFocused)
+        XCTAssertFalse(companion.automaticControllerMultiviewAvailable)
+        mode.isEnabled = true
+        toggle()
+        XCTAssertFalse(companion.state.macControllerFocused,
+                       "Controller Mode cannot override the Mac Allow Controller to Control Multiview switch")
+        assertSidebarVisible()
+        external.activate(MFiGameController.Input.down)
+        XCTAssertNotEqual(try nativeInputs(), 0)
+        external.deactivate(MFiGameController.Input.down)
+        automatic.isEnabled = true
+        XCTAssertFalse(companion.state.macControllerFocused, "Re-enabling the preference must not steal gameplay input")
+
+        func assertSheetReturnsToGame(_ name: String, setShowing: (Bool) -> Void) throws {
+            toggle()
+            XCTAssertTrue(companion.state.macControllerFocused)
+            setShowing(true)
+            XCTAssertFalse(companion.state.macControllerFocused, "Opening \(name) must clear sidebar focus")
+            XCTAssertFalse(companion.automaticControllerMultiviewAvailable)
+            toggle()
+            XCTAssertFalse(companion.state.macControllerFocused, "A background shortcut cannot capture input under \(name)")
+            setShowing(false)
+            XCTAssertFalse(companion.state.macControllerFocused, "Closing \(name) must keep gameplay control")
+            assertSidebarVisible()
+            external.activate(MFiGameController.Input.up)
+            XCTAssertNotEqual(try nativeInputs(), 0)
+            external.deactivate(MFiGameController.Input.up)
+        }
+        try assertSheetReturnsToGame("Settings", setShowing: { companion.state.showingSettings = $0 })
+        try assertSheetReturnsToGame("Friends", setShowing: { companion.state.showingFriends = $0 })
+        XCTAssertFalse(gameController.didRequestPauseMenu)
+        XCTAssertEqual(try nativeInputs(), 0)
+    }
+
     func testViewNavigationMappingsRemainAvailableWhenLegacyPreferenceIsFalse() throws {
         let defaults = UserDefaults.standard
         let previousValue = defaults.object(forKey: BoundControllerNavigationPreferences.key)

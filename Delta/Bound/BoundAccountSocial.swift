@@ -254,12 +254,57 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
     }
 }
 
+/// Settings borrows the running game's friends owner. Library settings owns a
+/// temporary owner and releases its transport when the account page is removed.
+@MainActor
+final class BoundAccountFriendsContext: ObservableObject {
+    let sharing: FriendSharingSession
+    let onboarding: FriendOnboarding
+    let account: BoundFriendAccount
+    private let ownsSharing: Bool
+    private var subscriptions: [AnyCancellable] = []
+
+    init(sharing: FriendSharingSession? = nil, onboarding: FriendOnboarding? = nil,
+         account: BoundFriendAccount = .shared) {
+        ownsSharing = sharing == nil
+        self.sharing = sharing ?? FriendSharingSession(authenticatedMode: true)
+        self.onboarding = onboarding ?? FriendOnboarding.forUI()
+        self.account = account
+        subscriptions = [account.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() },
+                         self.onboarding.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }]
+    }
+
+    deinit {
+        guard ownsSharing else { return }
+        let onboarding = onboarding, sharing = sharing
+        BoundMainActorDisposal.enqueue { onboarding.close(); sharing.stop() }
+    }
+
+    func open() { onboarding.open(sharing: sharing, existing: { [account] in account.session }) }
+    func close() { onboarding.close() }
+    func prepareForAccountRemoval() { onboarding.signOut(); sharing.stop() }
+
+    var signedInUsername: String? {
+        guard !account.deletionPending, let owner = account.session?.owner,
+              onboarding.currentIdentity()?.owner == owner,
+              let username = onboarding.accountUsername, BoundSocialAPI.validUsername(username) else { return nil }
+        return username
+    }
+}
+
 struct BoundAccountSocialSettings: View {
     static let stopSharingNotification = Notification.Name("BoundAccountSocialSettingsStopSharing")
-    @ObservedObject private var account = BoundFriendAccount.shared
+    @ObservedObject private var account: BoundFriendAccount
     @ObservedObject private var notifications = BoundJiggleNotifications.shared
     @State private var email = ""
     @State private var password = ""
+    private let prepareFriendsForAccountRemoval: () -> Void
+
+    init(account: BoundFriendAccount = .shared, prepareFriendsForAccountRemoval: @escaping () -> Void = {}) {
+        self.account = account
+        self.prepareFriendsForAccountRemoval = prepareFriendsForAccountRemoval
+    }
+
     var body: some View {
         Section("Bound Account") {
             if account.deletionPending {
@@ -307,6 +352,7 @@ struct BoundAccountSocialSettings: View {
     }
 
     private func prepareForAccountRemoval() {
+        prepareFriendsForAccountRemoval()
         postStopSharing()
         BoundJiggleNotifications.shared.prepareForSignOut()
     }

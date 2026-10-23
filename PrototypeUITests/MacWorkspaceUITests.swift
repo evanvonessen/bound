@@ -408,9 +408,16 @@ final class MacWorkspaceUITests: XCTestCase {
         for _ in 0..<4 where !accountEntry.isHittable { settingsForm.swipeDown() }
         XCTAssertTrue(accountEntry.waitForExistence(timeout: 5))
         accountEntry.tap()
-        XCTAssertTrue(app.navigationBars["Account & Sync"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Account, Friends, & Sync"].waitForExistence(timeout: 5))
         assertAccountEntry(in: app)
-        app.navigationBars["Account & Sync"].buttons.firstMatch.tap()
+        if app.buttons["bound.account-security"].exists {
+            XCTAssertTrue(element("bound.friends-list-heading", in: app).exists)
+            XCTAssertTrue(app.buttons["bound.add-friend-open"].exists)
+            XCTAssertTrue(app.buttons["bound.friends-refresh"].exists)
+        } else {
+            XCTAssertFalse(app.staticTexts["bound.account-signed-in-footer"].exists)
+        }
+        app.navigationBars["Account, Friends, & Sync"].buttons.firstMatch.tap()
 
         let controlsEntry = app.buttons["bound.settings-controls"]
         XCTAssertTrue(controlsEntry.waitForExistence(timeout: 5))

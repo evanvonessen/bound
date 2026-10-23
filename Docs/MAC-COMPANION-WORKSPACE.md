@@ -4,7 +4,7 @@ The existing iOS app selects the workspace when `ProcessInfo.processInfo.isiOSAp
 
 During gameplay, the game fills the available height beside a collapsible right sidebar. There is no left navigation rail, top toolbar, or bottom status bar. Floating controls at the top right provide the workspace actions menu and sidebar toggle. Library opens the existing game chooser; Game menu opens the existing pause, save-state, and fast-forward controls. Friends and Settings use the existing screens, with explicit pause/resume handling for direct presentation from the workspace.
 
-Mac and both iPhone UI versions share the current Friends and account layout. Friends places Add beside the Friends list heading, above the secondary multiplayer controls. Both Friends and Settings → Account & Sync open Account and Security for username, email, password recovery and authenticator controls. Passkey controls are hidden on every platform. The shared Settings switch is labeled Enable Experimental Multiplayer. Account controls remain available with multiplayer disabled. The saved iPhone UI Version is preserved.
+Mac and both iPhone UI versions share the current Friends and account layout. Friends places Add beside the Friends list heading, above the secondary multiplayer controls. Both Friends and Settings → Account, Friends, & Sync open Account and Security for username, email, password recovery and authenticator controls. Account, Friends, & Sync also includes the shared Friends list, Refresh and Add actions, plus a signed-in username footer beneath its account and sync controls. In-game Settings uses the existing sharing session and friend selection. Passkey controls are hidden on every platform. The shared Settings switch is labeled Enable Experimental Multiplayer. Account controls remain available with multiplayer disabled. The saved iPhone UI Version is preserved.
 
 The sidebar has three independent regions: Friend video at the top, Dex/Docs in the middle, and Notes/Types at the bottom. Friend video fills its region above a single Connect/Disconnect button, without the previous heading or card frame. Disconnect uses the shared Friends lifecycle, clears the selected friend and blocks automatic reconnect until another explicit selection. Connect returns to Friends. The handle on the sidebar's left edge changes its width while reserving usable gameplay space. A second handle between Friend and the middle region redistributes their height. The bottom region scales with the window height. Hiding the sidebar gives its space back to gameplay and preserves the selected content and pane sizes for reopening.
 
@@ -18,11 +18,11 @@ The coordinator continues to own one `FriendSharingSession`. Its remote view is 
 
 Most workspace UI code lives in `BoundMacWorkspaceView.swift` and `BoundMacWorkspaceGeometry.swift`. Integration touches the companion coordinator, game view controller, and Xcode source membership. The ordinary iPhone/iPad branch keeps its independent button-view memory, retained Boss/Dex tab and scroll state, and portrait game/controller geometry. Both interfaces share the current reference views and Settings, including Rules & contact under About.
 
-Settings → Controls also shares Controller Mode, Allow Controller to Control Multiview, and the Controllers mapping editor with iPhone. Controller Mode enables assigned companion navigation actions in the Mac inspector. Allow Controller to Control Multiview additionally routes the controller's D-pad, A/B, and right stick to the visible reference; the existing default LT/RT bindings switch tabs. Custom mappings keep the same precedence as on iPhone. Mac routing works in both wide and tall windows and is independent of the saved iPhone screen layout.
+Settings → Controls also shares Controller Mode, Allow Controller to Control Multiview, and the Controllers mapping editor with iPhone. On Mac, Allow Controller to Control Multiview enables the assigned Toggle Multiview Controls button to switch controller input between gameplay and the sidebar. Gameplay has focus initially. Enabling sidebar control routes the gamepad's D-pad, A/B and right stick to the selected reference; the existing default LT/RT bindings switch tabs. Toggling again returns input to gameplay without hiding the sidebar. Disabling the setting, hiding the sidebar, opening Settings or Friends, and leaving the active game return input to gameplay. Custom mappings keep the same precedence as on iPhone. Mac routing works in both wide and tall windows and is independent of the saved iPhone screen layout.
 
-Automatic Multiview capture applies to gamepads. Keyboard gameplay remains available, and explicitly mapped keyboard companion shortcuts still work.
+Multiview input capture applies to gamepads after an explicit focus toggle. Keyboard gameplay remains available, and explicitly mapped keyboard companion shortcuts still work.
 
-Previous/Next Multiview Tab wraps through Dex, Docs, Notes, and Types, moving controller focus while retaining the other region's independent selection. Explicit reference shortcuts also reopen the sidebar. Friend and Multiview toggle/hide bindings control the corresponding sidebar regions; hiding Multiview returns input to gameplay. The sidebar offers Show Friend Gameplay and Show Multiview buttons, and selecting a reference tab also reveals it. Changing reference tabs keeps Friend video visible unless explicitly hidden. Reference dialogs still close before a controller switches or hides their tab.
+Previous/Next Multiview Tab wraps through Dex, Docs, Notes, and Types, moving controller focus while retaining the other region's independent selection. Explicit reference shortcuts also reopen the sidebar. Friend visibility bindings control the Friend region. The Mac Multiview toggle and backing out of a reference return controller input to gameplay while leaving the reference visible. An explicitly assigned Hide Multiview action still hides the reference. Mouse and trackpad visibility controls retain their existing behavior. The sidebar offers Show Friend Gameplay and Show Multiview buttons, and selecting a reference tab also reveals it. Changing reference tabs keeps Friend video visible unless explicitly hidden. Reference dialogs still close before a controller switches or hides their tab.
 
 ## Mac Metal cache startup workaround
 
@@ -33,6 +33,18 @@ Migration preserves complete cache directories. If the destination already exist
 For an isolated QA build, override `BOUND_APP_BUNDLE_IDENTIFIER` with a dedicated identifier using compatible signing settings. Only the app target derives its `PRODUCT_BUNDLE_IDENTIFIER` from this setting; the default remains `com.evanvonessen.bound`, and dependency bundle identities remain unchanged. Install through Xcode's Designed-for-iPad destination and run without a debugger. Validate the actual cache file paths, RunningBoard suspension, and foreground recovery with the same process ID; merely switching windows or exercising the Simulator layout is insufficient.
 
 ## Verification
+
+Account/Friends and controller-focus verification on October 22, 2026: 51 focused
+integration checks and three UI checks passed. Coverage includes shared friend
+session ownership, username refresh/sign-out cleanup, both iPhone UI versions,
+Mac Settings navigation, and virtual-controller input reaching the emulator
+before and after sidebar focus changes. Signed-in account screenshots were
+reviewed at phone and desktop sizes. The initial phone UI run exposed an outdated
+Reset Password title assertion and a missing diagnostic ROM fixture; both were
+corrected before the passing rerun. Release builds passed for iPhone and the
+Designed-for-iPad Mac destination. This run did not validate a physical controller,
+native Mac runtime, or a live two-account friend connection. Evidence is retained
+locally under `.build/account-friends-mac-controls/`.
 
 Current-feature parity verification on October 22, 2026: 38 focused account,
 workspace geometry and controller tests passed. All three Mac workspace UI cases

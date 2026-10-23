@@ -530,6 +530,7 @@ class GameViewController: DeltaCore.GameViewController
                 && (self.presentedViewController == nil || (navigatingReference && !(self.presentedViewController is PauseViewController)))
                 && (!self.boundCompanion.isEditingNotes || navigatingReference)
                 && !self.boundCompanion.state.showingFriends && !self.boundCompanion.state.showingSettings
+                && self.boundCompanion.allowsControllerPanelAction(action, controllerType: controller.inputType)
             self.boundPanelActions.activate(controller: controller, action: action, eligible: eligible) {
                 if action.isViewNavigationAction || action.isMultiviewTabAction { self.boundCompanion.navigateControllerView(action) }
                 else if action == .cycleBoundPanels { self.boundCompanion.cyclePanels() }
@@ -559,6 +560,7 @@ class GameViewController: DeltaCore.GameViewController
             guard let self, let controller else { return }
             self.boundPanelActions.release(controller: controller)
             self.boundMultiviewRepeater.end(controller: controller)
+            self.boundCompanion.resetMacControllerFocus()
         }
         if Thread.isMainThread { release() } else { DispatchQueue.main.async(execute: release) }
     }
@@ -1009,7 +1011,7 @@ private extension GameViewController
                   ActionInput(input: target) == nil,
                   StandardGameControllerInput(input: target) != .menu,
                   old?.input(forControllerInput: physical).map(AnyInput.init) != AnyInput(target) else { continue }
-            // Resume a still-held gameplay direction immediately on hiding the panel.
+            // Resume a held gameplay direction when control returns from Multiview.
             self.gameController(controller, didActivate: target, value: value)
             core.gameController(controller, didActivate: target, value: value)
         }
@@ -2870,6 +2872,7 @@ private extension GameViewController
     @objc func sceneKeyboardFocusDidChange(with notification: Notification)
     {
         guard let scene = notification.object as? UIWindowScene, scene == self.view.window?.windowScene else { return }
+        if !scene.hasKeyboardFocus { boundCompanion.resetMacControllerFocus() }
         guard let externalDisplayScene = UIApplication.shared.externalDisplayScene else { return }
         
         if scene.hasKeyboardFocus

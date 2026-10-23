@@ -33,6 +33,7 @@ struct BoundSettingsGameplayContext {
     var showCompanion: (() -> Void)? = nil
     var recordedPlayer: BoundRecordedPlayerSession? = nil
     var livePresence: BoundLivePresenceSession? = nil
+    var friends: BoundAccountFriendsContext? = nil
 }
 
 /// Both entry points use this owner so closing and interactive dismissal share
@@ -160,11 +161,10 @@ struct SettingsView: View {
                             SettingsRow(label: Text("Video"), systemImage: "display", color: .teal)
                         }.accessibilityIdentifier("bound.settings-video")
                         NavigationLink {
-                            Form { BoundAccountSocialSettings(); DeltaSyncSettingsSection() }
-                                .navigationTitle("Account & Sync").navigationBarTitleDisplayMode(.inline)
+                            BoundAccountFriendsSyncSettings(context: gameplay?.friends)
                                 .boundSettingsPage()
                         } label: {
-                            SettingsRow(label: Text("Account & Sync"), systemImage: "person.crop.circle", color: .indigo)
+                            SettingsRow(label: Text("Account, Friends, & Sync"), systemImage: "person.crop.circle", color: .indigo)
                         }.accessibilityIdentifier("bound.settings-account")
                         NavigationLink {
                             Form {
@@ -449,6 +449,48 @@ struct OnlineMultiplayerView: View
 }
 
 // MARK: - Services
+
+struct BoundAccountFriendsSyncSettings: View {
+    @StateObject private var context: BoundAccountFriendsContext
+    @Environment(\.scenePhase) private var scenePhase
+
+    init(context: BoundAccountFriendsContext? = nil) {
+        _context = StateObject(wrappedValue: context ?? BoundAccountFriendsContext())
+    }
+
+    var body: some View {
+        Form {
+            BoundAccountSocialSettings(account: context.account,
+                                       prepareFriendsForAccountRemoval: context.prepareForAccountRemoval)
+            if context.account.session != nil && !context.account.deletionPending {
+                BoundFriendsListSections(sharing: context.sharing, onboarding: context.onboarding, account: context.account)
+            }
+            DeltaSyncSettingsSection()
+            if let username = context.signedInUsername {
+                Section {} footer: {
+                    Text("Signed in to \(username)")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                        .textCase(nil)
+                        .accessibilityIdentifier("bound.account-signed-in-footer")
+                }
+            }
+        }
+        .navigationTitle("Account, Friends, & Sync")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { context.open() }
+        .onDisappear { context.close() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { context.open() }
+            else { context.close() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: BoundAccountProfile.didChangeNotification)) { _ in
+            context.onboarding.refresh()
+        }
+    }
+}
 
 private struct DeltaSyncSettingsSection: View
 {

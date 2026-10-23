@@ -914,6 +914,169 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         onboarding.close()
     }
 
+    func testAccountFriendsReusesGameSessionAcrossSubmenusAndRemovesItOnlyOnSignOut() async throws {
+        let account = try accountFixture()
+        let room = FriendRoom(roomID: UUID().uuidString, displayName: "Navi")
+        let transport = FriendTapSharingTransport()
+        var leaseRequests = 0
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            tokenFetcher: { room, identity in
+                leaseRequests += 1
+                return self.makeLease(room: room, owner: identity.owner, request: leaseRequests)
+            })
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            XCTAssertEqual(action, "list")
+            return FriendResponse(ok: true, rooms: [room], username: "River")
+        }, sendJiggle: { _, _ in "" }, observeAccount: { OnboardingObservation($0) })
+        onboarding.open(sharing: sharing, existing: { account.session })
+        await waitUntil { !onboarding.busy }
+        onboarding.select(room, startSharing: true)
+        await waitUntil { sharing.joined }
+
+        var context: BoundAccountFriendsContext? = BoundAccountFriendsContext(sharing: sharing, onboarding: onboarding, account: account)
+        XCTAssertTrue(context?.sharing === sharing)
+        XCTAssertTrue(context?.onboarding === onboarding)
+        context?.open()
+        await waitUntil { !onboarding.busy }
+        XCTAssertEqual(context?.signedInUsername, "River")
+        context?.close() // Pushing Account and Security or Sync must keep the game connected.
+        XCTAssertTrue(sharing.joined)
+        context?.open()
+        await waitUntil { !onboarding.busy }
+        XCTAssertEqual(leaseRequests, 1, "Entering Account and returning from a submenu must not start another connection")
+        context?.close()
+        context = nil
+        BoundMainActorDisposal.drainPending()
+        XCTAssertTrue(sharing.joined, "Dismissing Account must preserve a borrowed game connection")
+
+        let reopened = BoundAccountFriendsContext(sharing: sharing, onboarding: onboarding, account: account)
+        reopened.open()
+        await waitUntil { !onboarding.busy }
+        reopened.prepareForAccountRemoval()
+        account.signOut()
+        XCTAssertFalse(sharing.active)
+        XCTAssertFalse(sharing.joined)
+        XCTAssertNil(onboarding.selected)
+        XCTAssertNil(reopened.signedInUsername)
+        reopened.close()
+    }
+
+    func testAccountFriendsFooterTracksProfileAndNeverLeaksPreviousOwnerName() async throws {
+        let account = try accountFixture()
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true)
+        var username = "River"
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            XCTAssertEqual(action, "list")
+            return FriendResponse(ok: true, rooms: [], username: username)
+        }, observeAccount: { OnboardingObservation($0) })
+        let context = BoundAccountFriendsContext(sharing: sharing, onboarding: onboarding, account: account)
+        XCTAssertNil(context.signedInUsername, "No placeholder footer is shown before a profile is loaded")
+        context.open()
+        await waitUntil { !onboarding.busy }
+        XCTAssertEqual(context.signedInUsername, "River")
+        username = "Renamed River"
+        onboarding.refresh()
+        await waitUntil { !onboarding.busy }
+        XCTAssertEqual(context.signedInUsername, "Renamed River")
+
+        let replacementAccount = try accountFixture()
+        let replacement = BoundAccountFriendsContext(sharing: sharing, onboarding: onboarding, account: replacementAccount)
+        XCTAssertNil(replacement.signedInUsername, "A retained list from another owner cannot expose their name")
+        username = "New Owner"
+        replacement.open()
+        await waitUntil { !onboarding.busy }
+        XCTAssertEqual(replacement.signedInUsername, "New Owner")
+        XCTAssertNil(context.signedInUsername)
+        replacementAccount.signOut()
+        XCTAssertNil(replacement.signedInUsername, "Signing out immediately hides the footer before the next account observation")
+        replacement.close()
+        account.signOut()
+    }
+
+    func testSignedInAccountFriendsRendersPhoneAndMacAndRefreshesProfile() async throws {
+        let account = try accountFixture()
+        let room = FriendRoom(roomID: UUID().uuidString, displayName: "Navi")
+        var username = "River"
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            XCTAssertEqual(action, "list")
+            return FriendResponse(ok: true, rooms: [room], username: username)
+        }, observeAccount: { OnboardingObservation($0) })
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+            tokenFetcher: { _, _ in XCTFail("Rendering Account must not start a share"); throw BoundFriendError.unavailable })
+        let context = BoundAccountFriendsContext(sharing: sharing, onboarding: onboarding, account: account)
+        let host = UIHostingController(rootView: NavigationStack { BoundAccountFriendsSyncSettings(context: context) })
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousWindow?.makeKeyAndVisible()
+            context.close()
+            account.signOut()
+        }
+        for (layout, size) in [("iPhone", CGSize(width: 393, height: 852)),
+                               ("Mac", CGSize(width: 1024, height: 768))] {
+            window.frame = CGRect(origin: .zero, size: size)
+            host.view.frame = window.bounds
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            await waitUntil { context.signedInUsername == "River" }
+            XCTAssertEqual(context.signedInUsername, "River")
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
+            let image = UIGraphicsImageRenderer(size: size).image { _ in
+                host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true)
+            }
+            XCTAssertGreaterThan(try XCTUnwrap(image.pngData()).count, 5000)
+            let attachment = XCTAttachment(image: image)
+            attachment.name = "Account-Friends-Sync-Signed-In-\(layout)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            XCTAssertEqual(onboarding.rooms, [room])
+            XCTAssertFalse(sharing.active)
+        }
+        username = "Renamed River"
+        NotificationCenter.default.post(name: BoundAccountProfile.didChangeNotification, object: account.session?.owner)
+        await waitUntil { context.signedInUsername == "Renamed River" }
+        XCTAssertEqual(context.signedInUsername, "Renamed River", "An open Account screen refreshes its footer after the shared profile changes")
+        account.signOut()
+        XCTAssertNil(context.signedInUsername)
+        XCTAssertFalse(sharing.active)
+    }
+
+    func testLibraryAccountFriendsDisposalCancelsItsObservation() async throws {
+        let account = try accountFixture()
+        var observation: OnboardingObservation?
+        let onboarding = FriendOnboarding(call: { _, _, _ in FriendResponse(ok: true, rooms: [], username: "River") },
+            observeAccount: { observation = OnboardingObservation($0); return observation! })
+        var context: BoundAccountFriendsContext? = BoundAccountFriendsContext(onboarding: onboarding, account: account)
+        weak var released = context
+        context?.open()
+        await waitUntil { !onboarding.busy }
+        XCTAssertFalse(try XCTUnwrap(observation).cancelled)
+        context = nil
+        XCTAssertNil(released)
+        BoundMainActorDisposal.drainPending()
+        XCTAssertTrue(try XCTUnwrap(observation).cancelled, "Library Account must not leave a friend refresh timer running after dismissal")
+        account.signOut()
+    }
+
+    private func accountFixture() throws -> BoundFriendAccount {
+        let owner = UUID()
+        let claims = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
+        let payload = claims.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        let saved = BoundSavedSession(origin: BoundFriendAccount.origin, owner: owner,
+            accessToken: "fixture.\(payload).signature", refreshToken: "synthetic-account-friends-refresh")
+        return BoundFriendAccount(storage: AccountFriendsMemoryStorage(try JSONEncoder().encode(saved)),
+            deletionStorage: AccountFriendsMemoryStorage(), automaticRefresh: false,
+            configuration: { "fixture-public-key" }, transport: { _ in
+                XCTFail("Account Friends fixtures must not contact the account service")
+                throw BoundFriendError.unavailable
+            })
+    }
+
     private func makeIdentity(owner: UUID) throws -> AppCloudSession {
         let claims = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
         let payload = claims.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
@@ -1126,4 +1289,13 @@ final class RunLeaseClientTests: XCTestCase {
         do { _ = try await client.acquire(runID: run, session: session, allowTransfer: true); XCTFail("Ended runs never reacquire") }
         catch BoundRunLeaseError.runEnded {}
     }
+}
+
+@MainActor
+private final class AccountFriendsMemoryStorage: BoundSessionStorage {
+    private var data: Data?
+    init(_ data: Data? = nil) { self.data = data }
+    func read() throws -> Data? { data }
+    func write(_ data: Data) throws { self.data = data }
+    func remove() throws { data = nil }
 }

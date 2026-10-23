@@ -291,7 +291,9 @@ extension Input
             case .screenshot: return NSLocalizedString("Screenshot", comment: "")
             case .cycleBoundPanels: return NSLocalizedString("Cycle Friend/Notes/Types", comment: "")
             case .toggleBoundFriend: return NSLocalizedString("Toggle Friend", comment: "")
-            case .toggleBoundMultiview: return NSLocalizedString("Toggle Multiview", comment: "")
+            case .toggleBoundMultiview: return BoundMacWorkspacePlatform.isEnabled
+                ? NSLocalizedString("Toggle Multiview Controls", comment: "")
+                : NSLocalizedString("Toggle Multiview", comment: "")
             case .boundScrollUp: return NSLocalizedString("View: Scroll Up", comment: "")
             case .boundScrollDown: return NSLocalizedString("View: Scroll Down", comment: "")
             case .boundScrollLeft: return NSLocalizedString("View: Scroll Left", comment: "")

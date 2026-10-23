@@ -79,8 +79,16 @@ final class BoundCompanionState: ObservableObject {
     @Published var chartTopInset: CGFloat = 0
     @Published var referenceTopInset: CGFloat = 0
     @Published var hidden = false
-    @Published var showingFriends = false
-    @Published var showingSettings = false
+    @Published var showingFriends = false {
+        didSet { if showingFriends { macControllerFocused = false } }
+    }
+    @Published var showingSettings = false {
+        didSet { if showingSettings { macControllerFocused = false } }
+    }
+    // Controller focus is a session choice, independent of sidebar visibility.
+    @Published var macControllerFocused = false {
+        didSet { if oldValue != macControllerFocused { changed?() } }
+    }
     // Desktop reference selection is separate from the iPhone PiP cycle.
     @Published var macReference: BoundPiPContent = .dex {
         didSet {
@@ -91,11 +99,21 @@ final class BoundCompanionState: ObservableObject {
     }
     @Published var macMidReference: BoundPiPContent = .dex
     @Published var macBottomReference: BoundPiPContent = .types
-    @Published var macSidebarVisible = true { didSet { if oldValue != macSidebarVisible { changed?() } } }
+    @Published var macSidebarVisible = true {
+        didSet {
+            if !macSidebarVisible { macControllerFocused = false }
+            if oldValue != macSidebarVisible { changed?() }
+        }
+    }
     @Published var macSidebarWidth: CGFloat = 420 { didSet { if oldValue != macSidebarWidth { changed?() } } }
     @Published var macTopFraction: CGFloat = 0.44
     @Published var macFriendVisible = true { didSet { if oldValue != macFriendVisible { changed?() } } }
-    @Published var macReferenceVisible = true { didSet { if oldValue != macReferenceVisible { changed?() } } }
+    @Published var macReferenceVisible = true {
+        didSet {
+            if !macReferenceVisible { macControllerFocused = false }
+            if oldValue != macReferenceVisible { changed?() }
+        }
+    }
     @Published var revision = 0
     @Published var emulationDetails: BoundEmulationDetails?
     #if DEBUG
@@ -213,6 +231,7 @@ final class BoundCompanionState: ObservableObject {
         refresh()
     }
     func resetPresentation() {
+        macControllerFocused = false
         settings.refresh()
         rememberedButtonViews.removeAll()
         activeButtons.removeAll()
@@ -248,16 +267,30 @@ enum BoundMacControllerActionRouting {
         return mapping
     }
 
-    static func isEnabled(controllerMode: Bool, multiview: Bool,
-                          showingFriends: Bool, showingSettings: Bool) -> Bool {
-        (controllerMode || multiview) && !showingFriends && !showingSettings
+    static func isEnabled(multiview: Bool, showingFriends: Bool, showingSettings: Bool) -> Bool {
+        multiview && !showingFriends && !showingSettings
+    }
+
+    static func canToggleFocus(multiview: Bool, state: BoundCompanionState) -> Bool {
+        isEnabled(multiview: multiview, showingFriends: state.showingFriends, showingSettings: state.showingSettings)
+            && state.macSidebarVisible && state.macReferenceVisible
+    }
+
+    static func allowsPanelAction(_ action: ActionInput, controllerType: GameControllerInputType,
+                                  multiview: Bool, state: BoundCompanionState) -> Bool {
+        guard isEnabled(multiview: multiview, showingFriends: state.showingFriends,
+                        showingSettings: state.showingSettings) else { return false }
+        if action == .toggleBoundMultiview { return canToggleFocus(multiview: multiview, state: state) }
+        // Keyboard gameplay remains independent; only explicitly assigned
+        // keyboard shortcuts can operate references without gamepad focus.
+        return controllerType == .keyboard || state.macControllerFocused
     }
 
     static func apply(_ action: ActionInput, to state: BoundCompanionState) {
         switch action {
         case .toggleBoundFriend: state.macFriendVisible.toggle()
         case .boundHideFriend: state.macFriendVisible = false
-        case .toggleBoundMultiview: state.macReferenceVisible.toggle()
+        case .toggleBoundMultiview: state.macControllerFocused.toggle()
         case .boundHideMultiview: state.macReferenceVisible = false
         case .boundShowDex: show(.dex, in: state)
         case .boundShowBosses: show(.bosses, in: state)
@@ -472,7 +505,7 @@ final class BoundCompanionCoordinator {
                         notification, gameID: self.gameID, content: content,
                         available: self.automaticControllerMultiviewAvailable
                       ) else { return }
-                if self.macHost != nil { self.state.macReferenceVisible = false }
+                if self.macHost != nil { self.resetMacControllerFocus() }
                 else if self.landscapeArrangement.active { self.landscapeArrangement.toggleReference() }
                 else if self.landscapeCompanion.active { self.landscapeCompanion.hideReference() }
             }
@@ -507,6 +540,9 @@ final class BoundCompanionCoordinator {
                 self?.sharing.stop()
                 self?.onboarding.signOut()
             }
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.resetMacControllerFocus() }
         })
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.background() }
@@ -1097,7 +1133,8 @@ final class BoundCompanionCoordinator {
             editControls: { [weak self] in self?.state.pendingControlEditor = true },
             showCompanion: { [weak self] in self?.state.hidden = false; self?.state.refresh() },
             recordedPlayer: playerStateDisplay.supportsRecording ? playerStateDisplay.recordingSession : nil,
-            livePresence: playerStateDisplay.supportsRecording ? sharing.livePresence : nil)
+            livePresence: playerStateDisplay.supportsRecording ? sharing.livePresence : nil,
+            friends: BoundAccountFriendsContext(sharing: sharing, onboarding: onboarding, account: account))
         let host = BoundSettingsHostingController(model: state.settings, gameplay: context, closed: { [weak self] in
             guard let self else { return }; self.state.showingSettings = false
             self.cancelInteractions()
@@ -1171,7 +1208,13 @@ final class BoundCompanionCoordinator {
             DispatchQueue.main.async(execute: finish)
         }
     }
+    func resetMacControllerFocus() {
+        guard macHost != nil else { return }
+        pendingControllerReferenceAction = nil
+        state.macControllerFocused = false
+    }
     func cancelInteractions() {
+        resetMacControllerFocus()
         pendingControllerReferenceAction = nil
         landscapeArrangement.finish(save: false)
         landscapeCompanion.finishArrangement(save: false)
@@ -1183,17 +1226,21 @@ final class BoundCompanionCoordinator {
         if landscapeArrangement.active { landscapeArrangement.cycleReference(); return }
         if landscapeCompanion.active { landscapeCompanion.cycleViews(); return }
         owner?.view.endEditing(true)
-        cancelInteractions()
         if macHost != nil {
             BoundMacControllerActionRouting.apply(.cycleBoundPanels, to: state)
             return
         }
+        cancelInteractions()
         state.advancePanel()
     }
     func toggleControllerPanel(_ action: ActionInput) {
         if macHost != nil {
             guard macControllerNavigationEnabled else { return }
-            if action == .toggleBoundMultiview, dismissReferenceBeforeControllerAction(action) { return }
+            if action == .toggleBoundMultiview {
+                guard BoundMacControllerActionRouting.canToggleFocus(
+                    multiview: BoundControllerMultiviewPreferences().isEnabled, state: state) else { return }
+                if dismissReferenceBeforeControllerAction(action) { return }
+            }
             BoundMacControllerActionRouting.apply(action, to: state)
             return
         }
@@ -1222,20 +1269,29 @@ final class BoundCompanionCoordinator {
     }
     private var macControllerNavigationEnabled: Bool {
         BoundMacControllerActionRouting.isEnabled(
-            controllerMode: BoundControllerModePreferences().isEnabled,
             multiview: BoundControllerMultiviewPreferences().isEnabled,
             showingFriends: state.showingFriends, showingSettings: state.showingSettings)
     }
     var isMacWorkspace: Bool { macHost != nil }
+    func allowsControllerPanelAction(_ action: ActionInput, controllerType: GameControllerInputType) -> Bool {
+        guard isMacWorkspace else { return true }
+        return BoundMacControllerActionRouting.allowsPanelAction(action, controllerType: controllerType,
+            multiview: BoundControllerMultiviewPreferences().isEnabled, state: state)
+    }
     var automaticControllerMultiviewAvailable: Bool {
         if macHost != nil {
-            return BoundControllerMultiviewPreferences().isEnabled && macControllerNavigationEnabled
-                && state.macSidebarVisible && state.macReferenceVisible
+            return state.macControllerFocused && BoundMacControllerActionRouting.canToggleFocus(
+                multiview: BoundControllerMultiviewPreferences().isEnabled, state: state)
         }
         return BoundControllerMultiviewPreferences().isEnabled && controllerCompanionAvailable
             && controllerReferenceContent != nil
     }
     private func refreshControllerMultiviewRouting() {
+        if macHost != nil, state.macControllerFocused,
+           !BoundMacControllerActionRouting.canToggleFocus(
+               multiview: BoundControllerMultiviewPreferences().isEnabled, state: state) {
+            state.macControllerFocused = false
+        }
         let content = automaticControllerMultiviewAvailable ? controllerReferenceContent : nil
         if let oldContent = lastControllerFocusContent, oldContent != content {
             BoundControllerNavigationEvent.post(command: .clearFocus, gameID: gameID, content: oldContent)
@@ -1297,7 +1353,7 @@ final class BoundCompanionCoordinator {
             guard let content = controllerReferenceContent else { return }
             if command == .back, content == .types,
                BoundControllerMultiviewPreferences().isEnabled {
-                if macHost != nil { state.macReferenceVisible = false }
+                if macHost != nil { resetMacControllerFocus() }
                 else if landscapeArrangement.active { landscapeArrangement.toggleReference() }
                 else if landscapeCompanion.active { landscapeCompanion.hideReference() }
                 return
@@ -1441,7 +1497,7 @@ final class BoundCompanionCoordinator {
         foregroundTask?.cancel(); foregroundTask = nil
         landscapeArrangement.finish(save: false, resume: false); landscapeCompanion.finishArrangement(save: false, resume: false)
         notesDismissalTask?.cancel(); notesDismissalTask = nil
-        let pendingAction = pendingControllerReferenceAction
+        let pendingAction = macHost == nil ? pendingControllerReferenceAction : nil
         cancelInteractions(); pendingControllerReferenceAction = pendingAction
         tap.setEnabled(false); sharing.background(); refreshMultiplayerServices(); onboarding.close()
     }
@@ -1827,12 +1883,6 @@ struct BoundFriendsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var email = ""
     @State private var password = ""
-    @State private var friendUsername = ""
-    @State private var reportingRoom: FriendRoom?
-    @State private var blockingRoom: FriendRoom?
-    @State private var removingRoom: FriendRoom?
-    @State private var showingAddFriend = false
-    @State private var roomIDsBeforeAdding: Set<String> = []
     @AppStorage(BoundDeveloperFeatures.key) private var developerFeaturesEnabled = false
     var closed: () -> Void = {}
 
@@ -1878,48 +1928,7 @@ struct BoundFriendsSheet: View {
                     }
                 }
                 if account.session != nil {
-                    Section {
-                        if !onboarding.message.isEmpty {
-                            Text(onboarding.message).font(.caption)
-                        }
-                        ForEach(onboarding.rooms) { room in
-                            friendRow(room)
-                        }
-                        Button("Refresh") { onboarding.refresh() }.disabled(onboarding.busy)
-                    } header: {
-                        HStack {
-                            Text("Friends")
-                                .accessibilityIdentifier("bound.friends-list-heading")
-                            Spacer()
-                            Button {
-                                guard account.session != nil else { return }
-                                roomIDsBeforeAdding = Set(onboarding.rooms.map(\.roomID))
-                                friendUsername = ""
-                                showingAddFriend = true
-                            } label: {
-                                Label("Add", systemImage: "person.badge.plus")
-                                    .font(.subheadline.weight(.semibold))
-                                    .lineLimit(1).minimumScaleFactor(0.8)
-                                    .frame(minWidth: 44, minHeight: 44)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.borderless)
-                            .accessibilityLabel("Add friend")
-                            .accessibilityIdentifier("bound.add-friend-open")
-                        }
-                        .textCase(nil)
-                    }
-                    if !onboarding.blocks.isEmpty {
-                        Section("Blocked") {
-                            ForEach(onboarding.blocks) { block in
-                                HStack {
-                                    Text(block.displayName)
-                                    Spacer()
-                                    Button("Unblock") { onboarding.unblock(block) }.disabled(onboarding.busy)
-                                }
-                            }
-                        }
-                    }
+                    BoundFriendsListSections(sharing: sharing, onboarding: onboarding, account: account)
                     if developerFeaturesEnabled {
                         BoundLivePresenceControls(session: sharing.livePresence)
                         BoundSoulControls(session: sharing.soulLink)
@@ -1934,15 +1943,80 @@ struct BoundFriendsSheet: View {
         .onReceive(NotificationCenter.default.publisher(for: BoundAccountProfile.didChangeNotification)) { _ in
             onboarding.refresh()
         }
-        .onChange(of: account.session?.owner) { _, _ in
-            showingAddFriend = false
-        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { onboarding.open(sharing: sharing, existing: { account.session }) }
             else { onboarding.close() }
         }
         .onDisappear { password = ""; onboarding.close(); closed() }
         .interactiveDismissDisabled(account.busy)
+    }
+}
+
+/// The Friends tile and Account settings use identical rows and actions.
+struct BoundFriendsListSections: View {
+    @ObservedObject var sharing: FriendSharingSession
+    @ObservedObject var onboarding: FriendOnboarding
+    @ObservedObject var account: BoundFriendAccount
+    @State private var friendUsername = ""
+    @State private var reportingRoom: FriendRoom?
+    @State private var blockingRoom: FriendRoom?
+    @State private var removingRoom: FriendRoom?
+    @State private var showingAddFriend = false
+    @State private var roomIDsBeforeAdding: Set<String> = []
+
+    var body: some View {
+        Group {
+            Section {
+                if !onboarding.message.isEmpty {
+                    Text(onboarding.message).font(.caption)
+                }
+                ForEach(onboarding.rooms) { room in
+                    friendRow(room)
+                }
+                Button("Refresh") { onboarding.refresh() }.disabled(onboarding.busy)
+                    .accessibilityIdentifier("bound.friends-refresh")
+            } header: {
+                HStack {
+                    Text("Friends")
+                        .accessibilityIdentifier("bound.friends-list-heading")
+                    Spacer()
+                    Button {
+                        guard account.session != nil else { return }
+                        roomIDsBeforeAdding = Set(onboarding.rooms.map(\.roomID))
+                        friendUsername = ""
+                        showingAddFriend = true
+                    } label: {
+                        Label("Add", systemImage: "person.badge.plus")
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1).minimumScaleFactor(0.8)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Add friend")
+                    .accessibilityIdentifier("bound.add-friend-open")
+                }
+                .textCase(nil)
+            }
+            if !onboarding.blocks.isEmpty {
+                Section("Blocked") {
+                    ForEach(onboarding.blocks) { block in
+                        HStack {
+                            Text(block.displayName)
+                            Spacer()
+                            Button("Unblock") { onboarding.unblock(block) }.disabled(onboarding.busy)
+                        }
+                    }
+                }
+            }
+        }
+        .onChange(of: account.session?.owner) { _, _ in
+            showingAddFriend = false
+            reportingRoom = nil
+            blockingRoom = nil
+            removingRoom = nil
+            friendUsername = ""
+        }
         .sheet(item: $reportingRoom) { room in BoundReportView(onboarding: onboarding, room: room) }
         .sheet(isPresented: $showingAddFriend) {
             NavigationStack {

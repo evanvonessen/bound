@@ -48,6 +48,7 @@ struct BoundMacWorkspaceView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("bound.mac-workspace")
+        .accessibilityValue(state.macControllerFocused ? "Multiview Controls" : "Game Controls")
         .onChange(of: geometry.inspector.size, initial: true) { _, size in
             if size.width > 0 && size.height > 0 { retainedSidebarSize = size }
         }
