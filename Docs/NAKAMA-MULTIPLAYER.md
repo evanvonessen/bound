@@ -1,7 +1,7 @@
 # Nakama multiplayer
 
-Bound's authenticated experimental gameplay transport is Nakama, hosted on
-Heroic Cloud. Supabase remains the account, friend authorization and run-lease
+Bound's authenticated experimental gameplay transport is Nakama, with deployment
+support for Heroic Cloud. Supabase remains the account, friend authorization and run-lease
 authority; existing paired save packages and Dropbox sync remain unchanged.
 Agora is retained for explicitly requested friend video and spectating.
 
@@ -70,9 +70,28 @@ See [server runtime](../Backend/nakama/README.md) and
 Heroic Cloud title/runtime and matching private broker secrets before enabling
 the service. The runtime deployment bundle contains server code only.
 
+The private [runtime deployment repository](https://github.com/evanvonessen/bound-nakama-runtime)
+contains the compiled server entry point, configuration fragment and digest
+manifest. It excludes the app, game assets and secrets. Re-export and verify its
+digest whenever server source changes before deploying a new runtime image.
+
+On October 22, 2026, the Bound Heroic Cloud title was created and Supabase
+migration `20261023032413_bound_nakama_room_authorization_v1` and
+`nakama-session` version 1 were deployed. The paid Nakama server, repository
+connection and private server secrets remain pending activation. Until those
+steps are complete, the broker returns `503 not_configured`; hosted gameplay
+is not available.
+
 Focused checks cover ticket forgery/expiry, account and room binding, concurrent
 room allocation, eight-member routing, lane limits, nonblocking client queues,
 stale callback fencing, independent video and paired recovery boundaries. A
 Release iPhone build and focused iOS integration tests are required before
 publishing. Fixture or local-server results do not establish hosted delivery,
 physical-device performance, browser play or multi-player ROM acceptance.
+
+The combined main revision passed a Release iPhone build and 74 focused iOS
+Simulator tests. Backend validation passed 65 broker tests, 39 runtime and
+interoperability tests, 11 real PostgreSQL authorization groups and nine checks
+against a local Nakama 3.41.0 server with three clients. Live Supabase readback
+matched the reviewed SQL and function files, existing API definitions stayed
+unchanged and anonymous, missing-session and browser-origin requests were denied.
