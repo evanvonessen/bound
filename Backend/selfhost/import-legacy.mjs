@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createGrantCipher } from '../dropbox-link/handler.mjs';
 
@@ -87,8 +87,9 @@ async function* rows(client, table, selected = '*') {
   } finally { await client.query('CLOSE bound_legacy_import'); }
 }
 
-export async function importLegacy({ source, destination, apply = false, env = {} }) {
-  const report = { mode: apply ? 'apply' : 'check', source: {}, destination: {}, blockers: [], imported: false };
+export async function importLegacy({ source, destination, apply = false, resetDropboxLinks = false, env = {} }) {
+  const report = { mode: apply ? 'apply' : 'check', dropbox_links: resetDropboxLinks ? 'reset' : 'preserve',
+    source: {}, destination: {}, blockers: [], imported: false };
   const block = (code, table, amount) => report.blockers.push({ code, ...(table ? { table } : {}), ...(amount !== undefined ? { count: amount } : {}) });
   let sourceOpen = false, destinationOpen = false;
   try {
@@ -167,7 +168,7 @@ export async function importLegacy({ source, destination, apply = false, env = {
       ? await count(source, 'bound_dropbox_private.links', ' WHERE ciphertext IS NOT NULL') : 0;
     report.source.dropbox_encrypted_grants = grants;
     let cipher;
-    if (grants) {
+    if (grants && !resetDropboxLinks) {
       try { cipher = createGrantCipher(env.DROPBOX_ENCRYPTION_KEY, env.DROPBOX_APP_KEY); }
       catch { block('original_dropbox_keys_required', 'bound_dropbox_private.links'); }
       if (!env.DROPBOX_APP_KEY) block('original_dropbox_app_key_required', 'bound_dropbox_private.links');
@@ -197,7 +198,16 @@ export async function importLegacy({ source, destination, apply = false, env = {
     copying.sort((a, b) => tables.indexOf(a.table) - tables.indexOf(b.table));
     for (const entry of copying) {
       const names = entry.fields.map(field => field.name);
-      for await (const row of rows(source, entry.table)) {
+      const resetGrants = resetDropboxLinks && entry.table === 'bound_dropbox_private.links';
+      // Reset only the destination connection. Do not read old grant ciphertext,
+      // revoke a provider token, or change the old backend's working connection.
+      const selected = resetGrants
+        ? names.map(name => name === 'ciphertext' ? 'NULL::text AS "ciphertext"' : quote(name)).join(',') : '*';
+      for await (const row of rows(source, entry.table, selected)) {
+        if (resetGrants) {
+          row.ciphertext = null;
+          row.revision = randomUUID();
+        }
         if (entry.table === 'bound_dropbox_private.links' && row.ciphertext) {
           try { await cipher.open(row.owner, row.ciphertext); } catch { fail('dropbox_ciphertext_key_mismatch'); }
         }
@@ -226,10 +236,11 @@ export async function importLegacy({ source, destination, apply = false, env = {
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help')) {
-    process.stdout.write('node import-legacy.mjs [--check | --apply]\nRequired env: SOURCE_DATABASE_URL, DATABASE_URL. Default: read-only count/check report.\n');
+    process.stdout.write('node import-legacy.mjs [--check | --apply] [--reset-dropbox-links]\nRequired env: SOURCE_DATABASE_URL, DATABASE_URL. Default: read-only count/check report.\n--reset-dropbox-links requires Dropbox reconnection on the destination and leaves source grants untouched.\n');
     return;
   }
-  if (args.length > 1 || args.some(arg => !['--check', '--apply'].includes(arg))) fail('invalid_arguments');
+  if (args.length !== new Set(args).size || args.some(arg => !['--check', '--apply', '--reset-dropbox-links'].includes(arg))
+      || (args.includes('--check') && args.includes('--apply'))) fail('invalid_arguments');
   const sourceURL = process.env.SOURCE_DATABASE_URL, destinationURL = process.env.DATABASE_URL;
   if (!sourceURL || !destinationURL || sourceURL === destinationURL) fail('distinct_database_urls_required');
   // Credentials are environment-only and never copied to reports or export files.
@@ -245,7 +256,8 @@ async function main() {
   const destination = new pg.Client({ connectionString: destinationURL, application_name: 'bound-legacy-import', types, connectionTimeoutMillis: 10000 });
   try {
     await source.connect(); await destination.connect();
-    const report = await importLegacy({ source, destination, apply: args[0] === '--apply', env: process.env });
+    const report = await importLegacy({ source, destination, apply: args.includes('--apply'),
+      resetDropboxLinks: args.includes('--reset-dropbox-links'), env: process.env });
     process.stdout.write(JSON.stringify(report, null, 2) + '\n');
     if (report.blockers.length) process.exitCode = 2;
   } finally { await source.end().catch(() => {}); await destination.end().catch(() => {}); }

@@ -10,32 +10,46 @@ const account = () => ({ id, email: 'fixture@example.com', encrypted_password: h
   created_at: '2026-01-01T00:00:00.123456Z', updated_at: '2026-01-02T00:00:00.123456Z',
   is_anonymous: false, deleted_at: null, banned_until: null, last_sign_in_at: null });
 const field = (name, type = 'text') => ({ name, type, nullable: 'YES', default: null, identity: 'NO', generated: 'NEVER' });
+const dropboxFields = [field('owner', 'uuid'), field('revision', 'uuid'), field('ciphertext'),
+  field('window_start', 'timestamptz'), field('requests', 'int4')];
+const dropboxRow = { owner: id, revision: '22222222-2222-4222-8222-222222222222',
+  ciphertext: 'original-encrypted-grant', window_start: '2026-01-01T00:00:00.123456Z', requests: 17 };
 
-function fixture({ factors = 0, destinationAccounts = 0, failInsert = false } = {}) {
-  const logs = { source: [], destination: [] }, state = { inserted: 0, fetches: 0 };
+function fixture({ factors = 0, destinationAccounts = 0, failInsert = false, dropbox = false } = {}) {
+  const logs = { source: [], destination: [], dropboxRows: [] }, state = { inserted: 0, fetches: 0, cursor: '' };
   const source = { async query(sql, parameters) {
     logs.source.push(sql);
     assert.ok(/^(BEGIN .*READ ONLY|SET LOCAL|SHOW |SELECT |DECLARE |FETCH |CLOSE |ROLLBACK)/.test(sql), 'source never gets writes');
     if (sql.startsWith('SHOW')) return { rows: [{ transaction_read_only: 'on' }] };
     if (sql.includes('FROM pg_class')) return { rows: [
       { schema: 'auth', name: 'users', kind: 'r' }, { schema: 'auth', name: 'mfa_factors', kind: 'r' },
-      { schema: 'auth', name: 'identities', kind: 'r' }] };
-    if (sql.includes('FROM information_schema.columns')) return { rows: Object.keys(account()).map(name => field(name)) };
+      { schema: 'auth', name: 'identities', kind: 'r' },
+      ...(dropbox ? [{ schema: 'bound_dropbox_private', name: 'links', kind: 'r' }] : [])] };
+    if (sql.includes('FROM information_schema.columns')) return { rows: parameters[0] === 'bound_dropbox_private'
+      ? dropboxFields : Object.keys(account()).map(name => field(name)) };
     if (sql.startsWith('SELECT count')) {
       if (sql.includes('mfa_factors')) return { rows: [{ count: String(factors) }] };
+      if (sql.includes('"links"')) return { rows: [{ count: '1' }] };
       if (sql.includes(' WHERE ') || sql.includes(' duplicates')) return { rows: [{ count: '0' }] };
       return { rows: [{ count: '1' }] };
     }
-    if (sql.startsWith('FETCH')) return { rows: state.fetches++ ? [] : [account()] };
+    if (sql.startsWith('DECLARE')) { state.cursor = sql; state.fetches = 0; }
+    if (sql.startsWith('FETCH')) return { rows: state.fetches++ ? [] : [state.cursor.includes('"links"')
+      ? { ...dropboxRow, ciphertext: state.cursor.includes('NULL::text AS "ciphertext"') ? null : dropboxRow.ciphertext }
+      : account()] };
     return { rows: [] };
   } };
   const destination = { async query(sql, parameters) {
     logs.destination.push(sql);
     if (sql.includes('FROM pg_class')) return { rows: [
       { schema: 'auth', name: 'users', kind: 'v' }, { schema: 'public', name: 'users', kind: 'r' },
-      { schema: 'public', name: 'storage', kind: 'r' }] };
-    if (sql.includes('FROM information_schema.columns')) return { rows: [field('id', 'uuid'), field('password', 'bytea'), field('metadata', 'jsonb'), field('custom_id', 'varchar')] };
-    if (sql.startsWith('SELECT count')) return { rows: [{ count: String(sql.includes('"users"') ? destinationAccounts + state.inserted : 0) }] };
+      { schema: 'public', name: 'storage', kind: 'r' },
+      ...(dropbox ? [{ schema: 'bound_dropbox_private', name: 'links', kind: 'r' }] : [])] };
+    if (sql.includes('FROM information_schema.columns')) return { rows: parameters[0] === 'bound_dropbox_private'
+      ? dropboxFields : [field('id', 'uuid'), field('password', 'bytea'), field('metadata', 'jsonb'), field('custom_id', 'varchar')] };
+    if (sql.startsWith('SELECT count')) return { rows: [{ count: String(sql.includes('"users"') ? destinationAccounts + state.inserted
+      : sql.includes('"links"') ? logs.dropboxRows.length : 0) }] };
+    if (sql.startsWith('INSERT INTO "bound_dropbox_private"."links"')) logs.dropboxRows.push(parameters);
     if (sql.startsWith('INSERT INTO public.users')) {
       if (failInsert) throw Error('sensitive upstream row detail must not escape CLI');
       assert.equal(parameters[0], id); assert.equal(parameters[3].toString(), hash); state.inserted++;
@@ -89,4 +103,25 @@ test('apply preserves native UUID/password then commits destination only; failur
   const failed = fixture({ failInsert: true });
   await assert.rejects(importLegacy({ ...failed, apply: true }));
   assert.equal(failed.logs.destination.at(-1), 'ROLLBACK'); assert.equal(failed.logs.source.at(-1), 'ROLLBACK');
+});
+
+test('explicit Dropbox reset imports disconnected rows without old keys and leaves source grants untouched', async () => {
+  const preserved = fixture({ dropbox: true });
+  const blocked = await importLegacy({ ...preserved, apply: true });
+  assert.equal(blocked.dropbox_links, 'preserve');
+  assert.ok(blocked.blockers.some(value => value.code === 'original_dropbox_keys_required'));
+  assert.equal(preserved.logs.dropboxRows.length, 0);
+
+  const f = fixture({ dropbox: true });
+  const result = await importLegacy({ ...f, apply: true, resetDropboxLinks: true });
+  assert.deepEqual(result.blockers, []); assert.equal(result.imported, true);
+  assert.equal(result.dropbox_links, 'reset'); assert.equal(result.source.dropbox_encrypted_grants, 1);
+  assert.equal(f.logs.dropboxRows.length, 1);
+  const [owner, revision, ciphertext, windowStart, requests] = f.logs.dropboxRows[0];
+  assert.equal(owner, id); assert.equal(ciphertext, null); assert.notEqual(revision, dropboxRow.revision);
+  assert.match(revision, /^[0-9a-f-]{36}$/);
+  assert.equal(windowStart, dropboxRow.window_start); assert.equal(requests, dropboxRow.requests);
+  assert.ok(f.logs.source.some(sql => sql.startsWith('DECLARE') && sql.includes('NULL::text AS "ciphertext"')));
+  assert.equal(dropboxRow.ciphertext, 'original-encrypted-grant');
+  assert.equal(f.logs.source.at(-1), 'ROLLBACK'); assert.equal(f.logs.destination.at(-1), 'COMMIT');
 });

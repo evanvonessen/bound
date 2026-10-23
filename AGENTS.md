@@ -11,31 +11,11 @@ Before publishing changes, run focused checks and a Release iPhone build, preser
 
 Publish completed, validated Bound changes by default unless the user explicitly says not to publish. This is standing project-wide authorization; do not ask for repeat permission. Verify the remote and push validated changes directly to `origin/main` with an explicit refspec; never push the current branch implicitly. Preserve unrelated work rather than including it in the publication. Use original upstream Delta playback smoothness as the performance baseline, and do not claim phone parity from simulator tests.
 
-TestFlight delivery is on demand to conserve Xcode Cloud minutes. Normal code
-validation, commits and pushes to main do not authorize or require a Cloud run.
-Only start a release when the user explicitly requests a TestFlight build or
-delivery; batch validated changes into one build of the requested main commit.
-Before starting, check for an existing queued, running, uploaded or processed
-build of that exact commit and reuse it rather than starting a duplicate.
-
-Use the existing manual-only Xcode Cloud workflow with caching enabled and a
-single Archive - iOS action. Keep its automatic internal TestFlight post-action
-for **Evan Only Internal Testing** (ID
-`165fa14a-3c1a-4c4c-ae90-0189de227adc`), containing only
-`evanvonessen.dev@gmail.com`. Do not restore per-push, schedule, pull-request or
-tag triggers, forced clean builds, or a separate duplicate Build - iOS action
-without a user request. Check available minutes before starting a requested run.
-If capacity is exhausted or Cloud cannot deliver, report the blocker and stop
-delivery work; normal code publication continues. Do not automatically create a
-local distribution archive or upload as a fallback. A local upload requires an
-explicit human request for that upload; then use
-`python3 PrototypeTools/deliver-testflight.py --revision <published-commit> --upload`
-or Organizer. Do not add external testers or submit for public release. Verify
-the exact commit, Apple processing and availability in the private group before
-reporting delivery complete. After an explicitly requested local upload, keep
-Cloud's next build number above the uploaded number. Preserve uncertain receipts
-and inspect Apple before retrying. See `Docs/TESTFLIGHT-DELIVERY.md`.
-Device Automatic Updates must be enabled in TestFlight separately on each device.
+Never upload to TestFlight or start an Xcode Cloud run that delivers to TestFlight.
+Never check Xcode Cloud usage, available minutes, or capacity. These are standing
+user instructions for all chats and supersede older delivery guidance in this
+repository. Normal local validation, commits, and pushes remain authorized.
+Keep the existing Cloud workflow manual-only; do not enable automatic triggers.
 
 The current feature set is the permanent Bound baseline. New features are non-experimental unless the user explicitly states otherwise. The experimental customization checkbox/options and Interface & Companion settings menu have been removed; their remaining settings live in Controls. Do not restore those entry points or erase saved customization choices. Keep unrelated upstream Delta controls under the existing `simplifiedSettings` and Debug/Release rules. Preserve saved preferences, and keep UI Version independent of companion appearance. See `Docs/BOUND-EXPERIMENTAL-FEATURES.md`.
 
@@ -64,4 +44,4 @@ matching integrated ROM to multi_red's permanent first-README download link and
 refreshes the named main iPhone 17 simulator when booted. Preserve earlier ROMs
 and saves; report incompatible game/app commits or service failures accurately.
 See `../multi_red/docs/main-simulator.md`. This does not replace the existing
-Bound validation or on-demand internal TestFlight delivery rules.
+Bound validation or the prohibition on TestFlight uploads and Cloud usage checks.
