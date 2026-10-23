@@ -322,6 +322,12 @@ private extension AppDelegate
         // Operator: notify device of database readiness
         self.handleOperatorDatabaseReady()
 
+        // Database readiness can be posted from its background context.
+        Task { @MainActor in
+            BoundROMUpdateManager.shared.canApply = { BoundROMUpdateActivity.canApply }
+            BoundROMUpdateManager.shared.start()
+        }
+
         #if DEBUG && targetEnvironment(simulator)
         BoundFullAppGameplayQA.current?.prepareLibrary()
         #endif

@@ -64,10 +64,12 @@ class PreviewGameViewController: DeltaCore.GameViewController
     }()
     
     override var game: GameProtocol? {
-        willSet {
+        get { super.game }
+        set {
+            guard newValue == nil || !BoundROMUpdateManager.shared.isApplying else { return }
             self.emulatorCore?.removeObserver(self, forKeyPath: #keyPath(EmulatorCore.state), context: &kvoContext)
-        }
-        didSet {
+            super.game = newValue
+            BoundROMUpdateActivity.bindingChanged(self)
             guard let emulatorCore = self.emulatorCore else {
                 self.preferredContentSize = CGSize.zero
                 return

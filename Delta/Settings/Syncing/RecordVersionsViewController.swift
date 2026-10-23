@@ -251,11 +251,37 @@ private extension RecordVersionsViewController
         guard !self.isSyncingRecord else { return }
         
         guard let indexPath = self._selectedVersionIndexPath else { return }
+
+        if indexPath.section == Section.remote.rawValue,
+           let type = SyncManager.RecordType(rawValue: self.record.recordID.type),
+           type == .gameSave || type == .saveState {
+            let metadata = self.record.remoteMetadata
+            let gameID = type == .gameSave ? self.record.recordID.identifier
+                : (metadata?[.verifiedGameID] ?? metadata?[.gameID] ?? self.record.localMetadata?[.gameID])
+            if let gameID {
+                do {
+                    // Harmony exposes the head's metadata even for an older
+                    // revision. Only the head can prove its reset generation.
+                    try BoundROMUpdateRegistry.validateRestore(gameID: gameID,
+                        generation: metadata?[HarmonyMetadataKey("boundROMGeneration")],
+                        version: self.dataSource.item(at: indexPath).version.identifier,
+                        currentVersion: self.record.remoteVersion?.identifier,
+                        isLocked: self.record.perform { $0.remoteRecord?.isLocked ?? true })
+                } catch {
+                    let alert = UIAlertController(title: "Unable to Restore Save", message: error.localizedDescription, preferredStyle: .alert)
+                    alert.addAction(.ok)
+                    self.present(alert, animated: true)
+                    return
+                }
+            }
+        }
         
-        guard let coordinator = SyncManager.shared.coordinator else { return }
+        guard let coordinator = SyncManager.shared.coordinator,
+              let finishMutation = SyncManager.shared.beginManualRecordMutation() else { return }
         
         func finish<T: Error>(_ result: Result<AnyRecord, T>)
         {
+            finishMutation()
             DispatchQueue.main.async {
                 
                 SyncManager.shared.ignoredCorruptedRecordIDs.remove(self.record.recordID)

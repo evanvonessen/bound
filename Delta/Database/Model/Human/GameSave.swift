@@ -71,6 +71,9 @@ extension GameSave: Syncable
         
         // Use self.identifier to always link with exact matching game.
         var metadata: [HarmonyMetadataKey: String] = [.gameID: self.identifier, .gameName: game.name]
+        if let generation = BoundROMUpdateRegistry.generation(for: self.identifier) {
+            metadata[HarmonyMetadataKey("boundROMGeneration")] = generation
+        }
         if let manifest = try? BoundMultiplayerSaveStore.shared.manifest(gameID: game.identifier), !manifest.ended {
             metadata[HarmonyMetadataKey("boundMultiplayerRun")] = manifest.identity.run.uuidString
             metadata[HarmonyMetadataKey("boundMultiplayerOwner")] = manifest.identity.owner.uuidString
@@ -92,6 +95,9 @@ extension GameSave: Syncable
     
     public func awakeFromSync(_ record: AnyRecord) throws
     {
+        try BoundROMUpdateRegistry.validateDownload(gameID: self.identifier,
+            generation: record.remoteMetadata?[HarmonyMetadataKey("boundROMGeneration")], isSave: true,
+            remoteLocked: record.perform { $0.remoteRecord?.isLocked ?? true })
         do
         {
             guard let game = self.game else { throw SyncValidationError.incorrectGame(nil) }
@@ -143,6 +149,10 @@ extension GameSave: Syncable
 
     public func prepareForSync(_ record: AnyRecord) throws
     {
+        try BoundROMUpdateRegistry.validateUpload(gameID: self.identifier)
+        if BoundROMUpdateRegistry.generation(for: self.identifier) != nil, let game = self.game {
+            try BoundROMUpdateResetPolicy.validateBatteryForUpload(try? Data(contentsOf: game.gameSaveURL), expectedSHA1: self.sha1)
+        }
         multiplayerDownloadDirectory = nil
         multiplayerUploadDirectory = nil
         if let game, BoundMultiplayerSaveStore.shared.hasRun(gameID: game.identifier) {

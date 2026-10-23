@@ -41,6 +41,7 @@ extension GameCollectionViewController
     {
         case alreadyRunning
         case downloadingGameSave
+        case updatingROM
         case biosNotFound
         case systemAlreadyRunning(RunningGameSnapshot?, UISceneSession)
         case multiplayerSessionActive(EmulatorCore?)
@@ -50,6 +51,7 @@ extension GameCollectionViewController
             {
             case .alreadyRunning: return NSLocalizedString("Game Already Running", comment: "")
             case .downloadingGameSave: return NSLocalizedString("Downloading Save File", comment: "")
+            case .updatingROM: return NSLocalizedString("Updating ROM", comment: "")
             case .biosNotFound: return NSLocalizedString("Missing Required DS Files", comment: "")
             case .systemAlreadyRunning: return NSLocalizedString("System Already Running", comment: "")
             case .multiplayerSessionActive: return NSLocalizedString("Active Multiplayer Game", comment: "")
@@ -62,6 +64,7 @@ extension GameCollectionViewController
             case .alreadyRunning: return NSLocalizedString("Delta can only play one copy of a game at a time.", comment: "")
             case .downloadingGameSave: return NSLocalizedString("Please wait until after this game's save file has been downloaded before playing to prevent losing save data.", comment: "")
             case .biosNotFound: return NSLocalizedString("Please import the required files in Delta's settings to play DS games.", comment: "")
+            case .updatingROM: return NSLocalizedString("Please wait for the ROM update to finish.", comment: "")
             case .systemAlreadyRunning(let game, _):
                 let gameNamePhrase = game.map { String(format: " (“%@”)", $0.name) } ?? ""
                 
@@ -654,7 +657,7 @@ private extension GameCollectionViewController
                     
                     self.present(alertController, animated: true, completion: nil)
                     
-                case .downloadingGameSave, .systemAlreadyRunning, .multiplayerSessionActive:
+                case .updatingROM, .downloadingGameSave, .systemAlreadyRunning, .multiplayerSessionActive:
                     let alertController = UIAlertController(title: error.errorTitle, message: error.localizedDescription, preferredStyle: .alert)
                     
                     if error.recoveryActions.isEmpty
@@ -688,6 +691,7 @@ private extension GameCollectionViewController
     
     private func validateLaunchingGame(_ game: Game, ignoringErrors ignoredErrors: [Error]) throws(LaunchError)
     {
+        guard !BoundROMUpdateManager.shared.isApplying else { throw LaunchError.updatingROM }
         let ignoredErrors = ignoredErrors.map { $0 as NSError }
         
         if !ignoredErrors.contains(where: { $0.domain == (LaunchError.alreadyRunning as NSError).domain && $0.code == (LaunchError.alreadyRunning as NSError).code })
