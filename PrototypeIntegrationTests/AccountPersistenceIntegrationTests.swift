@@ -371,6 +371,14 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
     }
 
     func testExplicitDisconnectSurvivesROMTicksRefreshAndForegroundUntilFriendTap() async throws {
+        try await assertExplicitDisconnectSurvivesRestoration(useMacSidebar: false)
+    }
+
+    func testMacSidebarDisconnectSurvivesROMTicksRefreshAndForegroundUntilFriendTap() async throws {
+        try await assertExplicitDisconnectSurvivesRestoration(useMacSidebar: true)
+    }
+
+    private func assertExplicitDisconnectSurvivesRestoration(useMacSidebar: Bool) async throws {
         let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
         BoundMultiplayerFeatures.setEnabled(true)
         defer {
@@ -393,7 +401,14 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         await waitUntil { !onboarding.busy }
         onboarding.setMultiplayerPartner(roomID: room.roomID)
         await waitUntil { sharing.joined }
-        onboarding.disconnect()
+        var friendsOpened = 0
+        let workspace = BoundMacWorkspaceView(sharing: sharing, onboarding: onboarding,
+            state: BoundCompanionState(), geometry: .init(bounds: CGRect(x: 0, y: 0, width: 1200, height: 800)),
+            gameID: "mac-disconnect-fixture", gameTitle: "Fixture", editingChanged: { _ in },
+            textEditingChanged: { _ in }, currentSave: { _ in throw BoundRRDexSave.ImportError.currentGameUnavailable },
+            showLibrary: {}, showMenu: {}, showFriends: { friendsOpened += 1 }, showSettings: {})
+        if useMacSidebar { workspace.toggleFriendConnection() }
+        else { onboarding.disconnect() }
         XCTAssertFalse(sharing.active)
         XCTAssertFalse(sharing.joined)
         XCTAssertNil(sharing.connectedRoomID)
@@ -405,6 +420,12 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         await settle()
         XCTAssertEqual(requests, 1, "Manual Stop must block background reconnection")
         XCTAssertNil(onboarding.selected, "Stopped friends have no paused/not-sharing badge")
+        if useMacSidebar {
+            XCTAssertEqual(friendsOpened, 0, "Disconnect must not open Friends")
+            workspace.toggleFriendConnection()
+            XCTAssertEqual(friendsOpened, 1, "Connect must return to Friends for an explicit selection")
+            XCTAssertEqual(requests, 1, "Opening Friends must not silently reconnect")
+        }
         onboarding.select(room, startSharing: true)
         await waitUntil { sharing.joined }
         XCTAssertEqual(requests, 2)

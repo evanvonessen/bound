@@ -4,6 +4,7 @@ import UIKit
 /// Mac-only workspace. Delta's native game fills the space beside the inspector.
 struct BoundMacWorkspaceView: View {
     @ObservedObject var sharing: FriendSharingSession
+    @ObservedObject var onboarding: FriendOnboarding
     @ObservedObject var state: BoundCompanionState
     var geometry: BoundMacWorkspaceGeometry
     var gameID: String
@@ -206,9 +207,7 @@ struct BoundMacWorkspaceView: View {
             .accessibilityValue(sharing.status)
             .accessibilityIdentifier("bound.friend-screen")
             if state.macFriendVisible {
-                Button {
-                    if sharing.active || sharing.joined { sharing.stop() } else { showFriends() }
-                } label: {
+                Button(action: toggleFriendConnection) {
                     Text(sharing.active || sharing.joined ? "Disconnect" : "Connect")
                         .font(.system(size: 12, weight: .semibold))
                         .frame(maxWidth: .infinity).frame(height: 32)
@@ -218,6 +217,11 @@ struct BoundMacWorkspaceView: View {
                 .accessibilityIdentifier("bound.mac-friends-connect")
             }
         }
+    }
+
+    func toggleFriendConnection() {
+        if sharing.active || sharing.joined { onboarding.disconnect() }
+        else { showFriends() }
     }
 
     private var midSection: some View {

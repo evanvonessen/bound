@@ -660,7 +660,7 @@ final class BoundCompanionCoordinator {
         #endif
     }
     private func installMacWorkspace(in owner: GameViewController) {
-        let workspace = BoundMacWorkspaceView(sharing: sharing, state: state,
+        let workspace = BoundMacWorkspaceView(sharing: sharing, onboarding: onboarding, state: state,
             geometry: BoundMacWorkspaceGeometry(bounds: owner.view.bounds),
             gameID: (owner.game as? Game)?.identifier ?? "", gameTitle: (owner.game as? Game)?.name ?? "Bound",
             editingChanged: { [weak self] in self?.notesEditing($0) },
