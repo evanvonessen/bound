@@ -70,6 +70,8 @@ final class FriendOnboarding: ObservableObject {
     private weak var sharing: FriendSharingSession?
     private var generation = UUID()
     private var task: Task<Void, Never>?
+    private var pendingRequestAction: String?
+    private var refreshCompletions: [(Bool) -> Void] = []
     private var jiggleGeneration = UUID()
     private var jiggleTask: Task<Void, Never>?
     private let call: @MainActor (AppCloudSession, String, [String: String]) async throws -> FriendResponse
@@ -192,6 +194,8 @@ final class FriendOnboarding: ObservableObject {
     }
     private func cancelPendingRequest() {
         generation = UUID(); task?.cancel(); task = nil; busy = false; inviteCode = nil
+        pendingRequestAction = nil
+        finishRefresh(false)
     }
     private func cancelPendingJiggle() {
         jiggleGeneration = UUID(); jiggleTask?.cancel(); jiggleTask = nil
@@ -271,10 +275,22 @@ final class FriendOnboarding: ObservableObject {
         sharing?.configureAuthenticatedRoom(nil, identity: { [weak self] in self?.sharingIdentity() })
         message = ""
     }
-    func refresh() {
-        guard !busy else { return }
+    func refresh(completion: ((Bool) -> Void)? = nil) {
+        // The ROM can join an initial/profile refresh already in flight. Its
+        // acknowledgement must describe the fetched list, not cached rows.
+        if busy {
+            if pendingRequestAction == "list", let completion { refreshCompletions.append(completion) }
+            else { completion?(false) }
+            return
+        }
+        if let completion { refreshCompletions.append(completion) }
         lastProfileRefresh = Date()
         request("list", payload: [:])
+    }
+    private func finishRefresh(_ succeeded: Bool) {
+        let completions = refreshCompletions
+        refreshCompletions.removeAll()
+        completions.forEach { $0(succeeded) }
     }
     func create(name: String) { request("create", payload: ["displayName": name.trimmingCharacters(in: .whitespacesAndNewlines)]) }
     func accept(code: String, name: String) { request("accept", payload: ["code": code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(), "displayName": name.trimmingCharacters(in: .whitespacesAndNewlines)]) }
@@ -345,7 +361,7 @@ final class FriendOnboarding: ObservableObject {
     private func request(_ action: String, payload: [String: String]) {
         guard !busy else { return }
         guard let identity = currentIdentity() else { signOut(); return }
-        busy = true; message = "Updating friends…"
+        busy = true; pendingRequestAction = action; message = "Updating friends…"
         let run = generation; let call = call
         task = Task { [weak self] in
             do {
@@ -354,7 +370,7 @@ final class FriendOnboarding: ObservableObject {
                 guard let self, self.generation == run else { return }
                 guard self.currentIdentity()?.owner == identity.owner else { self.signOut(); return }
                 guard response.ok else {
-                    self.busy = false; self.task = nil
+                    self.busy = false; self.task = nil; self.pendingRequestAction = nil
                     switch response.error {
                     case "rate_limited": self.message = "Too many attempts. Try again later."
                     case "block_limit": self.message = "Your block list is full. Remove a block before adding another."
@@ -364,6 +380,7 @@ final class FriendOnboarding: ObservableObject {
                     case "friend_limit": self.message = "One of you has reached the 20-friend limit."
                     default: self.message = "Could not update friends. Try again."
                     }
+                    if action == "list" { self.finishRefresh(false) }
                     return
                 }
                 if let username = response.username {
@@ -372,14 +389,14 @@ final class FriendOnboarding: ObservableObject {
                 }
                 if action == "list" {
                     guard let rooms = response.rooms, rooms.count <= 20, rooms.allSatisfy(\.valid), Set(rooms.map(\.roomID)).count == rooms.count else { throw FriendSharingTokenError.unavailable }
-                    self.rooms = rooms
-                    self.hasCurrentFriendList = true
-                    if let selected = self.selected, let refreshed = rooms.first(where: { $0.roomID == selected.roomID }) {
-                        self.selected = refreshed
-                    }
                     if let blocks = response.blocks {
                         guard blocks.count <= 100, blocks.allSatisfy(\.valid), Set(blocks.map(\.blockID)).count == blocks.count else { throw FriendSharingTokenError.unavailable }
-                        self.blocks = blocks
+                    }
+                    self.rooms = rooms
+                    self.hasCurrentFriendList = true
+                    if let blocks = response.blocks { self.blocks = blocks }
+                    if let selected = self.selected, let refreshed = rooms.first(where: { $0.roomID == selected.roomID }) {
+                        self.selected = refreshed
                     }
                     if let selected = self.selected, !rooms.contains(where: { $0.roomID == selected.roomID }) {
                         self.cancelPendingJiggle()
@@ -403,12 +420,15 @@ final class FriendOnboarding: ObservableObject {
                     self.blocks = blocks
                 }
                 if action == "report" { guard response.reportID != nil else { throw FriendSharingTokenError.unavailable } }
-                self.busy = false; self.task = nil
+                self.busy = false; self.task = nil; self.pendingRequestAction = nil
                 self.message = action == "report" ? "Report sent." : action == "add" ? "Friend added." : ""
                 self.synchronizeMultiplayerConnection()
+                if action == "list" { self.finishRefresh(true) }
             } catch {
                 guard let self, self.generation == run else { return }
-                self.busy = false; self.task = nil; self.message = "Could not update friends. Check the code or try again."
+                self.busy = false; self.task = nil; self.pendingRequestAction = nil
+                self.message = "Could not update friends. Check the code or try again."
+                if action == "list" { self.finishRefresh(false) }
             }
         }
     }

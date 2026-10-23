@@ -370,6 +370,153 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         sharing.stop()
     }
 
+    func testROMFriendsRefreshWaitsForNewlyAddedFriendAndCoalescesPendingList() async throws {
+        let identity = try makeIdentity(owner: UUID())
+        let room = FriendRoom(roomID: UUID().uuidString, displayName: "Added After Launch")
+        var requests = 0
+        var pending: CheckedContinuation<FriendResponse, Never>?
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            XCTAssertEqual(action, "list"); requests += 1
+            return await withCheckedContinuation { pending = $0 }
+        }, observeAccount: { OnboardingObservation($0) })
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true)
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { pending != nil }
+        let refresh = BoundROMFriendsRefresh()
+        refresh.begin(requestID: 7, onboarding: onboarding)
+        refresh.begin(requestID: 8, onboarding: onboarding)
+        var host = BoundROMHostState()
+        host.status = .timeline; host.acknowledgedRequest = 6
+        host.friends = [.init(room: UUID(), name: "Old timeline row")]
+        refresh.apply(to: &host, onboarding: onboarding)
+        XCTAssertEqual(requests, 1, "The ROM reuses an initial list request still in flight")
+        XCTAssertEqual(host.status, .waiting)
+        XCTAssertEqual(host.acknowledgedRequest, 6, "Network completion, not command receipt, acknowledges the request")
+        XCTAssertTrue(host.friends.isEmpty, "Timeline rows must never appear as friends")
+        pending?.resume(returning: .init(ok: true, rooms: [room])); pending = nil
+        await waitUntil { !onboarding.busy }
+        refresh.apply(to: &host, onboarding: onboarding)
+        XCTAssertEqual(host.status, .complete)
+        XCTAssertEqual(host.acknowledgedRequest, 8)
+        XCTAssertEqual(host.friends, [.init(room: try XCTUnwrap(UUID(uuidString: room.roomID)), name: room.displayName)])
+        XCTAssertEqual(requests, 1)
+        let acknowledged = BoundROMRequest(sequence: 2, command: .none, friendIndex: 0,
+            argument: 0, identifier: UUID(), settings: Data(repeating: 0, count: 32),
+            flags: 0, frame: 1, requestID: 8)
+        refresh.retireIfAcknowledged(acknowledged)
+        host.status = .accepted; host.message = "New setup status"
+        refresh.apply(to: &host, onboarding: onboarding)
+        XCTAssertEqual(host.status, .accepted, "Once the ROM consumes the acknowledgement, refresh cannot mask later status")
+        XCTAssertEqual(host.message, "New setup status")
+        onboarding.close(); sharing.stop()
+    }
+
+    func testROMFriendsRefreshFailurePreservesRowsAndRetryCommitsNewList() async throws {
+        let identity = try makeIdentity(owner: UUID())
+        let first = FriendRoom(roomID: UUID().uuidString, displayName: "First")
+        let added = FriendRoom(roomID: UUID().uuidString, displayName: "Added")
+        var response = FriendResponse(ok: true, rooms: [first])
+        let onboarding = FriendOnboarding(call: { _, _, _ in response }, observeAccount: { OnboardingObservation($0) })
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true)
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+        onboarding.select(first)
+        let refresh = BoundROMFriendsRefresh()
+        var host = BoundROMHostState()
+        response = .init(ok: false, error: "rate_limited")
+        refresh.begin(requestID: 1, onboarding: onboarding)
+        await waitUntil { !onboarding.busy }
+        refresh.apply(to: &host, onboarding: onboarding)
+        XCTAssertEqual(host.status, .unavailable)
+        XCTAssertEqual(host.acknowledgedRequest, 1)
+        XCTAssertEqual(host.friends.map(\.name), ["First"])
+        XCTAssertTrue(host.message.contains("Refresh"))
+        XCTAssertEqual(onboarding.selected, first)
+        response = .init(ok: true, rooms: [added])
+        refresh.begin(requestID: 2, onboarding: onboarding)
+        await waitUntil { !onboarding.busy }
+        refresh.apply(to: &host, onboarding: onboarding)
+        XCTAssertEqual(host.status, .complete)
+        XCTAssertEqual(host.friends.map(\.name), ["Added"])
+        XCTAssertNil(onboarding.selected, "A removed selected room cannot retain its old connection authority")
+        XCTAssertFalse(sharing.active)
+        onboarding.close(); sharing.stop()
+    }
+
+    func testROMFriendsRefreshCancelledByCloseOrOwnerChangeCannotPublishStaleRows() async throws {
+        var identity: AppCloudSession? = try makeIdentity(owner: UUID())
+        let oldRoom = FriendRoom(roomID: UUID().uuidString, displayName: "Old Account Friend")
+        var pending: CheckedContinuation<FriendResponse, Never>?
+        let onboarding = FriendOnboarding(call: { _, _, _ in
+            await withCheckedContinuation { pending = $0 }
+        }, observeAccount: { OnboardingObservation($0) })
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true)
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { pending != nil }
+        let refresh = BoundROMFriendsRefresh()
+        refresh.begin(requestID: 3, onboarding: onboarding)
+        onboarding.close()
+        var host = BoundROMHostState()
+        refresh.apply(to: &host, onboarding: onboarding)
+        XCTAssertEqual(host.status, .unavailable)
+        XCTAssertEqual(host.acknowledgedRequest, 3)
+        pending?.resume(returning: .init(ok: true, rooms: [oldRoom])); pending = nil
+        await settle()
+        XCTAssertTrue(onboarding.rooms.isEmpty)
+
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { pending != nil }
+        refresh.begin(requestID: 4, onboarding: onboarding)
+        identity = nil; onboarding.synchronizeAccount()
+        pending?.resume(returning: .init(ok: true, rooms: [oldRoom])); pending = nil
+        await settle()
+        refresh.apply(to: &host, onboarding: onboarding)
+        XCTAssertEqual(host.status, .unavailable)
+        XCTAssertEqual(host.acknowledgedRequest, 4)
+        XCTAssertTrue(host.friends.isEmpty)
+        refresh.reset()
+        host.status = .timeline; host.acknowledgedRequest = 5
+        refresh.apply(to: &host, onboarding: onboarding)
+        XCTAssertEqual(host.status, .timeline, "An abandoned refresh cannot repaint a newer menu")
+        XCTAssertEqual(host.acknowledgedRequest, 5)
+        onboarding.close(); sharing.stop()
+    }
+
+    func testROMRefreshDuringMutationOrServiceCancellationAlwaysAllowsRetry() async throws {
+        let identity = try makeIdentity(owner: UUID())
+        let room = FriendRoom(roomID: UUID().uuidString, displayName: "Added")
+        var pending: CheckedContinuation<FriendResponse, Never>?
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            if action == "list" { return .init(ok: true, rooms: []) }
+            return await withCheckedContinuation { pending = $0 }
+        }, observeAccount: { OnboardingObservation($0) })
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true)
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+        onboarding.add(username: "Added")
+        await waitUntil { pending != nil }
+        let refresh = BoundROMFriendsRefresh()
+        refresh.begin(requestID: 10, onboarding: onboarding)
+        var host = BoundROMHostState()
+        refresh.apply(to: &host, onboarding: onboarding)
+        XCTAssertEqual(host.status, .unavailable, "An Add response is not a fetched list")
+        XCTAssertEqual(host.acknowledgedRequest, 10)
+        pending?.resume(returning: .init(ok: true, room: room)); pending = nil
+        await waitUntil { !onboarding.busy }
+        refresh.begin(requestID: 11, onboarding: onboarding)
+        refresh.cancel()
+        await waitUntil { !onboarding.busy }
+        refresh.apply(to: &host, onboarding: onboarding)
+        XCTAssertEqual(host.status, .unavailable, "A cancelled service must not restore a stale success")
+        XCTAssertEqual(host.acknowledgedRequest, 11)
+        refresh.begin(requestID: 12, onboarding: onboarding)
+        await waitUntil { !onboarding.busy }
+        refresh.apply(to: &host, onboarding: onboarding)
+        XCTAssertEqual(host.status, .complete)
+        XCTAssertEqual(host.acknowledgedRequest, 12)
+        onboarding.close(); sharing.stop()
+    }
+
     func testExplicitDisconnectSurvivesROMTicksRefreshAndForegroundUntilFriendTap() async throws {
         try await assertExplicitDisconnectSurvivesRestoration(useMacSidebar: false)
     }

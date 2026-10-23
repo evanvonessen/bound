@@ -112,6 +112,52 @@ struct BoundROMHostState: Equatable, Sendable {
     }
 }
 
+/// Keeps the ROM's refresh acknowledgement pending until the server result is
+/// committed. A request cancelled by account/lifecycle changes cannot repaint a
+/// newer ROM menu, and a failed fetch leaves the last confirmed rows available.
+@MainActor
+final class BoundROMFriendsRefresh {
+    private var requestID: UInt32 = 0
+    private var generation = UUID()
+    private(set) var status: BoundROMStatus?
+    private(set) var message = ""
+
+    func reset() {
+        generation = UUID(); status = nil; message = ""
+    }
+    func cancel() {
+        guard status != nil else { return }
+        generation = UUID(); status = .unavailable
+        message = "Refresh was interrupted. Select Refresh to try again."
+    }
+    func begin(requestID: UInt32, onboarding: FriendOnboarding) {
+        reset()
+        self.requestID = requestID
+        let generation = generation
+        status = .waiting; message = "Refreshing friends..."
+        onboarding.refresh { [weak self, weak onboarding] succeeded in
+            guard let self, self.generation == generation else { return }
+            self.status = succeeded ? .complete : .unavailable
+            self.message = succeeded ? "" : (onboarding?.currentIdentity() == nil
+                ? "Sign in to Bound to refresh friends."
+                : "Could not refresh friends. Select Refresh to try again.")
+        }
+    }
+    func retireIfAcknowledged(_ request: BoundROMRequest?) {
+        guard let status, status != .waiting, let request,
+              request.command == .none, request.requestID == requestID else { return }
+        reset()
+    }
+    func apply(to host: inout BoundROMHostState, onboarding: FriendOnboarding) {
+        guard let status else { return }
+        host.status = status; host.message = message
+        if status != .waiting { host.acknowledgedRequest = requestID }
+        host.friends = onboarding.rooms.compactMap { room in
+            UUID(uuidString: room.roomID).map { .init(room: $0, name: room.displayName) }
+        }
+    }
+}
+
 /// All guest memory access stays on the emulator's completed-frame owner.
 final class BoundROMMultiplayerProbe: @unchecked Sendable {
     private let lock = NSLock()
@@ -306,6 +352,7 @@ final class BoundROMMultiplayerCoordinator {
     private var lastEventCount = 0
     private var lastAutomaticCheckpoint: TimeInterval = 0
     private var timelinePage = 0
+    private let friendsRefresh = BoundROMFriendsRefresh()
     var watch: (() -> Void)?
     var didRestoreSnapshot: (() -> Void)?
     var didCompleteCheckpoint: (() -> Void)?
@@ -351,6 +398,7 @@ final class BoundROMMultiplayerCoordinator {
         self.core = core; self.game = game; verified = false; probe.configure(core:core)
         servicesActive = core != nil; transportWasConnected = false
         protectedStorage = game.map { store.hasRun(gameID:$0.identifier) } ?? false; lastInboxScanAt = -.infinity
+        friendsRefresh.reset()
         host = BoundROMHostState(); channel.reset(); selectedRoom = nil; peerOwner = nil; peerHello = nil
         peerHelloAt = -.infinity; peerFence = 0; reconciled = false; peerCommitted = false
         setup = nil; manifest = nil; incoming = nil; finishedRun = nil; checkpoint = nil; localReceipt = nil; partnerReceipt = nil
@@ -458,6 +506,7 @@ final class BoundROMMultiplayerCoordinator {
     }
     func setServiceActive(_ value: Bool) {
         if !value {
+            friendsRefresh.cancel()
             // Owner teardown suspends the run before stopping its friend
             // services. Restore friendly RAM first, while keeping it paused.
             if sharing.nativeBattle.isActive, sharing.nativeBattle.activity == .battle {
@@ -654,11 +703,17 @@ final class BoundROMMultiplayerCoordinator {
         return BoundMultiplayerSaveStore.hash((try? BoundMultiplayerSaveStore.encode(canonical)) ?? Data())
     }
     static func validSettings(_ data: Data) -> Bool {
-        guard data.count == 32, (1...3).contains(data[0]) else { return false }
+        guard data.count == 32, (1...4).contains(data[0]) else { return false }
+        if data[0] >= 4 {
+            let name = data[12..<20]
+            guard let terminator = name.firstIndex(of: 0xFF), terminator > 12,
+                  name[..<terminator].allSatisfy({ $0 <= 0xF6 }),
+                  name[terminator...].allSatisfy({ $0 == 0xFF }),
+                  data[20..<32].allSatisfy({ $0 == 0 }) else { return false }
+        } else if !data[12..<32].allSatisfy({ $0 == 0 }) { return false }
         return data[1..<10].allSatisfy { $0 <= 1 }
             && data[10] <= (data[0] >= 2 ? 1 : 0)
             && data[11] <= (data[0] >= 3 ? 1 : 0)
-            && data[12..<32].allSatisfy { $0 == 0 }
             && Int(data[2]) + Int(data[3]) + Int(data[4]) <= 1
             && !(data[6] == 1 && data[7] == 1)
     }
@@ -834,13 +889,17 @@ final class BoundROMMultiplayerCoordinator {
     }
     private func handle(_ request: BoundROMRequest) throws {
         guard request.requestID != 0, request.requestID != lastRequest else { return }
+        let previousAcknowledgement = host.acknowledgedRequest
         lastRequest = request.requestID; host.acknowledgedRequest = request.requestID
+        friendsRefresh.reset()
         switch request.command {
         case .newGameReady:
             guard manifest == nil, incoming == nil else { host.status = .waiting; return }
             newGame = true; host.status = .idle
         case .listFriends:
-            timelinePage = 0; host.status = .idle; onboarding.refresh()
+            timelinePage = 0; host.status = .waiting
+            host.acknowledgedRequest = previousAcknowledgement
+            friendsRefresh.begin(requestID: request.requestID, onboarding: onboarding)
         case .pair, .startSoulLink:
             guard BoundMultiplayerFeatures.isEnabled, newGame, manifest == nil,
                   let room = onboarding.rooms.first(where: { UUID(uuidString:$0.roomID) == request.identifier }) else {
@@ -985,7 +1044,12 @@ final class BoundROMMultiplayerCoordinator {
             && (manifest == nil || workingStateAuthorized)
             && peerHello?.checkpoint == head?.payload.checkpoint && peerHello?.pending == nil && checkpoint == nil
         if !channel.fresh(at:now) { reconciled = false }
-        defer { probe.publish(host) }
+        defer {
+            if host.enabled && servicesActive && !host.recovery && !host.saving {
+                friendsRefresh.apply(to: &host, onboarding: onboarding)
+            }
+            probe.publish(host)
+        }
         if wasConnected && !host.connected { suspend() }
         wasConnected = host.connected
         guard host.enabled && servicesActive && UIApplication.shared.applicationState == .active else { host.connected = false; return }
@@ -1008,6 +1072,7 @@ final class BoundROMMultiplayerCoordinator {
             host.friends = events.dropFirst(timelinePage*12).prefix(12).map { .init(room:BoundROMBytes.zero,name:$0.title) }
         }
         let request = probe.read()
+        friendsRefresh.retireIfAcknowledged(request)
         do {
             if manifest == nil, incoming == nil, now - lastInboxScanAt > 1 {
                 lastInboxScanAt = now; protectedStorage = store.hasRun(gameID:game.identifier)

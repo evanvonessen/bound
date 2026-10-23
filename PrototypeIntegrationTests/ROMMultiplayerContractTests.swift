@@ -52,6 +52,38 @@ final class ROMMultiplayerContractTests: XCTestCase {
         XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings))
     }
 
+    @MainActor
+    func testSharedRivalNameRequiresVersionFourCanonicalNativeNameAndReservedZeros() {
+        var settings = Data(repeating: 0, count: 32)
+        settings[0] = 4
+        settings.replaceSubrange(12..<20, with: [0xBC, 0xC6, 0xCF, 0xBF, 0xFF, 0xFF, 0xFF, 0xFF])
+        XCTAssertTrue(BoundROMMultiplayerCoordinator.validSettings(settings))
+        for version in UInt8(1)...3 {
+            settings[0] = version
+            XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings))
+        }
+        settings[0] = 4
+        for invalid in UInt8(0xF7)...0xFE {
+            settings[12] = invalid
+            XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings), "Native control codes cannot enter a shared name")
+        }
+        settings[12] = 0xBC
+        settings[17] = 0
+        XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings), "Padding after the terminator must be canonical")
+        settings[17] = 0xFF
+        for reserved in 20..<32 {
+            settings[reserved] = 1
+            XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings))
+            settings[reserved] = 0
+        }
+        settings.replaceSubrange(12..<20, with: repeatElement(UInt8(0xFF), count: 8))
+        XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings), "The rival must have a name")
+        settings.replaceSubrange(12..<20, with: repeatElement(UInt8(0xBB), count: 8))
+        XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings), "Seven characters and a terminator is the maximum")
+        settings[19] = 0xFF
+        XCTAssertTrue(BoundROMMultiplayerCoordinator.validSettings(settings))
+    }
+
     func testCheckpointCaptureWaitsUntilBothCartridgesFreezeTheSameHistory() {
         func stage(local: Bool = true, peer: Bool = true, pending: Bool = true,
                    history: Bool = true, fresh: Bool = true) -> BoundROMCheckpointStage {
