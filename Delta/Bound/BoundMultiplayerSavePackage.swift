@@ -240,6 +240,135 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
         try write(manifest, to: directory(gameID: gameID).appendingPathComponent("run.json"))
         activeGames.remove(gameID)
     }
+    private struct NewGameArchive: Codable {
+        let identity: BoundMultiplayerRunIdentity
+        let device: UUID
+        let files: [String: String]
+    }
+    func pendingNewGame(gameID: String) throws -> UUID? {
+        lock.lock(); defer { lock.unlock() }
+        let url = directory(gameID: gameID).appendingPathComponent("pending-new-game.json")
+        return fm.fileExists(atPath: url.path) ? try read(url, maximum: 128) : nil
+    }
+    private func newGameManifest(gameID: String, run: UUID, owner: UUID) throws -> BoundMultiplayerRunManifest {
+        guard let value = try manifest(gameID: gameID), value.identity.run == run else { throw Failure.conflict }
+        guard value.identity.owner == owner else { throw Failure.ownerMismatch }
+        guard identityAvailable, value.deviceOwner == deviceID, !value.releasedForTransfer else { throw Failure.deviceOwned }
+        return value
+    }
+    private func newGameArchiveURL(_ run: UUID) -> URL {
+        root.appendingPathComponent("New Game Originals", isDirectory: true).appendingPathComponent(run.uuidString, isDirectory: true)
+    }
+    private func validateNewGameArchive(_ manifest: BoundMultiplayerRunManifest) throws {
+        let folder = newGameArchiveURL(manifest.identity.run)
+        let receipt: NewGameArchive = try read(folder.appendingPathComponent("receipt.json"), maximum: 4_194_304)
+        guard receipt.identity == manifest.identity, receipt.device == deviceID, !receipt.files.isEmpty else { throw Failure.corrupt }
+        for (name, hash) in receipt.files {
+            guard !name.hasPrefix("/"), !name.split(separator: "/").contains(".."), Self.isDigest(hash),
+                  Self.hash(try readData(folder.appendingPathComponent(name), maximum: Self.maximumPackageBytes)) == hash else { throw Failure.corrupt }
+        }
+    }
+    /// An explicit fresh game retires a run, so damaged checkpoint contents are
+    /// preserved as raw files, not interpreted as a playable recovery snapshot.
+    /// The active manifest and account/device identity must still be trustworthy.
+    func preserveForNewGame(gameID: String, run: UUID, owner: UUID, gameSaveURL: URL) throws {
+        lock.lock(); defer { lock.unlock() }
+        let manifest = try newGameManifest(gameID: gameID, run: run, owner: owner)
+        let destination = newGameArchiveURL(run)
+        if fm.fileExists(atPath: destination.path) {
+            try validateNewGameArchive(manifest)
+        } else {
+            let staging = destination.deletingLastPathComponent().appendingPathComponent(run.uuidString + "." + UUID().uuidString + ".pending", isDirectory: true)
+            try create(staging)
+            var hashes: [String: String] = [:]
+            func copy(_ source: URL, _ name: String) throws {
+                let values = try source.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                guard values.isSymbolicLink != true else { throw Failure.corrupt }
+                if values.isDirectory == true {
+                    try create(staging.appendingPathComponent(name, isDirectory: true))
+                    for child in try fm.contentsOfDirectory(at: source, includingPropertiesForKeys: nil) {
+                        try copy(child, name + "/" + child.lastPathComponent)
+                    }
+                } else {
+                    let data = try readData(source, maximum: Self.maximumPackageBytes)
+                    let target = staging.appendingPathComponent(name)
+                    try create(target.deletingLastPathComponent())
+                    try writeData(data, to: target)
+                    let hash = Self.hash(data)
+                    guard Self.hash(try readData(target, maximum: Self.maximumPackageBytes)) == hash else { throw Failure.corrupt }
+                    hashes[name] = hash
+                }
+            }
+            try copy(directory(gameID: gameID), "Package")
+            if fm.fileExists(atPath: gameSaveURL.path) { try copy(gameSaveURL, "Personal/game.sav") }
+            let stem = Self.hash(Data(gameID.utf8))
+            for (name, suffix) in [("soul.json", ".json"), ("timeline.json", ".timeline.json")] {
+                let source = support.appendingPathComponent("Soul Link/" + stem + suffix)
+                if fm.fileExists(atPath: source.path) { try copy(source, "Personal/" + name) }
+            }
+            // Include even malformed native journals without inferring which
+            // game they belong to. Active native recovery is never discarded.
+            let recovery = support.appendingPathComponent("Friend Battles", isDirectory: true)
+            if fm.fileExists(atPath: recovery.path) { try copy(recovery, "Native Recovery") }
+            try write(NewGameArchive(identity: manifest.identity, device: deviceID, files: hashes), to: staging.appendingPathComponent("receipt.json"))
+            try fm.moveItem(at: staging, to: destination)
+            try validateNewGameArchive(manifest)
+        }
+        try write(run, to: directory(gameID: gameID).appendingPathComponent("pending-new-game.json"))
+    }
+    func isNewGameReady(gameID: String, run: UUID, owner: UUID) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let manifest = try newGameManifest(gameID: gameID, run: run, owner: owner)
+        let url = directory(gameID: gameID).appendingPathComponent("new-game-ready.json")
+        guard manifest.ended, fm.fileExists(atPath: url.path) else { return false }
+        let recorded: UUID = try read(url, maximum: 128)
+        guard recorded == run else { throw Failure.conflict }
+        try validateNewGameArchive(manifest)
+        return true
+    }
+    func hasStartedNewGame(gameID: String, run: UUID) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let url = directory(gameID: gameID).appendingPathComponent("new-game-started.json")
+        guard fm.fileExists(atPath: url.path) else { return false }
+        let recorded: UUID = try read(url, maximum: 128)
+        guard recorded == run else { throw Failure.conflict }
+        return true
+    }
+    /// The native Oak handshake confirms that the fresh game actually started.
+    /// A solo choice may never call begin(), so consume recovery intent here.
+    func acknowledgeNewGameStarted(gameID: String, run: UUID, owner: UUID) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard try pendingNewGame(gameID: gameID) == run,
+              try isNewGameReady(gameID: gameID, run: run, owner: owner) else { throw Failure.incomplete }
+        if try hasStartedNewGame(gameID: gameID, run: run) { return }
+        try write(run, to: directory(gameID: gameID).appendingPathComponent("new-game-started.json"))
+    }
+    /// The coordinator calls this only after the authenticated server end (or
+    /// its idempotent already-ended reply). Unlike ordinary End Soul Link, this
+    /// can retire a corrupt ledger because its exact original was archived.
+    func finishNewGame(gameID: String, run: UUID, owner: UUID) throws {
+        lock.lock(); defer { lock.unlock() }
+        var manifest = try newGameManifest(gameID: gameID, run: run, owner: owner)
+        guard try pendingNewGame(gameID: gameID) == run else { throw Failure.conflict }
+        try validateNewGameArchive(manifest)
+        if try isNewGameReady(gameID: gameID, run: run, owner: owner) { return }
+        let retired = directory(gameID: gameID).appendingPathComponent("Restarted Originals", isDirectory: true)
+        try create(retired)
+        let stem = Self.hash(Data(gameID.utf8))
+        var sources = [("soul.json", support.appendingPathComponent("Soul Link/" + stem + ".json")),
+                       ("timeline.json", support.appendingPathComponent("Soul Link/" + stem + ".timeline.json"))]
+        for name in ["Incoming", "Restore"] { sources.append((name, directory(gameID: gameID).appendingPathComponent(name))) }
+        for (name, source) in sources where fm.fileExists(atPath: source.path) {
+            // Unique names also retain any files delivered during a prior
+            // interrupted attempt. Never overwrite an earlier original.
+            try fm.moveItem(at: source, to: retired.appendingPathComponent(UUID().uuidString + "-" + name))
+        }
+        manifest.ended = true
+        try write(manifest, to: directory(gameID: gameID).appendingPathComponent("run.json"))
+        try write(run, to: directory(gameID: gameID).appendingPathComponent("new-game-ready.json"))
+        activeGames.remove(gameID)
+    }
+
     /// Only the broker's live, typed lease can authorize adopting a foreign device
     /// checkpoint. The grant's initializer belongs to the lease client.
     func adoptOwnership(gameID: String, grant: BoundRunLeaseGrant) throws {
