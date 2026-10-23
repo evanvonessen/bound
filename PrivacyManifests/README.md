@@ -20,6 +20,14 @@ error alert. It adds no required-reason API access and does not change SDWebImag
 request or cache handling. Refreshed that integration hash only; the SDK manifest
 declarations and dependency pins remain unchanged.
 
+Rechecked 2026-10-23 against `c0efb29efb45726241523def6ee4b7c2673b3f32`
+for the per-ROM Clear Saves menu. Compared the menu actions, confirmation alert,
+and active save-state selection with the previously audited integration. These
+changes call the app's save manager and add no required-reason API accesses to
+this file. SDWebImage request/cache call sites and DeltaCore elapsed-time
+scheduling are unchanged. Refreshed only this integration hash; SDK declarations
+and dependency pins remain unchanged. This is not a broader privacy attestation.
+
 ## SDWebImage 3.8.3
 
 The committed CocoaPods lock identifies 3.8.3. The required-reason API scan of `Pods/SDWebImage/SDWebImage` found file-metadata access in `SDImageCache.m`:
