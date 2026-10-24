@@ -142,6 +142,10 @@ extension SaveState: Syncable
     public var syncableLocalizedName: String? {
         return self.localizedName
     }
+
+    public func prepareForSync(_ record: AnyRecord) throws {
+        if let gameID = self.game?.identifier { try BoundROMUpdateRegistry.validateUpload(gameID: gameID) }
+    }
     
     public func awakeFromSync(_ record: AnyRecord) throws
     {

@@ -12,7 +12,12 @@ enum BoundROMUpdateActivity {
 
     static func close(gameID: String) {
         for controller in controllers.allObjects where (controller.game as? Game)?.identifier == gameID {
-            controller.emulatorCore?.stop()
+            if let preview = controller as? PreviewGameViewController {
+                // A preview must restore its temporary battery copy before deletion.
+                preview.stopPreview()
+            } else {
+                controller.emulatorCore?.stop()
+            }
             controller.game = nil
         }
     }

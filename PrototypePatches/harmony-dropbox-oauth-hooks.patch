@@ -439,3 +439,25 @@ index dfffd6a0..d31025d6 100644
  }
  
  public extension SyncCoordinator
+diff --git a/External/Harmony/Harmony/Core Data/RecordController.swift b/External/Harmony/Harmony/Core Data/RecordController.swift
+index 786842df..4337adf0 100644
+--- a/External/Harmony/Harmony/Core Data/RecordController.swift	
++++ b/External/Harmony/Harmony/Core Data/RecordController.swift	
+@@ -349,6 +349,17 @@ private extension RecordController
+ 
+ public extension RecordController
+ {
++    /// Wait for already-observed Core Data saves, including their derived
++    /// Harmony records, without blocking the caller's actor or context queue.
++    func waitForRecordedChanges() async
++    {
++        await withCheckedContinuation { continuation in
++            self.processingDispatchGroup.notify(queue: .global(qos: .utility)) {
++                continuation.resume()
++            }
++        }
++    }
++
+     func updateRecord<T: Syncable>(for managedObject: T)
+     {
+         guard let context = self.processingContext else { return }

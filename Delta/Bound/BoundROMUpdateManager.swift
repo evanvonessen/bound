@@ -8,6 +8,8 @@ import Harmony
 @MainActor
 final class BoundROMUpdateManager: ObservableObject {
     static let shared = BoundROMUpdateManager()
+    static let saveClearBegan = Notification.Name("BoundSaveClearBegan")
+    @Published private(set) var clearingSaveGameIDs: Set<String> = []
     struct GameChoice: Identifiable, Sendable { let id: String; let name: String }
     @Published private(set) var enrollmentChoices: [GameChoice] = []
     @Published private(set) var needsGameSelection = false
@@ -141,46 +143,94 @@ final class BoundROMUpdateManager: ObservableObject {
         }
     }
 
+    func hasPendingSaveClear(for gameID: String) -> Bool {
+        clearingSaveGameIDs.contains(gameID) || storage.hasPendingSaveClear(gameID: gameID)
+    }
+
     func clearSaves(for game: Game, completion: @escaping (Error?) -> Void) {
-        guard !isApplying, !isChecking, !bundledImportInProgress else { completion(BoundROMUpdateError.busy); return }
-        isApplying = true
+        clearSaves(gameID: game.identifier, gameName: game.name, completion: completion)
+    }
+
+    private func clearSaves(gameID: String, gameName: String, completion: @escaping (Error?) -> Void) {
+        guard !isApplying, !isChecking, !bundledImportInProgress, !clearingSaveGameIDs.contains(gameID) else {
+            completion(BoundROMUpdateError.busy); return
+        }
+        clearingSaveGameIDs.insert(gameID)
         SyncManager.shared.performROMUpdate { finish in
-            defer { self.isApplying = false; finish() }
-            do {
-                BoundROMUpdateActivity.close(gameID: game.identifier)
-                let context = DatabaseManager.shared.newBackgroundContext()
-                try context.performAndWait {
-                    let record = try context.existingObject(with: game.objectID) as! Game
-                    let stem = BoundMultiplayerSaveStore.hash(Data(record.identifier.utf8))
-                    var paths = [record.gameSaveURL,
-                        record.gameSaveURL.deletingPathExtension().appendingPathExtension("rtc"),
-                        DatabaseManager.saveStatesDirectoryURL.appendingPathComponent(record.identifier),
-                        BoundMultiplayerSaveStore.shared.directory(gameID: record.identifier),
-                        self.storage.support.appendingPathComponent("Soul Link/" + stem + ".json"),
-                        self.storage.support.appendingPathComponent("Soul Link/" + stem + ".timeline.json")]
-                    let recovery = self.storage.support.appendingPathComponent("Friend Battles")
-                    if FileManager.default.fileExists(atPath: recovery.path) {
-                        for journal in try FileManager.default.contentsOfDirectory(at: recovery, includingPropertiesForKeys: nil) where journal.pathExtension == "json" {
-                            let values = try JSONSerialization.jsonObject(with: Data(contentsOf: journal)) as? [String: String]
-                            guard values?["gameID"] == record.identifier else { continue }
-                            guard let name = values?["state"], UUID(uuidString: URL(fileURLWithPath: name).deletingPathExtension().lastPathComponent) != nil,
-                                  name == URL(fileURLWithPath: name).lastPathComponent, name.hasSuffix(".state") else { throw BoundROMUpdateError.unsafePath }
-                            paths += [journal, recovery.appendingPathComponent(name)]
-                        }
+            Task { @MainActor in
+                var failure: Error?
+                do {
+                    let pending: BoundROMUpdateStorage.SaveClear
+                    if let saved = try self.storage.pendingSaveClear(gameID: gameID) { pending = saved }
+                    else {
+                        let cloud = try await SyncManager.shared.prepareSaveClearCloudContext(gameID: gameID)
+                        pending = try self.storage.beginSaveClear(gameID: gameID, gameName: gameName,
+                            cloudContext: JSONEncoder().encode(cloud))
                     }
-                    try self.storage.clearSaveFiles(paths) {
-                        record.previewSaveState = nil
-                        for state in record.saveStates { context.delete(state) }
-                        if let save = record.gameSave { context.delete(save); record.gameSave = nil }
-                        do { try context.save() } catch { context.rollback(); throw error }
-                    }
+                    let cloud = try JSONDecoder().decode(BoundSaveClearCloudContext.self, from: pending.cloudContext)
+                    NotificationCenter.default.post(name: Self.saveClearBegan, object: gameID)
+                    BoundROMUpdateActivity.close(gameID: gameID)
+                    try await SyncManager.shared.deleteDropboxSaves(gameID: gameID, context: cloud)
+                    try self.clearLocalSaves(gameID: gameID)
+                    try await SyncManager.shared.removeLocalSaveSyncRecords(gameID: gameID, context: cloud)
+                    try self.storage.completeSaveClear(pending)
+                } catch { failure = error }
+                // On failure the durable receipt keeps this ROM blocked, even after relaunch.
+                self.clearingSaveGameIDs.remove(gameID)
+                finish()
+                completion(failure)
+            }
+        }
+    }
+
+    private func clearLocalSaves(gameID: String) throws {
+        let context = DatabaseManager.shared.newBackgroundContext()
+        try context.performAndWait {
+            guard let record = try self.games(matching: [gameID], context: context).first else { throw BoundROMUpdateError.storage }
+            let stem = BoundMultiplayerSaveStore.hash(Data(record.identifier.utf8))
+            var paths = [record.gameSaveURL,
+                record.gameSaveURL.deletingPathExtension().appendingPathExtension("rtc"),
+                DatabaseManager.saveStatesDirectoryURL.appendingPathComponent(record.identifier),
+                BoundMultiplayerSaveStore.shared.directory(gameID: record.identifier),
+                self.storage.support.appendingPathComponent("Soul Link/" + stem + ".json"),
+                self.storage.support.appendingPathComponent("Soul Link/" + stem + ".timeline.json")]
+            let recovery = self.storage.support.appendingPathComponent("Friend Battles")
+            if FileManager.default.fileExists(atPath: recovery.path) {
+                for journal in try FileManager.default.contentsOfDirectory(at: recovery, includingPropertiesForKeys: nil) where journal.pathExtension == "json" {
+                    let values = try JSONSerialization.jsonObject(with: Data(contentsOf: journal)) as? [String: String]
+                    guard values?["gameID"] == record.identifier else { continue }
+                    guard let name = values?["state"], UUID(uuidString: URL(fileURLWithPath: name).deletingPathExtension().lastPathComponent) != nil,
+                          name == URL(fileURLWithPath: name).lastPathComponent, name.hasSuffix(".state") else { throw BoundROMUpdateError.unsafePath }
+                    paths += [journal, recovery.appendingPathComponent(name)]
                 }
-                completion(nil)
-            } catch { completion(error) }
+            }
+            try self.storage.clearSaveFiles(paths) {
+                record.previewSaveState = nil
+                for state in record.saveStates { context.delete(state) }
+                if let save = record.gameSave { context.delete(save); record.gameSave = nil }
+                do { try context.save() } catch { context.rollback(); throw error }
+            }
+        }
+    }
+
+    private func resumePendingSaveClears() -> Bool {
+        do {
+            let pending = try storage.pendingSaveClears()
+            for item in pending where !clearingSaveGameIDs.contains(item.gameID) {
+                clearSaves(gameID: item.gameID, gameName: item.gameName) { [weak self] error in
+                    if let error { self?.status = error.localizedDescription }
+                }
+            }
+            return !pending.isEmpty || !clearingSaveGameIDs.isEmpty
+        } catch {
+            status = error.localizedDescription
+            return true
         }
     }
 
     func checkNow() {
+        guard DatabaseManager.shared.isStarted, UIApplication.shared.applicationState == .active else { return }
+        guard !resumePendingSaveClears() else { return }
         installBundledROMIfNeeded()
         guard !bundledImportInProgress, !isChecking, !needsGameSelection, UIApplication.shared.applicationState == .active,
               isEnabled || stagedBookmark != nil || FileManager.default.fileExists(atPath: storage.journalURL.path) else { return }

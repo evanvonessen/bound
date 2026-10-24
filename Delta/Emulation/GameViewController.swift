@@ -200,7 +200,17 @@ class GameViewController: DeltaCore.GameViewController
         get { super.game }
         set {
             guard newValue == nil || !BoundROMUpdateManager.shared.isApplying else { return }
+            if let game = newValue as? Game,
+               BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier) { return }
             let oldValue = super.game
+            if newValue == nil, let oldGame = oldValue as? Game,
+               BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: oldGame.identifier) {
+                self.pausedSaveState = nil
+                self._deepLinkResumingSaveState = nil
+                self._isLoadingSaveState = false
+                self.isContinuingHandoff = false
+                self.handoffPlaceholderView?.isHidden = true
+            }
             self.emulatorCore?.removeObserver(self, forKeyPath: #keyPath(EmulatorCore.state), context: &kvoContext)
             
             let previousGame = self.game as? Game
@@ -1350,12 +1360,22 @@ extension GameViewController {
     /// uploaded. A completed paired checkpoint is independently sync-worthy.
     func boundDidCompleteMultiplayerCheckpoint() {
         guard let game = game as? Game else { return }
-        let id = game.objectID
+        let id = game.objectID, gameID = game.identifier
+        let storage = BoundROMUpdateStorage.live
+        guard !storage.hasPendingSaveClear(gameID: gameID) else { return }
+        let revision: UUID?
+        do { revision = try storage.saveClearRevision(gameID: gameID) } catch { return }
         DatabaseManager.shared.performBackgroundTask { context in
-            guard let game = try? context.existingObject(with: id) as? Game,
-                  let save = game.gameSave else { return }
-            save.modifiedDate = Date()
-            try? context.save()
+            do {
+                guard !storage.hasPendingSaveClear(gameID: gameID),
+                      try storage.saveClearRevision(gameID: gameID) == revision,
+                      let game = try context.existingObject(with: id) as? Game,
+                      let save = game.gameSave else { return }
+                save.modifiedDate = Date()
+                guard !storage.hasPendingSaveClear(gameID: gameID),
+                      try storage.saveClearRevision(gameID: gameID) == revision else { context.rollback(); return }
+                try context.save()
+            } catch { context.rollback() }
         }
     }
 }
@@ -1367,10 +1387,17 @@ private extension GameViewController
     func updateGameSave()
     {
         guard let game = self.game as? Game else { return }
+        let gameID = game.identifier
+        let storage = BoundROMUpdateStorage.live
+        guard !storage.hasPendingSaveClear(gameID: gameID) else { return }
+        let revision: UUID?
+        do { revision = try storage.saveClearRevision(gameID: gameID) } catch { return }
         
         DatabaseManager.shared.performBackgroundTask { (context) in
             do
             {
+                guard !storage.hasPendingSaveClear(gameID: gameID),
+                      try storage.saveClearRevision(gameID: gameID) == revision else { return }
                 let game = context.object(with: game.objectID) as! Game
                 
                 let hash = try RSTHasher.sha1HashOfFile(at: game.gameSaveURL)
@@ -1392,6 +1419,8 @@ private extension GameViewController
                     game.gameSave = gameSave
                 }
                 
+                guard !storage.hasPendingSaveClear(gameID: gameID),
+                      try storage.saveClearRevision(gameID: gameID) == revision else { context.rollback(); return }
                 try context.save()
                 
                 if ExperimentalFeatures.shared.toastNotifications.gameSaveEnabled
@@ -1420,6 +1449,7 @@ extension GameViewController: SaveStatesViewControllerDelegate
         guard !boundCompanion.sharing.nativeBattle.blocksAutoSave else { return }
         // Ensures game is non-nil and also a Game subclass
         guard let game = self.game as? Game else { return }
+        guard !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: game.identifier) else { return }
         
         guard let emulatorCore = self.emulatorCore, emulatorCore.state != .stopped, !emulatorCore.isWirelessMultiplayerActive else { return }
         
@@ -1473,6 +1503,9 @@ extension GameViewController: SaveStatesViewControllerDelegate
     
     private func update(_ saveState: SaveState, with replacementSaveState: SaveStateProtocol? = nil)
     {
+        guard !saveState.isDeleted, let savedGame = saveState.game,
+              savedGame.identifier == (self.game as? Game)?.identifier,
+              !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: savedGame.identifier) else { return }
         let isRunning = (self.emulatorCore?.state == .running)
         
         if isRunning
@@ -1532,7 +1565,9 @@ extension GameViewController: SaveStatesViewControllerDelegate
     
     private var boundPermitsIndependentStateLoad: Bool {
         guard boundCompanion.sharing.soulLink.permitsIndependentStateLoading else { return false }
+        guard game != nil else { return false }
         guard let id = (game as? Game)?.identifier else { return true }
+        guard !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: id) else { return false }
         return !BoundSoulSession.hasProtectedRun(gameID: id) && !BoundMultiplayerSaveStore.shared.hasRun(gameID: id)
     }
 
@@ -1618,6 +1653,9 @@ extension GameViewController: SaveStatesViewControllerDelegate
     
     func saveStatesViewController(_ saveStatesViewController: SaveStatesViewController, updateSaveState saveState: SaveState)
     {
+        guard !saveState.isDeleted, let savedGame = saveState.game,
+              savedGame.identifier == (self.game as? Game)?.identifier,
+              !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: savedGame.identifier) else { return }
         let updatingExistingSaveState = FileManager.default.fileExists(atPath: saveState.fileURL.path)
         
         self.update(saveState)
@@ -1632,6 +1670,9 @@ extension GameViewController: SaveStatesViewControllerDelegate
     
     func saveStatesViewController(_ saveStatesViewController: SaveStatesViewController, loadSaveState saveState: SaveStateProtocol)
     {
+        guard saveStatesViewController.game.identifier == (self.game as? Game)?.identifier,
+              !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: saveStatesViewController.game.identifier) else { return }
+        if let savedState = saveState as? SaveState, savedState.isDeleted || savedState.game == nil { return }
         self._isLoadingSaveState = true
         
         self.load(saveState)
@@ -1988,6 +2029,9 @@ extension GameViewController: GameViewControllerDelegate
         var result = false
         
         rst_dispatch_sync_on_main_thread {
+            guard self.game != nil else { return }
+            if let gameID = (self.game as? Game)?.identifier,
+               BoundROMUpdateManager.shared.hasPendingSaveClear(for: gameID) { return }
             let macSheet = BoundMacWorkspacePlatform.isEnabled && (self.boundCompanion.state.showingFriends || self.boundCompanion.state.showingSettings)
             result = !self.boundCompanion.isEditingNotes && !macSheet && (self.presentedViewController == nil || self.presentedViewController?.isDisappearing == true) && self.view.window != nil
         }
@@ -2389,6 +2433,11 @@ extension GameViewController: NSUserActivityDelegate
     
     func userActivity(_ userActivity: NSUserActivity, didReceive inputStream: InputStream, outputStream: OutputStream)
     {
+        guard let gameID = (self.game as? Game)?.identifier,
+              !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: gameID) else { return }
+        let storage = BoundROMUpdateStorage.live
+        let clearRevision: UUID?
+        do { clearRevision = try storage.saveClearRevision(gameID: gameID) } catch { return }
         inputStream.open()
         outputStream.open()
         
@@ -2402,6 +2451,11 @@ extension GameViewController: NSUserActivityDelegate
         self.emulatorCore?.saveSaveState(to: temporaryURL)
         
         Task<Void, Never> {
+            defer {
+                try? FileManager.default.removeItem(at: temporaryURL)
+                inputStream.close()
+                outputStream.close()
+            }
             do
             {
                 if #available(iOS 16, *)
@@ -2410,27 +2464,26 @@ extension GameViewController: NSUserActivityDelegate
                     try await Task.sleep(for: .seconds(0.5))
                 }
 
-                defer {
-                    try? FileManager.default.removeItem(at: temporaryURL)
-                }
-                
+                guard (self.game as? Game)?.identifier == gameID,
+                      !storage.hasPendingSaveClear(gameID: gameID),
+                      try storage.saveClearRevision(gameID: gameID) == clearRevision else { return }
                 let data = try Data(contentsOf: temporaryURL)
                 try await outputStream.send(data)
-                
+                guard (self.game as? Game)?.identifier == gameID,
+                      !storage.hasPendingSaveClear(gameID: gameID),
+                      try storage.saveClearRevision(gameID: gameID) == clearRevision else { return }
                 self.quitEmulation()
             }
             catch
             {
                 Logger.main.error("Failed to send save state for Handoff. \(error.localizedDescription, privacy: .public)")
                 
-                if isRunning
+                if isRunning, (self.game as? Game)?.identifier == gameID,
+                   !storage.hasPendingSaveClear(gameID: gameID)
                 {
                     self.resumeEmulation()
                 }
             }
-            
-            inputStream.close()
-            outputStream.close()
         }
     }
 }
@@ -2579,9 +2632,12 @@ private extension GameViewController
     @objc func deepLinkControllerWillLaunchGame(with notification: Notification)
     {
         guard let game = notification.userInfo?[DeepLink.Key.game] as? Game, let scene = notification.userInfo?[DeepLink.Key.scene] as? UIScene, scene == self.view.window?.windowScene else { return }
+        guard !BoundROMUpdateManager.shared.isApplying,
+              !BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier) else { return }
         
         // Game won't start until we call finishHandoff()
         self.game = game
+        guard (self.game as? Game)?.identifier == game.identifier else { return }
         self.prepareForHandoff()
         
         self.returnToGameViewController()
@@ -2590,9 +2646,15 @@ private extension GameViewController
     @objc func deepLinkControllerLaunchGame(with notification: Notification)
     {
         guard let game = notification.userInfo?[DeepLink.Key.game] as? Game, let scene = notification.userInfo?[DeepLink.Key.scene] as? UIScene, scene == self.view.window?.windowScene else { return }
+        guard !BoundROMUpdateManager.shared.isApplying,
+              !BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier) else { return }
+        let storage = BoundROMUpdateStorage.live
+        let clearRevision: UUID?
+        do { clearRevision = try storage.saveClearRevision(gameID: game.identifier) } catch { return }
         
         let previousGame = self.game
         self.game = game
+        guard (self.game as? Game)?.identifier == game.identifier else { return }
         
         if self.isContinuingHandoff
         {
@@ -2630,6 +2692,11 @@ private extension GameViewController
         }
                 
         self.returnToGameViewController() {
+            do {
+                guard (self.game as? Game)?.identifier == game.identifier,
+                      !storage.hasPendingSaveClear(gameID: game.identifier),
+                      try storage.saveClearRevision(gameID: game.identifier) == clearRevision else { return }
+            } catch { return }
             self.resumeEmulation()
         }
     }

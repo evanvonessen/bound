@@ -75,6 +75,9 @@ private extension DeepLinkController
         do
         {
             guard let game = try DatabaseManager.shared.viewContext.fetch(fetchRequest).first else { return false }
+            let storage = BoundROMUpdateStorage.live
+            guard !storage.hasPendingSaveClear(gameID: identifier) else { return false }
+            let clearRevision = try storage.saveClearRevision(gameID: identifier)
             
             var userInfo: [DeepLink.Key: Any] = [.game: game]
             if let windowScene = self.window?.windowScene
@@ -113,6 +116,17 @@ private extension DeepLinkController
                     }
                     
                     await MainActor.run { [userInfo] in
+                        let canResume: Bool
+                        do {
+                            if storage.hasPendingSaveClear(gameID: identifier) { canResume = false }
+                            else { canResume = try storage.saveClearRevision(gameID: identifier) == clearRevision }
+                        } catch { canResume = false }
+                        guard canResume else {
+                            if let staleState = userInfo[.saveState] as? SaveStateProtocol {
+                                try? FileManager.default.removeItem(at: staleState.fileURL)
+                            }
+                            return
+                        }
                         NotificationCenter.default.post(name: .deepLinkControllerLaunchGame, object: self, userInfo: userInfo)
                     }
                 }

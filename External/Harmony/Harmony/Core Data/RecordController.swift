@@ -349,6 +349,17 @@ private extension RecordController
 
 public extension RecordController
 {
+    /// Wait for already-observed Core Data saves, including their derived
+    /// Harmony records, without blocking the caller's actor or context queue.
+    func waitForRecordedChanges() async
+    {
+        await withCheckedContinuation { continuation in
+            self.processingDispatchGroup.notify(queue: .global(qos: .utility)) {
+                continuation.resume()
+            }
+        }
+    }
+
     func updateRecord<T: Syncable>(for managedObject: T)
     {
         guard let context = self.processingContext else { return }
