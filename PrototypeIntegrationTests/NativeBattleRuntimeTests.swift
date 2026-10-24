@@ -570,12 +570,12 @@ final class NativeBattleRuntimeTests:XCTestCase {
             guard let memory = BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }) else { throw NSError(domain:"snapshot",code:1) }
             return try XCTUnwrap(BoundPlayerStateDecoder.read(profile:profile,memory:memory,frame:1).player?.tile)
         }
-        func waitForPause(_ paused: Bool) async throws {
+        func waitForPause(_ paused: Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
             for _ in 0..<80 {
                 if probe.read()?.paused == paused { return }
                 try await Task.sleep(for:.milliseconds(25))
             }
-            XCTFail("The native mailbox must publish its pause gate while guest frames continue")
+            XCTFail("Expected native pause gate \(paused), observed \(String(describing: probe.read()?.paused))", file: file, line: line)
         }
         let initial = try position()
         var host = BoundROMHostState(); host.enabled = true; host.linked = true; host.run = UUID()
@@ -592,17 +592,20 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertFalse(BoundVBABattleBridge.verifyBattleEntryReady(), "Paused cartridge callbacks cannot admit a new friend battle")
         XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady(), "Host pause policy must not invalidate a restored overworld snapshot")
         XCTAssertGreaterThan(try XCTUnwrap(probe.read()).frame,pausedFrame,"The mailbox keeps processing while gameplay is paused")
-        host.connected = true; probe.publish(host); _ = core.resume(); try await waitForPause(false)
-        var moved = false
+        // A battery-only boot has no paired RAM provenance. Connectivity alone
+        // must not authorize the cold linked guest to resume.
+        host.connected = true; probe.publish(host); _ = core.resume(); try await waitForPause(true)
+        let connectedFrame = try XCTUnwrap(probe.read()).frame
         for input in [64,128,32,16] {
             probe.publish(host)
             core.deltaCore.emulatorBridge.activateInput(input,value:1,playerIndex:0)
             try await Task.sleep(for:.milliseconds(220))
             core.deltaCore.emulatorBridge.deactivateInput(input,playerIndex:0)
-            _ = core.pause(); moved = try position() != initial
-            if moved { break }; _ = core.resume()
         }
-        XCTAssertTrue(moved,"A fresh connected host restores native movement")
+        _ = core.pause()
+        XCTAssertTrue(try XCTUnwrap(probe.read()).paused,"CONNECTED must preserve the cold linked recovery gate")
+        XCTAssertGreaterThan(try XCTUnwrap(probe.read()).frame,connectedFrame)
+        XCTAssertEqual(try position(),initial,"Connectivity alone cannot resume a battery-only linked guest")
         host.enabled = false; probe.publish(host); _ = core.resume(); try await waitForPause(true); _ = core.pause()
         let disabledPosition = try position()
         _ = core.resume()
@@ -643,6 +646,18 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertTrue(BoundVBABattleBridge.setROMGameSaveAllowed(true,for:battery))
         core.deltaCore.emulatorBridge.saveGameSave(to:battery)
         XCTAssertEqual(try Data(contentsOf:battery),try Data(contentsOf:export),"Authorized battery writes reach the original core implementation")
+        host.enabled = true; host.linked = false; host.connected = false; host.ended = true; host.status = .complete
+        probe.publish(host); _ = core.resume(); try await waitForPause(false)
+        var moved = false
+        for input in [64,128,32,16] {
+            probe.publish(host)
+            core.deltaCore.emulatorBridge.activateInput(input,value:1,playerIndex:0)
+            try await Task.sleep(for:.milliseconds(220))
+            core.deltaCore.emulatorBridge.deactivateInput(input,playerIndex:0)
+            _ = core.pause(); moved = try position() != disabledPosition
+            if moved { break }; _ = core.resume()
+        }
+        XCTAssertTrue(moved,"Ending the matching run releases the cold linked pause gate")
         XCTAssertEqual(try Data(contentsOf:rom),originalROM); XCTAssertEqual(try Data(contentsOf:seed),originalSeed)
     }
 
