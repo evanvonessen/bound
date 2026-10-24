@@ -102,6 +102,14 @@ the explicit retirement instruction arrives.
 
 ## Validation and maintenance
 
+Deploy the backend before distributing an app that requires a new multiplayer
+protocol. The server-save menu requests `bound-saves-v1` from
+`/functions/v1/nakama-session`, then calls `bound_independent_v2`. Older gateways
+reject that first request with HTTP 400 even while their health check passes.
+Validate the save-ticket broker and Nakama save-library tests, and verify the
+running gateway, Nakama runtime and Caddy route all match the release being
+activated. Keep the existing room protocol available for older app builds.
+
 ```sh
 cd Backend/selfhost
 npm ci --ignore-scripts --no-audit --no-fund

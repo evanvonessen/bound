@@ -19,17 +19,21 @@ enum BoundNakamaAuthorization {
     }
     static func fetchSaves(session: AppCloudSession, room: String? = nil) async throws -> SaveConfiguration {
         let bytes = try await FriendSharingTokens.perform(session.nakamaSaveSessionRequest(roomID: room))
-        let value = try JSONDecoder().decode(SaveConfiguration.self, from: bytes)
+        let value: SaveConfiguration
+        do { value = try JSONDecoder().decode(SaveConfiguration.self, from: bytes) }
+        catch { throw FriendSharingTokenError.invalidResponse }
         guard value.valid, value.ownerID == session.owner,
-              room == nil || value.roomID == room.flatMap(UUID.init(uuidString:)) else { throw FriendSharingTokenError.unavailable }
+              room == nil || value.roomID == room.flatMap(UUID.init(uuidString:)) else { throw FriendSharingTokenError.invalidResponse }
         return value
     }
     static func fetch(room: String, session: AppCloudSession) async throws -> BoundNakamaConfiguration {
         guard let roomID = UUID(uuidString: room) else { throw FriendSharingTokenError.unavailable }
         let bytes = try await FriendSharingTokens.perform(session.nakamaSessionRequest(roomID: roomID.uuidString.lowercased()))
-        let configuration = try JSONDecoder().decode(BoundNakamaConfiguration.self, from: bytes)
+        let configuration: BoundNakamaConfiguration
+        do { configuration = try JSONDecoder().decode(BoundNakamaConfiguration.self, from: bytes) }
+        catch { throw FriendSharingTokenError.invalidResponse }
         guard configuration.isValid(room: roomID, owner: session.owner),
-              configuration.expiresAt > Date().timeIntervalSince1970 + 15 else { throw FriendSharingTokenError.unavailable }
+              configuration.expiresAt > Date().timeIntervalSince1970 + 15 else { throw FriendSharingTokenError.invalidResponse }
         return configuration
     }
 }

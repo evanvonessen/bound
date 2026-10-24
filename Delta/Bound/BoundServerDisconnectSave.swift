@@ -187,7 +187,7 @@ enum BoundServerDisconnectSave {
     }
     private static func retryable(_ error: Error) -> Bool {
         if case BoundNakamaRunService.Failure.unavailable = error { return true }
-        if case FriendSharingTokenError.unavailable = error { return true }
+        if let error = error as? FriendSharingTokenError { return error.retryable }
         guard let url = error as? URLError else { return false }
         return [.timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost, .dnsLookupFailed, .notConnectedToInternet].contains(url.code)
     }

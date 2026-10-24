@@ -53,6 +53,46 @@ private actor NakamaRPCRecordingFixture {
 }
 
 final class BoundNakamaClientTests: XCTestCase {
+    func testAuthorizationFailuresKeepHTTPStatusAndHaveReadableMessages() throws {
+        let url = URL(string: "https://bound.example/functions/v1/nakama-session")!
+        let request = URLRequest(url: url)
+        for status in [400, 401, 403, 404, 408, 429, 500, 503] {
+            let response = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil))
+            XCTAssertThrowsError(try FriendSharingTokens.validateResponse(response, for: request)) { error in
+                XCTAssertEqual(error as? FriendSharingTokenError, .rejected(statusCode: status))
+                XCTAssertFalse(error.localizedDescription.contains("FriendSharingTokenError"))
+                XCTAssertFalse(error.localizedDescription.contains("error 0"))
+                XCTAssertFalse(error.localizedDescription.contains("bound.example"))
+            }
+        }
+        XCTAssertEqual(FriendSharingTokenError.rejected(statusCode: 401).localizedDescription, "Sign in again to use multiplayer.")
+        XCTAssertEqual(FriendSharingTokenError.rejected(statusCode: 503).localizedDescription,
+                       "The multiplayer server is temporarily unavailable. Please try again.")
+        XCTAssertNoThrow(try FriendSharingTokens.validateResponse(
+            XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)), for: request))
+    }
+
+    func testAuthorizationRejectsRedirectsAndNonHTTPResponses() throws {
+        let url = URL(string: "https://bound.example/functions/v1/nakama-session")!
+        let request = URLRequest(url: url)
+        let redirected = try XCTUnwrap(HTTPURLResponse(url: URL(string: "https://other.example/")!, statusCode: 200,
+                                                      httpVersion: nil, headerFields: nil))
+        let nonHTTP = URLResponse(url: url, mimeType: "application/json", expectedContentLength: 0, textEncodingName: nil)
+        for response in [redirected as URLResponse, nonHTTP] {
+            XCTAssertThrowsError(try FriendSharingTokens.validateResponse(response, for: request)) { error in
+                XCTAssertEqual(error as? FriendSharingTokenError, .invalidResponse)
+            }
+        }
+    }
+
+    func testOnlyTransientAuthorizationFailuresRetryDisconnectSaves() {
+        for status in [408, 429, 500, 503] { XCTAssertTrue(FriendSharingTokenError.rejected(statusCode: status).retryable) }
+        for status in [400, 401, 403, 404] { XCTAssertFalse(FriendSharingTokenError.rejected(statusCode: status).retryable) }
+        XCTAssertTrue(FriendSharingTokenError.unavailable.retryable)
+        XCTAssertFalse(FriendSharingTokenError.invalidResponse.retryable)
+        XCTAssertFalse(FriendSharingTokenError.unavailable.localizedDescription.contains("error 0"))
+    }
+
     private let owner = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
     private let peer = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
     private let room = UUID(uuidString: "33333333-3333-4333-8333-333333333333")!
