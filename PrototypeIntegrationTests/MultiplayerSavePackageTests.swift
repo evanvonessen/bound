@@ -56,6 +56,19 @@ final class MultiplayerSavePackageTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: store.cloudURL(gameID: identity.gameID).path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: store.directory(gameID: identity.gameID).appendingPathComponent("Checkpoints").path))
     }
+
+    func testWithheldAcquisitionsCannotStarveLaterDeathEventsInBoundedBatches() throws {
+        let (store, identity, _) = try fixture()
+        for index in 0..<20 {
+            _ = try store.appendSharedEvent(gameID: identity.gameID, kind: "soul",
+                payload: XCTUnwrap(BoundSoulSharedEvent(run: identity.run, kind: .acquired, slot: "area:\(index)").payload))
+        }
+        let death = try store.appendSharedEvent(gameID: identity.gameID, kind: "soul",
+            payload: XCTUnwrap(BoundSoulSharedEvent(run: identity.run, kind: .death, slot: "area:0").payload))
+        XCTAssertEqual(try store.sharedEventsToSend(gameID: identity.gameID, peerCursor: .init(), limit: 16,
+            excludingAcquisitions: true), [death])
+        XCTAssertEqual(try store.sharedEventsToSend(gameID: identity.gameID, peerCursor: .init(), limit: 16).count, 16)
+    }
     func testServerSessionRestoresOnlyAuthenticatedPlayerAndGapAwareJournal() throws {
         let (store, identity, _) = try fixture()
         store.useServerStorage(gameID: identity.gameID)

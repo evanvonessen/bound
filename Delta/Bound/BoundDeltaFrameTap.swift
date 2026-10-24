@@ -3,6 +3,14 @@ import UIKit
 import CoreImage
 import DeltaCore
 
+/// Delta calls the frame observer from a long-lived emulation loop. Release
+/// Foundation/Objective-C temporaries after each observation, not at game exit.
+enum BoundFrameMemory {
+    static func perform(_ updates: () -> Void) {
+        autoreleasepool(invoking: updates)
+    }
+}
+
 struct GameFrame: Sendable {
     let rgba: Data
     let number: UInt64

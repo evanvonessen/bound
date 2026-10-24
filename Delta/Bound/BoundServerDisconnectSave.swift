@@ -82,7 +82,9 @@ enum BoundServerDisconnectSave {
                               service: BoundNakamaRunService) async throws -> UUID {
         let identity = original.payload.manifest.identity
         guard session.owner == identity.owner else { throw BoundNakamaRunService.Failure.conflict }
-        let ownEvents = try pendingEvents(in: original, verifiedCursor: verifiedCursor)
+        let pending = try pendingEvents(in: original, verifiedCursor: verifiedCursor)
+        let ownEvents = pending.filter { !$0.requiresNativeCheckpoint }
+        let acquisitions = pending.filter(\.requiresNativeCheckpoint)
         var offset = 0
         var candidate = original
         var candidates = [original.payload.checkpoint: original.receipt]
@@ -105,7 +107,10 @@ enum BoundServerDisconnectSave {
                 try Task.checkCancellation()
                 state = try await service.getSave(identity.run)
                 let actual = try validate(state, identity: identity, expectedHead: expectedHead, pendingHead: pendingHead, candidates: candidates)
-                if let actual, candidates[actual] != nil { return actual }
+                if let actual, candidates[actual] != nil {
+                    guard acquisitions.allSatisfy({ state.serverCursor.contains($0.id) }) else { throw BoundNakamaRunService.Failure.unavailable }
+                    return actual
+                }
                 if candidate.payload.predecessor != actual {
                     candidate = try rebased(original, predecessor: actual)
                     candidates[candidate.payload.checkpoint] = candidate.receipt
@@ -113,6 +118,7 @@ enum BoundServerDisconnectSave {
                 let confirmed = try await service.uploadIndependent(candidate, expectedHead: actual, session: session)
                 let sealed = try validate(confirmed, identity: identity, expectedHead: expectedHead, pendingHead: pendingHead, candidates: candidates)
                 guard sealed == candidate.payload.checkpoint else { throw BoundNakamaRunService.Failure.conflict }
+                guard acquisitions.allSatisfy({ confirmed.serverCursor.contains($0.id) }) else { throw BoundNakamaRunService.Failure.unavailable }
                 return candidate.payload.checkpoint
             } catch {
                 guard attempt < 2, retryable(error), !Task.isCancelled else { throw error }
@@ -172,6 +178,16 @@ enum BoundServerDisconnectSave {
         }
         return journal.events.filter { $0.id.origin == identity.owner && !verifiedCursor.contains($0.id) }
             .sorted { $0.id.sequence < $1.id.sequence }
+    }
+
+    static func needsAcquisitionCheckpoint(events: [BoundMultiplayerSharedEvent], owner: UUID,
+                                           verifiedCursor: BoundMultiplayerSharedCursor,
+                                           package: BoundMultiplayerSavePackage?) throws -> Bool {
+        let acquisitions = events.filter { $0.id.origin == owner && $0.requiresNativeCheckpoint && !verifiedCursor.contains($0.id) }
+        guard !acquisitions.isEmpty else { return false }
+        guard let package else { return true }
+        let represented = try pendingEvents(in: package, verifiedCursor: verifiedCursor)
+        return acquisitions.contains { !represented.contains($0) }
     }
 
     static func eventBatch(_ events: [BoundMultiplayerSharedEvent]) throws -> [BoundMultiplayerSharedEvent] {

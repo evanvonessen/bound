@@ -29,6 +29,34 @@ private final class PresenceFixtureTransport: FriendSharingTransport {
 }
 @MainActor private final class PresenceFixtureCancellation: SharingCancellation { func cancel() {} }
 
+private struct PresenceMapFixture {
+    var data = Data(repeating: 0, count: 0x360000)
+    init() { data.replaceSubrange(0x123450..<0x123550, with: repeatElement(UInt8(0x11), count: 256)) }
+    mutating func put(_ value: Int, at address: Int, count: Int = 4) {
+        for byte in 0..<count { data[address - 0x08000000 + byte] = UInt8(truncatingIfNeeded: value >> (byte * 8)) }
+    }
+    mutating func map(_ number: Int, width: Int, height: Int, edges: [(Int, Int, Int)] = []) {
+        put(0x08000100, at: 0x083526A8 + 3 * 4)
+        let header = 0x08001000 + number * 32, layout = 0x08004000 + number * 24
+        let connections = 0x08008000 + number * 256
+        put(header, at: 0x08000100 + number * 4); put(layout, at: header)
+        put(width, at: layout); put(height, at: layout + 4)
+        if !edges.isEmpty {
+            put(connections, at: header + 12); put(edges.count, at: connections); put(connections + 8, at: connections + 4)
+            for (index, edge) in edges.enumerated() {
+                let address = connections + 8 + index * 12
+                put(edge.0, at: address); put(edge.1, at: address + 4)
+                put(3, at: address + 8, count: 1); put(edge.2, at: address + 9, count: 1)
+            }
+        }
+    }
+    func bytes(_ address: Int, _ count: Int) -> [UInt8]? {
+        let offset = address - 0x08000000
+        guard offset >= 0, count >= 0, offset <= data.count, count <= data.count - offset else { return nil }
+        return Array(data[offset..<offset + count])
+    }
+}
+
 @MainActor
 final class LivePresenceTests: XCTestCase {
     private var previousExperimentalFeature: Any?
@@ -127,7 +155,7 @@ final class LivePresenceTests: XCTestCase {
         pose["frameAddress"] = 0x08123450; pose["palette"] = Data(repeating: 0, count: 31).base64EncodedString()
         invalid["pose"] = pose
         XCTAssertNil(BoundPresencePacket.decode(try JSONSerialization.data(withJSONObject: invalid)))
-        pose["palette"] = Data(repeating: 0, count: 32).base64EncodedString(); pose["x"] = -1
+        pose["palette"] = Data(repeating: 0, count: 32).base64EncodedString(); pose["x"] = -105
         invalid["pose"] = pose
         XCTAssertNil(BoundPresencePacket.decode(try JSONSerialization.data(withJSONObject: invalid)))
     }
@@ -206,6 +234,75 @@ final class LivePresenceTests: XCTestCase {
         session.receive(try packet(session, peer: peer, sequence: 3, time: 10.2,
                                    reading: reading(x: 120)), at: 20.2)
         XCTAssertTrue(try XCTUnwrap(session.pose(at: 20.2)).isSpatiallyComparable(to: viewer))
+    }
+
+    func testConnectedMapPresenceMovesThroughPalletRouteOneAndBackWithoutStaleEntryPose() throws {
+        var fixture = PresenceMapFixture()
+        // Exact native dimensions/offsets, with synthetic zero-filled graphics.
+        fixture.map(0, width: 24, height: 20, edges: [(2, 0, 19)])
+        fixture.map(19, width: 24, height: 40, edges: [(2, -12, 1), (1, 0, 0)])
+        fixture.map(1, width: 48, height: 40, edges: [(1, 12, 19)])
+        fixture.map(2, width: 13, height: 10)
+        func reading(_ map: Int, _ x: Int, _ y: Int, cameraY: Int = 80) -> BoundPlayerStateReading {
+            let appearance = self.reading().player!.scene!.appearance
+            var player = BoundPlayerState(mapGroup: 3, mapNumber: map, tile: .init(x: (x-8)/16, y: (y-16)/16),
+                previousTile: .init(x: (x-8)/16, y: (y-16)/16), facing: "North", elevation: 0,
+                graphicsID: 0, runningState: 0, tileTransitionState: 0)
+            player.scene = .init(worldFoot: .init(x: x, y: y), camera: .init(x: 0, y: cameraY), appearance: appearance,
+                background: .init(tiles: Data(repeating: 0, count: 32768), layers: []), objects: [])
+            return .init(frame: 1, status: .live, detail: "Connected map fixture", player: player)
+        }
+        let assets = BoundPlayerSceneAssets(), session = session(), peer = UUID()
+        let viewer = try XCTUnwrap(reading(0, 168, 48).player)
+        let samples = [(0, 16), (19, 640), (19, 624), (19, 608), (19, 640), (0, 16)]
+        for (index, sample) in samples.enumerated() {
+            let now = 20 + Double(index) * 0.15
+            session.receive(try packet(session, peer: peer, sequence: UInt64(index+1), time: now-10,
+                reading: reading(sample.0, 168, sample.1)), at: now)
+            let pose = try XCTUnwrap(session.pose(at: now+0.11))
+            let rendered = try XCTUnwrap(pose.rendered(viewer: viewer, rom: fixture.bytes, assets: assets))
+            XCTAssertEqual(rendered.y, Double(sample.1 - (sample.0 == 19 ? 640 : 0)))
+            XCTAssertNil(BoundPlayerViewport.indicator(pose: rendered, scene: viewer.scene!), "The adjacent map's visible border must contain the sprite immediately")
+            let pixels = BoundRecordedPlayerRasterizer.rgba(pose: rendered, scene: viewer.scene!).0
+            XCTAssertEqual(stride(from: 3, to: pixels.count, by: 4).filter { pixels[$0] != 0 }.count, 512)
+        }
+        XCTAssertEqual(session.receivedPackets, samples.count)
+        let routeViewer = try XCTUnwrap(reading(19, 168, 624, cameraY: -560).player)
+        let palletPose = try XCTUnwrap(BoundPresencePose(reading: reading(0, 168, 16)))
+        XCTAssertEqual(palletPose.rendered(viewer: routeViewer, rom: fixture.bytes, assets: assets)?.y, 656)
+        let viridianViewer = try XCTUnwrap(reading(1, 360, 624).player)
+        let routePose = try XCTUnwrap(BoundPresencePose(reading: reading(19, 168, 16)))
+        XCTAssertEqual(routePose.rendered(viewer: viridianViewer, rom: fixture.bytes, assets: assets)?.x, 360)
+        XCTAssertEqual(routePose.rendered(viewer: viridianViewer, rom: fixture.bytes, assets: assets)?.y, 656)
+        let unrelated = try XCTUnwrap(BoundPresencePose(reading: reading(2, 168, 16)))
+        XCTAssertNil(unrelated.rendered(viewer: viewer, rom: fixture.bytes, assets: assets))
+        XCTAssertFalse(routePose.isSpatiallyComparable(to: viewer), "Presentation projection must not grant cross-map interaction authority")
+    }
+
+    func testNativeCardinalConnectionOffsetsAndAmbiguousPathsAreBounded() {
+        var fixture = PresenceMapFixture()
+        fixture.map(0, width: 24, height: 20, edges: [(2, -3, 1), (1, 4, 2), (3, -5, 3), (4, 6, 4), (5, 0, 5)])
+        for n in 1...5 { fixture.map(n, width: 12, height: 30) }
+        let offsets = BoundPlayerMapConnections.offsets(from: .init(group: 3, number: 0), rom: fixture.bytes)
+        XCTAssertEqual(offsets[.init(group: 3, number: 1)], .init(x: -3, y: -30))
+        XCTAssertEqual(offsets[.init(group: 3, number: 2)], .init(x: 4, y: 20))
+        XCTAssertEqual(offsets[.init(group: 3, number: 3)], .init(x: -12, y: -5))
+        XCTAssertEqual(offsets[.init(group: 3, number: 4)], .init(x: 24, y: 6))
+        XCTAssertNil(offsets[.init(group: 3, number: 5)], "Dive/warp destinations are not adjacent geometry")
+        fixture = PresenceMapFixture()
+        fixture.map(0, width: 10, height: 10, edges: [(4, 0, 1), (1, 0, 2)])
+        fixture.map(1, width: 10, height: 10, edges: [(1, 0, 3)])
+        fixture.map(2, width: 10, height: 10, edges: [(4, 1, 3)])
+        fixture.map(3, width: 10, height: 10)
+        XCTAssertNil(BoundPlayerMapConnections.offsets(from: .init(group: 3, number: 0), rom: fixture.bytes)[.init(group: 3, number: 3)])
+    }
+
+    func testMapBorderSubtileSamplesRemainValid() throws {
+        var pose = try XCTUnwrap(BoundPresencePose(reading: reading()))
+        pose.x = -8; pose.y = -1
+        XCTAssertTrue(pose.isValid, "Native map borders include negative coordinates while a step crosses the seam")
+        pose.x = -105; XCTAssertFalse(pose.isValid)
+        pose.x = 8; pose.y = -97; XCTAssertFalse(pose.isValid)
     }
 
     func testPauseTimeoutRestoreAndReconnectRejectPreviousSession() throws {

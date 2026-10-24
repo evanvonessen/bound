@@ -121,6 +121,30 @@ final class PlayerStateTests: XCTestCase {
         XCTAssertEqual(fixture.decode().player?.tile, .init(x: 6, y: 6))
     }
 
+    func testConnectedMapCrossingKeepsPlayerSpawnIdentityAndPublishesCurrentMap() throws {
+        var fixture = ReaderFixture()
+        // Native camera connections rebase this retained object's coordinates;
+        // only a full object rebuild changes its spawn map 4:1.
+        fixture.rom[0x08352404] = ReaderFixture.bytes(0x08350D6C)
+        var tracker = BoundPlayerPresenceTracker()
+        _ = tracker.update(fixture.decode(frame: 1))
+        XCTAssertEqual(tracker.update(fixture.decode(frame: 2)).status, .live)
+        fixture.put(2, at: 0x02025531, count: 1)
+        XCTAssertEqual(fixture.decode().player?.mapNumber, 2)
+        XCTAssertEqual(tracker.update(fixture.decode(frame: 3)).status, .waiting)
+        XCTAssertEqual(tracker.update(fixture.decode(frame: 4)).player?.mapNumber, 2)
+        fixture.put(7, at: 0x0202552C, count: 2)
+        for offset in [0x10, 0x14] { fixture.put(14, at: 0x02036E38 + offset, count: 2) }
+        XCTAssertEqual(tracker.update(fixture.decode(frame: 5)).player?.tile.x, 7)
+        fixture.put(1, at: 0x02025531, count: 1)
+        XCTAssertEqual(tracker.update(fixture.decode(frame: 6)).status, .waiting)
+        XCTAssertEqual(tracker.update(fixture.decode(frame: 7)).player?.mapNumber, 1)
+        // The authoritative header agreement and unique player/sprite ownership
+        // remain mandatory even though spawn-map bytes are not live identity.
+        fixture.put(3, at: 0x02025531, count: 1)
+        XCTAssertEqual(fixture.decode().status, .invalidMemory)
+    }
+
     func testConsecutiveFramesInvalidateOnGapRewindMapChangeAndBattle() {
         var tracker = BoundPlayerPresenceTracker()
         XCTAssertEqual(tracker.update(ReaderFixture().decode(frame: 1)).status, .waiting)

@@ -630,7 +630,8 @@ actor BoundNakamaRunService {
         }
         let values = try JSONSerialization.jsonObject(with:BoundMultiplayerSaveStore.encode(batch))
         let after = Dictionary(uniqueKeysWithValues: cursor.origins.map { ($0.key.lowercased(),$0.value.contiguous) })
-        let data = try await request("events",identity:identity,fields:["events":values,"after":after],rpc:"bound_independent_v2")
+        let data = try await request("events",identity:identity,
+            fields:["events":values,"after":after,"checkpointAcquisitions":true],rpc:"bound_independent_v2")
         return try JSONDecoder().decode(IndependentState.self,from:data)
     }
     func uploadIndependent(_ package: BoundMultiplayerSavePackage, expectedHead: UUID?, session: AppCloudSession? = nil,

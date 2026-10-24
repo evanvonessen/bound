@@ -187,6 +187,83 @@ final class NativeBattleRuntimeTests:XCTestCase {
         super.tearDown()
     }
 
+    func testActualFrameSnapshotsReleaseTemporaryMemory() async throws {
+        continueAfterFailure = false
+        guard ProcessInfo.processInfo.environment["BOUND_FRAME_MEMORY_RUNTIME"] == "1" else {
+            throw XCTSkip("Requires the explicit owned-simulator frame memory fixture")
+        }
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let rom = root.appendingPathComponent("RadicalRed.gba")
+        let originalROM = try Data(contentsOf: rom), profile = try BoundPlayerROMProfile(rom: originalROM)
+        let output = root.appendingPathComponent("frame-memory-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let battery = output.appendingPathComponent("work.sav")
+        try Data(repeating: 0xFF, count: 0x20000).write(to: battery)
+        let core = try XCTUnwrap(EmulatorCore(game: NativeBattleGame(fileURL: rom, gameSaveURL: battery), options: [.metal:true]))
+        for _ in 0..<100 where UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).isEmpty {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first { $0.isKeyWindow }, window = UIWindow(windowScene: scene), owner = UIViewController(), view = GameView()
+        window.rootViewController = owner; window.makeKeyAndVisible(); owner.view.addSubview(view)
+        view.frame = CGRect(x: 0, y: 150, width: window.bounds.width, height: window.bounds.width * 2/3); core.add(view)
+        let driver = NativeBattleDriver(core: core, profile: profile, admittedSetup: true)
+        core.audioManager.pausesOtherAudio = false; core.audioManager.mixesWithOtherAudio = true; core.audioManager.isEnabled = false
+        core.updateHandler = { core in BoundFrameMemory.perform { driver.receive(core) } }
+        defer { _ = core.pause(); _ = core.stop(); window.isHidden = true; previous?.makeKeyAndVisible() }
+        core.rate = 8; XCTAssertTrue(core.start()); core.deltaCore.emulatorBridge.audioRenderer = nil
+        await fulfillment(of: [driver.booted], timeout: 90); _ = core.pause()
+        XCTAssertEqual((BoundVBABattleBridge.soulLinkSnapshot()["boxes"] as? Data)?.count, 25 * 30 * 58)
+        // A single long-lived worker turn models Delta's emulation loop. The
+        // paused core makes each native observation identical; no frame, save,
+        // party, or caller-retained buffer changes during either measurement.
+        let measurements: [String:Int] = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                func resident() -> Int {
+                    var info = mach_task_basic_info()
+                    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<integer_t>.size)
+                    let result = withUnsafeMutablePointer(to: &info) { pointer in
+                        pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                            task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+                        }
+                    }
+                    return result == KERN_SUCCESS ? Int(info.resident_size) : -1
+                }
+                var observedBytes = 0, invalidSnapshots = 0
+                func observe() {
+                    let snapshot = BoundVBABattleBridge.soulLinkSnapshot()
+                    let count = (snapshot["boxes"] as? Data)?.count ?? 0
+                    observedBytes += count
+                    if count != 25 * 30 * 58 || snapshot["ready"] as? Bool != true { invalidSnapshots += 1 }
+                }
+                for _ in 0..<128 { BoundFrameMemory.perform(observe) }
+                let unpooledGrowth = autoreleasepool { () -> Int in
+                    let before = resident()
+                    for _ in 0..<1024 { observe() }
+                    return resident() - before
+                }
+                for _ in 0..<128 { BoundFrameMemory.perform(observe) }
+                let beforePooled = resident()
+                var pooledPeak = beforePooled
+                for index in 0..<4096 {
+                    BoundFrameMemory.perform(observe)
+                    if index % 256 == 255 { pooledPeak = max(pooledPeak, resident()) }
+                }
+                continuation.resume(returning: ["unpooledSnapshots":1024,"pooledSnapshots":4096,
+                    "unpooledGrowth":unpooledGrowth,"pooledPeakGrowth":pooledPeak - beforePooled,
+                    "observedBoxBytes":observedBytes,"invalidSnapshots":invalidSnapshots])
+            }
+        }
+        NSLog("Actual native frame memory %@", String(describing: measurements))
+        try JSONSerialization.data(withJSONObject: measurements, options: [.prettyPrinted,.sortedKeys]).write(to: output.appendingPathComponent("measurements.json"))
+        XCTAssertEqual(measurements["invalidSnapshots"], 0)
+        XCTAssertGreaterThan(measurements["unpooledGrowth"] ?? 0, 32 * 1024 * 1024,
+            "The control must reproduce retained Objective-C native-snapshot allocations")
+        XCTAssertLessThan(measurements["pooledPeakGrowth"] ?? Int.max, 16 * 1024 * 1024,
+            "Four times as many production-scoped observations must have bounded working memory")
+        XCTAssertEqual(try Data(contentsOf: rom), originalROM)
+    }
+
     func testActualSharedWorldCollisionAndNativeCoexistence() async throws {
         try await verifySharedWorldRuntime(sightline: false)
     }

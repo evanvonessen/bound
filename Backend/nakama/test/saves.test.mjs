@@ -23,10 +23,15 @@ function setup() {
   const create = (fields = {}) => rpc(owner, 'create', { request_id: uuid(1), partnerID: peer, gameID: 'multi_red', romSHA256: 'a'.repeat(64), settings: settings(), profile: { name: 'RED', gender: 0 }, ...fields });
   const list = who => rpc(who, 'list', { gameID: 'multi_red' });
   const get = (who, run) => rpc(who, 'get', { save_id: run.save_id });
-  const upload = (who, run, checkpoint, predecessor = null) => {
+  const upload = (who, run, checkpoint, predecessor = null, events = [], snapshot = Buffer.from([0])) => {
     const current = get(who, run);
     const payload = { version: 2, manifest: { identity: current.identity, deviceOwner: who }, checkpoint, predecessor,
-      sharedEventDigest: 'c'.repeat(64), files: { 'game.sav': { data: 'AA==', sha256: hash(Buffer.from([0])) }, 'checkpoint.state': { data: 'AA==', sha256: hash(Buffer.from([0])) } } };
+      sharedEventDigest: 'c'.repeat(64), files: { 'game.sav': { data: 'AA==', sha256: hash(Buffer.from([0])) },
+        'checkpoint.state': { data: snapshot.toString('base64'), sha256: hash(snapshot) } } };
+    if (events.length) {
+      const bytes = Buffer.from(JSON.stringify({ version: 1, run: run.save_id, owner: who, partner: current.identity.partner, events }));
+      payload.files['shared-events.json'] = { data: bytes.toString('base64'), sha256: hash(bytes) };
+    }
     const bytes = Buffer.from(JSON.stringify(payload)), encoded = bytes.toString('base64');
     const fields = { save_id: run.save_id, checkpoint, expectedHead: predecessor, receipt: { run: run.save_id, checkpoint, owner: who,
       payloadSHA256: hash(bytes), sharedEventDigest: payload.sharedEventDigest }, bytes: bytes.length, count: Math.ceil(encoded.length / 12000) };
@@ -239,14 +244,14 @@ test('two simultaneous sessions for one owner cannot replace the winning snapsho
   assert.throws(left.seal); assert.equal(get(owner, run).saves[owner].receipt.checkpoint, uuid(12));
   f.nk.storageWrite = write;
   const event = kind => ({ run: run.save_id, id: { origin: owner, sequence: 1 }, kind: 'soul',
-    payload: Buffer.from(JSON.stringify({ version: 1, run: run.save_id, kind, slot: 'area:1' })).toString('base64') });
+    payload: Buffer.from(JSON.stringify({ version: 1, run: run.save_id, kind, ...(kind === 'ended' ? {} : { slot: 'area:1' }) })).toString('base64') });
   const publish = kind => rpc(owner, 'events', { save_id: run.save_id, events: [event(kind)], after: {} });
   raced = false;
   f.nk.storageWrite = rows => {
     if (!raced && rows.length === 2 && rows[1].collection === 'bound_events_v2') { raced = true; publish('death'); }
     return write(rows);
   };
-  assert.throws(() => publish('acquired'));
+  assert.throws(() => publish('ended'));
   assert.equal(rpc(peer, 'events', { save_id: run.save_id, events: [], after: {} }).events[0].payload, event('death').payload);
   assert.equal(get(owner, run).cursors[owner].contiguous, 1);
 });
@@ -258,6 +263,104 @@ test('idle event polling and identical save acknowledgements do not churn revisi
   const pending = upload(owner, run, uuid(10)); const sealed = pending.seal(); const retry = pending.seal();
   assert.equal(sealed.revision, retry.revision); assert.equal(sealed.updated_at, retry.updated_at);
   assert.equal(poll().revision, get(owner, run).revision);
+});
+
+const acquiredEvent = (run, sequence = 1, slot = 'area:100') => ({ run: run.save_id, id: { origin: owner, sequence }, kind: 'soul',
+  payload: Buffer.from(JSON.stringify({ version: 1, run: run.save_id, kind: 'acquired', slot })).toString('base64') });
+
+test('starter acquisition becomes visible only with its complete post-starter checkpoint', () => {
+  const { create, get, upload, rpc } = setup(), run = create();
+  upload(owner, run, uuid(10)).seal(); // Last idle field before choosing a starter.
+  // The backend treats emulator state as opaque bytes. Distinct fixtures prove
+  // the catch cannot publish with the earlier, empty party snapshot.
+  const postStarter = Buffer.from([1, 0x34, 0x12, 20, 20]);
+  const acquired = acquiredEvent(run), pending = upload(owner, run, uuid(11), uuid(10), [acquired], postStarter);
+  assert.throws(() => rpc(owner, 'events', { save_id: run.save_id, events: [acquired], after: {}, checkpointAcquisitions: true }));
+  assert.equal(get(owner, run).saves[owner].receipt.checkpoint, uuid(10));
+  assert.equal(rpc(peer, 'events', { save_id: run.save_id, events: [], after: {} }).events.length, 0,
+    'A staged or abandoned upload cannot spend an encounter ahead of its native state');
+  const sealed = pending.seal();
+  assert.equal(sealed.saves[owner].receipt.checkpoint, uuid(11));
+  assert.equal(sealed.cursors[owner].contiguous, 1);
+  const reopened = rpc(owner, 'saveDownload', { save_id: run.save_id, checkpoint: uuid(11), index: 0 });
+  const payload = JSON.parse(Buffer.from(reopened.data, 'base64'));
+  assert.deepEqual(Buffer.from(payload.files['checkpoint.state'].data, 'base64'), postStarter);
+  assert.deepEqual(JSON.parse(Buffer.from(payload.files['shared-events.json'].data, 'base64')).events, [acquired]);
+  assert.deepEqual(rpc(peer, 'events', { save_id: run.save_id, events: [], after: {} }).events, [acquired]);
+  assert.equal(pending.seal().cursors[owner].contiguous, 1, 'Lost-response replay is idempotent');
+});
+
+test('failed atomic seal leaves neither an acquisition nor an immutable orphan event', () => {
+  const { f, create, get, upload, rpc } = setup(), run = create();
+  upload(owner, run, uuid(10)).seal();
+  const acquired = acquiredEvent(run), pending = upload(owner, run, uuid(11), uuid(10), [acquired]);
+  const write = f.nk.storageWrite;
+  f.nk.storageWrite = rows => {
+    if (rows.some(row => row.collection === 'bound_events_v2')) throw Error('atomic commit interrupted');
+    return write(rows);
+  };
+  assert.throws(pending.seal);
+  assert.equal(get(owner, run).saves[owner].receipt.checkpoint, uuid(10));
+  assert.equal(get(owner, run).cursors[owner], undefined);
+  assert.equal([...f.stored.values()].filter(row => row.collection === 'bound_events_v2').length, 0);
+  f.nk.storageWrite = write;
+  const alternate = acquiredEvent(run, 1, 'area:101');
+  upload(owner, run, uuid(12), uuid(10), [alternate]).seal();
+  assert.deepEqual(rpc(peer, 'events', { save_id: run.save_id, events: [], after: {} }).events, [alternate]);
+  assert.throws(pending.seal, 'The losing head cannot publish its abandoned catch later');
+});
+
+test('atomic acquisition seal retries a concurrent death without exposing an old native head', () => {
+  const { f, create, get, upload, rpc } = setup(), run = create();
+  upload(owner, run, uuid(10)).seal();
+  const acquired = acquiredEvent(run), pending = upload(owner, run, uuid(11), uuid(10), [acquired]);
+  const death = { ...acquired, id: { origin: peer, sequence: 1 },
+    payload: Buffer.from(JSON.stringify({ version: 1, run: run.save_id, kind: 'death', slot: 'area:100' })).toString('base64') };
+  const write = f.nk.storageWrite; let raced = false;
+  f.nk.storageWrite = rows => {
+    if (!raced && rows.some(row => row.collection === 'bound_events_v2' && row.value.id.origin === owner)) {
+      raced = true;
+      const before = get(peer, run);
+      assert.equal(before.saves[owner].receipt.checkpoint, uuid(10)); assert.equal(before.cursors[owner], undefined);
+      rpc(peer, 'events', { save_id: run.save_id, events: [death], after: {} });
+    }
+    return write(rows);
+  };
+  const sealed = pending.seal();
+  assert.equal(sealed.saves[owner].receipt.checkpoint, uuid(11));
+  assert.equal(sealed.cursors[owner].contiguous, 1); assert.equal(sealed.cursors[peer].contiguous, 1);
+  assert.equal(rpc(peer, 'events', { save_id: run.save_id, events: [], after: {} }).events.length, 2);
+});
+
+test('lost atomic-seal acknowledgement retries the same checkpoint and acquisition exactly once', () => {
+  const { f, create, get, upload } = setup(), run = create();
+  const pending = upload(owner, run, uuid(10), null, [acquiredEvent(run)]);
+  const write = f.nk.storageWrite; let lost = false;
+  f.nk.storageWrite = rows => {
+    const result = write(rows);
+    if (!lost && rows.some(row => row.collection === 'bound_events_v2')) { lost = true; throw Error('response lost after commit'); }
+    return result;
+  };
+  assert.equal(pending.seal().saves[owner].receipt.checkpoint, uuid(10));
+  assert.equal(get(owner, run).cursors[owner].contiguous, 1);
+  assert.equal([...f.stored.values()].filter(row => row.collection === 'bound_events_v2').length, 1);
+});
+
+test('older clients retain their pre-checkpoint event API until they update', () => {
+  const { create, rpc, upload } = setup(), run = create(), acquired = acquiredEvent(run);
+  assert.equal(rpc(owner, 'events', { save_id: run.save_id, events: [acquired], after: {} }).cursors[owner].contiguous, 1);
+  const sealed = upload(owner, run, uuid(10), null, [acquired]).seal();
+  assert.equal(sealed.saves[owner].receipt.checkpoint, uuid(10));
+  assert.equal(rpc(owner, 'events', { save_id: run.save_id, events: [acquired], after: {}, checkpointAcquisitions: true }).cursors[owner].contiguous, 1,
+    'An acknowledged immutable acquisition remains idempotent after updating');
+});
+
+test('a newer checkpoint cannot rewrite a previously committed acquisition payload', () => {
+  const { create, get, upload } = setup(), run = create();
+  upload(owner, run, uuid(10), null, [acquiredEvent(run)]).seal();
+  const conflicting = upload(owner, run, uuid(11), uuid(10), [acquiredEvent(run, 1, 'area:101')]);
+  assert.throws(conflicting.seal);
+  assert.equal(get(owner, run).saves[owner].receipt.checkpoint, uuid(10));
 });
 
 test('v5 game-over override is shared, debug-only and immutable', () => {

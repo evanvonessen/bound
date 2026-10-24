@@ -1,5 +1,48 @@
 # Full-app multiplayer gameplay acceptance
 
+## Checkpoint recovery regressions — October 24, 2026
+
+The updated Nakama client, save-package, disconnect-save and Soul Link suites
+passed 142 tests with no failures or skips. They cover withholding new catch
+facts until their native checkpoint is sealed, death delivery while catches are
+pending, lost upload replies, and history polls delayed across one or more local
+seals. A late poll cannot retry an obsolete package or replace a newer confirmed
+head; a fresh stable poll still rejects a different device's checkpoint.
+
+The backend passed 99 tests, including the pre-starter/post-starter checkpoint
+transition, atomic acquisition/head publication, failed storage transactions,
+concurrent death events, immutable replay conflicts and older-client API
+compatibility. These checks do not reconstruct missing Pokémon from historical
+slot-only events or establish two-phone crash/reconnect behavior.
+The final Debug build, unsigned Release iPhone build, 17,061 pinned-source
+checks and 99 source/integration hashes plus two SDK privacy manifests passed.
+
+## Native snapshot memory regression — October 24, 2026
+
+`NativeBattleRuntimeTests.testActualFrameSnapshotsReleaseTemporaryMemory`
+passed on the owned QA A simulator with integrated v5 cartridge
+`433e308025f5ec0dfc389f323092de35fbbc19dfcb9046656d4de0245523e271`.
+The test admits a fresh game on a disposable battery, pauses the core in the
+overworld, and reads the actual native Soul Link snapshot repeatedly from one
+worker turn. No save, party, frame or caller-retained buffer changes between
+observations. It opts in with `BOUND_FRAME_MEMORY_RUNTIME=1`.
+
+The control accumulated **46,759,936 bytes** of resident memory over 1,024
+snapshots without a per-frame autorelease pool. The production
+`BoundFrameMemory.perform` scope completed 4,096 snapshots with **0 additional
+bytes of measured peak resident memory** after warmup. All 5,376 observations,
+including warmup, contained the expected 43,500 PC-box bytes and a valid native
+overworld. This proves the temporary Foundation objects are drained between
+Bound frame callbacks; upstream Delta core sources and pins remain unchanged.
+
+Receipt: `.build/native-frame-memory-v5.xcresult`; execution log:
+`/private/tmp/bound-frame-memory-runtime.log`. The single focused runtime test
+passed in 2.474 seconds. These measurements establish a reproduced allocation
+bug and its bounded-memory regression, not physical-device performance or the
+cause of a particular phone termination. The reported iPhone 14 Pro Max crash
+log was unavailable because that device was not connected; the connected
+iPhone 17 Pro Max had no matching crash or jetsam report for that day.
+
 ## Verified October 20, 2026
 
 Full-app simulator acceptance **passed** on `multiplayer` with the pinned VBA-M

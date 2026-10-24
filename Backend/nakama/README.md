@@ -282,7 +282,7 @@ both with different values is rejected.
 | `create` | Stable retry `request_id` UUID, authorized `partnerID`, `gameID`, `romSHA256`, version-four or version-five base64 `settings`, optional `profile` and `partnerProfile` | Complete version-two run state with a server-generated `save_id`; creates the root, both supplied trainer profiles and retry key atomically. |
 | `get` | `save_id` | Existing version-two run state, including snapshot descriptors, event cursors, profiles and caller-oriented identity/seeds. |
 | `profile` | `save_id`, `{name,gender}` | Updates only caller's profile before their first snapshot; name is 1–7 ASCII letters/digits, gender 0 or 1. Exact retries remain valid after saving. |
-| `events` | `save_id`, existing `events` and `after` | Existing upload/delivery acknowledgements and gap-aware missing-event batches. |
+| `events` | `save_id`, existing `events` and `after`, optional `checkpointAcquisitions:true` | Existing upload/delivery acknowledgements and gap-aware missing-event batches. Updated clients opt into checkpoint-backed acquisition publication. |
 | `save` / `saveChunk` / `saveSeal` / `saveDownload` | `save_id` plus existing snapshot fields | Existing independent snapshot protocol. |
 | `delete` | `save_id`, `confirmSharedDeletion:true`, current `expectedRevision` | `{save_id,deleted:true}` after deleting both participants' snapshots and events. |
 | `gameOver` | `save_id`, stable `eventID` UUID | Absorbs the run when its shared settings enable game over; concurrent triggers return the first event ID. |
@@ -321,6 +321,32 @@ silently overwrite the winner by substituting a newer expected head. Retrying
 the exact winning checkpoint is idempotent. A partial upload never replaces the
 last valid head. Shared event identity conflicts similarly reject changed
 payloads for the same `(save_id, origin, sequence)`.
+
+New acquisition facts use the snapshot as their durability boundary. Updated
+clients withhold own `soul/acquired` events from ordinary history batches and
+capture the completed native frame, battery and Soul ledger when an acquisition
+is not represented by the pending checkpoint. This critical capture can occur
+during an ordinary script or battle; it does not wait for an idle field frame.
+Temporary friend/co-op battle and trade executions retain their separate
+continuation fences. Death and world events still upload independently.
+
+For managed saves, `saveSeal` verifies the embedded `shared-events.json` checksum,
+run and owner, validates each own acquisition against immutable event history,
+and commits the new records, event cursor and exact own snapshot head in one
+storage transaction. Failed or abandoned uploads expose none of those new
+acquisitions; concurrent changes retry the parent CAS, and lost acknowledgements
+retry the original immutable checkpoint. The final-disconnect drain follows the
+same ordering and requires both the matching receipt and acquisition cursor.
+`events.checkpointAcquisitions:true` rejects an uncheckpointed acquisition on the
+ordinary event route. Older clients omit this capability and retain their API
+until updated; they retain the earlier acquisition/rollback risk.
+
+This prevents new history-only acquisitions from making a replayed starter look
+like a duplicate catch. It cannot reconstruct a Pokémon already missing from
+an older server checkpoint: historical acquisition events contain a slot, not
+the original Pokémon identity or native state. Deaths and consumed slots are
+never cleared as a generic repair. Recovery of affected older runs requires
+separately verified later native state or a new run.
 
 Clear Server Saves is shared deletion: the confirmation must state that the run
 is removed for **both** players. An authorized participant may confirm it; no
@@ -370,7 +396,8 @@ package and the account session independently of the coordinator, waits for the
 previous upload, and holds an iOS background task while draining pending events
 and the last snapshot. Only event identities covered by a previously validated
 local server receipt are skipped; current GET cursors alone do not establish
-payload equality. Remaining events use the existing immutable batch protocol.
+payload equality. Remaining non-acquisition events use the existing immutable
+batch protocol; acquisitions publish atomically with the frozen snapshot seal.
 The final seal accepts only the expected old head, the already-pending own head,
 or this task's exact checkpoint receipt. Changed ancestry gets a fresh checkpoint
 UUID while preserving the shared `save_id` and captured bytes. Another device's

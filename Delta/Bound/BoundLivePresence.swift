@@ -29,7 +29,7 @@ struct BoundPresencePose: Codable, Equatable, Sendable {
 
     var isValid: Bool {
         (0...255).contains(mapGroup) && (0...255).contains(mapNumber) && (0...15).contains(elevation)
-        && x.isFinite && y.isFinite && (0...1_048_592).contains(x) && (0...1_048_592).contains(y)
+        && x.isFinite && y.isFinite && (-104...1_048_592).contains(x) && (-96...1_048_592).contains(y)
         && (1...4).contains(facing) && (0...3).contains(priority) && palette.count == 32
         && (0x08000000...0x09FFFF00).contains(frameAddress)
     }
@@ -39,9 +39,17 @@ struct BoundPresencePose: Codable, Equatable, Sendable {
     }
 
     func rendered(profile: BoundPlayerROMProfile, viewer: BoundPlayerState) -> BoundRecordedPlayerPose? {
-        guard isValid, viewer.scene != nil, isSpatiallyComparable(to: viewer),
-              let tiles = profile.bytes(at: frameAddress, count: 256) else { return nil }
-        return .init(mapGroup: mapGroup, mapNumber: mapNumber, elevation: elevation, x: x, y: y,
+        rendered(viewer: viewer, rom: profile.bytes, assets: profile.sceneAssets)
+    }
+
+    func rendered(viewer: BoundPlayerState, rom: (Int, Int) -> [UInt8]?,
+                  assets: BoundPlayerSceneAssets) -> BoundRecordedPlayerPose? {
+        guard isValid, viewer.scene != nil, viewer.elevation == elevation,
+              let offset = assets.mapOffset(fromGroup: viewer.mapGroup, number: viewer.mapNumber,
+                  toGroup: mapGroup, number: mapNumber, rom: rom),
+              let tiles = rom(frameAddress, 256) else { return nil }
+        return .init(mapGroup: viewer.mapGroup, mapNumber: viewer.mapNumber, elevation: elevation,
+            x: x + Double(offset.x * 16), y: y + Double(offset.y * 16),
             appearance: .init(width: 16, height: 32, tiles: Data(tiles), palette: palette,
                               flipX: flipX, flipY: flipY, priority: priority, romAddress: frameAddress))
     }

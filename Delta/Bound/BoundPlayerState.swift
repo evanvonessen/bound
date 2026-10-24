@@ -153,7 +153,12 @@ enum BoundPlayerStateDecoder {
         let flags = word(object)
         guard flags & 0x10001 == 0x10001, object[8] == 0xFF,
               (0..<16).filter({ word(objects, $0 * 36) & 0x10001 == 0x10001 }) == [objectID],
-              Int(object[4]) == spriteID, Int(object[9]) == number, Int(object[10]) == group,
+              // Connected-map scrolling keeps the player ObjectEvent alive.
+              // Its map bytes identify where that object was spawned, while
+              // the save location and verified live header own its current map.
+              // Native UpdateObjectEventCoordsForCameraUpdate rebases all three
+              // coordinate pairs without changing those spawn-map bytes.
+              Int(object[4]) == spriteID,
               let sprite = memory.bytes(at: 0x0202063C + spriteID * 68, count: 68),
               half(sprite, 0x2E) == objectID, sprite[0x3E] & 1 != 0 else { return invalid("Player object / sprite disagreement") }
         if flags & (1 << 13) != 0 || sprite[0x3E] & 4 != 0 {

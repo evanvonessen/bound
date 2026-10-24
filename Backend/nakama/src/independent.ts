@@ -97,6 +97,12 @@ namespace BoundIndependent {
         c.sparse.push(sequence); c.sparse.sort(function (a, b) { return a - b; });
         while (c.sparse.length && c.sparse[0] === c.contiguous + 1) { c.contiguous++; c.sparse.shift(); }
     }
+    function contains(c: Cursor, sequence: number): boolean { return sequence <= c.contiguous || c.sparse.indexOf(sequence) >= 0; }
+    function acquisition(nk: nkruntime.Nakama, event: any): boolean {
+        if (!event || event.kind !== "soul" || typeof event.payload !== "string") return false;
+        try { return JSON.parse(nk.binaryToString(nk.base64Decode(event.payload))).kind === "acquired"; }
+        catch (_) { return false; }
+    }
     export function view(state: Run, events: any[] = [], owner?: string): any {
         const result: any = { version: 2, identity: state.identity, committed: state.committed, cancelled: state.cancelled,
             epoch: state.epoch, revision: state.revision, cursors: state.cursors, deliveries: state.deliveries || {}, saves: state.saves,
@@ -143,6 +149,30 @@ namespace BoundIndependent {
                 else write(nk, key, value, version, bucket);
             };
             const events: any[] = [];
+            const checkpointEvents: nkruntime.StorageWriteRequest[] = [];
+            const storeEvent = function (event: any, checkpoint: boolean): void {
+                if (!event || String(event.run).toLowerCase() !== runID || !event.id || String(event.id.origin).toLowerCase() !== owner ||
+                    !integer(event.id.sequence) || event.id.sequence < 1 || typeof event.kind !== "string" || !event.kind.length || event.kind.length > 64 ||
+                    typeof event.payload !== "string" || event.payload.length > 8192 || event.idempotencyKey != null && (typeof event.idempotencyKey !== "string" || event.idempotencyKey.length > 512)) fail("Invalid shared event");
+                if (state.save_id && !BoundSaveLibrary.eventValid(nk, event, runID)) fail("Unsupported shared event");
+                const c = cursor(state.cursors[owner]), before = canonical(c);
+                if (state.save_id && request.checkpointAcquisitions === true && acquisition(nk, event) && !checkpoint && !contains(c, event.id.sequence)) fail("Acquisition needs a confirmed checkpoint");
+                const stored = { run: runID, id: { origin: owner, sequence: event.id.sequence }, kind: event.kind, payload: event.payload,
+                    ...(event.idempotencyKey == null ? {} : { idempotencyKey: event.idempotencyKey }) };
+                admit(c, event.id.sequence);
+                const key = runID + "/" + owner + "/" + event.id.sequence, previous = read(nk, key, eventCollection);
+                if (previous && canonical(previous.value) !== canonical(stored)) fail("Immutable event conflict");
+                if (!previous && checkpoint) {
+                    if (checkpointEvents.length >= 2304) fail("Too many checkpoint acquisitions");
+                    checkpointEvents.push({ collection: eventCollection, key: key, userId: system, value: stored,
+                        version: "*", permissionRead: 0, permissionWrite: 0 });
+                } else if (!previous) {
+                    try { store(key, stored, "*", eventCollection); }
+                    catch (_) { const saved = read(nk, key, eventCollection); if (!saved || canonical(saved.value) !== canonical(stored)) fail("Immutable event conflict"); }
+                }
+                if (!state.save_id || !previous || before !== canonical(c)) changed = true;
+                state.cursors[owner] = c;
+            };
             // Absorption fences in-flight saves and new history, while peers may
             // still read the final state and acknowledge existing event delivery.
             if (state.gameOver && request.action !== "get" && request.action !== "saveDownload" &&
@@ -195,20 +225,7 @@ namespace BoundIndependent {
             } else if (request.action === "events") {
                 if (!state.committed || state.cancelled) fail("Shared setup is incomplete");
                 if (!Array.isArray(request.events) || request.events.length > 16 || !request.after || typeof request.after !== "object" || Array.isArray(request.after)) fail("Invalid event batch");
-                for (const event of request.events) {
-                    if (!event || String(event.run).toLowerCase() !== runID || !event.id || String(event.id.origin).toLowerCase() !== owner ||
-                        !integer(event.id.sequence) || event.id.sequence < 1 || typeof event.kind !== "string" || !event.kind.length || event.kind.length > 64 ||
-                        typeof event.payload !== "string" || event.payload.length > 8192 || event.idempotencyKey != null && (typeof event.idempotencyKey !== "string" || event.idempotencyKey.length > 512)) fail("Invalid shared event");
-                    if (state.save_id && !BoundSaveLibrary.eventValid(nk, event, runID)) fail("Unsupported shared event");
-                    const stored = { run: runID, id: { origin: owner, sequence: event.id.sequence }, kind: event.kind, payload: event.payload,
-                        ...(event.idempotencyKey == null ? {} : { idempotencyKey: event.idempotencyKey }) };
-                    const c = cursor(state.cursors[owner]), before = canonical(c); admit(c, event.id.sequence);
-                    const key = runID + "/" + owner + "/" + event.id.sequence, previous = read(nk, key, eventCollection);
-                    if (previous && canonical(previous.value) !== canonical(stored)) fail("Immutable event conflict");
-                    if (!previous) { try { store(key, stored, "*", eventCollection); } catch (_) { const saved = read(nk, key, eventCollection); if (!saved || canonical(saved.value) !== canonical(stored)) fail("Immutable event conflict"); } }
-                    if (!state.save_id || !previous || before !== canonical(c)) changed = true;
-                    state.cursors[owner] = c;
-                }
+                for (const event of request.events) storeEvent(event, false);
                 state.deliveries = state.deliveries || {};
                 const delivered: { [origin: string]: number } = {};
                 for (const origin of state.members) {
@@ -265,6 +282,25 @@ namespace BoundIndependent {
                         if (expected !== null && !id(expected)) fail("Invalid player save head");
                         if (state.save_id && (saved.predecessor == null ? null : String(saved.predecessor).toLowerCase()) !== expected) fail("Player save ancestry changed");
                         if ((!head && expected !== null) || (head && head.receipt.checkpoint.toLowerCase() !== request.checkpoint && head.receipt.checkpoint.toLowerCase() !== expected)) fail("Player save changed; retry");
+                        if (state.save_id && saved.files["shared-events.json"]) {
+                            const blob = saved.files["shared-events.json"];
+                            if (!blob || typeof blob.data !== "string" || blob.data.length > 24000000 || !digest.test(blob.sha256)) fail("Invalid checkpoint history");
+                            const text = nk.binaryToString(nk.base64Decode(blob.data));
+                            if (nk.sha256Hash(text) !== blob.sha256) fail("Invalid checkpoint history checksum");
+                            const journal = JSON.parse(text);
+                            if (!journal || journal.version !== 1 || String(journal.run).toLowerCase() !== runID ||
+                                String(journal.owner).toLowerCase() !== owner || String(journal.partner).toLowerCase() !== savedIdentity.partner ||
+                                !Array.isArray(journal.events) || journal.events.length > 100000) fail("Invalid checkpoint history identity");
+                            const seen: { [sequence: string]: boolean } = {};
+                            for (const event of journal.events) {
+                                if (!event || !event.id || String(event.id.origin).toLowerCase() !== owner || !acquisition(nk, event)) continue;
+                                if (seen[String(event.id.sequence)]) fail("Duplicate checkpoint acquisition");
+                                seen[String(event.id.sequence)] = true;
+                                // One storage transaction exposes the exact head,
+                                // new immutable records, and their parent cursor.
+                                storeEvent(event, true);
+                            }
+                        }
                         if (!state.save_id || canonical(head) !== canonical(descriptor)) { state.saves[owner] = descriptor; changed = true; }
                     }
                 }
@@ -272,7 +308,12 @@ namespace BoundIndependent {
             if (!changed) return JSON.stringify(view(state, events, owner));
             state.revision++;
             if (state.save_id && request.action === "saveSeal") state.updated_at = BoundSaveLibrary.timestamp();
-            try { write(nk, runID, state, record ? record.version : "*"); return JSON.stringify(view(state, events, owner)); }
+            try {
+                const writes: nkruntime.StorageWriteRequest[] = [{ collection: collection, key: runID, userId: system, value: state,
+                    version: record ? record.version : "*", permissionRead: 0, permissionWrite: 0 }];
+                nk.storageWrite(writes.concat(checkpointEvents));
+                return JSON.stringify(view(state, events, owner));
+            }
             catch (_) { if (attempt === 4) fail("Run changed; retry"); }
         }
         fail("Run changed; retry");

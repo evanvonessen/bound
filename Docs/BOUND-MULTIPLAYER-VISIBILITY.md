@@ -22,15 +22,18 @@ origin. A sprite intersecting the original 240×160 viewport is rasterized with
 the existing background/object occlusion, flips and animation frame. It is not
 replaced with an arrow when a tree, NPC or native field window covers it.
 
-A fully offscreen sprite on the same map and elevation becomes a small edge
+A fully offscreen sprite on the same or cardinally connected map and elevation becomes a small edge
 chevron with the selected friend's name and rounded straight-line distance in
 16-pixel tiles. Direction follows the camera center-to-player ray; distance is
 between the players' world feet. The whole label stays inset in the viewport.
 The overlay ignores input. Offscreen rendering skips sprite pixel rasterization,
 and neither indicator layout nor networking runs inside the emulator frame
 callback. Camera movement alone restores an already received sprite without
-waiting for another peer packet. Different maps/elevations produce neither a
-sprite nor an arrow, but their positions remain tracked.
+waiting for another peer packet. Native cardinal map connections translate a
+friend's map-local coordinates into the viewer's map before projection. Door,
+warp and dive destinations, disconnected maps and different elevations produce
+neither a sprite nor an arrow, but their positions remain tracked. Presentation
+projection never grants cross-map interaction authority.
 
 ## Disappearance diagnosis
 
@@ -58,8 +61,25 @@ collision, trainer and flag operations to the original local game logic.
 `source/multiplayer/game/game_runtime.c` publishes local snapshots and reads
 shared-world data for presentation policy; Bound owns remote sprite rendering.
 
+The later Pallet Town → Route 1 report exposed a different reader defect. Bound
+required the player's object spawn-map bytes to equal the current map. The
+native seamless camera transition keeps that object alive: function
+`UpdateObjectEventCoordsForCameraUpdate` (`0x0805F82C`) rebases its origin,
+current and previous coordinates, but leaves its spawn map unchanged. The reader
+therefore rejected every subsequent Route 1 frame and retained the last Pallet
+pose; returning to Pallet made the stale identity check pass again.
+
+The current map now comes from the save location and its matching verified map
+header. Unique player-object ownership, sprite ownership, coordinate agreement,
+fade/battle guards and consecutive completed-frame validation remain required.
+Signed border pixels are accepted during a step across a map seam. Cardinal
+connection geometry is read from the verified ROM and cached outside the frame
+owner. Nearest connection paths take precedence over longer paths; conflicting
+equally short paths are withheld because some cartridge loops do not form one
+consistent global grid. Interior warps are never treated as geometric edges.
+
 Physical-device verification remains pending. Packet loss, a scene-reader
-failure or a map/elevation change can still produce distinct absence states.
+failure or an unrelated map/elevation change can still produce distinct absence states.
 Existing Connection Check diagnostics report peer-pose availability,
 map/elevation agreement, frame resolution and visible pixel count to distinguish
 them.
@@ -98,6 +118,17 @@ October 24 validation: 47 focused presence, reader and rasterizer tests passed,
 including both native VBA-M tests with integrated ROM SHA-256
 `d2a206998f67db500f88ccc197fc9977ebd437f714661916abbc7b484e38370a`.
 The Release iPhone build and pinned-source/privacy checks passed.
+
+The connected-map regressions cover continued movement after the current map
+changes while object spawn identity remains unchanged, return crossings,
+Pallet/Route 1/Viridian offsets, all four cardinal directions, negative border
+pixels, disconnected interiors and ambiguous connection paths.
+The expanded presence, reader and rasterizer suites passed all 51 tests against
+the integrated v5 cartridge on October 24.
+`PrototypeTools/qa-python PrototypeTools/test-presence-map-boundaries.py --rom
+<owned-integrated-rom>` also executes the original cartridge rebase function
+for six crossing/return offsets and proves that it preserves spawn identity.
+These new checks do not constitute a paired physical-device map-crossing test.
 
 These deterministic tests do not prove physical-device behavior or upstream
 Delta playback parity. Device acceptance still requires two phones moving

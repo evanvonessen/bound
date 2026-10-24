@@ -68,6 +68,20 @@ struct BoundPlayerBackground: Equatable, Sendable {
 final class BoundPlayerSceneAssets: @unchecked Sendable {
     private let lock = NSLock()
     private var maps: [Int: Data] = [:]
+    private var connections: [BoundPlayerMapConnections.Map: [BoundPlayerMapConnections.Map: BoundPlayerState.Point]] = [:]
+
+    func mapOffset(fromGroup: Int, number: Int, toGroup: Int, number targetNumber: Int,
+                   rom: (Int, Int) -> [UInt8]?) -> BoundPlayerState.Point? {
+        let source = BoundPlayerMapConnections.Map(group: fromGroup, number: number)
+        let target = BoundPlayerMapConnections.Map(group: toGroup, number: targetNumber)
+        if source == target { return .init(x: 0, y: 0) }
+        lock.lock(); defer { lock.unlock() }
+        if connections[source] == nil {
+            if connections.count >= 16 { connections.removeAll() }
+            connections[source] = BoundPlayerMapConnections.offsets(from: source, rom: rom)
+        }
+        return connections[source]?[target]
+    }
 
     func tiles(layout: Int, rom: (Int, Int) -> [UInt8]?) -> Data? {
         lock.lock(); defer { lock.unlock() }
@@ -116,6 +130,67 @@ final class BoundPlayerSceneAssets: @unchecked Sendable {
             }
         }
         return output
+    }
+}
+
+/// Native cardinal connections define where adjoining maps are drawn. These
+/// are viewer-relative translations, not a fabricated global coordinate grid:
+/// some cartridge loops have inconsistent offsets, so nearer connections win
+/// and equally short conflicting paths are withheld. Doors/dive/warps never
+/// connect unrelated rooms for presentation or interaction authority.
+enum BoundPlayerMapConnections {
+    struct Map: Hashable { let group: Int; let number: Int }
+    private struct Header { let width: Int; let height: Int; let edges: [(Int, Int, Map)] }
+
+    private static func header(_ map: Map, rom: (Int, Int) -> [UInt8]?) -> Header? {
+        guard (0..<43).contains(map.group), (0...255).contains(map.number),
+              let group = rom(0x083526A8 + map.group * 4, 4),
+              let pointer = rom(BoundSceneBytes.word(group) + map.number * 4, 4),
+              let header = rom(BoundSceneBytes.word(pointer), 28),
+              let layout = rom(BoundSceneBytes.word(header), 8) else { return nil }
+        let width = BoundSceneBytes.word(layout), height = BoundSceneBytes.word(layout, 4)
+        guard (1...1024).contains(width), (1...1024).contains(height) else { return nil }
+        let address = BoundSceneBytes.word(header, 12)
+        if address == 0 { return .init(width: width, height: height, edges: []) }
+        guard let connections = rom(address, 8), (0...16).contains(BoundSceneBytes.word(connections)),
+              let rows = rom(BoundSceneBytes.word(connections, 4), BoundSceneBytes.word(connections) * 12) else { return nil }
+        var edges: [(Int, Int, Map)] = []
+        for index in stride(from: 0, to: rows.count, by: 12) {
+            let direction = BoundSceneBytes.word(rows, index)
+            let offset = Int(Int32(bitPattern: UInt32(BoundSceneBytes.word(rows, index + 4))))
+            guard (1...4).contains(direction), (-1024...1024).contains(offset) else { continue }
+            edges.append((direction, offset, .init(group: Int(rows[index + 8]), number: Int(rows[index + 9]))))
+        }
+        return .init(width: width, height: height, edges: edges)
+    }
+
+    static func offsets(from source: Map, rom: (Int, Int) -> [UInt8]?) -> [Map: BoundPlayerState.Point] {
+        var offsets: [Map: BoundPlayerState.Point] = [source: .init(x: 0, y: 0)]
+        var depths = [source: 0], queue = [source], cursor = 0, ambiguous = Set<Map>()
+        while cursor < queue.count, queue.count <= 512 {
+            let current = queue[cursor]; cursor += 1
+            guard !ambiguous.contains(current), let origin = offsets[current], let depth = depths[current],
+                  let currentHeader = header(current, rom: rom) else { continue }
+            for (direction, offset, target) in currentHeader.edges {
+                guard let targetHeader = header(target, rom: rom) else { continue }
+                let delta: BoundPlayerState.Point
+                switch direction {
+                case 1: delta = .init(x: offset, y: currentHeader.height)
+                case 2: delta = .init(x: offset, y: -targetHeader.height)
+                case 3: delta = .init(x: -targetHeader.width, y: offset)
+                default: delta = .init(x: currentHeader.width, y: offset)
+                }
+                let value = BoundPlayerState.Point(x: origin.x + delta.x, y: origin.y + delta.y)
+                if let existing = offsets[target] {
+                    if depths[target] == depth + 1, existing != value { ambiguous.insert(target) }
+                } else {
+                    guard queue.count < 512 else { continue }
+                    offsets[target] = value; depths[target] = depth + 1; queue.append(target)
+                }
+            }
+        }
+        for key in ambiguous { offsets.removeValue(forKey: key) }
+        return offsets
     }
 }
 

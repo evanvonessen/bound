@@ -114,6 +114,12 @@ struct BoundMultiplayerSharedEvent: Codable, Equatable, Sendable, Identifiable {
     var kind: String
     var payload: Data
     var idempotencyKey: String?
+    /// A catch must not become permanent shared history before the native
+    /// execution that acquired it is recoverable. Deaths still travel promptly.
+    var requiresNativeCheckpoint: Bool {
+        guard kind == "soul", let fact = try? JSONDecoder().decode(BoundSoulSharedEvent.self, from: payload) else { return false }
+        return fact.valid && fact.run == run && fact.kind == .acquired
+    }
 }
 
 struct BoundMultiplayerSharedAcknowledgement: Codable, Equatable, Sendable {
@@ -586,10 +592,12 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
         value.acknowledged.merge(.init(origins: [value.owner.uuidString: position]))
         try persistJournal(value, gameID: gameID, identity: identity)
     }
-    func sharedEventsToSend(gameID: String, peerCursor: BoundMultiplayerSharedCursor? = nil, limit: Int = 64, identity: BoundMultiplayerRunIdentity? = nil) throws -> [BoundMultiplayerSharedEvent] {
+    func sharedEventsToSend(gameID: String, peerCursor: BoundMultiplayerSharedCursor? = nil, limit: Int = 64,
+                           identity: BoundMultiplayerRunIdentity? = nil, excludingAcquisitions: Bool = false) throws -> [BoundMultiplayerSharedEvent] {
         let value = try journal(gameID: gameID, identity: identity)
         let cursor = peerCursor ?? value.acknowledged
-        return Array(value.events.filter { $0.id.origin == value.owner && !cursor.contains($0.id) }
+        return Array(value.events.filter { $0.id.origin == value.owner && !cursor.contains($0.id)
+            && (!excludingAcquisitions || !$0.requiresNativeCheckpoint) }
             .sorted { $0.id.sequence < $1.id.sequence }.prefix(max(0, min(limit, 256))))
     }
     /// Commit the player's checkpoint and its synchronization cursor without a

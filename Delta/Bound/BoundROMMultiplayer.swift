@@ -406,6 +406,35 @@ struct BoundROMChannel {
 }
 
 enum BoundROMCheckpointStage: Equatable { case wait, capture, commit, finish }
+
+/// A history response can predate a local upload that finishes while the
+/// request is in flight. Recognize those exact heads without adopting them or
+/// admitting an unrelated device's checkpoint just because an upload is busy.
+struct BoundServerHistoryHeadFence {
+    enum Disposition: Equatable { case accept, retry, conflict }
+    let confirmed: UUID?
+    let pending: UUID?
+
+    func permits(_ observed: UUID?, currentConfirmed: UUID?, currentPending: UUID?) -> Bool {
+        guard let observed else { return confirmed == nil || currentConfirmed == nil }
+        return observed == confirmed || observed == pending ||
+            observed == currentConfirmed || observed == currentPending
+    }
+
+    func disposition(_ observed: UUID?, currentConfirmed: UUID?, currentPending: UUID?) -> Disposition {
+        if permits(observed, currentConfirmed: currentConfirmed, currentPending: currentPending) { return .accept }
+        // More than one acquisition checkpoint may have sealed while polling.
+        // An intermediate response is unverifiable here; retry without applying
+        // it. A fresh request with a stable baseline still rejects foreign heads.
+        return currentConfirmed != confirmed ? .retry : .conflict
+    }
+
+    static func pendingUpload(head: BoundMultiplayerSavePackage?, uploaded: UUID?) -> BoundMultiplayerSavePackage? {
+        guard let head, head.payload.version == 2, head.payload.checkpoint != uploaded else { return nil }
+        return head
+    }
+}
+
 enum BoundROMCheckpointReadiness {
     static func stage(localStored: Bool, partnerStored: Bool, peerCommitted: Bool,
                       localPaused: Bool, peerPaused: Bool, peerPendingMatches: Bool,
@@ -1513,9 +1542,18 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     private func synchronizeIndependentHistory() {
         guard serverTask == nil, now >= serverPollAt, let identity = manifest?.identity,
               account.session?.owner == identity.owner else { return }
-        do { try journalSoulEvents() } catch { self.error = error.localizedDescription; return }
+        do {
+            try journalSoulEvents()
+            if serverOnly, try BoundServerDisconnectSave.needsAcquisitionCheckpoint(
+                events: store.journal(gameID: identity.gameID).events, owner: identity.owner,
+                verifiedCursor: sharedServerCursor, package: head) {
+                // A starter can go straight from a script into the rival fight
+                // without an idle field frame. Preserve that exact execution
+                // before publishing its permanent catch fact.
+                _ = try captureServerCheckpoint(criticalAcquisition: true)
+            }
+        } catch { self.error = error.localizedDescription; return }
         let operation = UUID(); serverOperation = operation; serverPollAt = now + 1
-        let package = head?.payload.version == 2 && serverUploaded != head?.payload.checkpoint ? head : nil
         serverTask = Task { [weak self] in
             guard let self else { return }
             defer { if self.serverOperation == operation { self.serverTask = nil } }
@@ -1539,8 +1577,14 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                     try self.journalSoulEvents()
                 }
                 let ack = try self.store.sharedEventAcknowledgement(gameID:identity.gameID)
-                var pending = self.manifest?.requiresInitialHistorySync == true ? [] : try self.store.sharedEventsToSend(gameID:identity.gameID,peerCursor:self.sharedServerCursor,limit:16)
-                if self.serverOnly, !pending.isEmpty { pending = try BoundServerDisconnectSave.eventBatch(pending) }
+                var pending = self.manifest?.requiresInitialHistorySync == true ? [] : try self.store.sharedEventsToSend(
+                    gameID:identity.gameID,peerCursor:self.sharedServerCursor,limit:16,excludingAcquisitions:self.serverOnly)
+                if self.serverOnly {
+                    pending.removeAll(where: \.requiresNativeCheckpoint)
+                    if !pending.isEmpty { pending = try BoundServerDisconnectSave.eventBatch(pending) }
+                }
+                let requestedHeads = BoundServerHistoryHeadFence(confirmed: self.independentServerHead,
+                    pending: self.head?.payload.checkpoint)
                 let state = try await self.server.sharedEvents(identity:identity,events:pending,cursor:ack.cursor)
                 guard !Task.isCancelled, self.serverOperation == operation,
                       (self.identity?.run ?? self.backgroundEndedIdentity?.run) == identity.run else { return }
@@ -1550,8 +1594,11 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                 let remoteSave = state.saves[identity.owner.uuidString.lowercased()]
                 if self.serverOnly {
                     let remoteHead = remoteSave?.receipt.checkpoint
-                    if remoteHead != self.independentServerHead && remoteHead != self.head?.payload.checkpoint && self.snapshotTask == nil {
-                        throw BoundNakamaRunService.Failure.conflict
+                    switch requestedHeads.disposition(remoteHead, currentConfirmed: self.independentServerHead,
+                        currentPending: self.head?.payload.checkpoint) {
+                    case .accept: break
+                    case .retry: self.serverPollAt = self.now; return
+                    case .conflict: throw BoundNakamaRunService.Failure.conflict
                     }
                 } else { self.independentServerHead = remoteSave?.receipt.checkpoint }
                 if let head = self.head, remoteSave?.receipt.checkpoint == head.payload.checkpoint,
@@ -1577,7 +1624,12 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                     }
                 }
                 try self.store.acknowledgeSharedEvents(gameID:identity.gameID,acknowledgement:.init(run:identity.run,receiver:identity.partner,cursor:state.peerCursor(identity.partner)))
-                if let package, self.manifest?.requiresInitialHistorySync != true { self.uploadSnapshotInBackground(package) }
+                // Select after the await: the request's old candidate may have
+                // been sealed and superseded by a newer local checkpoint.
+                if self.manifest?.requiresInitialHistorySync != true,
+                   let package = BoundServerHistoryHeadFence.pendingUpload(head: self.head, uploaded: self.serverUploaded) {
+                    self.uploadSnapshotInBackground(package)
+                }
             } catch {
                 // Local bytes and the outbox already exist. A failed request
                 // only schedules another background attempt.
@@ -1598,7 +1650,8 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
               session.owner == package.payload.manifest.identity.owner else { return }
         if serverOnly {
             do {
-                guard try BoundServerDisconnectSave.pendingEvents(in: package, verifiedCursor: sharedServerCursor).isEmpty else { return }
+                guard try BoundServerDisconnectSave.pendingEvents(in: package, verifiedCursor: sharedServerCursor)
+                    .allSatisfy(\.requiresNativeCheckpoint) else { return }
             } catch { failServerSession("The shared event journal could not be verified."); return }
         }
         let operation = UUID(); snapshotOperation = operation
@@ -1609,6 +1662,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
             guard let self else { return }
             defer { if self.snapshotOperation == operation { self.snapshotTask = nil } }
             do {
+                var committedAcquisitions: [BoundMultiplayerSharedEvent.ID] = []
                 if self.independentServerHead != package.payload.checkpoint {
                     if serverManaged {
                         _ = try await uploader.configureSaves(session: session)
@@ -1619,6 +1673,12 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                               confirmed.saves[session.owner.uuidString.lowercased()]?.receipt == package.receipt else {
                             throw BoundNakamaRunService.Failure.conflict
                         }
+                        let acquisitions = try BoundServerDisconnectSave.pendingEvents(in: package, verifiedCursor: .init())
+                            .filter(\.requiresNativeCheckpoint)
+                        guard acquisitions.allSatisfy({ confirmed.serverCursor.contains($0.id) }) else {
+                            throw BoundNakamaRunService.Failure.unavailable
+                        }
+                        committedAcquisitions = acquisitions.map(\.id)
                     } else {
                         _ = try await self.snapshotServer.uploadIndependent(package,expectedHead:expected,session:session,authorize:{ [leaseClient = self.leaseClient] in
                             _ = try await leaseClient.independentAuthority(runID:package.payload.manifest.identity.run,session:session)
@@ -1638,6 +1698,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                 }
                 guard !Task.isCancelled, self.snapshotOperation == operation,
                       self.identity?.run == package.payload.manifest.identity.run else { return }
+                for id in committedAcquisitions { self.sharedServerCursor.insert(id) }
                 self.serverUploaded = package.payload.checkpoint
                 self.independentServerHead = package.payload.checkpoint
                 if self.serverOnly { self.host.status = .complete; self.host.message = "Saved to server." }
@@ -2508,7 +2569,7 @@ extension BoundROMMultiplayerCoordinator {
         if !serverStarting { serverMenuBusy = false; needsServerMenu = false }
     }
     @discardableResult
-    private func captureServerCheckpoint(final: Bool = false) throws -> BoundMultiplayerSavePackage? {
+    private func captureServerCheckpoint(final: Bool = false, criticalAcquisition: Bool = false) throws -> BoundMultiplayerSavePackage? {
         guard serverOnly, let manifest, let game, let core, workingStateAuthorized, !serverStarting,
               !manifest.requiresInitialHistorySync, core.state == .paused || core.state == .running else { throw BoundMultiplayerSaveStore.Failure.incomplete }
         // Native activities preserve their exact execution separately. Making a
@@ -2530,7 +2591,7 @@ extension BoundROMMultiplayerCoordinator {
         // Recheck the cartridge's completed frame after stopping the core: a
         // dialogue can begin between the timer's observation and this pause.
         // Explicit suspension still captures the full interrupted state.
-        if !final, !sharing.nativeBattle.blocksAutoSave, !sharing.cooperativeDoubles.blocksAutoSave,
+        if !final, !criticalAcquisition, !sharing.nativeBattle.blocksAutoSave, !sharing.cooperativeDoubles.blocksAutoSave,
            BoundROMRequest.decode(BoundVBABattleBridge.romMultiplayerSnapshot())?.permitsAutomaticFieldSave != true {
             serverCapturePending = true
             if wasRunning, UIApplication.shared.applicationState == .active { core.resume() }

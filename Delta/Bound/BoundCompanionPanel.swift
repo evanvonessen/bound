@@ -808,19 +808,21 @@ final class BoundCompanionCoordinator {
         BoundFullAppGameplayQA.current?.configureTrade(core:core)
         #endif
         core.updateHandler = { [weak tap, weak reader, weak battle, weak soul, weak world, weak dialogue, weak romService, weak cooperative, weak cooperativeCable] core in
-            previous?(core)
-            romService?.receive(core)
-            world?.receive(core)
-            dialogue?.receive(core)
-            reader?.receive(core)
-            tap?.receive(core)
-            cooperativeCable?.receive(core)
-            cooperative?.receive(core)
-            soul?.receive(core)
-            battle?.receive(core)
-            #if DEBUG && targetEnvironment(simulator)
-            tradeQA?.receive(core)
-            #endif
+            BoundFrameMemory.perform {
+                previous?(core)
+                romService?.receive(core)
+                world?.receive(core)
+                dialogue?.receive(core)
+                reader?.receive(core)
+                tap?.receive(core)
+                cooperativeCable?.receive(core)
+                cooperative?.receive(core)
+                soul?.receive(core)
+                battle?.receive(core)
+                #if DEBUG && targetEnvironment(simulator)
+                tradeQA?.receive(core)
+                #endif
+            }
         }
         #if DEBUG && targetEnvironment(simulator)
         if usesLocalPairedFixture { sharing.start() }

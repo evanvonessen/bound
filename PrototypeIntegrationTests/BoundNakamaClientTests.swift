@@ -434,6 +434,7 @@ final class BoundNakamaClientTests: XCTestCase {
         let captured = await fixture.requests()
         let body = try independentBody(XCTUnwrap(captured.first))
         XCTAssertEqual(body["action"] as? String, "events")
+        XCTAssertEqual(body["checkpointAcquisitions"] as? Bool, true)
         XCTAssertEqual((body["after"] as? [String: Int])?[owner.uuidString.lowercased()], 50)
         let sent = try XCTUnwrap(body["events"] as? [[String: Any]])
         XCTAssertEqual(sent.count, 16)
