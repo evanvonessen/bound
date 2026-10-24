@@ -28,6 +28,16 @@ this file. SDWebImage request/cache call sites and DeltaCore elapsed-time
 scheduling are unchanged. Refreshed only this integration hash; SDK declarations
 and dependency pins remain unchanged. This is not a broader privacy attestation.
 
+Rechecked 2026-10-23 against `95e8db11c22fe9187a477a03dd9ce54ac65d48b7`
+for the completed Clear Saves launch lock and retry controls. Compared
+`GameCollectionViewController.swift` with the integration recorded by
+`d321b054596fbd7702ff49f62dc3523957dfda0b`: the additions track the selected game,
+check save-clear state/revision, close matching previews, and update confirmation,
+progress, and retry actions. They add no direct required-reason API access in
+this integration file and do not change its SDWebImage request/cache call sites.
+Refreshed only its source hash. SDK declarations and dependency pins remain
+unchanged; this is not a broader privacy or data-collection attestation.
+
 ## SDWebImage 3.8.3
 
 The committed CocoaPods lock identifies 3.8.3. The required-reason API scan of `Pods/SDWebImage/SDWebImage` found file-metadata access in `SDImageCache.m`:
