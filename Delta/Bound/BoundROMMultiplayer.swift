@@ -173,6 +173,23 @@ struct BoundROMHostState: Equatable, Sendable {
     }
 }
 
+/// Remember only successful durable exports. Disk failures must leave the fact
+/// eligible for retry; changing runs or restoring storage discards this cache.
+struct BoundROMSoulExportCache {
+    private var run: UUID?
+    private var copied: Set<String> = []
+    mutating func reset() { run = nil; copied.removeAll() }
+    mutating func export(_ events: [BoundSoulSharedEvent], run: UUID,
+                         persist: (String, Data) throws -> Void) throws {
+        if self.run != run { self.run = run; copied.removeAll() }
+        for event in events where event.run == run && !copied.contains(event.id) {
+            guard let payload = event.payload else { throw BoundMultiplayerSaveStore.Failure.corrupt }
+            try persist(event.id, payload)
+            copied.insert(event.id)
+        }
+    }
+}
+
 /// Keeps the ROM's refresh acknowledgement pending until the server result is
 /// committed. A request cancelled by account/lifecycle changes cannot repaint a
 /// newer ROM menu, and a failed fetch leaves the last confirmed rows available.
@@ -489,6 +506,8 @@ final class BoundROMMultiplayerCoordinator {
     private var sharedServerCursor = BoundMultiplayerSharedCursor()
     private var lastWorldDigest: String?
     private var worldProjectionRun: UUID?
+    private var soulExportCache = BoundROMSoulExportCache()
+    private var journalReplayNeeded = true
     private var independentServerHead: UUID?
     private var manualSavePending = false
     private var serverCaptureAuthorized: UUID?
@@ -571,6 +590,7 @@ final class BoundROMMultiplayerCoordinator {
         peerHelloAt = -.infinity; peerFence = 0; reconciled = false; peerCommitted = false
         setupRetryAt = 0; setupNetworkError = nil; setupAction = nil
         sharedServerCursor = .init(); independentServerHead = nil; lastWorldDigest = nil; worldProjectionRun = nil
+        soulExportCache.reset(); journalReplayNeeded = true
         setup = nil; manifest = nil; incoming = nil; finishedRun = nil; backgroundEndedIdentity = nil; cancelledSetup = nil; checkpoint = nil; localReceipt = nil; partnerReceipt = nil
         checkpointStartedAt = nil; checkpointCaptureAttempted = false; checkpointCancellation = .init(); cancelledCheckpoints = [:]; checkpointRetryAt = 0
         endingRun = false; newGameAfterEnd = false; recoveredNewGameChoice = false
@@ -1174,12 +1194,12 @@ final class BoundROMMultiplayerCoordinator {
     private func journalSoulEvents() throws {
         guard let game, let identity, manifest != nil else { return }
         if manifest?.requiresInitialHistorySync != true {
-            for event in sharing.soulLink.probe.sharedEvents() where event.run == identity.run {
-                guard let payload = event.payload else { throw BoundMultiplayerSaveStore.Failure.corrupt }
-                _ = try store.appendSharedEvent(gameID:game.identifier,kind:"soul",payload:payload,idempotencyKey:event.id)
+            try soulExportCache.export(sharing.soulLink.probe.sharedEvents(),run:identity.run) { key, payload in
+                _ = try store.appendSharedEvent(gameID:game.identifier,kind:"soul",payload:payload,idempotencyKey:key)
             }
         }
         if worldProjectionRun != identity.run {
+            journalReplayNeeded = true
             sharing.sharedWorld.resetSharedWorldRecords()
             for event in try store.journal(gameID:game.identifier).events where event.id.origin == identity.partner && event.kind == "world" {
                 if let state = try? JSONDecoder().decode(BoundWorldState.self,from:event.payload), state.valid {
@@ -1188,6 +1208,7 @@ final class BoundROMMultiplayerCoordinator {
             }
             worldProjectionRun = identity.run
         }
+        guard journalReplayNeeded else { return }
         for event in try store.pendingSharedEventsToApply(gameID:game.identifier) {
             if event.kind == "world", event.run == identity.run,
                let state = try? JSONDecoder().decode(BoundWorldState.self,from:event.payload), state.valid {
@@ -1204,6 +1225,7 @@ final class BoundROMMultiplayerCoordinator {
             try sharing.soulLink.probe.receiveSharedEvent(event.payload,localOrigin:event.id.origin == identity.owner)
             try store.markSharedEventApplied(gameID:game.identifier,eventID:event.id)
         }
+        journalReplayNeeded = false
     }
     static func mergingSetup(_ current: Setup, remote: BoundMultiplayerRunIdentity, epoch: UInt64, committed: Bool) throws -> Setup {
         var current = current
@@ -1299,6 +1321,7 @@ final class BoundROMMultiplayerCoordinator {
                 if let head = self.head, remoteSave?.receipt.checkpoint == head.payload.checkpoint,
                    remoteSave?.receipt != head.receipt { throw BoundMultiplayerSaveStore.Failure.conflict }
                 for event in state.events {
+                    self.journalReplayNeeded = true
                     _ = try self.store.receiveAuthoritativeSharedEvent(gameID:identity.gameID,event:event)
                 }
                 if self.manifest?.requiresInitialHistorySync == true {
@@ -1538,6 +1561,7 @@ final class BoundROMMultiplayerCoordinator {
         probe.publish(host)
     }
     private func selectStoredSnapshot() throws {
+        soulExportCache.reset(); journalReplayNeeded = true
         pendingSnapshot = nil; validatedSnapshot = false; didRestore = false
         guard let manifest, let game else { return }
         if let suspension = try store.validateSuspensionForResume(gameID:game.identifier,
@@ -1566,6 +1590,7 @@ final class BoundROMMultiplayerCoordinator {
                 owner:identity.owner,romSHA256:BoundWorldContract.romSHA256,gameSaveURL:game.gameSaveURL)
             guard let snapshot = restored.payload.files["checkpoint.state"]?.data else { throw BoundMultiplayerSaveStore.Failure.incomplete }
             manifest = try store.validateForResume(gameID:game.identifier,owner:identity.owner,romSHA256:BoundWorldContract.romSHA256)
+            soulExportCache.reset(); journalReplayNeeded = true
             head = restored; checkpoint = nil; localReceipt = nil; partnerReceipt = nil; peerCommitted = false
             pendingSnapshot = snapshot; didRestore = false; validatedSnapshot = true
             baselineHistory = restored.payload.sharedEventDigest; anchorBaselineValidated = false; historyJournal = nil

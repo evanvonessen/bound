@@ -105,7 +105,7 @@ physical two-phone playthrough, phone performance parity or live hostile-network
 behavior. The multiplayer variant remains separate from byte-identical baseline
 ROM reconstruction.
 
-October 24, 2026 validation passed 190 focused iOS Simulator tests, including an
+October 24, 2026 validation passed 191 focused iOS Simulator tests, including an
 actual native HP/save-state test that enforces known losses before restored play
 resumes. The authenticated Nakama service passed 68 tests; the self-hosted API
 passed 51 tests, with two database-dependent checks skipped. The unsigned Release

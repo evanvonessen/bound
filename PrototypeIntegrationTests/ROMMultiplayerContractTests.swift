@@ -2,6 +2,29 @@ import XCTest
 @testable import Delta
 
 final class ROMMultiplayerContractTests: XCTestCase {
+    func testSoulOutboxCopiesEachFactOnceAndRetriesAnInterruptedDurableWrite() throws {
+        let run = UUID(), otherRun = UUID()
+        let catchEvent = BoundSoulSharedEvent(run: run, kind: .acquired, slot: "area:1")
+        let death = BoundSoulSharedEvent(run: run, kind: .death, slot: "area:1")
+        let foreign = BoundSoulSharedEvent(run: otherRun, kind: .death, slot: "area:1")
+        var cache = BoundROMSoulExportCache(), persisted: [String] = []
+        XCTAssertThrowsError(try cache.export([catchEvent, death], run: run) { id, _ in
+            if id == death.id { throw CocoaError(.fileWriteUnknown) }
+            persisted.append(id)
+        })
+        XCTAssertEqual(persisted, [catchEvent.id])
+        try cache.export([catchEvent, death, foreign], run: run) { id, _ in persisted.append(id) }
+        XCTAssertEqual(persisted, [catchEvent.id, death.id], "Only the failed write retries; a different run cannot enter this outbox")
+        for _ in 0..<100 {
+            try cache.export([catchEvent, death], run: run) { _, _ in XCTFail("Unchanged gameplay ticks must perform no outbox I/O") }
+        }
+        cache.reset()
+        try cache.export([catchEvent, death], run: run) { id, _ in persisted.append(id) }
+        XCTAssertEqual(persisted.count, 4, "Reopening or replacing storage revalidates every durable fact")
+        try cache.export([foreign], run: otherRun) { id, _ in persisted.append(id) }
+        XCTAssertEqual(persisted.last, foreign.id)
+    }
+
     func testNativePairSelectionCarriesItsOwnNewGameAuthorizationAfterHostRestart() {
         func request(_ command: BoundROMCommand, flags: UInt32) -> BoundROMRequest {
             .init(sequence: 2, command: command, friendIndex: 0, argument: 0, identifier: UUID(),
