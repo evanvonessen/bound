@@ -245,7 +245,7 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
     }
 
     private func identity() throws -> AppCloudSession {
-        let bytes = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
+        let bytes = try JSONSerialization.data(withJSONObject: BoundAccountTestFixture.claims(owner: owner, expiry: Date().timeIntervalSince1970 + 3600))
         let payload = bytes.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         return try AppCloudSession(owner: owner, key: "fixture-public-key", token: "fixture.\(payload).signature")
     }

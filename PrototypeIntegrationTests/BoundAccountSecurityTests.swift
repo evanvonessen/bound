@@ -558,7 +558,7 @@ final class BoundAccountSecurityTests: XCTestCase {
         return try JSONSerialization.data(withJSONObject: ["access_token": token(owner: identity, aal: aal), "refresh_token": refresh, "user": user])
     }
     private func token(owner: UUID? = nil, aal: String, expiry: TimeInterval = 1_900_000_000) throws -> String {
-        let data = try JSONSerialization.data(withJSONObject: ["sub": (owner ?? self.owner).uuidString.lowercased(), "exp": expiry, "aal": aal], options: [.sortedKeys])
+        let data = try JSONSerialization.data(withJSONObject: BoundAccountTestFixture.claims(owner: owner ?? self.owner, expiry: expiry, aal: aal), options: [.sortedKeys])
         return "fixture." + data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "") + ".signature"
     }
 }

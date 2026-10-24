@@ -4,6 +4,23 @@ import SwiftUI
 import Security
 @testable import Delta
 
+enum BoundAccountTestFixture {
+    static func claims(owner: UUID, expiry: TimeInterval, aal: String? = nil, email: String? = nil) throws -> [String: Any] {
+        let backend = try BoundBackendConfiguration.current()
+        var details: [String: Any] = [:]
+        if let aal { details["aal"] = aal }
+        if let email { details["email"] = email }
+        if backend.kind == .selfhost {
+            return ["uid": owner.uuidString.lowercased(), "exp": expiry, "vrs": details]
+        }
+        return details.merging(["sub": owner.uuidString.lowercased(), "exp": expiry]) { _, value in value }
+    }
+
+    static func apiKey(_ key: String) throws -> String? {
+        try BoundBackendConfiguration.current().kind == .legacy ? key : nil
+    }
+}
+
 /// Synthetic credentials exercise the native Keychain and account lifecycle; no backend is contacted.
 @MainActor
 final class AccountPersistenceIntegrationTests: XCTestCase {
@@ -204,7 +221,7 @@ final class AccountPersistenceIntegrationTests: XCTestCase {
     }
 
     private func token(owner: UUID, expires: TimeInterval = 3600) throws -> String {
-        let bytes = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "email": "fixture@example.invalid", "exp": Date().timeIntervalSince1970 + expires])
+        let bytes = try JSONSerialization.data(withJSONObject: BoundAccountTestFixture.claims(owner: owner, expiry: Date().timeIntervalSince1970 + expires, email: "fixture@example.invalid"))
         let payload = bytes.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         return "fixture." + payload + ".signature"
     }
@@ -289,7 +306,7 @@ private final class OnboardingObservation: SharingCancellation {
 final class FriendModerationIntegrationTests: XCTestCase {
     private func identity() throws -> AppCloudSession {
         let owner = UUID()
-        let claims = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
+        let claims = try JSONSerialization.data(withJSONObject: BoundAccountTestFixture.claims(owner: owner, expiry: Date().timeIntervalSince1970 + 3600))
         let payload = claims.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         return try AppCloudSession(owner: owner, key: "synthetic-public", token: "fixture.\(payload).signature")
     }
@@ -1273,7 +1290,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
 
     private func accountFixture() throws -> BoundFriendAccount {
         let owner = UUID()
-        let claims = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
+        let claims = try JSONSerialization.data(withJSONObject: BoundAccountTestFixture.claims(owner: owner, expiry: Date().timeIntervalSince1970 + 3600))
         let payload = claims.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         let saved = BoundSavedSession(origin: BoundFriendAccount.origin, owner: owner,
             accessToken: "fixture.\(payload).signature", refreshToken: "synthetic-account-friends-refresh")
@@ -1286,7 +1303,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
     }
 
     private func makeIdentity(owner: UUID) throws -> AppCloudSession {
-        let claims = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
+        let claims = try JSONSerialization.data(withJSONObject: BoundAccountTestFixture.claims(owner: owner, expiry: Date().timeIntervalSince1970 + 3600))
         let payload = claims.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         return try AppCloudSession(owner: owner, key: "fixture-public-key", token: "fixture.\(payload).signature")
     }
@@ -1389,7 +1406,7 @@ private actor RunLeaseClientFixture {
 @MainActor
 final class RunLeaseClientTests: XCTestCase {
     private func identity(owner: UUID) throws -> AppCloudSession {
-        let data = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
+        let data = try JSONSerialization.data(withJSONObject: BoundAccountTestFixture.claims(owner: owner, expiry: Date().timeIntervalSince1970 + 3600))
         let payload = data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         return try AppCloudSession(owner: owner, key: "fixture", token: "fixture." + payload + ".signature")
     }

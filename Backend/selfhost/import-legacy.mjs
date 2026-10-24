@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createGrantCipher } from '../dropbox-link/handler.mjs';
+import { ArchiveImportError, archiveTables, deletedRowOwners, deletionDestinationTables, insertLegacyRow,
+  legacyRowOwners, legacyRowPlan, legacyRowSelection, prepareArchiveImport } from './import-archive.mjs';
 
 // Deliberately separate from startup/migrate.mjs. The source never receives DDL,
 // writes, functions belonging to the application, or authentication requests.
@@ -18,13 +20,17 @@ const quote = name => '"' + name.replaceAll('"', '""') + '"';
 const relation = name => name.split('.').map(quote).join('.');
 const tableListSQL = `SELECT n.nspname AS schema,c.relname AS name,c.relkind AS kind
   FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-  WHERE c.relkind IN ('r','p','v') AND (n.nspname IN ('public','auth','storage')
+  WHERE c.relkind IN ('r','p','v') AND (n.nspname IN ('public','auth','storage',$1)
     OR n.nspname ~ '^(bound_|cup[0-9])')
     AND NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass
       AND d.objid=c.oid AND d.deptype='e') ORDER BY n.nspname,c.relname`;
-const columnsSQL = `SELECT column_name AS name,udt_name AS type,is_nullable AS nullable,
-  column_default AS default,is_identity AS identity,is_generated AS generated
-  FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2 ORDER BY ordinal_position`;
+const columnsSQL = `SELECT c.column_name AS name,c.udt_name AS type,c.udt_schema AS type_schema,
+  pg_catalog.format_type(a.atttypid,a.atttypmod) AS sql_type,c.is_nullable AS nullable,
+  c.column_default AS default,c.is_identity AS identity,c.is_generated AS generated
+  FROM information_schema.columns c JOIN pg_namespace n ON n.nspname=c.table_schema
+  JOIN pg_class t ON t.relnamespace=n.oid AND t.relname=c.table_name
+  JOIN pg_attribute a ON a.attrelid=t.oid AND a.attname=c.column_name
+  WHERE c.table_schema=$1 AND c.table_name=$2 ORDER BY c.ordinal_position`;
 const fail = code => { throw new ImportError(code); };
 export class ImportError extends Error {
   constructor(code) { super(code); this.code = code; }
@@ -35,7 +41,7 @@ const rowCount = result => {
   return count;
 };
 const count = async (client, table, where = '') => rowCount(await client.query(`SELECT count(*)::text AS count FROM ${relation(table)}${where}`));
-const catalog = async client => new Map((await client.query(tableListSQL)).rows.map(row => [row.schema + '.' + row.name, row.kind]));
+const catalog = async (client, authSchema = 'auth') => new Map((await client.query(tableListSQL, [authSchema])).rows.map(row => [row.schema + '.' + row.name, row.kind]));
 const columns = async (client, table) => (await client.query(columnsSQL, table.split('.'))).rows;
 
 export function compatibleColumns(source, destination) {
@@ -91,72 +97,106 @@ export async function importLegacy({ source, destination, apply = false, resetDr
   const report = { mode: apply ? 'apply' : 'check', dropbox_links: resetDropboxLinks ? 'reset' : 'preserve',
     source: {}, destination: {}, blockers: [], imported: false };
   const block = (code, table, amount) => report.blockers.push({ code, ...(table ? { table } : {}), ...(amount !== undefined ? { count: amount } : {}) });
-  let sourceOpen = false, destinationOpen = false;
+  const sourceAuthSchema = env.SOURCE_AUTH_SCHEMA ?? 'auth';
+  if (!/^[a-z_][a-z0-9_]{0,62}$/.test(sourceAuthSchema) || ['public', 'storage'].includes(sourceAuthSchema)) fail('invalid_source_auth_schema');
+  const exportedAuth = sourceAuthSchema !== 'auth', sourceUsers = sourceAuthSchema + '.users';
+  let sourceOpen = false, destinationOpen = false, archive, commitStarted = false;
   try {
     await source.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY'); sourceOpen = true;
     await source.query("SET LOCAL statement_timeout='60s'");
     await source.query("SET LOCAL row_security=off");
+    await source.query("SET LOCAL DateStyle='ISO, YMD'");
+    await source.query("SET LOCAL bytea_output='hex'");
+    await source.query("SET LOCAL extra_float_digits=3");
     await source.query("SET LOCAL idle_in_transaction_session_timeout='10min'");
     const sourceSettings = await source.query('SHOW transaction_read_only');
     if (sourceSettings.rows[0]?.transaction_read_only !== 'on') fail('source_not_read_only');
     await destination.query(apply ? 'BEGIN ISOLATION LEVEL READ COMMITTED READ WRITE' : 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY'); destinationOpen = true;
     await destination.query("SET LOCAL lock_timeout='5s'");
     await destination.query("SET LOCAL statement_timeout='60s'");
-    const src = await catalog(source), dst = await catalog(destination);
-    if (!['r', 'p'].includes(src.get('auth.users')) || dst.get('auth.users') !== 'v'
+    const src = await catalog(source, sourceAuthSchema), dst = await catalog(destination);
+    if (!(exportedAuth ? src.get(sourceUsers) === 'v' : ['r', 'p'].includes(src.get(sourceUsers))) || dst.get('auth.users') !== 'v'
         || dst.get('public.users') !== 'r' || dst.get('public.storage') !== 'r') fail('expected_source_and_destination_schemas');
+    if (exportedAuth && !['users', 'identities', 'mfa_factors'].every(name => src.get(sourceAuthSchema + '.' + name) === 'v')) fail('source_auth_export_incomplete');
     const nativeColumns = new Map((await columns(destination, 'public.users')).map(c => [c.name, c.type]));
     for (const [name, type] of [['id', 'uuid'], ['password', 'bytea'], ['metadata', 'jsonb'], ['custom_id', 'varchar']]) {
       if (nativeColumns.get(name) !== type) fail('unsupported_nakama_schema');
     }
     if (apply) {
-      const locked = ['public.users', 'public.storage', ...tables.filter(table => dst.has(table))];
+      const locked = ['public.users', 'public.storage', ...[...tables, ...archiveTables, ...deletionDestinationTables].filter(table => dst.has(table))];
       await destination.query(`LOCK TABLE ${locked.map(relation).join(',')} IN ACCESS EXCLUSIVE MODE`);
     }
     report.destination.accounts = await count(destination, 'public.users', ` WHERE id<>'${SYSTEM}'`);
     report.destination.storage = await count(destination, 'public.storage');
     if (report.destination.accounts || report.destination.storage) block('destination_not_empty');
-    for (const table of tables.filter(table => dst.has(table))) {
+    for (const table of [...tables, ...archiveTables, ...deletionDestinationTables].filter(table => dst.has(table))) {
       const amount = await count(destination, table);
       report.destination[table] = amount;
       if (amount) block('destination_not_empty', table, amount);
     }
-    report.source.accounts = await count(source, 'auth.users');
+    report.source.accounts = await count(source, sourceUsers);
     // Column support is checked before accessing credentials. OAuth, MFA, passkeys,
     // pending account changes and unknown business rows cannot silently disappear.
-    const sourceColumns = new Set((await columns(source, 'auth.users')).map(c => c.name));
+    const sourceColumns = new Set((await columns(source, sourceUsers)).map(c => c.name));
     for (const name of ['id', 'email', 'encrypted_password', 'email_confirmed_at', 'raw_user_meta_data',
       'raw_app_meta_data', 'created_at', 'updated_at', 'deleted_at', 'is_anonymous', 'banned_until', 'last_sign_in_at']) {
       if (!sourceColumns.has(name)) fail('unsupported_source_auth_schema');
     }
     const unsupportedWhere = " WHERE deleted_at IS NOT NULL OR is_anonymous OR email IS NULL OR octet_length(btrim(email)) NOT BETWEEN 10 AND 254 OR email !~ '^[^[:space:]@]+@[^[:space:]@]+\\.[^[:space:]@]+$' OR encrypted_password IS NULL OR encrypted_password !~ '^\\$2[aby]\\$(0[4-9]|[12][0-9]|3[01])\\$[./A-Za-z0-9]{53}$' OR banned_until>now()"
       + (sourceColumns.has('is_sso_user') ? ' OR is_sso_user' : '') + (sourceColumns.has('phone') ? " OR coalesce(phone,'')<>''" : '');
-    const unsupported = await count(source, 'auth.users', unsupportedWhere);
+    const unsupported = await count(source, sourceUsers, unsupportedWhere);
     if (unsupported) block('unsupported_accounts_or_password_hashes', 'auth.users', unsupported);
-    const duplicates = rowCount(await source.query("SELECT count(*)::text AS count FROM (SELECT lower(btrim(email)) FROM auth.users GROUP BY lower(btrim(email)) HAVING count(*)>1) duplicates"));
+    const duplicates = rowCount(await source.query(`SELECT count(*)::text AS count FROM (SELECT lower(btrim(email)) FROM ${relation(sourceUsers)} GROUP BY lower(btrim(email)) HAVING count(*)>1) duplicates`));
     if (duplicates) block('duplicate_normalized_emails', 'auth.users', duplicates);
     if (sourceColumns.has('email_change')) {
-      const pending = await count(source, 'auth.users', " WHERE coalesce(email_change,'')<>''");
+      const pending = await count(source, sourceUsers, " WHERE coalesce(email_change,'')<>''");
       if (pending) block('pending_email_changes', 'auth.users', pending);
     }
-    for (const table of ['auth.mfa_factors', ...[...src.keys()].filter(name => name.startsWith('auth.') && /passkey|webauthn/i.test(name))]) {
+    const securityTables = new Set(['mfa_factors', ...[...src.keys()]
+      .filter(name => (name.startsWith('auth.') || name.startsWith(sourceAuthSchema + '.')) && /passkey|webauthn/i.test(name))
+      .map(name => name.slice(name.indexOf('.') + 1))]);
+    for (const name of securityTables) {
+      const table = sourceAuthSchema + '.' + name;
+      if (exportedAuth && src.get(table) !== 'v') { block('source_auth_export_incomplete', 'auth.' + name); continue; }
       if (!src.has(table)) continue;
-      const amount = await count(source, table); report.source[table] = amount;
-      if (amount) block('security_credentials_require_reviewed_transfer', table, amount);
+      const amount = await count(source, table); report.source['auth.' + name] = amount;
+      if (amount) block('security_credentials_require_reviewed_transfer', 'auth.' + name, amount);
     }
-    if (src.has('auth.identities')) {
-      const amount = await count(source, 'auth.identities', " WHERE provider<>'email'");
+    if (src.has(sourceAuthSchema + '.identities')) {
+      const amount = await count(source, sourceAuthSchema + '.identities', " WHERE provider<>'email'");
       report.source.external_identities = amount;
       if (amount) block('external_identities_not_supported', 'auth.identities', amount);
     }
-    const copying = [];
+    const copying = [], preserving = [];
     for (const [table, kind] of src) {
+      if (exportedAuth && table.startsWith(sourceAuthSchema + '.')) continue;
       if (!['r', 'p'].includes(kind)) continue;
       const business = /^(bound_|cup[0-9])/.test(table) || table.startsWith('public.');
       if (!business && table !== 'storage.objects') continue;
       const amount = await count(source, table); report.source[table] = amount;
+      if (Object.hasOwn(legacyRowOwners, table) || Object.hasOwn(deletedRowOwners, table)) {
+        const required = Object.hasOwn(deletedRowOwners, table)
+          ? ['bound_archive_private.catalog', 'bound_archive_private.deleted_records', 'cup117_private.deletions'] : archiveTables.slice(0, 2);
+        if (!required.every(name => dst.has(name))) {
+          if (amount) block('destination_archive_schema_missing', table, amount);
+          continue;
+        }
+        try { preserving.push(await legacyRowPlan(source, table, await columns(source, table), amount, sourceUsers)); }
+        catch (error) { block(error instanceof ArchiveImportError ? error.code : 'legacy_schema_check_failed', table, amount); }
+        continue;
+      }
+      if (table === 'storage.objects') {
+        if (amount) {
+          if (!dst.has('bound_archive_private.objects')) block('destination_archive_schema_missing', table, amount);
+          else {
+            try { archive = await prepareArchiveImport({ source, manifestPath: env.LEGACY_ARCHIVE_MANIFEST, objectCount: amount, env, sourceUsers }); }
+            catch (error) { block(error instanceof ArchiveImportError ? error.code : 'archive_verification_failed', table, amount); }
+          }
+        }
+        continue;
+      }
       if (!tables.includes(table)) {
-        if (amount) block(table === 'storage.objects' ? 'storage_files_require_transfer' : 'unmapped_business_data', table, amount);
+        if (amount) block('unmapped_business_data', table, amount);
         continue;
       }
       if (!dst.has(table)) { if (amount) block('destination_table_missing', table, amount); continue; }
@@ -167,6 +207,9 @@ export async function importLegacy({ source, destination, apply = false, resetDr
     const grants = copying.some(entry => entry.table === 'bound_dropbox_private.links')
       ? await count(source, 'bound_dropbox_private.links', ' WHERE ciphertext IS NOT NULL') : 0;
     report.source.dropbox_encrypted_grants = grants;
+    report.archive = { rows: preserving.filter(entry => !entry.deleted).reduce((total, entry) => total + entry.count, 0),
+      deleted_records: preserving.filter(entry => entry.deleted).reduce((total, entry) => total + entry.count, 0),
+      objects: archive?.count ?? 0, bytes: archive?.bytes ?? 0 };
     let cipher;
     if (grants && !resetDropboxLinks) {
       try { cipher = createGrantCipher(env.DROPBOX_ENCRYPTION_KEY, env.DROPBOX_APP_KEY); }
@@ -180,7 +223,8 @@ export async function importLegacy({ source, destination, apply = false, resetDr
     const accountFields = ['id', 'email', 'encrypted_password', 'email_confirmed_at', 'raw_user_meta_data',
       'raw_app_meta_data', 'created_at', 'updated_at', 'deleted_at', 'is_anonymous', 'banned_until', 'last_sign_in_at',
       ...['is_sso_user', 'phone'].filter(name => sourceColumns.has(name))].map(quote).join(',');
-    for await (const row of rows(source, 'auth.users', accountFields)) {
+    const accountMetadata = [];
+    for await (const row of rows(source, sourceUsers, accountFields)) {
       let name;
       if (src.has('bound_social_private.profiles')) {
         name = (await source.query('SELECT username FROM bound_social_private.profiles WHERE owner=$1', [row.id])).rows[0]?.username;
@@ -192,8 +236,9 @@ export async function importLegacy({ source, destination, apply = false, resetDr
       const legacy = JSON.stringify(user.legacy);
       await destination.query(`INSERT INTO public.storage(collection,key,user_id,value,version,read,write)
         VALUES('bound_legacy_accounts_v1','source',$1,$2::jsonb,$3,0,0)`, [user.id, legacy, createHash('md5').update(legacy).digest('hex')]);
-      // The signup trigger runs on INSERT only; original profile rows arrive below.
-      await destination.query('UPDATE public.users SET metadata=$1::jsonb WHERE id=$2', [JSON.stringify(user.metadata), user.id]);
+      // Metadata updates run the signup trigger. Restore original profile rows
+      // first so that trigger cannot fabricate a conflicting fresh profile.
+      accountMetadata.push([JSON.stringify(user.metadata), user.id]);
     }
     copying.sort((a, b) => tables.indexOf(a.table) - tables.indexOf(b.table));
     for (const entry of copying) {
@@ -224,19 +269,40 @@ export async function importLegacy({ source, destination, apply = false, resetDr
         await destination.query(`ALTER SEQUENCE ${relation(sequence)} RESTART WITH ${next}`);
       }
     }
+    for (const entry of preserving) {
+      await destination.query(`INSERT INTO bound_archive_private.catalog(source_table,source_columns,source_primary_key)
+        VALUES($1,$2::jsonb,$3::jsonb)`, [entry.table, JSON.stringify(entry.fields), JSON.stringify(entry.primaryKey)]);
+      for await (const row of rows(source, entry.table, legacyRowSelection(entry))) {
+        if (!uuid.test(row.owner ?? '') || typeof row.source_key !== 'string' || typeof row.source_row !== 'string') fail('invalid_legacy_row');
+        await insertLegacyRow(destination, entry, row);
+      }
+      const target = entry.deleted ? 'bound_archive_private.deleted_records' : 'bound_archive_private.records';
+      const copied = rowCount(await destination.query(`SELECT count(*)::text AS count FROM ${target} WHERE source_table=$1`, [entry.table]));
+      if (copied !== entry.count) fail('legacy_import_count_mismatch');
+      if (entry.deleted && entry.table === 'cup117_private.deletions'
+          && await count(destination, 'cup117_private.deletions') !== entry.count) fail('legacy_tombstone_count_mismatch');
+    }
+    if (archive) await archive.apply(destination);
+    for (const parameters of accountMetadata) {
+      await destination.query('UPDATE public.users SET metadata=$1::jsonb WHERE id=$2', parameters);
+    }
     if (await count(destination, 'public.users', ` WHERE id<>'${SYSTEM}'`) !== report.source.accounts) fail('account_count_mismatch');
+    commitStarted = true;
     await destination.query('COMMIT'); destinationOpen = false; report.imported = true;
     return report;
   } finally {
     if (destinationOpen) await destination.query('ROLLBACK').catch(() => {});
     if (sourceOpen) await source.query('ROLLBACK').catch(() => {});
+    // A lost COMMIT reply is ambiguous. Preserve imported files for inspection
+    // instead of possibly deleting bytes whose manifest already committed.
+    if (archive && !commitStarted) await archive.discard();
   }
 }
 
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help')) {
-    process.stdout.write('node import-legacy.mjs [--check | --apply] [--reset-dropbox-links]\nRequired env: SOURCE_DATABASE_URL, DATABASE_URL. Default: read-only count/check report.\n--reset-dropbox-links requires Dropbox reconnection on the destination and leaves source grants untouched.\n');
+    process.stdout.write('node import-legacy.mjs [--check | --apply] [--reset-dropbox-links]\nRequired env: SOURCE_DATABASE_URL, DATABASE_URL. Optional: SOURCE_AUTH_SCHEMA, LEGACY_ARCHIVE_MANIFEST, FILE_DIRECTORY. Default: read-only count/check report.\n--reset-dropbox-links requires Dropbox reconnection on the destination and leaves source grants untouched.\n');
     return;
   }
   if (args.length !== new Set(args).size || args.some(arg => !['--check', '--apply', '--reset-dropbox-links'].includes(arg))

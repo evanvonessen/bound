@@ -1004,7 +1004,7 @@ private final class ForegroundReconnectFixture {
     var failNextTokenRequest = false
 
     func identity() throws -> AppCloudSession {
-        let claims = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
+        let claims = try JSONSerialization.data(withJSONObject: BoundAccountTestFixture.claims(owner: owner, expiry: Date().timeIntervalSince1970 + 3600))
         let payload = claims.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         return try AppCloudSession(owner: owner, key: "fixture-public-key", token: "fixture.\(payload).signature")
     }

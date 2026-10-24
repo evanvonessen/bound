@@ -25,3 +25,26 @@ test('malformed deletion JSON is rejected before database access', async () => {
   const deletion = createDeletion({ pool: { query: async () => assert.fail('unexpected database call') }, auth: {}, files: {} });
   assert.equal((await deletion.handle(request(null))).status, 400);
 });
+
+test('account deletion completes only after durable archive cleanup succeeds', async () => {
+  const statements = [], actions = [];
+  const job = { owner: identity.id, token_hash: 'receipt' };
+  let accountExists = true, archiveFails = true;
+  const client = { async query(sql) {
+    statements.push(sql);
+    if (sql.startsWith('SELECT complete')) return { rows: [{ complete: false }] };
+    if (sql.startsWith('SELECT 1 FROM public.users')) return { rows: [], rowCount: accountExists ? 1 : 0 };
+    return { rows: [] };
+  }, release() {} };
+  const deletion = createDeletion({ pool: { query: async () => ({ rows: [job] }), connect: async () => client },
+    auth: { deleteAccount: async () => { actions.push('account'); accountExists = false; } },
+    files: { purgeOwner: async () => { actions.push('temporary'); } },
+    archive: { purgeOwner: async () => { actions.push('archive'); if (archiveFails) throw Error('disk unavailable'); } } });
+  assert.equal((await deletion.handle(request({ operationToken: 'a'.repeat(64) }))).status, 202);
+  assert.deepEqual(actions, ['account', 'temporary', 'archive']);
+  assert.equal(statements.some(sql => sql.startsWith('UPDATE')), false);
+  archiveFails = false;
+  assert.equal((await deletion.handle(request({ operationToken: 'a'.repeat(64) }))).status, 200);
+  assert.equal(actions.filter(action => action === 'account').length, 1);
+  assert.ok(statements.some(sql => sql.startsWith('UPDATE cup117_private.deletion_jobs')));
+});

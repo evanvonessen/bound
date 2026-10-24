@@ -4130,6 +4130,8 @@
 				BOUND_APP_ENTITLEMENTS = Delta/Delta.entitlements;
 				CODE_SIGN_ENTITLEMENTS = "$(BOUND_APP_ENTITLEMENTS)";
 				BOUND_APNS_ENVIRONMENT = development;
+				BOUND_BACKEND_KIND = selfhost;
+				BOUND_BACKEND_URL = "https://bound.evanvonessen.com";
 				BOUND_GOOGLE_CLIENT_ID = "";
 				BOUND_GOOGLE_REVERSED_CLIENT_ID = "bound-google-unconfigured";
 				BOUND_DROPBOX_APP_KEY = qky6pxxx8ks3d2k;
@@ -4211,6 +4213,8 @@
 				BOUND_APP_ENTITLEMENTS = Delta/Delta.entitlements;
 				CODE_SIGN_ENTITLEMENTS = "$(BOUND_APP_ENTITLEMENTS)";
 				BOUND_APNS_ENVIRONMENT = production;
+				BOUND_BACKEND_KIND = selfhost;
+				BOUND_BACKEND_URL = "https://bound.evanvonessen.com";
 				BOUND_GOOGLE_CLIENT_ID = "";
 				BOUND_GOOGLE_REVERSED_CLIENT_ID = "bound-google-unconfigured";
 				BOUND_DROPBOX_APP_KEY = qky6pxxx8ks3d2k;

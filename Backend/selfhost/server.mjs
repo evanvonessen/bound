@@ -8,6 +8,7 @@ import { createNakamaClient } from './nakama.mjs';
 import { createAuth } from './auth.mjs';
 import { createServices } from './services.mjs';
 import { createFileService } from './files.mjs';
+import { createArchive } from './archive.mjs';
 import { createDeletion } from './deletion.mjs';
 import { migrate } from './migrate.mjs';
 
@@ -72,13 +73,14 @@ export async function start(env = process.env) {
   const auth = createAuth({ nakama, config });
   const services = createServices({ pool, authenticate: auth.authenticate, config });
   const files = createFileService({ pool, authenticate: auth.authenticate, rpc: services.rpc, config });
-  const deletion = createDeletion({ pool, auth, files });
+  const archive = createArchive({ pool, authenticate: auth.authenticate, rpc: services.rpc, config });
+  const deletion = createDeletion({ pool, auth, files, archive });
   const handle = async request => {
     if (new URL(request.url).pathname === '/healthz' && request.method === 'GET') {
       try { await pool.query('SELECT 1'); return new Response('{"status":"ok"}', { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }); }
       catch { return json(503, 'unavailable'); }
     }
-    return await deletion.handle(request) ?? await auth.handle(request) ?? await services.handle(request) ?? await files.handle(request) ?? json(404, 'not_found');
+    return await deletion.handle(request) ?? await auth.handle(request) ?? await services.handle(request) ?? await files.handle(request) ?? await archive.handle(request) ?? json(404, 'not_found');
   };
   const server = http.createServer({ maxHeaderSize: 16384, requestTimeout: 60000, headersTimeout: 15000 }, httpHandler({ config, handle }));
   server.maxConnections = 256;

@@ -341,11 +341,13 @@ final class BoundDropboxLiveSyncTests: XCTestCase {
     }
 
     private func savedSession(_ bytes: Data?) throws -> BoundSavedSession {
+        let backend = try BoundBackendConfiguration.current()
         guard let bytes, bytes.count <= 65536,
               let saved = try? JSONDecoder().decode(BoundSavedSession.self, from: bytes),
               saved.origin == BoundFriendAccount.origin,
               let claims = Self.claims(saved.accessToken),
-              let subject = claims["sub"] as? String, UUID(uuidString: subject) == saved.owner else { throw Failure.signInRequired }
+              let subject = claims[backend.kind == .selfhost ? "uid" : "sub"] as? String,
+              UUID(uuidString: subject) == saved.owner else { throw Failure.signInRequired }
         _ = try sessionIdentifier(saved)
         // The test must never rotate a copied refresh token behind the normal
         // app's Keychain. A recent independent UI sign-in gives ample lifetime.
@@ -362,7 +364,9 @@ final class BoundDropboxLiveSyncTests: XCTestCase {
     }
 
     private func sessionIdentifier(_ saved: BoundSavedSession) throws -> String {
-        guard let value = Self.claims(saved.accessToken)?["session_id"] as? String,
+        let backend = try BoundBackendConfiguration.current()
+        guard let claims = Self.claims(saved.accessToken),
+              let value = backend.claims(claims)["session_id"] as? String,
               UUID(uuidString: value) != nil else { throw Failure.signInRequired }
         return value
     }

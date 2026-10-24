@@ -14,9 +14,16 @@ const dropboxFields = [field('owner', 'uuid'), field('revision', 'uuid'), field(
   field('window_start', 'timestamptz'), field('requests', 'int4')];
 const dropboxRow = { owner: id, revision: '22222222-2222-4222-8222-222222222222',
   ciphertext: 'original-encrypted-grant', window_start: '2026-01-01T00:00:00.123456Z', requests: 17 };
+const legacyTable = 'cup041_v3_private.values';
+const legacyFields = [['owner', 'uuid'], ['game', 'uuid'], ['operation', 'uuid'], ['generation', 'int8'],
+  ['slot', 'int4'], ['metadata', 'jsonb'], ['position', 'int8']].map(([name, type]) =>
+  ({ ...field(name, type), type_schema: 'pg_catalog', sql_type: type, nullable: name === 'slot' ? 'YES' : 'NO' }));
+const legacyRow = { owner: id, source_key: JSON.stringify([id, id, id]), source_row: JSON.stringify({
+  owner: id, game: id, operation: id, generation: '9007199254740993', slot: null, metadata: 'null', position: '9007199254740994' }) };
 
-function fixture({ factors = 0, destinationAccounts = 0, failInsert = false, dropbox = false } = {}) {
-  const logs = { source: [], destination: [], dropboxRows: [] }, state = { inserted: 0, fetches: 0, cursor: '' };
+function fixture({ factors = 0, destinationAccounts = 0, failInsert = false, dropbox = false,
+  legacy = false, authExport = false, missingWebauthnExport = false } = {}) {
+  const logs = { source: [], destination: [], dropboxRows: [], legacyRows: [], legacyCatalog: [] }, state = { inserted: 0, fetches: 0, cursor: '' };
   const source = { async query(sql, parameters) {
     logs.source.push(sql);
     assert.ok(/^(BEGIN .*READ ONLY|SET LOCAL|SHOW |SELECT |DECLARE |FETCH |CLOSE |ROLLBACK)/.test(sql), 'source never gets writes');
@@ -24,11 +31,16 @@ function fixture({ factors = 0, destinationAccounts = 0, failInsert = false, dro
     if (sql.includes('FROM pg_class')) return { rows: [
       { schema: 'auth', name: 'users', kind: 'r' }, { schema: 'auth', name: 'mfa_factors', kind: 'r' },
       { schema: 'auth', name: 'identities', kind: 'r' },
+      ...(authExport ? [{ schema: 'auth', name: 'webauthn_credentials', kind: 'r' },
+        ...['users', 'identities', 'mfa_factors', ...(missingWebauthnExport ? [] : ['webauthn_credentials'])]
+          .map(name => ({ schema: 'bound_migration_export', name, kind: 'v' }))] : []),
+      ...(legacy ? [{ schema: 'cup041_v3_private', name: 'values', kind: 'r' }] : []),
       ...(dropbox ? [{ schema: 'bound_dropbox_private', name: 'links', kind: 'r' }] : [])] };
     if (sql.includes('FROM information_schema.columns')) return { rows: parameters[0] === 'bound_dropbox_private'
-      ? dropboxFields : Object.keys(account()).map(name => field(name)) };
+      ? dropboxFields : parameters[0] === 'cup041_v3_private' ? legacyFields : Object.keys(account()).map(name => field(name)) };
+    if (sql.includes('FROM pg_index')) return { rows: ['owner', 'game', 'operation'].map(name => ({ name })) };
     if (sql.startsWith('SELECT count')) {
-      if (sql.includes('mfa_factors')) return { rows: [{ count: String(factors) }] };
+      if (sql.includes('mfa_factors') || sql.includes('webauthn_credentials')) return { rows: [{ count: String(factors) }] };
       if (sql.includes('"links"')) return { rows: [{ count: '1' }] };
       if (sql.includes(' WHERE ') || sql.includes(' duplicates')) return { rows: [{ count: '0' }] };
       return { rows: [{ count: '1' }] };
@@ -36,6 +48,7 @@ function fixture({ factors = 0, destinationAccounts = 0, failInsert = false, dro
     if (sql.startsWith('DECLARE')) { state.cursor = sql; state.fetches = 0; }
     if (sql.startsWith('FETCH')) return { rows: state.fetches++ ? [] : [state.cursor.includes('"links"')
       ? { ...dropboxRow, ciphertext: state.cursor.includes('NULL::text AS "ciphertext"') ? null : dropboxRow.ciphertext }
+      : state.cursor.includes('"values"') ? legacyRow
       : account()] };
     return { rows: [] };
   } };
@@ -44,12 +57,15 @@ function fixture({ factors = 0, destinationAccounts = 0, failInsert = false, dro
     if (sql.includes('FROM pg_class')) return { rows: [
       { schema: 'auth', name: 'users', kind: 'v' }, { schema: 'public', name: 'users', kind: 'r' },
       { schema: 'public', name: 'storage', kind: 'r' },
+      ...(legacy ? ['catalog', 'records', 'objects'].map(name => ({ schema: 'bound_archive_private', name, kind: 'r' })) : []),
       ...(dropbox ? [{ schema: 'bound_dropbox_private', name: 'links', kind: 'r' }] : [])] };
     if (sql.includes('FROM information_schema.columns')) return { rows: parameters[0] === 'bound_dropbox_private'
       ? dropboxFields : [field('id', 'uuid'), field('password', 'bytea'), field('metadata', 'jsonb'), field('custom_id', 'varchar')] };
     if (sql.startsWith('SELECT count')) return { rows: [{ count: String(sql.includes('"users"') ? destinationAccounts + state.inserted
-      : sql.includes('"links"') ? logs.dropboxRows.length : 0) }] };
+      : sql.includes('"links"') ? logs.dropboxRows.length : sql.includes('bound_archive_private.records') ? logs.legacyRows.length : 0) }] };
     if (sql.startsWith('INSERT INTO "bound_dropbox_private"."links"')) logs.dropboxRows.push(parameters);
+    if (sql.startsWith('INSERT INTO bound_archive_private.records')) logs.legacyRows.push(parameters);
+    if (sql.startsWith('INSERT INTO bound_archive_private.catalog')) logs.legacyCatalog.push(parameters);
     if (sql.startsWith('INSERT INTO public.users')) {
       if (failInsert) throw Error('sensitive upstream row detail must not escape CLI');
       assert.equal(parameters[0], id); assert.equal(parameters[3].toString(), hash); state.inserted++;
@@ -69,6 +85,42 @@ test('projects native identity/hash unchanged and keeps user-editable metadata o
   assert.equal(value.legacy.user_metadata.bound_deleted_at, 'forged');
   assert.throws(() => projectUser({ ...account(), encrypted_password: '$argon2id$unsupported' }));
   assert.throws(() => projectUser({ ...account(), is_anonymous: true }));
+});
+
+test('legacy archive retains original keys, exact bigint text and SQL-null versus JSON-null values', async () => {
+  const f = fixture({ legacy: true });
+  const result = await importLegacy({ ...f, apply: true });
+  assert.equal(result.imported, true); assert.deepEqual(result.blockers, []);
+  assert.equal(result.archive.rows, 1);
+  assert.deepEqual(f.logs.legacyRows, [[legacyTable, legacyRow.source_key, id, legacyRow.source_row]]);
+  assert.deepEqual(JSON.parse(f.logs.legacyCatalog[0][1]), legacyFields);
+  assert.deepEqual(JSON.parse(f.logs.legacyCatalog[0][2]), ['owner', 'game', 'operation']);
+});
+
+test('explicit auth export views include every discovered WebAuthn table or block import', async () => {
+  const options = { env: { SOURCE_AUTH_SCHEMA: 'bound_migration_export' }, apply: true };
+  const missing = fixture({ authExport: true, missingWebauthnExport: true });
+  const blocked = await importLegacy({ ...missing, ...options });
+  assert.ok(blocked.blockers.some(blocker => blocker.code === 'source_auth_export_incomplete'));
+  assert.equal(blocked.imported, false);
+  assert.equal(missing.logs.destination.some(sql => sql.startsWith('INSERT')), false);
+  const complete = fixture({ authExport: true });
+  assert.equal((await importLegacy({ ...complete, ...options })).imported, true);
+  assert.ok(complete.logs.source.some(sql => sql.startsWith('DECLARE') && sql.includes('"bound_migration_export"."users"')));
+  assert.equal(complete.logs.source.some(sql => /FROM "auth"\./.test(sql)), false);
+});
+
+test('existing destination deletion tombstones block import before any account is inserted', async () => {
+  const f = fixture(), original = f.destination.query;
+  f.destination.query = async function(sql, parameters) {
+    const result = await original(sql, parameters);
+    if (sql.includes('FROM pg_class')) result.rows.push({ schema: 'cup117_private', name: 'deletions', kind: 'r' });
+    if (sql.startsWith('SELECT count') && sql.includes('"cup117_private"."deletions"')) return { rows: [{ count: '9' }] };
+    return result;
+  };
+  const result = await importLegacy({ ...f, apply: true });
+  assert.ok(result.blockers.some(blocker => blocker.code === 'destination_not_empty' && blocker.table === 'cup117_private.deletions'));
+  assert.equal(result.imported, false); assert.equal(f.logs.destination.some(sql => sql.startsWith('INSERT')), false);
 });
 
 test('rejects schema changes that would drop columns or require fabricated data', () => {
@@ -121,6 +173,9 @@ test('explicit Dropbox reset imports disconnected rows without old keys and leav
   assert.equal(owner, id); assert.equal(ciphertext, null); assert.notEqual(revision, dropboxRow.revision);
   assert.match(revision, /^[0-9a-f-]{36}$/);
   assert.equal(windowStart, dropboxRow.window_start); assert.equal(requests, dropboxRow.requests);
+  assert.ok(f.logs.destination.findIndex(sql => sql.startsWith('UPDATE public.users SET metadata'))
+    > f.logs.destination.findIndex(sql => sql.startsWith('INSERT INTO "bound_dropbox_private"."links"')),
+  'signup-triggering metadata updates wait until original business/profile rows are restored');
   assert.ok(f.logs.source.some(sql => sql.startsWith('DECLARE') && sql.includes('NULL::text AS "ciphertext"')));
   assert.equal(dropboxRow.ciphertext, 'original-encrypted-grant');
   assert.equal(f.logs.source.at(-1), 'ROLLBACK'); assert.equal(f.logs.destination.at(-1), 'COMMIT');

@@ -6,8 +6,9 @@ Agora remains the Friends video provider; Resend sends account email; existing
 Dropbox sync keeps transferring ROMs and saves directly to Dropbox.
 
 **Keep the existing backend running until Evan explicitly requests retirement.**
-The default Bound build still uses that backend. Nothing here deletes, pauses,
-reconfigures or automatically switches away from it. The Heroic runtime repository
+New Bound builds use `https://bound.evanvonessen.com`. Existing installed builds
+continue using the original backend; changes made there after the migration
+snapshot are not automatically copied. Nothing here deletes or pauses it. The Heroic runtime repository
 is not used or changed. No backups or paid add-ons are configured.
 
 ## Server and cost
@@ -76,9 +77,11 @@ password recovery and TOTP use private Nakama storage. Provider credentials and
 MFA secrets remain server-side. Signing out, refreshing, changing passwords and
 deleting accounts revoke the appropriate server sessions.
 
-The file service is for temporary transfers, not durable save storage. It uses
+The file service handles temporary transfers. It uses
 live Nakama identity and current room membership, limits file sizes/disk use, and
-removes expired transfers. Dropbox remains the save destination.
+removes expired transfers. Dropbox remains the save destination. Historical
+Supabase files and save-history rows are retained in a separate private archive,
+without expiry, and removed when their owner deletes their new-backend account.
 
 After the new deployment, imported data and integrations are verified, select it
 in a Bound build with:

@@ -51,7 +51,7 @@ final class BoundDropboxOAuthTests: XCTestCase {
         func remove() throws { data = nil }
     }
     private func token(_ owner: UUID) throws -> String {
-        let claims = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().addingTimeInterval(3600).timeIntervalSince1970])
+        let claims = try JSONSerialization.data(withJSONObject: BoundAccountTestFixture.claims(owner: owner, expiry: Date().addingTimeInterval(3600).timeIntervalSince1970))
         return "header." + BoundDropboxOAuthProtocol.base64URL(claims) + ".signature"
     }
     private func account(owner: UUID = UUID()) throws -> BoundFriendAccount {

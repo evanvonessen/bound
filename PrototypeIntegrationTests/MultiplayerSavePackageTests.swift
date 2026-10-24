@@ -602,7 +602,7 @@ final class MultiplayerSavePackageTests: XCTestCase {
         let package = try complete(remote, next, remoteSave)
         let incoming = try store.stageDownload(gameID: identity.gameID, version: "next-run").appendingPathComponent("complete.boundrun")
         try Data(contentsOf: remote.cloudURL(gameID: identity.gameID)).write(to: incoming)
-        let payload = try JSONSerialization.data(withJSONObject: ["sub": identity.owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
+        let payload = try JSONSerialization.data(withJSONObject: BoundAccountTestFixture.claims(owner: identity.owner, expiry: Date().timeIntervalSince1970 + 3600))
             .base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         let session = try AppCloudSession(owner: identity.owner, key: "fixture", token: "fixture." + payload + ".signature")
         let device = store.deviceID, owner = identity.owner, run = next.run

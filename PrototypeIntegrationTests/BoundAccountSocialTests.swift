@@ -139,8 +139,8 @@ final class BoundAccountSocialTests: XCTestCase {
         XCTAssertEqual(requests.map { $0.url?.path }, ["/rest/v1/rpc/bound_username_available", "/auth/v1/signup"])
         let availability = try XCTUnwrap(requests.first)
         XCTAssertEqual(availability.httpMethod, "POST")
-        XCTAssertEqual(availability.value(forHTTPHeaderField: "apikey"), "fixture-publishable-key")
-        XCTAssertNil(availability.value(forHTTPHeaderField: "Authorization"), "Availability is public and uses only the publishable key")
+        XCTAssertEqual(availability.value(forHTTPHeaderField: "apikey"), try BoundAccountTestFixture.apiKey("fixture-publishable-key"))
+        XCTAssertNil(availability.value(forHTTPHeaderField: "Authorization"), "Availability does not require a signed-in account")
         XCTAssertEqual(try JSONSerialization.jsonObject(with: XCTUnwrap(availability.httpBody)) as? [String: String], ["username": "River"])
 
         let signup = try XCTUnwrap(requests.last)
@@ -293,7 +293,7 @@ final class BoundAccountSocialTests: XCTestCase {
         XCTAssertEqual(request.url?.path, "/auth/v1/recover")
         let query = try XCTUnwrap(URLComponents(url: XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems)
         XCTAssertEqual(query, [URLQueryItem(name: "redirect_to", value: "https://evanvonessen.github.io/bound/reset-password.html")])
-        XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), "fixture-publishable-key")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), try BoundAccountTestFixture.apiKey("fixture-publishable-key"))
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
         XCTAssertEqual(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: String],
@@ -430,7 +430,7 @@ final class BoundAccountSocialTests: XCTestCase {
         XCTAssertEqual(requests.count, 1)
         XCTAssertEqual(request.url?.path, "/auth/v1/recover")
         XCTAssertEqual(request.httpMethod, "POST")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), "fixture-publishable-key")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), try BoundAccountTestFixture.apiKey("fixture-publishable-key"))
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"), "Recovery does not send the saved session token")
         XCTAssertEqual(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: String],
                        ["email": "verified@example.invalid"])
@@ -940,7 +940,7 @@ final class BoundAccountSocialTests: XCTestCase {
         XCTAssertEqual(request.url?.absoluteString, BoundFriendAccount.origin + "/functions/v1/change-account-email")
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), "fixture-publishable-key")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "apikey"), try BoundAccountTestFixture.apiKey("fixture-publishable-key"))
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer " + token)
         XCTAssertEqual(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: String],
                        ["newEmail": "new@example.invalid", "currentPassword": password],
@@ -1394,11 +1394,7 @@ final class BoundAccountSocialTests: XCTestCase {
     }
 
     private func accessToken(owner: UUID, expiry: TimeInterval = 1_900_000_000, email: String? = nil) throws -> String {
-        var claims: [String: Any] = [
-            "sub": owner.uuidString.lowercased(),
-            "exp": expiry,
-        ]
-        if let email { claims["email"] = email }
+        let claims = try BoundAccountTestFixture.claims(owner: owner, expiry: expiry, email: email)
         let data = try JSONSerialization.data(withJSONObject: claims)
         let payload = data.base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
