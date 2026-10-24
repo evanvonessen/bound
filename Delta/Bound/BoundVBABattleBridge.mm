@@ -21,6 +21,7 @@ using GameSaveWriter=void (*)(id,SEL,NSURL *);
 struct GameSaveFence {
     std::mutex lock;
     std::set<std::string> blockedPaths;
+    std::set<std::string> cooperativeBlockedPaths;
     GameSaveWriter writer=nullptr;
 };
 GameSaveFence &gameSaveFence() { static GameSaveFence value; return value; }
@@ -34,7 +35,7 @@ void fencedGameSave(id bridge,SEL selector,NSURL *url) {
     auto &fence=gameSaveFence();
     std::lock_guard<std::mutex> lock(fence.lock);
     const auto path=canonicalSavePath(url);
-    if(path.empty()||fence.blockedPaths.count(path)||!fence.writer) return;
+    if(path.empty()||fence.blockedPaths.count(path)||fence.cooperativeBlockedPaths.count(path)||!fence.writer) return;
     fence.writer(bridge,selector,url);
 }
 bool installGameSaveFence() {
@@ -67,10 +68,10 @@ Hook hooks[]={
     {0x56854,BoundBattleTradeReturnAddress}
 };
 uint8_t *verifiedROM=nullptr,*patchedROM=nullptr;
-bool armed=false,installed=false,failed=false,syntheticHeld=false;
+bool armed=false,installed=false,failed=false,syntheticHeld=false,cooperativeCable=false;
 unsigned role=0,preparationFrames=0,tradeCount=0;
 bool tradeMode=false,tradeOpened=false,tradeScene=false;
-bool usesHook(size_t index) { return tradeMode ? index>=2 : index<9; }
+bool usesHook(size_t index) { return cooperativeCable ? index>=2&&index<9 : tradeMode ? index>=2 : index<9; }
 uint16_t networkRead=0;
 uint32_t word(const uint8_t *p) { return p[0]|uint32_t(p[1])<<8|uint32_t(p[2])<<16|uint32_t(p[3])<<24; }
 unsigned half(const uint8_t *p) { return p[0]|unsigned(p[1])<<8; }
@@ -92,7 +93,7 @@ NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
 #include "SoulLink/bridge.inc"
 #include "NativeBattle/invitation.inc"
 namespace {
-uint8_t *romUIOwner=nullptr;
+uint8_t *romUIOwner=nullptr,*cooperativeROM=nullptr;
 bool ownsROMUI() { return romUIOwner==rom && gameDescriptorPresent(rom); }
 }
 #if DEBUG && TARGET_OS_SIMULATOR
@@ -115,6 +116,82 @@ static uint8_t soulQAScriptBackup[128];
     if(path.empty()||!installGameSaveFence()) return NO;
     if(allowed) fence.blockedPaths.erase(path);
     else fence.blockedPaths.insert(path);
+    return YES;
+}
++ (BOOL)setCooperativeGameSaveAllowed:(BOOL)allowed forURL:(NSURL *)url {
+    auto &fence=gameSaveFence();std::lock_guard<std::mutex> lock(fence.lock);
+    const auto path=canonicalSavePath(url);if(path.empty()||!installGameSaveFence()) return NO;
+    if(allowed) fence.cooperativeBlockedPaths.erase(path);else fence.cooperativeBlockedPaths.insert(path);
+    return YES;
+}
+// All new cooperative gameplay access is through the generated cartridge ABI.
++ (BOOL)installCooperativeDoubles {
+#ifdef BOUND_GAME_COOPERATIVE_DOUBLES
+    if(cooperativeROM==rom&&rom&&gameDescriptorPresent(rom)) return YES;
+    if(!rom||!workRAM||!internalRAM||!gameDescriptorPresent(rom)
+       ||GameCooperativeSnapshotAddress<0x02000000
+       ||GameCooperativeSnapshotAddress+GameCooperativeSnapshotSize>0x02040000
+       ||GameCooperativeHostOffset+GameCooperativeHostSize>0x2000000) return NO;
+    uint8_t digest[32];soulOriginalHash(digest);
+    const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
+        0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
+    if(memcmp(digest,expected,32)) return NO;
+    cooperativeROM=rom;return YES;
+#else
+    return NO;
+#endif
+}
++ (NSData *)cooperativeSnapshot {
+#ifdef BOUND_GAME_COOPERATIVE_DOUBLES
+    if(cooperativeROM!=rom||!rom||!workRAM||!gameDescriptorPresent(rom)) return [NSData data];
+    const auto *p=workRAM+GameCooperativeSnapshotAddress-0x02000000;
+    const uint32_t sequence=word(p+8);
+    if(word(p)!=0x31474443||half(p+4)!=1||half(p+6)!=0||!sequence||(sequence&1)) return [NSData data];
+    NSData *copy=[NSData dataWithBytes:p length:GameCooperativeSnapshotSize];
+    return word(p+8)==sequence ? copy:[NSData data];
+#else
+    return [NSData data];
+#endif
+}
++ (void)setCooperativeHost:(NSData *)data {
+#ifdef BOUND_GAME_COOPERATIVE_DOUBLES
+    if(cooperativeROM!=rom||!rom||data.length!=GameCooperativeHostSize) return;
+    const auto *p=static_cast<const uint8_t *>(data.bytes);const uint32_t sequence=word(p+8);
+    if(word(p)!=0x31484443||half(p+4)!=1||half(p+6)!=0||!sequence||(sequence&1)
+       ||(word(p+12)&~15u)||word(p+16)>180||word(p+20)>1) return;
+    auto *out=rom+GameCooperativeHostOffset;put32(out+8,sequence-1);
+    memcpy(out,p,8);memcpy(out+12,p+12,GameCooperativeHostSize-12);put32(out+8,sequence);
+#endif
+}
++ (BOOL)prepareCooperativeCableForPlayer:(NSUInteger)player {
+    if(cooperativeCable&&installed&&patchedROM==rom) return player==role;
+    if(player>1||armed||installed||![self installCooperativeDoubles]) return NO;
+    for(size_t i=0;i<RegionSize;i++) if(rom[RegionOffset+i]!=0xFF) return NO;
+    role=unsigned(player);cooperativeCable=true;tradeMode=false;failed=false;
+    memcpy(rom+RegionOffset,BoundBattleEntryCode,sizeof(BoundBattleEntryCode));rom[0x1FFFBF0]=uint8_t(role);
+    for(size_t i=2;i<9;i++) {
+        auto &hook=hooks[i];memcpy(hook.original,rom+hook.offset,8);
+        hook.thunk[0]=0;hook.thunk[1]=0x48;hook.thunk[2]=0;hook.thunk[3]=0x47;
+        put32(hook.thunk+4,hook.target);memcpy(rom+hook.offset,hook.thunk,8);
+    }
+    memset(internalRAM+Mailbox,0,1176);put32(internalRAM+Mailbox,MailboxMagic);networkRead=0;
+    patchedROM=rom;armed=installed=true;return YES;
+}
++ (void)closeCooperativeCable {
+    if(cooperativeCable) [self close];
+}
++ (NSData *)cooperativeCableSnapshot {
+    if(!cooperativeCable||!mailboxReady()) return [NSData data];
+    return [NSData dataWithBytes:internalRAM+Mailbox length:1176];
+}
++ (BOOL)resumeCooperativeCableForPlayer:(NSUInteger)player {
+    if(player>1||!rom||!internalRAM) return NO;
+    // The paused state includes the native ring transaction. Reinstall only
+    // existing transport hooks, then replay records not consumed by the peer.
+    NSData *saved=[NSData dataWithBytes:internalRAM+Mailbox length:1176];
+    if(word(static_cast<const uint8_t *>(saved.bytes))!=MailboxMagic) return NO;
+    if(![self prepareCooperativeCableForPlayer:player]) return NO;
+    memcpy(internalRAM+Mailbox,saved.bytes,1176);networkRead=half(internalRAM+Mailbox+4);
     return YES;
 }
 + (BOOL)installROMMultiplayer {
@@ -425,7 +502,7 @@ static uint8_t soulQAScriptBackup[128];
     const bool returned=installed&&(callback==BoundBattleIdleAddress || (tradeMode&&tradeOpened&&overworld()));
     // Battle setup retains its verified linkup tap. Trade setup and all native
     // trade confirmations are strictly user-driven.
-    if(installed&&!tradeMode&&!battle&&!returned&&!failed) {
+    if(installed&&!cooperativeCable&&!tradeMode&&!battle&&!returned&&!failed) {
         ++preparationFrames;
         if(preparationFrames%12==1) { [[GBAEmulatorBridge sharedBridge] activateInput:1 value:1 playerIndex:0]; syntheticHeld=true; }
         else if(preparationFrames%12==3) { [[GBAEmulatorBridge sharedBridge] deactivateInput:1 playerIndex:0]; syntheticHeld=false; }
@@ -448,7 +525,7 @@ static uint8_t soulQAScriptBackup[128];
             memset(rom+RegionOffset,0xFF,RegionSize);
         }
     }
-    armed=installed=failed=syntheticHeld=tradeMode=tradeOpened=tradeScene=false;
+    armed=installed=failed=syntheticHeld=tradeMode=tradeOpened=tradeScene=cooperativeCable=false;
     tradeCount=0; patchedROM=verifiedROM=nullptr;
 }
 
@@ -556,6 +633,10 @@ static uint8_t soulQAScriptBackup[128];
 }
 
 #if DEBUG && TARGET_OS_SIMULATOR
++ (BOOL)qaCooperativeGameSaveBlocked:(NSURL *)url {
+    auto &fence=gameSaveFence();std::lock_guard<std::mutex> lock(fence.lock);
+    return fence.cooperativeBlockedPaths.count(canonicalSavePath(url))!=0;
+}
 + (NSData *)qaSharedWorldImmutableDigest {
     if(!rom) return [NSData data];
     NSMutableData *copy=[NSMutableData dataWithBytes:rom length:0x2000000];

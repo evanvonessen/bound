@@ -142,7 +142,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         guard connected, let gameplay, data.count <= 1024,
               data.starts(with: BoundFriendInteractionPacket.prefix) || data.starts(with: BoundBattleControlPacket.prefix)
                 || BoundSoulPacket.recognizes(data) || data.starts(with: BoundWorldPacket.prefix)
-                || data.starts(with: Data("BRM1".utf8)),
+                || data.starts(with: Data("BRM1".utf8)) || data.starts(with: BoundCooperativePacket.prefix),
               client.sendInteraction(data, targetOwnerID: gameplay.peerOwnerID) else { return false }
         acceptedSends += 1; return true
     }

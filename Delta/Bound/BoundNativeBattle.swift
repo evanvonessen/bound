@@ -56,7 +56,7 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
     private var frame:UInt64=0
     private var incoming=Data()
     private var blockAdmission=BoundNativeBlockAdmission()
-    private var peerGeneration:UInt16=0,receivedGeneration:UInt16=0,announcedGeneration:UInt16=0
+    private var peerGeneration:UInt16=0,receivedGeneration:UInt16=0,announcedGeneration:UInt16=0,lastAcceptedSequence:UInt16=0
     private var pendingAcknowledgement=Data(),lastAcknowledgement=Data()
     private var sender:(@Sendable (Data)->Bool)?
     private var senderEnabled=false
@@ -68,7 +68,7 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         coreID=core.map(ObjectIdentifier.init); entryPlayer=nil; peerDisconnectPending=false; latest=nil; frame=0
         incoming.removeAll(); blockAdmission=BoundNativeBlockAdmission(); sender=nil; senderEnabled=false; failed=nil; lastSent=0
-        peerGeneration=0; receivedGeneration=0; announcedGeneration=0
+        peerGeneration=0; receivedGeneration=0; announcedGeneration=0;lastAcceptedSequence=0
         pendingAcknowledgement.removeAll(); lastAcknowledgement.removeAll()
         lastReceived=ProcessInfo.processInfo.systemUptime; sentCommands=0; receivedCommands=0
     }
@@ -87,19 +87,50 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
             if let ack=BoundNativeCommandPacket.acknowledgement(packet) { pendingAcknowledgement=ack }
             if !commands.isEmpty {
                 if generation<receivedGeneration { return true }
-                if generation>receivedGeneration { blockAdmission=BoundNativeBlockAdmission(); receivedGeneration=generation }
-                guard blockAdmission.accept(commands) else { return false }
                 guard let sequence=BoundNativeCommandPacket.sequence(packet) else { return false }
-                for start in stride(from:0,to:commands.count,by:16) {
+                if generation>receivedGeneration { blockAdmission=BoundNativeBlockAdmission(); receivedGeneration=generation;lastAcceptedSequence=sequence &- 1 }
+                var first=0
+                while first<commands.count,Int16(bitPattern:(sequence &+ UInt16(first/16)) &- lastAcceptedSequence)<=0 { first+=16 }
+                let fresh=commands.subdata(in:first..<commands.count)
+                guard blockAdmission.accept(fresh) else { return false }
+                for start in stride(from:first,to:commands.count,by:16) {
                     incoming.append(UInt8(truncatingIfNeeded:generation)); incoming.append(UInt8(generation>>8))
                     let index=sequence &+ UInt16(start/16)
                     incoming.append(UInt8(truncatingIfNeeded:index)); incoming.append(UInt8(index>>8))
-                    incoming.append(commands.subdata(in:start..<start+16))
+                    incoming.append(commands.subdata(in:start..<start+16));lastAcceptedSequence=index
                 }
-                receivedCommands+=commands.count/16
+                receivedCommands+=(commands.count-first)/16
             }
         }
         lastReceived=ProcessInfo.processInfo.systemUptime; return true
+    }
+    private struct RecoveryState:Codable {
+        let incoming:Data
+        let remaining:Int
+        let peerGeneration:UInt16
+        let receivedGeneration:UInt16
+        let lastAcceptedSequence:UInt16
+        let pendingAcknowledgement:Data
+    }
+    /// Captured after the core and network wire are fenced. Native mailbox and
+    /// host continuation admission are one recovery transaction.
+    func recoveryData()->Data {
+        lock.lock();defer { lock.unlock() }
+        return (try? JSONEncoder().encode(RecoveryState(incoming:incoming,remaining:blockAdmission.recoveryRemaining,
+            peerGeneration:peerGeneration,receivedGeneration:receivedGeneration,lastAcceptedSequence:lastAcceptedSequence,
+            pendingAcknowledgement:pendingAcknowledgement))) ?? Data()
+    }
+    func restoreRecoveryData(_ bytes:Data)->Bool {
+        guard bytes.count<=32768,let value=try? JSONDecoder().decode(RecoveryState.self,from:bytes),
+              value.incoming.count<=10240,value.incoming.count%20==0,
+              [0,4].contains(value.pendingAcknowledgement.count),
+              let admission=BoundNativeBlockAdmission(recoveryRemaining:value.remaining) else { return false }
+        lock.lock();defer { lock.unlock() }
+        incoming=value.incoming;blockAdmission=admission;peerGeneration=value.peerGeneration
+        receivedGeneration=value.receivedGeneration;lastAcceptedSequence=value.lastAcceptedSequence
+        pendingAcknowledgement=value.pendingAcknowledgement;announcedGeneration=0;lastAcknowledgement=Data()
+        lastReceived=ProcessInfo.processInfo.systemUptime
+        return true
     }
     var networkAge:TimeInterval { lock.lock(); defer { lock.unlock() }; return ProcessInfo.processInfo.systemUptime-lastReceived }
     var diagnostics:String { lock.lock(); defer { lock.unlock() }; return "sentCommands=\(sentCommands) receivedCommands=\(receivedCommands) pending=\(incoming.count/20)" }

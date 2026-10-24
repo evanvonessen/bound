@@ -741,6 +741,7 @@ final class BoundCompanionCoordinator {
         defer { refreshMultiplayerServices() }
         sharing.nativeBattle.bind(core: core, gameID: gameID, interactions: sharing.interactions)
         sharing.soulLink.bind(core: core, gameID: gameID)
+        sharing.cooperativeDoubles.bind(core:core,gameID:gameID,soul:sharing.soulLink.probe)
         romMultiplayer.bind(core: core, game: owner?.game as? Game)
         romMultiplayer.watch = { [weak self, weak owner] in
             guard let self, let owner, owner.presentedViewController == nil else { return }
@@ -776,18 +777,20 @@ final class BoundCompanionCoordinator {
         guard let core else { boundCore = nil; state.emulationDetails = nil; return }
         state.emulationDetails = BoundEmulationDetails(packageName: core.deltaCore.name, packageIdentifier: core.deltaCore.identifier, packageVersion: core.deltaCore.version)
         boundCore = core
-        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe, soul = sharing.soulLink.probe, world = sharing.sharedWorld.probe, dialogue = friendInteractionPanel?.probe, romService = romMultiplayer.probe
+        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe, soul = sharing.soulLink.probe, world = sharing.sharedWorld.probe, dialogue = friendInteractionPanel?.probe, romService = romMultiplayer.probe, cooperative = sharing.cooperativeDoubles.probe, cooperativeCable = sharing.cooperativeDoubles.cable
         #if DEBUG && targetEnvironment(simulator)
         let tradeQA = BoundFullAppGameplayQA.current?.tradeProbe
         BoundFullAppGameplayQA.current?.configureTrade(core:core)
         #endif
-        core.updateHandler = { [weak tap, weak reader, weak battle, weak soul, weak world, weak dialogue, weak romService] core in
+        core.updateHandler = { [weak tap, weak reader, weak battle, weak soul, weak world, weak dialogue, weak romService, weak cooperative, weak cooperativeCable] core in
             previous?(core)
             romService?.receive(core)
             world?.receive(core)
             dialogue?.receive(core)
             reader?.receive(core)
             tap?.receive(core)
+            cooperativeCable?.receive(core)
+            cooperative?.receive(core)
             soul?.receive(core)
             battle?.receive(core)
             #if DEBUG && targetEnvironment(simulator)
