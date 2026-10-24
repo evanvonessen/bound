@@ -1701,7 +1701,7 @@ struct BoundCompanionPanel: View {
                     ZStack {
                         Color.black
                         BoundRemoteCanvas(view: sharing.remoteView).opacity(sharing.remoteVisible || state.displaysFixtureVideo ? 1 : 0)
-                        if !sharing.remoteVisible && !state.displaysFixtureVideo { Text(sharing.active ? "Waiting for friend" : "Connect a friend").foregroundStyle(.white).font(.callout) }
+                        if !sharing.remoteVisible && !state.displaysFixtureVideo { Text(sharing.active ? "Waiting for friend" : sharing.connectionRequested ? "Retrying connection…" : "Connect a friend").foregroundStyle(.white).font(.callout) }
                     }.accessibilityIdentifier("bound.friend-screen")
                     }
                 } else if shows(.notes) {

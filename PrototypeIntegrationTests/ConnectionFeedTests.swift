@@ -147,14 +147,44 @@ final class ConnectionFeedTests: XCTestCase {
         let feed = BoundConnectionFeed()
         feed.beginConnection(); feed.recovering()
         for _ in 0..<20 { feed.beginConnection(resuming: true); feed.recovering() }
-        XCTAssertEqual(feed.entries.map(\.kind), [.reconnecting, .connectionUnavailable, .connecting])
+        XCTAssertEqual(feed.entries.map(\.kind), [.retrying, .connectionUnavailable, .connecting])
         feed.connected()
-        XCTAssertEqual(feed.entries.first?.kind, .reconnected)
+        XCTAssertEqual(feed.entries.first?.kind, .connected, "A failed first authorization never established a connection")
         for kind in BoundConnectionFeed.Kind.allCases {
             XCTAssertFalse(kind.title.isEmpty)
             XCTAssertFalse(kind.symbolName.isEmpty)
             XCTAssertLessThan(kind.title.count, 40)
         }
+    }
+
+    func testClearAndBackgroundPreserveRecoveryHistoryButNewRoomResetsIt() {
+        let feed = BoundConnectionFeed()
+        feed.beginConnection(); feed.backgrounded(); feed.foregrounded(); feed.connected()
+        XCTAssertEqual(feed.entries.first?.kind, .connected,
+            "Backgrounding an unfinished first join does not make its eventual success a reconnection")
+        feed.clear(); feed.recovering(); feed.connected()
+        XCTAssertEqual(feed.entries.map(\.kind), [.reconnected, .reconnecting, .connectionLost])
+        feed.disconnect(.sessionChanged)
+        feed.beginConnection(); feed.recovering(); feed.connected()
+        XCTAssertEqual(Array(feed.entries.prefix(4)).map(\.kind), [.connected, .retrying, .connectionUnavailable, .connecting],
+            "A new room has its own first connection even while older history remains visible")
+    }
+
+    func testOldTransportCallbacksCannotChangeRestartedSessionOrItsFeed() {
+        let feed = BoundConnectionFeed(), transport = ConnectionFeedTransport()
+        let session = FriendSharingSession(configuration: configuration(), transport: transport,
+            authenticatedMode: false, connectionFeed: feed)
+        defer { session.stop() }
+        session.start(); transport.callback?(.remoteJoined)
+        let oldCallback = transport.callback
+        session.stop(reason: .manual); session.start(); transport.callback?(.remoteJoined)
+        let entries = feed.entries
+        for event: FriendSharingEvent in [.remoteGone, .reconnecting, .rejoined, .joined, .failed(.init(.connectionLost))] {
+            oldCallback?(event)
+        }
+        XCTAssertEqual(feed.entries, entries)
+        XCTAssertTrue(session.active); XCTAssertTrue(session.joined); XCTAssertTrue(session.peerConnected)
+        XCTAssertFalse(session.reconnecting)
     }
 
     func testForegroundMenuSuspensionDoesNotClaimTheAppWasBackgrounded() {

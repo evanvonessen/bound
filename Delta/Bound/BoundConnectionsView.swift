@@ -76,7 +76,7 @@ struct BoundConnectionsView: View {
     private func color(for kind: BoundConnectionFeed.Kind) -> Color {
         switch kind {
         case .connected, .reconnected, .friendJoined, .friendReconnected: .green
-        case .connecting, .reconnecting, .connectionLost, .friendConnectionLost, .connectionUnavailable: .orange
+        case .connecting, .retrying, .reconnecting, .connectionLost, .friendConnectionLost, .connectionUnavailable: .orange
         default: .secondary
         }
     }

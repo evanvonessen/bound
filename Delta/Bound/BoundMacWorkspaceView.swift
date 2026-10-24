@@ -196,7 +196,7 @@ struct BoundMacWorkspaceView: View {
                     Button("Show Friend Gameplay") { state.macFriendVisible = true }
                         .accessibilityIdentifier("bound.mac-show-friend")
                 } else if !sharing.remoteVisible && !state.displaysFixtureVideo {
-                    Text(sharing.active ? "Waiting for friend" : "Connect a friend")
+                    Text(sharing.active ? "Waiting for friend" : sharing.connectionRequested ? "Retrying connection…" : "Connect a friend")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                         .allowsHitTesting(false)
                 }
@@ -209,7 +209,7 @@ struct BoundMacWorkspaceView: View {
             .accessibilityIdentifier("bound.friend-screen")
             if state.macFriendVisible {
                 Button(action: toggleFriendConnection) {
-                    Text(sharing.active || sharing.joined ? "Disconnect" : "Connect")
+                    Text(sharing.connectionRequested ? "Disconnect" : "Connect")
                         .font(.system(size: 12, weight: .semibold))
                         .frame(maxWidth: .infinity).frame(height: 32)
                         .background(accent, in: RoundedRectangle(cornerRadius: 6))
@@ -221,7 +221,7 @@ struct BoundMacWorkspaceView: View {
     }
 
     func toggleFriendConnection() {
-        if sharing.active || sharing.joined { onboarding.disconnect() }
+        if sharing.connectionRequested { onboarding.disconnect() }
         else { showFriends() }
     }
 

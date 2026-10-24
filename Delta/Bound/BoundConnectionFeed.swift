@@ -6,7 +6,7 @@ import Combine
 @MainActor
 final class BoundConnectionFeed: ObservableObject {
     enum Kind: String, CaseIterable {
-        case connecting, connected, connectionLost, reconnecting, reconnected
+        case connecting, connected, connectionLost, retrying, reconnecting, reconnected
         case friendJoined, friendConnectionLost, friendReconnected, friendDisconnected
         case disconnected, manuallyDisconnected, sessionChanged, connectionUnavailable
         case backgrounded, foregrounded, suspended, resumed
@@ -16,6 +16,7 @@ final class BoundConnectionFeed: ObservableObject {
             case .connecting: return "Connecting"
             case .connected: return "Connected"
             case .connectionLost: return "Connection lost"
+            case .retrying: return "Retrying connection"
             case .reconnecting: return "Reconnecting"
             case .reconnected: return "Reconnected"
             case .friendJoined: return "Friend joined"
@@ -34,7 +35,7 @@ final class BoundConnectionFeed: ObservableObject {
         }
         var symbolName: String {
             switch self {
-            case .connecting, .reconnecting: return "arrow.triangle.2.circlepath"
+            case .connecting, .retrying, .reconnecting: return "arrow.triangle.2.circlepath"
             case .connected, .reconnected: return "wifi"
             case .friendJoined, .friendReconnected: return "person.fill.checkmark"
             case .friendConnectionLost, .friendDisconnected: return "person.fill.xmark"
@@ -59,6 +60,7 @@ final class BoundConnectionFeed: ObservableObject {
     private let now: () -> Date
     private let capacity: Int
     private var phase: Phase = .idle
+    private var hasConnected = false
     private var friend: FriendState = .absent
     private var recordedWithdrawal = false
     private var lastWithdrawalEpoch: UUID?
@@ -78,12 +80,13 @@ final class BoundConnectionFeed: ObservableObject {
     func beginConnection(resuming: Bool = false) {
         guard phase != .connected, phase != .connecting, phase != .reconnecting else { return }
         phase = resuming ? .reconnecting : .connecting
-        record(resuming ? .reconnecting : .connecting)
+        record(resuming ? (hasConnected ? .reconnecting : .retrying) : .connecting)
     }
 
     func connected() {
         guard phase != .connected else { return }
-        let recovered = phase == .reconnecting
+        let recovered = hasConnected
+        hasConnected = true
         phase = .connected
         record(recovered ? .reconnected : .connected)
     }
@@ -94,7 +97,7 @@ final class BoundConnectionFeed: ObservableObject {
         else if phase == .connecting { record(.connectionUnavailable) }
         if friend == .present { friend = .interrupted }
         phase = .reconnecting
-        record(.reconnecting)
+        record(hasConnected ? .reconnecting : .retrying)
     }
 
     func friendJoined() {
@@ -136,6 +139,7 @@ final class BoundConnectionFeed: ObservableObject {
     func disconnect(_ reason: DisconnectReason) {
         guard phase != .idle, phase != .stopped else { return }
         phase = .stopped
+        hasConnected = false
         friend = .absent
         recordedWithdrawal = false; lastWithdrawalEpoch = nil
         switch reason {

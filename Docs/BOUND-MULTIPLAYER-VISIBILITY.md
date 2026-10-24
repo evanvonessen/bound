@@ -17,6 +17,11 @@ is no per-frame work, polling, file writing or extra network request. The feed
 uses fixed labels and retains no tokens, addresses or raw remote errors. It is
 available without enabling experimental multiplayer and does not activate it.
 
+First-connection retries are labeled separately from recovery after an actual
+join. Clearing the feed preserves this distinction; changing rooms resets it.
+The Mac Disconnect action remains available during retry backoff and cancels
+the retained connection request rather than opening Friends.
+
 Validation covers repeated/stale callbacks, peer withdrawal followed by roster
 loss, background and menu suspension, bounded history, saved view choices and
 controller routing. Hosted view checks exercise live updates, clearing and

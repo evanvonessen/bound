@@ -884,7 +884,11 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         try await assertExplicitDisconnectSurvivesRestoration(useMacSidebar: true)
     }
 
-    private func assertExplicitDisconnectSurvivesRestoration(useMacSidebar: Bool) async throws {
+    func testMacSidebarCanCancelAutomaticReconnectDuringRetryDelay() async throws {
+        try await assertExplicitDisconnectSurvivesRestoration(useMacSidebar: true, duringRetry: true)
+    }
+
+    private func assertExplicitDisconnectSurvivesRestoration(useMacSidebar: Bool, duringRetry: Bool = false) async throws {
         let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
         BoundMultiplayerFeatures.setEnabled(true)
         defer {
@@ -913,10 +917,16 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
             gameID: "mac-disconnect-fixture", gameTitle: "Fixture", editingChanged: { _ in },
             textEditingChanged: { _ in }, currentSave: { _ in throw BoundRRDexSave.ImportError.currentGameUnavailable },
             showLibrary: {}, showMenu: {}, showFriends: { friendsOpened += 1 }, showSettings: {})
+        if duringRetry {
+            transport.emit(.failed(.init(.connectionLost)))
+            XCTAssertFalse(sharing.active); XCTAssertFalse(sharing.joined)
+            XCTAssertTrue(sharing.connectionRequested, "The retry delay still belongs to the selected connection")
+        }
         if useMacSidebar { workspace.toggleFriendConnection() }
         else { onboarding.disconnect() }
         XCTAssertFalse(sharing.active)
         XCTAssertFalse(sharing.joined)
+        XCTAssertFalse(sharing.connectionRequested)
         XCTAssertNil(sharing.connectedRoomID)
         XCTAssertNil(onboarding.selected)
         for _ in 0..<5 { onboarding.setMultiplayerPartner(roomID: room.roomID); observation?.fire() }
@@ -924,6 +934,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         onboarding.open(sharing: sharing, existing: { identity })
         await waitUntil { !onboarding.busy }
         await settle()
+        if duringRetry { try await Task.sleep(for: .milliseconds(1200)) }
         XCTAssertEqual(requests, 1, "Manual Stop must block background reconnection")
         XCTAssertNil(onboarding.selected, "Stopped friends have no paused/not-sharing badge")
         if useMacSidebar {
