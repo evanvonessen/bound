@@ -206,6 +206,122 @@ final class MultiplayerSavePackageTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: save), package.payload.files["game.sav"]?.data)
         XCTAssertNotNil(try store.validateForResume(gameID: identity.gameID, owner: identity.owner, romSHA256: identity.romSHA256))
     }
+    func testRestoreInterruptedBeforeJournalKeepsOriginalsAndAllowsRetry() throws {
+        let (store, identity, save) = try fixture()
+        let soul = try writeSoul(store, identity, dead: ["area:2"])
+        _ = try complete(store, identity, save)
+        let original = try Data(contentsOf: save), originalSoul = try Data(contentsOf: soul)
+        let transaction = store.directory(gameID: identity.gameID).appendingPathComponent("Restore")
+        let backups = transaction.appendingPathComponent("originals")
+        try FileManager.default.createDirectory(at: backups, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: save, to: backups.appendingPathComponent("game.sav"))
+        try FileManager.default.copyItem(at: soul, to: backups.appendingPathComponent("soul.json"))
+        let reopened = BoundMultiplayerSaveStore(root: store.root, support: store.support, deviceID: store.deviceID)
+        XCTAssertTrue(reopened.hasInterruptedRestore(gameID: identity.gameID))
+        try reopened.finishInterruptedRestore(gameID: identity.gameID, owner: identity.owner,
+            romSHA256: identity.romSHA256, gameSaveURL: save)
+        XCTAssertFalse(reopened.hasInterruptedRestore(gameID: identity.gameID))
+        XCTAssertEqual(try Data(contentsOf: save), original)
+        XCTAssertEqual(try Data(contentsOf: soul), originalSoul)
+        let preserved = try FileManager.default.contentsOfDirectory(at: store.directory(gameID: identity.gameID)
+            .appendingPathComponent("Restored Originals"), includingPropertiesForKeys: nil)
+        XCTAssertEqual(preserved.count, 1)
+        XCTAssertEqual(try Data(contentsOf: preserved[0].appendingPathComponent("originals/game.sav")), original)
+        try reopened.restore(archiveURL: store.cloudURL(gameID: identity.gameID), gameID: identity.gameID,
+            owner: identity.owner, romSHA256: identity.romSHA256, gameSaveURL: save)
+        XCTAssertNotNil(try reopened.validateForResume(gameID: identity.gameID, owner: identity.owner, romSHA256: identity.romSHA256))
+    }
+    func testInactiveRestoreStagingDoesNotBlockResumeAndCorruptActiveJournalStaysProtected() throws {
+        let (store, identity, save) = try fixture()
+        _ = try complete(store, identity, save)
+        let folder = store.directory(gameID: identity.gameID)
+        let staging = folder.appendingPathComponent("Restore Staging/unfinished/originals")
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: save, to: staging.appendingPathComponent("game.sav"))
+        XCTAssertFalse(store.hasInterruptedRestore(gameID: identity.gameID))
+        XCTAssertNotNil(try store.validateForResume(gameID: identity.gameID, owner: identity.owner, romSHA256: identity.romSHA256))
+        let active = folder.appendingPathComponent("Restore")
+        try FileManager.default.createDirectory(at: active, withIntermediateDirectories: true)
+        let broken = Data("broken journal".utf8)
+        try broken.write(to: active.appendingPathComponent("pending.boundrun"))
+        XCTAssertThrowsError(try store.finishInterruptedRestore(gameID: identity.gameID, owner: identity.owner,
+            romSHA256: identity.romSHA256, gameSaveURL: save))
+        XCTAssertThrowsError(try store.restore(archiveURL: store.cloudURL(gameID: identity.gameID), gameID: identity.gameID,
+            owner: identity.owner, romSHA256: identity.romSHA256, gameSaveURL: save))
+        XCTAssertTrue(store.hasInterruptedRestore(gameID: identity.gameID))
+        XCTAssertEqual(try Data(contentsOf: active.appendingPathComponent("pending.boundrun")), broken)
+        XCTAssertEqual(try Data(contentsOf: save), Data(repeating: 3, count: 131_072))
+    }
+    func testExplicitCompletedCheckpointRestoresMatchingBatteryAndStateAndRetiresSuspension() throws {
+        let (store, identity, save) = try fixture()
+        _ = try writeSoul(store, identity, dead: [])
+        let state = Data(repeating: 10, count: 2048)
+        let receipt = try store.prepare(gameID: identity.gameID, checkpointID: UUID(), predecessor: nil,
+            sharedEventDigest: String(repeating: "c", count: 64), gameSaveURL: save, additionalFiles: ["checkpoint.state": state])
+        let package = try store.commit(gameID: identity.gameID, checkpointID: receipt.checkpoint,
+            partnerReceipt: peer(receipt, identity: identity))
+        XCTAssertThrowsError(try store.restoreCompletedCheckpoint(gameID: identity.gameID, checkpointID: UUID(),
+            owner: identity.owner, romSHA256: identity.romSHA256, gameSaveURL: save))
+        store.setActive(true, gameID: identity.gameID)
+        XCTAssertThrowsError(try store.restoreCompletedCheckpoint(gameID: identity.gameID, checkpointID: receipt.checkpoint,
+            owner: identity.owner, romSHA256: identity.romSHA256, gameSaveURL: save))
+        store.setActive(false, gameID: identity.gameID)
+        let workingBattery = Data(repeating: 8, count: 131_072)
+        try workingBattery.write(to: save)
+        let suspension = try store.captureSuspension(gameID: identity.gameID, romSHA256: identity.romSHA256,
+            gameSaveURL: save, snapshot: Data(repeating: 11, count: 2048))
+        let retained = store.directory(gameID: identity.gameID).appendingPathComponent("Suspensions/" + suspension.package.payload.checkpoint.uuidString + ".json")
+        let originalSuspension = try Data(contentsOf: retained)
+        let restored = try store.restoreCompletedCheckpoint(gameID: identity.gameID, checkpointID: package.payload.checkpoint,
+            owner: identity.owner, romSHA256: identity.romSHA256, gameSaveURL: save)
+        XCTAssertEqual(restored, package)
+        XCTAssertEqual(restored.payload.files["checkpoint.state"]?.data, state)
+        XCTAssertEqual(try Data(contentsOf: save), package.payload.files["game.sav"]?.data)
+        XCTAssertNil(try store.suspension(gameID: identity.gameID))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: retained.path))
+        XCTAssertNotNil(try store.validateCheckpointForResume(gameID: identity.gameID, checkpointID: receipt.checkpoint,
+            owner: identity.owner, romSHA256: identity.romSHA256, gameSaveURL: save))
+        let originals = try FileManager.default.contentsOfDirectory(at: store.directory(gameID: identity.gameID)
+            .appendingPathComponent("Restored Originals"), includingPropertiesForKeys: nil)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(originals.first).appendingPathComponent("originals/game.sav")), workingBattery)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(originals.first).appendingPathComponent("originals/suspension.json")), originalSuspension)
+    }
+    func testExplicitCompletedCheckpointCannotBypassPreparedSuccessorOrNewHistory() throws {
+        let (store, identity, save) = try fixture()
+        let soul = try writeSoul(store, identity, dead: [])
+        let first = try store.prepare(gameID: identity.gameID, checkpointID: UUID(), predecessor: nil,
+            sharedEventDigest: String(repeating: "c", count: 64), gameSaveURL: save,
+            additionalFiles: ["checkpoint.state": Data(repeating: 10, count: 2048)])
+        let head = try store.commit(gameID: identity.gameID, checkpointID: first.checkpoint, partnerReceipt: peer(first, identity: identity))
+        try Data(repeating: 8, count: 131_072).write(to: save)
+        _ = try writeSoul(store, identity, dead: ["area:9"])
+        let death = try Data(contentsOf: soul)
+        XCTAssertThrowsError(try store.restoreCompletedCheckpoint(gameID: identity.gameID, checkpointID: first.checkpoint,
+            owner: identity.owner, romSHA256: identity.romSHA256, gameSaveURL: save))
+        XCTAssertEqual(try Data(contentsOf: soul), death)
+        for additions: [String: Any] in [
+            ["records": [["identity": ["personality": 1, "trainer": 2], "slot": "area:4", "eligible": true]]],
+            ["partnerAcquisitions": ["area:4"]], ["nextEgg": 2]
+        ] {
+            var journal: [String: Any] = ["run": identity.run.uuidString, "dead": [String]()]
+            journal.merge(additions) { _, new in new }
+            let bytes = try JSONSerialization.data(withJSONObject: journal)
+            try bytes.write(to: soul)
+            XCTAssertThrowsError(try store.restoreCompletedCheckpoint(gameID: identity.gameID, checkpointID: first.checkpoint,
+                owner: identity.owner, romSHA256: identity.romSHA256, gameSaveURL: save))
+            XCTAssertEqual(try Data(contentsOf: soul), bytes)
+        }
+        _ = try writeSoul(store, identity, dead: [])
+        let second = try store.prepare(gameID: identity.gameID, checkpointID: UUID(), predecessor: head.payload.checkpoint,
+            sharedEventDigest: String(repeating: "c", count: 64), gameSaveURL: save,
+            additionalFiles: ["checkpoint.state": Data(repeating: 11, count: 2048)])
+        XCTAssertThrowsError(try store.restoreCompletedCheckpoint(gameID: identity.gameID, checkpointID: first.checkpoint,
+            owner: identity.owner, romSHA256: identity.romSHA256, gameSaveURL: save))
+        XCTAssertEqual(try Data(contentsOf: save), Data(repeating: 8, count: 131_072))
+        XCTAssertEqual(try store.latestComplete(gameID: identity.gameID), head)
+        XCTAssertEqual(try store.checkpoint(gameID: identity.gameID, id: second.checkpoint)?.receipt, second)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.directory(gameID: identity.gameID).appendingPathComponent("Restore Staging").path))
+    }
     func testIncomingPackageMarkerCannotBeTreatedAsSoloOrOverwriteAnExistingRun() throws {
         let (store, identity, save) = try fixture()
         let fresh = BoundMultiplayerSaveStore(root: store.support.appendingPathComponent("new-device-packages"), support: store.support, deviceID: store.deviceID)
@@ -583,6 +699,73 @@ final class MultiplayerSavePackageTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: save), Data(repeating: 3, count: 131_072))
     }
 #if canImport(Delta)
+    @MainActor
+    func testOwnershipAdoptionRetagsCurrentSuspensionAndRetriesInterruptedManifestWrite() async throws {
+        let (store, identity, save) = try fixture()
+        _ = try writeSoul(store, identity, dead: [])
+        let receipt = try store.prepare(gameID: identity.gameID, checkpointID: UUID(), predecessor: nil,
+            sharedEventDigest: String(repeating: "c", count: 64), gameSaveURL: save,
+            additionalFiles: ["checkpoint.state": Data(repeating: 10, count: 2048)])
+        let package = try store.commit(gameID: identity.gameID, checkpointID: receipt.checkpoint,
+            partnerReceipt: peer(receipt, identity: identity))
+        let originalManifest = try XCTUnwrap(store.manifest(gameID: identity.gameID))
+        try Data(repeating: 8, count: 131_072).write(to: save)
+        let snapshot = Data(repeating: 11, count: 2048)
+        let oldSuspension = try store.captureSuspension(gameID: identity.gameID, romSHA256: identity.romSHA256,
+            gameSaveURL: save, snapshot: snapshot)
+        let suspensionURL = store.directory(gameID: identity.gameID).appendingPathComponent("Suspensions/" + oldSuspension.package.payload.checkpoint.uuidString + ".json")
+        let originalSuspension = try Data(contentsOf: suspensionURL)
+        let current = BoundMultiplayerSaveStore(root: store.root, support: store.support, deviceID: UUID())
+        let payload = try JSONSerialization.data(withJSONObject: BoundAccountTestFixture.claims(owner: identity.owner, expiry: Date().timeIntervalSince1970 + 3600))
+            .base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        let session = try AppCloudSession(owner: identity.owner, key: "fixture", token: "fixture." + payload + ".signature")
+        let device = current.deviceID, owner = identity.owner, run = identity.run
+        let client = BoundRunLeaseClient(perform: { _ in
+            let now = Date().timeIntervalSince1970
+            return try JSONSerialization.data(withJSONObject: ["ok": true, "ownerID": owner.uuidString,
+                "runID": run.uuidString, "deviceID": device.uuidString, "token": UUID().uuidString,
+                "fence": "2", "serverTime": now, "expiresAt": now + 60, "anchorVersion": "2",
+                "checkpointID": package.payload.checkpoint.uuidString, "checkpointHistory": package.payload.sharedEventDigest,
+                "historyDigest": package.payload.sharedEventDigest])
+        }, device: { device })
+        let grant = try await client.acquire(runID: run, session: session, allowTransfer: true)
+        let adopted = try current.adoptOwnership(gameID: identity.gameID, grant: grant)
+        XCTAssertEqual(adopted.deviceOwner, device)
+        var resumed = try XCTUnwrap(current.validateSuspensionForResume(gameID: identity.gameID,
+            owner: owner, romSHA256: identity.romSHA256, gameSaveURL: save))
+        XCTAssertEqual(resumed.manifest.deviceOwner, device)
+        XCTAssertEqual(resumed.snapshot, snapshot)
+        XCTAssertEqual(resumed.package.payload.checkpoint, oldSuspension.package.payload.checkpoint)
+        XCTAssertEqual(resumed.package.payload.files, oldSuspension.package.payload.files)
+        let archiveRoot = store.directory(gameID: identity.gameID).appendingPathComponent("Ownership Transfers")
+        let archives = try FileManager.default.contentsOfDirectory(at: archiveRoot, includingPropertiesForKeys: nil)
+        XCTAssertEqual(archives.count, 1)
+        XCTAssertEqual(try Data(contentsOf: archives[0].appendingPathComponent(suspensionURL.lastPathComponent)), originalSuspension)
+        // Simulate interruption after the suspension write but before run.json.
+        try BoundMultiplayerSaveStore.encode(originalManifest).write(to: store.directory(gameID: identity.gameID).appendingPathComponent("run.json"))
+        XCTAssertEqual(try current.adoptOwnership(gameID: identity.gameID, grant: grant).deviceOwner, device)
+        resumed = try XCTUnwrap(current.validateSuspensionForResume(gameID: identity.gameID,
+            owner: owner, romSHA256: identity.romSHA256, gameSaveURL: save))
+        XCTAssertEqual(resumed.snapshot, snapshot)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: archiveRoot.path).count, 1)
+        _ = try current.captureSuspension(gameID: identity.gameID, romSHA256: identity.romSHA256, gameSaveURL: save, snapshot: snapshot)
+        XCTAssertEqual(try current.latestComplete(gameID: identity.gameID), package, "Peer checkpoint receipts remain immutable")
+        _ = try current.restoreCompletedCheckpoint(gameID: identity.gameID, checkpointID: package.payload.checkpoint,
+            owner: owner, romSHA256: identity.romSHA256, gameSaveURL: save)
+        XCTAssertEqual(try current.manifest(gameID: identity.gameID)?.deviceOwner, device)
+        // Replay the active-transaction shape after a later ordinary acquisition,
+        // whose grant no longer carries the original transfer permission.
+        let restored = try FileManager.default.contentsOfDirectory(at: current.directory(gameID: identity.gameID)
+            .appendingPathComponent("Restored Originals"), includingPropertiesForKeys: nil)
+        let transaction = current.directory(gameID: identity.gameID).appendingPathComponent("Restore")
+        try FileManager.default.copyItem(at: XCTUnwrap(restored.first), to: transaction)
+        try Data(repeating: 9, count: 131_072).write(to: save)
+        let ordinary = try await client.acquire(runID: run, session: session)
+        try current.finishInterruptedRestore(gameID: identity.gameID, owner: owner,
+            romSHA256: identity.romSHA256, gameSaveURL: save, grant: ordinary)
+        XCTAssertEqual(try current.manifest(gameID: identity.gameID)?.deviceOwner, device)
+        XCTAssertEqual(try Data(contentsOf: save), package.payload.files["game.sav"]?.data)
+    }
     @MainActor
     func testAnchoredTransferArchivesEndedRunAndPreservesItsPersonalFiles() async throws {
         let (store, identity, save) = try fixture()

@@ -97,14 +97,39 @@ extension SaveStatesViewController
 
 class SaveStatesViewController: UICollectionViewController
 {
+    private struct SaveAccess {
+        let gameID: String
+        let revision: UUID?
+        init?(gameID: String) {
+            self.gameID = gameID
+            guard !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: gameID) else { return nil }
+            do { revision = try BoundROMUpdateStorage.live.saveClearRevision(gameID: gameID) }
+            catch { return nil }
+        }
+        var isCurrent: Bool {
+            let storage = BoundROMUpdateStorage.live
+            guard !storage.hasPendingSaveClear(gameID: gameID) else { return false }
+            do { return try storage.saveClearRevision(gameID: gameID) == revision }
+            catch { return false }
+        }
+    }
+    private var saveAccess: SaveAccess?
+    private var emulatorSaveAccess: SaveAccess?
+    private var saveClearInvalidated = false
+    private var mayAccessSaves: Bool { !saveClearInvalidated && saveAccess?.isCurrent == true }
+
     var game: Game! {
         didSet {
+            self.saveAccess = game.flatMap { SaveAccess(gameID: $0.identifier) }
+            self.saveClearInvalidated = false
             self.updateDataSource()
         }
     }
     
     // Reference to a current EmulatorCore. emulatorCore.game does _not_ have to match self.game
-    var emulatorCore: EmulatorCore?
+    var emulatorCore: EmulatorCore? {
+        didSet { emulatorSaveAccess = (emulatorCore?.game as? Game).flatMap { SaveAccess(gameID: $0.identifier) } }
+    }
     
     weak var delegate: SaveStatesViewControllerDelegate?
     
@@ -173,6 +198,35 @@ class SaveStatesViewController: UICollectionViewController
         super.init(coder: aDecoder)
         
         self.prepareDataSource()
+        NotificationCenter.default.addObserver(self, selector: #selector(saveClearBegan(_:)),
+            name: BoundROMUpdateManager.saveClearBegan, object: nil)
+    }
+
+    @objc private func saveClearBegan(_ notification: Notification) {
+        guard let gameID = notification.object as? String else { return }
+        let selected = game?.identifier == gameID
+        let retainedCore = (emulatorCore?.game as? Game)?.identifier == gameID
+        guard selected || retainedCore else { return }
+        if selected {
+            saveClearInvalidated = true
+            activePreviewViewController?.stopPreview()
+            _previewTransitionViewController = nil
+            activePreviewViewController = nil
+            _importingSaveState = nil
+            delegate = nil
+        }
+        if retainedCore { emulatorCore?.stop(); emulatorCore = nil }
+        // Viewing another ROM's saves can temporarily retain an unrelated core.
+        // Only the cleared ROM is discarded; restore an unrelated paused core.
+        resetEmulatorCoreIfNeeded()
+        if selected { emulatorCore = nil }
+        guard selected, isViewLoaded else { return }
+        view.isUserInteractionEnabled = false
+        if let presenter = navigationController?.presentingViewController ?? presentingViewController {
+            presenter.dismiss(animated: false)
+        } else {
+            navigationController?.popViewController(animated: false)
+        }
     }
 }
 
@@ -476,6 +530,7 @@ private extension SaveStatesViewController
     
     @objc private func deleteSelectedSaveStates()
     {
+        guard mayAccessSaves, let access = saveAccess else { return }
         let indexPaths = self.collectionView.indexPathsForSelectedItems ?? []
         guard !indexPaths.isEmpty else { return }
 
@@ -491,13 +546,15 @@ private extension SaveStatesViewController
 
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: NSLocalizedString("Delete", comment: ""), style: .destructive) { [weak self] _ in
-            guard let self else { return }
+            guard let self, self.mayAccessSaves else { return }
 
             DatabaseManager.shared.performBackgroundTask { context in
+                guard access.isCurrent else { return }
                 for objectID in objectIDs {
-                    let object = context.object(with: objectID)
+                    guard let object = try? context.existingObject(with: objectID) else { continue }
                     context.delete(object)
                 }
+                guard access.isCurrent else { context.rollback(); return }
                 context.saveWithErrorLogging()
             }
 
@@ -792,6 +849,7 @@ private extension SaveStatesViewController
     
     @IBAction func addSaveState()
     {
+        guard mayAccessSaves else { return }
         var saveState: SaveState!
         
         let backgroundContext = DatabaseManager.shared.newBackgroundContext()
@@ -809,10 +867,12 @@ private extension SaveStatesViewController
     
     func updateSaveState(_ saveState: SaveState)
     {
+        guard mayAccessSaves, let access = saveAccess else { return }
         let context = saveState.managedObjectContext
         self.withStoppedPreview {
             self.prepareEmulatorCore()
             context?.performAndWait {
+                guard access.isCurrent, !saveState.isDeleted, saveState.game?.identifier == access.gameID else { return }
                 self.delegate?.saveStatesViewController(self, updateSaveState: saveState)
                 context?.saveWithErrorLogging()
             }
@@ -821,6 +881,8 @@ private extension SaveStatesViewController
     
     func loadSaveState(_ saveState: SaveStateProtocol)
     {
+        guard mayAccessSaves else { return }
+        if let state = saveState as? SaveState, state.isDeleted || state.game?.identifier != game?.identifier { return }
         self.withStoppedPreview {
             self.prepareEmulatorCore()
             self.delegate?.saveStatesViewController(self, loadSaveState: saveState)
@@ -832,12 +894,15 @@ private extension SaveStatesViewController
     
     func deleteSaveState(_ saveState: SaveState)
     {
+        guard mayAccessSaves, let access = saveAccess, !saveState.isDeleted else { return }
+        let objectID = saveState.objectID
         let confirmationAlertController = UIAlertController(title: NSLocalizedString("Delete Save State?", comment: ""), message: NSLocalizedString("Are you sure you want to delete this save state? This cannot be undone.", comment: ""), preferredStyle: .alert)
         confirmationAlertController.addAction(UIAlertAction(title: NSLocalizedString("Delete", comment: ""), style: .destructive, handler: { action in
             
             DatabaseManager.shared.performBackgroundTask { (context) in
-                let temporarySaveState = context.object(with: saveState.objectID)
+                guard access.isCurrent, let temporarySaveState = try? context.existingObject(with: objectID) else { return }
                 context.delete(temporarySaveState)
+                guard access.isCurrent else { context.rollback(); return }
                 context.saveWithErrorLogging()
             }
             
@@ -849,6 +914,7 @@ private extension SaveStatesViewController
     
     func renameSaveState(_ saveState: SaveState)
     {
+        guard mayAccessSaves, !saveState.isDeleted else { return }
         self.withStoppedPreview {
             self.presentRenameSaveState(saveState)
         }
@@ -856,6 +922,7 @@ private extension SaveStatesViewController
 
     func presentRenameSaveState(_ saveState: SaveState)
     {
+        guard mayAccessSaves, !saveState.isDeleted else { return }
         let alertController = UIAlertController(title: NSLocalizedString("Rename Save State", comment: ""), message: nil, preferredStyle: .alert)
         alertController.addTextField { (textField) in
             textField.text = saveState.name
@@ -872,6 +939,7 @@ private extension SaveStatesViewController
     
     func rename(_ saveState: SaveState, with name: String?)
     {
+        guard mayAccessSaves, let access = saveAccess, !saveState.isDeleted else { return }
         var name = name
         if (name ?? "").count == 0
         {
@@ -881,15 +949,16 @@ private extension SaveStatesViewController
         
         let objectID = saveState.objectID
         DatabaseManager.shared.performBackgroundTask { (context) in
-            guard let saveState = try? context.existingObject(with: objectID) as? SaveState else { return }
+            guard access.isCurrent, let saveState = try? context.existingObject(with: objectID) as? SaveState else { return }
             saveState.name = name
-            
+            guard access.isCurrent else { context.rollback(); return }
             context.saveWithErrorLogging()
         }
     }
     
     func updatePreviewSaveState(_ saveState: SaveState?)
     {
+        guard mayAccessSaves, let access = saveAccess else { return }
         let message: String
         
         if #available(iOS 13, *)
@@ -906,11 +975,11 @@ private extension SaveStatesViewController
         alertController.addAction(UIAlertAction(title: NSLocalizedString("Change", comment: ""), style: .default, handler: { (action) in
             
             DatabaseManager.shared.performBackgroundTask { (context) in
-                let game = context.object(with: self.game.objectID) as! Game
+                guard access.isCurrent, let game = try? context.existingObject(with: self.game.objectID) as? Game else { return }
                 
                 if let saveState = saveState
                 {
-                    let previewSaveState = context.object(with: saveState.objectID) as! SaveState
+                    guard let previewSaveState = try? context.existingObject(with: saveState.objectID) as? SaveState else { return }
                     game.previewSaveState = previewSaveState
                 }
                 else
@@ -918,6 +987,7 @@ private extension SaveStatesViewController
                     game.previewSaveState = nil
                 }
                 
+                guard access.isCurrent else { context.rollback(); return }
                 context.saveWithErrorLogging()
             }
         }))
@@ -937,11 +1007,12 @@ private extension SaveStatesViewController
 
     func setSaveState(_ saveState: SaveState, locked: Bool)
     {
+        guard mayAccessSaves, let access = saveAccess, !saveState.isDeleted else { return }
         let objectID = saveState.objectID
         self.withStoppedPreview {
             let backgroundContext = DatabaseManager.shared.newBackgroundContext()
             backgroundContext.performAndWait {
-                guard let temporarySaveState = try? backgroundContext.existingObject(with: objectID) as? SaveState else { return }
+                guard access.isCurrent, let temporarySaveState = try? backgroundContext.existingObject(with: objectID) as? SaveState else { return }
                 temporarySaveState.type = locked ? .locked : .general
                 backgroundContext.saveWithErrorLogging()
             }
@@ -950,6 +1021,7 @@ private extension SaveStatesViewController
     
     func importSaveState(_ saveState: SaveState)
     {
+        guard mayAccessSaves, !saveState.isDeleted else { return }
         self._importingSaveState = saveState
         
         let importController = ImportController(documentTypes: [UTType.item.identifier])
@@ -959,6 +1031,7 @@ private extension SaveStatesViewController
     
     func importSaveState(_ saveState: SaveState, from fileURL: URL, error: Error?)
     {
+        guard mayAccessSaves, !saveState.isDeleted, saveState.game?.identifier == game?.identifier else { return }
         do
         {
             if let error = error
@@ -978,6 +1051,7 @@ private extension SaveStatesViewController
     
     func exportSaveState(_ saveState: SaveState)
     {
+        guard mayAccessSaves, !saveState.isDeleted, saveState.game?.identifier == game?.identifier else { return }
         do
         {
             let sanitizedFilename = saveState.localizedName.components(separatedBy: .urlFilenameAllowed.inverted).joined()
@@ -1000,6 +1074,7 @@ private extension SaveStatesViewController
     
     func markSaveStateAsCompatible(_ saveState: SaveState)
     {
+        guard mayAccessSaves, !saveState.isDeleted else { return }
         // Can only mark save states as compatible if the DeltaCore has an explicit version.
         guard let deltaCore = Delta.core(for: self.game.type), let version = deltaCore.version else { return }
         
@@ -1024,6 +1099,7 @@ private extension SaveStatesViewController
     
     func markSaveStateAsIncompatible(_ saveState: SaveState)
     {
+        guard mayAccessSaves, !saveState.isDeleted else { return }
         let backgroundContext = DatabaseManager.shared.newBackgroundContext()
         backgroundContext.performAndWait() {
             let temporarySaveState = backgroundContext.object(with: saveState.objectID) as! SaveState
@@ -1085,6 +1161,7 @@ private extension SaveStatesViewController
     
     func actionsForSaveState(_ saveState: SaveState) -> [UIMenuElement]?
     {
+        guard mayAccessSaves, !saveState.isDeleted else { return nil }
         if self.filter != .incompatible
         {
             // Don't show actions for auto save states (unless they're incompatible).
@@ -1201,6 +1278,7 @@ private extension SaveStatesViewController
         // We stopped emulation for 3D Touch, so now we must resume emulation and load the save state we made to make it seem like it was never stopped
         // Additionally, if emulatorCore.state != .stopped, then we have already resumed emulation with correct save state, and don't need to do it again
         guard let emulatorCore = self.emulatorCore, emulatorCore.state == .stopped else { return }
+        if emulatorCore.game is Game, emulatorSaveAccess?.isCurrent != true { return }
         
         // Temporarily disable video rendering to prevent flickers
         emulatorCore.videoManager.isEnabled = false
@@ -1234,16 +1312,22 @@ private extension SaveStatesViewController
 {
     func withStoppedPreview(_ completion: @escaping () -> Void)
     {
+        guard mayAccessSaves else { return }
         guard let preview = self.activePreviewViewController else {
             completion()
             return
         }
-        preview.stopPreview(completion: completion)
+        preview.stopPreview {
+            guard self.mayAccessSaves else { return }
+            completion()
+        }
     }
 
     @discardableResult private func prepareEmulatorCoreSaveState() -> Bool
     {
+        guard mayAccessSaves else { return false }
         guard let emulatorCore = self.emulatorCore, emulatorCore.state != .stopped else { return true }
+        if emulatorCore.game is Game, emulatorSaveAccess?.isCurrent != true { return false }
         
         // Store reference to current game state before we stop emulation so we can resume it if user decides to not load a save state
         
@@ -1268,6 +1352,7 @@ private extension SaveStatesViewController
     
     func makePreviewGameViewController(for saveState: SaveState) -> PreviewGameViewController?
     {
+        guard mayAccessSaves, !saveState.isDeleted, saveState.game?.identifier == game?.identifier else { return nil }
         guard self.activePreviewViewController == nil else { return nil }
         // Saving a state may have restarted the gameplay core since this screen
         // opened. Stop it before a preview takes over the shared emulator bridge.
@@ -1289,6 +1374,11 @@ private extension SaveStatesViewController
     func commitPreviewTransition()
     {
         guard let gameViewController = self._previewTransitionViewController else { return }
+        guard mayAccessSaves else {
+            gameViewController.stopPreview()
+            _previewTransitionViewController = nil
+            return
+        }
         let fileURL = FileManager.default.uniqueTemporaryURL()
         if let saveState = gameViewController.stopPreview(savingTo: fileURL)
         {
@@ -1317,6 +1407,7 @@ extension SaveStatesViewController
 {
     override func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool
     {
+        guard mayAccessSaves else { return false }
         guard self.isEditing else { return true }
 
         let section = self.correctedSectionForSectionIndex(indexPath.section)
@@ -1325,6 +1416,7 @@ extension SaveStatesViewController
 
     override func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath)
     {
+        guard mayAccessSaves else { return }
         if self.isEditing
         {
             self.updateToolbarState()
@@ -1407,7 +1499,7 @@ extension SaveStatesViewController
 {
     override func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemAt indexPath: IndexPath, point: CGPoint) -> UIContextMenuConfiguration?
     {
-        guard !self.isEditing else { return nil }
+        guard mayAccessSaves, !self.isEditing else { return nil }
 
         let saveState = self.dataSource.item(at: indexPath)
         guard let actions = self.actionsForSaveState(saveState) else { return nil }

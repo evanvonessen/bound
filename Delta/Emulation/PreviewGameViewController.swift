@@ -67,6 +67,8 @@ class PreviewGameViewController: DeltaCore.GameViewController
         get { super.game }
         set {
             guard newValue == nil || !BoundROMUpdateManager.shared.isApplying else { return }
+            if let game = newValue as? Game,
+               BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier) { return }
             self.emulatorCore?.removeObserver(self, forKeyPath: #keyPath(EmulatorCore.state), context: &kvoContext)
             super.game = newValue
             BoundROMUpdateActivity.bindingChanged(self)
@@ -329,6 +331,9 @@ extension PreviewGameViewController: GameViewControllerDelegate
 {
     func gameViewControllerShouldResumeEmulation(_ gameViewController: DeltaCore.GameViewController) -> Bool
     {
+        guard self.game != nil else { return false }
+        if let game = self.game as? Game,
+           BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: game.identifier) { return false }
         return self.isLivePreview && self.canRunPreview
     }
     

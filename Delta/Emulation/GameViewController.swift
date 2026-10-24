@@ -19,6 +19,94 @@ import GPGXDeltaCore
 import Roxas
 import AltKit
 import SwiftUI
+import zlib
+
+/// Read the pinned VBA save format without loading RAM into the running core.
+/// A Handoff cannot carry the native link session or its temporary ROM hooks.
+enum BoundHandoffSaveStatePolicy {
+    enum Failure: LocalizedError {
+        case invalid, temporaryNativeState
+        var errorDescription: String? {
+            switch self {
+            case .invalid: return "This Handoff save could not be verified."
+            case .temporaryNativeState: return "Finish the multiplayer interaction before using Handoff."
+            }
+        }
+    }
+
+    static func validateGBAState(at url: URL, nativeBoundROM: Bool) throws {
+        let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        guard size > 2, size <= 8 * 1024 * 1024 else { throw Failure.invalid }
+        let input = try FileHandle(forReadingFrom: url)
+        let signature = try input.read(upToCount: 2)
+        try input.close()
+        guard signature == Data([0x1f, 0x8b]), let file = gzopen(url.path, "rb") else { throw Failure.invalid }
+        defer { gzclose(file) }
+        var decoded = Data(), chunk = [UInt8](repeating: 0, count: 16 * 1024)
+        while true {
+            let count = chunk.withUnsafeMutableBytes { gzread(file, $0.baseAddress, UInt32($0.count)) }
+            guard count >= 0 else { throw Failure.invalid }
+            if count == 0 { break }
+            guard decoded.count + Int(count) <= 2 * 1024 * 1024 else { throw Failure.invalid }
+            decoded.append(contentsOf: chunk.prefix(Int(count)))
+        }
+        var error: Int32 = Z_OK
+        _ = gzerror(file, &error)
+        guard error == Z_OK, gzeof(file) != 0 else { throw Failure.invalid }
+        try validateDecodedGBAState(decoded, nativeBoundROM: nativeBoundROM)
+    }
+
+    static func validateDecodedGBAState(_ bytes: Data, nativeBoundROM: Bool) throws {
+        func word(_ offset: Int) -> UInt32 {
+            (0..<4).reduce(0) { $0 | UInt32(bytes[offset + $1]) << ($1 * 8) }
+        }
+        guard bytes.count >= 4 else { throw Failure.invalid }
+        let version = word(0)
+        guard (1...10).contains(version) else { throw Failure.invalid }
+        // GBA.cpp CPUWriteState: version/title/BIOS (24), reg[45] (180),
+        // saveGameStruct (267), then the versioned stopState/IRQTicks words.
+        let iwram = 471 + (version >= 3 ? 4 : 0) + (version >= 4 ? 4 : 0)
+        let ewram = iwram + 0x8000 + 0x400
+        guard bytes.count >= ewram + 0x40000 else { throw Failure.invalid }
+        guard nativeBoundROM else { return }
+        func temporaryPointer(_ value: UInt32) -> Bool { (0x09FFF800..<0x0A000000).contains(value & ~1) }
+        // Only live script contexts count: native end() can retain an inert
+        // script pointer after a clean trade/dialogue has already returned.
+        for context in [0xEB0, 0xF24] where bytes[iwram + context + 1] != 0 {
+            for offset in stride(from: 4, through: 88, by: 4) where temporaryPointer(word(iwram + context + offset)) {
+                throw Failure.temporaryNativeState
+            }
+        }
+        for offset in [0x30F0, 0x30F4] where temporaryPointer(word(iwram + offset)) {
+            throw Failure.temporaryNativeState
+        }
+        for task in stride(from: 0x5090, to: 0x5090 + 16 * 40, by: 40)
+            where bytes[iwram + task + 4] != 0 && temporaryPointer(word(iwram + task)) {
+            throw Failure.temporaryNativeState
+        }
+        // A closed trade may retain its mailbox, so require a live link or a
+        // native link battle rather than rejecting the stale magic alone.
+        if word(iwram + 0x4030) == 0x314D4642,
+           bytes[iwram + 0x3FB1] != 0 || (bytes[iwram + 0x3529] & 2 != 0 && word(ewram + 0x22B4C) & 2 != 0) {
+            throw Failure.temporaryNativeState
+        }
+        // reg[15] and armNextPC (the final 12 bytes of saveGameStruct).
+        if temporaryPointer(word(24 + 15 * 4)) || temporaryPointer(word(459)) { throw Failure.temporaryNativeState }
+    }
+}
+
+struct BoundHandoffCoreIdentity: Equatable {
+    let gameID: String
+    let core: ObjectIdentifier
+    // Retain the captured owner until the async transfer ends, so its identity
+    // cannot be reused by a replacement core at the same allocation address.
+    private let owner: AnyObject
+    init(gameID: String, core: AnyObject) { self.gameID = gameID; self.core = ObjectIdentifier(core); self.owner = core }
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.gameID == rhs.gameID && lhs.owner === rhs.owner }
+    func matches(gameID: String?, core: AnyObject?, allowed: Bool) -> Bool {
+        allowed && self.gameID == gameID && core.map(ObjectIdentifier.init) == self.core
+    }
+}
 
 private var kvoContext = 0
 
@@ -200,7 +288,17 @@ class GameViewController: DeltaCore.GameViewController
         get { super.game }
         set {
             guard newValue == nil || !BoundROMUpdateManager.shared.isApplying else { return }
+            if let game = newValue as? Game,
+               BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier) { return }
             let oldValue = super.game
+            if newValue == nil, let oldGame = oldValue as? Game,
+               BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: oldGame.identifier) {
+                self.pausedSaveState = nil
+                self._deepLinkResumingSaveState = nil
+                self._isLoadingSaveState = false
+                self.isContinuingHandoff = false
+                self.handoffPlaceholderView?.isHidden = true
+            }
             self.emulatorCore?.removeObserver(self, forKeyPath: #keyPath(EmulatorCore.state), context: &kvoContext)
             
             let previousGame = self.game as? Game
@@ -292,6 +390,8 @@ class GameViewController: DeltaCore.GameViewController
     
     // Handoff
     private var isContinuingHandoff = false
+    private var boundIncomingHandoff: BoundHandoffCoreIdentity?
+    private var boundOutgoingHandoff: UUID?
     private var handoffPlaceholderView: RSTPlaceholderView!
     
     // Gestures
@@ -913,14 +1013,20 @@ extension GameViewController
         guard context == &kvoContext else { return super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context) }
         
         guard let rawValue = change?[.oldKey] as? Int, let previousState = EmulatorCore.State(rawValue: rawValue) else { return }
+
+        if let activity = viewIfLoaded?.window?.windowScene?.userActivity, activity.activityType == NSUserActivity.playGameActivityType {
+            activity.isEligibleForHandoff = boundAllowsHandoff
+            activity.userInfo?[NSUserActivity.isSaveStateAvailable] = boundAllowsHandoff
+        }
         
-        if !boundPermitsIndependentStateLoad { _deepLinkResumingSaveState = nil }
+        if !boundPermitsIndependentStateLoad || !boundAllowsHandoff { _deepLinkResumingSaveState = nil }
         if let saveState = _deepLinkResumingSaveState, let emulatorCore = self.emulatorCore, emulatorCore.state == .running
         {
             emulatorCore.pause()
             
             do
             {
+                try boundValidateHandoffSaveState(saveState)
                 try emulatorCore.load(saveState)
                 self.boundRRDexDidLoadSaveState(core: emulatorCore)
             }
@@ -1350,12 +1456,22 @@ extension GameViewController {
     /// uploaded. A completed paired checkpoint is independently sync-worthy.
     func boundDidCompleteMultiplayerCheckpoint() {
         guard let game = game as? Game else { return }
-        let id = game.objectID
+        let id = game.objectID, gameID = game.identifier
+        let storage = BoundROMUpdateStorage.live
+        guard !storage.hasPendingSaveClear(gameID: gameID) else { return }
+        let revision: UUID?
+        do { revision = try storage.saveClearRevision(gameID: gameID) } catch { return }
         DatabaseManager.shared.performBackgroundTask { context in
-            guard let game = try? context.existingObject(with: id) as? Game,
-                  let save = game.gameSave else { return }
-            save.modifiedDate = Date()
-            try? context.save()
+            do {
+                guard !storage.hasPendingSaveClear(gameID: gameID),
+                      try storage.saveClearRevision(gameID: gameID) == revision,
+                      let game = try context.existingObject(with: id) as? Game,
+                      let save = game.gameSave else { return }
+                save.modifiedDate = Date()
+                guard !storage.hasPendingSaveClear(gameID: gameID),
+                      try storage.saveClearRevision(gameID: gameID) == revision else { context.rollback(); return }
+                try context.save()
+            } catch { context.rollback() }
         }
     }
 }
@@ -1367,10 +1483,17 @@ private extension GameViewController
     func updateGameSave()
     {
         guard let game = self.game as? Game else { return }
+        let gameID = game.identifier
+        let storage = BoundROMUpdateStorage.live
+        guard !storage.hasPendingSaveClear(gameID: gameID) else { return }
+        let revision: UUID?
+        do { revision = try storage.saveClearRevision(gameID: gameID) } catch { return }
         
         DatabaseManager.shared.performBackgroundTask { (context) in
             do
             {
+                guard !storage.hasPendingSaveClear(gameID: gameID),
+                      try storage.saveClearRevision(gameID: gameID) == revision else { return }
                 let game = context.object(with: game.objectID) as! Game
                 
                 let hash = try RSTHasher.sha1HashOfFile(at: game.gameSaveURL)
@@ -1392,6 +1515,8 @@ private extension GameViewController
                     game.gameSave = gameSave
                 }
                 
+                guard !storage.hasPendingSaveClear(gameID: gameID),
+                      try storage.saveClearRevision(gameID: gameID) == revision else { context.rollback(); return }
                 try context.save()
                 
                 if ExperimentalFeatures.shared.toastNotifications.gameSaveEnabled
@@ -1420,6 +1545,7 @@ extension GameViewController: SaveStatesViewControllerDelegate
         guard !boundCompanion.sharing.nativeBattle.blocksAutoSave && !boundCompanion.sharing.cooperativeDoubles.blocksAutoSave else { return }
         // Ensures game is non-nil and also a Game subclass
         guard let game = self.game as? Game else { return }
+        guard !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: game.identifier) else { return }
         
         guard let emulatorCore = self.emulatorCore, emulatorCore.state != .stopped, !emulatorCore.isWirelessMultiplayerActive else { return }
         
@@ -1473,6 +1599,9 @@ extension GameViewController: SaveStatesViewControllerDelegate
     
     private func update(_ saveState: SaveState, with replacementSaveState: SaveStateProtocol? = nil)
     {
+        guard !saveState.isDeleted, let savedGame = saveState.game,
+              savedGame.identifier == (self.game as? Game)?.identifier,
+              !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: savedGame.identifier) else { return }
         let isRunning = (self.emulatorCore?.state == .running)
         
         if isRunning
@@ -1532,7 +1661,9 @@ extension GameViewController: SaveStatesViewControllerDelegate
     
     private var boundPermitsIndependentStateLoad: Bool {
         guard boundCompanion.sharing.soulLink.permitsIndependentStateLoading else { return false }
+        guard game != nil else { return false }
         guard let id = (game as? Game)?.identifier else { return true }
+        guard !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: id) else { return false }
         return !BoundSoulSession.hasProtectedRun(gameID: id) && !BoundMultiplayerSaveStore.shared.hasRun(gameID: id)
     }
 
@@ -1618,6 +1749,9 @@ extension GameViewController: SaveStatesViewControllerDelegate
     
     func saveStatesViewController(_ saveStatesViewController: SaveStatesViewController, updateSaveState saveState: SaveState)
     {
+        guard !saveState.isDeleted, let savedGame = saveState.game,
+              savedGame.identifier == (self.game as? Game)?.identifier,
+              !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: savedGame.identifier) else { return }
         let updatingExistingSaveState = FileManager.default.fileExists(atPath: saveState.fileURL.path)
         
         self.update(saveState)
@@ -1632,6 +1766,9 @@ extension GameViewController: SaveStatesViewControllerDelegate
     
     func saveStatesViewController(_ saveStatesViewController: SaveStatesViewController, loadSaveState saveState: SaveStateProtocol)
     {
+        guard saveStatesViewController.game.identifier == (self.game as? Game)?.identifier,
+              !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: saveStatesViewController.game.identifier) else { return }
+        if let savedState = saveState as? SaveState, savedState.isDeleted || savedState.game == nil { return }
         self._isLoadingSaveState = true
         
         self.load(saveState)
@@ -1988,6 +2125,9 @@ extension GameViewController: GameViewControllerDelegate
         var result = false
         
         rst_dispatch_sync_on_main_thread {
+            guard self.game != nil else { return }
+            if let gameID = (self.game as? Game)?.identifier,
+               BoundROMUpdateManager.shared.hasPendingSaveClear(for: gameID) { return }
             let macSheet = BoundMacWorkspacePlatform.isEnabled && (self.boundCompanion.state.showingFriends || self.boundCompanion.state.showingSettings)
             result = !self.boundCompanion.isEditingNotes && !macSheet && (self.presentedViewController == nil || self.presentedViewController?.isDisappearing == true) && self.view.window != nil
         }
@@ -2322,6 +2462,19 @@ private extension GameViewController
 //MARK: - Handoff -
 extension GameViewController: NSUserActivityDelegate
 {
+    private var boundAllowsHandoff: Bool {
+        !boundCompanion.sharing.nativeBattle.blocksAutoSave && !boundCompanion.sharing.cooperativeDoubles.blocksAutoSave &&
+        !boundCompanion.sharing.soulLink.active && !boundCompanion.romMultiplayer.protectsRun
+    }
+
+    private func boundValidateHandoffSaveState(_ saveState: SaveStateProtocol) throws {
+        guard saveState.gameType == .gba else { return }
+        guard let game else { throw BoundHandoffSaveStatePolicy.Failure.invalid }
+        let rom = try Data(contentsOf: game.fileURL, options: .mappedIfSafe)
+        let nativeROM = (try? BoundPlayerROMProfile(rom: rom)) != nil
+        try BoundHandoffSaveStatePolicy.validateGBAState(at: saveState.fileURL, nativeBoundROM: nativeROM)
+    }
+
     func prepareForHandoff()
     {
         guard !self.isContinuingHandoff else { return }
@@ -2349,6 +2502,7 @@ extension GameViewController: NSUserActivityDelegate
     
     func startGameActivity()
     {
+        guard boundAllowsHandoff else { stopGameActivity(); return }
         if let userActivity = self.view.window?.windowScene?.userActivity, userActivity.activityType == NSUserActivity.playGameActivityType,
            let gameID = userActivity.userInfo?[NSUserActivity.gameIDKey] as? String, let game = self.game as? Game, game.identifier == gameID
         {
@@ -2389,19 +2543,37 @@ extension GameViewController: NSUserActivityDelegate
     
     func userActivity(_ userActivity: NSUserActivity, didReceive inputStream: InputStream, outputStream: OutputStream)
     {
+        guard boundOutgoingHandoff == nil, boundAllowsHandoff,
+              let core = self.emulatorCore, let gameID = (self.game as? Game)?.identifier,
+              !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: gameID) else {
+            inputStream.close(); outputStream.close(); return
+        }
+        let storage = BoundROMUpdateStorage.live
+        let clearRevision: UUID?
+        do { clearRevision = try storage.saveClearRevision(gameID: gameID) }
+        catch { inputStream.close(); outputStream.close(); return }
+        let identity = BoundHandoffCoreIdentity(gameID: gameID, core: core)
+        let transfer = UUID()
+        boundOutgoingHandoff = transfer
         inputStream.open()
         outputStream.open()
         
-        let isRunning = (self.emulatorCore?.state == .running)
-        if isRunning
-        {
-            self.pauseEmulation()
+        let isRunning = core.state == .running
+        guard core.state == .paused || (isRunning && self.pauseEmulation()),
+              identity.matches(gameID: (game as? Game)?.identifier, core: emulatorCore, allowed: boundAllowsHandoff) else {
+            boundOutgoingHandoff = nil; inputStream.close(); outputStream.close(); return
         }
         
         let temporaryURL = FileManager.default.uniqueTemporaryURL()
-        self.emulatorCore?.saveSaveState(to: temporaryURL)
+        let snapshot = core.saveSaveState(to: temporaryURL)
         
         Task<Void, Never> {
+            defer {
+                try? FileManager.default.removeItem(at: temporaryURL)
+                inputStream.close()
+                outputStream.close()
+                if self.boundOutgoingHandoff == transfer { self.boundOutgoingHandoff = nil }
+            }
             do
             {
                 if #available(iOS 16, *)
@@ -2410,27 +2582,30 @@ extension GameViewController: NSUserActivityDelegate
                     try await Task.sleep(for: .seconds(0.5))
                 }
 
-                defer {
-                    try? FileManager.default.removeItem(at: temporaryURL)
-                }
-                
+                guard self.boundOutgoingHandoff == transfer, core.state == .paused,
+                      identity.matches(gameID: (self.game as? Game)?.identifier, core: self.emulatorCore, allowed: self.boundAllowsHandoff),
+                      !storage.hasPendingSaveClear(gameID: gameID),
+                      try storage.saveClearRevision(gameID: gameID) == clearRevision else { return }
+                try self.boundValidateHandoffSaveState(snapshot)
                 let data = try Data(contentsOf: temporaryURL)
                 try await outputStream.send(data)
-                
+                guard self.boundOutgoingHandoff == transfer, core.state == .paused,
+                      identity.matches(gameID: (self.game as? Game)?.identifier, core: self.emulatorCore, allowed: self.boundAllowsHandoff),
+                      !storage.hasPendingSaveClear(gameID: gameID),
+                      try storage.saveClearRevision(gameID: gameID) == clearRevision else { return }
                 self.quitEmulation()
             }
             catch
             {
                 Logger.main.error("Failed to send save state for Handoff. \(error.localizedDescription, privacy: .public)")
                 
-                if isRunning
+                if isRunning, core.state == .paused,
+                   identity.matches(gameID: (self.game as? Game)?.identifier, core: self.emulatorCore, allowed: self.boundAllowsHandoff),
+                   !storage.hasPendingSaveClear(gameID: gameID)
                 {
                     self.resumeEmulation()
                 }
             }
-            
-            inputStream.close()
-            outputStream.close()
         }
     }
 }
@@ -2579,9 +2754,13 @@ private extension GameViewController
     @objc func deepLinkControllerWillLaunchGame(with notification: Notification)
     {
         guard let game = notification.userInfo?[DeepLink.Key.game] as? Game, let scene = notification.userInfo?[DeepLink.Key.scene] as? UIScene, scene == self.view.window?.windowScene else { return }
+        guard !BoundROMUpdateManager.shared.isApplying,
+              !BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier), boundAllowsHandoff else { return }
         
         // Game won't start until we call finishHandoff()
         self.game = game
+        guard (self.game as? Game)?.identifier == game.identifier, let core = emulatorCore else { return }
+        boundIncomingHandoff = BoundHandoffCoreIdentity(gameID: game.identifier, core: core)
         self.prepareForHandoff()
         
         self.returnToGameViewController()
@@ -2590,9 +2769,27 @@ private extension GameViewController
     @objc func deepLinkControllerLaunchGame(with notification: Notification)
     {
         guard let game = notification.userInfo?[DeepLink.Key.game] as? Game, let scene = notification.userInfo?[DeepLink.Key.scene] as? UIScene, scene == self.view.window?.windowScene else { return }
+        if isContinuingHandoff || boundIncomingHandoff != nil || notification.userInfo?[DeepLink.Key.saveState] != nil || notification.userInfo?[DeepLink.Key.error] != nil {
+            let target = boundIncomingHandoff
+            boundIncomingHandoff = nil
+            guard target?.matches(gameID: (self.game as? Game)?.identifier, core: emulatorCore,
+                                  allowed: boundAllowsHandoff && target?.gameID == game.identifier) == true else {
+                if let staleState = notification.userInfo?[DeepLink.Key.saveState] as? SaveStateProtocol {
+                    try? FileManager.default.removeItem(at: staleState.fileURL)
+                }
+                finishHandoff()
+                return
+            }
+        }
+        guard !BoundROMUpdateManager.shared.isApplying,
+              !BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier) else { return }
+        let storage = BoundROMUpdateStorage.live
+        let clearRevision: UUID?
+        do { clearRevision = try storage.saveClearRevision(gameID: game.identifier) } catch { return }
         
         let previousGame = self.game
         self.game = game
+        guard (self.game as? Game)?.identifier == game.identifier else { return }
         
         if self.isContinuingHandoff
         {
@@ -2603,7 +2800,14 @@ private extension GameViewController
             {
                 // Included save state with deep link, so load it when emulator core is started.
                 // Note: Will be automatically deleted when loaded, so make a copy if it's important.
-                _deepLinkResumingSaveState = saveState
+                do {
+                    try boundValidateHandoffSaveState(saveState)
+                    _deepLinkResumingSaveState = saveState
+                } catch {
+                    try? FileManager.default.removeItem(at: saveState.fileURL)
+                    let toastView = RSTToastView(text: NSLocalizedString("Handoff Failed", comment: ""), detailText: error.localizedDescription)
+                    self.show(toastView)
+                }
             }
             
             if let error
@@ -2630,6 +2834,11 @@ private extension GameViewController
         }
                 
         self.returnToGameViewController() {
+            do {
+                guard (self.game as? Game)?.identifier == game.identifier,
+                      !storage.hasPendingSaveClear(gameID: game.identifier),
+                      try storage.saveClearRevision(gameID: game.identifier) == clearRevision else { return }
+            } catch { return }
             self.resumeEmulation()
         }
     }

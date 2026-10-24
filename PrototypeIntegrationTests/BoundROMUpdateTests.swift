@@ -65,6 +65,55 @@ final class BoundROMUpdateTests: XCTestCase {
         XCTAssertThrowsError(try f.storage.clearSaveFiles([f.root.appendingPathComponent("outside")]) {})
     }
 
+    func testPendingSaveClearSurvivesRelaunchAndBlocksOnlySelectedROMSync() throws {
+        let f = try fixture()
+        let pending = try f.storage.beginSaveClear(gameID: "selected", gameName: "Selected", cloudContext: Data("owner-A".utf8))
+        let restarted = BoundROMUpdateStorage(root: f.storage.root, documents: f.storage.documents, support: f.storage.support)
+        XCTAssertEqual(try restarted.pendingSaveClear(gameID: "selected"), pending)
+        XCTAssertThrowsError(try BoundROMUpdateRegistry.validateDownload(gameID: "selected", generation: nil, isSave: true, storage: restarted))
+        XCTAssertThrowsError(try BoundROMUpdateRegistry.validateRestore(gameID: "selected", generation: nil, version: "old", currentVersion: "old", isLocked: false, storage: restarted))
+        XCTAssertThrowsError(try BoundROMUpdateRegistry.validateUpload(gameID: "selected", storage: restarted))
+        XCTAssertNoThrow(try BoundROMUpdateRegistry.validateDownload(gameID: "other", generation: nil, isSave: true, storage: restarted))
+        XCTAssertNoThrow(try BoundROMUpdateRegistry.validateUpload(gameID: "other", storage: restarted))
+        XCTAssertNoThrow(try BoundROMUpdateRegistry.validateDownload(gameID: "selected", generation: nil, isSave: false, storage: restarted))
+    }
+
+    func testSaveClearRetryRetainsOriginalCloudAccountAndOnlyCompletesItsROM() throws {
+        let f = try fixture()
+        let first = try f.storage.beginSaveClear(gameID: "selected", gameName: "Selected", cloudContext: Data("owner-A".utf8))
+        let other = try f.storage.beginSaveClear(gameID: "other", gameName: "Other", cloudContext: Data())
+        let retry = try f.storage.beginSaveClear(gameID: "selected", gameName: "Changed name", cloudContext: Data("owner-B".utf8))
+        XCTAssertEqual(retry, first)
+        try f.storage.completeSaveClear(first)
+        XCTAssertFalse(f.storage.hasPendingSaveClear(gameID: "selected"))
+        XCTAssertEqual(try f.storage.pendingSaveClears(), [other])
+        XCTAssertNoThrow(try BoundROMUpdateRegistry.validateUpload(gameID: "selected", storage: f.storage))
+    }
+
+    func testCompletedClearStillInvalidatesPreviouslyQueuedSaveWork() throws {
+        let f = try fixture()
+        let before = try f.storage.saveClearRevision(gameID: "selected")
+        let pending = try f.storage.beginSaveClear(gameID: "selected", gameName: "Selected", cloudContext: Data())
+        XCTAssertNotEqual(try f.storage.saveClearRevision(gameID: "selected"), before)
+        try f.storage.completeSaveClear(pending)
+        XCTAssertEqual(try f.storage.saveClearRevision(gameID: "selected"), pending.id)
+        let again = try f.storage.beginSaveClear(gameID: "selected", gameName: "Selected", cloudContext: Data())
+        XCTAssertNotEqual(again.id, pending.id)
+        XCTAssertThrowsError(try f.storage.completeSaveClear(pending))
+        XCTAssertTrue(f.storage.hasPendingSaveClear(gameID: "selected"))
+    }
+
+    func testUnreadableSaveClearReceiptKeepsROMBlocked() throws {
+        let f = try fixture()
+        _ = try f.storage.beginSaveClear(gameID: "selected", gameName: "Selected", cloudContext: Data())
+        let url = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: f.storage.root.appendingPathComponent("Pending Save Clears"), includingPropertiesForKeys: nil).first)
+        try Data("invalid".utf8).write(to: url, options: .atomic)
+        XCTAssertTrue(f.storage.hasPendingSaveClear(gameID: "selected"))
+        XCTAssertThrowsError(try f.storage.pendingSaveClear(gameID: "selected"))
+        XCTAssertThrowsError(try BoundROMUpdateRegistry.validateDownload(gameID: "selected", generation: nil, isSave: true, storage: f.storage))
+        XCTAssertFalse(f.storage.hasPendingSaveClear(gameID: "other"))
+    }
+
     func testBundledCartridgeMatchesCommittedContract() throws {
         let bundle = Bundle(for: Game.self)
         let url = try XCTUnwrap(bundle.url(forResource: "rrbin-integrated", withExtension: "gba"))

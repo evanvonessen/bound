@@ -30,7 +30,7 @@ struct BoundROMUpdateContent: Equatable, Codable {
 }
 
 enum BoundROMUpdateError: LocalizedError {
-    case invalidROM, incompatibleROM, unsafePath, changedBackup, storage, retired, staleSave, busy, olderROM, syncPending, multiplayerPending
+    case invalidROM, incompatibleROM, unsafePath, changedBackup, storage, retired, staleSave, busy, olderROM, syncPending, multiplayerPending, clearingSaves
     var errorDescription: String? {
         switch self {
         case .invalidROM: return "Choose a folder containing the complete rrbin-integrated.gba file."
@@ -44,6 +44,7 @@ enum BoundROMUpdateError: LocalizedError {
         case .olderROM: return "This ROM was already replaced. Keep the newer ROM in the folder."
         case .syncPending: return "Finish syncing this ROM's current saves before updating."
         case .multiplayerPending: return "Finish multiplayer recovery before updating."
+        case .clearingSaves: return "This ROM's saves are still being cleared. Use Clear Saves in its menu to retry."
         }
     }
 }
@@ -82,12 +83,66 @@ final class BoundROMUpdateStorage {
         var backupComplete = false
         var filesReset = false
     }
+    struct SaveClear: Codable, Equatable {
+        let id: UUID
+        let gameID: String
+        let gameName: String
+        /// Captured before deletion so a retry cannot target a different account.
+        let cloudContext: Data
+    }
     let root: URL
     let documents: URL
     let support: URL
     private let fm = FileManager.default
     var stateURL: URL { root.appendingPathComponent("state.json") }
     var journalURL: URL { root.appendingPathComponent("pending.json") }
+    private var saveClearsURL: URL { root.appendingPathComponent("Pending Save Clears", isDirectory: true) }
+    private func saveClearURL(gameID: String) -> URL {
+        saveClearsURL.appendingPathComponent(BoundROMUpdateContent.hash(Data(gameID.utf8)) + ".json")
+    }
+    private func completedSaveClearURL(gameID: String) -> URL {
+        root.appendingPathComponent("Completed Save Clears", isDirectory: true)
+            .appendingPathComponent(BoundROMUpdateContent.hash(Data(gameID.utf8)) + ".json")
+    }
+    /// Invalidates work captured before a clear, including callbacks arriving after completion.
+    func saveClearRevision(gameID: String) throws -> UUID? {
+        if let pending = try pendingSaveClear(gameID: gameID) { return pending.id }
+        let url = completedSaveClearURL(gameID: gameID)
+        guard fm.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(UUID.self, from: Data(contentsOf: url))
+    }
+    func hasPendingSaveClear(gameID: String) -> Bool {
+        fm.fileExists(atPath: saveClearURL(gameID: gameID).path)
+    }
+    func pendingSaveClear(gameID: String) throws -> SaveClear? {
+        guard hasPendingSaveClear(gameID: gameID) else { return nil }
+        let value = try JSONDecoder().decode(SaveClear.self, from: Data(contentsOf: saveClearURL(gameID: gameID)))
+        guard value.gameID == gameID else { throw BoundROMUpdateError.storage }
+        return value
+    }
+    func pendingSaveClears() throws -> [SaveClear] {
+        guard fm.fileExists(atPath: saveClearsURL.path) else { return [] }
+        return try fm.contentsOfDirectory(at: saveClearsURL, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
+            .map { url in
+                let value = try JSONDecoder().decode(SaveClear.self, from: Data(contentsOf: url))
+                guard url == saveClearURL(gameID: value.gameID) else { throw BoundROMUpdateError.storage }
+                return value
+            }
+    }
+    func beginSaveClear(gameID: String, gameName: String, cloudContext: Data) throws -> SaveClear {
+        if let pending = try pendingSaveClear(gameID: gameID) { return pending }
+        let value = SaveClear(id: UUID(), gameID: gameID, gameName: gameName, cloudContext: cloudContext)
+        try write(JSONEncoder().encode(value), to: saveClearURL(gameID: gameID))
+        return value
+    }
+    func completeSaveClear(_ value: SaveClear) throws {
+        guard try pendingSaveClear(gameID: value.gameID) == value else { throw BoundROMUpdateError.storage }
+        let completed = completedSaveClearURL(gameID: value.gameID)
+        try write(JSONEncoder().encode(value.id), to: completed)
+        try fm.removeItem(at: saveClearURL(gameID: value.gameID))
+        try synchronizeDirectory(saveClearsURL)
+    }
     init(root: URL, documents: URL, support: URL) {
         self.root = root; self.documents = documents; self.support = support
     }
@@ -345,6 +400,7 @@ enum BoundROMUpdateRegistry {
         return state.current?.sha256
     }
     static func validateDownload(gameID: String, generation: String?, isSave: Bool, storage: BoundROMUpdateStorage = .live, remoteLocked: Bool = false) throws {
+        if isSave, storage.hasPendingSaveClear(gameID: gameID) { throw BoundROMUpdateError.clearingSaves }
         if isSave, generation != nil, remoteLocked { throw BoundROMUpdateError.syncPending }
         let state = try storage.effectiveState()
         if state.retiredGameIDs.contains(gameID) { throw BoundROMUpdateError.retired }
@@ -352,13 +408,15 @@ enum BoundROMUpdateRegistry {
         if isSave, state.requiresGeneration, state.current?.gameID == gameID, generation != state.current?.sha256 { throw BoundROMUpdateError.staleSave }
     }
     static func validateRestore(gameID: String, generation: String?, version: String, currentVersion: String?, isLocked: Bool, storage: BoundROMUpdateStorage = .live) throws {
+        if storage.hasPendingSaveClear(gameID: gameID) { throw BoundROMUpdateError.clearingSaves }
         let state = try storage.effectiveState()
         if state.retiredGameIDs.contains(gameID) { throw BoundROMUpdateError.retired }
         guard state.requiresGeneration, state.current?.gameID == gameID else { return }
         guard generation == state.current?.sha256, version == currentVersion, !isLocked else { throw BoundROMUpdateError.staleSave }
         if let pending = try storage.pending(), pending.resetGameIDs.contains(gameID) { throw BoundROMUpdateError.syncPending }
     }
-    static func validateUpload(gameID: String) throws {
-        if try BoundROMUpdateStorage.live.effectiveState().retiredGameIDs.contains(gameID) { throw BoundROMUpdateError.retired }
+    static func validateUpload(gameID: String, storage: BoundROMUpdateStorage = .live) throws {
+        if storage.hasPendingSaveClear(gameID: gameID) { throw BoundROMUpdateError.clearingSaves }
+        if try storage.effectiveState().retiredGameIDs.contains(gameID) { throw BoundROMUpdateError.retired }
     }
 }

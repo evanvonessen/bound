@@ -6,6 +6,18 @@ import SwiftyDropbox
 
 @MainActor
 final class BoundDropboxOAuthTests: XCTestCase {
+    func testSaveClearRequiresStartedDropboxStoreOwnedByCurrentAccount() throws {
+        let owner = UUID()
+        XCTAssertThrowsError(try SyncManager.validateSaveClearRecordStore(owner: owner, recordedOwner: owner.uuidString,
+            service: nil, isStarted: false, isChangingAccount: false))
+        XCTAssertThrowsError(try SyncManager.validateSaveClearRecordStore(owner: owner, recordedOwner: UUID().uuidString,
+            service: .dropbox, isStarted: true, isChangingAccount: false))
+        XCTAssertThrowsError(try SyncManager.validateSaveClearRecordStore(owner: owner, recordedOwner: owner.uuidString,
+            service: .dropbox, isStarted: true, isChangingAccount: true))
+        XCTAssertNoThrow(try SyncManager.validateSaveClearRecordStore(owner: owner, recordedOwner: owner.uuidString,
+            service: .dropbox, isStarted: true, isChangingAccount: false))
+    }
+
     func testPKCEChallengeUsesS256Base64URLEncoding() {
         let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
         XCTAssertEqual(BoundDropboxOAuthProtocol.challenge(for: verifier), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
@@ -232,5 +244,132 @@ final class BoundDropboxOAuthTests: XCTestCase {
             let provider = BoundDropboxOAuth(account: try account()) { _ in (Data(body.utf8),status) }
             if case .success = await access(provider) { XCTFail("Invalid response must fail") }
         }
+    }
+}
+
+@MainActor
+final class BoundDropboxSaveDeletionTests: XCTestCase {
+    private let gameID = String(repeating: "a", count: 40)
+    private let otherGameID = String(repeating: "b", count: 40)
+    private let snapshot = "11111111-1111-4111-8111-111111111111"
+    private let otherSnapshot = "22222222-2222-4222-8222-222222222222"
+
+    private func entry(_ name: String, metadata: [String: String] = [:]) -> [String: Any] {
+        [".tag": "file", "id": "id:" + name, "name": name, "path_lower": "/delta emulator/" + name.lowercased(),
+         "property_groups": [["fields": metadata.map { ["name": $0.key, "value": $0.value] }]]]
+    }
+    private func record(_ identifier: String, game: String) -> [String: Any] {
+        entry("SaveState-" + identifier, metadata: ["harmony_recordedObjectType": "SaveState",
+             "harmony_recordedObjectIdentifier": identifier, "gameID": game])
+    }
+    private func encoded(_ value: Any) throws -> Data { try JSONSerialization.data(withJSONObject: value) }
+    private func entries(_ value: [[String: Any]]) throws -> [BoundDropboxSaveDeletion.Entry] {
+        try JSONDecoder().decode([BoundDropboxSaveDeletion.Entry].self, from: encoded(value))
+    }
+    private func page(_ values: [[String: Any]], cursor: String = "end", more: Bool = false) throws -> (Data, Int) {
+        (try encoded(["entries": values, "cursor": cursor, "has_more": more]), 200)
+    }
+
+    func testSelectsOnlyExactCartridgeAndCloudSnapshotFiles() throws {
+        let values = [entry("Game-" + gameID), entry("GameSave-" + gameID), entry("GameSave-" + gameID + "-gameSave"),
+                      entry("GameSave-" + otherGameID + "-gameSave"), record(snapshot, game: gameID),
+                      entry("SaveState-" + snapshot + "-saveState"), entry("SaveState-" + snapshot + "-thumbnail"),
+                      record(otherSnapshot, game: otherGameID), entry("SaveState-" + otherSnapshot + "-saveState"),
+                      entry("GameSave-" + gameID + "-gameSave-other")]
+        let selected = try BoundDropboxSaveDeletion.selectedEntries(entries(values), gameID: gameID, localSaveStateIDs: [], directory: "Delta Emulator")
+        XCTAssertEqual(Set(selected.map(\.name)), ["GameSave-" + gameID, "GameSave-" + gameID + "-gameSave",
+                                                  "SaveState-" + snapshot, "SaveState-" + snapshot + "-saveState", "SaveState-" + snapshot + "-thumbnail"])
+        XCTAssertEqual(selected.last?.name, "SaveState-" + snapshot)
+    }
+
+    func testRefusesLocalSnapshotIDThatBelongsToAnotherROMRemotely() throws {
+        let values = [record(snapshot, game: otherGameID)]
+        XCTAssertThrowsError(try BoundDropboxSaveDeletion.selectedEntries(entries(values), gameID: gameID,
+            localSaveStateIDs: [snapshot], directory: "Delta Emulator"))
+    }
+
+    func testPaginatesAndRemovesPayloadsBeforeCloudOnlyRecord() async throws {
+        var routes = [String](); var deleted = [String](); var listCalls = 0
+        let deletion = BoundDropboxSaveDeletion(token: "fixture", directory: "Delta Emulator", transport: { request in
+            let route = try XCTUnwrap(request.url?.path); routes.append(route)
+            switch route {
+            case "/2/file_properties/templates/list_for_user":
+                XCTAssertEqual(request.httpBody, Data("null".utf8))
+                return (try self.encoded(["template_ids": ["fixture-template"]]), 200)
+            case "/2/files/list_folder":
+                listCalls += 1
+                return try self.page(listCalls == 1 ? [self.record(self.snapshot, game: self.gameID)] : [], cursor: "next", more: listCalls == 1)
+            case "/2/files/list_folder/continue": return try self.page([self.entry("SaveState-" + self.snapshot + "-saveState")])
+            case "/2/files/delete_v2":
+                let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: String])
+                deleted.append(try XCTUnwrap(body["path"]))
+                return (try self.encoded([:]), 200)
+            default: XCTFail("Unexpected request"); throw BoundDropboxSaveDeletion.Failure.response
+            }
+        })
+        try await deletion.delete(gameID: gameID, localSaveStateIDs: [])
+        XCTAssertEqual(deleted, ["id:SaveState-" + snapshot + "-saveState", "id:SaveState-" + snapshot])
+        XCTAssertEqual(listCalls, 2)
+        XCTAssertTrue(routes.contains("/2/files/list_folder/continue"))
+    }
+
+    func testFailedPayloadDeletionDoesNotDeleteRecordAndCanBeRetried() async throws {
+        var deleted = [String](); var failed = false; var listCalls = 0
+        let deletion = BoundDropboxSaveDeletion(token: "fixture", directory: "Delta Emulator", transport: { request in
+            switch request.url?.path {
+            case "/2/file_properties/templates/list_for_user": return (try self.encoded(["template_ids": ["fixture-template"]]), 200)
+            case "/2/files/list_folder":
+                listCalls += 1
+                return try self.page(listCalls < 3 ? [self.record(self.snapshot, game: self.gameID), self.entry("SaveState-" + self.snapshot + "-saveState")] : [])
+            case "/2/files/delete_v2":
+                let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: String])
+                let path = try XCTUnwrap(body["path"])
+                if !failed { failed = true; return (Data(), 503) }
+                deleted.append(path); return (try self.encoded([:]), 200)
+            default: XCTFail("Unexpected request"); throw BoundDropboxSaveDeletion.Failure.response
+            }
+        })
+        do { try await deletion.delete(gameID: gameID, localSaveStateIDs: []); XCTFail("Failure must keep deletion pending") }
+        catch { XCTAssertTrue(deleted.isEmpty) }
+        try await deletion.delete(gameID: gameID, localSaveStateIDs: [])
+        XCTAssertEqual(deleted.last, "id:SaveState-" + snapshot)
+    }
+
+    func testMissingMetadataReadsOnlyRecordJSONToFindOwner() async throws {
+        var listed = false; var downloads = 0; var deleted = [String]()
+        let deletion = BoundDropboxSaveDeletion(token: "fixture", directory: "Delta Emulator", transport: { request in
+            switch request.url?.path {
+            case "/2/file_properties/templates/list_for_user": return (try self.encoded(["template_ids": []]), 200)
+            case "/2/files/list_folder":
+                if listed { return try self.page([]) }; listed = true
+                return try self.page([self.entry("SaveState-" + self.snapshot), self.entry("SaveState-" + self.snapshot + "-saveState")])
+            case "/2/files/download":
+                downloads += 1
+                XCTAssertEqual(request.url?.host, "content.dropboxapi.com")
+                return (try self.encoded(["type": "SaveState", "identifier": self.snapshot,
+                    "relationships": ["game": ["type": "Game", "identifier": self.gameID]]]), 200)
+            case "/2/files/delete_v2":
+                let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: String])
+                deleted.append(try XCTUnwrap(body["path"])); return (try self.encoded([:]), 200)
+            default: XCTFail("Unexpected request"); throw BoundDropboxSaveDeletion.Failure.response
+            }
+        })
+        try await deletion.delete(gameID: gameID, localSaveStateIDs: [])
+        XCTAssertEqual(downloads, 1)
+        XCTAssertEqual(deleted.count, 2)
+    }
+
+    func testAccountFencePreventsDeletionAfterIdentityChanges() async throws {
+        var changed = false; var deletes = 0
+        let deletion = BoundDropboxSaveDeletion(token: "fixture", directory: "Delta Emulator", transport: { request in
+            switch request.url?.path {
+            case "/2/file_properties/templates/list_for_user": return (try self.encoded(["template_ids": []]), 200)
+            case "/2/files/list_folder": changed = true; return try self.page([self.entry("GameSave-" + self.gameID)])
+            case "/2/files/delete_v2": deletes += 1; return (Data(), 200)
+            default: throw BoundDropboxSaveDeletion.Failure.response
+            }
+        }, validate: { if changed { throw BoundDropboxSaveDeletion.Failure.changed } })
+        do { try await deletion.delete(gameID: gameID, localSaveStateIDs: []); XCTFail("Changed identity must fail") }
+        catch { XCTAssertEqual(deletes, 0) }
     }
 }

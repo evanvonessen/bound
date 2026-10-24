@@ -42,6 +42,7 @@ extension GameCollectionViewController
         case alreadyRunning
         case downloadingGameSave
         case updatingROM
+        case clearingSaves
         case biosNotFound
         case systemAlreadyRunning(RunningGameSnapshot?, UISceneSession)
         case multiplayerSessionActive(EmulatorCore?)
@@ -52,6 +53,7 @@ extension GameCollectionViewController
             case .alreadyRunning: return NSLocalizedString("Game Already Running", comment: "")
             case .downloadingGameSave: return NSLocalizedString("Downloading Save File", comment: "")
             case .updatingROM: return NSLocalizedString("Updating ROM", comment: "")
+            case .clearingSaves: return "Clearing Saves"
             case .biosNotFound: return NSLocalizedString("Missing Required DS Files", comment: "")
             case .systemAlreadyRunning: return NSLocalizedString("System Already Running", comment: "")
             case .multiplayerSessionActive: return NSLocalizedString("Active Multiplayer Game", comment: "")
@@ -65,6 +67,7 @@ extension GameCollectionViewController
             case .downloadingGameSave: return NSLocalizedString("Please wait until after this game's save file has been downloaded before playing to prevent losing save data.", comment: "")
             case .biosNotFound: return NSLocalizedString("Please import the required files in Delta's settings to play DS games.", comment: "")
             case .updatingROM: return NSLocalizedString("Please wait for the ROM update to finish.", comment: "")
+            case .clearingSaves: return BoundROMUpdateError.clearingSaves.localizedDescription
             case .systemAlreadyRunning(let game, _):
                 let gameNamePhrase = game.map { String(format: " (“%@”)", $0.name) } ?? ""
                 
@@ -157,7 +160,10 @@ class GameCollectionViewController: UICollectionViewController
     
     weak var activeEmulatorCore: EmulatorCore?
     
-    private var activeSaveState: SaveStateProtocol?
+    private var activeSaveStateGameID: String?
+    private var activeSaveState: SaveStateProtocol? {
+        didSet { if activeSaveState == nil { activeSaveStateGameID = nil } }
+    }
     private var isResumingGame: Bool = false
     
     private let prototypeCell = GridCollectionViewCell()
@@ -193,6 +199,8 @@ extension GameCollectionViewController
 
         // Operator: swap in operator data source and start coordinator
         self.startOperatorCoordinator()
+        NotificationCenter.default.addObserver(self, selector: #selector(saveClearBegan(_:)),
+            name: BoundROMUpdateManager.saveClearBegan, object: nil)
 
         self.collectionView?.dataSource = self.dataSource
         self.collectionView?.prefetchDataSource = self.dataSource
@@ -286,6 +294,12 @@ extension GameCollectionViewController
                 return
             }
             
+            guard !BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier),
+                  !BoundROMUpdateManager.shared.isApplying else {
+                self.activeSaveState = nil
+                self.isResumingGame = false
+                return
+            }
             if let activeEmulatorCore, activeEmulatorCore.isWirelessMultiplayerActive, self.isResumingGame
             {
                 // We don't pause emulator cores with active multiplayer, so do nothing to "resume".
@@ -390,6 +404,7 @@ extension GameCollectionViewController
             do
             {
                 let saveStates = try game.managedObjectContext?.fetch(fetchRequest)
+                self.activeSaveStateGameID = game.identifier
                 self.activeSaveState = saveStates?.last
             }
             catch
@@ -441,6 +456,19 @@ extension GameCollectionViewController
 //MARK: - Private Methods -
 private extension GameCollectionViewController
 {
+    @objc func saveClearBegan(_ notification: Notification) {
+        guard let gameID = notification.object as? String else { return }
+        if activeSaveStateGameID == gameID || (activeEmulatorCore?.game as? Game)?.identifier == gameID {
+            activeSaveState = nil
+            isResumingGame = false
+        }
+        if (_previewTransitionViewController?.game as? Game)?.identifier == gameID {
+            _previewTransitionViewController?.stopPreview()
+            _previewTransitionViewController = nil
+            _performingPreviewTransition = false
+        }
+    }
+
     func update()
     {
         let layout = self.collectionViewLayout as! GridCollectionViewLayout
@@ -627,6 +655,7 @@ private extension GameCollectionViewController
                             do
                             {
                                 let saveStates = try game.managedObjectContext?.fetch(fetchRequest)
+                                self.activeSaveStateGameID = game.identifier
                                 self.activeSaveState = saveStates?.last
                             }
                             catch
@@ -660,7 +689,7 @@ private extension GameCollectionViewController
                     
                     self.present(alertController, animated: true, completion: nil)
                     
-                case .updatingROM, .downloadingGameSave, .systemAlreadyRunning, .multiplayerSessionActive:
+                case .clearingSaves, .updatingROM, .downloadingGameSave, .systemAlreadyRunning, .multiplayerSessionActive:
                     let alertController = UIAlertController(title: error.errorTitle, message: error.localizedDescription, preferredStyle: .alert)
                     
                     if error.recoveryActions.isEmpty
@@ -695,6 +724,7 @@ private extension GameCollectionViewController
     private func validateLaunchingGame(_ game: Game, ignoringErrors ignoredErrors: [Error]) throws(LaunchError)
     {
         guard !BoundROMUpdateManager.shared.isApplying else { throw LaunchError.updatingROM }
+        guard !BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier) else { throw LaunchError.clearingSaves }
         let ignoredErrors = ignoredErrors.map { $0 as NSError }
         
         if !ignoredErrors.contains(where: { $0.domain == (LaunchError.alreadyRunning as NSError).domain && $0.code == (LaunchError.alreadyRunning as NSError).code })
@@ -845,9 +875,8 @@ private extension GameCollectionViewController
             self.exportSaveFile(for: game)
         }
         
-        let clearSavesAction = UIAction(title: NSLocalizedString("Clear Saves…", comment: ""), image: UIImage(symbolNameIfAvailable: "trash"), attributes: .destructive) { [weak self] _ in
-            self?.confirmClearSaves(for: game)
-        }
+        let pending = BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier)
+        let clearSavesAction = self.clearSavesAction(for: game)
 
         let deleteAction = UIAction(title: NSLocalizedString("Delete", comment: ""), image: UIImage(symbolNameIfAvailable: "trash"), attributes: .destructive) { [unowned self] action in
             self.delete(game)
@@ -856,11 +885,16 @@ private extension GameCollectionViewController
         let openMenu = UIMenu(title: "", options: .displayInline, children: [openNewWindowAction])
         let openActions = UIApplication.shared.supportsMultipleScenes ? [openMenu] : []
         
-        let saveFileMenu = UIMenu(title: NSLocalizedString("Manage Save File", comment: ""), image: UIImage(symbolNameIfAvailable: "doc"), children: [importSaveFile, exportSaveFile, clearSavesAction])
+        let saveFileMenu = UIMenu(title: NSLocalizedString("Manage Save File", comment: ""), image: UIImage(symbolNameIfAvailable: "doc"), children: [importSaveFile, exportSaveFile])
         
         // Hide save states option if using RetroAchievements and Hardcore Mode.
         let savesActions = (AchievementsManager.shared.isAuthenticated && Settings.features.retroAchievements.isHardcoreModeEnabled) ? [saveFileMenu] : [saveStatesAction, saveFileMenu]
-        let savesMenu = UIMenu(title: "", options: .displayInline, children: savesActions)
+        let savesMenu = UIMenu(title: "", options: .displayInline, children: savesActions + [clearSavesAction])
+        if pending {
+            importSaveFile.attributes.insert(.disabled)
+            saveStatesAction.attributes.insert(.disabled)
+            deleteAction.attributes.insert(.disabled)
+        }
         
         let settingsMenu = UIMenu(title: "", options: .displayInline, children: [settingsAction])
         
@@ -933,12 +967,18 @@ private extension GameCollectionViewController
     
     func delete(_ game: Game)
     {
+        guard !BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier) else { return }
+        let gameID = game.identifier
+        let revision = try? BoundROMUpdateStorage.live.saveClearRevision(gameID: gameID)
         let confirmationAlertController = UIAlertController(title: NSLocalizedString("Are you sure you want to delete this game?", comment: ""),
                                                             message: NSLocalizedString("All associated data, such as saves, save states, and cheat codes, will also be deleted.", comment: ""),
                                                             preferredStyle: .alert)
         confirmationAlertController.addAction(UIAlertAction(title: NSLocalizedString("Delete Game", comment: ""), style: .destructive, handler: { action in
-            
+            guard !BoundROMUpdateManager.shared.hasPendingSaveClear(for: gameID),
+                  (try? BoundROMUpdateStorage.live.saveClearRevision(gameID: gameID)) == revision else { return }
             DatabaseManager.shared.performBackgroundTask { (context) in
+                guard !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: gameID),
+                      (try? BoundROMUpdateStorage.live.saveClearRevision(gameID: gameID)) == revision else { return }
                 let temporaryGame = context.object(with: game.objectID) as! Game
                 context.delete(temporaryGame)
                 
@@ -953,6 +993,7 @@ private extension GameCollectionViewController
     
     func viewSaveStates(for game: Game)
     {
+        guard !BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier) else { return }
         self.performSegue(withIdentifier: "saveStates", sender: game)
     }
     
@@ -1176,18 +1217,42 @@ private extension GameCollectionViewController
         self.present(activityViewController, animated: true, completion: nil)
     }
     
+    func clearSavesAction(for game: Game) -> UIAction {
+        let clearing = BoundROMUpdateManager.shared.clearingSaveGameIDs.contains(game.identifier)
+        let pending = BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier)
+        let title = clearing ? "Clearing Saves…" : (pending ? "Retry Clearing Saves…" : "Clear Saves…")
+        return UIAction(title: title, image: UIImage(symbolNameIfAvailable: "trash"),
+            attributes: clearing ? [.destructive, .disabled] : .destructive) { [weak self] _ in
+            self?.confirmClearSaves(for: game)
+        }
+    }
+
     func confirmClearSaves(for game: Game)
     {
-        let alert = UIAlertController(title: "Clear Saves for \(game.name)?", message: "This closes the game and clears its saved progress, save states, and local multiplayer recovery. Other games are unaffected.", preferredStyle: .alert)
+        let alert = UIAlertController(title: "Clear Saves for \(game.name)?",
+            message: "Delete all cartridge saves, save states, and Dropbox saves for this ROM? Its save conflicts and local multiplayer recovery will also be cleared. Close this ROM on your other devices first. This ROM stays locked until cleanup finishes. Other ROMs are unaffected.", preferredStyle: .alert)
         alert.addAction(.cancel)
         alert.addAction(UIAlertAction(title: "Clear Saves", style: .destructive) { [weak self] _ in
             guard let self else { return }
-            if self.activeEmulatorCore?.game.fileURL == game.fileURL { self.activeSaveState = nil }
-            BoundROMUpdateManager.shared.clearSaves(for: game) { error in
-                let result: UIAlertController
-                if let error { result = UIAlertController(title: "Couldn’t Clear Saves", error: error) }
-                else { result = UIAlertController(title: "Saves Cleared", message: game.name, preferredStyle: .alert); result.addAction(.ok) }
-                self.present(result, animated: true)
+            let progress = UIAlertController(title: "Clearing Saves…", message: game.name, preferredStyle: .alert)
+            self.present(progress, animated: true) {
+                BoundROMUpdateManager.shared.clearSaves(for: game) { [weak self] error in
+                    progress.dismiss(animated: true) {
+                        guard let self, self.view.window != nil else { return }
+                        let result: UIAlertController
+                        if let error {
+                            result = UIAlertController(title: "Couldn’t Clear Saves", message: error.localizedDescription, preferredStyle: .alert)
+                            result.addAction(UIAlertAction(title: "Retry", style: .default) { [weak self] _ in
+                                self?.confirmClearSaves(for: game)
+                            })
+                            result.addAction(.cancel)
+                        } else {
+                            result = UIAlertController(title: "Saves Cleared", message: game.name, preferredStyle: .alert)
+                            result.addAction(.ok)
+                        }
+                        self.present(result, animated: true)
+                    }
+                }
             }
         })
         present(alert, animated: true)
@@ -1215,6 +1280,7 @@ private extension GameCollectionViewController
                 
                 if let fileURL = fileURL
                 {
+                    guard !BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier) else { throw BoundROMUpdateError.clearingSaves }
                     try FileManager.default.copyItem(at: fileURL, to: game.gameSaveURL, shouldReplace: true)
                     
                     if let gameSave = game.gameSave
@@ -1343,8 +1409,16 @@ private extension GameCollectionViewController
     {
         guard let gameViewController = _previewTransitionViewController else { return }
         
-        let game = gameViewController.game as! Game
-        let indexPath = self.dataSource.fetchedResultsController.indexPath(forObject: game)!
+        guard let game = gameViewController.game as? Game,
+              !BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier),
+              let indexPath = self.dataSource.fetchedResultsController.indexPath(forObject: game) else {
+            gameViewController.stopPreview()
+            _previewTransitionViewController = nil
+            _performingPreviewTransition = false
+            activeSaveState = nil
+            return
+        }
+        self.activeSaveStateGameID = game.identifier
         let fileURL = FileManager.default.uniqueTemporaryURL()
         
         if gameViewController.isLivePreview
@@ -1385,10 +1459,14 @@ extension GameCollectionViewController: SaveStatesViewControllerDelegate
     
     func saveStatesViewController(_ saveStatesViewController: SaveStatesViewController, loadSaveState saveState: SaveStateProtocol)
     {
+        guard let game = saveStatesViewController.game,
+              !BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier) else { return }
+        self.activeSaveStateGameID = game.identifier
         self.activeSaveState = saveState
         
         self.dismiss(animated: true) {
-            let indexPath = self.dataSource.fetchedResultsController.indexPath(forObject: saveStatesViewController.game)!
+            guard !BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier),
+                  let indexPath = self.dataSource.fetchedResultsController.indexPath(forObject: game) else { return }
             self.launchGame(at: indexPath, clearScreen: false, ignoreAlreadyRunningError: true)
         }
     }
@@ -1487,15 +1565,16 @@ extension GameCollectionViewController
         }
         catch LaunchError.systemAlreadyRunning(let activeGame?, _) where activeGame.identifier == game.identifier
         {
-            // Selected game is currently running in background/another window, so don't show context menu.
-            Logger.main.info("Game \(activeGame.identifier, privacy: .public) is currently running, hiding context menu.")
-            return nil
+            // Clearing closes matching controllers in every window before deleting saves.
+            return UIContextMenuConfiguration(identifier: indexPath as NSIndexPath, previewProvider: nil) { [weak self] _ in
+                UIMenu(title: game.name, children: self.map { [$0.clearSavesAction(for: game)] } ?? [])
+            }
         }
         catch LaunchError.multiplayerSessionActive(let emulatorCore) where (emulatorCore?.game as? Game) == game
         {
-            // Selected game has active multiplayer session, so don't show context menu.
-            Logger.main.info("Game \(game.identifier, privacy: .public) has active multiplayer session, hiding context menu.")
-            return nil
+            return UIContextMenuConfiguration(identifier: indexPath as NSIndexPath, previewProvider: nil) { [weak self] _ in
+                UIMenu(title: game.name, children: self.map { [$0.clearSavesAction(for: game)] } ?? [])
+            }
         }
         catch
         {

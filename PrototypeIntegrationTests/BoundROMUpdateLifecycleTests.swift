@@ -4,6 +4,35 @@ import CoreData
 
 @MainActor
 final class BoundROMUpdateLifecycleTests: XCTestCase {
+    func testPendingSaveClearBlocksGameplayAndPreviewBindingForOnlyThatROM() throws {
+        guard SyncManager.shared.coordinator == nil else { throw XCTSkip("Requires the isolated signed-out QA app") }
+        let modelURL = try XCTUnwrap(Bundle(for: DatabaseManager.self).url(forResource: "Delta", withExtension: "momd"))
+        let model = try XCTUnwrap(NSManagedObjectModel(contentsOf: modelURL))
+        let context = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
+        context.persistentStoreCoordinator = NSPersistentStoreCoordinator(managedObjectModel: model)
+        defer { context.reset() }
+        let game = Game(entity: try XCTUnwrap(model.entitiesByName["Game"]), insertInto: context)
+        game.identifier = "save-clear-fixture-" + UUID().uuidString
+        game.name = "Save Clear Fixture"
+        game.filename = game.identifier + ".gba"
+        game.type = .gba
+
+        // This fabricated game never enters the library and owns no save files.
+        let storage = BoundROMUpdateStorage.live
+        let pending = try storage.beginSaveClear(gameID: game.identifier, gameName: game.name, cloudContext: Data())
+        defer { try? storage.completeSaveClear(pending) }
+        let gameplay = GameViewController()
+        let preview = PreviewGameViewController()
+        gameplay.game = game
+        preview.game = game
+        XCTAssertNil(gameplay.game)
+        XCTAssertNil(gameplay.emulatorCore)
+        XCTAssertNil(preview.game)
+        XCTAssertNil(preview.emulatorCore)
+        XCTAssertTrue(BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier))
+        XCTAssertFalse(BoundROMUpdateManager.shared.hasPendingSaveClear(for: "unrelated-" + game.identifier))
+    }
+
     func testBundledROMIsImportedWithoutDuplicatingExistingGame() async throws {
         let content = try BoundROMUpdateContent(data: Data(contentsOf: XCTUnwrap(Bundle(for: Game.self).url(forResource: "rrbin-integrated", withExtension: "gba"))), expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
         let context = DatabaseManager.shared.viewContext
