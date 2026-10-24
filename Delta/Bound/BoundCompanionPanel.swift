@@ -93,7 +93,7 @@ final class BoundCompanionState: ObservableObject {
     @Published var macReference: BoundPiPContent = .dex {
         didSet {
             if macReference == .dex || macReference == .bosses { macMidReference = macReference }
-            if macReference == .notes || macReference == .types { macBottomReference = macReference }
+            if [.notes, .types, .connections].contains(macReference) { macBottomReference = macReference }
             if oldValue != macReference { changed?() }
         }
     }
@@ -257,7 +257,7 @@ final class BoundOverlayView: UIView {
 
 @MainActor
 enum BoundMacControllerActionRouting {
-    static let referenceContents: [BoundPiPContent] = [.dex, .bosses, .notes, .types]
+    static let referenceContents: [BoundPiPContent] = [.dex, .bosses, .notes, .types, .connections]
 
     static func inputMapping(_ mapping: BoundControllerInputMapping) -> BoundControllerInputMapping {
         var mapping = mapping
@@ -1381,14 +1381,14 @@ final class BoundCompanionCoordinator {
         guard isAvailable else { return }
         if let command = action.navigationCommand {
             guard let content = controllerReferenceContent else { return }
-            if command == .back, content == .types,
+            if command == .back, [.types, .connections].contains(content),
                BoundControllerMultiviewPreferences().isEnabled {
                 if macHost != nil { resetMacControllerFocus() }
                 else if landscapeArrangement.active { landscapeArrangement.toggleReference() }
                 else if landscapeCompanion.active { landscapeCompanion.hideReference() }
                 return
             }
-            guard content == .dex || content == .bosses else { return }
+            guard [.dex, .bosses, .connections].contains(content) else { return }
             BoundControllerNavigationEvent.post(command: command, gameID: gameID, content: content)
             return
         }
@@ -1426,7 +1426,7 @@ final class BoundCompanionCoordinator {
             if !landscapeArrangement.referenceVisible { landscapeArrangement.toggleReference() }
         } else if landscapeCompanion.active { landscapeCompanion.selectReference(content) }
     }
-    private var macControllerTabContents: [BoundPiPContent] { [.dex, .bosses, .notes, .types] }
+    private var macControllerTabContents: [BoundPiPContent] { BoundMacControllerActionRouting.referenceContents }
     var allowsOpacityGesture: Bool { !state.availableContents.isEmpty && state.landscape && state.content != .types && !isEditingNotes }
     private func companionBaseSize(width: CGFloat, content: BoundPiPContent? = nil) -> CGSize {
         let content = content ?? state.content
@@ -1709,6 +1709,8 @@ struct BoundCompanionPanel: View {
                         textEditingChanged(editing)
                         editingChanged(editing)
                     }).id(gameID)
+                } else if shows(.connections) {
+                    BoundConnectionsView(feed: sharing.connectionFeed, gameID: gameID)
                 } else if shows(.types) {
                     if state.landscape {
                         Image("PokemonTypeChart").resizable().scaledToFit()

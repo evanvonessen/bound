@@ -12,6 +12,23 @@ final class LandscapeCompanionTests: XCTestCase {
         return (BoundLandscapeCompanionModel(preferences: preferences), defaults, suite)
     }
 
+    func testConnectionsIsSelectableWithoutOverwritingSavedReferenceChoices() throws {
+        let (model, defaults, suite) = try makeModel()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertTrue(model.referenceContents.contains(.connections))
+        model.preferences.referenceContents = [.bosses, .types]
+        model.preferences.referenceContent = .types
+        model.reload()
+        XCTAssertEqual(model.referenceContents, [.bosses, .types])
+        XCTAssertEqual(model.referenceContent, .types)
+        model.preferences.referenceContents = [.bosses, .types, .connections]
+        model.reload()
+        model.selectReference(.connections)
+        let restored = BoundLandscapeCompanionModel(preferences: BoundLandscapePreferences(defaults: defaults, namespace: suite))
+        XCTAssertEqual(restored.referenceContents, [.bosses, .types, .connections])
+        XCTAssertEqual(restored.referenceContent, .connections)
+    }
+
     func testLockedFriendOverlayYieldsTouchToUnderlyingControllerButton() throws {
         let (model, defaults, suite) = try makeModel()
         defer { defaults.removePersistentDomain(forName: suite) }

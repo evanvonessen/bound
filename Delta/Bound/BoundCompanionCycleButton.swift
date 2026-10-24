@@ -31,6 +31,7 @@ final class BoundCompanionCycleButton: UIButton {
             case .types: "square.grid.2x2.fill"
             case .notes: "note.text"
             case .dex: "book.closed.fill"
+            case .connections: "network"
             }
             images[content] = UIImage(systemName: name, withConfiguration: symbolConfiguration)
         }
@@ -41,7 +42,7 @@ final class BoundCompanionCycleButton: UIButton {
         super.init(frame: frame)
         accessibilityIdentifier = "bound.panel-cycle"
         accessibilityLabel = "Bound companion panel"
-        accessibilityHint = "Cycles Friend, Notes, and Types"
+        accessibilityHint = "Cycles enabled companion views"
         addTarget(self, action: #selector(beginPress), for: .touchDown)
         addTarget(self, action: #selector(pressVisual), for: .touchDragEnter)
         addTarget(self, action: #selector(releaseVisual), for: [.touchCancel, .touchUpInside, .touchUpOutside, .touchDragExit])

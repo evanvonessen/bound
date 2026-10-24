@@ -26,6 +26,34 @@ final class LandscapeArrangementTests: XCTestCase {
                            screenBounds: screenBounds)
     }
 
+    func testConnectionsCyclesAndPersistsInBothMultiviewOptionsWithExistingSharedPlacement() throws {
+        for option in [BoundLandscapeOption.option6, .option7] {
+            let (model, defaults, namespace) = try makeModel()
+            defer { defaults.removePersistentDomain(forName: namespace) }
+            model.useOption(option)
+            model.setActive(true)
+            arrangeLayout(model)
+            model.select(.bosses)
+            model.arrange()
+            model.move(content: .bosses, translation: CGSize(width: -25, height: 10), ended: true)
+            model.setOpacity(0.64, for: .bosses)
+            model.finish(save: true)
+            let placement = model.placement(for: .bosses)
+            model.select(.types)
+            model.cycleReference()
+            XCTAssertEqual(model.referenceContent, .connections)
+            XCTAssertEqual(model.placement(for: .connections), placement)
+
+            let restored = BoundLandscapeArrangementModel(defaults: defaults, namespace: namespace)
+            restored.useOption(option)
+            XCTAssertEqual(restored.referenceContent, .connections)
+            XCTAssertEqual(restored.placement(for: .connections), placement)
+            restored.cycleReference()
+            XCTAssertEqual(restored.referenceContent, .dex)
+            XCTAssertFalse(defaults.bool(forKey: BoundMultiplayerFeatures.key))
+        }
+    }
+
     func testControllerTogglesPreserveSelectionAndRespectLandscapeModeAndEditing() throws {
         let (model, defaults, namespace) = try makeModel()
         defer { defaults.removePersistentDomain(forName: namespace) }
@@ -485,7 +513,7 @@ final class LandscapeArrangementTests: XCTestCase {
 
         model.useOption(.option6)
         XCTAssertTrue(model.multiview)
-        XCTAssertEqual(model.contents, [.dex, .bosses, .types])
+        XCTAssertEqual(model.contents, [.dex, .bosses, .types, .connections])
         XCTAssertEqual(model.referenceContent, expectedInitialPage)
         for page in model.contents { XCTAssertEqual(model.placement(for: page), optionThreeSource) }
 
@@ -522,7 +550,7 @@ final class LandscapeArrangementTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: namespace) }
         model.setContents([])
         model.useOption(.option6)
-        XCTAssertEqual(model.contents, [.dex, .bosses, .types])
+        XCTAssertEqual(model.contents, [.dex, .bosses, .types, .connections])
         XCTAssertTrue(model.multiview)
 
         model.setActive(true)
@@ -558,7 +586,7 @@ final class LandscapeArrangementTests: XCTestCase {
         model.useOption(.option7)
         XCTAssertTrue(model.multiview)
         XCTAssertTrue(model.tabbedMultiview)
-        XCTAssertEqual(model.contents, [.dex, .bosses, .types])
+        XCTAssertEqual(model.contents, [.dex, .bosses, .types, .connections])
         XCTAssertEqual(model.referenceContent, .bosses)
         XCTAssertEqual(model.placement(for: .types), optionSixReference)
         XCTAssertEqual(model.placement(for: .friend), optionSixFriend)
@@ -604,7 +632,7 @@ final class LandscapeArrangementTests: XCTestCase {
         XCTAssertFalse(defaults.bool(forKey: namespace + ".option6.initialized"),
                         "Creating Option 7 must not initialize or rewrite Option 6.")
         XCTAssertTrue(model.tabbedMultiview)
-        XCTAssertEqual(model.contents, [.dex, .bosses, .types],
+        XCTAssertEqual(model.contents, [.dex, .bosses, .types, .connections],
                        "Fixed Option 7 tabs remain available when global content selection is empty.")
         XCTAssertEqual(model.placement(for: .dex), tinyOptionThree)
 
@@ -805,8 +833,8 @@ final class LandscapeArrangementTests: XCTestCase {
         XCTAssertTrue(model.friendVisible)
         XCTAssertTrue(model.referenceVisible)
         XCTAssertEqual(model.selected, .dex)
-        XCTAssertNil(defaults.object(forKey: "bound.landscape.v1.option"))
-        XCTAssertNil(defaults.object(forKey: "bound.landscape.option3.option"))
+        XCTAssertNil(defaults.persistentDomain(forName: namespace)?["bound.landscape.v1.option"])
+        XCTAssertNil(defaults.persistentDomain(forName: namespace)?["bound.landscape.option3.option"])
         model.cycleReference()
         XCTAssertEqual(model.selected, .bosses)
         XCTAssertTrue(model.friendVisible, "Cycling the other views never toggles Friend.")

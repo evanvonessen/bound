@@ -1,5 +1,29 @@
 # Multiplayer player visibility
 
+## Connection feed
+
+The Connections page is available in the companion cycle and landscape
+multiview; tabbed multiview and the Mac sidebar label its tab **Log**. It keeps
+the latest 200 connection transitions in the sharing session's memory,
+newest first, with local dates, times to milliseconds and timezone. Hiding the
+page or reconnecting does not clear its session-owned history.
+The trash button clears the displayed history without changing a connection.
+
+The feed distinguishes local connection/recovery, friend roster loss/rejoin,
+a friend leaving multiplayer, user disconnect and suspension. A missing video
+frame or an offscreen sprite is not logged as a network disconnect. Events come
+from existing session callbacks, with repeated transitions suppressed; there
+is no per-frame work, polling, file writing or extra network request. The feed
+uses fixed labels and retains no tokens, addresses or raw remote errors. It is
+available without enabling experimental multiplayer and does not activate it.
+
+Validation covers repeated/stale callbacks, peer withdrawal followed by roster
+loss, background and menu suspension, bounded history, saved view choices and
+controller routing. Hosted view checks exercise live updates, clearing and
+scrolling at portrait, landscape and Mac sidebar sizes. Release iPhone builds
+pass; these checks do not replace physical two-device reconnect or frame-pacing
+validation, which remains pending.
+
 ## Presence and presentation
 
 Presence remains independent of camera distance. `BoundLivePresenceSession`

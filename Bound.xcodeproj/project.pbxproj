@@ -503,6 +503,10 @@
 		B47710000000000000000005 /* BoundBattleCable.swift in Sources */ = {isa = PBXBuildFile; fileRef = B47710000000000000000004 /* BoundBattleCable.swift */; };
 		A15F00000000000000000004 /* BoundFriendInteractionPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15F00000000000000000003 /* BoundFriendInteractionPanel.swift */; };
 		A15E00000000000000000008 /* BoundPresenceConnectionCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000007 /* BoundPresenceConnectionCheck.swift */; };
+		C0FEED260000000000000002 /* BoundConnectionFeed.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FEED260000000000000001 /* BoundConnectionFeed.swift */; };
+		C0FEED260000000000000004 /* BoundConnectionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FEED260000000000000003 /* BoundConnectionsView.swift */; };
+		C0FEED260000000000000006 /* ConnectionFeedTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FEED260000000000000005 /* ConnectionFeedTests.swift */; };
+		C0FEED260000000000000008 /* ConnectionsViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FEED260000000000000007 /* ConnectionsViewTests.swift */; };
 		A15E0000000000000000000C /* BoundFullAppGameplayQA.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E0000000000000000000B /* BoundFullAppGameplayQA.swift */; };
 		18BC10A8D7EF4D1397B91706 /* RecordedPlayerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */; };
 		A15E00000000000000000004 /* LivePresenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000003 /* LivePresenceTests.swift */; };
@@ -1378,6 +1382,10 @@
 		B47710000000000000000004 /* BoundBattleCable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundBattleCable.swift; sourceTree = "<group>"; };
 		A15F00000000000000000003 /* BoundFriendInteractionPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundFriendInteractionPanel.swift; sourceTree = "<group>"; };
 		A15E00000000000000000007 /* BoundPresenceConnectionCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPresenceConnectionCheck.swift; sourceTree = "<group>"; };
+		C0FEED260000000000000001 /* BoundConnectionFeed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundConnectionFeed.swift; sourceTree = "<group>"; };
+		C0FEED260000000000000003 /* BoundConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundConnectionsView.swift; sourceTree = "<group>"; };
+		C0FEED260000000000000005 /* ConnectionFeedTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionFeedTests.swift; sourceTree = "<group>"; };
+		C0FEED260000000000000007 /* ConnectionsViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionsViewTests.swift; sourceTree = "<group>"; };
 		A15E0000000000000000000B /* BoundFullAppGameplayQA.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundFullAppGameplayQA.swift; sourceTree = "<group>"; };
 		18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordedPlayerTests.swift; sourceTree = "<group>"; };
 		A15E00000000000000000003 /* LivePresenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivePresenceTests.swift; sourceTree = "<group>"; };
@@ -1517,6 +1525,8 @@
                 501200000000000000000004 /* SharedWorldTests.swift */,
 				B4771000000000000000000C /* NativeBattleRuntimeTests.swift */,
 				A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */,
+				C0FEED260000000000000005 /* ConnectionFeedTests.swift */,
+				C0FEED260000000000000007 /* ConnectionsViewTests.swift */,
 				A15E00000000000000000005 /* LivePresenceRuntimeTests.swift */,
 				35733EA11CCE9FF25284EFB8 /* AppearanceIntegrationTests.swift */,
 				79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */,
@@ -1669,6 +1679,8 @@
 				B47710000000000000000004 /* BoundBattleCable.swift */,
 				A15F00000000000000000003 /* BoundFriendInteractionPanel.swift */,
 				A15E00000000000000000007 /* BoundPresenceConnectionCheck.swift */,
+				C0FEED260000000000000001 /* BoundConnectionFeed.swift */,
+				C0FEED260000000000000003 /* BoundConnectionsView.swift */,
 				A15E0000000000000000000B /* BoundFullAppGameplayQA.swift */,
 				E875C2DEF127D860254648FA /* BoundFrameCaptureGate.swift */,
 				9F35BC570DB6B8BA023B9B53 /* BoundCompanionCycleButton.swift */,
@@ -3379,6 +3391,8 @@
                 501200000000000000000003 /* SharedWorldTests.swift in Sources */,
 				B4771000000000000000000D /* NativeBattleRuntimeTests.swift in Sources */,
 				A15E0000000000000000000A /* PresenceConnectionCheckTests.swift in Sources */,
+				C0FEED260000000000000006 /* ConnectionFeedTests.swift in Sources */,
+				C0FEED260000000000000008 /* ConnectionsViewTests.swift in Sources */,
 				A15E00000000000000000006 /* LivePresenceRuntimeTests.swift in Sources */,
 				273B677E21CFB932EFA82ACD /* AppearanceIntegrationTests.swift in Sources */,
 				0DCC5A17E990440B949F4582 /* ConfigurationExportTests.swift in Sources */,
@@ -3727,6 +3741,8 @@
 				B47710000000000000000005 /* BoundBattleCable.swift in Sources */,
 				A15F00000000000000000004 /* BoundFriendInteractionPanel.swift in Sources */,
 				A15E00000000000000000008 /* BoundPresenceConnectionCheck.swift in Sources */,
+				C0FEED260000000000000002 /* BoundConnectionFeed.swift in Sources */,
+				C0FEED260000000000000004 /* BoundConnectionsView.swift in Sources */,
 				A15E0000000000000000000C /* BoundFullAppGameplayQA.swift in Sources */,
 				A5AAF6B64EA97D56F73A4A9D /* BoundFrameCaptureGate.swift in Sources */,
 				9EE1E66A051751E201D09F44 /* BoundCompanionCycleButton.swift in Sources */,

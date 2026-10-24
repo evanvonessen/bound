@@ -522,6 +522,7 @@ struct BoundCompanionPresentation: View {
             multiviewTab("DEX", content: .dex)
             multiviewTab("DOCS", content: .bosses)
             multiviewTab("TYPES", content: .types)
+            multiviewTab("LOG", content: .connections)
         }
         .background(Color(uiColor: .systemBackground))
         .clipShape(UnevenRoundedRectangle(topLeadingRadius: 8, topTrailingRadius: 8))
@@ -544,7 +545,7 @@ struct BoundCompanionPresentation: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(title)
+        .accessibilityLabel(content == .connections ? "Connections" : title)
         .accessibilityValue(selected ? "Selected" : "Not selected")
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityHint(content == .bosses ? "Shows Boss View" : "Shows \(content.title)")

@@ -262,6 +262,7 @@ struct BoundMacWorkspaceView: View {
             HStack(spacing: 3) {
                 referenceButton(.notes, icon: "note.text", label: "Notes", id: "bound.mac-notes")
                 referenceButton(.types, icon: "circle.hexagongrid", label: "Types", id: "bound.mac-types")
+                referenceButton(.connections, icon: "network", label: "Log", id: "bound.mac-connections")
             }.padding(3).background(panel)
             ZStack {
                 BoundNotesEditor(gameID: gameID, floating: false, editingChanged: { editing in
@@ -274,6 +275,11 @@ struct BoundMacWorkspaceView: View {
                     .opacity(state.macBottomReference == .types ? 1 : 0)
                     .allowsHitTesting(referenceIsVisible && state.macBottomReference == .types)
                     .accessibilityHidden(!referenceIsVisible || state.macBottomReference != .types)
+                BoundConnectionsView(feed: sharing.connectionFeed, gameID: gameID,
+                                     isActive: referenceIsVisible && state.macBottomReference == .connections)
+                    .opacity(state.macBottomReference == .connections ? 1 : 0)
+                    .allowsHitTesting(referenceIsVisible && state.macBottomReference == .connections)
+                    .accessibilityHidden(!referenceIsVisible || state.macBottomReference != .connections)
             }.id(gameID).frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(.black).clipShape(RoundedRectangle(cornerRadius: 8))
@@ -293,6 +299,7 @@ struct BoundMacWorkspaceView: View {
                 .background(selected ? accent.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain).accessibilityIdentifier(id)
+        .accessibilityLabel(content == .connections ? "Connections" : label)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

@@ -289,7 +289,7 @@ final class FriendOnboarding: ObservableObject {
         if let roomID = multiplayerPartnerRoomID { disconnectedRooms.insert(roomID) }
         cancelPendingJiggle()
         selected = nil
-        sharing?.configureAuthenticatedRoom(nil, identity: { [weak self] in self?.sharingIdentity() })
+        sharing?.configureAuthenticatedRoom(nil, disconnectReason: .manual, identity: { [weak self] in self?.sharingIdentity() })
         message = ""
     }
     func refresh(completion: ((Bool) -> Void)? = nil) {

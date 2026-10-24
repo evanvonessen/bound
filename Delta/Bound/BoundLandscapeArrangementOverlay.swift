@@ -77,7 +77,7 @@ struct BoundLandscapeArrangementOverlay: View {
                 .buttonStyle(ArrangementButtonStyle(selected: model.referenceVisible))
                 .accessibilityLabel(multiview ? (model.referenceVisible ? "Hide multiview" : "Show multiview") : model.focusedHandles ? (model.referenceVisible ? "Hide views" : "Show views") : "Toggle views")
                 .accessibilityValue(model.referenceVisible ? "Visible" : "Hidden")
-                .accessibilityHint(model.option == .option7 ? "Shows or hides Multiview. Use the DEX, DOCS, and TYPES tabs to switch views." : multiview ? "Shows or hides Multiview. Swipe left or right inside it to switch views." : "Shows or hides the selected reference view. Bound changes the selection.")
+                .accessibilityHint(model.option == .option7 ? "Shows or hides Multiview. Use its tabs to switch views." : multiview ? "Shows or hides Multiview. Swipe left or right inside it to switch views." : "Shows or hides the selected reference view. Bound changes the selection.")
                 .accessibilityIdentifier(model.accessibilityPrefix + "-views-button")
                 .disabled(model.editing || model.contents.isEmpty)
                 .placed(model.layout.viewsButton).zIndex(3)

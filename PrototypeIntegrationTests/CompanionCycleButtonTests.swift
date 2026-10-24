@@ -62,21 +62,47 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(version.version, .option2)
         let original = BoundPiPContent.cycleOrder
         preferences.setContentOrder([.dex, .bosses, .dex])
-        XCTAssertEqual(preferences.orderedContents, [.dex, .bosses, .friend, .notes, .types])
+        XCTAssertEqual(preferences.orderedContents, [.dex, .bosses, .friend, .notes, .types, .connections])
         XCTAssertEqual(preferences.enabledContents(uiVersion: .option1), original)
         version.version = .option2
         XCTAssertEqual(version.effectiveVersion, .option2)
         preferences.setEnabled(false, for: .bosses)
         let restarted = BoundPiPPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
         XCTAssertEqual(restarted.uiVersion, .option2)
-        XCTAssertEqual(restarted.enabledContents(uiVersion: restarted.uiVersion), [.dex, .friend, .notes, .types])
-        XCTAssertEqual(restarted.enabledContents(uiVersion: .option1), [.friend, .notes, .types, .dex])
+        XCTAssertEqual(restarted.enabledContents(uiVersion: restarted.uiVersion), [.dex, .friend, .notes, .types, .connections])
+        XCTAssertEqual(restarted.enabledContents(uiVersion: .option1), [.friend, .notes, .types, .dex, .connections])
         XCTAssertEqual(version.effectiveVersion, .option2)
         XCTAssertEqual(version.version, .option2)
         defaults.set(99, forKey: BoundUIVersionPreferences.key)
         XCTAssertEqual(version.version, .option2)
         defaults.set(["unknown", "notes", "notes"], forKey: "bound.delta.pip.v1.view-order")
-        XCTAssertEqual(restarted.orderedContents, [.notes, .friend, .types, .bosses, .dex])
+        XCTAssertEqual(restarted.orderedContents, [.notes, .friend, .types, .bosses, .dex, .connections])
+    }
+
+    func testConnectionsAppendsToExistingChoicesWithoutResettingAssignmentsOrEnablingMultiplayer() throws {
+        let suite = "BoundConnectionsPreferences." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let order = ["dex", "friend", "types", "notes", "bosses"]
+        defaults.set(order, forKey: "bound.delta.pip.v1.view-order")
+        defaults.set(["friend", "notes"], forKey: "bound.delta.pip.v1.button.option4.1.views")
+        defaults.set([], forKey: "bound.delta.pip.v1.button.option4.2.views")
+        defaults.set(false, forKey: BoundMultiplayerFeatures.key)
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.orderedContents.map(\.rawValue), order + ["connections"])
+        XCTAssertEqual(defaults.stringArray(forKey: "bound.delta.pip.v1.view-order"), order)
+        XCTAssertTrue(preferences.isEnabled(.connections))
+        XCTAssertEqual(preferences.assignedContents(for: 0, buttonType: .option4), [.friend, .notes])
+        XCTAssertEqual(preferences.assignedContents(for: 1, buttonType: .option4), [])
+
+        preferences.setAssignedContents([.connections], for: 1, buttonType: .option4)
+        let state = BoundCompanionState(preferences: preferences)
+        state.advanceButton(1)
+        XCTAssertEqual(state.content, .connections)
+        XCTAssertEqual(state.content.title, "Connections")
+        XCTAssertEqual(preferences.assignedContents(for: 0, buttonType: .option4), [.friend, .notes])
+        XCTAssertEqual(BoundPiPPreferences(defaults: defaults).assignedContents(for: 1, buttonType: .option4), [.connections])
+        XCTAssertFalse(defaults.bool(forKey: BoundMultiplayerFeatures.key))
     }
     func testUIVersionSwitchingAndReorderingPreserveVisiblePanel() throws {
         let suite = "BoundUIVersionState." + UUID().uuidString
@@ -93,7 +119,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         state.setContentOrder([.dex, .bosses, .friend, .types, .notes])
         XCTAssertEqual(state.content, .bosses)
         XCTAssertEqual(state.selected, 1)
-        for _ in 0..<4 { state.advancePanel() }
+        for _ in 0..<5 { state.advancePanel() }
         XCTAssertEqual(state.content, .dex, "Views remain reachable through ordinary cycling in either UI version")
         state.hidden = true
         state.advancePanel()
@@ -106,12 +132,14 @@ final class CompanionCycleButtonTests: XCTestCase {
         version.version = .option1
         state.updateUIVersion()
         XCTAssertEqual(state.content, .bosses)
-        XCTAssertEqual(state.availableContents, [.friend, .types, .bosses])
+        XCTAssertEqual(state.availableContents, [.friend, .types, .bosses, .connections])
+        state.advancePanel()
+        XCTAssertEqual(state.content, .connections)
         state.advancePanel()
         XCTAssertEqual(state.content, .friend)
         state.setContentOrder([.types, .friend])
         XCTAssertEqual(state.content, .friend, "Changing cycle order preserves the selected panel")
-        XCTAssertEqual(preferences.orderedContents, [.dex, .bosses, .friend, .types, .notes])
+        XCTAssertEqual(preferences.orderedContents, [.dex, .bosses, .friend, .types, .notes, .connections])
     }
 
     func testSplitButtonsRememberTheirOwnViewWhenAssignmentsOverlap() throws {
@@ -269,7 +297,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         let disabled = expectation(description: "The active session observes a disabled view")
         let cancellable = model.$configuration.dropFirst().sink { configuration in
             if configuration.uiVersion == .option2 { versionChanged.fulfill() }
-            if configuration.availableContents == [.dex, .bosses, .friend, .types, .notes] { orderChanged.fulfill() }
+            if configuration.availableContents == [.dex, .bosses, .friend, .types, .notes, .connections] { orderChanged.fulfill() }
             if !configuration.availableContents.contains(.dex) { disabled.fulfill() }
         }
 
@@ -281,6 +309,8 @@ final class CompanionCycleButtonTests: XCTestCase {
         await fulfillment(of: [orderChanged], timeout: 2)
         XCTAssertEqual(state.uiVersion, .option2)
         XCTAssertEqual(state.content, .notes, "A settings edit should preserve the active session's selected view")
+        state.advancePanel()
+        XCTAssertEqual(state.content, .connections)
         state.advancePanel()
         XCTAssertEqual(state.content, .dex)
         state.advancePanel()
@@ -394,6 +424,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         let sharing = FriendSharingSession(configuration: nil, authenticatedMode: true)
         var captures = 0
         var capturedGameIDs: [String] = []
+        var currentGameID = gameIDs[0]
         var expectedCapture: XCTestExpectation?
         var save = BoundRRDexSave(trainerID: 1, randomAbilities: false, randomLearnset: false)
 
@@ -401,6 +432,11 @@ final class CompanionCycleButtonTests: XCTestCase {
             BoundCompanionPanel(sharing: sharing, state: state, gameID: gameID, editingChanged: { _ in },
                                 currentSave: { requestedGameID in
                 XCTAssertTrue(Thread.isMainThread)
+                // Match importCurrentRRDexSave's active-ROM guard: SwiftUI can
+                // finish an old subtree's appearance while replacing its root.
+                guard requestedGameID == currentGameID else {
+                    throw BoundRRDexSave.ImportError.currentGameUnavailable
+                }
                 captures += 1
                 capturedGameIDs.append(requestedGameID)
                 expectedCapture?.fulfill()
@@ -410,11 +446,17 @@ final class CompanionCycleButtonTests: XCTestCase {
         }
 
         let host = UIHostingController(rootView: makePanel(gameID: gameIDs[0]))
-        let parent = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.windows.first?.rootViewController)
-        parent.addChild(host); parent.view.addSubview(host.view); host.didMove(toParent: parent)
-        host.view.frame = CGRect(x: 0, y: 60, width: 393, height: 263)
+        // Give this appearance-sensitive fixture its own root lifecycle. The
+        // app's existing root can still be finishing another host's transition.
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 60, width: 393, height: 263)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
         defer {
-            host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent()
+            window.isHidden = true; window.rootViewController = nil
+            previousKeyWindow?.makeKeyAndVisible()
             sharing.stop()
         }
 
@@ -458,12 +500,18 @@ final class CompanionCycleButtonTests: XCTestCase {
 
         let newROM = expectation(description: "A new ROM gets a fresh Dex view and save refresh")
         expectedCapture = newROM
+        let oldROMSave = save
+        save = BoundRRDexSave(trainerID: 99, randomAbilities: false, randomLearnset: true)
+        currentGameID = gameIDs[1]
         host.rootView = makePanel(gameID: gameIDs[1])
         settle()
         wait(for: [newROM], timeout: 5)
         XCTAssertEqual(captures, 3)
         XCTAssertEqual(capturedGameIDs, [gameIDs[0], gameIDs[0], gameIDs[1]],
                        "The retained Dex subtree resets its ROM-scoped identity when the game changes.")
+        XCTAssertEqual(BoundRRDexPreferences().read(gameID: gameIDs[0]).save, oldROMSave,
+                       "A stale appearance callback must not import the new ROM's save into the old ROM.")
+        XCTAssertEqual(BoundRRDexPreferences().read(gameID: gameIDs[1]).save, save)
     }
 
     func testDexCardRendersAtPortraitAndLandscapePanelSizes() throws {
@@ -702,6 +750,13 @@ final class CompanionCycleButtonTests: XCTestCase {
         let suite = "BoundButtonTypeMigration." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
+        // Registration is shared across UserDefaults suites. A legacy launch
+        // excludes the new key before registering its profile defaults.
+        let registered = UserDefaults.standard.volatileDomain(forName: UserDefaults.registrationDomain)
+        var legacyRegistration = registered
+        legacyRegistration.removeValue(forKey: BoundCompanionButtonPreferences.key)
+        UserDefaults.standard.setVolatileDomain(legacyRegistration, forName: UserDefaults.registrationDomain)
+        defer { UserDefaults.standard.setVolatileDomain(registered, forName: UserDefaults.registrationDomain) }
         defaults.set(4, forKey: BoundCompanionButtonPreferences.legacyKey)
 
         XCTAssertEqual(BoundCompanionButtonPreferences(defaults: defaults).buttonType, .option3)
@@ -762,7 +817,7 @@ final class CompanionCycleButtonTests: XCTestCase {
                     BoundReferenceLayoutPreferences.bossKey,
                     BoundControllerModePreferences.key,
                     BoundControllerModePreferences.layoutKey] {
-            XCTAssertNil(defaults.object(forKey: key), "Reading the fresh preset must not write \(key).")
+            XCTAssertNil(defaults.persistentDomain(forName: suite)?[key], "Reading the fresh preset must not write \(key).")
         }
 
         settings.setButtonType(.option3)
@@ -791,7 +846,9 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(upgradedDefaults.integer(forKey: BoundReferenceLayoutPreferences.bossKey), BoundReferenceLayout.layout9.rawValue)
         let upgradedController = BoundControllerModePreferences(defaults: upgradedDefaults)
         XCTAssertFalse(upgradedController.isEnabled)
-        XCTAssertEqual(upgradedController.layout, .mode2)
+        XCTAssertEqual(upgradedController.layout, .mode1, "Controller Mode now has one effective layout.")
+        XCTAssertEqual(upgradedDefaults.integer(forKey: BoundControllerModePreferences.layoutKey), BoundControllerModeLayout.mode2.rawValue,
+                       "Reading the unified layout must retain the legacy value for arrangement migration.")
     }
 
     func testBossLayout10NatureEffectsCoverBundledNaturesAndFallbacks() throws {
@@ -818,7 +875,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         let preferences = BoundPiPPreferences(defaults: defaults)
         preferences.buttonType = .option1
         let state = BoundCompanionState(preferences: preferences)
-        for expected in [BoundPiPContent.notes, .types, .bosses, .dex, .friend] {
+        for expected in [BoundPiPContent.notes, .types, .bosses, .dex, .connections, .friend] {
             state.advancePanel()
             XCTAssertEqual(state.content, expected)
         }
@@ -826,12 +883,13 @@ final class CompanionCycleButtonTests: XCTestCase {
         state.advancePanel()
         XCTAssertEqual(state.content, .friend)
         XCTAssertFalse(state.hidden)
-        XCTAssertEqual(state.availableContents, [.friend, .notes, .types, .bosses, .dex])
+        XCTAssertEqual(state.availableContents, [.friend, .notes, .types, .bosses, .dex, .connections])
         state.setContentEnabled(false, for: .friend)
         state.setContentEnabled(false, for: .notes)
         state.setContentEnabled(false, for: .types)
         state.setContentEnabled(false, for: .bosses)
         state.setContentEnabled(false, for: .dex)
+        state.setContentEnabled(false, for: .connections)
         XCTAssertTrue(state.availableContents.isEmpty)
         state.advancePanel()
         XCTAssertEqual(state.content, .friend)
@@ -850,6 +908,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         state.setContentEnabled(false, for: .notes)
         state.setContentEnabled(false, for: .types)
         state.setContentEnabled(false, for: .dex)
+        state.setContentEnabled(false, for: .connections)
         XCTAssertEqual(state.content, .bosses, "Removing earlier entries must preserve the visible view")
         XCTAssertEqual(state.availableContents, [.friend, .bosses])
         XCTAssertEqual(selectionChanges, 0)

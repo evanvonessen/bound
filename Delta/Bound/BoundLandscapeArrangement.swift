@@ -190,7 +190,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     var tabbedMultiview: Bool { option == .option7 }
     var accessibilityPrefix: String { "bound.landscape\(option.rawValue)" }
 
-    private static let multiviewContents: [BoundPiPContent] = [.dex, .bosses, .types]
+    private static let multiviewContents: [BoundPiPContent] = [.dex, .bosses, .types, .connections]
 
     init(defaults: UserDefaults? = nil, namespace: String = "bound.landscape") {
         self.defaults = defaults ?? .standard
@@ -1155,7 +1155,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         case .friend: BoundLandscapeViewPlacement(center: CGPoint(x: 0.75, y: 0.3), widthFraction: 0.28, heightFraction: 0.187, opacity: 1)
         case .dex: BoundLandscapeViewPlacement(center: CGPoint(x: 0.5, y: 0.34), widthFraction: 0.36, heightFraction: 0.72)
         case .bosses: BoundLandscapeViewPlacement(center: CGPoint(x: 0.5, y: 0.34), widthFraction: 0.36, heightFraction: 0.68)
-        case .notes, .types: BoundLandscapeViewPlacement(center: CGPoint(x: 0.5, y: 0.34), widthFraction: 0.36, heightFraction: 0.65)
+        case .notes, .types, .connections: BoundLandscapeViewPlacement(center: CGPoint(x: 0.5, y: 0.34), widthFraction: 0.36, heightFraction: 0.65)
         }
     }
     private func defaultSize(for content: BoundPiPContent, canvas: CGRect) -> CGSize {

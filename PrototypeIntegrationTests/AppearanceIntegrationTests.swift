@@ -401,7 +401,7 @@ import ZIPFoundation
         XCTAssertEqual(companion.assignedContents(for: 0, buttonType: .option4), [.friend])
         XCTAssertEqual(companion.assignedContents(for: 1, buttonType: .option4), [.dex, .bosses, .types])
         XCTAssertFalse(companion.isEnabled(.notes))
-        XCTAssertEqual(companion.orderedContents, [.dex, .bosses, .types, .friend, .notes])
+        XCTAssertEqual(companion.orderedContents, [.dex, .bosses, .types, .friend, .notes, .connections])
         XCTAssertFalse(controller.isEnabled)
         XCTAssertEqual(controller.layout, .mode1)
         XCTAssertEqual(landscape.option, .option3)
