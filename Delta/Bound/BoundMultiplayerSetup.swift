@@ -18,6 +18,8 @@ extension Game {
 struct BoundMultiplayerSetupOptions {
     var name = "RED"
     var gender = 0
+    var partnerName = "BLUE"
+    var partnerGender = 0
     var rival = "BLUE"
     var difficulty = 0
     var minimalGrinding = false
@@ -28,6 +30,7 @@ struct BoundMultiplayerSetupOptions {
     var nicknames = true
     var debug = false
     var profile: BoundNakamaRunService.PlayerProfile { .init(name: name, gender: gender) }
+    var partnerProfile: BoundNakamaRunService.PlayerProfile { .init(name: partnerName, gender: partnerGender) }
     static func nativeName(_ value: String) -> Data {
         var result = Data(repeating: 0xFF, count: 8)
         for (i, c) in value.utf8.prefix(7).enumerated() {
@@ -35,7 +38,7 @@ struct BoundMultiplayerSetupOptions {
         }
         return result
     }
-    var valid: Bool { profile.valid && BoundNakamaRunService.PlayerProfile(name: rival, gender: 0).valid }
+    var valid: Bool { profile.valid && partnerProfile.valid && BoundNakamaRunService.PlayerProfile(name: rival, gender: 0).valid }
     var settings: Data {
         if debug {
             var result = Data([4,1,0,0,0,0,0,0,0,0,1,0]) + Self.nativeName("Gary") + Data([1])
@@ -97,11 +100,15 @@ struct BoundMultiplayerSetupView: View {
                         Button("Refresh", systemImage: "arrow.clockwise") { coordinator.refreshServerFriends() }
                     }
                 } else {
-                    Section("Player") {
+                    Section("Your Player") {
                         TextField("Name", text: $options.name).textInputAutocapitalization(.characters).autocorrectionDisabled()
                         Picker("Character", selection: $options.gender) { Text("Boy").tag(0); Text("Girl").tag(1) }
                     }
                     if stage == 2 {
+                        Section("Friend's Player") {
+                            TextField("Name", text: $options.partnerName).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                            Picker("Character", selection: $options.partnerGender) { Text("Boy").tag(0); Text("Girl").tag(1) }
+                        }
                         Section("Game") {
                             TextField("Rival's Name", text: $options.rival).textInputAutocapitalization(.characters).autocorrectionDisabled()
                             Picker("Difficulty", selection: $options.difficulty) {
@@ -121,7 +128,7 @@ struct BoundMultiplayerSetupView: View {
                             if let profileRun { _ = await coordinator.selectServerRun(profileRun, profile: options.profile) }
                             else if let room { await coordinator.createServerRun(room: room, options: options, requestID: requestID) }
                         }
-                    }.disabled(!options.valid)
+                    }.disabled(stage == 2 ? !options.valid : !options.profile.valid)
                 }
                 if coordinator.serverMenuBusy { ProgressView() }
             }

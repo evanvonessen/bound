@@ -53,11 +53,12 @@ export function fixture(roomMembers = members) {
       });
     },
     sqlQuery: (sql, args) => {
-      if (!sql.startsWith('SELECT value FROM storage')) throw Error('Unsupported fixture query');
+      if (!sql.startsWith('SELECT key FROM storage')) throw Error('Unsupported fixture query');
       const [collection, system, gameID, member, after] = args;
       return [...stored.values()].filter(row => row.collection === collection && row.userId === system && row.value.save_id && !row.value.deleted &&
         row.value.game_id === gameID && row.value.members.includes(member) && row.key > after)
-        .sort((a, b) => a.key.localeCompare(b.key)).slice(0, 101).map(row => ({ value: plain(row.value) }));
+        .sort((a, b) => a.key.localeCompare(b.key)).slice(0, 101)
+        .map(row => ({ key: row.key }));
     },
     sqlExec: (sql, args) => {
       if (!sql.startsWith('DELETE FROM storage')) throw Error('Unsupported fixture mutation');

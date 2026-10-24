@@ -71,19 +71,39 @@ namespace BoundSaveLibrary {
                 (request.cursor != null && !uuid.test(String(request.cursor)))) fail("Invalid save listing");
             // Filtering roots in PostgreSQL avoids scanning megabytes of chunks
             // and does not require a second, potentially inconsistent save index.
-            const rows = nk.sqlQuery("SELECT value FROM storage WHERE collection = $1 AND user_id = $2::uuid AND value->>'save_id' IS NOT NULL AND value->>'deleted' IS DISTINCT FROM 'true' AND value->>'game_id' = $3 AND value->'members' ? $4 AND key > $5 ORDER BY key LIMIT 101",
+            const rows = nk.sqlQuery("SELECT key FROM storage WHERE collection = $1 AND user_id = $2::uuid AND value->>'save_id' IS NOT NULL AND value->>'deleted' IS DISTINCT FROM 'true' AND value->>'game_id' = $3 AND value->'members' ? $4 AND key > $5 ORDER BY key LIMIT 101",
                 [collection, system, request.gameID, owner, request.cursor || ""]);
-            const more = rows.length > 100, page = rows.slice(0, 100).map(function (row: any) { return metadata(typeof row.value === "string" ? JSON.parse(row.value) : row.value, owner); });
-            return JSON.stringify({ version: 2, runs: page, cursor: more ? page[page.length - 1].save_id : null });
+            const keys = rows.slice(0, 100).map(function (row: any) { return row.key as string; });
+            // SQL JSONB values are driver-specific binary values in the live
+            // runtime. storageRead supplies decoded JSON and may reorder rows.
+            const states: { [key: string]: any } = {};
+            if (keys.length) nk.storageRead(keys.map(function (key: string) {
+                return { collection: collection, key: key, userId: system };
+            })).forEach(function (record: nkruntime.StorageObject) { states[record.key] = record.value; });
+            const page: any[] = [];
+            keys.forEach(function (key: string) {
+                const state = states[key];
+                // A shared run can be removed after the query selected its key.
+                if (!state || state.deleted) return;
+                if (state.save_id !== key || state.game_id !== request.gameID || !Array.isArray(state.members) ||
+                    state.members.indexOf(owner) < 0 || !state.identity) fail("Save metadata is unavailable");
+                page.push(metadata(state, owner));
+            });
+            return JSON.stringify({ version: 2, runs: page, cursor: rows.length > 100 ? keys[keys.length - 1] : null });
         }
         if (request.action === "create") {
             if (!uuid.test(String(request.request_id)) || request.partnerID !== ticket.partnerID || !ticket.roomID ||
                 typeof request.gameID !== "string" || !request.gameID.length || request.gameID.length > 256 ||
                 !/^[0-9a-f]{64}$/.test(String(request.romSHA256)) || typeof request.settings !== "string" ||
-                !BoundIndependent.settingsValid(nk, request.settings) || request.profile !== undefined && !profile(request.profile)) fail("Invalid new save configuration");
+                !BoundIndependent.settingsValid(nk, request.settings) || request.profile !== undefined && !profile(request.profile) ||
+                request.partnerProfile !== undefined && !profile(request.partnerProfile)) fail("Invalid new save configuration");
             const key = owner + "/" + request.request_id;
-            const configuration = nk.sha256Hash(JSON.stringify([request.partnerID, request.gameID, request.romSHA256, request.settings,
-                request.profile ? [request.profile.name, request.profile.gender] : null]));
+            const choices = [request.partnerID, request.gameID, request.romSHA256, request.settings,
+                request.profile ? [request.profile.name, request.profile.gender] : null];
+            // Preserve existing request fingerprints for clients that chose
+            // only their own trainer; new clients commit both profiles.
+            if (request.partnerProfile !== undefined) choices.push([request.partnerProfile.name, request.partnerProfile.gender]);
+            const configuration = nk.sha256Hash(JSON.stringify(choices));
             for (let attempt = 0; attempt < 5; attempt++) {
                 const previous = read(nk, key, requests);
                 if (previous) {
@@ -103,6 +123,7 @@ namespace BoundSaveLibrary {
                     committed: true, cancelled: false, epoch: 1, revision: 1, chooserSeen: BoundRooms.seconds(),
                     cursors: {}, saves: {}, deliveries: {}, profiles: {}, created_at: now, updated_at: now };
                 if (request.profile) state.profiles[owner] = request.profile;
+                if (request.partnerProfile) state.profiles[request.partnerID] = request.partnerProfile;
                 try {
                     // Nakama storage batches are atomic: creation retries cannot
                     // allocate orphan/duplicate runs after a lost response.

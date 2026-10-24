@@ -424,13 +424,16 @@ actor BoundNakamaRunService {
         return URLSession(configuration: configuration)
     }()
     private let perform: @Sendable (URLRequest) async throws -> Data
-    init(perform: @escaping @Sendable (URLRequest) async throws -> Data = { request in
+    private let authorizeSaves: @Sendable (AppCloudSession, String?) async throws -> BoundNakamaAuthorization.SaveConfiguration
+    init(authorizeSaves: @escaping @Sendable (AppCloudSession, String?) async throws -> BoundNakamaAuthorization.SaveConfiguration = {
+        try await BoundNakamaAuthorization.fetchSaves(session: $0, room: $1)
+    }, perform: @escaping @Sendable (URLRequest) async throws -> Data = { request in
         let (data, response) = try await BoundNakamaRunService.memorySession.data(for: request)
         guard let response = response as? HTTPURLResponse else { throw Failure.unavailable }
         if [400, 403, 404, 409].contains(response.statusCode) { throw Failure.conflict }
         guard response.statusCode == 200 else { throw Failure.unavailable }
         return data
-    }) { self.perform = perform }
+    }) { self.perform = perform; self.authorizeSaves = authorizeSaves }
     func configure(_ configuration: BoundNakamaConfiguration) {
         guard configuration.isValid() else { return }
         if let old = self.configuration, old.ownerID == configuration.ownerID, old.roomID == configuration.roomID,
@@ -479,7 +482,7 @@ actor BoundNakamaRunService {
         var id: UUID { save_id }
     }
     func configureSaves(session: AppCloudSession, room: String? = nil) async throws -> BoundNakamaAuthorization.SaveConfiguration {
-        let value = try await BoundNakamaAuthorization.fetchSaves(session: session, room: room)
+        let value = try await authorizeSaves(session, room)
         saveSession = session; saveConfiguration = value
         return value
     }
@@ -488,7 +491,7 @@ actor BoundNakamaRunService {
         try session.credentials()
         if let value = saveConfiguration, value.valid, value.ownerID == session.owner,
            value.expiresAt > Date().timeIntervalSince1970 + 25 { return }
-        saveConfiguration = try await BoundNakamaAuthorization.fetchSaves(session: session, room: preserveCreationScope ? saveConfiguration?.roomID?.uuidString : nil)
+        saveConfiguration = try await authorizeSaves(session, preserveCreationScope ? saveConfiguration?.roomID?.uuidString : nil)
     }
     private func saveRequest(_ action: String, fields: [String: Any] = [:]) async throws -> Data {
         try await refreshSaveAuthorization(preserveCreationScope: action == "create")
@@ -516,11 +519,12 @@ actor BoundNakamaRunService {
         } while cursor != nil
         return runs.sorted { $0.updated_at > $1.updated_at }
     }
-    func createSave(gameID: String, romSHA256: String, settings: Data, profile: PlayerProfile, requestID: UUID) async throws -> IndependentState {
-        guard let partner = saveConfiguration?.partnerID, profile.valid else { throw Failure.unavailable }
+    func createSave(gameID: String, romSHA256: String, settings: Data, profile: PlayerProfile, partnerProfile: PlayerProfile, requestID: UUID) async throws -> IndependentState {
+        guard let partner = saveConfiguration?.partnerID, profile.valid, partnerProfile.valid else { throw Failure.unavailable }
         let fields: [String: Any] = ["request_id": requestID.uuidString.lowercased(), "partnerID": partner.uuidString.lowercased(),
             "gameID": gameID, "romSHA256": romSHA256, "settings": settings.base64EncodedString(),
-            "profile": ["name": profile.name, "gender": profile.gender]]
+            "profile": ["name": profile.name, "gender": profile.gender],
+            "partnerProfile": ["name": partnerProfile.name, "gender": partnerProfile.gender]]
         return try JSONDecoder().decode(IndependentState.self, from: await saveRequest("create", fields: fields))
     }
     func getSave(_ id: UUID) async throws -> IndependentState {

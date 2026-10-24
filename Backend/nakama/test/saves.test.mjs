@@ -74,6 +74,36 @@ test('lost creation responses and concurrent idempotency writes allocate exactly
   assert.equal(create({ request_id: uuid(2) }).save_id, uuid(999));
   assert.equal(list(owner).runs.length, 2, 'atomic batch leaves no losing candidate root');
 });
+test('creation stores both trainer profiles for the offline partner and retries preserve them', () => {
+  const { create, get, rpc } = setup();
+  const partnerProfile = { name: 'LEAF', gender: 1 };
+  const run = create({ partnerProfile });
+  assert.deepEqual(run.profiles[owner], { name: 'RED', gender: 0 });
+  assert.deepEqual(run.profiles[peer], partnerProfile);
+  assert.deepEqual(get(peer, run).profiles[peer], partnerProfile);
+  assert.equal(create({ partnerProfile }).save_id, run.save_id);
+  assert.throws(() => create({ partnerProfile: { name: 'OTHER', gender: 1 } }));
+  assert.throws(() => create({ partnerProfile: { name: 'LEAF', gender: 0 } }));
+  assert.throws(() => create());
+  rpc(owner, 'profile', { save_id: run.save_id, profile: { name: 'ASH', gender: 0 } });
+  assert.deepEqual(get(peer, run).profiles[peer], partnerProfile);
+});
+test('legacy creation retry fingerprints remain unchanged when no partner profile was supplied', () => {
+  const { f, create } = setup();
+  const run = create();
+  const record = f.stored.get('bound_save_requests_v1:' + owner + '/' + uuid(1));
+  assert.equal(record.value.configuration, hash(JSON.stringify([peer, 'multi_red', 'a'.repeat(64), settings(), ['RED', 0]])));
+  assert.equal(create().save_id, run.save_id);
+  assert.equal(run.profiles[peer], undefined);
+});
+test('invalid partner trainer profiles cannot create a save', () => {
+  for (const partnerProfile of [null, {}, [], { name: '', gender: 0 }, { name: 'TOOLONG8', gender: 0 },
+    { name: 'LEAF', gender: 2 }, { name: 'LEAF', gender: 1, ownerID: third }, { name: 'A B', gender: 0 }]) {
+    const { create, list } = setup();
+    assert.throws(() => create({ partnerProfile }));
+    assert.equal(list(owner).runs.length, 0);
+  }
+});
 test('each player seals independent snapshots with same-player CAS and incomplete uploads retain the prior valid head', () => {
   const { create, rpc, get, upload } = setup(); const run = create();
   rpc(peer, 'profile', { save_id: run.save_id, profile: { name: 'LEAF', gender: 1 } });
@@ -143,6 +173,37 @@ test('library pages are bounded and include only matching authorized game roots'
   assert.equal(second.runs.length, 2); assert.equal(second.cursor, null);
   assert.equal(new Set([...first.runs, ...second.runs].map(run => run.save_id)).size, 102);
   assert.throws(() => rpc(owner, 'list', { gameID: 'multi_red', cursor: "' OR TRUE" }));
+});
+test('nonempty libraries read decoded storage records in SQL key order', () => {
+  const { f, create, list } = setup();
+  const runs = [create(), create({ request_id: uuid(2) })];
+  const read = f.nk.storageRead;
+  f.nk.storageRead = requests => read(requests).reverse();
+  const page = list(peer);
+  assert.deepEqual(page.runs.map(run => run.save_id), runs.map(run => run.save_id).sort());
+  assert.ok(page.runs.every(run => run.identity.owner === peer));
+});
+test('library pagination survives deletion between the key query and storage read', () => {
+  const { f, create, rpc, list } = setup();
+  for (let i = 1; i <= 102; i++) create({ request_id: uuid(i) });
+  const query = f.nk.sqlQuery;
+  let lastKey;
+  f.nk.sqlQuery = (sql, args) => {
+    const rows = query(sql, args);
+    lastKey = rows[99].key;
+    const firstKey = rows[0].key;
+    f.stored.delete('bound_independent_v2:' + lastKey);
+    const record = f.stored.get('bound_independent_v2:' + firstKey);
+    record.value = { ...record.value, deleted: true };
+    return rows;
+  };
+  const first = list(owner);
+  assert.equal(first.runs.length, 98);
+  assert.equal(first.cursor, lastKey);
+  f.nk.sqlQuery = query;
+  const second = rpc(owner, 'list', { gameID: 'multi_red', cursor: first.cursor });
+  assert.equal(second.runs.length, 2);
+  assert.equal(second.cursor, null);
 });
 test('save limits and supported event validation reject malformed inputs before persisting', () => {
   const { f, create, rpc } = setup(); const run = create();

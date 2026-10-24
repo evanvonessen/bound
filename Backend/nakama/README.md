@@ -243,6 +243,9 @@ ownership; clients cannot choose a different account or mutate storage directly.
 The authorized `members` on the root are the participant relation. Listing
 queries those roots in Nakama's PostgreSQL storage and filters by authenticated
 account and game, avoiding a second index that could disagree with ownership.
+The query selects keys only; a bounded `storageRead` batch decodes their values.
+This avoids SQL-driver JSONB representations and preserves key order and the
+pagination cursor even if a run is deleted during the read.
 There are no expiry fields, TTLs, age-based deletions or retention jobs. Previous
 sealed checkpoints, incomplete upload chunks and events remain until the user
 explicitly clears the shared run. Deployments must plan storage capacity and
@@ -275,7 +278,7 @@ both with different values is rejected.
 | Action | Additional request | Result |
 | --- | --- | --- |
 | `list` | `gameID`, optional `cursor` UUID | `{version:2,runs:[...],cursor}`; at most 100 UUID-ordered roots. Follow cursors until null, then sort presentation by `updated_at` if desired. Refresh restarts the listing. |
-| `create` | Stable retry `request_id` UUID, authorized `partnerID`, `gameID`, `romSHA256`, version-four base64 `settings`, optional `profile` | Complete version-two run state with a server-generated `save_id`; creates the root and retry key atomically. |
+| `create` | Stable retry `request_id` UUID, authorized `partnerID`, `gameID`, `romSHA256`, version-four base64 `settings`, optional `profile` and `partnerProfile` | Complete version-two run state with a server-generated `save_id`; creates the root, both supplied trainer profiles and retry key atomically. |
 | `get` | `save_id` | Existing version-two run state, including snapshot descriptors, event cursors, profiles and caller-oriented identity/seeds. |
 | `profile` | `save_id`, `{name,gender}` | Updates only caller's profile before their first snapshot; name is 1–7 ASCII letters/digits, gender 0 or 1. Exact retries remain valid after saving. |
 | `events` | `save_id`, existing `events` and `after` | Existing upload/delivery acknowledgements and gap-aware missing-event batches. |
@@ -290,6 +293,13 @@ it or churn the revision. `identity` is oriented to
 the authenticated caller, while `settingsOwner` retains the original chooser.
 An offline friend with no snapshot receives their own identity and seed rather
 than the creator's save bytes.
+
+New Bound runs collect both trainer names and characters before creation. The
+creator's profile is keyed to the authenticated account; `partnerProfile` is
+keyed only to the partner authorized by the creation ticket. Both become part
+of the idempotency fingerprint. Clients that omit `partnerProfile` retain the
+original fingerprint and first-join profile prompt. Later profile updates still
+affect only the caller and remain locked after that player's first snapshot.
 
 ### Conflict resolution and deletion
 

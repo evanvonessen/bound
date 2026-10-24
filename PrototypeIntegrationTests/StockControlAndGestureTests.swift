@@ -32,6 +32,26 @@ private final class StaticButtonTouch: UITouch {
 
 @MainActor
 final class StockControlAndGestureTests: XCTestCase {
+    func testMultiplayerSetupButtonsDoNotFeedGameGestures() throws {
+        let controller = GameViewController()
+        controller.loadViewIfNeeded()
+        defer {
+            controller.updateServerSetupOverlay(false)
+            controller.boundCompanionForTesting.stop()
+        }
+        controller.updateServerSetupOverlay(true)
+        let setup = try XCTUnwrap(controller.children.last?.view)
+        let button = UIButton(frame: CGRect(x: 20, y: 20, width: 100, height: 44))
+        setup.addSubview(button)
+        let touch = StaticButtonTouch(target: button, point: CGPoint(x: 10, y: 10))
+        let gameGesture = UITapGestureRecognizer()
+        XCTAssertFalse(controller.gestureRecognizer(gameGesture, shouldReceive: touch),
+                       "Game gestures must not cancel New Game, Refresh, or text-field presses above gameplay.")
+        controller.updateServerSetupOverlay(false)
+        XCTAssertTrue(controller.gestureRecognizer(gameGesture, shouldReceive: touch),
+                      "Closing setup must restore the normal game gesture policy.")
+    }
+
     func testNativeButtonsStayVisuallyStaticWhilePressSlideAndCancelReachInputs() throws {
         let native = try XCTUnwrap(DeltaCore.ControllerSkin.standardControllerSkin(for: .gba))
         for orientation: DeltaCore.ControllerSkin.Orientation in [.portrait, .landscape] {

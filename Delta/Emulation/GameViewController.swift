@@ -217,7 +217,7 @@ class GameViewController: DeltaCore.GameViewController
     private let boundCompanion = BoundCompanionCoordinator()
     private var serverSetupHost: UIHostingController<BoundMultiplayerSetupView>?
     private var serverSetupObservation: AnyCancellable?
-    private func updateServerSetupOverlay(_ show: Bool) {
+    func updateServerSetupOverlay(_ show: Bool) {
         guard isViewLoaded else { return }
         if show {
             if serverSetupHost == nil {
@@ -2181,7 +2181,7 @@ extension GameViewController: GameViewControllerDelegate
             if let gameID = (self.game as? Game)?.identifier,
                BoundROMUpdateManager.shared.hasPendingSaveClear(for: gameID) { return }
             let macSheet = BoundMacWorkspacePlatform.isEnabled && (self.boundCompanion.state.showingFriends || self.boundCompanion.state.showingSettings)
-            result = !self.boundCompanion.isEditingNotes && !macSheet && (self.presentedViewController == nil || self.presentedViewController?.isDisappearing == true) && self.view.window != nil
+            result = self.serverSetupHost == nil && !self.boundCompanion.isEditingNotes && !macSheet && (self.presentedViewController == nil || self.presentedViewController?.isDisappearing == true) && self.view.window != nil
         }
         
         return result
@@ -2246,6 +2246,9 @@ extension GameViewController
 {
     override func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool
     {
+        // Delta's tap-to-resume recognizer covers the gameplay rectangle and
+        // otherwise cancels mouse/touch presses on the setup form above it.
+        if let setup = serverSetupHost?.view, let touched = touch.view, touched.isDescendant(of: setup) { return false }
         guard super.gestureRecognizer(gestureRecognizer, shouldReceive: touch) else { return false }
         
         if gestureRecognizer == self.gameScreenRepositionGestureRecognizer

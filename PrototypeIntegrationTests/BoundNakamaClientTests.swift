@@ -93,6 +93,46 @@ final class BoundNakamaClientTests: XCTestCase {
         XCTAssertFalse(FriendSharingTokenError.unavailable.localizedDescription.contains("error 0"))
     }
 
+    func testNewSaveSendsBothTrainerProfilesAndRetainsThePartnerProfile() async throws {
+        let owner = owner, peer = peer, room = room, run = UUID()
+        let first = BoundNakamaRunService.PlayerProfile(name: "RED", gender: 0)
+        let second = BoundNakamaRunService.PlayerProfile(name: "LEAF", gender: 1)
+        let payload = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(),
+                                                                  "exp": Date().timeIntervalSince1970 + 3600])
+        let encoded = payload.base64EncodedString().replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        let session = try AppCloudSession(owner: owner, key: "fixture", token: "e30.\(encoded).fixture",
+                                         backend: .init(kind: .legacy, origin: "https://bound.example"))
+        let identity = BoundMultiplayerRunIdentity(run: run, gameID: "fixture", owner: owner, partner: peer,
+            roomID: room.uuidString.lowercased(), settingsOwner: owner, settings: Data(repeating: 0, count: 32),
+            localSeed: 1, partnerSeed: 2, romSHA256: String(repeating: "a", count: 64))
+        let service = BoundNakamaRunService(authorizeSaves: { identity, selectedRoom in
+            XCTAssertEqual(identity.owner, owner); XCTAssertEqual(selectedRoom, room.uuidString.lowercased())
+            return .init(httpEndpoint: URL(string: "https://bound.example")!, accessToken: "fixture-token", ownerID: owner,
+                         expiresAt: Date().timeIntervalSince1970 + 90, saveTicket: "fixture-ticket", partnerID: peer, roomID: room)
+        }, perform: { request in
+            XCTAssertEqual(request.url?.path, "/v2/rpc/bound_independent_v2")
+            let text = try JSONDecoder().decode(String.self, from: XCTUnwrap(request.httpBody))
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+            XCTAssertEqual(body["action"] as? String, "create")
+            XCTAssertEqual(body["partnerID"] as? String, peer.uuidString.lowercased())
+            let profile = try XCTUnwrap(body["profile"] as? [String: Any])
+            let partner = try XCTUnwrap(body["partnerProfile"] as? [String: Any])
+            XCTAssertEqual(profile["name"] as? String, "RED"); XCTAssertEqual(profile["gender"] as? Int, 0)
+            XCTAssertEqual(partner["name"] as? String, "LEAF"); XCTAssertEqual(partner["gender"] as? Int, 1)
+            let result: [String: Any] = ["version": 2, "identity": try JSONSerialization.jsonObject(with: JSONEncoder().encode(identity)),
+                "committed": true, "cancelled": false, "epoch": 1, "revision": 1, "cursors": [:], "deliveries": [:], "saves": [:], "events": [],
+                "save_id": run.uuidString, "profiles": [owner.uuidString.lowercased(): profile, peer.uuidString.lowercased(): partner]]
+            let bytes = try JSONSerialization.data(withJSONObject: result)
+            return try JSONSerialization.data(withJSONObject: ["payload": String(decoding: bytes, as: UTF8.self)])
+        })
+        _ = try await service.configureSaves(session: session, room: room.uuidString.lowercased())
+        let result = try await service.createSave(gameID: "fixture", romSHA256: identity.romSHA256, settings: identity.settings,
+                                                  profile: first, partnerProfile: second, requestID: UUID())
+        XCTAssertEqual(result.profiles?[owner.uuidString.lowercased()], first)
+        XCTAssertEqual(result.profiles?[peer.uuidString.lowercased()], second)
+    }
+
     private let owner = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
     private let peer = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
     private let room = UUID(uuidString: "33333333-3333-4333-8333-333333333333")!

@@ -76,6 +76,7 @@ final class MultiplayerSavePackageTests: XCTestCase {
     @MainActor func testExternalSetupOptionsEncodeNativeQuestionsAndPersonalIdentity() {
         var options = BoundMultiplayerSetupOptions()
         options.name = "Leaf"; options.gender = 1; options.rival = "Gary"; options.difficulty = 2
+        options.partnerName = "Ash"; options.partnerGender = 0
         options.cheats = true; options.nicknames = false; options.randomAbilities = true
         XCTAssertTrue(options.valid)
         XCTAssertTrue(BoundROMMultiplayerCoordinator.validSettings(options.settings))
@@ -87,6 +88,15 @@ final class MultiplayerSavePackageTests: XCTestCase {
         XCTAssertEqual(bytes[13] & 16, 16)
         XCTAssertEqual(bytes.subdata(in: 1408..<1416), BoundMultiplayerSetupOptions.nativeName("Leaf"))
         XCTAssertEqual(bytes[1416], 1); XCTAssertEqual(bytes[1417], 1)
+        host.playerProfile = options.partnerProfile
+        let partnerBytes = host.encoded(sequence: 4)
+        XCTAssertEqual(partnerBytes.subdata(in: 1408..<1416), BoundMultiplayerSetupOptions.nativeName("Ash"))
+        XCTAssertEqual(partnerBytes[1416], 0)
+        options.partnerName = "TOOLONG8"
+        XCTAssertFalse(options.valid)
+        XCTAssertTrue(options.profile.valid, "An old save's own-profile prompt does not depend on the friend's draft")
+        options.partnerName = "Ash"; options.partnerGender = 2
+        XCTAssertFalse(options.valid)
     }
     func testConfigurationNeverRerollsAndPreservesSoloBattery() throws {
         let (store, identity, save) = try fixture()

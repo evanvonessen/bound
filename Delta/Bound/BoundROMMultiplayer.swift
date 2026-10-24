@@ -2046,7 +2046,7 @@ extension BoundROMMultiplayerCoordinator {
             _ = try await client.configureSaves(session: session, room: room.roomID)
             guard serverSelection == selection, session.isSameSession(as: account.session) else { return }
             let state = try await client.createSave(gameID: game.identifier, romSHA256: BoundWorldContract.romSHA256,
-                settings: options.settings, profile: options.profile, requestID: requestID)
+                settings: options.settings, profile: options.profile, partnerProfile: options.partnerProfile, requestID: requestID)
             guard serverSelection == selection, session.isSameSession(as: account.session) else { return }
             try await activateServerRun(state, profile: options.profile, selection: selection, client: client, session: session)
         } catch {
