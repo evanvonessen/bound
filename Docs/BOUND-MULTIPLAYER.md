@@ -193,7 +193,7 @@ ROM and seed in each dedicated Simulator's app container as described below.
 Run the paired acceptance harness with unique output paths:
 
 ```sh
-python3 PrototypeTools/live-presence-relay.py \
+PrototypeTools/qa-python PrototypeTools/live-presence-relay.py \
   --xctestrun /absolute/path/to/BoundIntegrationQA_iphonesimulator27.0-arm64.xctestrun \
   --sim-a <dedicated-A-UDID> --sim-b <dedicated-B-UDID> \
   --output /absolute/path/to/new-run-directory

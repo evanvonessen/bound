@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+game_source="${BOUND_GAME_SOURCE:-$(dirname "$0")/../../multi_red}"
+exec "$game_source/tools/qa-python" "$@"

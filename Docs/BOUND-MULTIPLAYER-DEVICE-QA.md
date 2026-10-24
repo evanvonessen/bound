@@ -51,7 +51,7 @@ friend can still make the existing Jiggle request; use the dedicated test pair.
 Create a fresh ignored output directory:
 
 ```sh
-python3 PrototypeTools/prepare-multiplayer-device-qa.py prepare \
+PrototypeTools/qa-python PrototypeTools/prepare-multiplayer-device-qa.py prepare \
   --output .build/multiplayer-device-qa-config
 ```
 
@@ -74,7 +74,7 @@ by these tools. Keep the normal app installed, and verify the QA artifact before
 any future install:
 
 ```sh
-python3 PrototypeTools/prepare-multiplayer-device-qa.py verify \
+PrototypeTools/qa-python PrototypeTools/prepare-multiplayer-device-qa.py verify \
   --app .build/MultiplayerDeviceQABuild/Build/Products/Release-iphoneos/Bound.app \
   --production-app /absolute/path/to/normal/Bound.app
 ```
@@ -135,7 +135,7 @@ After preparing the existing private ROM/seed fixtures and building the
 
 ```sh
 umask 077
-python3 -B PrototypeTools/live-presence-relay.py \
+PrototypeTools/qa-python -B PrototypeTools/live-presence-relay.py \
   --xctestrun /absolute/path/to/BoundIntegrationQA_iphonesimulator27.0-arm64.xctestrun \
   --sim-a QA_SIMULATOR_A --sim-b QA_SIMULATOR_B \
   --output .build/agora-presence-run --agora

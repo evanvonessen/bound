@@ -96,7 +96,7 @@ renewal, presence and video use their normal implementations.
 
 ```sh
 umask 077
-python3 -B PrototypeTools/full-app-gameplay.py \
+PrototypeTools/qa-python -B PrototypeTools/full-app-gameplay.py \
   --xctestrun /absolute/path/to/BoundCompanionQA_iphonesimulator27.1-arm64.xctestrun \
   --sim-a OWNED_QA_SIMULATOR_A --sim-b OWNED_QA_SIMULATOR_B \
   --output .build/new-full-app-gameplay-run --duration 900

@@ -36,6 +36,15 @@ style of the current site and keep earlier entries as a running history.
 Within each date, separate Radical Red multiplayer changes from general Bound
 changes under their own labels.
 
+## QA Python
+
+For Python QA, use `PrototypeTools/qa-python` for scripts, unit tests, and ad hoc
+checks. It selects multi_red's persistent repaired `.venv` and verifies its native
+Unicorn library before loading it. Do not create temporary QA environments or
+use bare system/Homebrew Python for emulator checks. If validation fails, run
+`python3 ../multi_red/tools/setup_qa_python.py`; never bypass the guard or suppress
+crash reporting. `BOUND_GAME_SOURCE` can select another game checkout.
+
 ## Latest integrated ROM
 
 After pushing completed changes to `origin/main`, run

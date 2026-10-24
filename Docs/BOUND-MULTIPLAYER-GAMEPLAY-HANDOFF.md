@@ -120,7 +120,7 @@ and supports a rehearsal/full suite with one guaranteed-final-cleanup friendship
 Use a new run number and fresh output paths for every attempt.
 
 The user's foreground setup populated only the exact development-account item
-through the transferred approved helper. Continue using `/opt/homebrew/bin/python3`
+through the transferred approved helper. Use `PrototypeTools/qa-python`
 and the protected public client key at `~/.cupcake-dev/publishable-key` (path only
 in environment). Read the transferred credential policy before reuse. Never
 enumerate Keychain items, export credentials, unlock automatically or relax ACLs.
@@ -142,7 +142,7 @@ For a future authorized repeat, the private launch recipe is:
 umask 077
 PATH='/Applications/Xcode.app/Contents/Developer/usr/bin:'"$PATH" \
   BOUND_QA_RUN=FRESH_NUMBER BOUND_GAMEPLAY_DURATION=900 BOUND_GAMEPLAY_SUITE=1 \
-  PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3 -B \
+  PYTHONDONTWRITEBYTECODE=1 PrototypeTools/qa-python -B \
   .build/full-app-gameplay-validation/run-private.py \
   > .build/full-app-gameplay-validation/run-FRESH_NUMBER.log 2>&1
 ```
