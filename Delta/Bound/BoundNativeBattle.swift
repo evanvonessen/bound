@@ -336,14 +336,14 @@ final class BoundNativeBattleSession {
             // native invitation is still closing. Keep only that consented ID.
             guard id==nil,let interactions,interactions.requestID==packet.id,
                   [.confirming,.agreed].contains(interactions.phase) else { return }
-            if packet.kind == .prepared { earlyPreparation=packet.id }
+            if packet.kind == .prepared { earlyPreparation=packet.id; interactions.peerPreparedActivity() }
             else if packet.kind == .abort {
                 earlyPreparation=nil; interactions.activityEnded("Your friend ended the interaction")
             }
             return
         }
         switch packet.kind {
-        case .prepared: peerPrepared=true
+        case .prepared: peerPrepared=true; interactions?.peerPreparedActivity()
         case .connected: peerConnected=true
         case .finished: peerFinished=true
         case .abort: fail("Your friend ended the \(activity.rawValue)"); return

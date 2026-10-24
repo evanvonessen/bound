@@ -5,7 +5,7 @@ single battle through VBA-M. See [native friend battles](BOUND-NATIVE-FRIEND-BAT
 for entry, transport, recovery and current validation evidence. Accepted Trades
 enter the native trade menu and save the exchange; see
 [native friend trades](BOUND-NATIVE-FRIEND-TRADES.md). Both activities require the
-Experimental Features switch.
+Enable Experimental Multiplayer switch.
 
 ## Player interaction
 
@@ -15,15 +15,19 @@ face their tile, and press **A**. The friend must be on the same map and elevati
 Diagonal positions, overlapping players, other maps, stale presence and sprites
 in the middle of a step are excluded.
 
-The interaction overlay offers Battle and Trade invitations. The other player
-can accept or decline. Either player can cancel. A request expires after 30
-seconds; acceptance confirmation expires after 10 seconds. Moving away, losing
-presence, restoring a state or losing the connection invalidates the request.
+The cartridge menu offers Battle, Trade and Cancel. The other player can accept
+or decline. Either player can cancel. Menus and invitations have no waiting
+deadline: missing position packets, roster gaps and socket reconnects retain
+the menu, selection and consent. Failed or unacknowledged invitation messages
+retry once per second while the connection permits them. Fresh verified
+movement away, deliberate disconnect, cancellation, account/room changes or
+disabling multiplayer end the interaction. An ended invitation leaves an
+acknowledgement instead of silently dismissing its window.
 Two simultaneous requests decline each other rather than silently choosing an
 activity. An accepted Battle starts native connection setup; accepting Trade starts native save/link setup and the cartridge trade menu.
 
-The invitation overlay leaves the local emulator running so presence stays fresh. It
-releases held gameplay inputs and blocks further game inputs until closed.
+The native invitation leaves the local emulator running so presence stays fresh.
+It releases held gameplay inputs and gives the cartridge window its normal controls.
 The native menu and existing app shortcuts retain their mapping. A press used
 to interact with a friend is an app-only input, which VBA-M ignores; it does
 not also interact with a game NPC or sign. Native touches and mapped physical
@@ -39,6 +43,11 @@ Other emulation cores retain their normal mappings.
   state machine. Request UUIDs, phase checks, location checks and a bounded
   retired-ID list reject duplicate and superseded messages. Incoming requests
   require the sender to be facing the local player's adjacent tile.
+  Freshness is required to open or admit a new invitation, but missing samples
+  do not prove that a player moved. A reconnect rebinds the retained invitation
+  to new authenticated presence epochs only after both players still occupy
+  its verified adjacent positions. Lost cancel/decline messages are replayed
+  when the other peer retries; repeated consent cannot launch an activity twice.
 - `BoundFriendInteractionPacket` is capped at 1,024 bytes and has a `BFI1`
   prefix, separate from movement JSON. It contains the activity, request/session
   identities and two map positions. It carries no RAM, battery save or party.
@@ -46,12 +55,14 @@ Other emulation cores retain their normal mappings.
   The installed Agora 4.6.4 headers distinguish this API from the existing
   replaceable presence stream. SDK callbacks copy invitations into a FIFO of
   at most 64 messages. Movement updates cannot overwrite it. Overflow or a
-  stream-delivery error aborts the invitation channel rather than continuing
-  after losing a control message. A new sharing session resets it.
-- Sharing stop/recovery, ROM binding and restored-state admission fence old
+  stream-delivery error suspends invitations while transport and fresh presence
+  recover. Nakama uses the same invitation state machine. Pending messages are
+  retried from their consent state, independently of the transport FIFO.
+- Explicit sharing stop, ROM binding and restored-state admission fence old
   invitations. The SDK callback accepts only the configured friend's remote UID.
-- `BoundFriendInteractionPanel` is a scrollable native overlay with explicit
-  friendly-battle and persistent-trade wording. `BoundFriendWorldInputGate` filters the same logical
+- `BoundFriendInteractionPanel` owns a completed-frame mailbox for native cartridge
+  windows; it draws no app overlay. Reconnection preserves the current window
+  request and cursor. `BoundFriendWorldInputGate` filters the same logical
   mapping before both the app and emulator receive a controller input.
 
 Cloud setup, backend, authentication, signing configuration, SDK versions and
@@ -70,8 +81,20 @@ invitation does not transfer a Pokémon.
 Use `BoundIntegrationQA` with `BattleCableTests`, `FriendInteractionTests`,
 `LivePresenceTests` and
 `ControllerNavigationTests`. The interaction tests cover adjacency/facing,
-consent, duplicate delivery, crossed invitations, cancel/decline/timeout,
-connection and location invalidation, bounded FIFO behavior, and input filtering.
+consent, duplicate delivery, crossed invitations, lost request/accept/confirm and
+cancel/decline messages, prolonged position gaps, reconnect epochs, verified
+location invalidation, bounded FIFO behavior, and input filtering.
+
+`FriendInteractionTests.testNativeChooserAndTradeInvitationStayOpenAcrossDisconnects`
+uses the current integrated private cartridge in the isolated simulator's
+`Documents/MultiplayerValidation/RadicalRed.gba`. It creates a disposable New Game,
+operates the cartridge's actual chooser and invitation with A/B/D-pad input,
+checks that the cursor and windows survive simulated connection loss, and checks
+that cancellation releases native script locks. `PlaybackSharingTests` also
+injects roster, socket and interaction-stream interruptions through the real
+sharing coordinator. These checks do not establish physical-device network
+reliability or seamless continuation of an already active native cable session;
+existing battle/trade interruption and save-recovery rules still apply there.
 
 `FullAppGameplayUITests.testFriendWorldInvitations` runs two ordinary Bound UIs
 with native controller touches and real Agora. The existing private launcher
@@ -86,6 +109,21 @@ The earlier full-app movement/save-state 900-second acceptance is recorded in
 `BOUND-MULTIPLAYER-GAMEPLAY-QA.md` at checkpoint `ec35f9cb`. It need not be repeated
 for invitation UI work. Build/test logs and runtime artifacts stay in ignored
 `.build/full-app-gameplay-validation/`; ROMs and credentials remain private.
+
+## Persistent invitation validation — October 24, 2026
+
+- 54 focused tests passed without failures or skips: 20 invitation tests,
+  25 presence tests, four cable protocol tests and five sharing/reconnect tests.
+- The current integrated cartridge's Battle/Trade/Cancel chooser kept the same
+  native window and cursor during a simulated outage. Both outgoing and incoming
+  trade prompts remained available, and A/B cancellation returned to an unlocked
+  field. Button readiness now distinguishes finished text from text still printing.
+- Protocol checks cover hour-long simulated waits, dropped messages, fresh
+  reconnect epochs, duplicate delivery and no repeated activity launch.
+- The unsigned Release iPhone build passed. All 17,061 pinned sources, 99
+  integration hashes and two SDK privacy manifests verified unchanged.
+- Physical-device, separate-network and active native cable reconnection remain
+  outside this validation. No phone performance parity is claimed.
 
 ## Invitation checkpoint results — October 20, 2026
 

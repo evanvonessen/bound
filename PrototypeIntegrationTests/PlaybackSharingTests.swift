@@ -75,6 +75,11 @@ private final class TransitionCount: @unchecked Sendable {
     private(set) var maximumInFlight = 0
     private(set) var completedAfterStop = 0
     private var event: ((FriendSharingEvent) -> Void)?
+    private var interactionReceiver: (@MainActor (Data?) -> Void)?
+    func setInteractionReceiver(_ receiver: (@MainActor (Data?) -> Void)?) { interactionReceiver = receiver }
+    func interruptInteractions() { interactionReceiver?(nil) }
+    func peerGone() { event?(.remoteGone) }
+    func peerJoined() { event?(.remoteJoined) }
     private var previousFingerprint: [UInt8]?
     private(set) var changedFrames = 0
     var delay: UInt64 = 0
@@ -430,6 +435,46 @@ private final class TransitionCount: @unchecked Sendable {
 }
 
 extension PlaybackSharingTests {
+    func testFriendMenuSurvivesRosterSocketAndInteractionStreamInterruptions() async throws {
+        let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer { UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key) }
+        let transport = OfflineVideoTransport()
+        let session = FriendSharingSession(configuration: configuration(), transport: transport)
+        defer { session.stop() }
+        let local = try JSONDecoder().decode(BoundFriendWorldPosition.self, from: Data(
+            #"{"mapGroup":4,"mapNumber":1,"elevation":0,"x":6,"y":6,"facing":4}"#.utf8))
+        let peer = try JSONDecoder().decode(BoundFriendWorldPosition.self, from: Data(
+            #"{"mapGroup":4,"mapNumber":1,"elevation":0,"x":7,"y":6,"facing":3}"#.utf8))
+        let context = BoundFriendInteractionSession.Context(localSession: UUID(), peerSession: UUID(), local: local, peer: peer)
+        var fresh = true
+        session.interactions.context = { fresh ? context : nil }
+        session.start()
+        XCTAssertTrue(session.interactions.open())
+        fresh = false; transport.peerGone()
+        session.interactions.tick(at: ProcessInfo.processInfo.systemUptime + 3600)
+        XCTAssertEqual(session.interactions.phase, .choosing)
+        XCTAssertFalse(session.interactions.connected)
+        fresh = true; transport.peerJoined()
+        XCTAssertTrue(session.interactions.connected)
+        XCTAssertEqual(session.interactions.phase, .choosing)
+        transport.interrupt()
+        XCTAssertEqual(session.interactions.phase, .choosing)
+        transport.recover()
+        XCTAssertTrue(session.interactions.connected)
+        XCTAssertEqual(session.interactions.phase, .choosing)
+        fresh = false; transport.interruptInteractions()
+        XCTAssertFalse(session.interactions.connected)
+        XCTAssertEqual(session.interactions.phase, .choosing)
+        fresh = true
+        try await wait(0.15) // Recovery without another peer-joined event.
+        XCTAssertTrue(session.interactions.connected)
+        XCTAssertEqual(session.interactions.phase, .choosing)
+        session.stop()
+        XCTAssertEqual(session.interactions.phase, .ended)
+        XCTAssertTrue(session.interactions.requiresResultAcknowledgement)
+    }
+
     func testPortraitCustomControlsCanMoveAboveNativeControllerWithoutStretchingOthers() throws {
         let base = try XCTUnwrap(DeltaCore.ControllerSkin.standardControllerSkin(for: System.gba.gameType))
         let traits = DeltaCore.ControllerSkin.Traits(device: .iphone, displayType: .standard, orientation: .portrait)

@@ -114,6 +114,7 @@ final class BoundLivePresenceSession: ObservableObject {
     var demandChanged: (() -> Void)?
     var retainsNativeDialoguePose: (() -> Bool)?
     var presentationChanged: (() -> Void)?
+    var peerWithdrew: (() -> Void)?
     var needsReader: Bool { BoundMultiplayerFeatures.isEnabled && enabled && (connected || retainedPose != nil) }
     private var retainedPose: BoundPresencePose?
     private var retainedAt: TimeInterval?
@@ -278,7 +279,7 @@ final class BoundLivePresenceSession: ObservableObject {
         if packet.withdrawn == true {
             retainedPose = nil; retainedAt = nil
             samples.removeAll(keepingCapacity: true); bufferedSamples = 0
-            presentationChanged?(); return
+            peerWithdrew?(); presentationChanged?(); return
         }
         guard let pose = packet.pose else {
             samples.removeAll(keepingCapacity: true); bufferedSamples = 0

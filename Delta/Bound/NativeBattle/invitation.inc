@@ -23,7 +23,10 @@ bool inviteMenuReady() {
         auto *task=internalRAM+0x5090+i*40;
         if(task[4]&&word(task)==(inviteMode==0?0x0809CC99:0x0809CE55)) return true;
     }
-    return inviteMode==2&&internalRAM[0xEB1]==2;
+    // Both waitmessage and waitbuttonpress use native-script mode. Only the
+    // latter has advanced past byte 7; reporting readiness while text is still
+    // printing consumes the first A/B press without closing the prompt.
+    return inviteMode==2&&internalRAM[0xEB1]==2&&word(internalRAM+0xEB8)==0x08000000+InviteStart+8;
 }
 uint8_t inviteCharacter(unichar c) {
     if(c>='A'&&c<='Z') return 0xBB+c-'A';

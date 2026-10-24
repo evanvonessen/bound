@@ -233,6 +233,8 @@ final class LivePresenceTests: XCTestCase {
 
     func testPacketJitterKeepsStationarySpriteWithoutBlockingUntilExplicitWithdrawal() throws {
         let session = session(), peer = UUID()
+        var withdrawals = 0
+        session.peerWithdrew = { withdrawals += 1 }
         session.receive(try packet(session, peer: peer, time: 10, reading: reading()), at: 20)
         for elapsed in [0.05, 0.35, 0.5, 0.74] {
             XCTAssertEqual(session.pose(at: 20 + elapsed)?.x, 104)
@@ -241,8 +243,10 @@ final class LivePresenceTests: XCTestCase {
         session.receive(try packet(session, peer: peer, sequence: 2, time: 10.74, reading: reading()), at: 20.74)
         XCTAssertEqual(session.pose(at: 21.2)?.x, 104, "A stationary heartbeat renews its position")
         XCTAssertNil(session.collision(at: 21.2))
+        XCTAssertEqual(withdrawals, 0, "Missing packets are not deliberate departure")
         session.receive(try packet(session, peer: peer, sequence: 3, time: 11.21, withdrawn: true), at: 21.21)
         XCTAssertNil(session.pose(at: 21.21)); XCTAssertNil(session.collision(at: 21.21))
+        XCTAssertEqual(withdrawals, 1)
     }
 
     func testRemoteAvatarsNeverBlockDivergentPuzzleOrStoryWorlds() throws {

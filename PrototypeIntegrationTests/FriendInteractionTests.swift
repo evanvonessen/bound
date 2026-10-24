@@ -4,6 +4,12 @@ import DeltaCore
 import GBADeltaCore
 @testable import Delta
 
+private struct FriendDialogueGame: GameProtocol {
+    let fileURL: URL
+    let gameSaveURL: URL
+    var type: GameType { .gba }
+}
+
 @MainActor
 final class FriendInteractionTests: XCTestCase {
     private var previousExperimentalFeature: Any?
@@ -26,7 +32,7 @@ final class FriendInteractionTests: XCTestCase {
     }
     @MainActor private final class Peers {
         let a = Session(), b = Session()
-        let aID = UUID(), bID = UUID()
+        var aID = UUID(), bID = UUID()
         var left: BoundFriendWorldPosition, right: BoundFriendWorldPosition
         var aPackets: [Data] = [], bPackets: [Data] = []
         var online = true
@@ -90,7 +96,7 @@ final class FriendInteractionTests: XCTestCase {
         p.a.stop();p.b.stop()
         XCTAssertEqual(p.a.phase,.ended);XCTAssertEqual(p.b.phase,.ended)
     }
-    func testDeclineCancelTimeoutAndCrossedInvitationsCannotLaunchActivity() {
+    func testDeclineCancelAndCrossedInvitationsCannotLaunchActivity() {
         let p = peers(); var launched = false
         p.a.agreed = { _,_,_ in launched = true }; p.b.agreed = { _,_,_ in launched = true }
         p.a.open(at:10); p.a.request(.trade,at:10); p.deliver(); p.b.decline(); p.deliver()
@@ -98,20 +104,20 @@ final class FriendInteractionTests: XCTestCase {
         p.a.cancel(); p.a.open(at:20); p.a.request(.battle,at:20); p.deliver(at:20)
         p.a.cancel(); p.deliver(at:20); XCTAssertEqual(p.b.phase,.ended)
         p.b.cancel(); p.a.open(at:30); p.a.request(.trade,at:30); p.a.tick(at:61)
-        XCTAssertEqual(p.a.message,"Request timed out"); p.a.cancel()
+        XCTAssertEqual(p.a.phase,.outgoing, "Waiting is not a cancellation"); p.a.cancel()
         p.aPackets.removeAll(); p.bPackets.removeAll()
         p.a.open(at:70); p.b.open(at:70); p.a.request(.battle,at:70); p.b.request(.trade,at:70)
         p.deliver(at:70); p.deliver(at:70)
         XCTAssertEqual(p.a.phase,.ended); XCTAssertEqual(p.b.phase,.ended); XCTAssertFalse(launched)
     }
-    func testMovementLostPresenceAndConnectionChangesInvalidateAdmission() {
+    func testMovementInvalidatesAdmissionButMissingPresenceKeepsInvitation() {
         let p = peers()
         p.a.open(at:10); p.a.request(.battle,at:10); p.deliver()
         p.right = position(8,8,facing:3); p.b.accept(at:10.1); p.a.tick(at:10.1)
         XCTAssertEqual(p.a.phase,.ended); XCTAssertTrue(p.bPackets.isEmpty)
         p.a.cancel(); p.b.cancel(); p.right = position(7,8,facing:3)
         p.a.open(at:20); p.a.request(.trade,at:20); p.deliver(at:20)
-        p.online = false; p.a.tick(at:20.1); XCTAssertEqual(p.a.phase,.ended)
+        p.online = false; p.a.tick(at:20.1); XCTAssertEqual(p.a.phase,.outgoing)
         p.online = true; p.a.cancel(); p.a.refreshInputGate()
         XCTAssertEqual(BoundFriendWorldInput(input:p.a.inputGate.filter(GBAGameInput.a)), .interact)
         p.a.stop()
@@ -211,7 +217,7 @@ final class FriendInteractionTests: XCTestCase {
             ready?(); XCTAssertEqual(launches,cancel ? 0:1)
         }
     }
-    func testUnavailableInvitationsReleaseControlsAndLateCleanupCannotLaunch() {
+    func testReconnectKeepsConsentAndCancelledNativeCleanupCannotLaunch() {
         let p = peers(); var cleanup: (() -> Void)?, launched = false
         p.a.beforeAgreement = { cleanup = $0 }
         p.a.agreed = { _, _, _ in launched = true }
@@ -219,29 +225,209 @@ final class FriendInteractionTests: XCTestCase {
         p.b.accept(at: 10); p.deliver(at: 10)
         XCTAssertEqual(p.a.phase, .agreed)
         p.online = false
-        p.a.tick(at: 20.1)
-        XCTAssertEqual(p.a.phase, .ended)
-        XCTAssertFalse(p.a.blocksGameplay)
-        XCTAssertEqual(AnyInput(p.a.inputGate.filter(GBAGameInput.up)), AnyInput(GBAGameInput.up))
+        p.a.suspend(); p.a.tick(at: 2000)
+        XCTAssertEqual(p.a.phase, .agreed)
+        XCTAssertTrue(p.a.blocksGameplay)
         cleanup?(); XCTAssertFalse(launched)
-        p.a.stop(); p.a.start { _ in true }
-        XCTAssertFalse(p.a.blocksGameplay)
-        p.online = true
-        XCTAssertTrue(p.a.canInteract, "An expired invitation can be replaced without a catch-up acknowledgement")
+        p.a.start { _ in true }; p.a.tick(at: 2001)
+        XCTAssertTrue(p.a.waitingForConnection)
+        cleanup?(); XCTAssertFalse(launched, "A rejoined socket alone does not authorize native activity")
+        p.online = true; p.a.tick(at: 2002)
+        XCTAssertFalse(p.a.waitingForConnection)
+        p.a.cancel(); cleanup?(); XCTAssertFalse(launched)
+        XCTAssertTrue(p.a.canInteract)
     }
 
-    func testDeclinedAndExpiredRequestsNeverKeepMovementPermission() {
+    func testDeclinedRequestsRemainAcknowledgableAndWaitingCanAlwaysBeCancelled() {
         for decline in [false, true] {
             let p = peers()
             p.a.open(at: 10); p.a.request(.battle, at: 10); p.deliver()
             if decline { p.b.decline(); p.deliver(at: 11) }
-            else { p.a.tick(at: 41) }
+            else {
+                p.a.tick(at: 3600)
+                XCTAssertEqual(p.a.phase, .outgoing)
+                XCTAssertTrue(p.a.blocksGameplay)
+                p.a.cancel()
+                XCTAssertEqual(p.a.phase, .idle)
+                XCTAssertFalse(p.a.blocksGameplay)
+                continue
+            }
             XCTAssertEqual(p.a.phase, .ended)
             XCTAssertFalse(p.a.blocksGameplay)
-            XCTAssertFalse(p.a.requiresResultAcknowledgement)
-            XCTAssertTrue(p.a.canInteract)
+            XCTAssertTrue(p.a.requiresResultAcknowledgement)
+            XCTAssertFalse(p.a.canInteract)
             XCTAssertEqual(AnyInput(p.a.inputGate.filter(GBAGameInput.up)), AnyInput(GBAGameInput.up))
         }
+    }
+
+    func testChoosingMenuAndSelectedActivitySurviveMissingCoordinatesAndLongWait() {
+        for activity in Packet.Activity.allCases {
+            let p = peers()
+            XCTAssertTrue(p.a.open(at: 10))
+            p.online = false
+            for time in [10.25, 40, 3600.0] { p.a.tick(at: time) }
+            XCTAssertEqual(p.a.phase, .choosing)
+            XCTAssertTrue(p.a.blocksGameplay)
+            p.a.request(activity, at: 3601)
+            XCTAssertEqual(p.a.phase, .outgoing)
+            XCTAssertTrue(p.aPackets.isEmpty, "Selection waits for fresh verified positions")
+            p.online = true; p.a.tick(at: 3602); p.deliver(at: 3602)
+            XCTAssertEqual(p.b.phase, .incoming)
+            p.a.stop(); p.deliver(at: 3603)
+            XCTAssertEqual(p.a.phase, .ended); XCTAssertEqual(p.b.phase, .ended)
+        }
+    }
+
+    func testFailedSendsAndLostConfirmationRetryWithoutChangingConsentOrDoubleLaunching() throws {
+        for activity in Packet.Activity.allCases {
+            let p = peers(); var launches = [String]()
+            p.a.agreed = { _, _, _ in launches.append("A") }
+            p.b.agreed = { _, _, _ in launches.append("B") }
+            p.a.send = { _ in false }
+            p.a.open(at: 10); p.a.request(activity, at: 10)
+            let id = try XCTUnwrap(p.a.requestID)
+            XCTAssertEqual(p.a.phase, .outgoing)
+            p.a.send = { p.aPackets.append($0); return true }
+            p.a.tick(at: 11); p.deliver(at: 11)
+            XCTAssertEqual(p.b.requestID, id)
+            p.b.send = { _ in false }; p.b.accept(at: 12)
+            XCTAssertEqual(p.b.phase, .confirming)
+            p.b.send = { p.bPackets.append($0); return true }
+            p.b.tick(at: 13); p.deliver(at: 13)
+            p.aPackets.removeAll() // Confirmation was accepted locally but lost in transit.
+            p.a.tick(at: 14); p.deliver(at: 14)
+            XCTAssertEqual(launches, ["A", "B"])
+            p.b.tick(at: 15); p.a.tick(at: 15); p.deliver(at: 15)
+            XCTAssertEqual(launches, ["A", "B"])
+            p.a.peerPreparedActivity(); p.aPackets.removeAll(); p.a.tick(at: 100)
+            XCTAssertTrue(p.aPackets.isEmpty)
+            p.a.send = nil; p.b.send = nil
+        }
+    }
+
+    func testIncomingConsentSurvivesTransportReconnectAndFreshPresenceEpochs() {
+        for activity in Packet.Activity.allCases {
+            let p = peers(); var launches = 0
+            p.a.agreed = { _, _, _ in launches += 1 }; p.b.agreed = { _, _, _ in launches += 1 }
+            p.a.open(at: 10); p.a.request(activity, at: 10); p.deliver()
+            let id = p.a.requestID
+            p.a.suspend(); p.b.suspend(); p.online = false
+            p.b.accept(at: 11)
+            p.a.tick(at: 3600); p.b.tick(at: 3600)
+            XCTAssertEqual(p.a.phase, .outgoing); XCTAssertEqual(p.b.phase, .confirming)
+            p.aID = UUID(); p.bID = UUID(); p.online = true
+            p.a.start { p.aPackets.append($0); return true }; p.b.start { p.bPackets.append($0); return true }
+            p.a.tick(at: 3601); p.b.tick(at: 3601); p.deliver(at: 3601); p.deliver(at: 3601)
+            XCTAssertEqual(p.a.requestID, id); XCTAssertEqual(p.b.requestID, id)
+            XCTAssertEqual(launches, 2)
+            p.a.send = nil; p.b.send = nil
+        }
+    }
+
+    func testLostCancelAndDeclineAreReplayedWithoutResurrectingInvitation() {
+        for decline in [false, true] {
+            let p = peers()
+            p.a.open(at: 10); p.a.request(.trade, at: 10); p.deliver()
+            p.b.send = { _ in false }
+            if decline { p.b.decline() } else { p.b.cancel() }
+            p.b.send = { p.bPackets.append($0); return true }
+            p.a.tick(at: 11); p.deliver(at: 11); p.deliver(at: 11)
+            XCTAssertEqual(p.a.phase, .ended); XCTAssertEqual(p.b.phase, .idle)
+            XCTAssertEqual(p.a.message, decline ? "Your friend declined the request" : "Your friend cancelled the interaction")
+            p.b.send = nil
+        }
+    }
+
+    func testNativeChooserAndTradeInvitationStayOpenAcrossDisconnects() async throws {
+        continueAfterFailure = false
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MultiplayerValidation")
+        let rom = root.appendingPathComponent("RadicalRed.gba")
+        guard FileManager.default.fileExists(atPath: rom.path) else {
+            throw XCTSkip("Install the private cartridge in the isolated QA simulator")
+        }
+        let battery = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sav")
+        let core = try XCTUnwrap(EmulatorCore(game: FriendDialogueGame(fileURL: rom, gameSaveURL: battery), options: [.metal: true]))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let oldWindow = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene), owner = UIViewController(), view = GameView()
+        window.rootViewController = owner; window.makeKeyAndVisible(); owner.view.addSubview(view)
+        view.frame = CGRect(x: 0, y: 150, width: window.bounds.width, height: window.bounds.width * 2 / 3)
+        core.add(view)
+        let p = peers(), panel = BoundFriendInteractionPanel(session: p.a)
+        panel.bind(core: core); p.a.changed = { panel.render() }
+        let setup = NativePlayerSceneSetup(core: core), probe = panel.probe
+        let booted = expectation(description: "Current cartridge New Game ready")
+        var ready = false
+        core.updateHandler = { core in
+            setup.receive(core); probe.receive(core)
+            if setup.isReady, !ready { ready = true; booted.fulfill() }
+        }
+        defer {
+            p.a.send = nil
+            p.a.changed = nil; panel.bind(core: nil); core.updateHandler = nil; _ = core.stop()
+            window.isHidden = true; oldWindow?.makeKeyAndVisible()
+            try? FileManager.default.removeItem(at: battery)
+        }
+        core.rate = 8; XCTAssertTrue(core.start()); await fulfillment(of: [booted], timeout: 60)
+        XCTAssertTrue(core.pause()); core.rate = 1; XCTAssertTrue(core.resume())
+        func wait(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
+            for _ in 0..<200 {
+                if condition() { return }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            XCTFail("Native friend menu did not reach expected state: \(probe.read())", file: file, line: line)
+        }
+        func press(_ mask: Int) async throws {
+            core.deltaCore.emulatorBridge.activateInput(mask, value: 1, playerIndex: 0)
+            try await Task.sleep(for: .milliseconds(100))
+            core.deltaCore.emulatorBridge.deactivateInput(mask, playerIndex: 0)
+            try await Task.sleep(for: .milliseconds(150))
+        }
+        try await wait { p.a.canInteract }
+        XCTAssertTrue(p.a.open(at: 10))
+        try await wait { probe.read().menuReady && probe.read().mode == 0 }
+        try await press(128) // Keep the real native cursor on Trade during the outage.
+        let cursor = probe.read().cursor
+        let chooserID = try XCTUnwrap(probe.read().activeID)
+        p.online = false; p.a.suspend(); p.a.tick(at: 3600)
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertTrue(probe.read().active); XCTAssertTrue(probe.read().menuReady)
+        XCTAssertEqual(probe.read().mode, 0); XCTAssertEqual(probe.read().cursor, cursor)
+        XCTAssertEqual(probe.read().activeID, chooserID)
+        XCTAssertEqual(p.a.phase, .choosing)
+        try await press(1)
+        try await wait { p.a.phase == .outgoing && probe.read().menuReady && probe.read().mode == 2 }
+        XCTAssertEqual(p.a.activity, .trade)
+        let id = p.a.requestID
+        let waitingID = try XCTUnwrap(probe.read().activeID)
+        p.a.tick(at: ProcessInfo.processInfo.systemUptime + 3600)
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertTrue(probe.read().active); XCTAssertEqual(p.a.requestID, id)
+        XCTAssertEqual(probe.read().activeID, waitingID)
+        p.online = true
+        p.a.start { p.aPackets.append($0); return true }
+        p.a.tick(); p.deliver()
+        XCTAssertEqual(p.b.phase, .incoming)
+        p.b.cancel(); p.deliver()
+        try await wait { p.a.phase == .ended && probe.read().activeID != waitingID && probe.read().menuReady && probe.read().mode == 2 }
+        try await press(2)
+        try await wait { p.a.phase == .idle && !probe.read().active && probe.read().ready }
+        // The receiving side keeps its Yes/No invitation and can consent offline.
+        XCTAssertTrue(p.b.open()); p.b.request(.trade); p.deliver()
+        try await wait { p.a.phase == .incoming && probe.read().menuReady && probe.read().mode == 1 }
+        p.online = false; p.a.suspend(); p.a.tick(at: ProcessInfo.processInfo.systemUptime + 3600)
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertTrue(probe.read().active); XCTAssertEqual(probe.read().mode, 1)
+        try await press(1)
+        try await wait { p.a.phase == .confirming && probe.read().menuReady && probe.read().mode == 2 }
+        try await press(2)
+        try await wait { p.a.phase == .idle && !probe.read().active && probe.read().ready }
+        XCTAssertTrue(core.pause())
+        // A fresh bedroom save has no Pokémon yet; battle admission also tests
+        // party size. This check specifically verifies native field/UI cleanup.
+        XCTAssertTrue(BoundVBABattleBridge.friendDialogueReady(), "Cancel releases native script locks and window tasks")
+        p.a.send = nil
     }
 
 }

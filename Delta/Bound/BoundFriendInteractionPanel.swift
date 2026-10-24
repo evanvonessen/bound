@@ -5,7 +5,7 @@ import DeltaCore
 /// guest memory; replacing a request first lets native B dismiss the old window.
 final class BoundFriendDialogueProbe: @unchecked Sendable {
     struct Request: Equatable { let id: UUID; let mode: Int; let text: String }
-    struct Reading { var id: UUID?; var result: Int?; var ready=false; var active=false; var menuReady=false; var mode = -1; var cursor = -1 }
+    struct Reading { var id: UUID?; var activeID: UUID?; var result: Int?; var ready=false; var active=false; var menuReady=false; var mode = -1; var cursor = -1 }
     private let lock=NSLock()
     private var coreID: ObjectIdentifier?
     private var desired: Request?, current: Request?
@@ -42,6 +42,7 @@ final class BoundFriendDialogueProbe: @unchecked Sendable {
         }
         reading.ready=native["ready"] as? Bool ?? false
         reading.active=native["active"] as? Bool ?? false
+        reading.activeID=reading.active ? current?.id:nil
         reading.menuReady=native["menuReady"] as? Bool ?? false
         reading.mode=native["mode"] as? Int ?? -1
         reading.cursor=native["cursor"] as? Int ?? -1
@@ -63,6 +64,7 @@ final class BoundFriendInteractionPanel: UIView {
     private var boundCore: ObjectIdentifier?
     private var configured=false
     private var shownMessage=""
+    private var waitingForConnection=false
     init(session: BoundFriendInteractionSession) {
         self.session=session
         super.init(frame:.zero)
@@ -77,7 +79,7 @@ final class BoundFriendInteractionPanel: UIView {
     func bind(core: EmulatorCore?) {
         let id=core.map(ObjectIdentifier.init)
         guard !configured || boundCore != id else { return }
-        configured=true; boundCore=id; closeCompletion=nil; request=nil; phase = .idle
+        configured=true; boundCore=id; closeCompletion=nil; request=nil; phase = .idle; waitingForConnection=false
         let supported=core?.deltaCore.identifier == "com.rileytestut.GBADeltaCore"
         probe.configure(core:supported ? core:nil)
         session?.nativeDialogueManaged=supported
@@ -99,7 +101,9 @@ final class BoundFriendInteractionPanel: UIView {
     func render() {
         isHidden=true
         guard let session, configured else { return }
-        if phase != session.phase || phase == .ended && shownMessage != session.message {
+        let waiting = session.phase == .agreed && session.waitingForConnection
+        if phase != session.phase || phase == .ended && shownMessage != session.message || waiting != waitingForConnection {
+            waitingForConnection=waiting
             phase=session.phase; shownMessage=session.message
             request=nil
             if phase != .agreed { closeCompletion=nil }
@@ -110,6 +114,7 @@ final class BoundFriendInteractionPanel: UIView {
                 mode=1; text="Your friend wants to \(session.activity?.rawValue ?? "trade").\nWill you accept?"
             case .outgoing: mode=2; text="Waiting for your friend.\nA or B: Cancel."
             case .confirming: mode=2; text="Confirming with your friend.\nA or B: Cancel."
+            case .agreed where waiting: mode=2; text="Waiting for your friend.\nA or B: Cancel."
             case .ended:
                 guard session.requiresResultAcknowledgement else { probe.show(nil); return }
                 mode=2; text=Self.message(session.message)
@@ -156,7 +161,7 @@ final class BoundFriendInteractionPanel: UIView {
             else { session.cancel() }
         case .incoming:
             if result==1 { session.accept() } else { session.decline() }
-        case .outgoing, .confirming, .ended: session.cancel()
+        case .outgoing, .confirming, .agreed, .ended: session.cancel()
         default: break
         }
     }

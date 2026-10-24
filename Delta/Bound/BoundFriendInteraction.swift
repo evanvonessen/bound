@@ -109,14 +109,20 @@ final class BoundFriendInteractionSession {
     var contextDiagnostic:(()->String)?
     private var anchor: Context?
     private var initiator = false
-    private var deadline: TimeInterval?
+    private var lastTransmission: TimeInterval?
+    private var agreementAcknowledged = false
+    private var agreementScheduled = false
+    private var agreementGeneration = UUID()
+    private var needsFreshAnchor = false
     private var retired: [UUID] = []
+    private var terminalReplies: [UUID: Packet.Action] = [:]
     private(set) var connected = false
+    var waitingForConnection: Bool { !connected || needsFreshAnchor }
     var blocksGameplay: Bool { phase != .idle && phase != .playing && phase != .ended }
     var cancelActivity: (() -> Void)?
     func activityProgress(_ message: String, playing: Bool) {
         guard activity != nil else { return }
-        phase = playing ? .playing : .connecting; self.message = message; deadline = nil; notify()
+        phase = playing ? .playing : .connecting; self.message = message; notify()
     }
     func activityEnded(_ message: String) { requiresResultAcknowledgement = true; end(message) }
     var canInteract: Bool {
@@ -128,11 +134,19 @@ final class BoundFriendInteractionSession {
         guard BoundMultiplayerFeatures.isEnabled else { return }
         // A reconnect must not erase the save/recovery result before the
         // player has acknowledged it. Retired requests still cannot restart.
-        if !connected && phase != .ended { reset() }
-        self.send = send; connected = true; refreshInputGate()
+        self.send = send; connected = true; lastTransmission = nil; notify()
     }
+    /// Socket/roster gaps are not user cancellation. Keep the same native menu,
+    /// choice and consent while the authenticated connection is restored.
+    func suspend() {
+        connected = false; send = nil; lastTransmission = nil
+        needsFreshAnchor = true
+        agreementGeneration = UUID(); agreementScheduled = false
+        notify()
+    }
+    func peerPreparedActivity() { agreementAcknowledged = true }
     func stop(message: String = "Friend connection ended") {
-        guard connected else { refreshInputGate(); return }
+        if let anchor, ![.idle, .ended, .playing, .connecting].contains(phase) { _ = emit(.cancel, anchor: anchor) }
         connected = false; send = nil
         if phase != .idle && phase != .ended { end(message) }
         refreshInputGate()
@@ -140,24 +154,29 @@ final class BoundFriendInteractionSession {
     @discardableResult func open(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
         guard canInteract, let value = context?() else { return false }
         requiresResultAcknowledgement = false
-        anchor = value; deadline = now + 30; phase = .choosing; message = "Choose an interaction"
+        anchor = value; initiator = true; lastTransmission = nil
+        phase = .choosing; message = "Choose an interaction"
         notify(); return true
     }
     func request(_ activity: Packet.Activity, at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
-        guard phase == .choosing, validAnchor(), let anchor else { return }
+        guard phase == .choosing else { return }
+        guard anchorValidity() != false else { end("Your friend is no longer next to you"); return }
         self.activity = activity; requestID = UUID(); initiator = true
-        phase = .outgoing; deadline = now + 30; message = "Waiting for your friend…"
-        guard emit(.request, anchor: anchor) else { end("Couldn’t send the request"); return }
+        agreementAcknowledged = false
+        phase = .outgoing; lastTransmission = nil; message = "Waiting for your friend…"
+        retry(at: now)
         notify()
     }
     func accept(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
-        guard phase == .incoming, validAnchor(), let anchor else { return }
-        phase = .confirming; deadline = now + 10; message = "Confirming with your friend…"
-        guard emit(.accept, anchor: anchor) else { end("Couldn’t confirm the request"); return }
+        guard phase == .incoming else { return }
+        guard anchorValidity() != false else { end("Your friend is no longer next to you"); return }
+        phase = .confirming; lastTransmission = nil; message = "Confirming with your friend…"
+        retry(at: now)
         notify()
     }
     func decline() {
         if phase == .incoming, let anchor { _ = emit(.decline, anchor: anchor) }
+        if let requestID { terminalReplies[requestID] = .decline }
         reset()
     }
     func cancel() {
@@ -173,21 +192,36 @@ final class BoundFriendInteractionSession {
     }
     func tick(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         refreshInputGate()
-        guard ![.idle, .ended, .connecting, .playing].contains(phase) else { return }
-        if phase != .confirming && phase != .agreed && !validAnchor() {
+        guard ![.idle, .ended].contains(phase) else { return }
+        if [.choosing, .outgoing, .incoming, .confirming].contains(phase), anchorValidity() == false {
             if let anchor { _ = emit(.cancel, anchor: anchor) }
             end("Your friend is no longer next to you")
-        } else if let deadline, now >= deadline {
-            if let anchor { _ = emit(.cancel, anchor: anchor) }
-            end("Request timed out")
+        } else {
+            retry(at: now)
         }
     }
     func receive(_ data: Data, at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
-        guard BoundMultiplayerFeatures.isEnabled, connected, let packet = Packet.decode(data), !retired.contains(packet.id),
+        guard BoundMultiplayerFeatures.isEnabled, connected, let packet = Packet.decode(data),
               let current = context?() ?? (packet.action == .request ? nil:anchor),
               packet.sender == current.peerSession, packet.receiver == current.localSession else { return }
+        if retired.contains(packet.id) {
+            // A lost cancellation/decline is answered again when the other peer
+            // retries. Never turn a retired request back into an invitation.
+            if let action = terminalReplies[packet.id], [.request, .accept, .confirm].contains(packet.action) {
+                let reply = Packet(sender: current.localSession, receiver: current.peerSession, id: packet.id,
+                    activity: packet.activity, action: action, origin: packet.origin, target: packet.target)
+                if let data = reply.encoded() { _ = send?(data) }
+            }
+            return
+        }
+        if anchor != nil, anchorValidity() == false { return }
         if packet.action == .request {
-            if packet.id == requestID { return } // Duplicate delivery is idempotent.
+            if packet.id == requestID {
+                guard !initiator, packet.activity == activity, let anchor,
+                      packet.origin.occupiesSameTile(as: anchor.peer),
+                      packet.target.occupiesSameTile(as: anchor.local) else { return }
+                retry(at: now, force: true); return
+            }
             guard (phase == .idle || phase == .choosing), (!nativeDialogueManaged || nativeDialogueReady || phase == .choosing), canPresent?() ?? true else {
                 // One pending invitation at a time, including crossed requests.
                 let reply = Packet(sender: current.localSession, receiver: current.peerSession, id: packet.id,
@@ -198,7 +232,8 @@ final class BoundFriendInteractionSession {
             guard current.peer.isFacing(current.local), packet.origin.occupiesSameTile(as: current.peer),
                   packet.target.occupiesSameTile(as: current.local) else { return }
             anchor = current; activity = packet.activity; requestID = packet.id; initiator = false
-            phase = .incoming; deadline = now + 30; message = "Your friend wants to \(packet.activity.rawValue)"
+            agreementAcknowledged = false; lastTransmission = nil
+            phase = .incoming; message = "Your friend wants to \(packet.activity.rawValue)"
             notify(); return
         }
         guard packet.id == requestID, packet.activity == activity, let anchor,
@@ -206,16 +241,18 @@ final class BoundFriendInteractionSession {
               packet.target.occupiesSameTile(as: initiator ? anchor.peer : anchor.local) else { return }
         switch packet.action {
         case .accept:
-            guard phase == .outgoing, initiator, validAnchor() else { return }
-            phase = .agreed; deadline = now + 10; message = "\(packet.activity.title) invitation accepted"
-            guard emit(.confirm, anchor: anchor) else { end("Couldn’t confirm the request"); return }
-            notify(); finishAgreement(packet, initiator:true)
+            guard initiator else { return }
+            if phase == .outgoing {
+                phase = .agreed; message = "\(packet.activity.title) invitation accepted"
+                lastTransmission = nil; notify()
+            }
+            retry(at: now, force: true)
         case .confirm:
             // Both peers already consented at verified adjacent anchors. The
             // initiator can now pause for its snapshot, withholding live pose.
             guard phase == .confirming, !initiator else { return }
-            phase = .agreed; deadline = now + 10; message = "\(packet.activity.title) invitation accepted"
-            notify(); finishAgreement(packet, initiator:false)
+            phase = .agreed; message = "\(packet.activity.title) invitation accepted"
+            notify(); finishAgreement()
         case .decline:
             guard phase == .outgoing else { return }
             end("Your friend declined the request")
@@ -223,20 +260,55 @@ final class BoundFriendInteractionSession {
         case .request: break
         }
     }
-    private func finishAgreement(_ packet:Packet, initiator:Bool) {
+    private func retry(at now: TimeInterval, force: Bool = false) {
+        guard connected, let anchor, force || (lastTransmission.map({ now - $0 >= 1 }) ?? true) else { return }
+        let action: Packet.Action
+        switch phase {
+        case .outgoing, .confirming:
+            guard anchorValidity() == true else { return }
+            action = phase == .outgoing ? .request : .accept
+        case .agreed, .connecting, .playing:
+            // A new authenticated presence epoch can arrive after consent but
+            // before the native window has finished closing.
+            if phase == .agreed, anchorValidity() == false {
+                _ = emit(.cancel, anchor: anchor)
+                end("Your friend is no longer next to you"); return
+            }
+            if phase == .agreed, needsFreshAnchor { return }
+            guard initiator, !agreementAcknowledged else {
+                if phase == .agreed { finishAgreement() }; return
+            }
+            action = .confirm
+        default: return
+        }
+        lastTransmission = now
+        if emit(action, anchor: self.anchor ?? anchor), phase == .agreed { finishAgreement() }
+    }
+    private func finishAgreement() {
+        guard connected, !needsFreshAnchor, phase == .agreed, !agreementScheduled, let activity, let requestID else { return }
+        agreementScheduled = true
+        let generation = agreementGeneration
         let completion={ [weak self] in
-            guard let self,self.phase == .agreed,self.requestID==packet.id else { return }
-            self.agreed?(packet.activity,packet.id,initiator)
+            guard let self, self.connected, self.agreementGeneration == generation,
+                  self.phase == .agreed, self.requestID == requestID else { return }
+            self.agreed?(activity,requestID,self.initiator)
         }
         if let beforeAgreement { beforeAgreement(completion) } else { completion() }
     }
-    private func validAnchor() -> Bool {
-        guard BoundMultiplayerFeatures.isEnabled, connected, let anchor else { anchorFailure="disabled/disconnected/no anchor"; return false }
-        guard let current=context?() else { anchorFailure=contextDiagnostic?() ?? "context unavailable"; return false }
-        guard current.localSession==anchor.localSession,current.peerSession==anchor.peerSession else { anchorFailure="session changed"; return false }
+    /// nil means evidence is temporarily unavailable; it is not evidence that
+    /// either player moved. Admission still requires fresh verified positions.
+    private func anchorValidity() -> Bool? {
+        guard BoundMultiplayerFeatures.isEnabled, let anchor else { anchorFailure="disabled/no anchor"; return false }
+        guard connected, let current=context?() else { anchorFailure=contextDiagnostic?() ?? "waiting for connection"; return nil }
         guard current.local.occupiesSameTile(as:anchor.local),current.peer.occupiesSameTile(as:anchor.peer),current.local.isNextTo(current.peer) else { anchorFailure="tile/map changed"; return false }
         let valid=(initiator || phase == .choosing) ? current.local.isFacing(current.peer):current.peer.isFacing(current.local)
         anchorFailure=valid ? "":"facing changed"
+        // Authenticated presence re-handshakes with fresh epochs after a gap.
+        // Rebind only after both verified positions still match this consent.
+        if valid {
+            self.anchor = current
+            if needsFreshAnchor { needsFreshAnchor = false; notify() }
+        }
         return valid
     }
     private func emit(_ action: Packet.Action, anchor: Context) -> Bool {
@@ -248,14 +320,21 @@ final class BoundFriendInteractionSession {
         return send?(data) == true
     }
     private func retireRequest() {
-        if let requestID { retired.append(requestID); if retired.count > 32 { retired.removeFirst() } }
+        if let requestID, !retired.contains(requestID) {
+            retired.append(requestID)
+            if terminalReplies[requestID] == nil { terminalReplies[requestID] = .cancel }
+            if retired.count > 32 { terminalReplies.removeValue(forKey: retired.removeFirst()) }
+        }
     }
     private func end(_ message: String) {
-        if phase == .connecting || phase == .playing { requiresResultAcknowledgement = true }
-        retireRequest(); deadline = nil; phase = .ended; self.message = message; notify()
+        requiresResultAcknowledgement = true
+        agreementGeneration = UUID(); agreementScheduled = false
+        retireRequest(); phase = .ended; self.message = message; notify()
     }
     private func reset() {
-        retireRequest(); phase = .idle; anchor = nil; activity = nil; requestID = nil; deadline = nil; message = ""
+        retireRequest(); phase = .idle; anchor = nil; activity = nil; requestID = nil; lastTransmission = nil; message = ""
+        agreementGeneration = UUID(); agreementScheduled = false; agreementAcknowledged = false
+        needsFreshAnchor = false
         requiresResultAcknowledgement = false
         notify()
     }
