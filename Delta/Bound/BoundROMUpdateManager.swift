@@ -106,6 +106,24 @@ final class BoundROMUpdateManager: ObservableObject {
         defaults.set(false, forKey: Self.enabledKey); isEnabled = false
         status = "Automatic updates are off."
     }
+    static func bundledROMName(buildNumber: String?) -> String {
+        guard let buildNumber, !buildNumber.isEmpty else { return "Multi Red" }
+        return "Multi Red — Build " + buildNumber
+    }
+    static func isAutomaticBundledROMName(_ name: String, sha256: String) -> Bool {
+        name == "Multi Red " + String(sha256.prefix(8)) ||
+        name.range(of: #"^Multi Red — Build [0-9]+(?:\.[0-9]+){0,2}$"#, options: .regularExpression) != nil
+    }
+    private func refreshBundledROMName(_ content: BoundROMUpdateContent, name: String) throws {
+        let context = DatabaseManager.shared.newBackgroundContext()
+        try context.performAndWait {
+            for game in try self.games(matching: [content.gameID], context: context)
+                where game.name != name && Self.isAutomaticBundledROMName(game.name, sha256: content.sha256) {
+                game.name = name
+            }
+            if context.hasChanges { try context.save() }
+        }
+    }
     /// Each cartridge keeps its content-addressed identity and existing saves.
     /// Never enroll an older cartridge in the reset-on-update folder workflow.
     private func installBundledROMIfNeeded() {
@@ -124,10 +142,15 @@ final class BoundROMUpdateManager: ObservableObject {
                     return data
                 }.value
                 let content = try BoundROMUpdateContent(data: data, expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
-                if try !games(matching: [content.gameID]).isEmpty { return }
+                // Read the installed bundle at runtime: App Store export can renumber the archive.
+                let name = Self.bundledROMName(buildNumber: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+                if try !games(matching: [content.gameID]).isEmpty {
+                    try refreshBundledROMName(content, name: name)
+                    return
+                }
                 let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                let copy = folder.appendingPathComponent("Multi Red " + String(content.sha256.prefix(8)) + ".gba")
+                let copy = folder.appendingPathComponent(name + ".gba")
                 try data.write(to: copy, options: .atomic)
                 let succeeded = await withCheckedContinuation { continuation in
                     DatabaseManager.shared.importGames(at: [copy]) { _, errors in
