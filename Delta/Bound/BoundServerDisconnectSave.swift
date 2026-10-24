@@ -43,7 +43,9 @@ enum BoundServerDisconnectSave {
     @MainActor
     static func enqueue(package: BoundMultiplayerSavePackage, previous: Task<Void, Never>?,
                         expectedHead: UUID?, pendingHead: UUID?, session: AppCloudSession,
-                        verifiedCursor: BoundMultiplayerSharedCursor = .init()) -> Task<Void, Never> {
+                        verifiedCursor: BoundMultiplayerSharedCursor = .init(),
+                        service: BoundNakamaRunService = .init(),
+                        onConfirmed: (@MainActor (UUID) throws -> Void)? = nil) -> Task<Void, Never> {
         let lifetime = Lifetime(identity: package.payload.manifest.identity, previous: previous, attempt: nextAttempt())
         lifetime.begin()
         let task = Task { @MainActor in
@@ -52,8 +54,11 @@ enum BoundServerDisconnectSave {
                 if let previous { await previous.value }
                 try Task.checkCancellation()
                 let checkpoint = try await drain(package: package, expectedHead: expectedHead,
-                    pendingHead: pendingHead, session: session, verifiedCursor: verifiedCursor)
+                    pendingHead: pendingHead, session: session, verifiedCursor: verifiedCursor, service: service)
                 try Task.checkCancellation()
+                // Includes server-confirmed retries of a previously sealed
+                // package. The caller settles only the matching activity claim.
+                try onConfirmed?(checkpoint)
                 lifetime.finish(status: "saved", message: "Saved to server.", checkpoint: checkpoint)
             } catch {
                 let message: String
@@ -73,14 +78,14 @@ enum BoundServerDisconnectSave {
     }
 
     private static func drain(package original: BoundMultiplayerSavePackage, expectedHead: UUID?, pendingHead: UUID?,
-                              session: AppCloudSession, verifiedCursor: BoundMultiplayerSharedCursor) async throws -> UUID {
+                              session: AppCloudSession, verifiedCursor: BoundMultiplayerSharedCursor,
+                              service: BoundNakamaRunService) async throws -> UUID {
         let identity = original.payload.manifest.identity
         guard session.owner == identity.owner else { throw BoundNakamaRunService.Failure.conflict }
         let ownEvents = try pendingEvents(in: original, verifiedCursor: verifiedCursor)
         var offset = 0
         var candidate = original
         var candidates = [original.payload.checkpoint: original.receipt]
-        let service = BoundNakamaRunService()
         for attempt in 0..<3 {
             do {
                 try Task.checkCancellation(); try session.credentials()

@@ -25,6 +25,8 @@ def main():
     parser.add_argument('--disconnect-seconds',type=float,default=0,help='Drop the actual active cable, wait, then replace both channels and finish; 0–120 seconds')
     parser.add_argument('--disconnect-stage',choices=['menu','exchange','saved'],default='menu',help='Native trade stage to interrupt; battles always interrupt after entry')
     parser.add_argument('--silent-disconnect',action='store_true',help='Blackhole packets without a transport error; native liveness detection must suspend automatically')
+    parser.add_argument('--battle-run',action='store_true',help='Peer A chooses the native Run action; both peers must return and restore their parties')
+    parser.add_argument('--battle-party',choices=['healthy','fainted','soul-denied'],default='healthy',help='Disposable party: healthy, ordinary 0HP, or a permanently denied lead plus a living damaged mon')
     parser.add_argument('--trade-cancel',action='store_true',help='Cancel from the native trade menu before offering; both original parties must persist')
     parser.add_argument('--trade',action='store_true',help='Exercise the actual native trade menu, exchange, save and server-state/battery persistence')
     parser.add_argument('--session-entry',action='store_true',help='Exercise the production activity coordinator through native entry and cancel/restore; requires --relay')
@@ -32,6 +34,7 @@ def main():
     parser.add_argument('--shared-world',action='store_true',help='Exercise both native Nugget Bridge first wins and all four shared-prerequisite states')
     args=parser.parse_args()
     args.trade = args.trade or args.trade_cancel
+    if (args.battle_run or args.battle_party!='healthy') and (args.trade or args.shared_world or args.session_entry):parser.error('Battle Run and party fixtures require a full native battle')
     if not 0<=args.latency_ms<=100:parser.error('Latency must be 0–100 ms')
     if not 0<=args.disconnect_seconds<=120:parser.error('Disconnect duration must be 0–120 seconds')
     if args.silent_disconnect and not args.disconnect_seconds:parser.error('Silent disconnect requires a positive disconnect duration')
@@ -108,7 +111,7 @@ def main():
             if isinstance(value,dict):
                 copy={k:visit(v) for k,v in value.items()}
                 if 'TestBundlePath' in copy:
-                    copy.setdefault('EnvironmentVariables',{}).update(BOUND_NATIVE_BATTLE_PEER=peer,BOUND_NATIVE_BATTLE_PORT=str(server.server_port),BOUND_NATIVE_TRADE_CANCEL='1' if args.trade_cancel else '0',BOUND_SHARED_WORLD_PAIR='1' if args.shared_world else '0',BOUND_NATIVE_DISCONNECT_SECONDS=str(args.disconnect_seconds),BOUND_NATIVE_DISCONNECT_STAGE=args.disconnect_stage,BOUND_NATIVE_SILENT_DISCONNECT='1' if args.silent_disconnect else '0')
+                    copy.setdefault('EnvironmentVariables',{}).update(BOUND_NATIVE_BATTLE_PEER=peer,BOUND_NATIVE_BATTLE_PORT=str(server.server_port),BOUND_NATIVE_TRADE_CANCEL='1' if args.trade_cancel else '0',BOUND_SHARED_WORLD_PAIR='1' if args.shared_world else '0',BOUND_NATIVE_DISCONNECT_SECONDS=str(args.disconnect_seconds),BOUND_NATIVE_DISCONNECT_STAGE=args.disconnect_stage,BOUND_NATIVE_SILENT_DISCONNECT='1' if args.silent_disconnect else '0',BOUND_NATIVE_BATTLE_RUN='1' if args.battle_run else '0',BOUND_NATIVE_BATTLE_PARTY=str(['healthy','fainted','soul-denied'].index(args.battle_party)))
                     if relay:copy['EnvironmentVariables'].update(BOUND_NATIVE_BATTLE_RELAY_PORT=str(relay.server_address[1]),BOUND_NATIVE_BATTLE_RELAY_ID=relay_id)
                 return copy
             if isinstance(value,list): return [visit(v) for v in value]
@@ -137,12 +140,17 @@ def main():
                     [c['trainer2Battle'] for c in v['cases']]==[False,False,False,True] and
                     v.get('nativeBattleEntries')==[0x6e,0x7b] for v in result.values()):
                 raise RuntimeError('Missing paired native progression evidence')
-        elif set(result)!=set(('A','B')) or not all(v.get('stage')=='done' and ((v.get('canceled') if args.trade_cancel else v.get('trade')) and v.get('persisted') if args.trade else v.get('battle') and (args.session_entry or v.get('damaged')) and v.get('restored')) for v in result.values()):
+        elif set(result)!=set(('A','B')) or not all(v.get('stage')=='done' and ((v.get('canceled') if args.trade_cancel else v.get('trade')) and v.get('persisted') if args.trade else v.get('battle') and (args.session_entry or args.battle_run or v.get('damaged')) and v.get('restored')) for v in result.values()):
             raise RuntimeError('Missing native activity or persistence/restoration evidence')
         outcomes={q.get('outcome') for q in result.values()}
+        if not args.shared_world and not args.trade_cancel and not all(v.get('ownerRestored') for v in result.values()):
+            raise RuntimeError('Missing cold-core/new-owner durable continuation evidence')
         if args.disconnect_seconds and not all(v.get('disconnectResumed') and v.get('disconnectSeconds')==args.disconnect_seconds for v in result.values()):raise RuntimeError('Missing native same-activity disconnect/resume evidence')
         if args.silent_disconnect and not all(v.get('silentDisconnect') for v in result.values()):raise RuntimeError('Missing automatic native liveness suspension evidence')
-        if not args.shared_world and not args.trade and not args.session_entry and outcomes not in ({1,2},{3}): raise RuntimeError('Native outcomes disagree')
+        if not args.shared_world and not args.trade and not args.session_entry:
+            if not args.battle_run and {q & 0x7f for q in outcomes} not in ({1,2},{3}): raise RuntimeError('Native outcomes disagree')
+            if args.battle_run and not result['A'].get('nativeRunIntent'): raise RuntimeError('Actual native Run selection missing')
+            if not all(v.get('partyUnchanged') for v in result.values()): raise RuntimeError('Original party was not restored')
         passed=True
     except BaseException as exc:
         error=type(exc).__name__+': '+str(exc)
@@ -151,7 +159,7 @@ def main():
             if process.poll() is None: process.terminate()
             log.close()
         with lock: result=dict(peers)
-        (args.output/'summary.json').write_text(json.dumps(dict(passed=passed,error=error,relay=args.relay,latencyMs=args.latency_ms,entryOnly=args.session_entry,trade=args.trade,cancel=args.trade_cancel,sharedWorld=args.shared_world,disconnectSeconds=args.disconnect_seconds,disconnectStage=args.disconnect_stage,silentDisconnect=args.silent_disconnect,elapsed=time.monotonic()-started,peers=result,
+        (args.output/'summary.json').write_text(json.dumps(dict(passed=passed,error=error,relay=args.relay,latencyMs=args.latency_ms,entryOnly=args.session_entry,trade=args.trade,cancel=args.trade_cancel,sharedWorld=args.shared_world,battleRun=args.battle_run,battleParty=args.battle_party,disconnectSeconds=args.disconnect_seconds,disconnectStage=args.disconnect_stage,silentDisconnect=args.silent_disconnect,elapsed=time.monotonic()-started,peers=result,
             limits='Native command transport on two owned simulators over host loopback; separate from real Agora and normal-app interaction acceptance.'),indent=2)+'\n')
         server.shutdown(); server.server_close()
         if relay:relay.shutdown(); relay.server_close()

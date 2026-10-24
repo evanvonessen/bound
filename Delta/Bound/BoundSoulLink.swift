@@ -79,6 +79,19 @@ struct BoundSoulMon: Equatable, Sendable {
     }
 }
 
+enum BoundSoulWipeout {
+    /// A lost pair is not a game over while another usable party member lives.
+    /// Eggs and boxed Pokémon cannot keep the current party in a battle.
+    static func occurred(party: [BoundSoulMon], ledger: BoundSoulLedger, friendly: Bool = false) -> Bool {
+        guard !friendly, ledger.valid, !ledger.offering, !ledger.ended, !ledger.dead.isEmpty else { return false }
+        let members = party.filter { $0.inParty && !$0.isEgg }
+        guard !members.isEmpty, members.contains(where: { mon in
+            ledger.records.contains { $0.eligible && $0.identities.contains(mon.identity) }
+        }) else { return false }
+        return members.allSatisfy { ledger.denied.contains($0.identity) || $0.hp == 0 }
+    }
+}
+
 struct BoundSoulRecord: Codable, Equatable, Sendable {
     let identity: BoundSoulIdentity
     let slot: String
@@ -482,6 +495,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         var ledger: BoundSoulLedger?
         var error: String?
         var activeDenied = false
+        var partyWipedOut = false
     }
     let timeline = BoundRunTimeline()
     private let lock = NSRecursiveLock()
@@ -518,6 +532,16 @@ final class BoundSoulProbe: @unchecked Sendable {
             ledger = value; snapshot.ledger = value
         } catch { snapshot.error = "Soul Link record couldn’t be read. Your run is paused." }
     }
+    /// Refresh only host caches after restoring an exact native continuation.
+    /// The saved cartridge already owns its in-flight battle/trade execution.
+    func reloadContinuationMemory(for core:EmulatorCore) throws {
+        lock.lock();defer { lock.unlock() }
+        guard coreID==ObjectIdentifier(core),core.state == .paused else { throw BoundSoulLedger.Error.corrupt }
+        let wasVerified=verified
+        configure(core:core,url:url,gameID:gameID)
+        verified=wasVerified
+        if snapshot.error != nil { throw BoundSoulLedger.Error.corrupt }
+    }
     func setPreviewEnabled(_ value: Bool) { lock.lock(); previewEnabled = value; lock.unlock() }
     func setVerified(_ value: Bool) { lock.lock(); verified = value; lock.unlock() }
     func setNativeObservationAllowed(_ value: Bool) { lock.lock(); nativeObservationAllowed = value; lock.unlock() }
@@ -542,6 +566,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         do {
             try value.observe(mons,registering:false,fainted:fainted)
             if value != previous { try persist(value);ledger=value;snapshot.ledger=value }
+            snapshot.partyWipedOut = snapshot.partyWipedOut || BoundSoulWipeout.occurred(party: mons, ledger: value)
         } catch { snapshot.error="Soul Link couldn’t preserve cooperative faints. Your run is paused." }
     }
     func start(run: UUID, binding: String, offering: Bool = false) throws {
@@ -735,6 +760,7 @@ final class BoundSoulProbe: @unchecked Sendable {
             let previous = value
             try value.observe(ready && boxesChanged ? party + cachedBoxes : party, registering: ready, fainted: fainted)
             if value != previous { try persist(value); ledger = value; snapshot.ledger = value }
+            snapshot.partyWipedOut = snapshot.partyWipedOut || BoundSoulWipeout.occurred(party: party, ledger: value)
             if ready && (snapshot.team == nil || frame % 15 == 0 || boxesChanged || value != previous) {
                 snapshot.team = BoundSoulTeam.capture(mons: snapshot.mons, ledger: value)
                 snapshot.teamCapturedAt = ProcessInfo.processInfo.systemUptime
@@ -753,6 +779,10 @@ final class BoundSoulProbe: @unchecked Sendable {
 @MainActor
 final class BoundSoulSession: ObservableObject {
     let probe: BoundSoulProbe
+    func reloadContinuationMemory(for core: EmulatorCore) throws {
+        try probe.reloadContinuationMemory(for: core)
+        ledger = probe.read().ledger; localTeam = nil; localTeamCurrent = false
+    }
     @Published private(set) var status = "Receive your starter, then connect to your partner."
     @Published private(set) var ledger: BoundSoulLedger?
     @Published private(set) var localTeam: BoundSoulTeam?

@@ -111,3 +111,12 @@ void __attribute__((naked)) BoundBattlePreserveLinkFlags(void)
         "movs r2,#128\nlsl r2,r2,#3\nand r3,r2\nldr r2,=0x09090961\nbx r2\n"
         "1: ldr r2,=0x09090967\nbx r2\n.ltorg");
 }
+
+/* Exact RR action-input dispatch: action 3 is the player's explicit Run
+ * submission. Record intent before native turn resolution waits on the peer,
+ * then replay the unchanged controller response and native continuation. */
+void __attribute__((naked)) BoundBattleChoice(void)
+{
+    __asm__ volatile("cmp r1,#3\nbne 1f\nldr r3,=0x0300402F\nstrb r1,[r3]\n"
+        "1: ldr r3,=0x090A9EFF\nmov lr,r3\nldr r3,=0x0800E849\nbx r3\n.ltorg");
+}

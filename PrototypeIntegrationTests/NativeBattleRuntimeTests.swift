@@ -16,7 +16,8 @@ private final class NativeBattleDriver:@unchecked Sendable {
     private let reader=BoundVBAPlayerStateProbe()
     private let setup:NativePlayerSceneSetup?
     private var frame=0,battleFrame:Int?,lastMask=0
-    private var playing=false,moves=false,didBoot=false,didDamage=false
+    private var playing=false,moves=false,run=false,didBoot=false,didDamage=false
+    private var firstMenuHP:[Int]?,firstMenuEnemyHP:[Int]?
     private var initialHP:[Int]?
     let booted=XCTestExpectation(description:"Native overworld")
     let entered=XCTestExpectation(description:"Native battle")
@@ -25,11 +26,13 @@ private final class NativeBattleDriver:@unchecked Sendable {
         setup=admittedSetup ? NativePlayerSceneSetup(core:core):nil
         reader.configure(coreID:ObjectIdentifier(core),profile:profile,active:true,status:.waiting,detail:"Native battle cold boot")
     }
-    func play(moves:Bool) { lock.lock(); playing=true; self.moves=moves; lock.unlock() }
+    func play(moves:Bool,run:Bool=false) { lock.lock(); playing=true; self.moves=moves;self.run=run; lock.unlock() }
     var damaged:Bool { lock.lock(); defer { lock.unlock() }; return didDamage }
+    var menuHP:[Int]? { lock.lock();defer { lock.unlock() };return firstMenuHP }
+    var menuEnemyHP:[Int]? { lock.lock();defer { lock.unlock() };return firstMenuEnemyHP }
     func receive(_ core:EmulatorCore) {
         frame+=1
-        lock.lock(); let playing=playing,moves=moves; lock.unlock()
+        lock.lock(); let playing=playing,moves=moves,run=run; lock.unlock()
         if !playing {
             setup?.receive(core)
             let value=reader.receive(core)
@@ -40,17 +43,30 @@ private final class NativeBattleDriver:@unchecked Sendable {
         }
         let battle=BoundVBABattleBridge.isInBattle()
         if battle,battleFrame==nil { battleFrame=frame; entered.fulfill() }
+        let menu=BoundVBABattleBridge.qaBattleMenu()
+        if menu["battler"] != nil {
+            lock.lock()
+            if firstMenuHP==nil {
+                firstMenuHP=menu["playerHP"] as? [Int];firstMenuEnemyHP=menu["enemyHP"] as? [Int]
+                NSLog("Native first action menu HP=%@ enemyHP=%@",String(describing:firstMenuHP),String(describing:firstMenuEnemyHP))
+            }
+            lock.unlock()
+        }
         let hp=BoundVBABattleBridge.playerHP().map { $0.intValue }
         if battle,hp.first ?? 0>0,initialHP==nil { initialHP=hp }
         if battle,let initialHP,hp != initialHP {
             lock.lock(); let first = !didDamage; didDamage=true; lock.unlock()
             if first { damage.fulfill() }
         }
-        if battle,moves,let battleFrame,frame-battleFrame>120 { apply((frame-battleFrame)%12<2 ? 1:0,core:core) }
+        if battle,run,let cursor=menu["cursor"] as? Int {
+            let button=cursor&1==0 ? 16:cursor&2==0 ? 128:1
+            apply(frame%12<2 ? button:0,core:core)
+        }
+        else if battle,moves,let battleFrame,frame-battleFrame>120 { apply((frame-battleFrame)%12<2 ? 1:0,core:core) }
         else { apply(0,core:core) }
     }
     private func apply(_ mask:Int,core:EmulatorCore) {
-        for bit in [1,8] where mask&bit != lastMask&bit {
+        for bit in [1,8,16,32,64,128] where mask&bit != lastMask&bit {
             if mask&bit != 0 { core.deltaCore.emulatorBridge.activateInput(bit,value:1,playerIndex:0) }
             else { core.deltaCore.emulatorBridge.deactivateInput(bit,playerIndex:0) }
         }
@@ -480,7 +496,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
         let battery=output.appendingPathComponent("work.sav"); try originalSeed.write(to:battery)
         let core=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
-        let scene=try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let scene=try await nativeWindowScene()
         let previous=scene.windows.first { $0.isKeyWindow }, window=UIWindow(windowScene:scene), owner=UIViewController(), view=GameView()
         window.rootViewController=owner; window.makeKeyAndVisible(); owner.view.addSubview(view)
         view.frame=CGRect(x:0,y:150,width:window.bounds.width,height:window.bounds.width*2/3); core.add(view)
@@ -849,17 +865,20 @@ final class NativeBattleRuntimeTests:XCTestCase {
         // would introduce an unrelated native overwrite-confirmation prompt.
         let battery=output.appendingPathComponent("work.sav"); try Data(repeating:0xFF,count:0x20000).write(to:battery)
         let core=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
-        let scene=try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let scene=try await nativeWindowScene()
         let previous=scene.windows.first { $0.isKeyWindow },window=UIWindow(windowScene:scene),owner=UIViewController(),view=GameView()
         window.rootViewController=owner; window.makeKeyAndVisible(); owner.view.addSubview(view)
         view.frame=CGRect(x:0,y:150,width:window.bounds.width,height:window.bounds.width*2/3); core.add(view)
-        let driver=NativeTradeDriver(core:core,profile:profile,offersEnabled:!cancelMode,admittedSetup:true),native=BoundNativeBattleSession(),interactions=BoundFriendInteractionSession()
+        let driver=NativeTradeDriver(core:core,profile:profile,offersEnabled:!cancelMode,admittedSetup:true),interactions=BoundFriendInteractionSession()
+        var native=BoundNativeBattleSession()
+        native.continuationContext=BoundNativeContinuationContext(owner:UUID(),roomID:id.uuidString,runID:id)
+        native.continuationHeadsProvider={ _ in BoundContinuationHeads(checkpoints:[],permitsNoCheckpoint:true) }
         try primeNativeInteraction(interactions,activity:.trade)
         driver.progress(offers:!cancelMode && !(disconnectSeconds>0 && disconnectStage=="menu"),exit:disconnectSeconds==0)
         let probe=native.probe
         core.updateHandler={ core in driver.receive(core); probe.receive(core) }
         var channel:NativeBattleRelayChannel?
-        var networkAvailable=true,disconnectResumed=false
+        var networkAvailable=true,disconnectResumed=false,bridgeRestored=false
         defer {
             native.cancel(resume:false); channel?.close(); _=core.pause(); BoundVBABattleBridge.close(); _=core.stop()
             window.isHidden=true; previous?.makeKeyAndVisible()
@@ -873,18 +892,27 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertTrue(BoundVBABattleBridge.qaPrepareTradeFixture(UInt(offered)))
         let beforeTrade=BoundVBABattleBridge.qaTradeParty()
         native.bind(core:core,gameID:output.lastPathComponent,interactions:interactions); native.canResume={ true }
-        native.makeChannel={ receiver,failed in
-            guard networkAvailable else { return nil }
-            let value=NativeBattleRelayChannel(port:relayPort,peer:peer,receive:{ data in
-                if data.starts(with:BoundBattleControlPacket.prefix) { Task { @MainActor in native.receive(data) } }
-                else { receiver(data) }
-            },failed:failed)
-            channel=value; return value
+        func configureTransport(_ session:BoundNativeBattleSession) {
+            session.makeChannel={ receiver,failed in
+                guard networkAvailable else { return nil }
+                let value=NativeBattleRelayChannel(port:relayPort,peer:peer,receive:{ data in
+                    if data.starts(with:BoundBattleControlPacket.prefix) { Task { @MainActor in session.receive(data) } }
+                    else { receiver(data) }
+                },failed:failed)
+                channel=value; return value
+            }
+            session.sendControl={ channel?.send($0)==true }
         }
-        native.sendControl={ channel?.send($0)==true }
+        configureTransport(native)
         driver.begin(); _=core.resume(); native.begin(activity:.trade,id:id,initiator:peer=="A")
         for tick in 0..<9000 {
             if tick%200==0 { NSLog("Native trade %@ callback=%08x script=%d trades=%d %@",peer,native.observation?.callback ?? 0,native.observation?.scriptResult ?? -1,native.observation?.tradeCount ?? 0,native.probe.diagnostics) }
+            if !bridgeRestored,native.observation?.callback==0x0804D639 {
+                try verifyNativeBridgeRestore(core)
+                native=try restoreNativeOwner(native,core:core,gameID:output.lastPathComponent,interactions:interactions,
+                    receive:{ driver.receive($0) },configure:configureTransport)
+                bridgeRestored=true
+            }
             let reachedDisconnect = disconnectStage=="exchange" ? native.observation?.callback==0x08053D85
                 : disconnectStage=="saved" ? (native.observation?.tradeCount ?? 0)>0 : native.observation?.callback==0x0804D639
             if disconnectSeconds>0,!disconnectResumed,reachedDisconnect {
@@ -936,7 +964,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertTrue(reopened.stop())
         XCTAssertEqual(try Data(contentsOf:rom),originalROM); XCTAssertEqual(try Data(contentsOf:seed),originalSeed)
         XCTAssertEqual(disconnectResumed,disconnectSeconds>0)
-        let report:[String:Any]=["stage":"done","trade":native.completedTrades==1,"canceled":cancelMode && !native.isActive,"persisted":persisted[8]==UInt8(expected),"restorationMode":"server-state-and-battery","cable":native.lastCableDiagnostic,
+        let report:[String:Any]=["stage":"done","trade":native.completedTrades==1,"canceled":cancelMode && !native.isActive,"persisted":persisted[8]==UInt8(expected),"restorationMode":"server-state-and-battery","ownerRestored":bridgeRestored,"cable":native.lastCableDiagnostic,
             "disconnectResumed":disconnectResumed,"disconnectSeconds":disconnectSeconds,"disconnectPhase":4,"silentDisconnect":silentDisconnect]
         try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("report.json"))
         _=try await request(port:port,peer:peer,body:report)
@@ -946,6 +974,8 @@ final class NativeBattleRuntimeTests:XCTestCase {
     private func runNativeBattle(entryOnly:Bool) async throws {
         continueAfterFailure=false
         let env=ProcessInfo.processInfo.environment
+        let runBattle=env["BOUND_NATIVE_BATTLE_RUN"]=="1"
+        let partyMode=Int(env["BOUND_NATIVE_BATTLE_PARTY"] ?? "0") ?? 0
         let disconnectSeconds=Double(env["BOUND_NATIVE_DISCONNECT_SECONDS"] ?? "0") ?? 0
         let silentDisconnect=env["BOUND_NATIVE_SILENT_DISCONNECT"]=="1"
         guard let peer=env["BOUND_NATIVE_BATTLE_PEER"],["A","B"].contains(peer),
@@ -961,17 +991,20 @@ final class NativeBattleRuntimeTests:XCTestCase {
         try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
         let battery=output.appendingPathComponent("work.sav"); try Data(repeating:0xFF,count:0x20000).write(to:battery)
         let core=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:romURL,gameSaveURL:battery),options:[.metal:true]))
-        let scene=try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let scene=try await nativeWindowScene()
         let previous=scene.windows.first { $0.isKeyWindow },window=UIWindow(windowScene:scene),owner=UIViewController(),gameView=GameView()
         window.rootViewController=owner; window.makeKeyAndVisible()
         gameView.frame=CGRect(x:0,y:150,width:window.bounds.width,height:window.bounds.width*2/3)
         owner.view.addSubview(gameView); core.add(gameView)
         let driver=NativeBattleDriver(core:core,profile:profile,admittedSetup:true)
-        let native=BoundNativeBattleSession(),interactions=BoundFriendInteractionSession(),probe=native.probe
+        var native=BoundNativeBattleSession()
+        native.continuationContext=BoundNativeContinuationContext(owner:UUID(),roomID:uuid.uuidString,runID:uuid)
+        native.continuationHeadsProvider={ _ in BoundContinuationHeads(checkpoints:[],permitsNoCheckpoint:true) }
+        let interactions=BoundFriendInteractionSession(),probe=native.probe
         try primeNativeInteraction(interactions,activity:.battle)
         let soulProbe=BoundSoulProbe(),soulJournal=output.appendingPathComponent("run.json")
         soulProbe.configure(core:core,url:soulJournal); soulProbe.setVerified(true); soulProbe.setPreviewEnabled(true)
-        native.soulProbe=soulProbe
+        native.soulProbe=partyMode==1 ? nil:soulProbe
         core.updateHandler={ core in driver.receive(core); soulProbe.receive(core); probe.receive(core) }
         var channel:NativeBattleRelayChannel?
         var networkAvailable=true,disconnectResumed=false
@@ -1000,24 +1033,43 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertEqual(soulProbe.read().mons.count,1)
         try soulProbe.start(run:UUID(),binding:String(repeating:"a",count:64))
         _=core.resume(); try await Task.sleep(for:.milliseconds(150)); _=core.pause()
+        if partyMode>0 {
+            // Fixture writes are not gameplay faints. Ordinary 0HP has no Soul
+            // death; the denied case deliberately lets the real probe record it.
+            if partyMode==1 { soulProbe.setNativeObservationAllowed(false) }
+            XCTAssertTrue(BoundVBABattleBridge.qaConfigureBattleParty(UInt(partyMode)))
+            if partyMode==2 {
+                for _ in 0..<60 {
+                    _=core.resume();try await Task.sleep(for:.milliseconds(50));_=core.pause()
+                    if soulProbe.read().mons.count==2,soulProbe.read().ledger?.dead.isEmpty==false { break }
+                }
+                XCTAssertEqual(soulProbe.read().mons.count,2)
+                XCTAssertFalse(try XCTUnwrap(soulProbe.read().ledger).dead.isEmpty)
+            }
+        }
         let soulBefore=try XCTUnwrap(soulProbe.read().ledger)
         let journalBefore=try Data(contentsOf:soulJournal)
         let hpBefore=BoundVBABattleBridge.playerHP().map(\.intValue)
+        let partyBefore=BoundVBABattleBridge.qaTradeParty()
         let timelineBefore=soulProbe.timeline.read().events
         let before=output.appendingPathComponent("before.state"); core.saveSaveState(to:before)
         native.bind(core:core,gameID:output.lastPathComponent,interactions:interactions)
         native.canResume={ true }
-        native.makeChannel={ receiver,failed in
-            guard networkAvailable else { return nil }
-            let value=NativeBattleRelayChannel(port:relayPort,peer:peer,receive:{ data in
-                if data.starts(with:BoundBattleControlPacket.prefix) { Task { @MainActor in native.receive(data) } }
-                else { receiver(data) }
-            },failed:failed)
-            channel=value; return value
+        func configureTransport(_ session:BoundNativeBattleSession) {
+            session.makeChannel={ receiver,failed in
+                guard networkAvailable else { return nil }
+                let value=NativeBattleRelayChannel(port:relayPort,peer:peer,receive:{ data in
+                    if data.starts(with:BoundBattleControlPacket.prefix) { Task { @MainActor in session.receive(data) } }
+                    else { receiver(data) }
+                },failed:failed)
+                channel=value; return value
+            }
+            session.sendControl={ channel?.send($0)==true }
         }
-        native.sendControl={ data in channel?.send(data)==true }
-        driver.play(moves:!entryOnly); _=core.resume()
+        configureTransport(native)
+        driver.play(moves:!entryOnly && !(runBattle && peer=="B"),run:runBattle && peer=="A"); _=core.resume()
         native.begin(activity:.battle,id:uuid,initiator:peer=="A")
+        if partyMode != 1 { soulProbe.setNativeObservationAllowed(true) }
         var entered=false
         for tick in 0..<1200 {
             if tick%100==0 { NSLog("Native entry %@: frame=%llu callback=%08x result=%d %@",peer,native.observation?.frame ?? 0,native.observation?.callback ?? 0,native.observation?.scriptResult ?? -1,native.probe.diagnostics) }
@@ -1033,6 +1085,9 @@ final class NativeBattleRuntimeTests:XCTestCase {
             if let peers=status["peers"] as? [String:[String:Any]],peers.count==2,peers.values.allSatisfy({ ["entered","disconnect","done"].contains($0["stage"] as? String ?? "") }) { break }
             try await Task.sleep(for:.milliseconds(50))
         }
+        try verifyNativeBridgeRestore(core)
+        native=try restoreNativeOwner(native,core:core,gameID:output.lastPathComponent,interactions:interactions,soulProbe:soulProbe,
+            receive:{ driver.receive($0);soulProbe.receive($0) },configure:configureTransport)
         if disconnectSeconds>0 {
             try await verifyNativeReconnect(native:native,id:uuid,core:core,interactions:interactions,port:port,peer:peer,seconds:disconnectSeconds,
                 silent:silentDisconnect,disconnect:{ networkAvailable=false; if silentDisconnect { channel?.dropTraffic() } else { channel?.close() } },reconnect:{ networkAvailable=true })
@@ -1070,17 +1125,23 @@ final class NativeBattleRuntimeTests:XCTestCase {
                     try JSONSerialization.data(withJSONObject:registers,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("native-terminal.json"))
                     if running,!native.isTransportSuspended { _=core.resume() }
                 }
-                if native.completedBattles==1 { done=true; break }
+                if native.completedBattles==1 || runBattle && !native.isActive && native.restoredBattles==1 { done=true; break }
                 if !native.isActive { break }
                 try await Task.sleep(for:.milliseconds(50))
             }
             XCTAssertTrue(done,"Native battle failed: \(native.lastFailure), \(native.lastCableDiagnostic)")
-            XCTAssertTrue(driver.damaged,"A native move must change party HP")
+            XCTAssertTrue(native.lastFailure.isEmpty)
+            if runBattle,peer=="A" { XCTAssertTrue(native.observation?.runRequested==true,"Only actual native Run input may trigger unilateral exit") }
+            if !runBattle { XCTAssertTrue(driver.damaged,"A native move must change party HP") }
+            XCTAssertEqual(driver.menuHP?.count,1,"Only the eligible mon enters this fixture battle")
+            XCTAssertTrue(driver.menuHP?.allSatisfy { $0>0 } == true,"Native action selection cannot start with zero HP")
+            XCTAssertGreaterThan(driver.menuEnemyHP?.first ?? 0,0,"The peer's exchanged lead must also be healed")
         }
         try await Task.sleep(for:.milliseconds(200))
         _=core.pause()
         XCTAssertEqual(native.restoredBattles,1)
         XCTAssertEqual(BoundVBABattleBridge.playerHP().map(\.intValue),hpBefore,"Friendly completion and cancellation restore the prebattle party")
+        XCTAssertEqual(BoundVBABattleBridge.qaTradeParty(),partyBefore,"All original party bytes survive temporary healing and eligibility filtering")
         XCTAssertEqual(soulProbe.read().ledger,soulBefore,"Friendly battle faints never become permanent Soul Link deaths")
         XCTAssertEqual(soulProbe.read().ledger?.lossBits,soulBefore.lossBits)
         XCTAssertEqual(soulProbe.read().ledger?.memorials,soulBefore.memorials)
@@ -1093,9 +1154,74 @@ final class NativeBattleRuntimeTests:XCTestCase {
         let report:[String:Any]=["stage":"done","entryOnly":entryOnly,"battle":entered,
             "damaged":driver.damaged,"restored":native.restoredBattles==1,"cable":native.lastCableDiagnostic,
             "outcome":native.observation?.outcome ?? 0,"soulLedgerUnchanged":soulProbe.read().ledger==soulBefore,
+            "ownerRestored":true,"ran":runBattle,"nativeRunIntent":native.observation?.runRequested==true,"partyMode":partyMode,"checkedSoulHistory":partyMode != 1,"startingHP":driver.menuHP ?? [],"startingEnemyHP":driver.menuEnemyHP ?? [],"partyUnchanged":BoundVBABattleBridge.qaTradeParty()==partyBefore,
             "disconnectResumed":disconnectResumed,"disconnectSeconds":disconnectSeconds,"disconnectPhase":4,"silentDisconnect":silentDisconnect]
         try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("report.json"))
         _=try await request(port:port,peer:peer,body:report)
+    }
+    private func nativeWindowScene() async throws -> UIWindowScene {
+        for _ in 0..<100 {
+            if let scene=UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first { return scene }
+            try await Task.sleep(for:.milliseconds(50))
+        }
+        return try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first,"QA application did not connect its window scene")
+    }
+    private func restoreNativeOwner(_ previous:BoundNativeBattleSession,core:EmulatorCore,gameID:String,
+        interactions:BoundFriendInteractionSession,soulProbe:BoundSoulProbe?=nil,
+        receive:@escaping @Sendable (EmulatorCore)->Void,configure:(BoundNativeBattleSession)->Void) throws -> BoundNativeBattleSession {
+        previous.canResume={ false }
+        XCTAssertTrue(previous.checkpointForContinuation(),previous.lastFailure)
+        XCTAssertEqual(core.state,.paused)
+        let context=try XCTUnwrap(previous.continuationContext)
+        let party=BoundVBABattleBridge.qaTradeParty()
+        let nativeState=BoundVBABattleBridge.captureNativeSession()
+        let cableState=previous.probe.recoveryData()
+        let observation=previous.observation
+        previous.bind(core:nil,gameID:gameID,interactions:interactions)
+        previous.makeChannel=nil;previous.sendControl=nil
+        core.updateHandler=nil
+        BoundVBABattleBridge.closeSoulLink()
+        XCTAssertTrue(core.stop());XCTAssertTrue(core.start());_=core.pause()
+        let reopened=BoundNativeBattleSession()
+        reopened.continuationContext=context;reopened.soulProbe=previous.soulProbe;reopened.canResume={ false }
+        reopened.continuationHeadsProvider=previous.continuationHeadsProvider
+        configure(reopened)
+        reopened.bind(core:core,gameID:gameID,interactions:interactions)
+        XCTAssertTrue(try reopened.restoreContinuationIfAvailable())
+        try soulProbe?.reloadContinuationMemory(for:core)
+        XCTAssertEqual(core.state,.paused)
+        XCTAssertEqual(BoundVBABattleBridge.qaTradeParty(),party,"Relaunch must preserve the in-flight party without healing or swapping twice")
+        XCTAssertEqual(BoundVBABattleBridge.captureNativeSession(),nativeState,"Relaunch restores exact native ring cursors and entry phase")
+        XCTAssertEqual(try JSONSerialization.jsonObject(with:reopened.probe.recoveryData()) as? NSDictionary,
+            try JSONSerialization.jsonObject(with:cableState) as? NSDictionary,"Relaunch restores queued native commands without replaying consumed records")
+        XCTAssertEqual(reopened.observation?.frame,observation?.frame)
+        XCTAssertEqual(reopened.observation?.callback,observation?.callback)
+        let newProbe=reopened.probe
+        core.updateHandler={ core in receive(core);newProbe.receive(core) }
+        reopened.canResume={ true };reopened.resumeTransport()
+        NSLog("Native owner and cold core restored with exact native/cable queues")
+        return reopened
+    }
+    private func verifyNativeBridgeRestore(_ core:EmulatorCore) throws {
+        // A native checkpoint recreates temporary ROM hooks after RAM restore;
+        // it must never re-run entry, heal again or reset command queues.
+        _=core.pause()
+        let checkpoint=BoundVBABattleBridge.captureServerState(),bridge=BoundVBABattleBridge.captureNativeSession()
+        XCTAssertFalse(checkpoint.isEmpty);XCTAssertFalse(bridge.isEmpty)
+        let checkpointParty=BoundVBABattleBridge.qaTradeParty()
+        BoundVBABattleBridge.close()
+        XCTAssertTrue(BoundVBABattleBridge.restoreServerState(checkpoint))
+        XCTAssertFalse(BoundVBABattleBridge.restoreNativeSession(Data("{}".utf8)))
+        XCTAssertFalse(BoundVBABattleBridge.restoreCooperativeSession(bridge))
+        let metadata=try XCTUnwrap(JSONSerialization.jsonObject(with:bridge) as? [String:Any])
+        for (key,value) in [("version",UInt64(1)<<32|1),("installed",UInt64(1)<<32)] {
+            var invalid=metadata;invalid[key]=value
+            XCTAssertFalse(BoundVBABattleBridge.restoreNativeSession(try JSONSerialization.data(withJSONObject:invalid)))
+        }
+        XCTAssertTrue(BoundVBABattleBridge.restoreNativeSession(bridge))
+        XCTAssertEqual(BoundVBABattleBridge.qaTradeParty(),checkpointParty)
+        XCTAssertEqual(BoundVBABattleBridge.captureNativeSession(),bridge)
+        _=core.resume()
     }
     /// New cartridges start before a starter exists. The same native givemon
     /// recipe as integrated ROM gameplay QA creates this disposable party.

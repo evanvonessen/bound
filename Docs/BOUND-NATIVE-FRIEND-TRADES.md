@@ -93,7 +93,7 @@ a stale Pokémon Center return warp. A second adapts ReturnToFieldFromMultiplaye
 initialize/unlock scripts and call the native local return/fade (080568FC).
 The linked-room return would otherwise emit physical overworld key commands;
 those remain rejected by the bounded command admission. Native map/position,
-party and completed-save data remain intact. The shared guest is 964 bytes. All hooks and the
+party and completed-save data remain intact. The shared guest is 992 bytes. All hooks and the
 unused ROM-tail entry are removed before normal world play or a cartridge reboot.
 The on-disk ROM remains untouched and must match the full supported digest.
 
@@ -126,7 +126,17 @@ There is no elapsed-time cancellation, reboot, party restore or repeated
 exchange during that wait. Native commands are delivered once; the cartridge
 continues to own confirmation, exchange and linked save.
 
-Opening the app menu, disabling Experimental Multiplayer or deliberately leaving
+Opening Menu and backgrounding preserve the exact paused trade, including the
+native save state, battery, bridge metadata, command queues, consent and original
+recovery journal. Reopening the same authorized run restores this continuation
+before emulation resumes and waits for a fresh peer handshake. Durable claims
+prevent reuse of an execution that has already resumed. Failed checkpoint writes
+keep the resident trade paused and block destructive exit.
+Automatic cold continuation uses the server-run launcher. Legacy local-ROM
+activities retain resident Menu/background execution, but destructive exit is
+blocked and process loss remains a recovery fence instead of loading an old party.
+
+Disabling Experimental Multiplayer or deliberately leaving
 sharing after trade entry closes the cable and reboots from
 the native cartridge save. The player selects Continue. The game owns selection
 of its valid save after an interrupted linked save. An explicit cancellation before the menu opened can safely restore the
@@ -141,8 +151,9 @@ save, verifies the ROM and retained snapshot digest, and boots the native save;
 it does not load the old party from that snapshot. Recovery remains available
 with Experimental Multiplayer off. A failed recovery keeps its journal/snapshot
 and blocks automatic/quick state capture. Ordinary game, snapshot and backup
-storage remain separate. If iOS terminates a backgrounded app, this process-loss
-recovery applies instead of live continuation. This follows the cartridge's linked-save semantics,
+storage remain separate. This fallback applies to unexpected process loss when
+no unconsumed paused continuation exists. Normal background termination uses
+the exact continuation captured during backgrounding. This follows the cartridge's linked-save semantics,
 not a server-authoritative cross-account trade ledger.
 
 ## Validation workflow
@@ -199,6 +210,36 @@ Repeated join callbacks preserve an already active activity's consent and input
 handoff. Cancellation diagnostics identify the calling source without account or
 credential data. The UIKit tests wait for stable control rectangles after a
 foreground transition before touching them.
+
+## Durable continuation and exchange reconnect — October 24, 2026
+
+`.build/native-owner-trade-exchange-v5/summary.json` passed on both owned
+simulators in **122.84 seconds**, using integrated ROM SHA-256
+`433e308025f5ec0dfc389f323092de35fbbc19dfcb9046656d4de0245523e271`
+and the 992-byte guest.
+
+At the visible native party menu (`0804D639`), each peer wrote a production
+continuation, detached the old session owner, stopped and restarted the emulator
+core, and created a new owner. Production restoration preserved the exact
+in-flight party, native ring cursors, queued commands and observation before the
+fresh resume handshake. It did not repeat entry, healing or party exchange.
+
+Both transports then silently discarded packets for **18 seconds** during the
+real exchange animation (`08053D85`). Native liveness protection paused the games
+without an injected disconnect callback. The same activities resumed and each
+completed exactly one exchange and linked save. Both offered Pokémon and original
+trainer identities were correct; the unoffered party member was byte-identical.
+Both returned to playable overworlds with temporary hooks removed, and restoring
+the resulting server state and battery into new cores preserved those identities
+and party bytes. Final wire and native command queues were empty. Original
+fixture ROM and seed files remained unchanged.
+
+This is production continuation and native command behavior on two real VBA-M
+cores over a host loopback relay. Physical-phone, separate-network, authenticated
+Friends UI, OS process termination and phone frame-pacing validation remain
+pending. It does not establish paired cooperative gameplay restoration; the
+shipping standard v5 cartridge has no enabled cooperative ABI. Earlier receipts
+below remain evidence for their named builds.
 
 ## Observed results — October 24, 2026
 

@@ -309,3 +309,23 @@ the existing friend room. Further acceptance includes authenticated Agora across
 separate networks, physical-device cost/presentation timing and those broader
 world fixtures. Each player's earned progress remains independent;
 [shared world gates](BOUND-SHARED-WORLD-PROGRESSION.md) can wait for both players.
+
+## Soul Link party-wipe return — October 24, 2026
+
+A full usable-party wipe ends a normal Soul Link run. One faint alone does not.
+Friendly battle RAM is fenced out; eggs and boxed Pokémon do not count as living
+party members. Cooperative battles use the cartridge's owned-party projection,
+excluding borrowed partner records. Unknown HP does not count as a faint.
+
+The Game Over overlay says “Press A to return to menu.” A persists return intent
+and presents the menu. The server deletes that exact run only after both
+authenticated participants acknowledge visible menus; offline returns retry from
+owner-scoped durable receipts. The terminal run rejects new gameplay writes.
+Minimal tombstone metadata supports retries after deletion without retaining
+gameplay snapshots. Menu acknowledgements wait until covering sheets are closed
+and the app is active.
+
+Settings version 5 adds a Debug-only “Game Over on Party Wipe” toggle, default
+off. Off disables the whole automatic Game Over/delete flow. Normal mode and
+legacy settings keep the flow enabled. Byte 21 is the inverted Debug override;
+the app, cartridge and server validate the same contract.

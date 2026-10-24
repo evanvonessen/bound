@@ -378,7 +378,15 @@ final class FriendInteractionTests: XCTestCase {
         }
         let battery = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sav")
         let core = try XCTUnwrap(EmulatorCore(game: FriendDialogueGame(fileURL: rom, gameSaveURL: battery), options: [.metal: true]))
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        // The hosted app may still be connecting its first scene after model
+        // tests finish. Yield to UIKit before creating the native fixture window.
+        var connectedScene: UIWindowScene?
+        for _ in 0..<100 {
+            connectedScene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+            if connectedScene != nil { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let scene = try XCTUnwrap(connectedScene)
         let oldWindow = scene.windows.first { $0.isKeyWindow }
         let window = UIWindow(windowScene: scene), owner = UIViewController(), view = GameView()
         window.rootViewController = owner; window.makeKeyAndVisible(); owner.view.addSubview(view)
@@ -469,6 +477,46 @@ final class BattleCableTests:XCTestCase {
         func add(_ data:Data) { lock.lock(); values.append(data); lock.unlock() }
         var snapshot:[Data] { lock.lock(); defer { lock.unlock() }; return values }
         func drain()->[Data] { lock.lock(); defer { lock.unlock() }; let copy=values; values.removeAll(); return copy }
+    }
+    func testContinuationRestoresBothWiresWithAnOutOfOrderGapExactlyOnce() throws {
+        let id=UUID(),sent=Box(),received=Box()
+        let originalA=BoundBattleWire(id:id,receive:{ _ in XCTFail() },failed:{ XCTFail() })
+        let originalB=BoundBattleWire(id:id,receive:{ received.add($0) },failed:{ XCTFail() })
+        originalA.setSender { sent.add($0);return true }
+        XCTAssertTrue(originalA.send(Data([1])));XCTAssertTrue(originalA.send(Data([2])))
+        originalB.receive(sent.snapshot[1]) // Retain the reordered second packet.
+        let savedA=try originalA.freezeForContinuation(),savedB=try originalB.freezeForContinuation()
+        originalB.receive(sent.snapshot[0])
+        XCTAssertTrue(received.snapshot.isEmpty,"Late packets cannot advance a durable saved execution")
+        let a=BoundBattleWire(id:id,receive:{ _ in XCTFail() },failed:{ XCTFail() })
+        let b=BoundBattleWire(id:id,receive:{ received.add($0) },failed:{ XCTFail() })
+        XCTAssertTrue(a.restoreContinuation(savedA));XCTAssertTrue(b.restoreContinuation(savedB))
+        a.setSender { b.receive($0);return true };b.setSender { a.receive($0);return true }
+        XCTAssertTrue(received.snapshot.isEmpty,"Restoring cannot send or ACK before its durable claim")
+        b.thawContinuation();a.thawContinuation()
+        let now=ProcessInfo.processInfo.systemUptime
+        a.tick(at:now+1);b.tick(at:now+2)
+        XCTAssertEqual(received.snapshot,[Data([1]),Data([2])]);XCTAssertFalse(a.hasPending)
+        XCTAssertTrue(a.send(Data([3])))
+        XCTAssertEqual(received.snapshot,[Data([1]),Data([2]),Data([3])],"New commands continue the previous sequence")
+        originalA.close();originalB.close();a.close();b.close()
+    }
+    func testContinuationRetainsDeduplicationAcrossLostAckAndRejectsAnotherActivity() throws {
+        let id=UUID(),sent=Box(),received=Box()
+        let a=BoundBattleWire(id:id,receive:{ _ in XCTFail() },failed:{ XCTFail() })
+        let b=BoundBattleWire(id:id,receive:{ received.add($0) },failed:{ XCTFail() })
+        a.setSender { sent.add($0);return true };XCTAssertTrue(a.send(Data([9])))
+        let packet=try XCTUnwrap(sent.snapshot.first);b.receive(packet)
+        let saved=try b.freezeForContinuation()
+        let reopened=BoundBattleWire(id:id,receive:{ received.add($0) },failed:{ XCTFail() })
+        let wrong=BoundBattleWire(id:UUID(),receive:{ _ in XCTFail() },failed:{ XCTFail() })
+        XCTAssertFalse(wrong.restoreContinuation(saved));XCTAssertTrue(reopened.restoreContinuation(saved))
+        reopened.setSender { a.receive($0);return true }
+        reopened.receive(packet);XCTAssertTrue(a.hasPending)
+        reopened.thawContinuation();reopened.receive(packet);reopened.tick(at:ProcessInfo.processInfo.systemUptime+1)
+        XCTAssertEqual(received.snapshot,[Data([9])],"Reopening cannot apply an already received trade command twice")
+        XCTAssertFalse(a.hasPending)
+        a.close();b.close();reopened.close();wrong.close()
     }
     func testWireReordersAndDeduplicatesAndRejectsWrongActivity() throws {
         let id=UUID(),sent=Box(),received=Box(),failures=Box()
@@ -669,5 +717,103 @@ extension FriendInteractionTests {
         p.a.activityProgress("Trade",playing:true)
         XCTAssertEqual(p.a.phase,.playing); XCTAssertFalse(p.a.blocksGameplay)
         p.a.cancel(); XCTAssertEqual(canceled,1); XCTAssertEqual(p.a.phase,.ended)
+    }
+}
+
+@MainActor
+final class NativeContinuationTests:XCTestCase {
+    private func record(context:BoundNativeContinuationContext,ticket:UUID=UUID())->BoundNativeContinuation {
+        BoundNativeContinuation(version:1,ticket:ticket,context:context,gameID:"continuation-fixture",rom:BoundPlayerROMProfile.supportedSHA256,
+            cartridge:String(repeating:"a",count:64),id:UUID(),activity:.trade,initiator:true,rate:1,
+            localPrepared:true,peerPrepared:true,localConnected:true,peerConnected:true,entryQueued:true,
+            localFinished:false,peerFinished:false,played:true,peerLinkClosed:false,observation:nil,
+            state:Data(repeating:1,count:1025),battery:Data(repeating:0xFF,count:131072),bridge:Data([1]),
+            probe:Data(),wire:Data(),backup:Data(repeating:2,count:1025),journal:Data(),memoryFiles:[:],heads:BoundContinuationHeads(checkpoints:[],permitsNoCheckpoint:true))
+    }
+    func testDurableContinuationIsScopedAndClaimedBeforeReuse() throws {
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:folder) }
+        let store=BoundNativeContinuationStore(root:folder)
+        let context=BoundNativeContinuationContext(owner:UUID(),roomID:UUID().uuidString,runID:UUID())
+        let value=record(context:context);try store.save(value)
+        XCTAssertEqual(try store.load(context:context,gameID:value.gameID)?.ticket,value.ticket)
+        let otherOwner=BoundNativeContinuationContext(owner:UUID(),roomID:context.roomID,runID:context.runID)
+        let otherRun=BoundNativeContinuationContext(owner:context.owner,roomID:context.roomID,runID:UUID())
+        XCTAssertNil(try store.load(context:otherOwner,gameID:value.gameID))
+        XCTAssertNil(try store.load(context:otherRun,gameID:value.gameID))
+        XCTAssertNil(try store.load(context:context,gameID:"another-game"))
+        let claimant=UUID()
+        try store.claim(ticket:value.ticket,context:context,gameID:value.gameID,claimant:claimant)
+        try store.claim(ticket:value.ticket,context:context,gameID:value.gameID,claimant:claimant)
+        XCTAssertThrowsError(try store.claim(ticket:value.ticket,context:context,gameID:value.gameID),"Another reopened core cannot claim the same trade execution")
+        XCTAssertThrowsError(try store.load(context:context,gameID:value.gameID),"A crash after resuming cannot silently load the pre-trade server save")
+        let settlement=try XCTUnwrap(store.settlement(context:context,gameID:value.gameID))
+        try store.settle(settlement)
+        XCTAssertNil(try store.load(context:context,gameID:value.gameID),"Only confirmed post-activity world durability retires the recovery fence")
+        let next=record(context:context);try store.save(next)
+        XCTAssertEqual(try store.load(context:context,gameID:next.gameID)?.ticket,next.ticket,"A later intentional pause creates a fresh continuation")
+    }
+    func testTerminalBeforeClaimPreventsCancelledExecutionFromReopening() throws {
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:folder) }
+        let store=BoundNativeContinuationStore(root:folder)
+        let context=BoundNativeContinuationContext(owner:UUID(),roomID:UUID().uuidString,runID:UUID())
+        let value=record(context:context);try store.save(value)
+        try store.saveTerminal(id:value.id,data:Data("abort".utf8),context:context,gameID:value.gameID)
+        XCTAssertThrowsError(try store.load(context:context,gameID:value.gameID),"A crash between terminal write and claim cannot rejoin the cancelled trade")
+    }
+    func testHeadsFenceNewerWorldAndOldSettlementCannotConsumeNewExecution() throws {
+        let oldHead=UUID(),pendingHead=UUID(),newerHead=UUID()
+        let heads=BoundContinuationHeads(checkpoints:[oldHead,pendingHead],permitsNoCheckpoint:false)
+        XCTAssertTrue(heads.permits(oldHead));XCTAssertTrue(heads.permits(pendingHead))
+        XCTAssertFalse(heads.permits(newerHead));XCTAssertFalse(heads.permits(nil))
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:folder) }
+        let store=BoundNativeContinuationStore(root:folder)
+        let context=BoundNativeContinuationContext(owner:UUID(),roomID:UUID().uuidString,runID:UUID()),game="continuation-fixture"
+        let first=record(context:context);try store.save(first);try store.claim(ticket:first.ticket,context:context,gameID:game)
+        let olderUpload=try XCTUnwrap(store.settlement(context:context,gameID:game))
+        let second=record(context:context);try store.save(second);try store.claim(ticket:second.ticket,context:context,gameID:game)
+        try store.settle(olderUpload)
+        XCTAssertThrowsError(try store.load(context:context,gameID:game),"An older in-flight world upload cannot settle a later trade")
+    }
+    func testTerminalReceiptsSurviveRelaunchAndStayScopedAndBounded() throws {
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:folder) }
+        let store=BoundNativeContinuationStore(root:folder)
+        let context=BoundNativeContinuationContext(owner:UUID(),roomID:UUID().uuidString,runID:UUID())
+        let ids=(0..<35).map { _ in UUID() }
+        for id in ids { try store.saveTerminal(id:id,data:Data("finished".utf8),context:context,gameID:"game") }
+        let reopened=BoundNativeContinuationStore(root:folder)
+        XCTAssertNil(try reopened.terminal(id:ids[0],context:context,gameID:"game"))
+        XCTAssertEqual(try reopened.terminal(id:ids[34],context:context,gameID:"game"),Data("finished".utf8),"A late peer may finish after the other app has restarted")
+        let other=BoundNativeContinuationContext(owner:context.owner,roomID:context.roomID,runID:UUID())
+        XCTAssertNil(try reopened.terminal(id:ids[34],context:other,gameID:"game"))
+        XCTAssertThrowsError(try store.saveTerminal(id:UUID(),data:Data(repeating:0,count:8193),context:context,gameID:"game"))
+    }
+    func testMalformedContinuationCannotBecomeAnEmptyOrFreshSession() throws {
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:folder) }
+        let store=BoundNativeContinuationStore(root:folder)
+        let context=BoundNativeContinuationContext(owner:UUID(),roomID:UUID().uuidString,runID:UUID())
+        let value=record(context:context);try store.save(value)
+        let file=try XCTUnwrap(FileManager.default.contentsOfDirectory(at:folder,includingPropertiesForKeys:nil).first { $0.pathExtension=="json" })
+        try Data("{}".utf8).write(to:file,options:.atomic)
+        XCTAssertThrowsError(try store.load(context:context,gameID:value.gameID))
+        let invalid=record(context:BoundNativeContinuationContext(owner:context.owner,roomID:"unbound",runID:context.runID))
+        XCTAssertThrowsError(try store.save(invalid))
+    }
+    func testNativeRunUsesOnlyCartridgeProducedTerminalResults() {
+        for value in [1,2,3,0x81,0x82,0x83] { XCTAssertEqual(BoundNativeBattleSession.terminalOutcome(value),value & 0x7F) }
+        for value in [-1,0,4,0x80,0x84,0x101,0x181] { XCTAssertNil(BoundNativeBattleSession.terminalOutcome(value)) }
+    }
+    func testRestoredConsentDoesNotStartANewNativeActivity() {
+        let session=BoundFriendInteractionSession(),id=UUID()
+        session.agreed={ _,_,_ in XCTFail("Restored consent must not create a replacement battle or trade") }
+        session.restoreActivity(.trade,id:id,initiator:false)
+        XCTAssertEqual(session.requestID,id);XCTAssertEqual(session.activity,.trade);XCTAssertEqual(session.phase,.connecting)
+        XCTAssertTrue(session.blocksGameplay);XCTAssertFalse(session.requiresResultAcknowledgement)
+        session.activityProgress("Trade",playing:true)
+        XCTAssertEqual(session.phase,.playing);XCTAssertEqual(session.requestID,id)
     }
 }

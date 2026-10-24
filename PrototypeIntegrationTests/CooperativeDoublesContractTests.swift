@@ -22,6 +22,35 @@ final class CooperativeDoublesContractTests:XCTestCase {
         put(0xBC485D2D,&data,80)
         return data
     }
+    func testExactContinuationRetainsEncounterAndXPWithoutSelectingARecoveryCut() throws {
+        let state=try XCTUnwrap(BoundCooperativeSnapshot(snapshot())),local=UUID(),peer=UUID(),encounter=UUID(),other=UUID()
+        let proof=Data(repeating:0xA5,count:32),enemy=Data(repeating:0x77,count:600)
+        let team=BoundCooperativePacket(kind:.team,local:peer,peer:local,id:other,peerID:encounter,snapshot:state,payload:state.party)
+        let host=BoundCooperativeHost.transaction(sequence:42,flags:3,role:0,capture:state,peerTeam:team,proof:proof,enemy:enemy,xp:Data())
+        let context=BoundNativeContinuationContext(owner:UUID(),roomID:UUID().uuidString,runID:UUID())
+        let value=BoundCooperativeContinuation(version:1,ticket:UUID(),context:context,gameID:"cooperative-continuation",
+            cartridge:String(repeating:"a",count:64),state:Data(repeating:1,count:1025),battery:Data(repeating:0xFF,count:131072),
+            bridge:Data([1]),host:host,probe:Data([2]),wire:Data([3]),memoryFiles:[:],heads:BoundContinuationHeads(checkpoints:[],permitsNoCheckpoint:true),snapshot:state.bytes,capture:state.bytes,
+            local:local,peer:peer,encounter:encounter,peerEncounter:other,peerTeam:team.data,enemy:enemy,proof:proof,
+            peerReady:true,readySent:true,started:true,prepared:true,peerCableReady:true,peerResultsReady:false,peerFinished:false,
+            fixedRole:0,lastXP:Data(repeating:9,count:192),incomingXP:Data(repeating:8,count:404),sequence:42,controlCursor:7,
+            checkpointName:nil,journalName:nil,checkpoint:nil,journal:nil,agreement:Data(),branch:proof)
+        XCTAssertTrue(value.valid)
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at:folder) }
+        let store=BoundNativeContinuationStore(root:folder);try store.save(value)
+        let restored=try XCTUnwrap(store.load(context:context,gameID:value.gameID,as:BoundCooperativeContinuation.self))
+        XCTAssertEqual(restored.encounter,encounter);XCTAssertEqual(restored.peerEncounter,other)
+        XCTAssertEqual(restored.local,local);XCTAssertEqual(restored.peer,peer);XCTAssertEqual(restored.proof,proof)
+        XCTAssertEqual(restored.lastXP,value.lastXP);XCTAssertEqual(restored.incomingXP,value.incomingXP)
+        XCTAssertEqual(restored.host,host);XCTAssertEqual(restored.sequence,42);XCTAssertTrue(restored.started)
+        try store.claim(ticket:restored.ticket,context:context,gameID:value.gameID)
+        XCTAssertThrowsError(try store.load(context:context,gameID:value.gameID,as:BoundCooperativeContinuation.self),"A consumed execution cannot reapply old XP barriers or fall back to an older world")
+        var fields=try XCTUnwrap(JSONSerialization.jsonObject(with:JSONEncoder().encode(value)) as? [String:Any])
+        fields["checkpointName"]="../outside.state";fields["checkpoint"]=Data([1]).base64EncodedString()
+        let invalid=try JSONDecoder().decode(BoundCooperativeContinuation.self,from:JSONSerialization.data(withJSONObject:fields))
+        XCTAssertFalse(invalid.valid)
+    }
     func testNativeSelectionAllowsOneToThreeOwnedRecordsAndRejectsAmbiguity() throws {
         XCTAssertTrue(try XCTUnwrap(BoundCooperativeSnapshot(snapshot())).selected)
         XCTAssertTrue(try XCTUnwrap(BoundCooperativeSnapshot(snapshot(count:6,selected:3,order:[6,2,1]))).selected)
@@ -244,10 +273,9 @@ final class CooperativeDoublesContractTests:XCTestCase {
             XCTAssertEqual(sent.last(where:{ $0.kind == .resumeReady })?.payload,challenge.payload+renewedChallenge)
             permitted=false
             session.receive(response(.resumeReady,payload:renewedChallenge+challenge.payload))
-            if previouslyRunning {
-                XCTAssertTrue(session.waitingForConnection);XCTAssertEqual(core.state,.paused)
-                permitted=true;session.transportResumed()
-            }
+            XCTAssertTrue(session.waitingForConnection,"Fresh peer proof cannot claim or thaw a continuation while the gameplay UI disallows resume")
+            XCTAssertEqual(core.state,.paused)
+            permitted=true;session.transportResumed()
             XCTAssertFalse(session.waitingForConnection);XCTAssertFalse(session.recoveryPending)
             XCTAssertEqual(core.state,previouslyRunning ? .running:.paused)
             XCTAssertFalse(sent.contains(where:{ $0.kind == .cancel }))

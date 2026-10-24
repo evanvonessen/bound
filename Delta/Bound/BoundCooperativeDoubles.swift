@@ -16,6 +16,44 @@ private func coopID(_ bytes: Data, _ offset: Int) -> UUID {
 private func coopHash(_ bytes: Data) -> Data { Data(SHA256.hash(data: bytes)) }
 private func coopFNV(_ bytes: Data) -> UInt32 { bytes.reduce(UInt32(2166136261)) { ($0 ^ UInt32($1)) &* 16777619 } }
 
+/// Exact device-local execution; unlike a recovery cut this never rewinds a
+/// peer that remained in the same encounter while this app was closed.
+struct BoundCooperativeContinuation:BoundActivityContinuation {
+    let version:Int,ticket:UUID,context:BoundNativeContinuationContext,gameID:String,cartridge:String
+    let state:Data,battery:Data,bridge:Data,host:Data,probe:Data,wire:Data
+    let memoryFiles:[String:Data]
+    let heads:BoundContinuationHeads?
+    let snapshot:Data,capture:Data?,local:UUID?,peer:UUID?,encounter:UUID,peerEncounter:UUID?
+    let peerTeam:Data?,enemy:Data,proof:Data
+    let peerReady:Bool,readySent:Bool,started:Bool,prepared:Bool,peerCableReady:Bool,peerResultsReady:Bool,peerFinished:Bool
+    let fixedRole:UInt32?,lastXP:Data,incomingXP:Data,sequence:UInt32,controlCursor:Int
+    let checkpointName:String?,journalName:String?,checkpoint:Data?,journal:Data?,agreement:Data,branch:Data
+    var activityID:UUID { encounter }
+    var valid:Bool {
+        version==1 && context.valid && (context.runID==nil || heads != nil) && !gameID.isEmpty && gameID.utf8.count<=512
+            && cartridge.count==64 && cartridge.allSatisfy({ $0.isHexDigit })
+            && state.count>1024 && state.count<=16_777_216 && battery.count==131072
+            && bridge.count<=8192 && host.count==16384 && coopWord(host,0)==0x31484443 && host[4]==1
+            && host[5...7].allSatisfy({ $0==0 }) && coopWord(host,8)>0 && coopWord(host,8)&1==0
+            && coopWord(host,12) & ~UInt32(15) == 0 && coopWord(host,16)<=180 && coopWord(host,20)<=1 && probe.count<=32768 && wire.count<=400_000
+            && memoryFiles.count<=256 && memoryFiles.values.reduce(0,{ $0+$1.count })<=16_777_216
+            && BoundCooperativeSnapshot(snapshot).map({ (1...7).contains($0.phase) || $0.phase==9 }) == true && (capture==nil || BoundCooperativeSnapshot(capture!) != nil)
+            && (peerTeam==nil || BoundCooperativePacket(data:peerTeam!)?.kind == .team)
+            && [0,600].contains(enemy.count) && [0,32].contains(proof.count)
+            && [0,192,404].contains(lastXP.count) && [0,192,404].contains(incomingXP.count)
+            && (fixedRole==nil || fixedRole!<=1) && controlCursor>=0
+            && (checkpoint?.count ?? 0)<=16_777_216 && (journal?.count ?? 0)<=65536 && agreement.count<=8192 && [0,32].contains(branch.count)
+            && Self.validName(checkpointName,extension:"state") && Self.validName(journalName,extension:"json")
+            && (checkpointName==nil)==(checkpoint==nil) && (journalName==nil)==(journal==nil)
+            && (!prepared || !bridge.isEmpty && !wire.isEmpty && peerEncounter != nil && local != nil && peer != nil)
+    }
+    private static func validName(_ name:String?,extension suffix:String)->Bool {
+        guard let name else { return true }
+        let url=URL(fileURLWithPath:name)
+        return name==url.lastPathComponent && url.pathExtension==suffix && UUID(uuidString:url.deletingPathExtension().lastPathComponent) != nil
+    }
+}
+
 /// A cartridge-owned encounter. No host request can create a trainer encounter.
 struct BoundCooperativeSnapshot: Sendable {
     let bytes: Data
@@ -188,6 +226,10 @@ final class BoundCooperativeProbe: @unchecked Sendable {
     func protect(state:URL,journal:URL,agreement:Data,branch:Data,cable:BoundNativeBattleProbe) {
         lock.lock();checkpoint=state;self.journal=journal;self.agreement=agreement;self.branch=branch;self.cable=cable;durable=false;lock.unlock()
     }
+    func continuationHost()->Data { lock.lock();defer { lock.unlock() };return host }
+    func restoreContinuation(snapshot:BoundCooperativeSnapshot,host:Data) {
+        lock.lock();defer { lock.unlock() };latest=snapshot;self.host=host
+    }
     func clearProtection() { lock.lock();checkpoint=nil;journal=nil;agreement=Data();branch=Data();durable=false;lastDurable=Data();lock.unlock() }
     func recoveryLocation()->(URL?,URL?) { lock.lock();defer { lock.unlock() };return(checkpoint,journal) }
     func read()->(BoundCooperativeSnapshot?,Bool,String?) { lock.lock();defer { lock.unlock() };return(latest,durable,lastError) }
@@ -251,9 +293,27 @@ final class BoundCooperativeDoublesSession {
         let capture:BoundCooperativeSnapshot,proof:Data
         let kind:BoundCooperativePacket.Kind
     }
+    private struct DurableTerminal:Codable {
+        let local:UUID,peer:UUID,id:UUID,peerID:UUID?,capture:Data,proof:Data,kind:UInt32
+    }
     let probe=BoundCooperativeProbe(), cable=BoundNativeBattleProbe()
     private weak var core:EmulatorCore?
     private weak var soul:BoundSoulProbe?
+    var continuationContext:BoundNativeContinuationContext?
+    var continuationHeadsProvider:((BoundNativeContinuationContext)->BoundContinuationHeads?)?
+    private var pendingSettlement:BoundContinuationSettlement?
+    func continuationSettlement()->BoundContinuationSettlement? { !blocksAutoSave ? pendingSettlement:nil }
+    func settleContinuation(_ token:BoundContinuationSettlement) throws { try continuationStore.settle(token) }
+    static func settlePersistedContinuation(_ token:BoundContinuationSettlement) throws {
+        try BoundNativeContinuationStore(root:FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
+            .appendingPathComponent("Cooperative Activity Continuations",isDirectory:true)).settle(token)
+    }
+    private var activeContinuationContext:BoundNativeContinuationContext?
+    private var continuationTicket:UUID?,continuationWriteBlocked=false
+    private let continuationClaimant=UUID()
+    private let continuationStore=BoundNativeContinuationStore(root:FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("Cooperative Activity Continuations",isDirectory:true))
+    var hasSavedContinuation:Bool { continuationTicket != nil }
+    var blocksCoreResume:Bool { waitingForConnection || continuationWriteBlocked }
     private var gameID="",timer:Timer?,snapshot:BoundCooperativeSnapshot?,capture:BoundCooperativeSnapshot?
     private var local:UUID?,peer:UUID?,encounter=UUID(),peerEncounter:UUID?
     private var peerTeam:BoundCooperativePacket?,enemy=Data(),proof=Data(),peerReady=false,readySent=false,started=false
@@ -291,12 +351,13 @@ final class BoundCooperativeDoublesSession {
         guard self.core !== core || self.gameID != gameID else { return }
         // Delta may already have stopped the old core and replaced its bridge.
         // Preserve its last durable receipt without reading the new game's RAM.
-        if self.core?.state != .stopped { suspend() }
+        if continuationTicket==nil,self.core?.state != .stopped { suspend() }
         timer?.invalidate();timer=nil;channel?.close();wire?.close();channel=nil;wire=nil
         if let oldCore=self.core {
             self.soul?.setCooperativeBattleActive(false,for:oldCore)
             BoundVBABattleBridge.closeCooperativeCable()
         }
+        continuationTicket=nil;continuationWriteBlocked=false;activeContinuationContext=nil
         snapshot=nil;capture=nil;local=nil;peer=nil;peerEncounter=nil;peerTeam=nil
         enemy=Data();proof=Data();started=false;prepared=false;fixedRole=nil;cancellingBeforeEntry=false
         peerReady=false;readySent=false;peerCableReady=false;peerResultsReady=false;peerFinished=false
@@ -324,6 +385,7 @@ final class BoundCooperativeDoublesSession {
     func qaResumeRecoveredCore() { if let core { resumeIfPermitted(core) } }
     #endif
     private func resetEncounter(_ value:BoundCooperativeSnapshot,local:UUID,peer:UUID) {
+        activeContinuationContext=continuationContext
         self.local=local;self.peer=peer;capture=value;encounter=UUID();peerEncounter=nil;peerTeam=nil;enemy=isHost ? value.enemy:Data()
         proof=Data();peerReady=false;readySent=false;started=false;prepared=false;peerCableReady=false;peerResultsReady=false;peerFinished=false;fixedRole=isHost ? 0:1;lastXP=Data();incomingXP=Data();lastPeer=clock();lastSent=0;lastXPSent=0;controlCursor=0
         transportNonce=UUID();peerTransportNonce=nil;peerTransportReady=false;sentTransportReady=false
@@ -331,7 +393,7 @@ final class BoundCooperativeDoublesSession {
     }
     func receive(_ data:Data) {
         guard let packet=BoundCooperativePacket(data:data) else { return }
-        if let terminal=terminalEncounters[packet.peerID],packet.sender == terminal.peer,packet.receiver == terminal.local,
+        if let terminal=terminalEncounters[packet.peerID] ?? persistedTerminal(packet.peerID),packet.sender == terminal.peer,packet.receiver == terminal.local,
            terminal.peerID == nil || packet.id == terminal.peerID,packet.encounter == terminal.capture.encounter {
             if ![.cancel,.finished].contains(packet.kind) {
                 _=send?(BoundCooperativePacket(kind:terminal.kind,local:terminal.local,peer:terminal.peer,
@@ -531,6 +593,7 @@ final class BoundCooperativeDoublesSession {
         resumeTransportIfReady()
     }
     private func sendTransportReady(_ nonce:UUID) {
+        guard continuationTicket==nil,!continuationWriteBlocked else { return }
         let currentEncounter=encounter,currentNonce=transportNonce
         let delivered=transmit(.resumeReady,payload:coopUUID(currentNonce)+coopUUID(nonce))
         guard waitingForConnection,encounter == currentEncounter,transportNonce == currentNonce,
@@ -542,6 +605,7 @@ final class BoundCooperativeDoublesSession {
               let core,core.state != .stopped else { return }
         if core.state == .running { resumeAfterTransport=true;_=core.pause() }
         if core.state == .paused { core.deltaCore.emulatorBridge.resetInputs() }
+        guard canResume?() == true,claimContinuation() else { return }
         let now=clock()
         if capture == nil,let snapshot,let identities=context?() {
             resetEncounter(snapshot,local:identities.0,peer:identities.1)
@@ -575,7 +639,7 @@ final class BoundCooperativeDoublesSession {
         }
     }
     private func bindTransportChannel()->Bool {
-        guard let wire else { return false }
+        guard continuationTicket==nil,!continuationWriteBlocked,let wire else { return false }
         let generation=UUID();channelGeneration=generation
         let interrupted:@Sendable ()->Void={ [weak self] in Task { @MainActor in
             guard let self,self.channelGeneration == generation else { return }
@@ -585,7 +649,7 @@ final class BoundCooperativeDoublesSession {
         self.channel=channel;wire.setSender { [channel] bytes in channel.send(bytes) }
         return true
     }
-    private func prepareCable(recovery:Bool=false)->Bool {
+    private func configureCableWire(recovery:Bool=false)->Bool {
         guard let core,let peerEncounter else { return false }
         let generation=UUID();wireGeneration=generation
         let failure:@Sendable ()->Void={ [weak self] in Task { @MainActor in
@@ -603,6 +667,11 @@ final class BoundCooperativeDoublesSession {
         let safe=BoundBattleWire(id:coopID(coopHash(namespace),0),receive:{ [cable] bytes in if !cable.receiveNetworkPacket(bytes) { failure() } },failed:failure,interrupted:interrupted)
         wire=safe
         cable.setSender({ bytes in safe.send(bytes) },failed:failure,interrupted:interrupted)
+        return true
+    }
+    private func prepareCable(recovery:Bool=false)->Bool {
+        guard let core,let peerEncounter else { return false }
+        guard configureCableWire(recovery:recovery) else { return false }
         let channelReady=bindTransportChannel()
         let running=core.state == .running
         if running { _=core.pause() }
@@ -639,21 +708,134 @@ final class BoundCooperativeDoublesSession {
         try BoundServerMemoryFiles.write(JSONSerialization.data(withJSONObject:entry,options:[.sortedKeys]),to:journal,gameID:gameID)
         probe.protect(state:checkpoint,journal:journal,agreement:agreement,branch:recoveryBranch,cable:cable)
     }
+    func protectLocalLifecycle()->Bool {
+        guard isActive || started || prepared else { return true }
+        transportInterrupted();resumeAfterTransport=true
+        guard let journal=probe.recoveryLocation().1 ?? journal else { return true }
+        do {
+            var value=try JSONSerialization.jsonObject(with:BoundServerMemoryFiles.read(journal,gameID:gameID)) as? [String:Any]
+            guard value != nil else { throw CocoaError(.fileReadCorruptFile) }
+            value?["localContinuation"]=true
+            try BoundServerMemoryFiles.write(JSONSerialization.data(withJSONObject:value!,options:[.sortedKeys]),to:journal,gameID:gameID)
+            return true
+        } catch { status="Couldn’t protect this battle. Keep the game open.";return false }
+    }
+    func showLocalExitUnavailable() { status="Keep this local save open to continue the battle." }
+    @discardableResult func checkpointForContinuation()->Bool {
+        guard isActive || started || prepared else { return !recoveryPending }
+        if continuationTicket != nil { return true }
+        transportInterrupted();resumeAfterTransport=true
+        guard !recoveryPending,let core,core.state == .paused,let context=activeContinuationContext ?? continuationContext,
+              let snapshot=probe.read().0 ?? snapshot else { status="Keep this game open until its battle can be saved";return false }
+        self.snapshot=snapshot
+        do {
+            continuationWriteBlocked=true
+            let transport=try wire?.freezeForContinuation() ?? Data()
+            let locations=probe.recoveryLocation(),stateURL=locations.0 ?? checkpoint,journalURL=locations.1 ?? journal
+            let value=BoundCooperativeContinuation(version:1,ticket:UUID(),context:context,gameID:gameID,
+                cartridge:coopHash(try Data(contentsOf:core.game.fileURL,options:.mappedIfSafe)).map { String(format:"%02x",$0) }.joined(),
+                state:BoundVBABattleBridge.captureServerState(),battery:BoundVBABattleBridge.captureServerBattery(),
+                bridge:prepared ? BoundVBABattleBridge.captureCooperativeSession():Data(),host:probe.continuationHost(),probe:cable.recoveryData(),wire:transport,
+                memoryFiles:BoundServerMemoryFiles.snapshot(gameID:gameID),heads:continuationHeadsProvider?(context),snapshot:snapshot.bytes,capture:capture?.bytes,
+                local:local,peer:peer,encounter:encounter,peerEncounter:peerEncounter,peerTeam:peerTeam?.data,enemy:enemy,proof:proof,
+                peerReady:peerReady,readySent:readySent,started:started,prepared:prepared,peerCableReady:peerCableReady,
+                peerResultsReady:peerResultsReady,peerFinished:peerFinished,fixedRole:fixedRole,lastXP:lastXP,incomingXP:incomingXP,
+                sequence:sequence,controlCursor:controlCursor,checkpointName:stateURL?.lastPathComponent,journalName:journalURL?.lastPathComponent,
+                checkpoint:try stateURL.map { try BoundServerMemoryFiles.read($0,gameID:gameID) },
+                journal:try journalURL.map { try BoundServerMemoryFiles.read($0,gameID:gameID) },agreement:recoveryAgreement,branch:recoveryBranch)
+            try continuationStore.save(value)
+            activeContinuationContext=context;continuationTicket=value.ticket;continuationWriteBlocked=false
+            return true
+        } catch {
+            status="Couldn’t save this battle. Keep the game open and try again.";return false
+        }
+    }
+    @discardableResult func restoreContinuationIfAvailable(serverHead:UUID?=nil) throws -> Bool {
+        if continuationTicket != nil { return true }
+        guard let core,core.state == .paused,let context=continuationContext,
+              let value=try continuationStore.load(context:context,gameID:gameID,as:BoundCooperativeContinuation.self) else { return false }
+        guard context.runID==nil || value.heads?.permits(serverHead)==true else { throw BoundContinuationError.serverChanged }
+        guard value.cartridge==coopHash(try Data(contentsOf:core.game.fileURL,options:.mappedIfSafe)).map({ String(format:"%02x",$0) }).joined(),
+              let savedSnapshot=BoundCooperativeSnapshot(value.snapshot) else { throw CocoaError(.fileReadCorruptFile) }
+        channel?.close();wire?.close();channel=nil;wire=nil;cable.configure(core:nil);BoundVBABattleBridge.closeCooperativeCable()
+        do {
+            guard BoundVBABattleBridge.restoreServerState(value.state),BoundVBABattleBridge.restoreServerBattery(value.battery),
+                  BoundVBABattleBridge.installCooperativeDoubles(),
+                  !value.prepared || BoundVBABattleBridge.restoreCooperativeSession(value.bridge) else { throw CocoaError(.fileReadCorruptFile) }
+            if BoundServerMemoryFiles.isEnabled(for:gameID) { try BoundServerMemoryFiles.restore(value.memoryFiles,gameID:gameID) }
+            snapshot=savedSnapshot;capture=value.capture.flatMap(BoundCooperativeSnapshot.init)
+            local=value.local;peer=value.peer;encounter=value.encounter;peerEncounter=value.peerEncounter;peerTeam=value.peerTeam.flatMap { BoundCooperativePacket(data:$0) }
+            enemy=value.enemy;proof=value.proof;peerReady=value.peerReady;readySent=value.readySent;started=value.started;prepared=value.prepared
+            peerCableReady=value.peerCableReady;peerResultsReady=value.peerResultsReady;peerFinished=value.peerFinished
+            fixedRole=value.fixedRole;lastXP=value.lastXP;incomingXP=value.incomingXP;sequence=value.sequence;controlCursor=value.controlCursor
+            recoveryAgreement=value.agreement;recoveryBranch=value.branch;recoveryPending=false;recoveryLoaded=false;cancellingBeforeEntry=false
+            let folder=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("Cooperative Battles",isDirectory:true)
+            try BoundServerMemoryFiles.directory(folder,gameID:gameID)
+            checkpoint=value.checkpointName.map { folder.appendingPathComponent($0) };journal=value.journalName.map { folder.appendingPathComponent($0) }
+            if let checkpoint,let bytes=value.checkpoint { try BoundServerMemoryFiles.write(bytes,to:checkpoint,gameID:gameID) }
+            if let journal,let bytes=value.journal { try BoundServerMemoryFiles.write(bytes,to:journal,gameID:gameID) }
+            if prepared {
+                guard configureCableWire(),cable.restoreRecoveryData(value.probe),wire?.restoreContinuation(value.wire)==true else { throw CocoaError(.fileReadCorruptFile) }
+            }
+            probe.configure(core:core,gameID:gameID,soul:soul)
+            if let checkpoint,let journal { probe.protect(state:checkpoint,journal:journal,agreement:recoveryAgreement,branch:recoveryBranch,cable:cable) }
+            probe.restoreContinuation(snapshot:savedSnapshot,host:value.host);BoundVBABattleBridge.setCooperativeHost(value.host)
+            activeContinuationContext=context;continuationTicket=value.ticket;continuationWriteBlocked=false
+            waitingForConnection=true;resumeAfterTransport=true;transportNonce=UUID();peerTransportNonce=nil;retiredTransportNonces=[]
+            peerTransportReady=false;sentTransportReady=false;lastSent=0;lastPeer=clock();retryChannelAt=0
+            cable.suspendTransport();core.deltaCore.emulatorBridge.resetInputs()
+            soul?.setCooperativeBattleActive(prepared || started,for:core)
+            _=BoundVBABattleBridge.setCooperativeGameSaveAllowed(false,for:core.game.gameSaveURL)
+            status="Waiting for your friend"
+            return true
+        } catch {
+            continuationWriteBlocked=true;waitingForConnection=true
+            status="This battle needs recovery. Its saved continuation was kept."
+            throw error
+        }
+    }
+    private func claimContinuation()->Bool {
+        guard !continuationWriteBlocked else { return false }
+        guard let ticket=continuationTicket else { return true }
+        guard let context=activeContinuationContext else { return false }
+        do {
+            try continuationStore.claim(ticket:ticket,context:context,gameID:gameID,claimant:continuationClaimant)
+            continuationTicket=nil;wire?.thawContinuation();return true
+        } catch { status="Couldn’t reopen this battle. Try again.";return false }
+    }
     func suspend() {
+        guard claimContinuation() else { return }
         guard !recoveryPending else { return }
         guard isActive || started else { return }
         _=transmit(.cancel)
         interrupt("Cooperative recovery kept. Reconnect with your friend.")
     }
-    private func retireEncounter(_ kind:BoundCooperativePacket.Kind) {
-        guard let local,let peer,let capture else { return }
-        if terminalEncounters[encounter] == nil { terminalOrder.append(encounter) }
-        terminalEncounters[encounter] = .init(local:local,peer:peer,id:encounter,peerID:peerEncounter,capture:capture,
+    private func persistedTerminal(_ id:UUID)->TerminalEncounter? {
+        guard let context=activeContinuationContext ?? continuationContext,
+              let bytes=try? continuationStore.terminal(id:id,context:context,gameID:gameID),
+              let value=try? JSONDecoder().decode(DurableTerminal.self,from:bytes),
+              let capture=BoundCooperativeSnapshot(value.capture),let kind=BoundCooperativePacket.Kind(rawValue:value.kind),
+              [.cancel,.finished].contains(kind),value.proof.count==32,value.id==id else { return nil }
+        return TerminalEncounter(local:value.local,peer:value.peer,id:value.id,peerID:value.peerID,capture:capture,proof:value.proof,kind:kind)
+    }
+    private func retireEncounter(_ kind:BoundCooperativePacket.Kind)->Bool {
+        guard let local,let peer,let capture else { return true }
+        let terminal=TerminalEncounter(local:local,peer:peer,id:encounter,peerID:peerEncounter,capture:capture,
             proof:proof.count == 32 ? proof:Data(repeating:0,count:32),kind:kind)
+        if let context=activeContinuationContext {
+            do {
+                let value=DurableTerminal(local:local,peer:peer,id:encounter,peerID:peerEncounter,capture:capture.bytes,proof:terminal.proof,kind:kind.rawValue)
+                try continuationStore.saveTerminal(id:encounter,data:JSONEncoder().encode(value),context:context,gameID:gameID)
+            } catch { transportInterrupted();status="Couldn’t save the battle result. Try again.";return false }
+        }
+        if terminalEncounters[encounter] == nil { terminalOrder.append(encounter) }
+        terminalEncounters[encounter]=terminal
         if terminalOrder.count>32 { terminalEncounters.removeValue(forKey:terminalOrder.removeFirst()) }
+        return true
     }
     private func interrupt(_ message:String) {
-        retireEncounter(.cancel)
+        guard claimContinuation() else { return }
+        guard retireEncounter(.cancel) else { return }
         status=message
         let wasWaiting=waitingForConnection,resume=resumeAfterTransport
         waitingForConnection=false;interruptedAt=nil;resumeAfterTransport=false;channelGeneration=UUID();wireGeneration=UUID()
@@ -685,8 +867,10 @@ final class BoundCooperativeDoublesSession {
         cable.configure(core:nil)
     }
     private func finish() {
+        guard claimContinuation() else { return }
         let completed=started
-        retireEncounter(completed ? .finished:.cancel)
+        guard retireEncounter(completed ? .finished:.cancel) else { return }
+        pendingSettlement=activeContinuationContext.flatMap { try? continuationStore.settlement(context:$0,gameID:gameID) }
         channelGeneration=UUID();wireGeneration=UUID()
         channel?.close();wire?.close();channel=nil;wire=nil;cable.configure(core:nil)
         if let core {
@@ -732,6 +916,11 @@ final class BoundCooperativeDoublesSession {
               let encodedSnapshot=entry["snapshot"] as? String,let snapshotData=Data(base64Encoded:encodedSnapshot),
               let savedSnapshot=BoundCooperativeSnapshot(snapshotData),[UInt32(3),4,5,6,7,9].contains(savedSnapshot.phase),
               let encodedBranch=entry["branch"] as? String,let branch=Data(base64Encoded:encodedBranch),branch.count==32 else { return false }
+        if entry["localContinuation"] as? Bool == true {
+            continuationWriteBlocked=true;recoveryPending=true
+            status="This local battle needs recovery. Its saved continuation was kept."
+            return true
+        }
         self.capture=capture;peerTeam=team;proof=record.proof;enemy=record.enemy;fixedRole=record.role;snapshot=savedSnapshot
         journal=url;checkpoint=folder.appendingPathComponent(name);recoveryAgreement=agreement;recoveryCable=cable;recoveryDigest=digest;recoveryBranch=branch
         if savedSnapshot.phase==3 { recoveryCut=BoundCooperativeCableCut(admissionPhase:3) }

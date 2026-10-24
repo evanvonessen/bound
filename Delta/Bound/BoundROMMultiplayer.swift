@@ -4,6 +4,48 @@ import DeltaCore
 import UIKit
 import Combine
 
+/// Only termination intent is stored here, never a gameplay snapshot. Returning
+/// to the menu must survive process loss before either participant acknowledges it.
+struct BoundSoulGameOverRecord: Codable, Equatable {
+    let gameID: String
+    let owner: UUID
+    let run: UUID
+    var eventID: UUID
+    var returnRequested = false
+    var menuPresented = false
+    var valid: Bool { !gameID.isEmpty && gameID.utf8.count <= 256 && (!menuPresented || returnRequested) }
+}
+struct BoundSoulGameOverStore {
+    let root: URL
+    func url(owner: UUID, run: UUID) -> URL {
+        root.appendingPathComponent(owner.uuidString, isDirectory: true).appendingPathComponent(run.uuidString + ".json")
+    }
+    func save(_ record: BoundSoulGameOverRecord) throws {
+        guard record.valid else { throw BoundMultiplayerSaveStore.Failure.corrupt }
+        let path = url(owner: record.owner, run: record.run)
+        try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try JSONEncoder().encode(record).write(to: path, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        let file = try FileHandle(forWritingTo: path); defer { try? file.close() }; try file.synchronize()
+    }
+    func load(owner: UUID, gameID: String) throws -> [UUID: BoundSoulGameOverRecord] {
+        let directory = root.appendingPathComponent(owner.uuidString, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: directory.path) else { return [:] }
+        var result: [UUID: BoundSoulGameOverRecord] = [:]
+        for path in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) where path.pathExtension == "json" {
+            let bytes = try Data(contentsOf: path)
+            guard bytes.count <= 4096 else { throw BoundMultiplayerSaveStore.Failure.corrupt }
+            let record = try JSONDecoder().decode(BoundSoulGameOverRecord.self, from: bytes)
+            guard record.valid, record.owner == owner, path.lastPathComponent == record.run.uuidString + ".json" else { throw BoundMultiplayerSaveStore.Failure.corrupt }
+            if record.gameID == gameID { result[record.run] = record }
+        }
+        return result
+    }
+    func remove(_ record: BoundSoulGameOverRecord) throws {
+        let path = url(owner: record.owner, run: record.run)
+        if FileManager.default.fileExists(atPath: path.path) { try FileManager.default.removeItem(at: path) }
+    }
+}
+
 /// Data-only interface exported by the integrated cartridge. These offsets are
 /// not native Pokémon RAM bindings; the game owns menus and all gameplay gates.
 enum BoundROMCommand: UInt32 {
@@ -544,6 +586,15 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     private var timelinePage = 0
     private let friendsRefresh = BoundROMFriendsRefresh()
     @Published private(set) var needsServerMenu = false
+    @Published private(set) var gameOverID: UUID?
+    private var pendingGameOvers: [UUID: BoundSoulGameOverRecord] = [:]
+    private var gameOverLoadedOwner: UUID?
+    private var gameOverTask: Task<Void, Never>?
+    private var gameOverOperation = UUID()
+    private var gameOverRetryAt: TimeInterval = 0
+    private var gameOverMenuRun: UUID?
+    var awaitingGameOverMenu: Bool { gameOverMenuRun != nil }
+    private var gameOverQueueIndex = 0
     @Published private(set) var serverMenuBusy = false
     @Published private(set) var serverMenuError: String?
     @Published private(set) var serverRuns: [BoundNakamaRunService.ServerRun] = []
@@ -560,6 +611,11 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     private var finalServerSaveRetry: (@MainActor (AppCloudSession) -> Task<Void, Never>)?
     private var finalServerSaveRun: UUID?
     private var finalServerSaveOwner: UUID?
+    private struct ServerContinuationSettlement {
+        let native: BoundContinuationSettlement?
+        let cooperative: BoundContinuationSettlement?
+    }
+    private var serverContinuationSettlements: [UUID: ServerContinuationSettlement] = [:]
     @Published private(set) var hasUnconfirmedServerSave = false
     private var accountObservation: AnyCancellable?
     var watch: (() -> Void)?
@@ -573,6 +629,13 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
             .sink { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, self.serverOnly else { return }
+                    // Account replacement is a presentation/authority boundary,
+                    // even while a Game Over is pending. Keep the durable owner-
+                    // scoped receipt for sign-in/relaunch, but fence old requests
+                    // and remove an overlay the new account cannot acknowledge.
+                    self.gameOverTask?.cancel(); self.gameOverTask = nil; self.gameOverOperation = UUID()
+                    self.gameOverID = nil; self.gameOverMenuRun = nil
+                    self.pendingGameOvers = [:]; self.gameOverLoadedOwner = nil; self.gameOverRetryAt = 0
                     self.serverSelection = UUID(); self.serverMenuBusy = false; self.serverRuns = []
                     self.failServerSession(self.account.session == nil ? "Sign in to view server saves." : "Select a server save.")
                 }
@@ -584,6 +647,8 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
             guard let self else { return }
             try self.persistWorldSnapshot(state)
         }
+        sharing.nativeBattle.continuationHeadsProvider = { [weak self] context in self?.continuationHeads(for: context) }
+        sharing.cooperativeDoubles.continuationHeadsProvider = { [weak self] context in self?.continuationHeads(for: context) }
         let timer = Timer(timeInterval:0.1,repeats:true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
@@ -593,9 +658,34 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         let timer = timer
         BoundMainActorDisposal.enqueue { timer?.invalidate() }
         verification?.cancel(); leaseTask?.cancel(); serverTask?.cancel(); snapshotTask?.cancel(); archivedEventTask?.cancel()
+        gameOverTask?.cancel()
     }
     private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
+    private var gameOverStore: BoundSoulGameOverStore { .init(root: store.root.appendingPathComponent("Game Over", isDirectory: true)) }
     private var identity: BoundMultiplayerRunIdentity? { manifest?.identity ?? setup?.identity ?? incoming?.manifest.identity }
+    private func continuationHeads(for context: BoundNativeContinuationContext) -> BoundContinuationHeads? {
+        guard serverOnly, let identity, identity.owner == context.owner, identity.run == context.runID,
+              identity.roomID.lowercased() == context.roomID, account.session?.owner == identity.owner else { return nil }
+        // A safe head captured before activity admission may finish uploading
+        // while the activity is paused. Accept either side of that one upload;
+        // a different device's later checkpoint must never be overwritten.
+        return .init(checkpoints: Set([head?.payload.checkpoint, independentServerHead].compactMap { $0 }),
+                     permitsNoCheckpoint: independentServerHead == nil)
+    }
+    private func captureContinuationSettlement(for identity: BoundMultiplayerRunIdentity) -> ServerContinuationSettlement {
+        func matching(_ token: BoundContinuationSettlement?) -> BoundContinuationSettlement? {
+            guard let token, token.gameID == identity.gameID, token.context.owner == identity.owner,
+                  token.context.runID == identity.run, token.context.roomID == identity.roomID.lowercased() else { return nil }
+            return token
+        }
+        return .init(native: matching(sharing.nativeBattle.continuationSettlement()),
+                     cooperative: matching(sharing.cooperativeDoubles.continuationSettlement()))
+    }
+    private static func settle(_ captured: ServerContinuationSettlement?, native: BoundNativeBattleSession,
+                               cooperative: BoundCooperativeDoublesSession) throws {
+        if let token = captured?.native { try native.settleContinuation(token) }
+        if let token = captured?.cooperative { try cooperative.settleContinuation(token) }
+    }
     private var setupURL: URL? { game.map { store.directory(gameID:$0.identifier).appendingPathComponent("setup.json") } }
     private var setupCancellationURL: URL { store.root.appendingPathComponent("Setup Cancellations", isDirectory: true).appendingPathComponent("queue.json") }
     static func loadSetupCancellations(at url: URL) throws -> BoundROMSetupCancellationQueue {
@@ -638,8 +728,11 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         archivedEventTask?.cancel(); archivedEventTask = nil; archivedEventOperation = UUID(); archivedEventRetryAt = 0
         archivedServerCursors = [:]; archivedEventIndex = 0
         serverRegisteredRun = nil; serverUploaded = nil; serverPollAt = 0; manualSavePending = false; serverCaptureAuthorized = nil; serverReservedCheckpoint = nil
+        serverContinuationSettlements = [:]
         anchorBaselineValidated = false; baselineHistory = nil; historyJournal = nil; romFrameClock.reset(); requestCursor = .init()
         self.core = core; self.game = game; verified = false; probe.configure(core:core)
+        gameOverTask?.cancel(); gameOverTask = nil; gameOverOperation = UUID(); gameOverID = nil; gameOverMenuRun = nil
+        pendingGameOvers = [:]; gameOverLoadedOwner = nil; gameOverRetryAt = 0
         serverOnly = game?.boundUsesServerMultiplayer == true
         if !serverOnly { server = .shared }
         serverSelection = UUID(); serverStarting = false; serverActivating = false; serverCapturePending = false; finalServerSaveQueued = false; serverProfile = nil
@@ -804,6 +897,13 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     /// Preserve the exact working game separately from the last two-party
     /// checkpoint. This snapshot never becomes a cloud backup on its own.
     @discardableResult func suspend() -> Bool {
+        if let run = identity?.run, pendingGameOvers[run] != nil { return true }
+        if sharing.nativeBattle.isActive {
+            return sharing.nativeBattle.checkpointForContinuation()
+        }
+        if sharing.cooperativeDoubles.blocksAutoSave {
+            return sharing.cooperativeDoubles.checkpointForContinuation()
+        }
         if serverOnly {
             guard workingStateAuthorized else { return false }
             if finalServerSaveQueued { return true }
@@ -811,9 +911,14 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                 let pending = head?.payload.checkpoint, expected = independentServerHead, previous = snapshotTask
                 guard let session = account.session, let package = try captureServerCheckpoint(final: true) else { return false }
                 let verifiedCursor = sharedServerCursor
+                let settlement = serverContinuationSettlements[package.payload.checkpoint]
+                let account = account, native = sharing.nativeBattle, cooperative = sharing.cooperativeDoubles
                 finalServerSaveRetry = { session in
                     BoundServerDisconnectSave.enqueue(package: package, previous: previous, expectedHead: expected,
-                        pendingHead: pending, session: session, verifiedCursor: verifiedCursor)
+                        pendingHead: pending, session: session, verifiedCursor: verifiedCursor, onConfirmed: { _ in
+                            guard session.isSameSession(as: account.session) else { throw CancellationError() }
+                            try Self.settle(settlement, native: native, cooperative: cooperative)
+                        })
                 }
                 finalServerSaveRun = package.payload.manifest.identity.run; finalServerSaveOwner = session.owner
                 finalServerSaveTask = finalServerSaveRetry?(session)
@@ -871,12 +976,9 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                     }
                 } else { suspend() }
             } else {
-                // Deliberate owner teardown restores friendly RAM before its
-                // last world save, retaining the existing recovery guarantees.
-                if sharing.nativeBattle.isActive, sharing.nativeBattle.activity == .battle {
-                    sharing.nativeBattle.cancel(resume:false)
-                }
-                suspend()
+                // Leaving the app preserves the exact native execution. Only
+                // an explicit Run/Cancel may end a friendly activity.
+                _ = suspend()
             }
         }
         guard value != servicesActive else { return }
@@ -1170,14 +1272,15 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         canonical.gameID = "" // local database identifiers do not define a shared run
         return BoundMultiplayerSaveStore.hash((try? BoundMultiplayerSaveStore.encode(canonical)) ?? Data())
     }
-    static func validSettings(_ data: Data) -> Bool {
-        guard data.count == 32, (1...4).contains(data[0]) else { return false }
+    nonisolated static func validSettings(_ data: Data) -> Bool {
+        guard data.count == 32, (1...5).contains(data[0]) else { return false }
         if data[0] >= 4 {
             let name = data[12..<20]
             guard let terminator = name.firstIndex(of: 0xFF), terminator > 12,
                   name[..<terminator].allSatisfy({ $0 <= 0xF6 }),
                   name[terminator...].allSatisfy({ $0 == 0xFF }),
-                  data[20] <= 1, data[21..<32].allSatisfy({ $0 == 0 }) else { return false }
+                  data[20] <= 1, data[22..<32].allSatisfy({ $0 == 0 }),
+                  data[21] <= (data[0] >= 5 && data[20] == 1 ? 1 : 0) else { return false }
         } else if !data[12..<32].allSatisfy({ $0 == 0 }) { return false }
         return data[1..<10].allSatisfy { $0 <= 1 }
             && data[10] <= (data[0] >= 2 ? 1 : 0)
@@ -1264,12 +1367,8 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     private func historyDigest() -> String? {
         historyBits().map(BoundROMHistoryJournal.digest)
     }
-    /// Friendly battle RAM belongs only to its recovery journal. A requested run
-    /// save first restores the world; a failed restore keeps every save blocked.
+    /// A world save cannot consume or cancel an active friendly execution.
     private func restoreFriendlyBattleBeforeSaving(resume: Bool = true) throws {
-        if sharing.nativeBattle.isActive, sharing.nativeBattle.activity == .battle {
-            sharing.nativeBattle.cancel(resume:resume)
-        }
         guard !sharing.nativeBattle.protectsTemporaryState && !sharing.cooperativeDoubles.blocksAutoSave else {
             throw BoundMultiplayerSaveStore.Failure.incomplete
         }
@@ -1445,6 +1544,9 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                 let state = try await self.server.sharedEvents(identity:identity,events:pending,cursor:ack.cursor)
                 guard !Task.isCancelled, self.serverOperation == operation,
                       (self.identity?.run ?? self.backgroundEndedIdentity?.run) == identity.run else { return }
+                if let gameOver = state.gameOver {
+                    try self.receiveGameOver(gameOver, identity: identity); return
+                }
                 let remoteSave = state.saves[identity.owner.uuidString.lowercased()]
                 if self.serverOnly {
                     let remoteHead = remoteSave?.receipt.checkpoint
@@ -1482,6 +1584,8 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                 guard !Task.isCancelled, self.serverOperation == operation else { return }
                 self.serverPollAt = self.now + 3
                 if self.serverOnly, self.isServerConflict(error) {
+                    if await self.discoverGameOver(for: identity) { return }
+                    guard !Task.isCancelled, self.serverOperation == operation else { return }
                     self.failServerSession("This run changed on another device. Refresh and reopen its server save.")
                 } else if error as? BoundRunLeaseError == .transferRequired {
                     self.error = "This run was transferred to another device. Use recovery to continue."
@@ -1499,6 +1603,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         }
         let operation = UUID(); snapshotOperation = operation
         let expected = independentServerHead, serverManaged = serverOnly
+        let settlement = serverManaged ? serverContinuationSettlements[package.payload.checkpoint] : nil
         let uploader = serverManaged ? BoundNakamaRunService() : snapshotServer
         snapshotTask = Task { [weak self] in
             guard let self else { return }
@@ -1507,7 +1612,13 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                 if self.independentServerHead != package.payload.checkpoint {
                     if serverManaged {
                         _ = try await uploader.configureSaves(session: session)
-                        _ = try await uploader.uploadIndependent(package, expectedHead: expected, session: session)
+                        let confirmed = try await uploader.uploadIndependent(package, expectedHead: expected, session: session)
+                        guard confirmed.identity == package.payload.manifest.identity,
+                              confirmed.save_id == package.payload.manifest.identity.run,
+                              confirmed.committed, !confirmed.cancelled,
+                              confirmed.saves[session.owner.uuidString.lowercased()]?.receipt == package.receipt else {
+                            throw BoundNakamaRunService.Failure.conflict
+                        }
                     } else {
                         _ = try await self.snapshotServer.uploadIndependent(package,expectedHead:expected,session:session,authorize:{ [leaseClient = self.leaseClient] in
                             _ = try await leaseClient.independentAuthority(runID:package.payload.manifest.identity.run,session:session)
@@ -1516,6 +1627,14 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                 }
                 if !serverManaged, package.payload.manifest.deviceOwner == self.store.deviceID {
                     _ = try await self.leaseClient.publishIndependentCheckpoint(package:package,session:session)
+                }
+                // Settle only the activity token captured with these exact
+                // gameplay bytes, including a successful retry after a lost
+                // upload response. A newer activity's claim remains untouched.
+                if serverManaged {
+                    guard !Task.isCancelled, session.isSameSession(as: self.account.session) else { return }
+                    try Self.settle(settlement, native: self.sharing.nativeBattle, cooperative: self.sharing.cooperativeDoubles)
+                    self.serverContinuationSettlements.removeValue(forKey: package.payload.checkpoint)
                 }
                 guard !Task.isCancelled, self.snapshotOperation == operation,
                       self.identity?.run == package.payload.manifest.identity.run else { return }
@@ -1526,6 +1645,8 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                 guard self.snapshotOperation == operation else { return }
                 self.snapshotRetryAt = self.now + 3
                 if self.serverOnly, self.isServerConflict(error) {
+                    if await self.discoverGameOver(for: package.payload.manifest.identity) { return }
+                    guard !Task.isCancelled, self.snapshotOperation == operation else { return }
                     self.failServerSession("This run changed on another device. Refresh and reopen its server save.")
                 } else if error as? BoundRunLeaseError == .transferRequired {
                     self.error = "This run was transferred to another device. Use recovery to continue."
@@ -1998,6 +2119,159 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
 }
 
 extension BoundROMMultiplayerCoordinator {
+    private func rememberGameOver(_ record: BoundSoulGameOverRecord) throws {
+        try gameOverStore.save(record)
+        pendingGameOvers[record.run] = record
+    }
+    private func pauseForGameOver() {
+        core?.pause(); workingStateAuthorized = false
+        snapshotTask?.cancel(); snapshotTask = nil; snapshotOperation = UUID()
+        serverTask?.cancel(); serverTask = nil; serverOperation = UUID()
+        serverStarting = false; serverMenuBusy = false; serverMenuError = nil
+        serverCapturePending = false; finalServerSaveQueued = false
+        pendingAction.clear(); host.connected = false; host.recovery = false
+        probe.publish(host)
+    }
+    private func showGameOver(_ record: BoundSoulGameOverRecord) {
+        guard account.session?.owner == record.owner, game?.identifier == record.gameID else { return }
+        if gameOverID == record.eventID && !record.returnRequested { return }
+        pauseForGameOver()
+        if record.returnRequested { moveGameOverToMenu(record) }
+        else { needsServerMenu = false; gameOverMenuRun = nil; gameOverID = record.eventID }
+    }
+    private func moveGameOverToMenu(_ record: BoundSoulGameOverRecord) {
+        guard record.returnRequested else { return }
+        pauseForGameOver(); gameOverID = nil; gameOverMenuRun = record.run
+        needsServerMenu = true
+        serverRuns.removeAll { $0.save_id == record.run }
+    }
+    func returnFromGameOver() {
+        guard let gameOverID, var record = pendingGameOvers.values.first(where: { $0.eventID == gameOverID && $0.owner == account.session?.owner }) else { return }
+        record.returnRequested = true
+        do { try rememberGameOver(record); moveGameOverToMenu(record); gameOverRetryAt = 0 }
+        catch { serverMenuError = "Couldn’t preserve Game Over. Press A to retry." }
+    }
+    /// Called only after the menu view is attached to the visible window. This
+    /// durable receipt is what permits the server's two-player deletion barrier.
+    func gameOverMenuDidAppear() {
+        guard needsServerMenu, let run = gameOverMenuRun, var record = pendingGameOvers[run],
+              record.owner == account.session?.owner, record.returnRequested, !record.menuPresented else { return }
+        record.menuPresented = true
+        do { try rememberGameOver(record); gameOverRetryAt = 0 }
+        catch { serverMenuError = "Couldn’t preserve the menu return. Reopen Multiplayer to retry." }
+    }
+    private func receiveGameOver(_ state: BoundNakamaRunService.GameOverState, identity: BoundMultiplayerRunIdentity) throws {
+        guard identity.owner == account.session?.owner, identity.gameID == game?.identifier else { return }
+        var record = pendingGameOvers[identity.run] ?? .init(gameID: identity.gameID, owner: identity.owner, run: identity.run, eventID: state.id)
+        record.eventID = state.id
+        record.returnRequested = record.returnRequested || state.returnRequested
+        if state.deleted {
+            try finishGameOver(record)
+            return
+        }
+        try rememberGameOver(record)
+        if self.identity?.run == record.run || needsServerMenu && !record.menuPresented { showGameOver(record) }
+    }
+    private func finishGameOver(_ record: BoundSoulGameOverRecord) throws {
+        try gameOverStore.remove(record); pendingGameOvers.removeValue(forKey: record.run)
+        serverRuns.removeAll { $0.save_id == record.run }
+        if identity?.run == record.run {
+            pauseForGameOver(); manifest = nil; setup = nil; head = nil; serverProfile = nil
+            sharing.nativeBattle.continuationContext = nil
+            gameOverID = nil; needsServerMenu = true
+        }
+        if gameOverMenuRun == record.run { gameOverMenuRun = nil }
+        if serverMenuError == "Game Over · Waiting for connection" { serverMenuError = nil }
+    }
+    private func discoverGameOver(for identity: BoundMultiplayerRunIdentity) async -> Bool {
+        guard serverOnly, let session = account.session, session.owner == identity.owner else { return false }
+        let client = BoundNakamaRunService()
+        do {
+            _ = try await client.configureSaves(session: session)
+            let state = try await client.getSave(identity.run)
+            guard session.isSameSession(as: account.session), self.identity?.run == identity.run,
+                  let gameOver = state.gameOver else { return false }
+            try receiveGameOver(gameOver, identity: identity)
+            return true
+        } catch { return false }
+    }
+    private func tickGameOver() {
+        guard serverOnly, let game, let session = account.session else { return }
+        if gameOverLoadedOwner != session.owner {
+            do {
+                pendingGameOvers = try gameOverStore.load(owner: session.owner, gameID: game.identifier)
+                gameOverLoadedOwner = session.owner
+                if needsServerMenu, let record = pendingGameOvers.values.first(where: { !$0.menuPresented }) {
+                    showGameOver(record)
+                }
+            } catch { core?.pause(); serverMenuError = "Game Over recovery could not be read. Reopen Multiplayer."; return }
+        }
+        if let identity, identity.owner == session.owner, workingStateAuthorized,
+           pendingGameOvers[identity.run] == nil,
+           BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: identity.settings) == true,
+           !sharing.nativeBattle.protectsTemporaryState {
+            let snapshot = sharing.soulLink.probe.read()
+            if snapshot.ledger?.run == identity.run, snapshot.error == nil, snapshot.partyWipedOut {
+                let record = BoundSoulGameOverRecord(gameID: game.identifier, owner: session.owner, run: identity.run, eventID: UUID())
+                do { try rememberGameOver(record); showGameOver(record); gameOverRetryAt = 0 }
+                catch { core?.pause(); serverMenuError = "Couldn’t preserve Game Over. Reopen Multiplayer to retry."; return }
+            }
+        }
+        guard gameOverTask == nil, now >= gameOverRetryAt, UIApplication.shared.applicationState == .active else { return }
+        let queue = pendingGameOvers.values.sorted { $0.run.uuidString < $1.run.uuidString }
+        let pending = queue.isEmpty ? nil : queue[gameOverQueueIndex % queue.count]
+        gameOverQueueIndex = (gameOverQueueIndex + 1) % max(queue.count, 1)
+        let active = identity
+        guard pending != nil || active != nil && !needsServerMenu && !serverActivating else { return }
+        let operation = UUID(); gameOverOperation = operation; gameOverRetryAt = now + 1
+        let client = BoundNakamaRunService()
+        gameOverTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.gameOverOperation == operation { self.gameOverTask = nil } }
+            do {
+                _ = try await client.configureSaves(session: session)
+                guard !Task.isCancelled, self.gameOverOperation == operation, session.isSameSession(as: self.account.session) else { return }
+                if var record = pending {
+                    // A lost start response is harmless: the first accepted ID
+                    // owns this run, and every later start returns that same ID.
+                    var state = try await client.gameOver(saveID: record.run, action: "gameOver", eventID: record.eventID)
+                    guard !Task.isCancelled, self.gameOverOperation == operation, session.isSameSession(as: self.account.session) else { return }
+                    if state.deleted {
+                        try self.finishGameOver(record); return
+                    }
+                    record.eventID = state.id
+                    let latest = self.pendingGameOvers[record.run]
+                    record.returnRequested = record.returnRequested || state.returnRequested || latest?.returnRequested == true
+                    record.menuPresented = record.menuPresented || latest?.menuPresented == true
+                    try self.rememberGameOver(record)
+                    if record.returnRequested {
+                        state = try await client.gameOver(saveID: record.run, action: "gameOverReturn", eventID: state.id)
+                        guard !Task.isCancelled, self.gameOverOperation == operation, session.isSameSession(as: self.account.session) else { return }
+                        if self.identity?.run == record.run || self.needsServerMenu && !record.menuPresented {
+                            if self.gameOverMenuRun != record.run { self.moveGameOverToMenu(record) }
+                        }
+                        if self.pendingGameOvers[record.run]?.menuPresented == true {
+                            state = try await client.gameOver(saveID: record.run, action: "gameOverMenu", eventID: state.id)
+                            guard !Task.isCancelled, self.gameOverOperation == operation, session.isSameSession(as: self.account.session) else { return }
+                        }
+                    } else if self.identity?.run == record.run || self.needsServerMenu && !record.menuPresented { self.showGameOver(record) }
+                    if state.deleted {
+                        try self.finishGameOver(record)
+                    }
+                } else if let active {
+                    let state = try await client.getSave(active.run)
+                    guard !Task.isCancelled, self.gameOverOperation == operation, session.isSameSession(as: self.account.session),
+                          self.identity?.run == active.run else { return }
+                    if let gameOver = state.gameOver { try self.receiveGameOver(gameOver, identity: active) }
+                }
+            } catch {
+                guard !Task.isCancelled, self.gameOverOperation == operation else { return }
+                self.gameOverRetryAt = self.now + 3
+                // Preserve the prompt/menu and durable intent while offline.
+                if pending != nil, self.needsServerMenu { self.serverMenuError = "Game Over · Waiting for connection" }
+            }
+        }
+    }
     enum ServerCoreFailure: LocalizedError {
         case startup
         var errorDescription: String? { "The game could not start. Close and reopen it." }
@@ -2031,6 +2305,13 @@ extension BoundROMMultiplayerCoordinator {
             let runs = try await client.listSaves(gameID: game.identifier)
             guard serverSelection == selection, session.isSameSession(as: account.session) else { return }
             serverRuns = runs
+            for run in runs {
+                guard let gameOver = run.gameOver else { continue }
+                var local = run.identity.owner == session.owner ? run.identity : flip(run.identity)
+                local.gameID = game.identifier
+                try receiveGameOver(gameOver, identity: local)
+            }
+            serverRuns.removeAll { pendingGameOvers[$0.save_id]?.returnRequested == true }
             serverMenuError = BoundServerDisconnectSave.failureMessage(gameID: game.identifier, owner: session.owner)
         } catch {
             guard serverSelection == selection, session.isSameSession(as: account.session) else { return }
@@ -2100,6 +2381,13 @@ extension BoundROMMultiplayerCoordinator {
             _ = try await client.configureSaves(session: session)
             var state = try await client.getSave(saveID)
             guard serverSelection == selection, session.isSameSession(as: account.session) else { return true }
+            if let gameOver = state.gameOver {
+                try receiveGameOver(gameOver, identity: state.identity)
+                serverMenuBusy = false; return true
+            }
+            if let pending = pendingGameOvers[saveID] {
+                showGameOver(pending); serverMenuBusy = false; return true
+            }
             if let profile { state = try await client.setProfile(profile, saveID: saveID) }
             guard serverSelection == selection, session.isSameSession(as: account.session) else { return true }
             guard let selectedProfile = state.profiles?[session.owner.uuidString.lowercased()] else {
@@ -2138,6 +2426,10 @@ extension BoundROMMultiplayerCoordinator {
         guard let game, let core, state.save_id == state.identity.run, state.committed, !state.cancelled,
               state.identity.owner == account.session?.owner, state.identity.gameID == game.identifier,
               state.identity.romSHA256 == BoundWorldContract.romSHA256, profile.valid else { throw BoundMultiplayerSaveStore.Failure.incompatible }
+        if let gameOver = state.gameOver {
+            try receiveGameOver(gameOver, identity: state.identity); return
+        }
+        if let pending = pendingGameOvers[state.identity.run] { showGameOver(pending); return }
         serverActivating = true
         defer { if selection == serverSelection { serverActivating = false } }
         let upload = state.saves[state.identity.owner.uuidString.lowercased()]
@@ -2171,13 +2463,21 @@ extension BoundROMMultiplayerCoordinator {
         sharing.soulLink.bind(core: core, gameID: game.identifier)
         sharing.soulLink.setConnection(owner: state.identity.owner.uuidString, room: state.identity.roomID)
         try sharing.soulLink.startPreparedRun(run: state.identity.run)
+        sharing.nativeBattle.continuationContext = .init(owner: state.identity.owner, roomID: state.identity.roomID, runID: state.identity.run)
+        sharing.cooperativeDoubles.continuationContext = sharing.nativeBattle.continuationContext
+        sharing.nativeBattle.bind(core: core, gameID: game.identifier, interactions: sharing.interactions)
+        sharing.cooperativeDoubles.bind(core: core, gameID: game.identifier, soul: sharing.soulLink.probe)
+        let continuedNativeActivity = try sharing.nativeBattle.restoreContinuationIfAvailable(serverHead: upload?.receipt.checkpoint)
+        let continuedCooperativeActivity = continuedNativeActivity ? false : try sharing.cooperativeDoubles.restoreContinuationIfAvailable(serverHead: upload?.receipt.checkpoint)
+        let continuedActivity = continuedNativeActivity || continuedCooperativeActivity
+        if continuedActivity { try sharing.soulLink.reloadContinuationMemory(for: core) }
         manifest = try store.manifest(gameID: game.identifier); head = package; serverUploaded = package?.payload.checkpoint
         independentServerHead = upload?.receipt.checkpoint; serverRegisteredRun = state.identity.run
         serverProfile = profile; selectedRoom = state.identity.roomID; peerOwner = state.identity.partner
         setup = .init(identity: state.identity, accepted: true, settingsCommitted: true, serverEpoch: state.epoch, serverCommitted: true)
         error = nil; pendingSnapshot = nil; didRestore = true; protectedStorage = true; workingStateAuthorized = true
         sharedServerCursor = .init(); journalReplayNeeded = true; soulExportCache.reset(); worldProjectionRun = nil
-        serverStarting = package == nil; host.externalSetup = serverStarting; host.playerProfile = profile
+        serverStarting = package == nil && !continuedActivity; host.externalSetup = serverStarting; host.playerProfile = profile
         nextAutomaticSave = now; serverCapturePending = package == nil; serverPollAt = 0
         host.setupCommitted = true; host.linked = true; host.run = state.identity.run
         host.settings = state.identity.settings; host.localSeed = state.identity.localSeed; host.partnerSeed = state.identity.partnerSeed
@@ -2190,6 +2490,7 @@ extension BoundROMMultiplayerCoordinator {
                 let ack = try store.sharedEventAcknowledgement(gameID: game.identifier)
                 let history = try await server.sharedEvents(identity: state.identity, events: [], cursor: ack.cursor)
                 guard selection == serverSelection, session.isSameSession(as: account.session) else { throw CancellationError() }
+                if let gameOver = history.gameOver { try receiveGameOver(gameOver, identity: state.identity); return }
                 for event in history.events {
                     _ = try store.receiveAuthoritativeSharedEvent(gameID: game.identifier, event: event)
                     sharedServerCursor.insert(event.id)
@@ -2201,17 +2502,23 @@ extension BoundROMMultiplayerCoordinator {
                 } else if history.events.isEmpty { throw BoundMultiplayerSaveStore.Failure.incomplete }
             }
         }
-        if package != nil { try sharing.soulLink.probe.prepareRestoredState(core) }
-        sharing.nativeBattle.bind(core: core, gameID: game.identifier, interactions: sharing.interactions)
-        sharing.cooperativeDoubles.bind(core: core, gameID: game.identifier, soul: sharing.soulLink.probe)
+        if package != nil && !continuedActivity { try sharing.soulLink.probe.prepareRestoredState(core) }
         host.recovery = false; probe.publish(host)
-        if servicesActive, UIApplication.shared.applicationState == .active { core.resume() }
+        if !continuedActivity, servicesActive, UIApplication.shared.applicationState == .active { core.resume() }
         if !serverStarting { serverMenuBusy = false; needsServerMenu = false }
     }
     @discardableResult
     private func captureServerCheckpoint(final: Bool = false) throws -> BoundMultiplayerSavePackage? {
         guard serverOnly, let manifest, let game, let core, workingStateAuthorized, !serverStarting,
               !manifest.requiresInitialHistorySync, core.state == .paused || core.state == .running else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+        // Native activities preserve their exact execution separately. Making a
+        // new world checkpoint from old RAM plus current activity journals would
+        // both mix executions and move the continuation's server-head boundary.
+        if sharing.nativeBattle.protectsTemporaryState || sharing.cooperativeDoubles.blocksAutoSave {
+            serverCapturePending = true
+            if final { throw BoundMultiplayerSaveStore.Failure.incomplete }
+            return nil
+        }
         if !final, snapshotTask != nil || head?.payload.checkpoint != serverUploaded {
             serverCapturePending = true
             if let head { uploadSnapshotInBackground(head) }
@@ -2230,15 +2537,10 @@ extension BoundROMMultiplayerCoordinator {
             return nil
         }
         do {
-            // A temporary battle's emulator RAM is never the world save. Its
-            // recovery cut travels beside the last safe world snapshot instead.
-            if sharing.nativeBattle.blocksAutoSave || sharing.cooperativeDoubles.blocksAutoSave {
-                guard let safe = head, let savedState = safe.payload.files["checkpoint.state"]?.data,
-                      let savedBattery = safe.payload.files["game.sav"]?.data else { throw BoundMultiplayerSaveStore.Failure.incomplete }
-                state = savedState; battery = savedBattery
-            } else {
-                state = BoundVBABattleBridge.captureServerState(); battery = BoundVBABattleBridge.captureServerBattery()
-            }
+            // Activities were excluded above. Even if their closing dialogue
+            // still blocks automatic saves, a final capture must contain the
+            // current result, never the pre-activity world's old RAM.
+            state = BoundVBABattleBridge.captureServerState(); battery = BoundVBABattleBridge.captureServerBattery()
             try journalSoulEvents()
             if let world = sharing.sharedWorld.probe.read() { try persistWorldSnapshot(world) }
             memory = BoundServerMemoryFiles.snapshot(gameID: game.identifier)
@@ -2250,6 +2552,7 @@ extension BoundROMMultiplayerCoordinator {
         guard !state.isEmpty, battery.count == 131072 else { throw BoundMultiplayerSaveStore.Failure.incomplete }
         let files = ["checkpoint.state": state, "game.sav": battery, "memory-files.json": try JSONEncoder().encode(memory)]
         let package = try store.captureServerCheckpoint(gameID: game.identifier, files: files, history: history)
+        serverContinuationSettlements[package.payload.checkpoint] = captureContinuationSettlement(for: manifest.identity)
         if !final {
             head = package; serverCapturePending = false; nextAutomaticSave = now + 15
             host.status = .waiting; host.message = "Saving to server..."
@@ -2268,6 +2571,7 @@ extension BoundROMMultiplayerCoordinator {
         return false
     }
     private func failServerSession(_ message: String) {
+        if gameOverID != nil || identity.map({ pendingGameOvers[$0.run] != nil }) == true { return }
         serverSelection = UUID(); serverActivating = false
         core?.pause(); workingStateAuthorized = false; needsServerMenu = true; serverStarting = false
         snapshotTask?.cancel(); snapshotTask = nil; snapshotOperation = UUID()
@@ -2277,6 +2581,8 @@ extension BoundROMMultiplayerCoordinator {
     }
     private func tickServerSession() {
         guard verified, saveFenceReady, let core, let game else { return }
+        tickGameOver()
+        if gameOverID != nil || identity.map({ pendingGameOvers[$0.run] != nil }) == true { return }
         host.enabled = BoundMultiplayerFeatures.isEnabled; host.linked = manifest != nil
         defer { probe.publish(host) }
         guard host.enabled, servicesActive, UIApplication.shared.applicationState == .active else {
@@ -2324,7 +2630,8 @@ extension BoundROMMultiplayerCoordinator {
         } else {
             host.friends = onboarding.rooms.compactMap { room in UUID(uuidString: room.roomID).map { .init(room: $0, name: room.displayName) } }
         }
-        if !serverStarting, (request?.permitsAutomaticFieldSave == true || sharing.nativeBattle.blocksAutoSave || sharing.cooperativeDoubles.blocksAutoSave), serverCapturePending || now >= nextAutomaticSave {
+        if !serverStarting, !sharing.nativeBattle.blocksAutoSave, !sharing.cooperativeDoubles.blocksAutoSave,
+           request?.permitsAutomaticFieldSave == true, serverCapturePending || now >= nextAutomaticSave {
             do { try captureServerCheckpoint() } catch { serverMenuError = error.localizedDescription; nextAutomaticSave = now + 3 }
         }
         synchronizeIndependentHistory()

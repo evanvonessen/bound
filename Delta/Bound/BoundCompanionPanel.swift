@@ -741,6 +741,17 @@ final class BoundCompanionCoordinator {
     }
     func bind(core: EmulatorCore?, gameID: String) {
         defer { refreshMultiplayerServices() }
+        let preservingNative=sharing.nativeBattle.hasSavedContinuation || sharing.cooperativeDoubles.hasSavedContinuation
+        if (owner?.game as? Game)?.boundUsesServerMultiplayer != true {
+            sharing.nativeBattle.continuationContext=nil
+            sharing.cooperativeDoubles.continuationContext=(account.session?.owner).flatMap { owner in
+                sharing.configuredRoomID.map { BoundNativeContinuationContext(owner:owner,roomID:$0,runID:nil) }
+            }
+        }
+        sharing.nativeBattle.continuationContextProvider = { [weak self] in
+            guard let self,let owner=self.account.session?.owner,let room=self.sharing.configuredRoomID else { return nil }
+            return BoundNativeContinuationContext(owner:owner,roomID:room,runID:nil)
+        }
         sharing.nativeBattle.bind(core: core, gameID: gameID, interactions: sharing.interactions)
         sharing.soulLink.bind(core: core, gameID: gameID)
         sharing.cooperativeDoubles.bind(core:core,gameID:gameID,soul:sharing.soulLink.probe)
@@ -769,20 +780,22 @@ final class BoundCompanionCoordinator {
         sharing.nativeBattle.canResume = { [weak owner] in
             guard let owner else { return false }
             return UIApplication.shared.applicationState == .active && owner.view.window?.windowScene?.hasKeyboardFocus == true
-                && owner.gameViewControllerShouldResumeEmulation(owner)
+                && owner.boundCanResumeEmulation(resumingNativeActivity:true)
         }
         sharing.nativeBattle.releaseGameplayInputs = { [weak owner] in owner?.releaseBoundFriendGameplayInputs() }
         sharing.cooperativeDoubles.releaseGameplayInputs = { [weak owner] in owner?.releaseBoundFriendGameplayInputs() }
         sharing.cooperativeDoubles.canResume = { [weak owner] in
             guard let owner else { return false }
             return UIApplication.shared.applicationState == .active && owner.view.window?.windowScene?.hasKeyboardFocus == true
-                && owner.gameViewControllerShouldResumeEmulation(owner)
+                && owner.boundCanResumeEmulation(resumingNativeActivity:true)
         }
         playerStateDisplay.bind(core: core)
         friendInteractionPanel?.bind(core: core)
         guard boundCore !== core || self.gameID != gameID else { return }
         notesDismissalTask?.cancel(); notesDismissalTask = nil; pendingControllerReferenceAction = nil
-        cancelInteractions(); tap.setEnabled(false); sharing.stop(); notesPaused = false; isEditingNotes = false; isEditingText = false; owner?.controllerView.isUserInteractionEnabled = true; self.gameID = gameID
+        cancelInteractions(); tap.setEnabled(false)
+        if preservingNative { sharing.background() } else { sharing.stop() }
+        notesPaused = false; isEditingNotes = false; isEditingText = false; owner?.controllerView.isUserInteractionEnabled = true; self.gameID = gameID
         host?.rootView.gameID = gameID
         macHost?.rootView.gameID = gameID
         macHost?.rootView.gameTitle = (owner?.game as? Game)?.name ?? "Bound"
@@ -1506,7 +1519,16 @@ final class BoundCompanionCoordinator {
         if usesLocalPairedFixture { sharing.start() }
         #endif
     }
+    @discardableResult func preserveNativeActivity()->Bool {
+        if !romMultiplayer.serverOnly {
+            guard sharing.nativeBattle.protectLocalLifecycle(),sharing.cooperativeDoubles.protectLocalLifecycle() else { return false }
+        }
+        if sharing.nativeBattle.isActive { return sharing.nativeBattle.checkpointForContinuation() }
+        if sharing.cooperativeDoubles.blocksAutoSave { return sharing.cooperativeDoubles.checkpointForContinuation() }
+        return true
+    }
     func background() {
+        _=preserveNativeActivity()
         romMultiplayer.setServiceActive(false, temporary: true)
         multiplayerServicesForeground = false
         foregroundTask?.cancel(); foregroundTask = nil
@@ -1516,18 +1538,29 @@ final class BoundCompanionCoordinator {
         cancelInteractions(); pendingControllerReferenceAction = pendingAction
         tap.setEnabled(false); sharing.background(); refreshMultiplayerServices(temporary: true); onboarding.close()
     }
-    func stop() {
-        romMultiplayer.setServiceActive(false)
+    @discardableResult func stop()->Bool {
+        let preserving=sharing.nativeBattle.isActive || sharing.cooperativeDoubles.blocksAutoSave
+        if preserving,!romMultiplayer.serverOnly {
+            _=preserveNativeActivity()
+            if sharing.nativeBattle.isActive { sharing.nativeBattle.showLocalExitUnavailable() }
+            else { sharing.cooperativeDoubles.showLocalExitUnavailable() }
+            return false
+        }
+        guard !preserving || preserveNativeActivity() else { return false }
+        romMultiplayer.setServiceActive(false, temporary:preserving)
         multiplayerServicesForeground = false
-        refreshMultiplayerServices()
+        refreshMultiplayerServices(temporary:preserving)
         playerStateDisplay.stop()
         foregroundTask?.cancel(); foregroundTask = nil
         notesDismissalTask?.cancel(); notesDismissalTask = nil; pendingControllerReferenceAction = nil
         macSheetPaused = false; macSheetCore = nil
         landscapeArrangement.finish(save: false, resume: false)
         landscapeCompanion.finishArrangement(save: false, resume: false)
-        cancelInteractions(); tap.setEnabled(false); sharing.stop(); onboarding.close()
+        cancelInteractions(); tap.setEnabled(false)
+        if preserving { sharing.background() } else { sharing.stop() }
+        onboarding.close()
         notesPaused = false; isEditingNotes = false; isEditingText = false; owner?.controllerView.isUserInteractionEnabled = true; host?.view.endEditing(true); macHost?.view.endEditing(true)
+        return true
     }
     func importCurrentRRDexSave(gameID: String) throws -> BoundRRDexSave {
         guard let owner, let core = owner.emulatorCore, core === boundCore,

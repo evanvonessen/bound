@@ -217,6 +217,32 @@ class GameViewController: DeltaCore.GameViewController
     private let boundCompanion = BoundCompanionCoordinator()
     private var serverSetupHost: UIHostingController<BoundMultiplayerSetupView>?
     private var serverSetupObservation: AnyCancellable?
+    private var soulGameOverObservation: AnyCancellable?
+    private var soulGameOverView: UIView?
+    private var soulGameOverAPressed = false
+    private func updateSoulGameOverOverlay(_ show: Bool) {
+        guard isViewLoaded else { return }
+        if !show { soulGameOverView?.removeFromSuperview(); soulGameOverView = nil; soulGameOverAPressed = false; return }
+        emulatorCore?.pause(); releaseBoundFriendGameplayInputs()
+        guard soulGameOverView == nil else { return }
+        let overlay = UIView(); overlay.backgroundColor = .black; overlay.accessibilityIdentifier = "bound.soul-game-over"
+        let title = UILabel(); title.text = "Game Over"; title.textColor = .white
+        title.font = .boldSystemFont(ofSize: 34); title.textAlignment = .center
+        let prompt = UIButton(type: .system); prompt.setTitle("Press A to return to menu.", for: .normal)
+        prompt.tintColor = .white; prompt.accessibilityIdentifier = "bound.soul-game-over-return"
+        prompt.addAction(UIAction { [weak self] _ in self?.boundCompanion.romMultiplayer.returnFromGameOver() }, for: .touchUpInside)
+        view.addSubview(overlay); overlay.addSubview(title); overlay.addSubview(prompt)
+        for item in [overlay, title, prompt] { item.translatesAutoresizingMaskIntoConstraints = false }
+        NSLayoutConstraint.activate([
+            overlay.leadingAnchor.constraint(equalTo: gameView.leadingAnchor), overlay.trailingAnchor.constraint(equalTo: gameView.trailingAnchor),
+            overlay.topAnchor.constraint(equalTo: gameView.topAnchor), overlay.bottomAnchor.constraint(equalTo: gameView.bottomAnchor),
+            title.centerXAnchor.constraint(equalTo: overlay.centerXAnchor), title.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
+            prompt.centerXAnchor.constraint(equalTo: overlay.centerXAnchor), prompt.bottomAnchor.constraint(equalTo: overlay.bottomAnchor, constant: -16)
+        ])
+        soulGameOverView = overlay
+        boundCompanion.state.showingFriends = false; boundCompanion.state.showingSettings = false
+        if presentedViewController != nil { dismiss(animated: false) }
+    }
     func updateServerSetupOverlay(_ show: Bool) {
         guard isViewLoaded else { return }
         if show {
@@ -231,9 +257,25 @@ class GameViewController: DeltaCore.GameViewController
                 host.didMove(toParent: self); serverSetupHost = host
             }
             if let host = serverSetupHost { view.bringSubviewToFront(host.view) }
+            if boundCompanion.romMultiplayer.awaitingGameOverMenu {
+                boundCompanion.state.showingFriends = false; boundCompanion.state.showingSettings = false
+                if presentedViewController != nil {
+                    dismiss(animated: false) { [weak self] in self?.acknowledgeVisibleGameOverMenu() }
+                }
+            }
+            DispatchQueue.main.async { [weak self] in
+                self?.acknowledgeVisibleGameOverMenu()
+            }
         } else if let host = serverSetupHost {
             host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent(); serverSetupHost = nil
         }
+    }
+    private func acknowledgeVisibleGameOverMenu() {
+        guard serverSetupHost?.view.window != nil, presentedViewController == nil,
+              UIApplication.shared.applicationState == .active,
+              view.window?.windowScene?.activationState == .foregroundActive,
+              !boundCompanion.state.showingFriends, !boundCompanion.state.showingSettings else { return }
+        boundCompanion.romMultiplayer.gameOverMenuDidAppear()
     }
     private let boundWorldAPressed = NSHashTable<AnyObject>.weakObjects()
     var boundCompanionForTesting: BoundCompanionCoordinator { boundCompanion }
@@ -314,6 +356,13 @@ class GameViewController: DeltaCore.GameViewController
             if let game = newValue as? Game,
                BoundServerBackupManager.hasPendingRestore(gameID: game.identifier) { return }
             let oldValue = super.game
+            if oldValue?.fileURL != newValue?.fileURL, (boundCompanion.sharing.nativeBattle.isActive || boundCompanion.sharing.cooperativeDoubles.blocksAutoSave) {
+                if !boundCompanion.romMultiplayer.serverOnly {
+                    _ = boundCompanion.stop()
+                    return
+                }
+                guard boundCompanion.preserveNativeActivity() else { return }
+            }
             if newValue == nil, let oldGame = oldValue as? Game,
                BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: oldGame.identifier) {
                 self.pausedSaveState = nil
@@ -554,8 +603,15 @@ class GameViewController: DeltaCore.GameViewController
     // MARK: - GameControllerReceiver -
     override func gameController(_ gameController: GameController, didActivate input: Input, value: Double)
     {
+        if boundCompanion.romMultiplayer.gameOverID != nil {
+            if BoundFriendWorldInputGate.isA(input) {
+                if value < 0.33 { soulGameOverAPressed = false }
+                else if !soulGameOverAPressed { soulGameOverAPressed = true; boundCompanion.romMultiplayer.returnFromGameOver() }
+            }
+            return
+        }
         if StandardGameControllerInput(input: input) == .menu, value >= 0.33 {
-            boundCompanion.sharing.cooperativeDoubles.suspend(); boundCompanion.sharing.nativeBattle.cancel()
+            _ = boundCompanion.preserveNativeActivity()
         }
         super.gameController(gameController, didActivate: input, value: value)
         let worldInput = BoundFriendWorldInput(input: input)
@@ -607,6 +663,7 @@ class GameViewController: DeltaCore.GameViewController
     
     override func gameController(_ gameController: GameController, didDeactivate input: Input)
     {
+        if BoundFriendWorldInputGate.isA(input) { soulGameOverAPressed = false }
         super.gameController(gameController, didDeactivate: input)
         let worldInput = BoundFriendWorldInput(input: input)
         if BoundFriendWorldInputGate.isA(input) || worldInput == .interact || worldInput == .blockedA {
@@ -723,6 +780,9 @@ extension GameViewController
         serverSetupObservation = boundCompanion.romMultiplayer.$needsServerMenu
             .receive(on: DispatchQueue.main).sink { [weak self] in self?.updateServerSetupOverlay($0) }
         updateServerSetupOverlay(boundCompanion.romMultiplayer.needsServerMenu)
+        soulGameOverObservation = boundCompanion.romMultiplayer.$gameOverID
+            .receive(on: DispatchQueue.main).sink { [weak self] in self?.updateSoulGameOverOverlay($0 != nil) }
+        updateSoulGameOverOverlay(boundCompanion.romMultiplayer.gameOverID != nil)
         
         self.view.layoutIfNeeded()
         
@@ -786,6 +846,7 @@ extension GameViewController
     override func viewDidAppear(_ animated: Bool)
     {
         super.viewDidAppear(animated)
+        acknowledgeVisibleGameOverMenu()
         boundCompanion.playerStateDisplay.bind(core: emulatorCore)
         
         if self.emulatorCore?.deltaCore == MelonDS.core, ProcessInfo.processInfo.isJITAvailable
@@ -820,7 +881,8 @@ extension GameViewController
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         if isBeingDismissed || isMovingFromParent || navigationController?.isBeingDismissed == true {
-            boundCompanion.stop()
+            // A failed durable write must retain the resident paused core.
+            guard boundCompanion.stop() else { return }
         }
     }
 
@@ -833,7 +895,9 @@ extension GameViewController
         // Native layout can change the controller bounds after rotation or Reset.
         // Refresh companion/Menu geometry only after those real frames settle.
         boundCompanion.bringControlsToFront()
+        if let overlay = soulGameOverView { view.bringSubviewToFront(overlay) }
         if let host = serverSetupHost { view.bringSubviewToFront(host.view) }
+        acknowledgeVisibleGameOverMenu()
         pauseViewController?.showsArrangeViews = boundCompanion.canArrangeLandscapeViews
         gameView.accessibilityIdentifier = "bound.game-screen"
         gameView.isAccessibilityElement = true
@@ -852,7 +916,7 @@ extension GameViewController
         switch identifier
         {
         case "showGamesViewController":
-            boundCompanion.stop()
+            guard boundCompanion.stop() else { return }
             let gamesViewController = (segue.destination as! UINavigationController).topViewController as! GamesViewController
             
             if let emulatorCore = self.emulatorCore
@@ -868,8 +932,11 @@ extension GameViewController
             }
             
         case "pause":
+            _ = boundCompanion.preserveNativeActivity()
             
-            if let game = self.game, !boundCompanion.romMultiplayer.serverOnly
+            if let game = self.game, !boundCompanion.romMultiplayer.serverOnly,
+               !boundCompanion.sharing.nativeBattle.protectsTemporaryState,
+               !boundCompanion.sharing.cooperativeDoubles.blocksAutoSave
             {
                 let fileURL = FileManager.default.uniqueTemporaryURL()
                 self.pausedSaveState = PausedSaveState(fileURL: fileURL, gameType: game.type)
@@ -1018,13 +1085,13 @@ extension GameViewController
         case "unwindToGames":
             if self.isGameScene
             {
+                guard boundCompanion.stop() else { return }
                 guard let session = self.view.window?.windowScene?.session else { return }
                 UIApplication.shared.requestSceneSessionDestruction(session, options: nil) { error in
                     Logger.main.error("Failed to close game window. \(error.localizedDescription, privacy: .public)")
                 }
                 
                 // Capture the final server package before the core is stopped.
-                if boundCompanion.romMultiplayer.serverOnly { boundCompanion.stop() }
                 self.emulatorCore?.stop()
             }
             else
@@ -1044,7 +1111,8 @@ extension GameViewController
     {
         self.pausedSaveState = nil
         
-        if let emulatorCore = self.emulatorCore, emulatorCore.state == .paused
+        if let emulatorCore = self.emulatorCore, emulatorCore.state == .paused,
+           self.boundCanResumeEmulation(resumingNativeActivity: false)
         {
             emulatorCore.resume()
         }
@@ -1107,7 +1175,6 @@ private extension GameViewController
 {
     func quitEmulation()
     {
-        boundCompanion.sharing.cooperativeDoubles.suspend(); boundCompanion.sharing.nativeBattle.cancel(resume: false)
         if let presentedViewController = self.presentedViewController
         {
             presentedViewController.dismiss(animated: true) {
@@ -1118,7 +1185,7 @@ private extension GameViewController
         }
         
         self.updateAutoSaveState()
-        if boundCompanion.romMultiplayer.serverOnly { boundCompanion.stop() }
+        guard boundCompanion.stop() else { return }
         
         self.emulatorCore?.stop()
         self.game = nil
@@ -2171,13 +2238,23 @@ extension GameViewController: GameViewControllerDelegate
     func gameViewControllerShouldResumeEmulation(_ gameViewController: DeltaCore.GameViewController) -> Bool
     {
         guard gameViewController == self else { return false }
+        return boundCanResumeEmulation(resumingNativeActivity:false)
+    }
+
+    /// The native coordinator alone may release its transport pause. Ordinary
+    /// UIKit/window resume paths still obey that pause and the game-over gate.
+    func boundCanResumeEmulation(resumingNativeActivity:Bool)->Bool {
         guard !self.isContinuingHandoff else { return false }
         guard !self.isPreparingAchievements else { return false }
         
         var result = false
         
         rst_dispatch_sync_on_main_thread {
-            guard self.game != nil else { return }
+            // Menu presentation arrives asynchronously. Keep the cartridge
+            // paused from the request itself, including Game Over's return.
+            guard self.game != nil, self.boundCompanion.romMultiplayer.gameOverID == nil,
+                  !self.boundCompanion.romMultiplayer.needsServerMenu else { return }
+            if !resumingNativeActivity,self.boundCompanion.sharing.nativeBattle.blocksCoreResume || self.boundCompanion.sharing.cooperativeDoubles.blocksCoreResume { return }
             if let gameID = (self.game as? Game)?.identifier,
                BoundROMUpdateManager.shared.hasPendingSaveClear(for: gameID) { return }
             let macSheet = BoundMacWorkspacePlatform.isEnabled && (self.boundCompanion.state.showingFriends || self.boundCompanion.state.showingSettings)
@@ -3133,7 +3210,7 @@ private extension GameViewController
         Logger.main.info("Discarding current scene session, quitting emulation for game \((self.game as? Game)?.identifier ?? "nil", privacy: .public)")
         
         self.updateAutoSaveState()
-        if boundCompanion.romMultiplayer.serverOnly { boundCompanion.stop() }
+        guard boundCompanion.stop() else { return }
         self.emulatorCore?.stop() // Required to ensure data isn't corrupted due to starting new game before previous EmulatorBridge state is reset.
     }
     

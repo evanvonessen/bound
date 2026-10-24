@@ -98,6 +98,54 @@ final class MultiplayerSavePackageTests: XCTestCase {
         options.partnerName = "Ash"; options.partnerGender = 2
         XCTAssertFalse(options.valid)
     }
+    @MainActor func testGameOverDeletionChoiceIsSharedAndOnlyDebugCanDisableIt() {
+        var options = BoundMultiplayerSetupOptions()
+        XCTAssertFalse(options.deleteSaveOnGameOver, "The debug control defaults off")
+        XCTAssertEqual(options.settings[0], 5)
+        XCTAssertEqual(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: options.settings), true)
+
+        options.debug = true
+        XCTAssertEqual(options.settings[20], 1)
+        XCTAssertEqual(options.settings[21], 1)
+        XCTAssertEqual(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: options.settings), false)
+        let shared = options.settings
+        XCTAssertEqual(shared.count, 32)
+        XCTAssertEqual(shared[21], 1)
+        XCTAssertEqual(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: shared), false)
+        options.deleteSaveOnGameOver = true
+        XCTAssertEqual(options.settings[21], 0)
+        XCTAssertEqual(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: options.settings), true)
+        options.deleteSaveOnGameOver = false
+
+        options.debug = false
+        XCTAssertEqual(options.settings[21], 0, "A hidden debug choice cannot disable ordinary run deletion")
+        XCTAssertEqual(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: options.settings), true)
+        options.debug = true
+        XCTAssertEqual(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: options.settings), false,
+                       "Changing the preset preserves the user's draft choice")
+
+        var invalid = shared; invalid[20] = 0
+        XCTAssertNil(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: invalid))
+        invalid = shared; invalid[21] = 2
+        XCTAssertNil(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: invalid))
+        invalid = shared; invalid[22] = 1
+        XCTAssertNil(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: invalid))
+        invalid = shared; invalid[0] = 6
+        XCTAssertNil(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: invalid))
+        XCTAssertNil(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: Data()))
+    }
+    @MainActor func testLegacyGameOverSettingsDefaultToDeletionWithoutAcceptingAnOverride() {
+        for version in UInt8(1)...3 {
+            var settings = Data(repeating: 0, count: 32); settings[0] = version
+            XCTAssertEqual(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: settings), true)
+            settings[21] = 1
+            XCTAssertNil(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: settings))
+        }
+        var settings = BoundMultiplayerSetupOptions().settings; settings[0] = 4
+        XCTAssertEqual(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: settings), true)
+        settings[20] = 1; settings[21] = 1
+        XCTAssertNil(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: settings))
+    }
     func testConfigurationNeverRerollsAndPreservesSoloBattery() throws {
         let (store, identity, save) = try fixture()
         XCTAssertEqual(try store.manifest(gameID: identity.gameID)?.identity, identity)

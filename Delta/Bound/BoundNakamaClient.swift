@@ -479,6 +479,7 @@ actor BoundNakamaRunService {
         let created_at: String
         let updated_at: String
         let saves: [String: Upload]
+        var gameOver: GameOverState? = nil
         var id: UUID { save_id }
     }
     func configureSaves(session: AppCloudSession, room: String? = nil) async throws -> BoundNakamaAuthorization.SaveConfiguration {
@@ -538,6 +539,24 @@ actor BoundNakamaRunService {
     func deleteSave(_ id: UUID, expectedRevision: UInt64) async throws {
         _ = try await saveRequest("delete", fields: ["save_id": id.uuidString.lowercased(), "expectedRevision": expectedRevision, "confirmSharedDeletion": true])
     }
+    struct GameOverState: Codable, Equatable, Sendable {
+        let id: UUID
+        let returnRequested: Bool
+        let returned: [UUID]
+        let deleted: Bool
+    }
+    func gameOver(saveID: UUID, action: String, eventID: UUID? = nil) async throws -> GameOverState {
+        guard ["gameOver", "gameOverReturn", "gameOverMenu", "gameOverStatus"].contains(action),
+              action == "gameOverStatus" || eventID != nil else { throw Failure.conflict }
+        var fields: [String: Any] = ["save_id": saveID.uuidString.lowercased()]
+        if let eventID { fields["eventID"] = eventID.uuidString.lowercased() }
+        let state = try JSONDecoder().decode(GameOverState.self, from: await saveRequest(action, fields: fields))
+        guard Set(state.returned).count == state.returned.count, state.returned.count <= 2,
+              state.returnRequested || state.returned.isEmpty,
+              !state.deleted || state.returnRequested && state.returned.count == 2,
+              action == "gameOver" || eventID == nil || state.id == eventID else { throw Failure.conflict }
+        return state
+    }
     func downloadIndependent(identity: BoundMultiplayerRunIdentity, upload: Upload) async throws -> BoundMultiplayerSavePackage {
         guard upload.receipt.run == identity.run, upload.receipt.owner == identity.owner,
               upload.bytes > 0, upload.bytes <= 16 * 1024 * 1024,
@@ -583,6 +602,7 @@ actor BoundNakamaRunService {
         let profiles: [String: PlayerProfile]?
         let save_id: UUID?
         let updated_at: String?
+        var gameOver: GameOverState? = nil
 
         var serverCursor: BoundMultiplayerSharedCursor {
             .init(origins: Dictionary(uniqueKeysWithValues: cursors.compactMap { key, value in UUID(uuidString:key).map { ($0.uuidString,value) } }))

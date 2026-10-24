@@ -16,6 +16,7 @@ namespace BoundIndependent {
         chooserSeen: number; cursors: { [origin: string]: Cursor };
         saves: { [owner: string]: any }; deliveries: { [owner: string]: { [origin: string]: number } };
         legacyHistory?: { [owner: string]: { history: string; bits: string } };
+        gameOver?: { id: string; returnRequested: boolean; returned: string[] };
     }
     function fail(message: string): never { throw { message: message, code: 9 }; }
     function id(value: any): boolean { return typeof value === "string" && uuid.test(value); }
@@ -53,13 +54,14 @@ namespace BoundIndependent {
     }
     export function settingsValid(nk: nkruntime.Nakama, text: string): boolean {
         const b = new Uint8Array(nk.base64Decode(text));
-        if (b.length !== 32 || b[0] !== 4) return false;
+        if (b.length !== 32 || (b[0] !== 4 && b[0] !== 5)) return false;
         for (let i = 1; i <= 11; i++) if (b[i] > 1) return false;
         if (b[2] + b[3] + b[4] > 1 || b[6] && b[7] || b[20] > 1) return false;
         let end = false;
         for (let i = 12; i < 20; i++) { if (b[i] === 255) end = true; else if (end || b[i] > 246) return false; }
         if (!end || b[12] === 255) return false;
-        for (let i = 21; i < 32; i++) if (b[i]) return false;
+        if (b[0] === 5 && (b[21] > 1 || b[21] === 1 && b[20] !== 1)) return false;
+        for (let i = b[0] === 5 ? 22 : 21; i < 32; i++) if (b[i]) return false;
         return true;
     }
     function cursor(value?: Cursor): Cursor { return value || { contiguous: 0, sparse: [] }; }
@@ -141,6 +143,10 @@ namespace BoundIndependent {
                 else write(nk, key, value, version, bucket);
             };
             const events: any[] = [];
+            // Absorption fences in-flight saves and new history, while peers may
+            // still read the final state and acknowledge existing event delivery.
+            if (state.gameOver && request.action !== "get" && request.action !== "saveDownload" &&
+                !(request.action === "events" && Array.isArray(request.events) && request.events.length === 0)) fail("Run is over");
             if (state.save_id && ["setup", "migrate", "draft", "commit", "takeover", "cancelSetup"].indexOf(request.action) >= 0) fail("Server save configuration is immutable");
             if (request.action === "profile") {
                 if (!state.save_id || !BoundSaveLibrary.profile(request.profile)) fail("Invalid player profile");

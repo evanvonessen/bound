@@ -52,7 +52,63 @@ namespace BoundSaveLibrary {
         }
         return { save_id: state.save_id, game_id: state.game_id, roomID: state.roomID, participants: state.members,
             identity: identity, revision: state.revision, created_at: state.created_at, updated_at: state.updated_at,
-            profiles: state.profiles || {}, saves: state.saves };
+            profiles: state.profiles || {}, saves: state.saves, gameOver: gameOverView(state) };
+    }
+    function gameOverView(state: any): any {
+        return state.gameOver ? { id: state.gameOver.id, returnRequested: state.gameOver.returnRequested,
+            returned: state.gameOver.returned, deleted: state.deleted === true } : null;
+    }
+    function cleanup(nk: nkruntime.Nakama, runID: string): void {
+        nk.sqlExec("DELETE FROM storage WHERE user_id = $1::uuid AND collection IN ('bound_independent_v2','bound_events_v2') AND key LIKE $2", [system, runID + "/%"]);
+    }
+    function gameOver(nk: nkruntime.Nakama, request: any, owner: string): string {
+        if (!uuid.test(String(request.runID)) || request.eventID !== undefined && !uuid.test(String(request.eventID)) ||
+            request.action !== "gameOverStatus" && !uuid.test(String(request.eventID))) fail("Invalid game over identity");
+        for (let attempt = 0; attempt < 5; attempt++) {
+            const record = read(nk, request.runID);
+            const state = record && JSON.parse(JSON.stringify(record.value));
+            if (!state || state.save_id !== request.runID || !Array.isArray(state.members) || state.members.length !== 2 ||
+                state.members[0] === state.members[1] || state.members.indexOf(owner) < 0) fail("Save access denied");
+            if (state.gameOver && request.action !== "gameOver" && request.eventID !== undefined && request.eventID !== state.gameOver.id) fail("Game over changed");
+            if (state.deleted) {
+                if (!state.gameOver) fail("Save was deleted");
+                cleanup(nk, request.runID);
+                return JSON.stringify(gameOverView(state));
+            }
+            let changed = false;
+            if (request.action === "gameOver") {
+                if (!state.gameOver) {
+                    if (!state.committed || state.cancelled || !state.identity || !settingsPermitDeletion(nk, state.identity.settings)) fail("Game over deletion is disabled");
+                    state.gameOver = { id: request.eventID, returnRequested: false, returned: [] }; changed = true;
+                }
+            } else {
+                if (!state.gameOver) fail("Game over is unavailable");
+                if (request.action === "gameOverReturn" && !state.gameOver.returnRequested) { state.gameOver.returnRequested = true; changed = true; }
+                if (request.action === "gameOverMenu") {
+                    if (!state.gameOver.returnRequested) fail("Return to menu has not been requested");
+                    if (state.gameOver.returned.indexOf(owner) < 0) {
+                        state.gameOver.returned.push(owner); state.gameOver.returned.sort(); changed = true;
+                    }
+                }
+            }
+            if (!changed) return JSON.stringify(gameOverView(state));
+            state.revision++;
+            const complete = state.members.every(function (member: string) { return state.gameOver.returned.indexOf(member) >= 0; });
+            // Both independently authenticated menu acknowledgements must win
+            // the parent CAS before either player's saved data can be deleted.
+            const next = complete ? { version: 2, save_id: state.save_id, members: state.members,
+                deleted: true, revision: state.revision, gameOver: state.gameOver } : state;
+            try { nk.storageWrite([write(request.runID, next, record!.version)]); }
+            catch (_) { if (attempt === 4) fail("Game over changed; retry"); continue; }
+            if (complete) cleanup(nk, request.runID);
+            return JSON.stringify(gameOverView(next));
+        }
+        fail("Game over changed; retry");
+    }
+    function settingsPermitDeletion(nk: nkruntime.Nakama, settings: string): boolean {
+        if (!BoundIndependent.settingsValid(nk, settings)) return false;
+        const b = new Uint8Array(nk.base64Decode(settings));
+        return b[0] < 5 || b[21] === 0;
     }
     export function admission(ctx: nkruntime.Context, nk: nkruntime.Nakama, request: any): BoundRooms.Ticket {
         const authorization = BoundRooms.authorizeSave(ctx, nk, request.saveTicket);
@@ -64,8 +120,9 @@ namespace BoundSaveLibrary {
             roomID: state.roomID, members: state.members, issuedAt: authorization.issuedAt, expiresAt: authorization.expiresAt };
     }
     export function library(ctx: nkruntime.Context, nk: nkruntime.Nakama, request: any): string | null {
-        if (["list", "create", "delete"].indexOf(request.action) < 0) return null;
+        if (["list", "create", "delete", "gameOver", "gameOverReturn", "gameOverMenu", "gameOverStatus"].indexOf(request.action) < 0) return null;
         const ticket = BoundRooms.authorizeSave(ctx, nk, request.saveTicket), owner = ticket.ownerID;
+        if (request.action.indexOf("gameOver") === 0) return gameOver(nk, request, owner);
         if (request.action === "list") {
             if (typeof request.gameID !== "string" || !request.gameID.length || request.gameID.length > 256 ||
                 (request.cursor != null && !uuid.test(String(request.cursor)))) fail("Invalid save listing");
@@ -137,6 +194,7 @@ namespace BoundSaveLibrary {
             const record = read(nk, request.runID), state = record && record.value;
             if (!state || !state.save_id || state.members.indexOf(owner) < 0) fail("Save access denied");
             if (!state.deleted) {
+                if (state.gameOver) fail("Both players must return to the menu before deletion");
                 if (request.expectedRevision !== state.revision) fail("Save changed; refresh before deleting");
                 // Retain only an access/replay tombstone; no gameplay snapshots,
                 // identity, profile, or event data survives confirmed deletion.
@@ -147,7 +205,7 @@ namespace BoundSaveLibrary {
             // Child writes atomically CAS the parent (guardedWrite), so nothing
             // can recreate data after the tombstone wins. A deletion retry also
             // completes cleanup if a previous connection ended after the CAS.
-            nk.sqlExec("DELETE FROM storage WHERE user_id = $1::uuid AND collection IN ('bound_independent_v2','bound_events_v2') AND key LIKE $2", [system, request.runID + "/%"]);
+            cleanup(nk, request.runID);
             return JSON.stringify({ save_id: request.runID, deleted: true });
         }
         fail("Save changed; retry");
@@ -155,7 +213,7 @@ namespace BoundSaveLibrary {
     export function guardedWrite(nk: nkruntime.Nakama, runID: string, key: string, value: any, version: string, bucket: string): void {
         for (let attempt = 0; attempt < 5; attempt++) {
             const record = read(nk, runID);
-            if (!record || record.value.deleted) fail("Save was deleted");
+            if (!record || record.value.deleted || record.value.gameOver) fail("Run is over");
             try {
                 nk.storageWrite([write(runID, record.value, record.version), write(key, value, version, bucket)]);
                 return;

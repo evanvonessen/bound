@@ -10,6 +10,19 @@ Process loss, explicit disconnection and native integrity errors retain recovery
 
 The October 24 live-reconnection changes do not claim physical-device or separate-network acceptance. The retained checkpoint-recovery requirements above remain applicable after process loss; ordinary packet loss does not require rewinding to a compatible saved command cut.
 
+Opening Menu, backgrounding and deliberate exit now capture an exact paused
+continuation, including encounter/party agreement, command queues, EXP barriers,
+cartridge state, battery and bridge metadata. It restores only into the same
+owner, run, ROM and accepted server checkpoint lineage. Reconnection performs a
+fresh nonce handshake before frames advance. A durable claim prevents replay;
+unsettled consumed records remain recovery fences until a matching completed
+world checkpoint is confirmed. Unexpected loss without an available paused
+continuation still follows the checkpoint-recovery rules above.
+
+The default bundled cartridge does not enable the co-op ABI. Co-op continuation
+has model/contract coverage; a full paired runtime check needs the separate
+co-op cartridge and app build. Physical-device acceptance remains pending.
+
 ## Build
 
 Build the cartridge using `python3 tools/build_doubles_game.py` from the game worktree. Import its export here with `python3 PrototypeTools/build-shared-world.py --from-game /Users/evandev/dev/doubles/build/doubles-contract`, and update `PrototypeTools/bundled-rom.json` to the exact generated ROM SHA-256. Supply the cartridge as `BOUND_DEVELOPMENT_ROM` for the normal `Bound.xcodeproj` / `Bound` build. This variant uses a local development ROM pin to avoid replacing the permanent main download.

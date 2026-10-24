@@ -26,6 +26,7 @@ final class BoundBattleWire: @unchecked Sendable {
     private var acknowledgementPending = false
     private var lastAcknowledgedAt: TimeInterval = 0
     private var active = true
+    private var continuationFrozen = false
     private var sender: (@Sendable (Data) -> Bool)?
     private var senderGeneration=UUID()
     private let receiveBytes: @Sendable (Data) -> Void
@@ -40,6 +41,40 @@ final class BoundBattleWire: @unchecked Sendable {
         tick()
     }
     func suspend() { lock.lock(); sender=nil; senderGeneration=UUID(); lastRetry=nil; lock.unlock() }
+    private struct Continuation: Codable {
+        let version:Int, id:UUID, outgoing:UInt64, expected:UInt64
+        let pending:[UInt64:Data], unacknowledged:[UInt64:Data]
+    }
+    /// Stop delivery as well as sends before capturing the probe and cartridge.
+    /// Late SDK callbacks remain unacknowledged and are retried by the peer.
+    func freezeForContinuation() throws -> Data {
+        lock.lock(); defer { lock.unlock() }
+        guard active else { throw CocoaError(.fileWriteUnknown) }
+        continuationFrozen=true;sender=nil;senderGeneration=UUID();lastRetry=nil
+        return try JSONEncoder().encode(Continuation(version:1,id:id,outgoing:outgoing,expected:expected,
+            pending:pending,unacknowledged:unacknowledged.mapValues { Data($0.dropFirst(38)) }))
+    }
+    func restoreContinuation(_ data:Data)->Bool {
+        guard data.count<=400_000,let value=try? JSONDecoder().decode(Continuation.self,from:data),
+              value.version==1,value.id==id,value.expected>0,value.expected<UInt64.max,value.outgoing<UInt64.max,
+              value.pending.count<=64,value.unacknowledged.count<=64,
+              value.pending.allSatisfy({ $0.key>=value.expected && $0.key-value.expected<64 && !$0.value.isEmpty && $0.value.count<=4096 }),
+              value.unacknowledged.allSatisfy({ $0.key>0 && $0.key<=value.outgoing && !$0.value.isEmpty && $0.value.count<=4096 }),
+              value.pending.values.reduce(0,{ $0+$1.count })<=131072,
+              value.unacknowledged.values.reduce(0,{ $0+$1.count })<=131072 else { return false }
+        lock.lock();defer { lock.unlock() }
+        guard outgoing==0,expected==1,pending.isEmpty,unacknowledged.isEmpty else { return false }
+        outgoing=value.outgoing;expected=value.expected;pending=value.pending
+        pendingBytes=pending.values.reduce(0,{ $0+$1.count })
+        unacknowledged=[:]
+        for (sequence,bytes) in value.unacknowledged { unacknowledged[sequence]=packet(sequence:sequence,bytes:bytes) }
+        unacknowledgedBytes=value.unacknowledged.values.reduce(0,{ $0+$1.count })
+        continuationFrozen=true;acknowledgementPending=true;active=true;sender=nil
+        lastReceived=ProcessInfo.processInfo.systemUptime
+        return true
+    }
+    /// The durable continuation must be claimed before allowing any new ACK.
+    func thawContinuation() { lock.lock();continuationFrozen=false;lock.unlock() }
     private func packet(sequence: UInt64, bytes: Data) -> Data {
         var data=Self.prefix
         var uuid=id.uuid; withUnsafeBytes(of:&uuid) { data.append(contentsOf:$0) }
@@ -59,7 +94,7 @@ final class BoundBattleWire: @unchecked Sendable {
     func send(_ bytes: Data) -> Bool {
         guard !bytes.isEmpty, bytes.count <= 4096 else { return false }
         lock.lock()
-        guard active else { lock.unlock(); return false }
+        guard active,!continuationFrozen else { lock.unlock(); return false }
         guard unacknowledged.count<64, unacknowledgedBytes+bytes.count<=131072, outgoing<UInt64.max else {
             active=false; lock.unlock(); failed(); return false
         }
@@ -75,7 +110,7 @@ final class BoundBattleWire: @unchecked Sendable {
     }
     func tick(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         lock.lock()
-        guard active, let sender else { lock.unlock(); return }
+        guard active,!continuationFrozen, let sender else { lock.unlock(); return }
         let generation=senderGeneration
         var replay:[Data]=[]
         if lastRetry.map({ now-$0>=0.25 }) ?? true {
@@ -106,7 +141,7 @@ final class BoundBattleWire: @unchecked Sendable {
         guard count<=4096,data.count==38+count,(count==0)==(sequence==0) else { return }
         let bytes=data.subdata(in:38..<data.count)
         lock.lock()
-        guard active, acknowledgement<=outgoing else { lock.unlock(); return }
+        guard active,!continuationFrozen, acknowledgement<=outgoing else { lock.unlock(); return }
         lastReceived=ProcessInfo.processInfo.systemUptime
         for key in unacknowledged.keys.filter({ $0<=acknowledgement }) {
             if let packet=unacknowledged.removeValue(forKey:key) { unacknowledgedBytes-=packet.count-38 }

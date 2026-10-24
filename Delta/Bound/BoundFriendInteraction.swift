@@ -120,6 +120,14 @@ final class BoundFriendInteractionSession {
     var waitingForConnection: Bool { !connected || needsFreshAnchor }
     var blocksGameplay: Bool { phase != .idle && phase != .playing && phase != .ended }
     var cancelActivity: (() -> Void)?
+    /// Reattach a locally persisted, already consented native activity. The
+    /// transport still has to authenticate the same room and complete its fresh handshake.
+    func restoreActivity(_ activity:Packet.Activity,id:UUID,initiator:Bool) {
+        self.activity=activity;requestID=id;self.initiator=initiator
+        phase = .connecting;message="Waiting for your friend…";requiresResultAcknowledgement=false
+        agreementAcknowledged=true;agreementScheduled=false;agreementGeneration=UUID()
+        needsFreshAnchor=true;lastTransmission=nil;notify()
+    }
     func activityProgress(_ message: String, playing: Bool) {
         guard activity != nil else { return }
         phase = playing ? .playing : .connecting; self.message = message; notify()

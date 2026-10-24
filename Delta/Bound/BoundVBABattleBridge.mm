@@ -92,7 +92,7 @@ bool installServerSaveFence() {
 constexpr size_t RegionOffset=0x1FFF800,RegionSize=0x800;
 constexpr uint32_t ScriptAddress=0x09FFFC00,MailboxMagic=0x314D4642;
 constexpr size_t Mailbox=0x4030;
-struct Hook { size_t offset; uint32_t target; uint8_t original[8],thunk[8]; };
+struct Hook { size_t offset; uint32_t target; uint8_t original[8],thunk[8]; bool preservesArguments; };
 Hook hooks[]={
     {0x81668,BoundBattleReturnAddress},
     {0x15B58,BoundBattleReturnAddress}, // Native ReturnFromBattleToOverworld, after result/text.
@@ -108,13 +108,14 @@ Hook hooks[]={
     {0x56854,BoundBattleTradeReturnAddress},
     // Original RR and the integrated ROM share this native cleanup tail. The
     // latter's co-op wrapper is saved/restored with the other temporary hooks.
-    {0x1090958,BoundBattlePreserveLinkFlagsAddress}
+    {0x1090958,BoundBattlePreserveLinkFlagsAddress},
+    {0x10A9F10,BoundBattleChoiceAddress,{},{},true} // Explicit local action selection, before waiting for the peer's move.
 };
 uint8_t *verifiedROM=nullptr,*patchedROM=nullptr;
 bool armed=false,installed=false,failed=false,syntheticHeld=false,cooperativeCable=false;
 unsigned role=0,preparationFrames=0,tradeCount=0;
 bool tradeMode=false,tradeOpened=false,tradeScene=false;
-bool usesHook(size_t index) { return cooperativeCable ? index>=2&&index<9 : tradeMode ? index>=2&&index<11 : index<9||index==11; }
+bool usesHook(size_t index) { return cooperativeCable ? index>=2&&index<9 : tradeMode ? index>=2&&index<11 : index<9||index>=11; }
 uint16_t networkRead=0;
 uint32_t word(const uint8_t *p) { return p[0]|uint32_t(p[1])<<8|uint32_t(p[2])<<16|uint32_t(p[3])<<24; }
 unsigned half(const uint8_t *p) { return p[0]|unsigned(p[1])<<8; }
@@ -138,6 +139,78 @@ NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
 namespace {
 uint8_t *romUIOwner=nullptr,*cooperativeROM=nullptr;
 bool ownsROMUI() { return romUIOwner==rom && gameDescriptorPresent(rom); }
+bool nativeProfileVerified() {
+    const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
+        0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
+    uint8_t digest[CC_SHA256_DIGEST_LENGTH];
+    return soulOriginalHash(digest)&&memcmp(digest,expected,32)==0;
+}
+NSData *nativeCodeIdentity() {
+    uint8_t digest[CC_SHA256_DIGEST_LENGTH];CC_SHA256(BoundBattleEntryCode,sizeof(BoundBattleEntryCode),digest);
+    return [NSData dataWithBytes:digest length:sizeof(digest)];
+}
+bool soulDenies(const uint8_t *mon) {
+    if(!soulHooked()||word(rom+SoulPolicy)!=0x314C5342) return false;
+    unsigned count=word(rom+SoulPolicy+4);
+    if(count>2048) return true;
+    for(unsigned i=0;i<count;i++) if(memcmp(mon,rom+SoulPolicy+8+i*8,8)==0) return true;
+    return false;
+}
+// The temporary battle party contains only eligible non-eggs. Dead Soul Link
+// slots remain in the prebattle snapshot and are never healed or exchanged.
+bool prepareFriendlyParty() {
+    uint8_t party[600]={};unsigned count=0;
+    for(unsigned i=0;i<workRAM[0x24029]&&i<6;i++) {
+        const auto *mon=workRAM+0x24284+i*100;
+        if((mon[19]&4)||(mon[75]&0x40)||half(mon+88)==0||soulDenies(mon)) continue;
+        memcpy(party+count++*100,mon,100);
+    }
+    if(!count) return false;
+    memcpy(workRAM+0x24284,party,sizeof(party));workRAM[0x24029]=uint8_t(count);
+    return true;
+}
+// Recreating this fixed ROM code does not execute the entry script. A resumed
+// native core keeps its existing PC, script context, mailbox and party in RAM.
+bool writeNativeROM() {
+    uint8_t script[128];size_t n=0;
+    auto byte=[&](uint8_t v) { script[n++]=v; };
+    auto half=[&](uint16_t v) { byte(v);byte(v>>8); };
+    auto ptr=[&](uint32_t v) { for(int i=0;i<4;i++) byte(v>>(8*i)); };
+    auto setvar=[&](uint16_t var,uint16_t value) { byte(0x16);half(var);half(value); };
+    auto special=[&](uint16_t id) { byte(0x25);half(id); };
+    setvar(0x8004,tradeMode?3:1);setvar(0x8005,uint16_t(role));setvar(0x800D,0);
+    if(tradeMode) {
+        special(35);byte(0x27);
+        byte(0x21);half(0x800D);half(1);
+        byte(0x06);byte(1);size_t savedPointer=n;ptr(0);
+        byte(0x23);ptr(BoundBattleReturnAddress);byte(0x27);byte(0x02);
+        put32(script+savedPointer,ScriptAddress+uint32_t(n));
+    } else {
+        // Heal the eligible temporary copy before any peer can receive it.
+        special(0);
+    }
+    special(tradeMode?29:28);byte(0x27);
+    byte(0x21);half(0x800D);half(1);
+    byte(0x06);byte(1);size_t successPointer=n;ptr(0);
+    byte(0x23);ptr(BoundBattleReturnAddress);byte(0x27);byte(0x02);
+    put32(script+successPointer,ScriptAddress+uint32_t(n));
+    if(tradeMode) { special(34);byte(0x27);byte(0x02); }
+    else {
+        special(39);special(331); // Native SavePlayerParty and LoadPlayerBag.
+        byte(0x23);ptr(BoundBattleStartAddress);byte(0x27);byte(0x02);
+    }
+    if(n>sizeof(script)) return false;
+    memcpy(rom+RegionOffset,BoundBattleEntryCode,sizeof(BoundBattleEntryCode));rom[0x1FFFBF0]=uint8_t(role);
+    if(!cooperativeCable) memcpy(rom+ScriptAddress-0x08000000,script,n);
+    for(size_t index=0;index<sizeof(hooks)/sizeof(hooks[0]);index++) {
+        if(!usesHook(index)) continue;
+        auto &hook=hooks[index];memcpy(hook.original,rom+hook.offset,8);
+        hook.thunk[0]=0;hook.thunk[1]=hook.preservesArguments?0x4B:0x48;
+        hook.thunk[2]=hook.preservesArguments?0x18:0;hook.thunk[3]=0x47;
+        put32(hook.thunk+4,hook.target);memcpy(rom+hook.offset,hook.thunk,8);
+    }
+    patchedROM=rom;return true;
+}
 }
 #if DEBUG && TARGET_OS_SIMULATOR
 #include "SoulLink/BoundSoulQACode.h"
@@ -483,44 +556,8 @@ static uint8_t soulQAScriptBackup[128];
 }
 + (BOOL)installBattleForPlayer:(NSUInteger)player {
     if(!armed||installed||verifiedROM!=rom||!overworld()||player!=role) { failed=true; return NO; }
-    memcpy(rom+RegionOffset,BoundBattleEntryCode,sizeof(BoundBattleEntryCode));
-    rom[0x1FFFBF0]=uint8_t(role);
-    for(size_t index=0;index<sizeof(hooks)/sizeof(hooks[0]);index++) {
-        if(!usesHook(index)) continue;
-        auto &hook=hooks[index];
-        memcpy(hook.original,rom+hook.offset,8);
-        hook.thunk[0]=0; hook.thunk[1]=0x48; hook.thunk[2]=0; hook.thunk[3]=0x47;
-        put32(hook.thunk+4,hook.target); memcpy(rom+hook.offset,hook.thunk,8);
-    }
-    patchedROM=rom;
-    uint8_t script[128]; size_t n = 0;
-    auto byte = [&](uint8_t v) { script[n++] = v; };
-    auto half = [&](uint16_t v) { byte(v); byte(v >> 8); };
-    auto ptr = [&](uint32_t v) { for (int i=0;i<4;i++) byte(v >> (8*i)); };
-    auto setvar = [&](uint16_t var, uint16_t value) { byte(0x16); half(var); half(value); };
-    auto special = [&](uint16_t id) { byte(0x25); half(id); };
-    setvar(0x8004,tradeMode?3:1); setvar(0x8005,static_cast<uint16_t>(player)); setvar(0x800D,0);
-    // Native trade/save confirmation precedes the exchange. We never synthesize
-    // A on a save prompt or trade menu; player consent uses normal controls.
-    if(tradeMode) {
-        special(35); byte(0x27);
-        byte(0x21); half(0x800D); half(1);
-        byte(0x06); byte(1); size_t savedPointer=n; ptr(0);
-        byte(0x23); ptr(BoundBattleReturnAddress); byte(0x27); byte(0x02);
-        put32(script+savedPointer,ScriptAddress+static_cast<uint32_t>(n));
-    }
-    special(tradeMode?29:28); byte(0x27); // Exact-profile native linkup.
-    byte(0x21); half(0x800D); half(1);
-    byte(0x06); byte(1); size_t successPointer=n; ptr(0); // equal -> native setup
-    byte(0x23); ptr(BoundBattleReturnAddress); byte(0x27); byte(0x02);
-    put32(script+successPointer, ScriptAddress+static_cast<uint32_t>(n));
-    if(tradeMode) { special(34); byte(0x27); byte(0x02); }
-    else {
-        special(0); special(39); special(331); // Heal, SavePlayerParty, LoadPlayerBag.
-        byte(0x23); ptr(BoundBattleStartAddress); byte(0x27); byte(0x02);
-    }
-    if(n>sizeof(script)) { failed=true; return NO; }
-    memcpy(rom + (ScriptAddress - 0x08000000), script, n);
+    if(!tradeMode&&!prepareFriendlyParty()) { failed=true; return NO; }
+    if(!writeNativeROM()) { failed=true; return NO; }
     // Exact bindings verified against the profile's ScriptContext_SetupScript.
     memset(internalRAM + 0xEB0,0,0x74);
     internalRAM[0xEB1] = 1;
@@ -528,9 +565,63 @@ static uint8_t soulQAScriptBackup[128];
     put32(internalRAM + 0xF0C,0x0815F9B4); put32(internalRAM + 0xF10,0x0815FD08);
     internalRAM[0xEA8]=0; internalRAM[0xF9C]=1;
     internalRAM[0xF9D]=0; internalRAM[0xF9E]=0; internalRAM[0xFA0]=0;
-    memset(internalRAM+Mailbox,0,1176); networkRead=0;
+    memset(internalRAM+Mailbox,0,1176); networkRead=0;internalRAM[0x402F]=0;
     put32(internalRAM+Mailbox,MailboxMagic);
     preparationFrames=0; installed=true; return YES;
+}
++ (NSData *)captureNativeSession { return [self captureSessionForCooperative:NO]; }
++ (NSData *)captureCooperativeSession { return [self captureSessionForCooperative:YES]; }
++ (NSData *)captureSessionForCooperative:(BOOL)cooperative {
+    if(!armed||failed||cooperativeCable!=bool(cooperative)||!rom||!workRAM||!internalRAM
+       ||(cooperative ? cooperativeROM!=rom||!installed : verifiedROM!=rom)) return [NSData data];
+    if(installed) {
+        if(!mailboxReady()||patchedROM!=rom||memcmp(rom+RegionOffset,BoundBattleEntryCode,sizeof(BoundBattleEntryCode))) return [NSData data];
+        for(size_t i=0;i<sizeof(hooks)/sizeof(hooks[0]);i++)
+            if(usesHook(i)&&memcmp(rom+hooks[i].offset,hooks[i].thunk,8)) return [NSData data];
+    }
+    NSDictionary *value=@{@"version":@1,@"scriptVersion":@2,@"code":[nativeCodeIdentity() base64EncodedStringWithOptions:0],
+        @"armed":@(armed),@"installed":@(installed),@"cooperative":@(cooperativeCable),@"role":@(role),@"tradeMode":@(tradeMode),
+        @"tradeOpened":@(tradeOpened),@"tradeScene":@(tradeScene),@"tradeCount":@(tradeCount),
+        @"networkRead":@(networkRead),@"preparationFrames":@(preparationFrames)};
+    return [NSJSONSerialization dataWithJSONObject:value options:NSJSONWritingSortedKeys error:nil] ?: [NSData data];
+}
++ (BOOL)restoreNativeSession:(NSData *)data { return [self restoreSession:data cooperative:NO]; }
++ (BOOL)restoreCooperativeSession:(NSData *)data { return [self restoreSession:data cooperative:YES]; }
++ (BOOL)restoreSession:(NSData *)data cooperative:(BOOL)cooperative {
+    if(armed||installed||cooperativeCable||!rom||!workRAM||!internalRAM||data.length==0||data.length>4096) return NO;
+    id raw=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if(![raw isKindOfClass:NSDictionary.class]) return NO;
+    NSDictionary *value=raw;
+    for(NSString *key in @[@"version",@"scriptVersion",@"armed",@"installed",@"cooperative",@"role",@"tradeMode",@"tradeOpened",@"tradeScene",@"tradeCount",@"networkRead",@"preparationFrames"])
+        if(![value[key] isKindOfClass:NSNumber.class]||[value[key] doubleValue]!=[value[key] unsignedLongLongValue]) return NO;
+    for(NSString *key in @[@"armed",@"installed",@"cooperative",@"tradeMode",@"tradeOpened",@"tradeScene"])
+        if([value[key] unsignedLongLongValue]>1) return NO;
+    if([value[@"version"] unsignedLongLongValue]!=1||[value[@"scriptVersion"] unsignedLongLongValue]!=2||![value[@"armed"] boolValue]
+       ||[value[@"cooperative"] boolValue]!=cooperative
+       ||[value[@"role"] unsignedLongLongValue]>1||[value[@"networkRead"] unsignedLongLongValue]>UINT16_MAX
+       ||[value[@"preparationFrames"] unsignedLongLongValue]>UINT32_MAX||[value[@"tradeCount"] unsignedLongLongValue]>UINT32_MAX
+       ||![value[@"code"] isKindOfClass:NSString.class]||![value[@"code"] isEqualToString:[nativeCodeIdentity() base64EncodedStringWithOptions:0]]) return NO;
+    const bool resumedInstalled=[value[@"installed"] boolValue],resumedTrade=[value[@"tradeMode"] boolValue];
+    if(cooperative&&(!resumedInstalled||resumedTrade)) return NO;
+    if(!resumedTrade&&([value[@"tradeOpened"] boolValue]||[value[@"tradeScene"] boolValue]||[value[@"tradeCount"] unsignedIntValue])) return NO;
+    if(resumedInstalled) {
+        if(word(internalRAM+Mailbox)!=MailboxMagic||half(internalRAM+Mailbox+12)
+           ||uint16_t(half(internalRAM+Mailbox+6)-half(internalRAM+Mailbox+4))>32
+           ||uint16_t(half(internalRAM+Mailbox+10)-half(internalRAM+Mailbox+8))>32
+           ||uint16_t([value[@"networkRead"] unsignedIntValue]-half(internalRAM+Mailbox+4))>
+             uint16_t(half(internalRAM+Mailbox+6)-half(internalRAM+Mailbox+4))) return NO;
+    } else if(!overworld()) return NO;
+    if(!nativeProfileVerified()) return NO;
+    for(size_t i=0;i<RegionSize;i++) if(rom[RegionOffset+i]!=0xFF) return NO;
+    if(cooperative&&![self installCooperativeDoubles]) return NO;
+    role=[value[@"role"] unsignedIntValue];tradeMode=resumedTrade;cooperativeCable=cooperative;
+    if(resumedInstalled&&!writeNativeROM()) return NO;
+    verifiedROM=rom;armed=true;installed=resumedInstalled;failed=false;syntheticHeld=false;
+    tradeOpened=[value[@"tradeOpened"] boolValue];tradeScene=[value[@"tradeScene"] boolValue];
+    tradeCount=[value[@"tradeCount"] unsignedIntValue];networkRead=[value[@"networkRead"] unsignedIntValue];
+    preparationFrames=[value[@"preparationFrames"] unsignedIntValue];
+    [[GBAEmulatorBridge sharedBridge] deactivateInput:1 playerIndex:0];
+    return YES;
 }
 + (NSData *)takeOutgoingCommands {
     if(!mailboxReady()) return [NSData data];
@@ -611,6 +702,7 @@ static uint8_t soulQAScriptBackup[128];
         @"scriptStatus":@(internalRAM[0xEA8]),@"scriptResult":@(half(workRAM+0x370D0)),
         @"playerHP":partyHP(0x24284,workRAM[0x24029]),@"enemyHP":partyHP(0x2402C,6),
         @"pendingCommands":@(mailboxReady()?uint16_t(half(internalRAM+Mailbox+6)-half(internalRAM+Mailbox+4)):0),
+        @"runRequested":@(installed&&!tradeMode&&!cooperativeCable&&internalRAM[0x402F]==3),
         @"tradeOpened":@(tradeOpened),@"tradeCount":@(tradeCount)};
 }
 + (void)close {
@@ -851,6 +943,27 @@ static uint8_t soulQAScriptBackup[128];
     put32(mon+4,0xB00D0000u|uint32_t(marker));
     memset(mon+8,0xFF,10); mon[8]=uint8_t(marker);
     return YES;
+}
++ (BOOL)qaConfigureBattleParty:(NSUInteger)mode {
+    if(!ownsROMUI()||!overworld()||workRAM[0x24029]!=1||mode<1||mode>2) return NO;
+    auto *mon=workRAM+0x24284;
+    if(mode==2) {
+        memcpy(mon+100,mon,100);workRAM[0x24029]=2;
+        put32(mon+100,word(mon)^0x10203040);mon[169]=uint8_t(mon[69]+1);
+        put16(mon+186,1); // A distinct living encounter, damaged but eligible.
+    }
+    put16(mon+86,0);return YES;
+}
++ (NSDictionary<NSString *,id> *)qaBattleMenu {
+    if(!workRAM||!internalRAM||!rom) return @{};
+    for(unsigned i=0;i<4;i++) {
+        const auto callback=word(internalRAM+0x4FE0+i*4);
+        if(callback==0x0802E439||callback==0x090A9EA1) {
+            return @{@"battler":@(i),@"cursor":@(workRAM[0x23FF8+i]),
+                @"playerHP":partyHP(0x24284,workRAM[0x24029]),@"enemyHP":partyHP(0x2402C,6)};
+        }
+    }
+    return @{};
 }
 + (NSDictionary<NSString *, id> *)qaTradeMenu {
     if(!workRAM||!internalRAM||!rom) return @{};

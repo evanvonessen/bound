@@ -23,6 +23,9 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)closeCooperativeCable;
 + (BOOL)resumeCooperativeCableForPlayer:(NSUInteger)player;
 + (NSData *)cooperativeCableSnapshot;
+/// Exact paused cable continuation. Restore after the matching core state and cooperative host block.
++ (NSData *)captureCooperativeSession;
++ (BOOL)restoreCooperativeSession:(NSData *)data;
 + (BOOL)installROMMultiplayer;
 + (NSData *)romMultiplayerSnapshot;
 + (void)setROMMultiplayerHost:(NSData *)data;
@@ -41,6 +44,9 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)prepareBattleForPlayer:(NSUInteger)player;
 + (BOOL)prepareTradeForPlayer:(NSUInteger)player;
 + (BOOL)installBattleForPlayer:(NSUInteger)player;
+/// Paused core only. Restore after its matching native state, without re-entering the battle or trade.
++ (NSData *)captureNativeSession;
++ (BOOL)restoreNativeSession:(NSData *)data;
 + (NSData *)takeOutgoingCommands;
 + (NSUInteger)connectionGeneration;
 + (void)requestPeerDisconnect;
@@ -60,6 +66,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)closeSoulLink;
 #if DEBUG && TARGET_OS_SIMULATOR
 + (BOOL)qaStartNativePartyFixture;
++ (BOOL)qaConfigureBattleParty:(NSUInteger)mode;
++ (NSDictionary<NSString *,id> *)qaBattleMenu;
 + (BOOL)qaCooperativeGameSaveBlocked:(NSURL *)url;
 + (NSData *)qaSharedWorldImmutableDigest;
 + (BOOL)qaStartSharedWorldWait;

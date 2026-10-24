@@ -4,9 +4,10 @@ Walk to the cardinal tile beside a connected friend, face their tile and press
 A. Choose Battle in the native game menu; the friend answers its YES/NO dialogue. Bound prepares a private recovery
 snapshot, transports the game's two-player link commands over the authenticated
 Nakama gameplay connection, and starts the cartridge's native single battle with each current party.
-The ordinary game controls select moves and Pokémon. Opening the app menu,
-or deliberately leaving sharing ends the friendly battle and restores
-the local pre-battle world. A temporary network interruption keeps the same
+The ordinary game controls select moves and Pokémon. Opening the app menu or
+backgrounding preserves an exact paused continuation. Run or deliberate
+cancellation ends the friendly battle and restores the local pre-battle world.
+A temporary network interruption keeps the same
 battle on screen, pauses native emulation and reconnects in the background.
 Quick saves and fast-forward are suppressed during
 battle; quick load ends the battle before loading the selected state.
@@ -24,7 +25,8 @@ run transfers cannot replace each other's temporary state.
 This entry supports only the SHA-256-verified Radical Red 4.1 profile already
 used by live presence. The player must be in an unlocked normal overworld scene
 with a party of 1–6. The native game performs party/link checks. Bound does not
-manufacture a win/loss or rewrite party data to simulate a battle. Trade now uses its own persistent native flow; see
+manufacture a win/loss. Its temporary eligible party uses native healing, while
+the original party remains in the recovery snapshot. Trade uses its own persistent native flow; see
 [native friend trades](BOUND-NATIVE-FRIEND-TRADES.md).
 
 ## Native entry
@@ -32,9 +34,9 @@ manufacture a win/loss or rewrite party data to simulate a battle. Trade now use
 `BoundVBABattleBridge` is called only with the core paused or on its completed
 frame owner. It verifies the entire loaded 32 MiB ROM and an unused 2 KiB tail.
 It installs Bound's small, original ARM7TDMI Thumb entry there and temporarily
-branches ten native entry points: battle-to-overworld and cable-room return,
+branches eleven native entry points: battle-to-overworld and cable-room return,
 physical link exchange, serial VSync, multiplayer ID, send/receive queue counts,
-serial enable/disable and Radical Red's cleanup flag check. No on-disk ROM patch is applied. `NativeBattle/battle-entry.c` calls the existing native task,
+serial enable/disable, Radical Red's cleanup flag check and explicit Run selection. No on-disk ROM patch is applied. `NativeBattle/battle-entry.c` calls the existing native task,
 including Radical Red's own battle-start hook. The generated header is checked
 with `PrototypeTools/build-battle-entry.py --check` using devkitARM.
 
@@ -72,7 +74,7 @@ patch is required.
 
 The current Nakama gameplay route carries native commands independently of
 Agora friend video. The legacy Agora channel remains supported without changing
-its pinned SDK. `BFB1` prepared/connected/finished/abort and resume controls use
+its pinned SDK. `BFB1` prepared/connected/finished/ranAway/abort and resume controls use
 the authenticated expected-peer interaction route separately from movement.
 
 `BFS2` frames bind the activity UUID, monotonic sequence, cumulative receipt
@@ -103,10 +105,20 @@ controls do not start another battle. Foreground resume cannot advance a waiting
 cartridge before its authenticated peer is ready. Explicit cancellation is
 remembered and repeated if its first notification was lost.
 
-This continuation requires the resident process and cartridge. App termination,
-changing games/accounts/rooms, disabling Experimental Multiplayer or explicitly
-ending the session still uses the existing recovery path. A process restart
-cannot reconstruct arbitrary unsaved live link state from a socket reconnect.
+Opening Menu, backgrounding and deliberate app exit now write an exact paused
+continuation: native state, battery, bridge hooks, command queues and counters,
+consent, and the original world rollback journal. It is scoped to the account,
+room, run, game and exact ROM. Reopening that run restores it while paused and
+requires a fresh peer handshake. A durable single-consumer claim is written
+before packets or frames advance, preventing an old trade execution from being
+replayed. A failed write keeps the activity paused and blocks destructive exit.
+An unexpected foreground crash without a completed pause checkpoint still uses
+the existing recovery journal. Account/room changes and explicit cancellation
+remain deliberate session boundaries.
+Automatic cold continuation is supported by the current server-run launcher.
+Legacy local-ROM activities retain Menu/background execution, but destructive
+exit is blocked and process-loss recovery is fenced until their local startup
+path can authorize an exact continuation; it must not silently restore old RAM.
 Physical-phone and separate-network validation remains pending; the dated
 runtime results below distinguish the current native harness from earlier
 full-app acceptance.
@@ -123,9 +135,16 @@ restores the exact original ROM bytes, including the integrated co-op wrapper.
 reproduces that routing failure and checks the repair against the original and
 current integrated ROM hashes. It verifies actual native win/loss/draw payloads,
 non-link behavior, and native epilogue register/stack restoration. The generated
-entry occupies 964 bytes of its 1008-byte allocation.
+entry remains inside its reserved allocation.
 
 ## Friendly state and interruption
+
+Eligible non-egg Pokémon are healed before native link setup sends either party.
+Permanently denied Soul Link Pokémon remain excluded; the original party is
+restored after the friendly battle. Native Run dispatch is observed before the
+peer's action is required, so Run explicitly cancels the friendly battle and
+repeats the terminal notification if necessary. Native Run outcomes 0x81–0x83
+are also recognized alongside win/loss/draw outcomes.
 
 Before entry, Bound saves a private native state with a matching game ID, ROM
 profile and SHA-256 journal in Application Support/Friend Battles. The folder
@@ -162,6 +181,44 @@ real Agora native commands, party damage, a normal knockout, matching outcomes
 and restored distinct locations.
 Credentials, ROMs, saves, screenshots and test receipts remain in ignored local
 validation storage. See the current results below for executed coverage.
+
+## Run, party eligibility and durable continuation — October 24, 2026
+
+The current checks use integrated ROM SHA-256
+`433e308025f5ec0dfc389f323092de35fbbc19dfcb9046656d4de0245523e271`
+and the 992-byte generated native guest. Both paired checks checkpointed an
+active battle to the production continuation store, detached its session owner,
+stopped and restarted the emulator core, and created a new session owner.
+Production restoration preserved the exact party, native ring cursors, queued
+commands and observation before a fresh peer handshake resumed execution.
+Malformed metadata, oversized integer fields and the wrong bridge mode were
+rejected before the valid continuation was restored.
+
+- `.build/native-owner-run-fainted-v5/summary.json` passed in **50.24 seconds**.
+  Both ordinary, non-Soul parties began at 0 HP and reached the actual action
+  menu at 21 HP, with the peer's exchanged Pokémon also at 21 HP. A selected
+  Run through normal native inputs while B selected no move. The explicit Run
+  marker ended both battles cleanly without synthesizing a win/loss; both exact
+  original parties, including their prebattle 0 HP, were restored.
+- `.build/native-owner-ko-soul-denied-v5/summary.json` passed in **148.26 seconds**.
+  Each original party contained a permanently denied 0-HP lead and an eligible
+  Pokémon at 1 HP. Only the eligible Pokémon entered, healed to 21 HP on both
+  screens. Actual moves produced a knockout and native loss **2** / win **1**.
+  Both original 600-byte parties, HP, Soul ledger, loss bits, memorials, timeline
+  and journal bytes were unchanged after the clean overworld return.
+
+`.build/native-run-instruction-both-v5.json` also verifies the actual original and v5
+cartridge Run selection/outcome routines and terminal-command routing. Run is
+observed only for native action 3; dispatch arguments, stack and the adjacent
+peer-disconnect marker are preserved. Native outcomes 0x81–0x83 remain distinct
+from the unilateral Run control. The generated guest check passes.
+
+These are two real VBA-M cores using the production local continuation and
+command paths over a host loopback relay. They do not establish physical-phone,
+separate-network, authenticated Friends UI, OS process termination, or phone
+frame-pacing acceptance. Paired cooperative gameplay restoration remains
+unvalidated; the shipping standard v5 cartridge does not enable its cooperative
+ABI. Earlier receipts below remain evidence for their named builds.
 
 ## Observed results — October 24, 2026
 

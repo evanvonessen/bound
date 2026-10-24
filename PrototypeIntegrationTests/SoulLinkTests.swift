@@ -70,10 +70,65 @@ final class SoulLinkTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: stateURL), original, "Discarding a rejected download must preserve its older same-filename file")
     }
 
-    private func mon(_ id: UInt32, area: Int = 100, egg: Bool = false, isEgg: Bool = false, hp: Int? = 30) -> BoundSoulMon {
-        .init(identity: .init(personality: id, trainer: 42), species: 1, name: "Mon\(id)", area: area, eggOrigin: egg, isEgg: isEgg, hp: hp)
+    private func mon(_ id: UInt32, area: Int = 100, egg: Bool = false, isEgg: Bool = false, hp: Int? = 30, inParty: Bool = false) -> BoundSoulMon {
+        .init(identity: .init(personality: id, trainer: 42), species: 1, name: "Mon\(id)", area: area, eggOrigin: egg, isEgg: isEgg, hp: hp, inParty: inParty)
     }
     private func makeLedger() -> BoundSoulLedger { .init(run: UUID(), binding: String(repeating: "a", count: 64)) }
+
+    func testGameOverRequiresWholeUsablePartyAndExcludesFriendlyBattles() throws {
+        var first = mon(1), second = mon(2, area: 101)
+        first.inParty = true; second.inParty = true
+        var ledger = makeLedger()
+        try ledger.observe([first, second], registering: true, fainted: [])
+        first = mon(1, hp: 0, inParty: true)
+        try ledger.observe([first, second], registering: false, fainted: [])
+        XCTAssertFalse(BoundSoulWipeout.occurred(party: [first, second], ledger: ledger))
+        second = mon(2, area: 101, hp: 0, inParty: true)
+        try ledger.observe([first, second], registering: false, fainted: [])
+        XCTAssertTrue(BoundSoulWipeout.occurred(party: [first, second], ledger: ledger))
+        XCTAssertFalse(BoundSoulWipeout.occurred(party: [first, second], ledger: ledger, friendly: true))
+        // A linked loss remains a loss even after the cartridge's blackout heal.
+        first = mon(1, inParty: true); second = mon(2, area: 101, inParty: true)
+        XCTAssertTrue(BoundSoulWipeout.occurred(party: [first, second], ledger: ledger))
+    }
+
+    func testWipeoutIgnoresEggsAndBoxesButFailsClosedOnUnknownPartyHealth() throws {
+        var lost = mon(1), live = mon(2, area: 101)
+        lost.inParty = true; live.inParty = true
+        var egg = mon(3, egg: true, isEgg: true); egg.inParty = true
+        let boxed = mon(4, area: 102)
+        var ledger = makeLedger()
+        try ledger.observe([lost, live, egg, boxed], registering: true, fainted: [])
+        lost = mon(1, hp: 0, inParty: true)
+        try ledger.observe([lost], registering: false, fainted: [])
+        XCTAssertTrue(BoundSoulWipeout.occurred(party: [lost, egg, boxed], ledger: ledger))
+        live = mon(2, area: 101, hp: nil, inParty: true)
+        XCTAssertFalse(BoundSoulWipeout.occurred(party: [lost, live], ledger: ledger))
+        XCTAssertFalse(BoundSoulWipeout.occurred(party: [egg, boxed], ledger: ledger))
+        XCTAssertFalse(BoundSoulWipeout.occurred(party: [], ledger: ledger))
+        ledger.ended = true
+        XCTAssertFalse(BoundSoulWipeout.occurred(party: [lost], ledger: ledger))
+    }
+
+    func testGameOverReturnIntentSurvivesRelaunchAndStaysScopedToExactSave() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BoundSoulGameOverStore(root: directory)
+        let owner = UUID(), run = UUID(), other = UUID()
+        var record = BoundSoulGameOverRecord(gameID: "game", owner: owner, run: run, eventID: UUID())
+        let unaffected = BoundSoulGameOverRecord(gameID: "game", owner: owner, run: other, eventID: UUID())
+        try store.save(record); try store.save(unaffected)
+        record.menuPresented = true
+        XCTAssertThrowsError(try store.save(record), "A menu acknowledgement cannot precede return intent")
+        record.returnRequested = true
+        try store.save(record)
+        let reopened = BoundSoulGameOverStore(root: directory)
+        XCTAssertEqual(try reopened.load(owner: owner, gameID: "game")[run], record)
+        XCTAssertTrue(try reopened.load(owner: UUID(), gameID: "game").isEmpty)
+        XCTAssertTrue(try reopened.load(owner: owner, gameID: "other-game").isEmpty)
+        try reopened.remove(record); try reopened.remove(record)
+        XCTAssertEqual(try reopened.load(owner: owner, gameID: "game"), [other: unaffected])
+    }
 
     func testServerOnlyLedgerAndTimelineIgnoreDiskAndRoundTripThroughSnapshot() throws {
         let game = UUID().uuidString

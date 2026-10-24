@@ -5,6 +5,10 @@ import { fixture, owner, peer, third, roomID, secret, plain } from './fixture.mj
 const uuid = n => `bbbbbbbb-bbbb-4bbb-8bbb-${String(n).padStart(12, '0')}`;
 const hash = input => createHash('sha256').update(input).digest('hex');
 const settings = () => { const bytes = Buffer.alloc(32); bytes[0] = 4; bytes[12] = 187; bytes.fill(255, 13, 20); return bytes.toString('base64'); };
+const gameOverSettings = (debug = false, keep = false) => {
+  const bytes = Buffer.from(settings(), 'base64'); bytes[0] = 5; bytes[20] = Number(debug); bytes[21] = Number(keep);
+  return bytes.toString('base64');
+};
 function setup() {
   const f = fixture(); let serial = 100, now = 1000;
   f.nk.uuidv4 = () => uuid(++serial);
@@ -254,4 +258,138 @@ test('idle event polling and identical save acknowledgements do not churn revisi
   const pending = upload(owner, run, uuid(10)); const sealed = pending.seal(); const retry = pending.seal();
   assert.equal(sealed.revision, retry.revision); assert.equal(sealed.updated_at, retry.updated_at);
   assert.equal(poll().revision, get(owner, run).revision);
+});
+
+test('v5 game-over override is shared, debug-only and immutable', () => {
+  const { create, get, rpc } = setup();
+  const disabled = create({ settings: gameOverSettings(true, true) });
+  assert.equal(get(peer, disabled).identity.settings, gameOverSettings(true, true));
+  assert.throws(() => rpc(owner, 'gameOver', { save_id: disabled.save_id, eventID: uuid(800) }));
+  assert.equal(get(owner, disabled).gameOver, null);
+  assert.throws(() => create({ request_id: uuid(2), settings: gameOverSettings(false, true) }));
+  const malformed = Buffer.from(gameOverSettings(true, true), 'base64'); malformed[21] = 2;
+  assert.throws(() => create({ request_id: uuid(3), settings: malformed.toString('base64') }));
+  malformed[21] = 1; malformed[22] = 1;
+  assert.throws(() => create({ request_id: uuid(4), settings: malformed.toString('base64') }));
+  malformed[22] = 0; malformed[0] = 4;
+  assert.throws(() => create({ request_id: uuid(5), settings: malformed.toString('base64') }));
+  for (const [index, encoded] of [gameOverSettings(), gameOverSettings(true, false)].entries()) {
+    const run = create({ request_id: uuid(10 + index), settings: encoded });
+    assert.equal(rpc(owner, 'gameOver', { save_id: run.save_id, eventID: uuid(810 + index) }).deleted, false);
+  }
+});
+
+test('game over deletes only its exact save after both authenticated clients acknowledge the menu', () => {
+  const { f, create, rpc, get, list, upload } = setup();
+  const run = create(), other = create({ request_id: uuid(2) });
+  upload(owner, run, uuid(10)).seal(); upload(peer, run, uuid(11)).seal(); upload(owner, other, uuid(12)).seal();
+  const eventID = uuid(800), fields = { save_id: run.save_id, eventID };
+  const start = rpc(owner, 'gameOver', fields);
+  assert.deepEqual(start, { id: eventID, returnRequested: false, returned: [], deleted: false });
+  const revision = get(owner, run).revision;
+  assert.deepEqual(rpc(peer, 'gameOver', { ...fields, eventID: uuid(801) }), start);
+  assert.equal(get(owner, run).revision, revision);
+  assert.deepEqual(get(peer, run).gameOver, start);
+  assert.deepEqual(list(owner).runs.find(value => value.save_id === run.save_id).gameOver, start);
+  assert.throws(() => rpc(owner, 'gameOverMenu', fields));
+  assert.throws(() => rpc(owner, 'delete', { save_id: run.save_id, expectedRevision: revision, confirmSharedDeletion: true }));
+  assert.equal(rpc(peer, 'gameOverReturn', fields).returnRequested, true);
+  assert.deepEqual(rpc(owner, 'gameOverMenu', fields).returned, [owner]);
+  assert.deepEqual(rpc(owner, 'gameOverMenu', fields).returned, [owner]);
+  assert.equal(Object.keys(get(peer, run).saves).length, 2);
+  assert.ok([...f.stored.values()].some(row => row.key.startsWith(run.save_id + '/')));
+  const complete = rpc(peer, 'gameOverMenu', fields);
+  assert.deepEqual(complete, { id: eventID, returnRequested: true, returned: [owner, peer], deleted: true });
+  assert.deepEqual(rpc(owner, 'gameOverStatus', fields), complete);
+  assert.deepEqual(rpc(owner, 'gameOverMenu', fields), complete);
+  assert.equal([...f.stored.values()].filter(row => row.key.startsWith(run.save_id + '/')).length, 0);
+  assert.deepEqual(Object.keys(f.stored.get('bound_independent_v2:' + run.save_id).value).sort(), ['deleted', 'gameOver', 'members', 'revision', 'save_id', 'version']);
+  assert.equal(get(owner, other).saves[owner].receipt.checkpoint, uuid(12));
+  assert.deepEqual(list(peer).runs.map(value => value.save_id), [other.save_id]);
+});
+
+test('game-over lifecycle rejects outsiders, conflicting saves, stale IDs and ordinary deletion tombstones', () => {
+  const { create, rpc, remove } = setup(); const run = create();
+  const fields = { save_id: run.save_id, eventID: uuid(800) };
+  assert.throws(() => rpc(owner, 'gameOverStatus', { save_id: run.save_id }));
+  assert.throws(() => rpc(owner, 'gameOver', { save_id: run.save_id }));
+  assert.throws(() => rpc(owner, 'gameOver', { ...fields, runID: uuid(999) }));
+  rpc(owner, 'gameOver', fields);
+  for (const action of ['gameOver', 'gameOverReturn', 'gameOverMenu', 'gameOverStatus']) {
+    assert.throws(() => rpc(third, action, fields));
+    assert.throws(() => rpc(owner, action, { ...fields, eventID: 'invalid' }));
+  }
+  for (const action of ['gameOverReturn', 'gameOverMenu', 'gameOverStatus']) assert.throws(() => rpc(peer, action, { ...fields, eventID: uuid(801) }));
+  rpc(owner, 'gameOverReturn', fields); rpc(owner, 'gameOverMenu', fields); rpc(peer, 'gameOverMenu', fields);
+  assert.throws(() => rpc(third, 'gameOverStatus', fields));
+  assert.throws(() => rpc(owner, 'gameOverStatus', { ...fields, eventID: uuid(801) }));
+  const other = create({ request_id: uuid(2) }); remove(owner, other);
+  assert.throws(() => rpc(owner, 'gameOverStatus', { save_id: other.save_id }));
+});
+
+test('concurrent game-over starts and menu acknowledgements retain one event and both receipts', () => {
+  const { f, create, rpc, get } = setup(); const run = create();
+  const original = f.nk.storageWrite; let injected = false;
+  f.nk.storageWrite = rows => {
+    if (!injected && rows.length === 1 && rows[0].key === run.save_id && rows[0].value.gameOver) {
+      injected = true; rpc(peer, 'gameOver', { save_id: run.save_id, eventID: uuid(801) });
+    }
+    return original(rows);
+  };
+  assert.equal(rpc(owner, 'gameOver', { save_id: run.save_id, eventID: uuid(800) }).id, uuid(801));
+  assert.equal(get(owner, run).gameOver.id, uuid(801));
+  const fields = { save_id: run.save_id, eventID: uuid(801) };
+  rpc(owner, 'gameOverReturn', fields); injected = false;
+  f.nk.storageWrite = rows => {
+    if (!injected && rows.length === 1 && rows[0].key === run.save_id && rows[0].value.gameOver.returned.includes(owner)) {
+      injected = true; rpc(peer, 'gameOverMenu', fields);
+    }
+    return original(rows);
+  };
+  assert.deepEqual(rpc(owner, 'gameOverMenu', fields).returned, [owner, peer]);
+  assert.equal(rpc(peer, 'gameOverStatus', fields).deleted, true);
+});
+
+test('game-over absorption fences delayed uploads and new events while allowing final reads', () => {
+  const { create, rpc, get, upload } = setup(); const run = create();
+  const saved = upload(owner, run, uuid(10)); saved.seal();
+  const pending = upload(owner, run, uuid(11), uuid(10));
+  const event = { run: run.save_id, id: { origin: owner, sequence: 1 }, kind: 'soul', payload: Buffer.from(JSON.stringify({ version: 1, run: run.save_id, kind: 'death', slot: 'area:1' })).toString('base64') };
+  rpc(owner, 'events', { save_id: run.save_id, events: [event], after: {} });
+  rpc(peer, 'gameOver', { save_id: run.save_id, eventID: uuid(800) });
+  assert.throws(pending.seal);
+  assert.throws(() => rpc(owner, 'save', pending.fields));
+  assert.throws(() => rpc(owner, 'saveChunk', { ...pending.fields, index: 0, data: pending.bytes.toString('base64') }));
+  assert.throws(() => rpc(owner, 'events', { save_id: run.save_id, events: [event], after: {} }));
+  assert.throws(() => rpc(peer, 'profile', { save_id: run.save_id, profile: { name: 'LEAF', gender: 1 } }));
+  assert.equal(get(owner, run).saves[owner].receipt.checkpoint, uuid(10));
+  assert.equal(rpc(peer, 'events', { save_id: run.save_id, events: [], after: {} }).events.length, 1);
+  assert.deepEqual(Buffer.from(rpc(owner, 'saveDownload', { save_id: run.save_id, checkpoint: uuid(10), index: 0 }).data, 'base64'), saved.bytes);
+});
+
+test('game-over CAS racing a child write prevents any new upload after absorption', () => {
+  const { f, create, rpc, upload } = setup(); const run = create();
+  const original = f.nk.storageWrite; let injected = false;
+  f.nk.storageWrite = rows => {
+    if (!injected && rows.length === 2 && rows[1].key.includes('/save/')) {
+      injected = true; rpc(peer, 'gameOver', { save_id: run.save_id, eventID: uuid(800) });
+    }
+    return original(rows);
+  };
+  assert.throws(() => upload(owner, run, uuid(10)));
+  assert.equal([...f.stored.values()].filter(row => row.key.startsWith(run.save_id + '/save/')).length, 0);
+  assert.equal(rpc(owner, 'gameOverStatus', { save_id: run.save_id }).deleted, false);
+});
+
+test('lost final game-over cleanup retries from its tombstone without resurrecting data', () => {
+  const { f, create, rpc, upload } = setup(); const run = create(); upload(owner, run, uuid(10)).seal();
+  const fields = { save_id: run.save_id, eventID: uuid(800) };
+  rpc(owner, 'gameOver', fields); rpc(owner, 'gameOverReturn', fields); rpc(owner, 'gameOverMenu', fields);
+  const exec = f.nk.sqlExec; f.nk.sqlExec = () => { throw Error('interrupted cleanup'); };
+  assert.throws(() => rpc(peer, 'gameOverMenu', fields));
+  assert.equal(f.stored.get('bound_independent_v2:' + run.save_id).value.deleted, true);
+  assert.ok([...f.stored.values()].some(row => row.key.startsWith(run.save_id + '/')));
+  f.nk.sqlExec = exec;
+  assert.equal(rpc(owner, 'gameOverStatus', fields).deleted, true);
+  assert.equal([...f.stored.values()].filter(row => row.key.startsWith(run.save_id + '/')).length, 0);
 });

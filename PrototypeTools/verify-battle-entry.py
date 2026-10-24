@@ -26,7 +26,7 @@ RESTORED = [UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R4,
 PRESERVED = [UC_ARM_REG_R8, UC_ARM_REG_R9, UC_ARM_REG_R10, UC_ARM_REG_R11]
 
 
-def verify(path, allowed, code, hook):
+def verify(path, allowed, code, hook, choice_hook):
     image = path.read_bytes()
     digest = hashlib.sha256(image).hexdigest()
     assert digest in allowed and len(image) == 0x2000000, "Unsupported ROM profile"
@@ -96,7 +96,48 @@ def verify(path, allowed, code, hook):
         else:
             assert fixed == original, "Non-link flags, condition codes or routing changed"
         cases.append({"flags": flags, "originalFlags": original[0], "fixedFlags": fixed[0], "linkTransfers": fixed[2]})
-    return {"romSHA256": digest, "entryBytes": len(code), "cases": cases, "passed": True}
+    run_outcomes=[]
+    for choices,expected in [((3,0),0x82),((0,3),0x81),((3,3),0x83)]:
+        cpu=Uc(UC_ARCH_ARM,UC_MODE_THUMB)
+        for address,size in [(ROM_BASE,len(image)),(0x02000000,0x40000),(0x03000000,0x8000)]:cpu.mem_map(address,size)
+        cpu.mem_write(ROM_BASE,image);cpu.mem_write(FLAGS,struct.pack('<I',2))
+        cpu.mem_write(0x02023BCC,b'\x02');cpu.mem_write(0x02023BDE,b'\x00\x01')
+        cpu.mem_write(0x02023D7C,bytes(choices));cpu.reg_write(UC_ARM_REG_SP,STACK);cpu.reg_write(UC_ARM_REG_LR,STOP|1)
+        def observe_run(machine,address,size,user):
+            if address==STOP:machine.emu_stop()
+            elif address==0x080751C4:
+                # Two fixture battlers, one on each side. All Run decision and
+                # outcome instructions execute directly from the real ROM.
+                machine.reg_write(UC_ARM_REG_R0,machine.reg_read(UC_ARM_REG_R0)&1)
+                machine.reg_write(UC_ARM_REG_PC,machine.reg_read(UC_ARM_REG_LR))
+        cpu.hook_add(UC_HOOK_CODE,observe_run);cpu.emu_start(0x080168A5,STOP,count=1000)
+        outcome=cpu.mem_read(0x02023E8A,1)[0]
+        assert cpu.reg_read(UC_ARM_REG_PC)==STOP and outcome==expected,'Native Run result changed'
+        run_outcomes.append({'choices':choices,'nativeOutcome':outcome})
+    selections=[]
+    for action in range(13):
+        results=[]
+        for patched in (False,True):
+            cpu=Uc(UC_ARCH_ARM,UC_MODE_THUMB)
+            for address,size in [(ROM_BASE,len(image)),(0x02000000,0x40000),(0x03000000,0x8000)]:cpu.mem_map(address,size)
+            cpu.mem_write(ROM_BASE,image)
+            if patched:
+                cpu.mem_write(ENTRY,code);cpu.mem_write(0x090A9F10,bytes.fromhex('004b1847')+struct.pack('<I',choice_hook))
+            cpu.mem_write(0x0300402E,b'\xa5\0');cpu.reg_write(UC_ARM_REG_SP,STACK)
+            cpu.reg_write(UC_ARM_REG_R0,1);cpu.reg_write(UC_ARM_REG_R1,action);cpu.reg_write(UC_ARM_REG_R2,0x1234)
+            calls=[]
+            def observe_choice(machine,address,size,user):
+                if address==0x090A9EFE:machine.emu_stop()
+                elif address==0x0800E848:
+                    calls.append([machine.reg_read(register) for register in [UC_ARM_REG_R0,UC_ARM_REG_R1,UC_ARM_REG_R2]])
+                    machine.reg_write(UC_ARM_REG_PC,machine.reg_read(UC_ARM_REG_LR))
+            cpu.hook_add(UC_HOOK_CODE,observe_choice);cpu.emu_start(0x090A9F11,0x090A9EFE,count=1000)
+            assert cpu.reg_read(UC_ARM_REG_PC)==0x090A9EFE and cpu.reg_read(UC_ARM_REG_SP)==STACK
+            results.append((calls,bytes(cpu.mem_read(0x0300402E,2))))
+        assert results[0][0]==results[1][0]==[[1,action,0x1234]],'Native choice dispatch changed'
+        assert results[1][1]==bytes([0xA5,3 if action==3 else 0]),'Run intent was ambiguous or corrupted disconnect flag'
+        selections.append({'action':action,'runIntent':action==3})
+    return {"romSHA256": digest, "entryBytes": len(code), "cases": cases, "runOutcomes":run_outcomes,"runSelectionCases":selections,"passed": True}
 
 
 def main():
@@ -110,8 +151,9 @@ def main():
     body = header.split("BoundBattleEntryCode[] = {", 1)[1].split("};", 1)[0]
     code = bytes(int(value, 16) for value in re.findall(r"0x([0-9A-Fa-f]{2})", body))
     hook = int(re.search(r"BoundBattlePreserveLinkFlagsAddress = 0x([0-9A-Fa-f]+)", header)[1], 16)
+    choice_hook = int(re.search(r"BoundBattleChoiceAddress = 0x([0-9A-Fa-f]+)", header)[1], 16)
     assert len(code) <= 0x3F0, "Entry overlaps the role byte"
-    report = {"profiles": [verify(path, allowed, code, hook) for path in args.rom], "passed": True}
+    report = {"profiles": [verify(path, allowed, code, hook,choice_hook) for path in args.rom], "passed": True}
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2) + "\n")

@@ -29,6 +29,7 @@ struct BoundMultiplayerSetupOptions {
     var cheats = false
     var nicknames = true
     var debug = false
+    var deleteSaveOnGameOver = false
     var profile: BoundNakamaRunService.PlayerProfile { .init(name: name, gender: gender) }
     var partnerProfile: BoundNakamaRunService.PlayerProfile { .init(name: partnerName, gender: partnerGender) }
     static func nativeName(_ value: String) -> Data {
@@ -39,12 +40,18 @@ struct BoundMultiplayerSetupOptions {
         return result
     }
     var valid: Bool { profile.valid && partnerProfile.valid && BoundNakamaRunService.PlayerProfile(name: rival, gender: 0).valid }
+    /// The shared run settings carry the choice across both players and devices.
+    /// Older formats have no override. Invalid settings cannot authorize deletion.
+    @MainActor static func deletesSaveOnGameOver(settings: Data) -> Bool? {
+        guard BoundROMMultiplayerCoordinator.validSettings(settings) else { return nil }
+        return settings[0] < 5 || settings[21] == 0
+    }
     var settings: Data {
         if debug {
-            var result = Data([4,1,0,0,0,0,0,0,0,0,1,0]) + Self.nativeName("Gary") + Data([1])
-            result.append(Data(repeating: 0, count: 11)); return result
+            var result = Data([5,1,0,0,0,0,0,0,0,0,1,0]) + Self.nativeName("Gary") + Data([1, deleteSaveOnGameOver ? 0 : 1])
+            result.append(Data(repeating: 0, count: 10)); return result
         }
-        var result = Data(repeating: 0, count: 32); result[0] = 4
+        var result = Data(repeating: 0, count: 32); result[0] = 5
         result[1] = minimalGrinding ? 1 : 0
         if difficulty > 0 { result[1 + difficulty] = 1 }
         result[5] = difficulty == 2 ? 1 : 0
@@ -121,6 +128,10 @@ struct BoundMultiplayerSetupView: View {
                             Toggle("Common Cheats", isOn: $options.cheats)
                             Toggle("Nickname Prompts", isOn: $options.nicknames)
                             Toggle("Debug Preset", isOn: $options.debug)
+                            if options.debug {
+                                Toggle("Game Over on Party Wipe", isOn: $options.deleteSaveOnGameOver)
+                                    .accessibilityIdentifier("bound.multiplayer.delete-on-game-over")
+                            }
                         }
                     }
                     Button("Start Game") {

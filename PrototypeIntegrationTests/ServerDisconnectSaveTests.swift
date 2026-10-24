@@ -1,6 +1,36 @@
 import XCTest
 @testable import Delta
 
+private actor DisconnectSaveRPCFixture {
+    enum Mode { case loseSealResponse, rejectUpload }
+    let identity: BoundMultiplayerRunIdentity
+    let mode: Mode
+    private var saved: [String: Any]?
+    private var actions: [String] = []
+    init(identity: BoundMultiplayerRunIdentity, mode: Mode) { self.identity = identity; self.mode = mode }
+    func requests() -> [String] { actions }
+    func perform(_ request: URLRequest) throws -> Data {
+        let text = try JSONDecoder().decode(String.self, from: XCTUnwrap(request.httpBody))
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        let action = try XCTUnwrap(body["action"] as? String)
+        XCTAssertEqual(body["save_id"] as? String, identity.run.uuidString.lowercased())
+        actions.append(action)
+        if action == "save", mode == .rejectUpload { throw BoundNakamaRunService.Failure.conflict }
+        if action == "saveSeal" {
+            saved = ["receipt": try XCTUnwrap(body["receipt"]), "count": try XCTUnwrap(body["count"]),
+                     "bytes": try XCTUnwrap(body["bytes"])]
+            // The server committed the frozen package, but its response never
+            // reached the client. The following GET is the only confirmation.
+            if mode == .loseSealResponse { throw URLError(.networkConnectionLost) }
+        }
+        let value: [String: Any] = ["version": 2,
+            "identity": try JSONSerialization.jsonObject(with: BoundMultiplayerSaveStore.encode(identity)),
+            "save_id": identity.run.uuidString, "committed": true, "cancelled": false, "epoch": 1, "revision": 1,
+            "cursors": [:], "deliveries": [:], "saves": saved.map { [identity.owner.uuidString.lowercased(): $0] } ?? [:], "events": []]
+        return try JSONSerialization.data(withJSONObject: ["payload": String(decoding: JSONSerialization.data(withJSONObject: value), as: UTF8.self)])
+    }
+}
+
 final class ServerDisconnectSaveTests: XCTestCase {
     private let owner = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
     private let peer = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
@@ -103,5 +133,71 @@ final class ServerDisconnectSaveTests: XCTestCase {
         }
         XCTAssertNil(BoundServerDisconnectSave.failureMessage(run: first))
         XCTAssertEqual(BoundServerDisconnectSave.failureMessage(gameID: identity.gameID, owner: owner), "Failure 31")
+    }
+
+    private func session() throws -> AppCloudSession {
+        let bytes = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
+        let token = bytes.base64EncodedString().replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        return try AppCloudSession(owner: owner, key: "fixture", token: "e30.\(token).fixture",
+                                   backend: .init(kind: .legacy, origin: "https://bound.example"))
+    }
+    private func service(_ fixture: DisconnectSaveRPCFixture) -> BoundNakamaRunService {
+        BoundNakamaRunService(authorizeSaves: { session, _ in
+            .init(httpEndpoint: URL(string: "https://bound.example")!, accessToken: "fixture-token", ownerID: session.owner,
+                  expiresAt: Date().timeIntervalSince1970 + 90, saveTicket: "fixture-ticket", partnerID: nil, roomID: nil)
+        }, perform: { request in try await fixture.perform(request) })
+    }
+
+    @MainActor func testLostFinalUploadResponseSettlesCapturedActivityOnlyAfterServerConfirmsSamePackage() async throws {
+        let package = try package(), identity = package.payload.manifest.identity
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = BoundNativeContinuationStore(root: folder)
+        let context = BoundNativeContinuationContext(owner: owner, roomID: identity.roomID, runID: identity.run)
+        try store.claim(ticket: UUID(), context: context, gameID: identity.gameID)
+        let token = try XCTUnwrap(store.settlement(context: context, gameID: identity.gameID))
+        let fixture = DisconnectSaveRPCFixture(identity: identity, mode: .loseSealResponse)
+        var confirmations = 0
+        let task = BoundServerDisconnectSave.enqueue(package: package, previous: nil, expectedHead: nil, pendingHead: nil,
+            session: try session(), service: service(fixture), onConfirmed: { checkpoint in
+                XCTAssertEqual(checkpoint, package.payload.checkpoint)
+                XCTAssertNotNil(try store.settlement(context: context, gameID: identity.gameID))
+                confirmations += 1
+                try store.settle(token)
+            })
+        await task.value
+        XCTAssertEqual(confirmations, 1)
+        XCTAssertNil(try store.settlement(context: context, gameID: identity.gameID))
+        XCTAssertNil(BoundServerDisconnectSave.failureMessage(run: identity.run))
+        let actions = await fixture.requests()
+        XCTAssertEqual(actions.filter { $0 == "saveSeal" }.count, 1, "A confirmed sealed retry must not replay the upload")
+        XCTAssertEqual(actions.filter { $0 == "get" }.count, 4, "The retry verifies the authoritative head after the lost seal response")
+    }
+
+    @MainActor func testRejectedFinalUploadNeverSettlesActivityAndRetainsVisibleSaveFailure() async throws {
+        let package = try package(), identity = package.payload.manifest.identity
+        let fixture = DisconnectSaveRPCFixture(identity: identity, mode: .rejectUpload)
+        let task = BoundServerDisconnectSave.enqueue(package: package, previous: nil, expectedHead: nil, pendingHead: nil,
+            session: try session(), service: service(fixture), onConfirmed: { _ in XCTFail("An unconfirmed upload cannot retire a consumed activity") })
+        await task.value
+        XCTAssertNotNil(BoundServerDisconnectSave.failureMessage(run: identity.run))
+        let actions = await fixture.requests()
+        XCTAssertEqual(actions.filter { $0 == "save" }.count, 1)
+        XCTAssertFalse(actions.contains("saveSeal"))
+    }
+
+    @MainActor func testFailedContinuationSettlementDoesNotReportFinalSaveSuccess() async throws {
+        let package = try package(), identity = package.payload.manifest.identity
+        let fixture = DisconnectSaveRPCFixture(identity: identity, mode: .loseSealResponse)
+        var confirmations = 0
+        let task = BoundServerDisconnectSave.enqueue(package: package, previous: nil, expectedHead: nil, pendingHead: nil,
+            session: try session(), service: service(fixture), onConfirmed: { _ in
+                confirmations += 1
+                throw CocoaError(.fileWriteNoPermission)
+            })
+        await task.value
+        XCTAssertEqual(confirmations, 1)
+        XCTAssertNotNil(BoundServerDisconnectSave.failureMessage(run: identity.run), "A durable recovery fence write failure must remain retryable")
     }
 }

@@ -133,6 +133,61 @@ final class BoundNakamaClientTests: XCTestCase {
         XCTAssertEqual(result.profiles?[peer.uuidString.lowercased()], second)
     }
 
+    func testGameOverUsesExactSaveAndEventAndAcceptsDeletedStatusWithoutGameplayIdentity() async throws {
+        let owner = owner, peer = peer, run = UUID(), event = UUID()
+        let payload = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
+        let encoded = payload.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        let session = try AppCloudSession(owner: owner, key: "fixture", token: "e30.\(encoded).fixture",
+                                         backend: .init(kind: .legacy, origin: "https://bound.example"))
+        let state = BoundNakamaRunService.GameOverState(id: event, returnRequested: true, returned: [owner, peer], deleted: true)
+        let response = try JSONSerialization.data(withJSONObject: ["payload": String(decoding: JSONEncoder().encode(state), as: UTF8.self)])
+        let fixture = NakamaRPCRecordingFixture(response: response)
+        let service = BoundNakamaRunService(authorizeSaves: { identity, _ in
+            XCTAssertEqual(identity.owner, owner)
+            return .init(httpEndpoint: URL(string: "https://bound.example")!, accessToken: "fixture-token", ownerID: owner,
+                         expiresAt: Date().timeIntervalSince1970 + 90, saveTicket: "fixture-ticket", partnerID: nil, roomID: nil)
+        }, perform: { request in await fixture.perform(request) })
+        _ = try await service.configureSaves(session: session)
+        for action in ["gameOver", "gameOverReturn", "gameOverMenu", "gameOverStatus"] {
+            let actual = try await service.gameOver(saveID: run, action: action, eventID: event)
+            XCTAssertEqual(actual, state)
+        }
+        let discovered = try await service.gameOver(saveID: run, action: "gameOverStatus")
+        XCTAssertEqual(discovered, state)
+        let requests = await fixture.requests()
+        XCTAssertEqual(requests.count, 5)
+        for (index, request) in requests.enumerated() {
+            XCTAssertEqual(request.url?.path, "/v2/rpc/bound_independent_v2")
+            let body = try JSONDecoder().decode(String.self, from: XCTUnwrap(request.httpBody))
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any])
+            XCTAssertEqual(json["save_id"] as? String, run.uuidString.lowercased())
+            XCTAssertEqual(json["saveTicket"] as? String, "fixture-ticket")
+            XCTAssertEqual(json["eventID"] as? String, index == 4 ? nil : event.uuidString.lowercased())
+            XCTAssertNil(json["returned"]); XCTAssertNil(json["ownerID"])
+        }
+        for action in ["delete", "gameOverMenu"] {
+            do { _ = try await service.gameOver(saveID: run, action: action); XCTFail("Invalid lifecycle request must not send") }
+            catch { XCTAssertTrue(error is BoundNakamaRunService.Failure) }
+        }
+        let afterRejected = await fixture.requests()
+        XCTAssertEqual(afterRejected.count, 5)
+        do { _ = try await service.gameOver(saveID: run, action: "gameOverMenu", eventID: UUID()); XCTFail("A stale event must fail closed") }
+        catch { XCTAssertTrue(error is BoundNakamaRunService.Failure) }
+    }
+
+    func testIndependentSaveDecodesOptionalGameOverWithoutBreakingOlderResponses() async throws {
+        let identity = independentIdentity()
+        let terminal = BoundNakamaRunService.GameOverState(id: UUID(), returnRequested: false, returned: [], deleted: false)
+        let field = try JSONSerialization.jsonObject(with: JSONEncoder().encode(terminal))
+        for (fields, expected) in [([String: Any](), Optional<BoundNakamaRunService.GameOverState>.none), (["gameOver": field], terminal)] {
+            let fixture = NakamaRPCRecordingFixture(response: try independentResponse(identity: identity, fields: fields))
+            let service = BoundNakamaRunService { request in await fixture.perform(request) }
+            await service.configure(configuration())
+            let value = try await service.sharedSetup(identity: identity)
+            XCTAssertEqual(value.gameOver, expected)
+        }
+    }
+
     private let owner = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
     private let peer = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
     private let room = UUID(uuidString: "33333333-3333-4333-8333-333333333333")!
@@ -189,8 +244,14 @@ final class BoundNakamaClientTests: XCTestCase {
         try client.start(configuration: configuration()) { event in if case .joined = event { joined.fulfill() } }
         await fulfillment(of: [joined], timeout: 2)
         socket.holdSends()
-        var bytes = BoundBattleWire.prefix; bytes.append(Data(repeating: 1, count: 32))
+        // BFS2 ACK-only frame: activity UUID, zero sequence, cumulative ACK,
+        // and zero payload length. This smallest real frame must be admitted.
+        var bytes = BoundBattleWire.prefix, activity = UUID().uuid
+        withUnsafeBytes(of: &activity) { bytes.append(contentsOf: $0) }
+        bytes.append(Data(repeating: 0, count: 18))
         let channel = BoundNakamaBattleChannel(client: client, targetOwnerID: peer)
+        XCTAssertEqual(bytes.count, 38)
+        XCTAssertFalse(channel.send(Data(bytes.dropLast())))
         XCTAssertTrue(channel.send(bytes))
         await fulfillment(of: [battleSent], timeout: 2)
         // Socket completion remains withheld: callers still enqueue immediately.

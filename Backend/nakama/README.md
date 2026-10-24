@@ -248,7 +248,8 @@ This avoids SQL-driver JSONB representations and preserves key order and the
 pagination cursor even if a run is deleted during the read.
 There are no expiry fields, TTLs, age-based deletions or retention jobs. Previous
 sealed checkpoints, incomplete upload chunks and events remain until the user
-explicitly clears the shared run. Deployments must plan storage capacity and
+explicitly clears the shared run or both players return to the menu after an
+enabled full-party-wipe game over. Deployments must plan storage capacity and
 backups accordingly. Older v1/v2 records remain intact; the library lists newly
 server-created saves and does not silently import existing local runs.
 
@@ -278,12 +279,16 @@ both with different values is rejected.
 | Action | Additional request | Result |
 | --- | --- | --- |
 | `list` | `gameID`, optional `cursor` UUID | `{version:2,runs:[...],cursor}`; at most 100 UUID-ordered roots. Follow cursors until null, then sort presentation by `updated_at` if desired. Refresh restarts the listing. |
-| `create` | Stable retry `request_id` UUID, authorized `partnerID`, `gameID`, `romSHA256`, version-four base64 `settings`, optional `profile` and `partnerProfile` | Complete version-two run state with a server-generated `save_id`; creates the root, both supplied trainer profiles and retry key atomically. |
+| `create` | Stable retry `request_id` UUID, authorized `partnerID`, `gameID`, `romSHA256`, version-four or version-five base64 `settings`, optional `profile` and `partnerProfile` | Complete version-two run state with a server-generated `save_id`; creates the root, both supplied trainer profiles and retry key atomically. |
 | `get` | `save_id` | Existing version-two run state, including snapshot descriptors, event cursors, profiles and caller-oriented identity/seeds. |
 | `profile` | `save_id`, `{name,gender}` | Updates only caller's profile before their first snapshot; name is 1–7 ASCII letters/digits, gender 0 or 1. Exact retries remain valid after saving. |
 | `events` | `save_id`, existing `events` and `after` | Existing upload/delivery acknowledgements and gap-aware missing-event batches. |
 | `save` / `saveChunk` / `saveSeal` / `saveDownload` | `save_id` plus existing snapshot fields | Existing independent snapshot protocol. |
 | `delete` | `save_id`, `confirmSharedDeletion:true`, current `expectedRevision` | `{save_id,deleted:true}` after deleting both participants' snapshots and events. |
+| `gameOver` | `save_id`, stable `eventID` UUID | Absorbs the run when its shared settings enable game over; concurrent triggers return the first event ID. |
+| `gameOverReturn` | `save_id`, exact `eventID` | Requests both players return to the menu. |
+| `gameOverMenu` | `save_id`, exact `eventID` | Records only the authenticated caller's receipt after their menu is presented; the second participant receipt tombstones the run and removes its children. |
+| `gameOverStatus` | `save_id`, optional exact `eventID` | Reads terminal state, including after deletion, and retries interrupted child cleanup. |
 
 Every listed root and managed run response includes `save_id`, `game_id`,
 `roomID`, `participants`, `identity`, `revision`, `created_at`, `updated_at`,
@@ -325,7 +330,19 @@ and UUID tombstone, then removes every snapshot/chunk/event under that UUID.
 Each managed child write atomically checks the parent revision, fencing uploads
 already in flight. Repeating deletion completes interrupted cleanup safely. The
 tombstone and hashed creation retry mapping prevent delayed requests from
-resurrecting deleted gameplay data. No other run action permanently deletes it.
+resurrecting deleted gameplay data.
+
+Game over is a separate absorbing lifecycle. Version-five settings byte 21 is a
+keep override: zero enables the flow, one disables it and is legal only with
+Debug byte 20 set. New Debug presets default to the disabled flow; ordinary
+presets enable it. Version-four settings retain the enabled policy. A terminal
+run rejects saves, profile changes and new shared events; final reads and empty
+event polls remain available. Both menu receipts are required before deletion,
+including when one player is offline. The terminal event ID and participant
+receipts remain in the minimal deletion tombstone so retries cannot target a
+different run or resurrect its progress. Generic `delete` cannot bypass an
+unfinished game-over menu barrier. Deploy the updated runtime before clients
+start sending version-five settings or these lifecycle actions.
 
 ## Operation classes and recovery
 
