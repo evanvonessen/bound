@@ -183,6 +183,10 @@ final class PlayerStateTests: XCTestCase {
         let seedHash = SHA256.hash(data: try Data(contentsOf: battery))
         let core = try XCTUnwrap(EmulatorCore(game: ReaderGame(fileURL: romURL, gameSaveURL: workBattery), options: [.metal: true]))
         let oldPreference = UserDefaults.standard.object(forKey: BoundPlayerStatePreferences.key)
+        let oldDeveloperPreference = UserDefaults.standard.object(forKey: BoundDeveloperFeatures.key)
+        let oldMultiplayerPreference = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        UserDefaults.standard.set(true, forKey: BoundDeveloperFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
         UserDefaults.standard.set(true, forKey: BoundPlayerStatePreferences.key)
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previousWindow = scene.windows.first(where: \.isKeyWindow)
@@ -198,15 +202,19 @@ final class PlayerStateTests: XCTestCase {
             display.stop(); _ = core.stop(); window.isHidden = true; previousWindow?.makeKeyAndVisible()
             if let oldPreference { UserDefaults.standard.set(oldPreference, forKey: BoundPlayerStatePreferences.key) }
             else { UserDefaults.standard.removeObject(forKey: BoundPlayerStatePreferences.key) }
+            UserDefaults.standard.set(oldDeveloperPreference, forKey: BoundDeveloperFeatures.key)
+            UserDefaults.standard.set(oldMultiplayerPreference, forKey: BoundMultiplayerFeatures.key)
         }
         let completed = expectation(description: "VBA-M reaches overworld and reads moving player")
+        let setup = NativePlayerSceneSetup(core: core)
         // All counters and input scheduling below belong only to the core's owner.
         var frame = 0, movingSince: Int?, previousMask = 0, finished = false
         core.updateHandler = { core in
             frame += 1
+            setup.receive(core)
             if let reading = probe.receive(core) {
                 recorder.record(reading)
-                if reading.status == .live, movingSince == nil { movingSince = frame }
+                if reading.status == .live, setup.isReady, movingSince == nil { movingSince = frame }
             }
             let mask: Int
             if let since = movingSince {
@@ -214,8 +222,7 @@ final class PlayerStateTests: XCTestCase {
                 mask = elapsed < 40 ? 32 : elapsed < 80 ? 64 : elapsed < 120 ? 16 : elapsed < 160 ? 128 : 0
                 if elapsed >= 200, !finished { finished = true; completed.fulfill() }
             } else {
-                // Normal title/Continue navigation. No ROM patch or RAM write.
-                mask = (1300..<1302).contains(frame) ? 8 : (1600..<1602).contains(frame) || (2200..<2202).contains(frame) ? 1 : 0
+                mask = 0 // Bound setup starts the current cartridge automatically.
                 if frame >= 7000, !finished { finished = true; completed.fulfill() }
             }
             for bit in [1, 8, 16, 32, 64, 128] where (mask & bit) != (previousMask & bit) {
@@ -243,8 +250,8 @@ final class PlayerStateTests: XCTestCase {
         let readings = recorder.snapshot(), live = readings.compactMap(\.player)
         XCTAssertGreaterThan(live.count, 100)
         let first = try XCTUnwrap(live.first)
-        XCTAssertEqual(first.mapGroup, 4); XCTAssertEqual(first.mapNumber, 3)
-        XCTAssertEqual(first.tile, .init(x: 7, y: 8))
+        XCTAssertEqual(first.mapGroup, 4); XCTAssertEqual(first.mapNumber, 1)
+        XCTAssertEqual(first.tile, .init(x: 6, y: 6))
         XCTAssertEqual(Set(live.map(\.facing)), Set(["North", "South", "East", "West"]))
         XCTAssertTrue(live.contains { $0.tile != first.tile })
         XCTAssertEqual(SHA256.hash(data: try Data(contentsOf: battery)), seedHash)

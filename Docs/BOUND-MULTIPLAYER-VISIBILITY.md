@@ -34,13 +34,23 @@ sprite nor an arrow, but their positions remain tracked.
 
 ## Disappearance diagnosis
 
-Inspection of the receive buffer, map/elevation admission, camera projection,
-foreground masks and sprite clipping found **no two-tile distance cull** in the
-current Swift implementation. The confirmed presentation gap was that the
-rasterizer clipped all pixels outside 240×160 and hid its overlay, with no
-offscreen representation. A defensive interpolation path could also return no
-pose on a discontinuity; it now selects the confirmed sample. These changes do
-not bypass map, elevation, ROM or packet validation.
+The October 24 report of a friend partially or completely disappearing **inside
+the viewport** exposed a separate BG0 window-mask bug. Native
+`ClearWindowTilemap` selects transparent tile 0 but preserves its palette:
+cleared border/text cells contain `0xE000`/`0xF000`, not necessarily zero. Bound
+incorrectly treated any nonzero entry as an occupied window tile. The cleared
+dialogue rectangle therefore kept erasing the friend's pixels as either player
+or the camera moved through it. Coordinates and incoming poses remained valid.
+
+Window occupancy now tests the ten-bit tile index, ignoring palette and flip
+attributes. Real open windows, borders, foreground map pixels and nearer native
+objects retain their occlusion. This fixes the false mask without moving the
+friend, changing the native framebuffer or relaxing packet/map validation.
+
+There is no two-tile distance cull in the current receive or projection code.
+The earlier work added an offscreen representation and removed an empty-pose
+interpolation case. Those changes did not fix this window-mask defect, and the
+earlier synthetic camera tests did not model native cleared-window attributes.
 
 The native ROM audit found no remote sprite lifecycle or proximity-based
 existence rule either. `source/multiplayer/shared_world/shared_world.c` delegates
@@ -48,12 +58,11 @@ collision, trainer and flag operations to the original local game logic.
 `source/multiplayer/game/game_runtime.c` publishes local snapshots and reads
 shared-world data for presentation policy; Bound owns remote sprite rendering.
 
-The reported approximately two-tile disappearance has not been reproduced on
-two physical devices. It must not be attributed conclusively to viewport
-clipping without that reproduction: packet loss, a scene-reader failure or a
-map/elevation change can still produce distinct absence states. Existing
-Connection Check diagnostics report peer-pose availability, map/elevation
-agreement, frame resolution and visible pixel count to distinguish them.
+Physical-device verification remains pending. Packet loss, a scene-reader
+failure or a map/elevation change can still produce distinct absence states.
+Existing Connection Check diagnostics report peer-pose availability,
+map/elevation agreement, frame resolution and visible pixel count to distinguish
+them.
 
 ## Expanded rendering
 
@@ -72,6 +81,23 @@ large position steps, map/elevation changes, packet sequencing and existing
 disconnect/reconnect validation. `RecordedPlayerTests` covers camera-only
 reentry, partially visible edge sprites, arrow direction/inset placement, live
 distance changes, overlay switching and foreground occlusion.
+
+The window-clear regressions exercise all 64 combinations of palette/flip
+attributes on tile 0, native dialogue open/close, and every pixel of horizontal
+and vertical camera movement through the cleared bedroom dialogue rectangle and
+the viewport edges. The open/close and camera regressions fail before the fix.
+The opt-in VBA-M recording test also checks actual native cleared window cells
+while walking in all four directions. Both native reader/replay tests now use
+the current Bound New Game host ABI, wait for the intro to release controls,
+and enable/restore their diagnostic preferences. Their exact-ROM/battery
+fixtures remain private and are copied before use. A native bedroom mGBA capture independently
+confirmed that the retained palette-only entries refer to a fully transparent
+BG0 tile 0.
+
+October 24 validation: 47 focused presence, reader and rasterizer tests passed,
+including both native VBA-M tests with integrated ROM SHA-256
+`d2a206998f67db500f88ccc197fc9977ebd437f714661916abbc7b484e38370a`.
+The Release iPhone build and pinned-source/privacy checks passed.
 
 These deterministic tests do not prove physical-device behavior or upstream
 Delta playback parity. Device acceptance still requires two phones moving

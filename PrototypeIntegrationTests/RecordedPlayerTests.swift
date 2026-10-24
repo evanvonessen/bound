@@ -10,6 +10,32 @@ private struct ReplayGame: GameProtocol {
     var type: GameType { .gba }
 }
 
+/// Current cartridges require Bound's admitted New Game data, not a legacy
+/// Continue button sequence. Only the published host ABI is written; the ROM
+/// performs its own intro, settings, map and player initialization.
+final class NativePlayerSceneSetup {
+    private let probe = BoundROMMultiplayerProbe()
+    private var host = BoundROMHostState()
+    private var frames = 0
+    var isReady: Bool { probe.read()?.permitsFieldInterruption == true && probe.read()?.settingsApplied == true }
+
+    init(core: EmulatorCore) {
+        var options = BoundMultiplayerSetupOptions(); options.debug = true
+        host.enabled = true; host.linked = true; host.setupCommitted = true
+        host.externalSetup = true; host.status = .complete; host.run = UUID()
+        host.localSeed = 0x12345678; host.partnerSeed = 0x87654321
+        host.settings = options.settings; host.playerProfile = options.profile
+        probe.configure(core: core); probe.setVerified(true)
+    }
+
+    // Accessed only from the emulator's completed-frame callback after init.
+    func receive(_ core: EmulatorCore) {
+        if frames % 60 == 0 { probe.publish(host) }
+        frames += 1; probe.receive(core)
+        if probe.read()?.safeField == true { host.externalSetup = false }
+    }
+}
+
 private final class ReplayReadings: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [BoundPlayerStateReading] = []
@@ -105,9 +131,53 @@ final class RecordedPlayerTests: XCTestCase {
         let rendered = BoundRecordedPlayerRasterizer.rgba(pose: pose(), scene: dialogue).0
         XCTAssertTrue(stride(from: 3, to: rendered.count, by: 4).contains { rendered[$0] != 0 },
                       "Dialogue must not hide the entire friend")
-        put(0, 0x02010000 + (15 * 32 + 14) * 2, 2)
+        // ClearWindowTilemap preserves palette 15 when it selects blank tile 0.
+        put(0xF000, 0x02010000 + (15 * 32 + 14) * 2, 2)
         XCTAssertFalse(try XCTUnwrap(decode()).background.covers(x: 112, y: 120, priority: 2),
                        "Closing a window removes its occlusion")
+    }
+
+    func testClearedWindowPaletteAndFlipAttributesDoNotHideFriend() {
+        for attributes in 0..<64 {
+            let entry = attributes << 10 // Tile 0, with every palette/flip combination.
+            var map = Data(repeating: 0, count: 2048)
+            for offset in stride(from: 0, to: map.count, by: 2) {
+                map[offset] = UInt8(truncatingIfNeeded: entry)
+                map[offset + 1] = UInt8(entry >> 8)
+            }
+            let background = BoundPlayerBackground(tiles: Data(), layers: [
+                .init(priority: 0, scrollX: 253, scrollY: 255, map: map, masksWholeTiles: true)
+            ])
+            for point in [(0, 0), (7, 7), (112, 120), (239, 159)] {
+                XCTAssertFalse(background.covers(x: point.0, y: point.1, priority: 2),
+                               "Blank UI tile must stay transparent regardless of attributes: \(entry)")
+            }
+        }
+    }
+
+    func testFriendCrossesClearedDialogueRegionAndViewportEdgesWithoutPixelLoss() {
+        // Native bedroom state after intro dialogue: the bottom six tile rows
+        // retain palette 14 (border) and 15 (text) even though the window is gone.
+        var map = Data(repeating: 0, count: 2048)
+        for row in 14..<20 {
+            for column in 0..<30 {
+                map[(row * 32 + column) * 2 + 1] =
+                    (15..<19).contains(row) && (2..<28).contains(column) ? 0xF0 : 0xE0
+            }
+        }
+        let background = BoundPlayerBackground(tiles: Data(), layers: [
+            .init(priority: 0, scrollX: 0, scrollY: 0, map: map, masksWholeTiles: true)
+        ])
+        let friend = pose(x: 104, y: 144)
+        for shift in -176...160 {
+            for camera in [(16, shift), (shift, 0)] {
+                let actual = scene(cameraX: camera.0, cameraY: camera.1, background: background)
+                let clear = scene(cameraX: camera.0, cameraY: camera.1)
+                XCTAssertEqual(BoundRecordedPlayerRasterizer.rgba(pose: friend, scene: actual).0,
+                               BoundRecordedPlayerRasterizer.rgba(pose: friend, scene: clear).0,
+                               "A closed dialogue must not clip the friend at camera \(camera)")
+            }
+        }
     }
 
     func testCameraMovesByOnePixelAcrossDestinationTileAndSignedWrap() {
@@ -297,24 +367,24 @@ final class RecordedPlayerTests: XCTestCase {
         owner.view.addSubview(gameView); core.add(gameView)
         let display = BoundPlayerStateDisplay(), readings = ReplayReadings()
         let oldPreference = UserDefaults.standard.object(forKey: BoundPlayerStatePreferences.key)
+        let oldDeveloperPreference = UserDefaults.standard.object(forKey: BoundDeveloperFeatures.key)
+        UserDefaults.standard.set(true, forKey: BoundDeveloperFeatures.key)
         UserDefaults.standard.set(true, forKey: BoundPlayerStatePreferences.key)
         display.install(in: owner); display.bind(core: core); display.layout(in: owner, gameView: gameView)
         defer {
             display.stop(); _ = core.stop(); window.isHidden = true; oldWindow?.makeKeyAndVisible()
             if let oldPreference { UserDefaults.standard.set(oldPreference, forKey: BoundPlayerStatePreferences.key) }
             else { UserDefaults.standard.removeObject(forKey: BoundPlayerStatePreferences.key) }
+            UserDefaults.standard.set(oldDeveloperPreference, forKey: BoundDeveloperFeatures.key)
         }
         let probe = display.probe, booted = expectation(description: "VBA-M overworld")
-        var bootFrame = 0, bootFinished = false, previousMask = 0
+        let setup = NativePlayerSceneSetup(core: core)
+        var bootFinished = false
         core.updateHandler = { core in
-            bootFrame += 1
-            if let reading = probe.receive(core), reading.status == .live, !bootFinished { bootFinished = true; booted.fulfill() }
-            let mask = (1300..<1302).contains(bootFrame) ? 8 : (1600..<1602).contains(bootFrame) || (2200..<2202).contains(bootFrame) ? 1 : 0
-            for bit in [1, 8] where (mask & bit) != (previousMask & bit) {
-                if mask & bit != 0 { core.deltaCore.emulatorBridge.activateInput(bit, value: 1, playerIndex: 0) }
-                else { core.deltaCore.emulatorBridge.deactivateInput(bit, playerIndex: 0) }
+            setup.receive(core)
+            if let reading = probe.receive(core), reading.status == .live, setup.isReady, !bootFinished {
+                bootFinished = true; booted.fulfill()
             }
-            previousMask = mask
         }
         core.rate = 8; XCTAssertTrue(core.start()); await fulfillment(of: [booted], timeout: 60)
         XCTAssertTrue(core.pause()); core.rate = 1
@@ -326,6 +396,7 @@ final class RecordedPlayerTests: XCTestCase {
             var frame = 0, lastMask = 0, finished = false
             let duration = segments.reduce(0) { $0 + $1.1 }
             core.updateHandler = { core in
+                setup.receive(core)
                 if let reading = probe.receive(core) {
                     readings.append(reading)
                 }
@@ -362,6 +433,27 @@ final class RecordedPlayerTests: XCTestCase {
         XCTAssertGreaterThan(Set(scenes.map { $0.worldFoot.x }).count, 16)
         XCTAssertGreaterThan(Set(scenes.map(\.appearance)).count, 6)
 
+        // Exercise the actual native tilemaps, not just a zero-filled synthetic
+        // scene. Closing native windows leaves palette-only entries behind.
+        var clearedWindowTiles = 0
+        for scene in scenes {
+            for layer in scene.background.layers where layer.masksWholeTiles {
+                let windows = BoundPlayerBackground(tiles: Data(), layers: [layer])
+                for y in stride(from: 0, to: 160, by: 8) {
+                    for x in stride(from: 0, to: 240, by: 8) {
+                        let offset = (((y + layer.scrollY) & 255) / 8 * 32 + ((x + layer.scrollX) & 255) / 8) * 2
+                        let entry = Int(layer.map[offset]) | Int(layer.map[offset + 1]) << 8
+                        if entry != 0, entry & 1023 == 0 {
+                            clearedWindowTiles += 1
+                            XCTAssertFalse(windows.covers(x: x, y: y, priority: 2),
+                                           "Native cleared window must not erase the friend: \(entry)")
+                        }
+                    }
+                }
+            }
+        }
+        XCTAssertGreaterThan(clearedWindowTiles, 0, "Native run must exercise the reported window-clear regression")
+
         UserDefaults.standard.set(true, forKey: BoundPlayerStatePreferences.key)
         NotificationCenter.default.post(name: BoundPlayerStatePreferences.didChange, object: nil)
         await movement([(16, 40), (0, 8)], name: "Move viewer independently")
@@ -369,6 +461,7 @@ final class RecordedPlayerTests: XCTestCase {
         // A different input route runs while the recorded player follows its own.
         var replayFrame = 0
         core.updateHandler = { core in
+            setup.receive(core)
             if let reading = probe.receive(core) { readings.append(reading) }
             if replayFrame == 0 { core.deltaCore.emulatorBridge.activateInput(64, value: 1, playerIndex: 0) }
             if replayFrame == 40 { core.deltaCore.emulatorBridge.deactivateInput(64, playerIndex: 0) }

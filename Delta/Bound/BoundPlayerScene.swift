@@ -51,8 +51,10 @@ struct BoundPlayerBackground: Equatable, Sendable {
             let px = (x + layer.scrollX) & 255, py = (y + layer.scrollY) & 255
             let offset = ((py / 8) * 32 + px / 8) * 2
             let entry = Int(layer.map[offset]) | Int(layer.map[offset + 1]) << 8
-            // Native BG0 windows own their occupied tiles, including borders.
-            if layer.masksWholeTiles { if entry != 0 { return true }; continue }
+            // ClearWindowTilemap leaves palette/flip attributes on transparent
+            // tile 0 (e.g. 0xE000/0xF000). Only an occupied tile masks a window;
+            // treating those attributes as graphics hides the field beneath it.
+            if layer.masksWholeTiles { if entry & 1023 != 0 { return true }; continue }
             let tx = entry & 0x400 != 0 ? 7 - (px & 7) : px & 7
             let ty = entry & 0x800 != 0 ? 7 - (py & 7) : py & 7
             let index = (entry & 1023) * 32 + ty * 4 + tx / 2
