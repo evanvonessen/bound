@@ -993,6 +993,7 @@ private extension GameCollectionViewController
     
     func viewSaveStates(for game: Game)
     {
+        guard self.mayAccessLocalSaves(for: game) else { return }
         guard !BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier) else { return }
         self.performSegue(withIdentifier: "saveStates", sender: game)
     }
@@ -1260,6 +1261,7 @@ private extension GameCollectionViewController
 
     func importSaveFile(for game: Game)
     {
+        guard self.mayAccessLocalSaves(for: game) else { return }
         self._importingSaveFileGame = game
         
         let importController = ImportController(documentTypes: [UTType.item.identifier])
@@ -1271,6 +1273,7 @@ private extension GameCollectionViewController
     {
         // Dispatch to main queue so we can access game.gameSaveURL on its context's thread (main thread).
         DispatchQueue.main.async {
+            guard self.mayAccessLocalSaves(for: game) else { return }
             do
             {
                 if let error = error
@@ -1309,6 +1312,7 @@ private extension GameCollectionViewController
     
     func exportSaveFile(for game: Game)
     {
+        guard self.mayAccessLocalSaves(for: game) else { return }
         do
         {
             let sanitizedFilename = game.name.components(separatedBy: .urlFilenameAllowed.inverted).joined()
@@ -1337,6 +1341,19 @@ private extension GameCollectionViewController
             let alertController = UIAlertController(title: NSLocalizedString("Failed to Export Save File", comment: ""), error: error)
             self.present(alertController, animated: true, completion: nil)
         }
+    }
+
+    func mayAccessLocalSaves(for game: Game) -> Bool
+    {
+        guard game.boundUsesServerMultiplayer else { return true }
+        let alert = UIAlertController(title: "Server Saves", message: "Use Server Saves in the game.", preferredStyle: .alert)
+        alert.addAction(.ok)
+        if let presented = self.presentedViewController {
+            presented.dismiss(animated: true) { self.present(alert, animated: true) }
+        } else {
+            self.present(alert, animated: true)
+        }
+        return false
     }
     
     func showSettings(for game: Game)

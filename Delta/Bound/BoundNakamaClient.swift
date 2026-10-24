@@ -409,16 +409,26 @@ actor BoundNakamaRunService {
         var errorDescription: String? {
             switch self {
             case .unavailable: return "Server save unavailable. Retry Save when connected."
-            case .conflict: return "The server checkpoint needs recovery. Your local saves were kept."
-            case .tooLarge: return "This save exceeds the server checkpoint limit. Your local save was kept."
+            case .conflict: return "The server save changed. Refresh and reopen it."
+            case .tooLarge: return "This save exceeds the server checkpoint limit."
             }
         }
     }
     private var configuration: BoundNakamaConfiguration?
+    private var saveConfiguration: BoundNakamaAuthorization.SaveConfiguration?
+    private var saveSession: AppCloudSession?
+    private static let memorySession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }()
     private let perform: @Sendable (URLRequest) async throws -> Data
     init(perform: @escaping @Sendable (URLRequest) async throws -> Data = { request in
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let response = response as? HTTPURLResponse, response.statusCode == 200 else { throw Failure.unavailable }
+        let (data, response) = try await BoundNakamaRunService.memorySession.data(for: request)
+        guard let response = response as? HTTPURLResponse else { throw Failure.unavailable }
+        if [400, 403, 404, 409].contains(response.statusCode) { throw Failure.conflict }
+        guard response.statusCode == 200 else { throw Failure.unavailable }
         return data
     }) { self.perform = perform }
     func configure(_ configuration: BoundNakamaConfiguration) {
@@ -428,6 +438,12 @@ actor BoundNakamaRunService {
         self.configuration = configuration
     }
     private func request(_ action: String, identity: BoundMultiplayerRunIdentity, fields: [String: Any] = [:], rpc: String = "bound_run_v1") async throws -> Data {
+        if rpc == "bound_independent_v2", let saveSession {
+            guard saveSession.owner == identity.owner else { throw Failure.conflict }
+            try saveSession.credentials()
+            var fields = fields; fields["save_id"] = identity.run.uuidString.lowercased()
+            return try await saveRequest(action, fields: fields)
+        }
         guard let configuration, configuration.isValid(), configuration.ownerID == identity.owner,
               configuration.roomID.uuidString.lowercased() == identity.roomID.lowercased(),
               configuration.members.contains(identity.partner),
@@ -445,6 +461,97 @@ actor BoundNakamaRunService {
         struct Envelope: Decodable { let payload: String }
         guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else { throw Failure.unavailable }
         return Data(envelope.payload.utf8)
+    }
+    struct PlayerProfile: Codable, Equatable, Sendable {
+        var name: String
+        var gender: Int
+        var valid: Bool { (1...7).contains(name.utf8.count) && name.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) } && (0...1).contains(gender) }
+    }
+    struct ServerRun: Decodable, Identifiable, Sendable {
+        let save_id: UUID
+        let game_id: String
+        let identity: BoundMultiplayerRunIdentity
+        let participants: [UUID]
+        let revision: UInt64
+        let created_at: String
+        let updated_at: String
+        let saves: [String: Upload]
+        var id: UUID { save_id }
+    }
+    func configureSaves(session: AppCloudSession, room: String? = nil) async throws -> BoundNakamaAuthorization.SaveConfiguration {
+        let value = try await BoundNakamaAuthorization.fetchSaves(session: session, room: room)
+        saveSession = session; saveConfiguration = value
+        return value
+    }
+    private func refreshSaveAuthorization(preserveCreationScope: Bool = false) async throws {
+        guard let session = saveSession else { throw Failure.unavailable }
+        try session.credentials()
+        if let value = saveConfiguration, value.valid, value.ownerID == session.owner,
+           value.expiresAt > Date().timeIntervalSince1970 + 25 { return }
+        saveConfiguration = try await BoundNakamaAuthorization.fetchSaves(session: session, room: preserveCreationScope ? saveConfiguration?.roomID?.uuidString : nil)
+    }
+    private func saveRequest(_ action: String, fields: [String: Any] = [:]) async throws -> Data {
+        try await refreshSaveAuthorization(preserveCreationScope: action == "create")
+        guard let value = saveConfiguration, value.valid else { throw Failure.unavailable }
+        var body = fields; body["action"] = action; body["saveTicket"] = value.saveTicket
+        let json = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        var request = URLRequest(url: value.httpEndpoint.appendingPathComponent("v2/rpc/bound_independent_v2"))
+        request.httpMethod = "POST"; request.timeoutInterval = 20
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer " + value.accessToken, forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONEncoder().encode(String(decoding: json, as: UTF8.self))
+        struct Envelope: Decodable { let payload: String }
+        return Data(try JSONDecoder().decode(Envelope.self, from: await perform(request)).payload.utf8)
+    }
+    func listSaves(gameID: String) async throws -> [ServerRun] {
+        struct Page: Decodable { let runs: [ServerRun]; let cursor: String? }
+        var runs: [ServerRun] = [], cursor: String?, visited = Set<String>()
+        repeat {
+            var fields: [String: Any] = ["gameID": gameID]
+            if let cursor { guard visited.insert(cursor).inserted else { throw Failure.conflict }; fields["cursor"] = cursor }
+            let page = try JSONDecoder().decode(Page.self, from: await saveRequest("list", fields: fields))
+            runs += page.runs; cursor = page.cursor
+        } while cursor != nil
+        return runs.sorted { $0.updated_at > $1.updated_at }
+    }
+    func createSave(gameID: String, romSHA256: String, settings: Data, profile: PlayerProfile, requestID: UUID) async throws -> IndependentState {
+        guard let partner = saveConfiguration?.partnerID, profile.valid else { throw Failure.unavailable }
+        let fields: [String: Any] = ["request_id": requestID.uuidString.lowercased(), "partnerID": partner.uuidString.lowercased(),
+            "gameID": gameID, "romSHA256": romSHA256, "settings": settings.base64EncodedString(),
+            "profile": ["name": profile.name, "gender": profile.gender]]
+        return try JSONDecoder().decode(IndependentState.self, from: await saveRequest("create", fields: fields))
+    }
+    func getSave(_ id: UUID) async throws -> IndependentState {
+        try JSONDecoder().decode(IndependentState.self, from: await saveRequest("get", fields: ["save_id": id.uuidString.lowercased()]))
+    }
+    func setProfile(_ profile: PlayerProfile, saveID: UUID) async throws -> IndependentState {
+        guard profile.valid else { throw Failure.conflict }
+        return try JSONDecoder().decode(IndependentState.self, from: await saveRequest("profile", fields: ["save_id": saveID.uuidString.lowercased(),
+            "profile": ["name": profile.name, "gender": profile.gender]]))
+    }
+    func deleteSave(_ id: UUID, expectedRevision: UInt64) async throws {
+        _ = try await saveRequest("delete", fields: ["save_id": id.uuidString.lowercased(), "expectedRevision": expectedRevision, "confirmSharedDeletion": true])
+    }
+    func downloadIndependent(identity: BoundMultiplayerRunIdentity, upload: Upload) async throws -> BoundMultiplayerSavePackage {
+        guard upload.receipt.run == identity.run, upload.receipt.owner == identity.owner,
+              upload.bytes > 0, upload.bytes <= 16 * 1024 * 1024,
+              upload.count == ((upload.bytes + 2) / 3 * 4 + 11999) / 12000 else { throw Failure.conflict }
+        struct Chunk: Decodable { let data: String }
+        var encoded = ""
+        for index in 0..<upload.count {
+            let data = try await request("saveDownload", identity: identity, fields: ["checkpoint": upload.receipt.checkpoint.uuidString.lowercased(), "index": index], rpc: "bound_independent_v2")
+            let chunk = try JSONDecoder().decode(Chunk.self, from: data)
+            guard chunk.data.utf8.count <= 12000 else { throw Failure.conflict }
+            encoded += chunk.data
+        }
+        guard let bytes = Data(base64Encoded: encoded), bytes.count == upload.bytes,
+              BoundMultiplayerSaveStore.hash(bytes) == upload.receipt.payloadSHA256 else { throw Failure.conflict }
+        let payload = try JSONDecoder().decode(BoundMultiplayerSavePackage.Payload.self, from: bytes)
+        guard payload.version == 2, payload.manifest.identity == identity,
+              payload.checkpoint == upload.receipt.checkpoint, payload.sharedEventDigest == upload.receipt.sharedEventDigest else { throw Failure.conflict }
+        return .init(payload: payload, receipt: upload.receipt)
     }
     func session(identity: BoundMultiplayerRunIdentity, history: String, bits: Data, head: BoundMultiplayerSavePackage?, world: BoundWorldState? = nil) async throws -> State {
         let value = try JSONSerialization.jsonObject(with: BoundMultiplayerSaveStore.encode(identity))
@@ -469,6 +576,9 @@ actor BoundNakamaRunService {
         let saves: [String: Upload]
         let events: [BoundMultiplayerSharedEvent]
         let legacyHistory: [String: LegacyHistory]?
+        let profiles: [String: PlayerProfile]?
+        let save_id: UUID?
+        let updated_at: String?
 
         var serverCursor: BoundMultiplayerSharedCursor {
             .init(origins: Dictionary(uniqueKeysWithValues: cursors.compactMap { key, value in UUID(uuidString:key).map { ($0.uuidString,value) } }))
@@ -526,6 +636,7 @@ actor BoundNakamaRunService {
         return try JSONDecoder().decode(IndependentState.self,from:data)
     }
     private func refreshUploadAuthorization(identity: BoundMultiplayerRunIdentity, session: AppCloudSession?) async throws {
+        if saveSession != nil { try await refreshSaveAuthorization(); return }
         guard let session else { return }
         guard session.owner == identity.owner else { throw Failure.conflict }
         if let configuration, configuration.ownerID == identity.owner,

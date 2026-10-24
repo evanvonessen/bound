@@ -1,53 +1,115 @@
-# Multiplayer save packages
+# Multiplayer server saves
 
-Each run binds an account-owned cartridge save to its partner, room, setup owner,
-immutable shared settings, distinct seeds, exact ROM hash and protocol/save
-versions. Original solo batteries and prior recovery files are preserved.
+Games marked `bound.multiplayer`, including the integrated Multi Red cartridge,
+open Bound's server-save menu. A compatible ROM adapter is required before play.
+Existing local multiplayer batteries, save states and legacy packages are ignored
+and preserved; they are never imported automatically. Unmarked games retain
+ordinary Delta saving. Experimental Multiplayer remains off by default.
 
-Version 2 completes a player's content-hashed snapshot locally, without a partner
-receipt. Native Save flushes that player's battery, Soul Link ledger, timeline,
-shared-event cursor and internal snapshot, together with any required native
-transaction recovery. Each player has an independent checkpoint ancestry.
-Server and Dropbox uploads use immutable copies in the background and cannot
-reopen or delay gameplay. Version 1 paired packages remain readable for existing
-exact-build recovery; they are not silently discarded.
+## Two players, one permanent run
 
-Local suspension retains the most recent working state before app closure.
-Normal reopening checks the local account/device, exact ROM, file hashes and
-transaction integrity. It requires neither a partner connection nor matching
-checkpoint IDs or equal progress. Cross-build raw emulator states remain
-unsupported. A damaged local save has an explicit recovery path.
+Nakama creates one UUID `save_id` after validating the creator's authenticated
+friend room. Both participants see that ID in their server catalog even when the
+friend is offline. Creation records immutable participants, room, ROM hash,
+shared settings and separate nonzero randomization seeds. A stable creation
+request ID makes a retry return the same run. Each participant chooses a personal
+name and character; the creator chooses the shared options in Bound.
 
-The shared journal records stable `(origin, sequence)` identities before sending.
-Received events persist before effects, and effects persist before their applied
-cursor. Duplicate/reordered delivery is harmless; contiguous and sparse per-origin
-receipts ensure that a later sequence cannot hide a missing earlier one. Missing
-messages retry after reconnect. Acknowledgements report durable synchronization;
-they never authorize native frames or Save.
+Each participant has an independent snapshot head under that shared ID. A manual,
+automatic or disconnect save replaces only its owner's head. Checkpoint UUIDs
+identify immutable snapshots, not additional runs. Save data includes the
+cartridge battery, emulator state, Soul Link ledger, timeline, shared-event
+journal/cursors and native battle/trade recovery records. Nakama's existing
+private storage and independent snapshot protocol provide persistence; no second
+save database or network framework was introduced.
 
-Soul Link death tombstones, used encounter slots, egg ordinals, pending events
-and sequence counters are monotonic history. Restoring an older native save merges
-that history rather than rolling it backward. A recorded death continues to bar
-a corresponding Pokemon caught later. Older packages and replaced local files
-remain available in restore originals. Restore transactions are staged before
-activation, and interrupted native trade/battle recovery remains protected.
+The catalog has no TTL and is not tied to live-match lifetime. **Clear Server
+Saves** is the client deletion path. Its confirmation explicitly covers both
+players; the server requires membership, explicit shared-deletion confirmation
+and the revision shown to the user. A changed run must be refreshed and confirmed
+again. A durable tombstone fences late chunks, old writers and creation retries.
+See [Nakama persistence and operation classes](../Backend/nakama/README.md).
 
-Shared journals remain addressable by run and owner after explicit end or a new
-run archives a game folder, so a final queued event is not lost. Archived outboxes
-can upload and receive durable acknowledgements without reopening their games.
+## Conflict rules
 
-Cloud imports and device transfers continue to validate account ownership, ROM
-compatibility, content hashes and explicit ownership transfer. They never choose
-between incompatible saves solely by timestamp. A transfer/recovery operation may
-need its authoritative server records; an already validated local game does not
-need continuous server or partner permission to progress.
-An explicitly imported save first reconciles a fixed authoritative history
-target, including its owner's earlier events. This finite local recovery step
-preserves deaths and spent encounter slots before the first restored frame;
-new partner progress cannot keep extending its target. Snapshot uploads renew
-their own device authority between chunks without holding the gameplay loop.
+* Different players may save independently; their snapshot slots never overlap.
+* Two devices for one player use compare-and-swap against the last known server
+  head. The first valid seal wins. The other device stops and asks to refresh and
+  reopen; timestamps never choose a winner or silently discard an account's head.
+* Upload retries preserve immutable bytes and checkpoint identity. A final
+  disconnect snapshot may rebase only onto the previously known head or its own
+  in-flight upload. A rebase gets a new checkpoint UUID and checksum, retaining
+  the same `save_id` and frozen game contents.
+* Restoring requires the authenticated participant, exact game/ROM, valid content
+  hashes and a fixed initial shared-history target. Gaps and permanent losses
+  are reconciled before gameplay resumes. A partner's continuing progress cannot
+  indefinitely extend that initial target.
 
-Validation must cover different towns/badges, a closed partner app, offline saves
-and reopen, delayed/duplicate/reordered events, gaps in acknowledgement cursors,
-death before catch, and older-save loading without resurrecting a lost pair.
-Runtime/device/network evidence limits are recorded with each published change.
+## RAM working state and recovery
+
+Marked games intercept native battery and state-file access before the core is
+bound. Their working battery, state, journal, ledger and recovery files exist
+only in memory. Manual state loading, local autosaves, legacy Dropbox GameSave
+sync and general server-backup import/export cannot bypass this policy. Existing
+files are untouched. The server remains the only persistent multiplayer store.
+
+Pokémon's normal Save action schedules a server checkpoint. Automatic checkpoints
+run about every 15 seconds at a safe boundary; a pending upload is retried before
+another is created. Local emulator execution does not wait for the network or a
+partner acknowledgment. The core briefly pauses to copy a consistent state,
+battery and journal into RAM, then resumes before encoding and network upload.
+This capture cost requires physical frame-pacing measurement; it is not a claim
+of zero pause time or parity with upstream Delta.
+
+During native battles/trades, the last safe world snapshot travels with current
+transaction recovery data; temporary battle RAM is not saved as the world. Exit
+and suspension retain an immutable final package in an independent task, drain
+unacknowledged events, await any in-flight upload and attempt a final seal using
+an iOS background assertion. Bounded retries never write a fallback to disk.
+Failure/expiry retains the frozen package in RAM and offers Retry Save or a
+confirmed Use Last Server Save action. A retry may use a renewed session for the
+same owner; switching runs cannot silently discard a failed final save. The
+Pokédex's current-save reader also uses the RAM battery, never an old local file.
+Reopening always downloads the latest confirmed server snapshot. A network outage
+or OS termination can lose changes since that checkpoint; the phone cannot make
+an unreachable server durable.
+
+The existing `(origin, sequence)` event IDs, contiguous/sparse acknowledgments,
+deduplication, missing-event replay and Soul Link tombstones remain in use.
+Presence is coalesced and freshness-bound, not strictly sequenced gameplay.
+Battles and trades retain their reliable consent/transaction protocol. Nakama
+validates authentication, ownership, schemas and event identities; it does not
+simulate Pokémon game logic.
+
+## Validation limits
+
+Native and protocol tests cover local-write suppression, RAM round trips,
+independent ownership, duplicate creation, event gaps/reordering, immutable
+uploads, CAS conflicts, permanent catalog access and deletion fencing. Release
+compilation is separate from runtime validation. Live backend deployment and
+two-physical-device checks are pending. Test distance at 1/3/5/10+ tiles,
+offscreen/reentry, maps/elevations, offline partner creation, two-account resume,
+same-owner device conflicts, manual/automatic/disconnect saves, battle/trade
+recovery, video, authentication and frame pacing before claiming device parity.
+
+Local validation recorded October 24, 2026:
+
+| Check | Result |
+| --- | --- |
+| Nakama runtime fixtures | 81 passed |
+| Account broker and self-hosted service fixtures | 105 passed |
+| Swift save-package tests | 49 passed |
+| Swift Nakama client / ROM contract / disconnect tests | 12 / 27 / 7 passed |
+| Presence / recorded-player / Soul Link suites | 25 / 11 / 51 passed |
+| Cooperative contract and recorded-player follow-up | 24 passed |
+| Native RAM state + battery roundtrip and disk-write suppression | Passed |
+| multi_red full reconstruction gate | 452 passed; 23 retained stages, 40 gameplay segments, 102 rendered snapshots |
+| Source/dependency integrity | 17,061 pinned files unchanged |
+| SDK privacy integration checks | 99 hashes and 2 manifests verified |
+| Raw state sync/file preservation and ordinary preference regression | 2 passed |
+| Unsigned Release iPhone build | Passed |
+
+The matching integrated cartridge SHA-256 is
+`15f7be08ae295828ae95e2b7ede00e553ac5cbbea2b2e5789ad9a98494fe7707`.
+These suite counts overlap and are not an aggregate test total. PostgreSQL/live
+Nakama, physical phones and WAN/performance acceptance are not claimed.

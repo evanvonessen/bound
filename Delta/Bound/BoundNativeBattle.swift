@@ -284,21 +284,23 @@ final class BoundNativeBattleSession {
         if activity == .battle { soulProbe?.setFriendlyBattleActive(true, for:core) }
         core.rate=core.deltaCore.supportedRates.lowerBound
         do {
-            let folder=try FileManager.default.url(for:.applicationSupportDirectory,in:.userDomainMask,appropriateFor:nil,create:true)
+            let folder=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
                 .appendingPathComponent("Friend Battles",isDirectory:true)
-            try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+            try BoundServerMemoryFiles.directory(folder,gameID:gameID)
             let backup=folder.appendingPathComponent(id.uuidString+".state")
-            core.saveSaveState(to:backup)
-            let bytes=try Data(contentsOf:backup)
+            try BoundServerMemoryFiles.saveState(core:core,to:backup,gameID:gameID)
+            let bytes=try BoundServerMemoryFiles.read(backup,gameID:gameID)
             guard bytes.count>1024 else { throw CocoaError(.fileReadCorruptFile) }
             backupURL=backup
             let journal=folder.appendingPathComponent(id.uuidString+".json")
             let value:[String:Any]=["gameID":gameID,"rom":BoundPlayerROMProfile.supportedSHA256,
                 "state":backup.lastPathComponent,"sha256":Self.hash(bytes),"activity":activity.rawValue]
-            try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]).write(to:journal,options:.atomic)
+            try BoundServerMemoryFiles.write(JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]),to:journal,gameID:gameID)
             journalURL=journal
-            var resource=URLResourceValues(); resource.isExcludedFromBackup=true
-            var protectedFolder=folder; try protectedFolder.setResourceValues(resource)
+            if !BoundServerMemoryFiles.isEnabled(for:gameID) {
+                var resource=URLResourceValues(); resource.isExcludedFromBackup=true
+                var protectedFolder=folder; try protectedFolder.setResourceValues(resource)
+            }
         } catch { fail("Couldn’t prepare a recovery snapshot"); return }
         let failure:@Sendable ()->Void = { [weak self] in
             Task { @MainActor in
@@ -395,12 +397,12 @@ final class BoundNativeBattleSession {
         }
     }
     private func markTradeStarted() throws {
-        guard let journalURL,let bytes=try? Data(contentsOf:journalURL),
+        guard let journalURL,let bytes=try? BoundServerMemoryFiles.read(journalURL,gameID:gameID),
               var value=try JSONSerialization.jsonObject(with:bytes) as? [String:String] else {
             throw CocoaError(.fileReadCorruptFile)
         }
         value["tradeStarted"]="true"
-        try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]).write(to:journalURL,options:.atomic)
+        try BoundServerMemoryFiles.write(JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]),to:journalURL,gameID:gameID)
     }
     private func emit(_ kind:BoundBattleControlPacket.Kind)->Bool {
         guard let id,let data=BoundBattleControlPacket(id:id,kind:kind).encoded() else { return false }
@@ -438,15 +440,15 @@ final class BoundNativeBattleSession {
         var recovered=backupURL==nil
         if let backupURL,core.state != .stopped {
             do {
-                try core.load(DeltaCore.SaveState(fileURL:backupURL,gameType:core.game.type))
+                try BoundServerMemoryFiles.loadState(core:core,from:backupURL,gameID:gameID)
                 let check=BoundVBABattleBridge.advanceAndObserve()
                 recovered=(check["callback"] as? Int)==0x080565B5 && (check["battle"] as? Bool)==false && BoundVBABattleBridge.verifyBattleReady()
                 if recovered {
                     didRestore=true
                     // Remove the recovery instruction before its state. A crash
                     // between removals leaves an inert orphan, not a stale restore.
-                    if let journalURL { try FileManager.default.removeItem(at:journalURL) }
-                    try? FileManager.default.removeItem(at:backupURL)
+                    if let journalURL { try BoundServerMemoryFiles.remove(journalURL,gameID:gameID) }
+                    try? BoundServerMemoryFiles.remove(backupURL,gameID:gameID)
                 }
             } catch { recovered=false }
         }
@@ -478,8 +480,8 @@ final class BoundNativeBattleSession {
                 if count > 0 { tradeCompleted?(tradeID, count) }
             }
             do {
-                if let journalURL { try FileManager.default.removeItem(at:journalURL) }
-                if let backupURL { try? FileManager.default.removeItem(at:backupURL) }
+                if let journalURL { try BoundServerMemoryFiles.remove(journalURL,gameID:gameID) }
+                if let backupURL { try? BoundServerMemoryFiles.remove(backupURL,gameID:gameID) }
                 self.journalURL=nil; self.backupURL=nil
                 interactions?.activityEnded(finished ? message : "Trade interrupted. Continue from your in-game save.")
                 restored?()
@@ -493,15 +495,15 @@ final class BoundNativeBattleSession {
     private func findRecovery() {
         guard let core else { return }
         do {
-            let folder=try FileManager.default.url(for:.applicationSupportDirectory,in:.userDomainMask,appropriateFor:nil,create:true)
+            let folder=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
                 .appendingPathComponent("Friend Battles",isDirectory:true)
-            guard let files=try? FileManager.default.contentsOfDirectory(at:folder,includingPropertiesForKeys:[.contentModificationDateKey]) else { return }
+            guard let files=try? BoundServerMemoryFiles.contents(folder,gameID:gameID) else { return }
             let candidates=files.filter { $0.pathExtension=="json" }.sorted {
-                ((try? $0.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
-                    > ((try? $1.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
+                BoundServerMemoryFiles.modifiedAt($0,gameID:gameID)
+                    > BoundServerMemoryFiles.modifiedAt($1,gameID:gameID)
             }
             for journal in candidates.prefix(64) {
-                guard let bytes=try? Data(contentsOf:journal),bytes.count<=4096,
+                guard let bytes=try? BoundServerMemoryFiles.read(journal,gameID:gameID),bytes.count<=4096,
                       let value=try? JSONSerialization.jsonObject(with:bytes) as? [String:String],
                       value["gameID"]==gameID,value["rom"]==BoundPlayerROMProfile.supportedSHA256,
                       let name=value["state"],name==URL(fileURLWithPath:name).lastPathComponent,
@@ -514,7 +516,7 @@ final class BoundNativeBattleSession {
                     // Bind runs before loading automatic states. Preserve the actual
                     // cartridge save, never flash data from a pre-trade save state.
                     recoveryFailed=true
-                    let battery=try Data(contentsOf:core.game.gameSaveURL)
+                    let battery=try BoundServerMemoryFiles.battery(core:core,gameID:gameID)
                     guard battery.count == 131072 else {
                         interactions?.activityEnded("Trade save needs recovery. The original snapshots were kept.")
                         return
@@ -539,25 +541,30 @@ final class BoundNativeBattleSession {
         if core.state == .running { _=core.pause() }
         probe.configure(core:nil); BoundVBABattleBridge.close()
         do {
-            let bytes=try Data(contentsOf:recovery.state)
+            let bytes=try BoundServerMemoryFiles.read(recovery.state,gameID:gameID)
             guard Self.hash(bytes)==recovery.digest else { throw CocoaError(.fileReadCorruptFile) }
             _=try BoundPlayerROMProfile(rom:Data(contentsOf:core.game.fileURL,options:.mappedIfSafe))
             if let battery=recovery.tradeBattery {
                 guard core.stop() else { throw CocoaError(.fileReadUnknown) }
-                try battery.write(to:core.game.gameSaveURL,options:.atomic)
-                guard core.start() else { throw CocoaError(.fileReadUnknown) }
-                try FileManager.default.removeItem(at:recovery.journal)
-                try? FileManager.default.removeItem(at:recovery.state)
+                if BoundServerMemoryFiles.isEnabled(for:gameID) {
+                    guard core.start(),core.pause(),BoundVBABattleBridge.restoreServerBattery(battery) else { throw CocoaError(.fileReadUnknown) }
+                } else {
+                    try battery.write(to:core.game.gameSaveURL,options:.atomic)
+                    guard core.start() else { throw CocoaError(.fileReadUnknown) }
+                }
+                try BoundServerMemoryFiles.remove(recovery.journal,gameID:gameID)
+                try? BoundServerMemoryFiles.remove(recovery.state,gameID:gameID)
                 self.recovery=nil; timer?.invalidate(); timer=nil
                 interactions?.activityEnded("Continue from your in-game save after the interrupted trade.")
                 if !(canResume?() ?? true) { _=core.pause() }
+                else if core.state == .paused { _=core.resume() }
                 return
             }
-            try core.load(DeltaCore.SaveState(fileURL:recovery.state,gameType:core.game.type))
+            try BoundServerMemoryFiles.loadState(core:core,from:recovery.state,gameID:gameID)
             let check=BoundVBABattleBridge.advanceAndObserve()
             guard (check["callback"] as? Int)==0x080565B5,(check["battle"] as? Bool)==false else { throw CocoaError(.fileReadCorruptFile) }
-            try FileManager.default.removeItem(at:recovery.journal)
-            try? FileManager.default.removeItem(at:recovery.state)
+            try BoundServerMemoryFiles.remove(recovery.journal,gameID:gameID)
+            try? BoundServerMemoryFiles.remove(recovery.state,gameID:gameID)
             self.recovery=nil; timer?.invalidate(); timer=nil
             if recovery.friendlyBattle { soulProbe?.setFriendlyBattleActive(false, for:core) }
             interactions?.activityEnded("Your game was restored after an interrupted friendly battle")

@@ -91,7 +91,9 @@ export function createNakamaSessionHandler({ publishableKey, nakamaHTTPURL, naka
     if (!/^Bearer [A-Za-z0-9._-]{16,16384}$/.test(authorization)) return reply(401, { error: 'unauthorized' });
     let body;
     try { body = await boundedJSON(request.body, 512, requestTimeoutMs); } catch { return reply(400, { error: 'invalid_request' }); }
-    if (!exactKeys(body, ['roomID', 'protocol']) || !uuid.test(body.roomID ?? '') || body.protocol !== protocol) return reply(400, { error: 'invalid_request' });
+    const saves = body?.protocol === 'bound-saves-v1';
+    if (saves ? !(exactKeys(body, ['protocol']) || exactKeys(body, ['protocol', 'roomID']) && uuid.test(body.roomID ?? '')) :
+        !exactKeys(body, ['roomID', 'protocol']) || !uuid.test(body.roomID ?? '') || body.protocol !== protocol) return reply(400, { error: 'invalid_request' });
     if (!origin) return reply(503, { error: 'not_configured' });
     const headers = { Authorization: authorization, apikey: publishableKey, 'Content-Type': 'application/json' };
     let ownerID;
@@ -116,12 +118,14 @@ export function createNakamaSessionHandler({ publishableKey, nakamaHTTPURL, naka
       try { return checkedRoom(value, ownerID, body.roomID); } catch { return null; }
     };
     let room;
-    try { room = await resolveRoom(); } catch { return reply(503, { error: 'membership_unavailable' }); }
-    if (!room) return reply(403, { error: 'forbidden' });
+    try { room = saves && !body.roomID ? null : await resolveRoom(); } catch { return reply(503, { error: 'membership_unavailable' }); }
+    if (!room && (!saves || body.roomID)) return reply(403, { error: 'forbidden' });
     try {
       const issuedAt = now();
       if (!Number.isSafeInteger(issuedAt) || issuedAt < 0) throw Error('invalid clock');
-      const claims = { version: 1, protocol, ownerID, roomID: body.roomID, members: room.members, issuedAt, expiresAt: issuedAt + 90 };
+      const claims = saves ? { version: 1, protocol: 'bound-saves-v1', ownerID, issuedAt, expiresAt: issuedAt + 90,
+        ...(room ? { partnerID: room.peerOwnerID, roomID: room.roomID } : {}) } :
+        { version: 1, protocol, ownerID, roomID: body.roomID, members: room.members, issuedAt, expiresAt: issuedAt + 90 };
       const encoded = b64url(new TextEncoder().encode(JSON.stringify(claims)));
       const signature = new Uint8Array(await cryptoImpl.subtle.sign('HMAC', await signingKey, new TextEncoder().encode(encoded)));
       const joinTicket = encoded + '.' + Array.from(signature, byte => byte.toString(16).padStart(2, '0')).join('');
@@ -132,6 +136,18 @@ export function createNakamaSessionHandler({ publishableKey, nakamaHTTPURL, naka
       if (!auth.ok) throw Error('upstream authentication failed');
       const session = await boundedJSON(auth.body, 32768, requestTimeoutMs);
       const sessionClaims = decodeToken(session?.token, now());
+      if (saves) {
+        // Library access survives a closed gameplay socket. Creation still
+        // requires current friendship; persisted run access is checked by Nakama.
+        if (room && JSON.stringify(await resolveRoom()) !== JSON.stringify(room)) return reply(403, { error: 'forbidden' });
+        const active = await call(`${supabaseOrigin}/rest/v1/rpc/cup117_account_active`, { method: 'POST', headers, body: '{}' });
+        if (!active.ok || await boundedJSON(active.body, 32, requestTimeoutMs) !== true) return reply(403, { error: 'forbidden' });
+        const expiresAt = Math.min(claims.expiresAt, sessionClaims.exp);
+        const current = now();
+        if (!Number.isSafeInteger(current) || expiresAt <= current + 10) throw Error('expired issuance');
+        return reply(200, { httpEndpoint: origin, accessToken: session.token, ownerID, expiresAt, saveTicket: joinTicket,
+          ...(room ? { partnerID: room.peerOwnerID, roomID: room.roomID } : {}) });
+      }
       const result = await call(`${origin}/v2/rpc/bound_room_v1`, {
         method: 'POST', headers: { Authorization: 'Bearer ' + session.token, 'Content-Type': 'application/json' },
         // Nakama's REST RPC payload is a JSON string containing serialized JSON.

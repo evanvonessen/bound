@@ -44,7 +44,7 @@ extension GameSave: Syncable
     }
     
     public var syncableFiles: Set<File> {
-        guard let game = self.game else { return [] }
+        guard let game = self.game, !game.boundUsesServerMultiplayer else { return [] }
         
         let packages = BoundMultiplayerSaveStore.shared
         let protectedRun = packages.hasRun(gameID: game.identifier)
@@ -90,11 +90,12 @@ extension GameSave: Syncable
         // self.game may be nil if being downloaded, so don't enforce it.
         // guard let identifier = self.game?.identifier else { return false }
         
-        return self.game?.identifier != Game.melonDSBIOSIdentifier && self.game?.identifier != Game.melonDSDSiBIOSIdentifier
+        return self.game?.boundUsesServerMultiplayer != true && self.game?.identifier != Game.melonDSBIOSIdentifier && self.game?.identifier != Game.melonDSDSiBIOSIdentifier
     }
     
     public func awakeFromSync(_ record: AnyRecord) throws
     {
+        guard game?.boundUsesServerMultiplayer != true else { throw BoundROMUpdateError.multiplayerPending }
         try BoundROMUpdateRegistry.validateDownload(gameID: self.identifier,
             generation: record.remoteMetadata?[HarmonyMetadataKey("boundROMGeneration")], isSave: true,
             remoteLocked: record.perform { $0.remoteRecord?.isLocked ?? true })
@@ -139,6 +140,8 @@ extension GameSave: Syncable
                 throw ValidationError.nilRelationshipObjects(keys: [#keyPath(GameSave.game)])
             }
         }
+        // Corrupt-record repair may have changed the game's relationship.
+        guard game?.boundUsesServerMultiplayer != true else { throw BoundROMUpdateError.multiplayerPending }
         if let game, record.remoteMetadata?[HarmonyMetadataKey("boundMultiplayerRun")] != nil ||
             BoundMultiplayerSaveStore.shared.hasRun(gameID: game.identifier) {
             multiplayerDownloadDirectory = try BoundMultiplayerSaveStore.shared.stageDownload(
@@ -149,6 +152,7 @@ extension GameSave: Syncable
 
     public func prepareForSync(_ record: AnyRecord) throws
     {
+        guard game?.boundUsesServerMultiplayer != true else { throw BoundROMUpdateError.multiplayerPending }
         try BoundROMUpdateRegistry.validateUpload(gameID: self.identifier)
         if BoundROMUpdateRegistry.generation(for: self.identifier) != nil, let game = self.game {
             try BoundROMUpdateResetPolicy.validateBatteryForUpload(try? Data(contentsOf: game.gameSaveURL), expectedSHA1: self.sha1)

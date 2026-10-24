@@ -104,18 +104,37 @@ export function createServices({ pool, authenticate, config = process.env, fetch
   async function gameplay(request, identity) {
     let body;
     try { body = await readJSON(request, 512); } catch { return reply(400, { error: 'invalid_request' }); }
-    if (!exact(body, ['roomID', 'protocol']) || !uuid.test(body.roomID) || body.protocol !== 'bound-room-v1') return reply(400, { error: 'invalid_request' });
+    const saves = body?.protocol === 'bound-saves-v1';
+    if (saves ? !(exact(body, ['protocol']) || exact(body, ['protocol', 'roomID']) && uuid.test(body.roomID ?? '')) :
+        !exact(body, ['roomID', 'protocol']) || !uuid.test(body.roomID) || body.protocol !== 'bound-room-v1') return reply(400, { error: 'invalid_request' });
     if (!config.PUBLIC_URL || !config.NAKAMA_HTTP_URL || (config.BOUND_NAKAMA_BRIDGE_SECRET?.length ?? 0) < 32) return reply(503, { error: 'not_configured' });
     try {
-      const room = await rpc(identity, 'bound_nakama_room_v1', { payload: { roomID: body.roomID } });
+      const room = saves && !body.roomID ? null : await rpc(identity, 'bound_nakama_room_v1', { payload: { roomID: body.roomID } });
       const ownerID = claimsFor(identity).sub;
-      if (room?.ownerID !== ownerID || room.roomID !== body.roomID || !Array.isArray(room.members) || !room.members.includes(ownerID)) return reply(403, { error: 'forbidden' });
+      const partnerID = room?.peerOwnerID ?? room?.peerID;
+      if ((!saves || body.roomID) && (room?.ownerID !== ownerID || room.roomID !== body.roomID ||
+          !Array.isArray(room.members) || room.members.length < 2 || room.members.length > 8 ||
+          room.members.some(member => typeof member !== 'string' || !uuid.test(member) || member !== member.toLowerCase()) ||
+          new Set(room.members).size !== room.members.length || !room.members.includes(ownerID) ||
+          typeof partnerID !== 'string' || !uuid.test(partnerID) || partnerID === ownerID || !room.members.includes(partnerID))) return reply(403, { error: 'forbidden' });
       const now = Math.floor(Date.now() / 1000);
-      const ticket = { version: 1, protocol: body.protocol, ownerID, roomID: body.roomID,
-        members: [...room.members].sort(), issuedAt: now, expiresAt: now + 90 };
+      const ticket = saves ? { version: 1, protocol: 'bound-saves-v1', ownerID, issuedAt: now, expiresAt: now + 90,
+        ...(room ? { partnerID: room.peerOwnerID ?? room.peerID, roomID: room.roomID } : {}) } :
+        { version: 1, protocol: body.protocol, ownerID, roomID: body.roomID, members: [...room.members].sort(), issuedAt: now, expiresAt: now + 90 };
       const encoded = Buffer.from(JSON.stringify(ticket)).toString('base64url');
       const joinTicket = encoded + '.' + createHmac('sha256', config.BOUND_NAKAMA_BRIDGE_SECRET).update(encoded).digest('hex');
       const token = identity.nakamaToken ?? identity.token;
+      if (saves) {
+        const fresh = await authenticate(request);
+        if (claimsFor(fresh).sub !== ownerID) return reply(403, { error: 'forbidden' });
+        if (room && JSON.stringify(await rpc(fresh, 'bound_nakama_room_v1', { payload: { roomID: body.roomID } })) !== JSON.stringify(room)) return reply(403, { error: 'forbidden' });
+        if (await rpc(fresh, 'cup117_account_active') !== true) return reply(403, { error: 'forbidden' });
+        const expiresAt = Math.min(now + 90, Number(identity.claims?.exp ?? now + 90));
+        if (!Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000) + 10) throw Error('expired issuance');
+        return reply(200, { httpEndpoint: new URL(config.PUBLIC_URL).origin, accessToken: token, ownerID,
+          expiresAt, saveTicket: joinTicket,
+          ...(room ? { partnerID: ticket.partnerID, roomID: room.roomID } : {}) });
+      }
       const upstream = await fetchImpl(new URL('/v2/rpc/bound_room_v1', config.NAKAMA_HTTP_URL), {
         method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(JSON.stringify({ ticket: joinTicket })), redirect: 'error', signal: AbortSignal.timeout(5000),

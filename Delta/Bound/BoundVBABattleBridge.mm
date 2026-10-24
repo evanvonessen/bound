@@ -9,9 +9,16 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <zlib.h>
 #include "NativeBattle/BoundBattleEntryCode.h"
 
 extern uint8_t *rom,*workRAM,*internalRAM,*ioMem;
+extern uint8_t flashSaveMemory[0x20000];
+extern int flashSize;
+extern int skipSaveGameBattery,skipSaveGameCheats;
+extern void flashSetSize(int size);
+extern bool CPUWriteMemState(char *,int,long &);
+extern bool CPUReadMemState(char *,int);
 namespace {
 // Bound owns this interception; upstream core sources and dependency pins stay
 // unchanged. Every write, including stop() and guest save callbacks, crosses the
@@ -22,7 +29,10 @@ struct GameSaveFence {
     std::mutex lock;
     std::set<std::string> blockedPaths;
     std::set<std::string> cooperativeBlockedPaths;
+    std::set<std::string> serverOnlyPaths;
+    bool serverOnlyActive=false;
     GameSaveWriter writer=nullptr;
+    GameSaveWriter reader=nullptr,stateWriter=nullptr,stateReader=nullptr;
 };
 GameSaveFence &gameSaveFence() { static GameSaveFence value; return value; }
 std::string canonicalSavePath(NSURL *url) {
@@ -35,8 +45,22 @@ void fencedGameSave(id bridge,SEL selector,NSURL *url) {
     auto &fence=gameSaveFence();
     std::lock_guard<std::mutex> lock(fence.lock);
     const auto path=canonicalSavePath(url);
-    if(path.empty()||fence.blockedPaths.count(path)||fence.cooperativeBlockedPaths.count(path)||!fence.writer) return;
+    if(path.empty()||fence.serverOnlyActive||fence.serverOnlyPaths.count(path)||fence.blockedPaths.count(path)||fence.cooperativeBlockedPaths.count(path)||!fence.writer) return;
     fence.writer(bridge,selector,url);
+}
+void fencedGameLoad(id bridge,SEL selector,NSURL *url) {
+    auto &fence=gameSaveFence();std::lock_guard<std::mutex> lock(fence.lock);
+    const auto path=canonicalSavePath(url);
+    if(path.empty()||fence.serverOnlyActive||fence.serverOnlyPaths.count(path)||!fence.reader) return;
+    fence.reader(bridge,selector,url);
+}
+void fencedStateSave(id bridge,SEL selector,NSURL *url) {
+    auto &fence=gameSaveFence();std::lock_guard<std::mutex> lock(fence.lock);
+    if(!fence.serverOnlyActive&&fence.stateWriter) fence.stateWriter(bridge,selector,url);
+}
+void fencedStateLoad(id bridge,SEL selector,NSURL *url) {
+    auto &fence=gameSaveFence();std::lock_guard<std::mutex> lock(fence.lock);
+    if(!fence.serverOnlyActive&&fence.stateReader) fence.stateReader(bridge,selector,url);
 }
 bool installGameSaveFence() {
     auto &fence=gameSaveFence();
@@ -48,6 +72,22 @@ bool installGameSaveFence() {
        ||[signature getArgumentTypeAtIndex:2][0]!='@') return false;
     fence.writer=reinterpret_cast<GameSaveWriter>(method_setImplementation(method,reinterpret_cast<IMP>(fencedGameSave)));
     return fence.writer!=nullptr;
+}
+bool installServerSaveFence() {
+    auto &fence=gameSaveFence();
+    if(!installGameSaveFence()) return false;
+    auto install=[](SEL selector,GameSaveWriter replacement,GameSaveWriter &original) {
+        if(original) return true;
+        Method method=class_getInstanceMethod(NSClassFromString(@"GBAEmulatorBridge"),selector);
+        if(!method) return false;
+        NSMethodSignature *signature=[NSMethodSignature signatureWithObjCTypes:method_getTypeEncoding(method)];
+        if(signature.numberOfArguments!=3||strcmp(signature.methodReturnType,@encode(void))||[signature getArgumentTypeAtIndex:2][0]!='@') return false;
+        original=reinterpret_cast<GameSaveWriter>(method_setImplementation(method,reinterpret_cast<IMP>(replacement)));
+        return original!=nullptr;
+    };
+    return install(@selector(loadGameSaveFromURL:),fencedGameLoad,fence.reader)
+        &&install(@selector(saveSaveStateToURL:),fencedStateSave,fence.stateWriter)
+        &&install(@selector(loadSaveStateFromURL:),fencedStateLoad,fence.stateReader);
 }
 constexpr size_t RegionOffset=0x1FFF800,RegionSize=0x800;
 constexpr uint32_t ScriptAddress=0x09FFFC00,MailboxMagic=0x314D4642;
@@ -117,6 +157,62 @@ static uint8_t soulQAScriptBackup[128];
     if(allowed) fence.blockedPaths.erase(path);
     else fence.blockedPaths.insert(path);
     return YES;
+}
++ (BOOL)setServerOnlyGameSave:(BOOL)enabled forURL:(NSURL *)url {
+    auto &fence=gameSaveFence();std::lock_guard<std::mutex> lock(fence.lock);
+    const auto path=canonicalSavePath(url);
+    if(path.empty()||!installServerSaveFence()) return NO;
+    fence.serverOnlyActive=enabled;
+    if(enabled) fence.serverOnlyPaths.insert(path);
+    // A previously marked path remains protected even after a different game
+    // binds. Its old persistent save can never be loaded by a delayed callback.
+    return YES;
+}
++ (NSData *)captureServerState {
+    if(!rom||!workRAM||!internalRAM) return [NSData data];
+    NSMutableData *data=[NSMutableData dataWithLength:4*1024*1024];
+    long reserved=0;
+    if(!CPUWriteMemState(static_cast<char *>(data.mutableBytes),int(data.length),reserved)) return [NSData data];
+    const auto *bytes=static_cast<const uint8_t *>(data.bytes);
+    // VBA's memory writer prepends its own eight-byte length header. Read the
+    // finalized length after gzip close rather than its pre-close estimate.
+    const size_t length=size_t(word(bytes+4))+8;
+    if(memcmp(bytes,"VBA ",4)||length<=32||length>data.length) return [NSData data];
+    data.length=length;return data;
+}
++ (BOOL)restoreServerState:(NSData *)data {
+    if(!rom||!workRAM||!internalRAM||data.length<=32||data.length>4*1024*1024) return NO;
+    const auto *bytes=static_cast<const uint8_t *>(data.bytes);
+    if(memcmp(bytes,"VBA ",4)||size_t(word(bytes+4))+8!=data.length) return NO;
+    // The upstream memory reader trusts the embedded size and gzip stream.
+    // Validate both before handing it an authenticated but possibly damaged
+    // server checkpoint, bounding decompression before any core mutation.
+    NSMutableData *decoded=[NSMutableData dataWithLength:4*1024*1024];
+    z_stream stream={};
+    stream.next_in=const_cast<Bytef *>(bytes+8);stream.avail_in=uInt(data.length-8);
+    stream.next_out=static_cast<Bytef *>(decoded.mutableBytes);stream.avail_out=uInt(decoded.length);
+    if(inflateInit2(&stream,15+16)!=Z_OK) return NO;
+    const int result=inflate(&stream,Z_FINISH);const auto length=stream.total_out;const auto remaining=stream.avail_in;
+    inflateEnd(&stream);
+    if(result!=Z_STREAM_END||remaining!=0||length<700000||length>decoded.length) return NO;
+    const auto *raw=static_cast<const uint8_t *>(decoded.bytes);
+    if(word(raw)!=10||memcmp(raw+4,rom+0xA0,16)) return NO;
+    NSMutableData *owned=[data mutableCopy];
+    // Delta's ordinary load reapplies the current cheat configuration. Keep
+    // that configuration here too; only the server snapshot supplies battery.
+    const int previousBattery=skipSaveGameBattery,previousCheats=skipSaveGameCheats;
+    skipSaveGameBattery=0;skipSaveGameCheats=1;
+    const bool restored=CPUReadMemState(static_cast<char *>(owned.mutableBytes),int(owned.length));
+    skipSaveGameBattery=previousBattery;skipSaveGameCheats=previousCheats;
+    return restored;
+}
++ (NSData *)captureServerBattery {
+    if(!rom||!workRAM||!internalRAM||flashSize!=0x20000) return [NSData data];
+    return [NSData dataWithBytes:flashSaveMemory length:0x20000];
+}
++ (BOOL)restoreServerBattery:(NSData *)data {
+    if(!rom||!workRAM||!internalRAM||data.length!=0x20000) return NO;
+    flashSetSize(0x20000);memcpy(flashSaveMemory,data.bytes,0x20000);return YES;
 }
 + (BOOL)setCooperativeGameSaveAllowed:(BOOL)allowed forURL:(NSURL *)url {
     auto &fence=gameSaveFence();std::lock_guard<std::mutex> lock(fence.lock);

@@ -32,6 +32,9 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		D24100000000000000000002 /* BoundServerMemoryFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = D24000000000000000000002; };
+		D24100000000000000000003 /* BoundServerDisconnectSave.swift in Sources */ = {isa = PBXBuildFile; fileRef = D24000000000000000000003; };
+		D24100000000000000000001 /* BoundMultiplayerSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = D24000000000000000000001; };
 		7F4D62F4E73C84D5370C7696 /* BoundServerBackupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B216D18DCBA716E8ADA2A73C /* BoundServerBackupView.swift */; };
 		FA8034E464163C5A453FEF2D /* BoundServerBackupManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7AFBC9246DF97A56D45A76D /* BoundServerBackupManager.swift */; };
 		7285B8C1DB24FE670A654597 /* BoundServerBackupPackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 226771F97D1E13D90E45BC8C /* BoundServerBackupPackage.swift */; };
@@ -53,6 +56,7 @@
 		D16900000000000000000000 /* BoundNakamaClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16800000000000000000000 /* BoundNakamaClient.swift */; };
 		503000000000000000000009 /* ROMMultiplayerContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50300000000000000000000A; };
 		503000000000000000000007 /* MultiplayerSavePackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000008; };
+		D24100000000000000000004 /* ServerDisconnectSaveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D24000000000000000000004; };
 		503000000000000000000005 /* BoundRunLease.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000006; };
 		503000000000000000000003 /* BoundMultiplayerSavePackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000004; };
 		503000000000000000000001 /* BoundROMMultiplayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000002; };
@@ -886,6 +890,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		D24000000000000000000002 /* BoundServerMemoryFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundServerMemoryFiles.swift; sourceTree = "<group>"; };
+		D24000000000000000000003 /* BoundServerDisconnectSave.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundServerDisconnectSave.swift; sourceTree = "<group>"; };
+		D24000000000000000000001 /* BoundMultiplayerSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundMultiplayerSetup.swift; sourceTree = "<group>"; };
 		B216D18DCBA716E8ADA2A73C /* BoundServerBackupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundServerBackupView.swift; sourceTree = "<group>"; };
 		C7AFBC9246DF97A56D45A76D /* BoundServerBackupManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundServerBackupManager.swift; sourceTree = "<group>"; };
 		226771F97D1E13D90E45BC8C /* BoundServerBackupPackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundServerBackupPackage.swift; sourceTree = "<group>"; };
@@ -907,6 +914,7 @@
 		D16800000000000000000000 /* BoundNakamaClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundNakamaClient.swift; sourceTree = "<group>"; };
 		50300000000000000000000A /* ROMMultiplayerContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ROMMultiplayerContractTests.swift; sourceTree = "<group>"; };
 		503000000000000000000008 /* MultiplayerSavePackageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiplayerSavePackageTests.swift; sourceTree = "<group>"; };
+		D24000000000000000000004 /* ServerDisconnectSaveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerDisconnectSaveTests.swift; sourceTree = "<group>"; };
 		503000000000000000000006 /* BoundRunLease.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundRunLease.swift; sourceTree = "<group>"; };
 		503000000000000000000004 /* BoundMultiplayerSavePackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundMultiplayerSavePackage.swift; sourceTree = "<group>"; };
 		503000000000000000000002 /* BoundROMMultiplayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMMultiplayer.swift; sourceTree = "<group>"; };
@@ -1505,6 +1513,7 @@
 				501100000000000000000004 /* SoulLinkTests.swift */,
 				50300000000000000000000A /* ROMMultiplayerContractTests.swift */,
 				503000000000000000000008 /* MultiplayerSavePackageTests.swift */,
+				D24000000000000000000004 /* ServerDisconnectSaveTests.swift */,
                 501200000000000000000004 /* SharedWorldTests.swift */,
 				B4771000000000000000000C /* NativeBattleRuntimeTests.swift */,
 				A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */,
@@ -1593,6 +1602,9 @@
 				45AF939F3DBFF779500FB019 /* FriendSharingSession.swift */,
 				D16800000000000000000002 /* BoundNakamaSharingTransport.swift */,
 				D16800000000000000000001 /* BoundNakamaAuthorization.swift */,
+				D24000000000000000000002 /* BoundServerMemoryFiles.swift */,
+				D24000000000000000000003 /* BoundServerDisconnectSave.swift */,
+				D24000000000000000000001 /* BoundMultiplayerSetup.swift */,
 				D16800000000000000000000 /* BoundNakamaClient.swift */,
 				26C47EB2F43565AEDD44B055 /* FriendSharingTokens.swift */,
 				8B8FA67C55D07173D3644813 /* SharingFrame.swift */,
@@ -3363,6 +3375,7 @@
 				501100000000000000000003 /* SoulLinkTests.swift in Sources */,
 				503000000000000000000009 /* ROMMultiplayerContractTests.swift in Sources */,
 				503000000000000000000007 /* MultiplayerSavePackageTests.swift in Sources */,
+				D24100000000000000000004 /* ServerDisconnectSaveTests.swift in Sources */,
                 501200000000000000000003 /* SharedWorldTests.swift in Sources */,
 				B4771000000000000000000D /* NativeBattleRuntimeTests.swift in Sources */,
 				A15E0000000000000000000A /* PresenceConnectionCheckTests.swift in Sources */,
@@ -3653,6 +3666,9 @@
 				79C3209DFBBC08312D236440 /* FriendSharingSession.swift in Sources */,
 				D16900000000000000000002 /* BoundNakamaSharingTransport.swift in Sources */,
 				D16900000000000000000001 /* BoundNakamaAuthorization.swift in Sources */,
+				D24100000000000000000002 /* BoundServerMemoryFiles.swift in Sources */,
+				D24100000000000000000003 /* BoundServerDisconnectSave.swift in Sources */,
+				D24100000000000000000001 /* BoundMultiplayerSetup.swift in Sources */,
 				D16900000000000000000000 /* BoundNakamaClient.swift in Sources */,
 				0FACF7086F87199C6306CC15 /* FriendSharingTokens.swift in Sources */,
 				6775DA71ADC1948B36D0A009 /* SharingFrame.swift in Sources */,

@@ -5,6 +5,14 @@ NS_ASSUME_NONNULL_BEGIN
 /// Thread-safe battery admission fence. Blocked paths remain blocked until
 /// explicitly authorized, including after their core has stopped or unbound.
 + (BOOL)setROMGameSaveAllowed:(BOOL)allowed forURL:(NSURL *)url NS_SWIFT_NAME(setROMGameSaveAllowed(_:for:));
+/// Call before creating/binding a GBA core. Server-only games never read or
+/// write persistent battery/state files, including at core start and stop.
++ (BOOL)setServerOnlyGameSave:(BOOL)enabled forURL:(NSURL *)url NS_SWIFT_NAME(setServerOnlyGameSave(_:for:));
+/// Paused core or completed-frame owner only; these functions perform no I/O.
++ (NSData *)captureServerState;
++ (BOOL)restoreServerState:(NSData *)data;
++ (NSData *)captureServerBattery;
++ (BOOL)restoreServerBattery:(NSData *)data;
 /// Attaches to the resident cartridge co-op ABI; gameplay code is never installed by this adapter.
 + (BOOL)installCooperativeDoubles;
 + (BOOL)setCooperativeGameSaveAllowed:(BOOL)allowed forURL:(NSURL *)url NS_SWIFT_NAME(setCooperativeGameSaveAllowed(_:for:));

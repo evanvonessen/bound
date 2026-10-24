@@ -79,3 +79,30 @@ and `BOUND_NAKAMA_TEST_PORT` if its port differs from 54923. Then run
 `node --test Backend/nakama-session/contract.test.mjs`. The test provisions local
 fixture roles and creates and drops a randomly named fixture database. It does
 not contact Supabase or Heroic.
+
+
+## Permanent save-library scope
+
+`POST /functions/v1/nakama-session` also accepts
+`{"protocol":"bound-saves-v1"}`. It checks the same live account and session
+fences, authenticates its protected Nakama identity, and returns
+`{httpEndpoint,accessToken,ownerID,expiresAt,saveTicket}` without allocating or
+joining a gameplay match. This lets players list and restore runs while their
+friend is offline or their previous room socket has closed.
+
+For New Game, include an existing authorized friendship `roomID`. The broker
+resolves its peer and rechecks membership after authentication, adding the
+server-derived `partnerID` and `roomID` to both response and ticket. Supplying
+an owner, partner or member list directly is rejected. Creation authorization
+requires the current friendship; later save access uses the permanent
+participants stored by Nakama.
+
+Save ticket claims are exactly
+`{version:1,protocol:"bound-saves-v1",ownerID,issuedAt,expiresAt}`, with optional
+`partnerID` and `roomID` supplied together. Signing and the 90-second maximum
+lease are unchanged. The response expiry also respects the Nakama access token's
+shorter lifetime. The runtime accepts this scope for custom authentication and
+`bound_independent_v2` persistence only, never for live match entry. Deploy the
+updated broker and runtime together before enabling the client library.
+See [`../nakama/README.md`](../nakama/README.md#permanent-shared-save-library)
+for requests, shared deletion, ownership and per-player conflict resolution.

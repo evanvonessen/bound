@@ -34,9 +34,12 @@ struct BoundPresencePose: Codable, Equatable, Sendable {
         && (0x08000000...0x09FFFF00).contains(frameAddress)
     }
 
+    func isSpatiallyComparable(to viewer: BoundPlayerState) -> Bool {
+        viewer.mapGroup == mapGroup && viewer.mapNumber == mapNumber && viewer.elevation == elevation
+    }
+
     func rendered(profile: BoundPlayerROMProfile, viewer: BoundPlayerState) -> BoundRecordedPlayerPose? {
-        guard isValid, viewer.scene != nil, viewer.mapGroup == mapGroup,
-              viewer.mapNumber == mapNumber, viewer.elevation == elevation,
+        guard isValid, viewer.scene != nil, isSpatiallyComparable(to: viewer),
               let tiles = profile.bytes(at: frameAddress, count: 256) else { return nil }
         return .init(mapGroup: mapGroup, mapNumber: mapNumber, elevation: elevation, x: x, y: y,
             appearance: .init(width: 16, height: 32, tiles: Data(tiles), palette: palette,
@@ -318,7 +321,9 @@ final class BoundLivePresenceSession: ObservableObject {
         if target <= first.time { return first.pose }
         for index in 1..<samples.count where target <= samples[index].time {
             let a = samples[index - 1], b = samples[index]
-            guard Self.continuous(a.pose, b.pose), b.time - a.time <= 0.2 else { return nil }
+            // Discontinuity changes smoothing only. A confirmed position must
+            // never disappear because a movement step exceeds two tiles.
+            guard Self.continuous(a.pose, b.pose), b.time - a.time <= 0.2 else { return b.pose }
             var pose = a.pose
             let fraction = (target - a.time) / (b.time - a.time)
             pose.x += (b.pose.x - pose.x) * fraction; pose.y += (b.pose.y - pose.y) * fraction
@@ -335,6 +340,8 @@ final class BoundLivePresenceSession: ObservableObject {
         nil
     }
 
+    /// Compares successive peer samples, never distance from the local player.
+    /// Discontinuous samples replace the interpolation buffer, not presence.
     private static func continuous(_ a: BoundPresencePose, _ b: BoundPresencePose) -> Bool {
         a.mapGroup == b.mapGroup && a.mapNumber == b.mapNumber && a.elevation == b.elevation
         && abs(a.x - b.x) + abs(a.y - b.y) <= 32

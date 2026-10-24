@@ -137,6 +137,7 @@ final class BoundPlayerStateDisplay {
     let recordedPlayerOverlay = BoundRecordedPlayerOverlay(frame: .zero)
     let livePlayerOverlay = BoundRecordedPlayerOverlay(frame: .zero)
     private weak var presence: BoundLivePresenceSession?
+    private var friendName: () -> String = { "Friend" }
     private var currentReading: BoundPlayerStateReading?
     private weak var owner: UIViewController?
     private weak var core: EmulatorCore?
@@ -182,9 +183,10 @@ final class BoundPlayerStateDisplay {
         owner.view.addSubview(hud)
         refreshPreference()
     }
-    func attachPresence(_ session: BoundLivePresenceSession) {
+    func attachPresence(_ session: BoundLivePresenceSession, friendName: @escaping () -> String = { "Friend" }) {
         presence?.demandChanged = nil; presence?.presentationChanged = nil
         presence = session
+        self.friendName = friendName
         session.setROMVerified(profile != nil && supportsCore)
         session.demandChanged = { [weak self] in self?.refreshPreference() }
         session.presentationChanged = { [weak self] in self?.renderLivePresence() }
@@ -312,7 +314,7 @@ final class BoundPlayerStateDisplay {
         if let presence, let reading = currentReading, reading.status == .live,
            let lastFrameAt, now - lastFrameAt < BoundLivePresenceSession.visibilityGrace, let profile, let viewer = reading.player {
             let pose = presence.pose(at: now), rendered = pose?.rendered(profile: profile, viewer: viewer)
-            livePlayerOverlay.show(pose: rendered, scene: viewer.scene)
+            livePlayerOverlay.show(pose: rendered, scene: viewer.scene, offscreenName: friendName())
             presence.observePresentation(pose: pose, viewer: viewer, frameResolved: rendered != nil,
                                          visiblePixels: livePlayerOverlay.visiblePixels, at: now)
         } else {

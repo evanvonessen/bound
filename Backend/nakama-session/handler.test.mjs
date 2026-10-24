@@ -20,7 +20,7 @@ const identity = { id: owner, role: 'authenticated', is_anonymous: false, email_
 const membership = { roomID, ownerID: owner, members: [peer, owner], peerID: peer };
 
 function fixture(options = {}) {
-  const calls = []; let roomCalls = 0; let current = 1000;
+  const calls = []; let roomCalls = 0; let activeCalls = 0; let current = 1000;
   const handler = createNakamaSessionHandler({ publishableKey: 'synthetic-public', nakamaHTTPURL: origin,
     nakamaServerKey: serverKey, bridgeSecret, now: () => current, requestTimeoutMs: 100,
     ...options.config,
@@ -28,7 +28,7 @@ function fixture(options = {}) {
       calls.push({ url, ...config });
       if (options.failAt && url.includes(options.failAt)) throw Error('synthetic sensitive upstream detail');
       if (url.endsWith('/auth/v1/user')) return json(options.user ?? identity, options.authStatus ?? 200);
-      if (url.endsWith('/rpc/cup117_account_active')) return json(options.active ?? true, options.activeStatus ?? 200);
+      if (url.endsWith('/rpc/cup117_account_active')) { activeCalls++; return json(activeCalls > 1 ? options.finalActive ?? options.active ?? true : options.active ?? true, options.activeStatus ?? 200); }
       if (url.endsWith('/rpc/bound_nakama_room_v1')) {
         roomCalls += 1;
         assert.deepEqual(JSON.parse(config.body), { payload: { roomID } });
@@ -36,6 +36,7 @@ function fixture(options = {}) {
       }
       if (url.startsWith(origin + '/v2/account/authenticate/custom')) {
         assert.equal(config.headers.Authorization, 'Basic ' + Buffer.from(serverKey + ':').toString('base64'));
+        if (options.afterAuth) current = options.afterAuth;
         return json({ token: options.token ?? token(), refreshToken: 'synthetic-do-not-return-refresh' }, options.nakamaAuthStatus ?? 200);
       }
       if (url === origin + '/v2/rpc/bound_room_v1') {
@@ -162,3 +163,51 @@ for (const [failAt, error] of [['/auth/v1/user', 'identity_unavailable'], ['/rpc
     assert.equal(response.status, 503); assert.deepEqual(await response.json(), { error });
   });
 }
+
+
+test('save library broker authorizes without room resolution or match allocation', async () => {
+  const f = fixture(); const response = await f.request({ protocol: 'bound-saves-v1' });
+  assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'no-store');
+  const value = await response.json();
+  assert.deepEqual(Object.keys(value).sort(), ['accessToken', 'expiresAt', 'httpEndpoint', 'ownerID', 'saveTicket'].sort());
+  assert.equal(value.ownerID, owner); assert.equal(value.expiresAt, 1090);
+  const [claims, signature] = value.saveTicket.split('.');
+  assert.equal(signature, createHmac('sha256', bridgeSecret).update(claims).digest('hex'));
+  assert.deepEqual(JSON.parse(Buffer.from(claims, 'base64url')), { version: 1, protocol: 'bound-saves-v1', ownerID: owner, issuedAt: 1000, expiresAt: 1090 });
+  assert.ok(!f.calls.some(call => /room_v1/.test(call.url)));
+  assert.equal(f.calls.filter(call => call.url.endsWith('/rpc/cup117_account_active')).length, 2);
+  assert.deepEqual(JSON.parse(f.calls.find(call => call.url.includes('/authenticate/custom')).body), { id: 'bound:' + owner, vars: { bound_ticket: value.saveTicket } });
+});
+test('save creation scope resolves an offline friend through an authorized existing room', async () => {
+  const f = fixture(); const response = await f.request({ protocol: 'bound-saves-v1', roomID });
+  assert.equal(response.status, 200); const value = await response.json();
+  const claims = JSON.parse(Buffer.from(value.saveTicket.split('.')[0], 'base64url'));
+  assert.deepEqual(claims, { version: 1, protocol: 'bound-saves-v1', ownerID: owner, issuedAt: 1000, expiresAt: 1090, partnerID: peer, roomID });
+  assert.equal(value.partnerID, peer); assert.equal(value.roomID, roomID);
+  assert.equal(f.calls.filter(call => call.url.endsWith('/rpc/bound_nakama_room_v1')).length, 2);
+  assert.ok(!f.calls.some(call => call.url.endsWith('/rpc/bound_room_v1')));
+});
+for (const body of [{ protocol: 'bound-saves-v1', ownerID: stranger }, { protocol: 'bound-saves-v1', partnerID: peer },
+  { protocol: 'bound-saves-v1', roomID: 'bad' }, { protocol: 'bound-saves-v1', roomID, members: [owner, stranger] }]) {
+  test('save broker rejects caller-selected ownership ' + JSON.stringify(body), async () => {
+    const f = fixture(); assert.equal((await f.request(body)).status, 400); assert.equal(f.calls.length, 0);
+  });
+}
+for (const [options, status] of [[{ authStatus: 401 }, 401], [{ active: false }, 403], [{ finalActive: false }, 403],
+  [{ user: { ...identity, email_confirmed_at: null } }, 403], [{ nakamaAuthStatus: 401 }, 503], [{ token: 'invalid' }, 503],
+  [{ token: token({ exp: 1010 }) }, 503], [{ afterAuth: 1090 }, 503]]) {
+  test('save broker refuses invalid or revoked sessions ' + JSON.stringify(options), async () => {
+    const f = fixture(options); assert.equal((await f.request({ protocol: 'bound-saves-v1' })).status, status);
+  });
+}
+for (const options of [{ roomStatus: 403 }, { room: { ...membership, peerID: stranger } },
+  { finalRoom: { ...membership, members: [owner, stranger], peerID: stranger } }, { finalRoom: { ok: false } }]) {
+  test('save creation scope refuses stale friendship ' + JSON.stringify(options), async () => {
+    const f = fixture(options); assert.equal((await f.request({ protocol: 'bound-saves-v1', roomID })).status, 403);
+    assert.ok(!f.calls.some(call => call.url.endsWith('/rpc/bound_room_v1')));
+  });
+}
+test('save lease uses the shorter authenticated session lifetime', async () => {
+  const f = fixture({ token: token({ exp: 1050 }) });
+  assert.equal((await (await f.request({ protocol: 'bound-saves-v1' })).json()).expiresAt, 1050);
+});

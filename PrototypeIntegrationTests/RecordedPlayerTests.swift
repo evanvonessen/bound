@@ -210,6 +210,75 @@ final class RecordedPlayerTests: XCTestCase {
         XCTAssertFalse(stride(from: 3, to: offscreen.count, by: 4).contains { offscreen[$0] != 0 })
     }
 
+    func testViewportUsesCameraRatherThanDistanceAndSwitchesAtSpriteBounds() throws {
+        let local = scene()
+        for tiles in [1, 3, 5] {
+            let remote = pose(x: 104 + Double(tiles * 16))
+            XCTAssertNil(BoundPlayerViewport.indicator(pose: remote, scene: local))
+            let pixels = BoundRecordedPlayerRasterizer.rgba(pose: remote, scene: local).0
+            XCTAssertTrue(stride(from: 3, to: pixels.count, by: 4).contains { pixels[$0] != 0 })
+        }
+        let distant = pose(x: 264)
+        XCTAssertEqual(try XCTUnwrap(BoundPlayerViewport.indicator(pose: distant, scene: local)).distanceInTiles, 10)
+        // The same retained world position immediately appears when the camera
+        // reaches it, without receiving another network packet.
+        let movedCamera = scene(x: 200, cameraX: -80)
+        XCTAssertNil(BoundPlayerViewport.indicator(pose: distant, scene: movedCamera))
+        let partial = pose(x: 231) // Origin 239; one column is still visible.
+        XCTAssertNil(BoundPlayerViewport.indicator(pose: partial, scene: local))
+        XCTAssertNotNil(BoundPlayerViewport.indicator(pose: pose(x: 232), scene: local))
+    }
+
+    func testOffscreenIndicatorsFollowEveryDirectionAndKeepEntireLabelInset() throws {
+        let label = CGSize(width: 100, height: 14)
+        for (x, y) in [(500.0, 112.0), (-500, 112), (104, -500), (104, 500), (500, 500), (-500, -500)] {
+            let indicator = try XCTUnwrap(BoundPlayerViewport.indicator(pose: pose(x: x, y: y), scene: scene()))
+            let center = indicator.center(labelSize: label)
+            XCTAssertGreaterThanOrEqual(center.x - label.width / 2, 4)
+            XCTAssertLessThanOrEqual(center.x + label.width / 2, 236)
+            XCTAssertGreaterThanOrEqual(center.y - label.height / 2, 4)
+            XCTAssertLessThanOrEqual(center.y + label.height / 2, 156)
+            let expectedAngle = atan2(y - 24 - 80, x + 16 - 120)
+            XCTAssertEqual(Double(indicator.angle), expectedAngle, accuracy: 0.0001)
+        }
+        let remote = pose(x: 500, y: 500)
+        let before = try XCTUnwrap(BoundPlayerViewport.indicator(pose: remote, scene: scene()))
+        let after = try XCTUnwrap(BoundPlayerViewport.indicator(pose: remote, scene: scene(x: 300, cameraX: -180)))
+        XCTAssertNotEqual(before.angle, after.angle)
+        XCTAssertGreaterThan(before.distanceInTiles, after.distanceInTiles)
+    }
+
+    func testOverlaySwitchesSpriteAndIndicatorWithoutMistakingOcclusionForOffscreen() throws {
+        let overlay = BoundRecordedPlayerOverlay(frame: CGRect(x: 0, y: 0, width: 480, height: 320))
+        overlay.show(pose: pose(x: 264), scene: scene(), offscreenName: "Alex")
+        overlay.layoutIfNeeded()
+        XCTAssertFalse(overlay.isHidden)
+        XCTAssertEqual(overlay.visiblePixels, 0)
+        XCTAssertEqual(overlay.offscreenText, "Alex · 10 tiles")
+        XCTAssertNotNil(overlay.offscreenIndicator)
+        overlay.show(pose: pose(x: 264), scene: scene(x: 200, cameraX: -80), offscreenName: "Alex")
+        XCTAssertFalse(overlay.isHidden)
+        XCTAssertGreaterThan(overlay.visiblePixels, 0)
+        XCTAssertNil(overlay.offscreenIndicator)
+
+        let origin = BoundPlayerViewport.origin(pose: pose(), scene: scene())
+        let nearer = BoundPlayerSceneObject(origin: origin, footY: 88, appearance: sprite())
+        overlay.show(pose: pose(), scene: scene(objects: [nearer]), offscreenName: "Alex")
+        XCTAssertEqual(overlay.visiblePixels, 0)
+        XCTAssertTrue(overlay.isHidden)
+        XCTAssertNil(overlay.offscreenIndicator, "Foreground occlusion is not physical offscreen movement")
+        overlay.show(pose: nil, scene: nil, offscreenName: "Alex")
+        XCTAssertNil(overlay.offscreenText)
+        XCTAssertNil(overlay.offscreenIndicator)
+    }
+
+    func testRecordingLargeMovementStepOnlyDisablesSmoothing() {
+        var track = BoundRecordedPlayerTrack()
+        track.append(frame: 0, pose: pose()); track.append(frame: 4, pose: pose(x: 500))
+        XCTAssertEqual(track.pose(at: 2)?.x, 104)
+        XCTAssertEqual(track.pose(at: 4)?.x, 500)
+    }
+
     func testActualVBAMRecordingAndReplayAgainstMovingCamera() async throws {
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MultiplayerValidation", isDirectory: true)

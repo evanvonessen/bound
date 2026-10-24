@@ -39,6 +39,55 @@ final class MultiplayerSavePackageTests: XCTestCase {
         try JSONSerialization.data(withJSONObject: ["run": identity.run.uuidString, "dead": dead]).write(to: url, options: .atomic)
         return url
     }
+    func testServerStorageDisregardsLocalRunAndWritesNoCheckpointFiles() throws {
+        let (store, old, save) = try fixture()
+        let original = try Data(contentsOf: store.directory(gameID: old.gameID).appendingPathComponent("run.json"))
+        store.useServerStorage(gameID: old.gameID)
+        XCTAssertNil(try store.manifest(gameID: old.gameID))
+        var identity = old; identity.run = UUID()
+        try store.beginServerSession(identity: identity, package: nil, target: .init())
+        let event = try store.appendSharedEvent(gameID: identity.gameID, kind: "world", payload: Data([1]), idempotencyKey: "one")
+        let files = ["game.sav": Data(repeating: 7, count: 131072), "checkpoint.state": Data(repeating: 9, count: 2048), "memory-files.json": Data("{}".utf8)]
+        let package = try store.captureServerCheckpoint(gameID: identity.gameID, files: files, history: String(repeating: "a", count: 64))
+        XCTAssertEqual(package.payload.manifest.identity.run, identity.run)
+        XCTAssertEqual(try store.journal(gameID: identity.gameID).events, [event])
+        XCTAssertEqual(try Data(contentsOf: store.directory(gameID: old.gameID).appendingPathComponent("run.json")), original)
+        XCTAssertEqual(try Data(contentsOf: save), Data(repeating: 3, count: 131072))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.cloudURL(gameID: identity.gameID).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.directory(gameID: identity.gameID).appendingPathComponent("Checkpoints").path))
+    }
+    func testServerSessionRestoresOnlyAuthenticatedPlayerAndGapAwareJournal() throws {
+        let (store, identity, _) = try fixture()
+        store.useServerStorage(gameID: identity.gameID)
+        try store.beginServerSession(identity: identity, package: nil, target: .init())
+        let event = try store.appendSharedEvent(gameID: identity.gameID, kind: "world", payload: Data([3]))
+        let package = try store.captureServerCheckpoint(gameID: identity.gameID,
+            files: ["game.sav": Data(repeating: 8, count: 131072), "checkpoint.state": Data(repeating: 4, count: 2048)], history: String(repeating: "c", count: 64))
+        store.useServerStorage(gameID: identity.gameID)
+        XCTAssertNil(try store.latestComplete(gameID: identity.gameID))
+        var other = identity; other.owner = identity.partner; other.partner = identity.owner
+        XCTAssertThrowsError(try store.beginServerSession(identity: other, package: package, target: .init()))
+        try store.beginServerSession(identity: identity, package: package, target: .init())
+        XCTAssertEqual(try store.journal(gameID: identity.gameID).events, [event])
+        let next = try store.appendSharedEvent(gameID: identity.gameID, kind: "world", payload: Data([4]))
+        XCTAssertEqual(next.id.sequence, event.id.sequence + 1)
+        XCTAssertEqual(try store.latestComplete(gameID: identity.gameID), package)
+    }
+    @MainActor func testExternalSetupOptionsEncodeNativeQuestionsAndPersonalIdentity() {
+        var options = BoundMultiplayerSetupOptions()
+        options.name = "Leaf"; options.gender = 1; options.rival = "Gary"; options.difficulty = 2
+        options.cheats = true; options.nicknames = false; options.randomAbilities = true
+        XCTAssertTrue(options.valid)
+        XCTAssertTrue(BoundROMMultiplayerCoordinator.validSettings(options.settings))
+        XCTAssertEqual(options.settings[3], 1)
+        XCTAssertEqual(options.settings[10], 1)
+        XCTAssertEqual(options.settings[11], 0)
+        var host = BoundROMHostState(); host.externalSetup = true; host.playerProfile = options.profile
+        let bytes = host.encoded(sequence: 2)
+        XCTAssertEqual(bytes[13] & 16, 16)
+        XCTAssertEqual(bytes.subdata(in: 1408..<1416), BoundMultiplayerSetupOptions.nativeName("Leaf"))
+        XCTAssertEqual(bytes[1416], 1); XCTAssertEqual(bytes[1417], 1)
+    }
     func testConfigurationNeverRerollsAndPreservesSoloBattery() throws {
         let (store, identity, save) = try fixture()
         XCTAssertEqual(try store.manifest(gameID: identity.gameID)?.identity, identity)

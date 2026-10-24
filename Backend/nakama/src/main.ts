@@ -62,7 +62,7 @@ namespace BoundRooms {
         return difference === 0;
     }
 
-    export function verifyTicket(ctx: nkruntime.Context, nk: nkruntime.Nakama, value: any): Ticket {
+    function signedClaims(ctx: nkruntime.Context, nk: nkruntime.Nakama, value: any): any {
         const secret = ctx.env.BOUND_NAKAMA_BRIDGE_SECRET;
         if (!secret || secret.length < 32) reject("Gameplay bridge is unavailable", 14);
         if (typeof value !== "string" || value.length > 4096) reject("Invalid admission ticket");
@@ -76,7 +76,11 @@ namespace BoundRooms {
             if (nk.base64UrlEncode(decoded, false) !== parts[0]) reject("Invalid admission ticket");
             ticket = JSON.parse(nk.binaryToString(decoded));
         } catch (_) { reject("Invalid admission ticket"); }
-        const now = seconds();
+        return ticket;
+    }
+
+    export function verifyTicket(ctx: nkruntime.Context, nk: nkruntime.Nakama, value: any): Ticket {
+        const ticket = signedClaims(ctx, nk, value), now = seconds();
         if (!object(ticket) || Object.keys(ticket).sort().join(",") !== "expiresAt,issuedAt,members,ownerID,protocol,roomID,version" ||
             ticket.version !== 1 || ticket.protocol !== protocol ||
             typeof ticket.ownerID !== "string" || !uuid.test(ticket.ownerID) ||
@@ -86,6 +90,27 @@ namespace BoundRooms {
             ticket.issuedAt > now + 5 || ticket.expiresAt <= now ||
             ticket.expiresAt <= ticket.issuedAt || ticket.expiresAt > ticket.issuedAt + 90) reject("Invalid or expired admission ticket");
         return ticket as Ticket;
+    }
+
+    export interface SaveTicket {
+        version: 1; protocol: string; ownerID: string; issuedAt: number; expiresAt: number;
+        partnerID?: string; roomID?: string;
+    }
+    export function verifySaveTicket(ctx: nkruntime.Context, nk: nkruntime.Nakama, value: any): SaveTicket {
+        const ticket = signedClaims(ctx, nk, value), now = seconds();
+        const keys = object(ticket) ? Object.keys(ticket).sort().join(",") : "";
+        if (!object(ticket) || ["expiresAt,issuedAt,ownerID,protocol,version", "expiresAt,issuedAt,ownerID,partnerID,protocol,roomID,version"].indexOf(keys) < 0 ||
+            ticket.version !== 1 || ticket.protocol !== "bound-saves-v1" || !uuid.test(String(ticket.ownerID)) ||
+            !integer(ticket.issuedAt) || !integer(ticket.expiresAt) || ticket.issuedAt > now + 5 || ticket.expiresAt <= now ||
+            ticket.expiresAt <= ticket.issuedAt || ticket.expiresAt > ticket.issuedAt + 90 ||
+            (ticket.partnerID !== undefined && (!uuid.test(String(ticket.partnerID)) || ticket.partnerID === ticket.ownerID || !uuid.test(String(ticket.roomID))))) reject("Invalid or expired save ticket");
+        return ticket;
+    }
+    export function authorizeSave(ctx: nkruntime.Context, nk: nkruntime.Nakama, value: any): SaveTicket {
+        if (!ctx.userId) reject("Authentication required", 16);
+        const ticket = verifySaveTicket(ctx, nk, value);
+        if (ownerForUser(ctx, nk, ctx.userId) !== ticket.ownerID) reject("Save access denied");
+        return ticket;
     }
 
     function ownerForUser(ctx: nkruntime.Context, nk: nkruntime.Nakama, userID: string): string {
@@ -107,7 +132,9 @@ namespace BoundRooms {
     }
 
     export const authenticate: nkruntime.BeforeHookFunction<nkruntime.AuthenticateCustomRequest> = function (ctx, _logger, nk, request) {
-        const ticket = verifyTicket(ctx, nk, request.account && request.account.vars && request.account.vars.bound_ticket);
+        const value = request.account && request.account.vars && request.account.vars.bound_ticket;
+        const claims = signedClaims(ctx, nk, value);
+        const ticket = claims && claims.protocol === "bound-saves-v1" ? verifySaveTicket(ctx, nk, value) : verifyTicket(ctx, nk, value);
         if (!request.account || request.account.id !== "bound:" + ticket.ownerID) reject("Account does not match admission ticket");
         // Never preserve caller-supplied session vars. Match authorization also
         // checks the protected account customId instead of trusting those vars.

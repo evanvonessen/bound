@@ -73,6 +73,10 @@ public class SaveState: _SaveState, SaveStateProtocol
         
         // In rare cases, game may actually be nil if game is corrupted, so we ensure it is non-nil first
         guard self.game != nil else { return }
+        // Harmony removes rejected, newly downloaded objects. Preserve older
+        // local files for a server-managed game; explicit game deletion still
+        // owns its usual file cleanup.
+        guard self.game?.boundUsesServerMultiplayer != true || self.game?.isDeleted == true else { return }
         
         guard let managedObjectContext = self.managedObjectContext else { return }
         
@@ -115,6 +119,7 @@ extension SaveState: Syncable
     }
     
     public var syncableFiles: Set<File> {
+        guard let game = self.game, !game.boundUsesServerMultiplayer else { return [] }
         return [File(identifier: "saveState", fileURL: self.fileURL), File(identifier: "thumbnail", fileURL: self.imageFileURL)]
     }
     
@@ -126,7 +131,7 @@ extension SaveState: Syncable
         // self.game may be nil if being downloaded, so don't enforce it.
         // guard let identifier = self.game?.identifier else { return false }
         
-        let isSyncingEnabled = (self.type != .auto && self.type != .quick) && (self.game?.identifier != Game.melonDSBIOSIdentifier && self.game?.identifier != Game.melonDSDSiBIOSIdentifier)
+        let isSyncingEnabled = self.game?.boundUsesServerMultiplayer != true && (self.type != .auto && self.type != .quick) && (self.game?.identifier != Game.melonDSBIOSIdentifier && self.game?.identifier != Game.melonDSDSiBIOSIdentifier)
         return isSyncingEnabled
     }
     
@@ -144,11 +149,13 @@ extension SaveState: Syncable
     }
 
     public func prepareForSync(_ record: AnyRecord) throws {
+        guard game?.boundUsesServerMultiplayer != true else { throw BoundROMUpdateError.multiplayerPending }
         if let gameID = self.game?.identifier { try BoundROMUpdateRegistry.validateUpload(gameID: gameID) }
     }
     
     public func awakeFromSync(_ record: AnyRecord) throws
     {
+        guard game?.boundUsesServerMultiplayer != true else { throw BoundROMUpdateError.multiplayerPending }
         let verifiedGameID = record.remoteMetadata?[.verifiedGameID]
         if let gameID = verifiedGameID ?? record.remoteMetadata?[.gameID] ?? self.game?.identifier {
             try BoundROMUpdateRegistry.validateDownload(gameID: gameID,
@@ -201,5 +208,7 @@ extension SaveState: Syncable
                 throw ValidationError.nilRelationshipObjects(keys: [#keyPath(GameSave.game)])
             }
         }
+        // A repaired relationship must not reopen raw save-state downloads.
+        guard game?.boundUsesServerMultiplayer != true else { throw BoundROMUpdateError.multiplayerPending }
     }
 }

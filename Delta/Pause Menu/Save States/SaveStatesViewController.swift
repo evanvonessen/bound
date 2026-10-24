@@ -116,7 +116,7 @@ class SaveStatesViewController: UICollectionViewController
     private var saveAccess: SaveAccess?
     private var emulatorSaveAccess: SaveAccess?
     private var saveClearInvalidated = false
-    private var mayAccessSaves: Bool { !saveClearInvalidated && saveAccess?.isCurrent == true }
+    private var mayAccessSaves: Bool { game?.boundUsesServerMultiplayer != true && !saveClearInvalidated && saveAccess?.isCurrent == true }
 
     var game: Game! {
         didSet {

@@ -1,12 +1,191 @@
 import XCTest
 import SwiftUI
+import CoreData
+@testable import Harmony
+@testable import class Delta.Game
+@testable import class Delta.SaveState
+@preconcurrency import DeltaCore
 @testable import Delta
 
+private struct ServerMemoryFixtureGame: GameProtocol {
+    let fileURL: URL
+    let gameSaveURL: URL
+    var type: GameType { .gba }
+}
+
 final class SoulLinkTests: XCTestCase {
+    @MainActor func testServerManagedSaveStatesRejectRawCloudSyncWithoutTouchingLocalFiles() throws {
+        let modelURL = try XCTUnwrap(Bundle(for: DatabaseManager.self).url(forResource: "Delta", withExtension: "momd"))
+        let appModel = try XCTUnwrap(NSManagedObjectModel(contentsOf: modelURL))
+        let model = try XCTUnwrap(NSManagedObjectModel.harmonyModel(byMergingWith: [appModel]))
+        let context = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
+        let coordinator = NSPersistentStoreCoordinator(managedObjectModel: model)
+        try coordinator.addPersistentStore(ofType: NSInMemoryStoreType, configurationName: nil, at: nil)
+        context.persistentStoreCoordinator = coordinator
+        defer { context.reset() }
+
+        let game = Game(entity: try XCTUnwrap(model.entitiesByName["Game"]), insertInto: context)
+        game.identifier = UUID().uuidString
+        game.name = "Server save fixture"
+        game.filename = "server-save-fixture.gba"
+        game.type = .gba
+        game.gameSettings = ["bound.multiplayer": true]
+        let state = SaveState(entity: try XCTUnwrap(model.entitiesByName["SaveState"]), insertInto: context)
+        state.game = game
+        let directory = DatabaseManager.defaultDirectoryURL().appendingPathComponent("Save States").appendingPathComponent(game.identifier)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let managed = NSEntityDescription.insertNewObject(forEntityName: "ManagedRecord", into: context) as! ManagedRecord
+        managed.recordedObjectType = "SaveState"
+        managed.recordedObjectIdentifier = state.identifier
+        let record = AnyRecord(managed)
+
+        for type in [SaveStateType.auto, .quick, .general, .locked] {
+            state.type = type
+            XCTAssertFalse(state.isSyncingEnabled)
+            XCTAssertTrue(state.syncableFiles.isEmpty)
+            XCTAssertThrowsError(try state.prepareForSync(record))
+            XCTAssertThrowsError(try state.awakeFromSync(record))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path), "Rejected sync must not materialize a local save-state directory")
+
+        game.gameSettings = [:]
+        state.type = .general
+        XCTAssertTrue(state.isSyncingEnabled)
+        XCTAssertEqual(Set(state.syncableFiles.map(\.identifier)), ["saveState", "thumbnail"])
+        XCTAssertNoThrow(try state.prepareForSync(record))
+        XCTAssertNoThrow(try state.awakeFromSync(record))
+        let original = Data("preserved legacy state".utf8)
+        let stateURL = state.fileURL
+        try original.write(to: stateURL)
+        state.type = .quick
+        XCTAssertFalse(state.isSyncingEnabled)
+
+        game.gameSettings = ["bound.multiplayer": true]
+        XCTAssertTrue(state.syncableFiles.isEmpty)
+        XCTAssertThrowsError(try state.awakeFromSync(record))
+        XCTAssertEqual(try Data(contentsOf: stateURL), original, "Marking a game must preserve its older local states")
+        context.delete(state)
+        context.processPendingChanges()
+        XCTAssertEqual(try Data(contentsOf: stateURL), original, "Discarding a rejected download must preserve its older same-filename file")
+    }
+
     private func mon(_ id: UInt32, area: Int = 100, egg: Bool = false, isEgg: Bool = false, hp: Int? = 30) -> BoundSoulMon {
         .init(identity: .init(personality: id, trainer: 42), species: 1, name: "Mon\(id)", area: area, eggOrigin: egg, isEgg: isEgg, hp: hp)
     }
     private func makeLedger() -> BoundSoulLedger { .init(run: UUID(), binding: String(repeating: "a", count: 64)) }
+
+    func testServerOnlyLedgerAndTimelineIgnoreDiskAndRoundTripThroughSnapshot() throws {
+        let game = UUID().uuidString
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(game)
+        let url = root.appendingPathComponent("Soul Link/run.json")
+        let old = try JSONEncoder().encode(makeLedger())
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try old.write(to: url)
+        BoundServerMemoryFiles.setEnabled(true, for: game)
+        defer {
+            try? BoundServerMemoryFiles.restore([:], gameID: game)
+            BoundServerMemoryFiles.setEnabled(false, for: game)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let probe = BoundSoulProbe(); probe.configure(core: nil, url: url, gameID: game)
+        XCTAssertNil(probe.read().ledger, "A preexisting local multiplayer run must never be loaded")
+        let run = UUID()
+        try probe.startPreparedRun(run: run, binding: String(repeating: "b", count: 64))
+        probe.timeline.append(id: "server:one", kind: .trade, title: "Trade completed")
+        let files = BoundServerMemoryFiles.snapshot(gameID: game)
+        XCTAssertEqual(files.count, 2)
+        XCTAssertEqual(try Data(contentsOf: url), old, "The legacy save remains untouched")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.deletingPathExtension().appendingPathExtension("timeline.json").path))
+        let encoded = try JSONEncoder().encode(files)
+        try BoundServerMemoryFiles.restore([:], gameID: game)
+        probe.configure(core: nil, url: url, gameID: game)
+        XCTAssertNil(probe.read().ledger)
+        try BoundServerMemoryFiles.restore(JSONDecoder().decode([String: Data].self, from: encoded), gameID: game)
+        let otherContainerURL = root.appendingPathComponent("other-container/Soul Link/run.json")
+        probe.configure(core: nil, url: otherContainerURL, gameID: game)
+        XCTAssertEqual(probe.read().ledger?.run, run)
+        XCTAssertEqual(probe.timeline.read().events.map(\.id), ["server:one"])
+    }
+
+    func testMemoryRecoveryFilesAreIsolatedAndRejectUnsafeServerPaths() throws {
+        let first = UUID().uuidString, second = UUID().uuidString
+        for game in [first, second] { BoundServerMemoryFiles.setEnabled(true, for: game) }
+        defer { for game in [first, second] { try? BoundServerMemoryFiles.restore([:], gameID: game); BoundServerMemoryFiles.setEnabled(false, for: game) } }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(first).appendingPathComponent("Friend Battles")
+        let state = folder.appendingPathComponent("checkpoint.state")
+        try BoundServerMemoryFiles.directory(folder, gameID: first)
+        try BoundServerMemoryFiles.write(Data([1, 2, 3]), to: state, gameID: first)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
+        XCTAssertFalse(BoundServerMemoryFiles.exists(state, gameID: second))
+        XCTAssertThrowsError(try BoundServerMemoryFiles.read(state, gameID: second))
+        XCTAssertEqual(try BoundServerMemoryFiles.contents(folder, gameID: first), [state])
+        XCTAssertThrowsError(try BoundServerMemoryFiles.restore(["../outside": Data([9])], gameID: first))
+        XCTAssertThrowsError(try BoundServerMemoryFiles.restore(["Soul Link/../outside": Data([9])], gameID: first))
+        XCTAssertEqual(try BoundServerMemoryFiles.read(state, gameID: first), Data([1, 2, 3]))
+        let destination = folder.appendingPathComponent("moved.state")
+        try BoundServerMemoryFiles.move(state, to: destination, gameID: first)
+        XCTAssertFalse(BoundServerMemoryFiles.exists(state, gameID: first))
+        XCTAssertTrue(BoundServerMemoryFiles.exists(destination, gameID: first))
+        try BoundServerMemoryFiles.remove(destination, gameID: first)
+        XCTAssertTrue(BoundServerMemoryFiles.snapshot(gameID: first).isEmpty)
+    }
+
+    func testServerSnapshotRejectsMalformedNativeMemoryState() {
+        XCTAssertFalse(BoundVBABattleBridge.restoreServerState(Data()))
+        XCTAssertFalse(BoundVBABattleBridge.restoreServerState(Data(repeating: 0, count: 64)))
+        var invalid = Data("VBA ".utf8)
+        invalid.append(contentsOf: [255, 255, 255, 127])
+        invalid.append(Data(repeating: 0, count: 64))
+        XCTAssertFalse(BoundVBABattleBridge.restoreServerState(invalid))
+        XCTAssertFalse(BoundVBABattleBridge.restoreServerBattery(Data(repeating: 0, count: 10)))
+    }
+
+    @MainActor
+    func testNativeServerCheckpointRoundTripNeverLoadsOrWritesPersistentSaves() throws {
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var cartridge = try Data(contentsOf: fixture)
+        cartridge.append(Data(repeating: 0, count: (4 - cartridge.count % 4) % 4))
+        cartridge.append(Data("FLASH1M_V103".utf8))
+        let rom = folder.appendingPathComponent("flash-fixture.gba")
+        try cartridge.write(to: rom)
+        let batteryURL = folder.appendingPathComponent("legacy.sav")
+        let legacy = Data(repeating: 0x17, count: 131072)
+        try legacy.write(to: batteryURL)
+        XCTAssertTrue(BoundVBABattleBridge.setServerOnlyGameSave(true, for: batteryURL))
+        let core = try XCTUnwrap(EmulatorCore(game: ServerMemoryFixtureGame(fileURL: rom, gameSaveURL: batteryURL), options: [.metal: true]))
+        defer {
+            _ = core.stop()
+            _ = BoundVBABattleBridge.setServerOnlyGameSave(false, for: batteryURL)
+        }
+        XCTAssertTrue(core.start()); XCTAssertTrue(core.pause())
+        XCTAssertNotEqual(BoundVBABattleBridge.captureServerBattery(), legacy, "Core startup ignores legacy multiplayer files")
+        let saved = Data(repeating: 0x42, count: 131072)
+        XCTAssertTrue(BoundVBABattleBridge.restoreServerBattery(saved))
+        let state = BoundVBABattleBridge.captureServerState()
+        XCTAssertGreaterThan(state.count, 32)
+        XCTAssertEqual(state.prefix(4), Data("VBA ".utf8))
+        XCTAssertTrue(BoundVBABattleBridge.restoreServerBattery(Data(repeating: 0x24, count: 131072)))
+        XCTAssertFalse(BoundVBABattleBridge.restoreServerState(Data(state.dropLast())))
+        var corrupt = state; corrupt[corrupt.count - 5] ^= 0x80
+        XCTAssertFalse(BoundVBABattleBridge.restoreServerState(corrupt), "Gzip checksum failure is rejected before mutating the core")
+        XCTAssertEqual(BoundVBABattleBridge.captureServerBattery(), Data(repeating: 0x24, count: 131072))
+        XCTAssertTrue(BoundVBABattleBridge.restoreServerState(state))
+        XCTAssertEqual(BoundVBABattleBridge.captureServerBattery(), saved)
+        core.deltaCore.emulatorBridge.loadGameSave(from: batteryURL)
+        XCTAssertEqual(BoundVBABattleBridge.captureServerBattery(), saved, "A direct persistent load remains fenced")
+        let otherBattery = folder.appendingPathComponent("unregistered.sav")
+        core.deltaCore.emulatorBridge.saveGameSave(to: otherBattery)
+        let diskState = folder.appendingPathComponent("blocked.state")
+        core.saveSaveState(to: diskState)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: otherBattery.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: diskState.path))
+        XCTAssertTrue(core.stop())
+        XCTAssertEqual(try Data(contentsOf: batteryURL), legacy, "Core stop cannot overwrite the disregarded save")
+    }
     @MainActor
     func testFriendlyBattlesRemainAvailableDuringSoulLinkWhileTradesStayBlocked() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("run.json")

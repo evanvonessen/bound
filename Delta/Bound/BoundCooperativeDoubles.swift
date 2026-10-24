@@ -222,15 +222,15 @@ final class BoundCooperativeProbe: @unchecked Sendable {
         do {
             // An uncommitted write never replaces the last recoverable state.
             let next=checkpoint.deletingLastPathComponent().appendingPathComponent(UUID().uuidString+".state")
-            core.saveSaveState(to:next)
-            let bytes=try Data(contentsOf:next)
+            try BoundServerMemoryFiles.saveState(core:core,to:next,gameID:gameID)
+            let bytes=try BoundServerMemoryFiles.read(next,gameID:gameID)
             guard bytes.count > 1024 else { throw CocoaError(.fileReadCorruptFile) }
             let entry:[String:Any]=["gameID":gameID,"state":next.lastPathComponent,"sha256":coopHash(bytes).map { String(format:"%02x",$0) }.joined(),"phase":value.phase,"token":value.token,"snapshot":value.bytes.base64EncodedString(),"rom":BoundPlayerROMProfile.supportedSHA256,
                 "agreement":agreement.base64EncodedString(),"branch":branch.base64EncodedString(),"cable":(cable?.recoveryData() ?? Data()).base64EncodedString(),
                 "nativeCable":BoundVBABattleBridge.cooperativeCableSnapshot().base64EncodedString()]
-            try JSONSerialization.data(withJSONObject:entry,options:[.sortedKeys]).write(to:journal,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
+            try BoundServerMemoryFiles.write(JSONSerialization.data(withJSONObject:entry,options:[.sortedKeys]),to:journal,gameID:gameID)
             self.checkpoint=next
-            try? FileManager.default.removeItem(at:checkpoint)
+            try? BoundServerMemoryFiles.remove(checkpoint,gameID:gameID)
             lastDurable=identity;durable=true;lastError=nil
         } catch { lastError="Cooperative recovery could not be saved" }
     }
@@ -470,20 +470,20 @@ final class BoundCooperativeDoublesSession {
             capture:capture,peerTeam:peerTeam,proof:proof,enemy:enemy,xp:incomingXP))
     }
     private func protect(core:EmulatorCore) throws {
-        let folder=try FileManager.default.url(for:.applicationSupportDirectory,in:.userDomainMask,appropriateFor:nil,create:true).appendingPathComponent("Cooperative Battles",isDirectory:true)
-        try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+        let folder=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("Cooperative Battles",isDirectory:true)
+        try BoundServerMemoryFiles.directory(folder,gameID:gameID)
         guard BoundVBABattleBridge.setCooperativeGameSaveAllowed(false,for:core.game.gameSaveURL) else { throw CocoaError(.fileWriteNoPermission) }
         checkpoint=folder.appendingPathComponent(encounter.uuidString+".state");journal=folder.appendingPathComponent(encounter.uuidString+".json")
         guard let checkpoint,let journal else { throw CocoaError(.fileWriteUnknown) }
         let running=core.state == .running;if running { _=core.pause() }
         defer { if running { resumeIfPermitted(core) } }
-        core.saveSaveState(to:checkpoint)
-        let saved=try Data(contentsOf:checkpoint);guard saved.count > 1024 else { throw CocoaError(.fileReadCorruptFile) }
+        try BoundServerMemoryFiles.saveState(core:core,to:checkpoint,gameID:gameID)
+        let saved=try BoundServerMemoryFiles.read(checkpoint,gameID:gameID);guard saved.count > 1024 else { throw CocoaError(.fileReadCorruptFile) }
         guard let capture,let peerTeam,proof.count==32,enemy.count==600 else { throw CocoaError(.fileReadCorruptFile) }
         let agreement=try JSONEncoder().encode(BoundCooperativeRecovery(capture:capture.bytes,proof:proof,enemy:enemy,role:isHost ? 0:1,peerTeam:peerTeam.data))
         recoveryAgreement=agreement;recoveryBranch=BoundCooperativeRecoveryBranch.initial(proof:proof)
         let entry:[String:String]=["gameID":gameID,"state":checkpoint.lastPathComponent,"rom":BoundPlayerROMProfile.supportedSHA256,"sha256":coopHash(saved).map { String(format:"%02x",$0) }.joined(),"agreement":agreement.base64EncodedString(),"branch":recoveryBranch.base64EncodedString(),"snapshot":capture.bytes.base64EncodedString(),"cable":cable.recoveryData().base64EncodedString()]
-        try JSONSerialization.data(withJSONObject:entry,options:[.sortedKeys]).write(to:journal,options:.atomic)
+        try BoundServerMemoryFiles.write(JSONSerialization.data(withJSONObject:entry,options:[.sortedKeys]),to:journal,gameID:gameID)
         probe.protect(state:checkpoint,journal:journal,agreement:agreement,branch:recoveryBranch,cable:cable)
     }
     func suspend() {
@@ -533,24 +533,24 @@ final class BoundCooperativeDoublesSession {
             if running { resumeIfPermitted(core) }
         }
         let locations=probe.recoveryLocation();checkpoint=locations.0 ?? checkpoint;journal=locations.1 ?? journal
-        if let journal { try? FileManager.default.removeItem(at:journal) }
-        if let checkpoint { try? FileManager.default.removeItem(at:checkpoint) }
+        if let journal { try? BoundServerMemoryFiles.remove(journal,gameID:gameID) }
+        if let checkpoint { try? BoundServerMemoryFiles.remove(checkpoint,gameID:gameID) }
         probe.clearProtection()
         journal=nil;checkpoint=nil;started=false;prepared=false;fixedRole=nil;recoveryPending=false;status=completed ? "Cooperative battle complete":"Cooperative battle ended"
         local=nil;peer=nil
     }
     private func findRecovery() {
-        guard let folder=try? FileManager.default.url(for:.applicationSupportDirectory,in:.userDomainMask,appropriateFor:nil,create:true).appendingPathComponent("Cooperative Battles",isDirectory:true),
-              let files=try? FileManager.default.contentsOfDirectory(at:folder,includingPropertiesForKeys:[.contentModificationDateKey]) else { return }
+        let folder=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("Cooperative Battles",isDirectory:true)
+        guard let files=try? BoundServerMemoryFiles.contents(folder,gameID:gameID) else { return }
         let ordered=files.filter { $0.pathExtension == "json" }.sorted {
-            ((try? $0.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast) >
-            ((try? $1.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
+            BoundServerMemoryFiles.modifiedAt($0,gameID:gameID) >
+            BoundServerMemoryFiles.modifiedAt($1,gameID:gameID)
         }
         for url in ordered.prefix(64) { if adoptRecovery(from:url) { return } }
     }
     private func adoptRecovery(from url:URL,expectedProof:Data?=nil)->Bool {
         let folder=url.deletingLastPathComponent()
-        guard let bytes=try? Data(contentsOf:url),bytes.count<=65536,
+        guard let bytes=try? BoundServerMemoryFiles.read(url,gameID:gameID),bytes.count<=65536,
               let entry=try? JSONSerialization.jsonObject(with:bytes) as? [String:Any],entry["gameID"] as? String==gameID,
               entry["rom"] as? String==BoundPlayerROMProfile.supportedSHA256,
               let encoded=entry["agreement"] as? String,let agreement=Data(base64Encoded:encoded),
@@ -622,11 +622,11 @@ final class BoundCooperativeDoublesSession {
         }
         if due,let ready=recoveryPacket(.recoveryReady) { let sent=send?(ready)==true;recoveryReadySent=recoveryReadySent || sent }
         guard recoveryReadySent,recoveryPeerReady,!recoveryLoaded,
-              let checkpoint,let journal,let saved=try? Data(contentsOf:checkpoint),
+              let checkpoint,let journal,let saved=try? BoundServerMemoryFiles.read(checkpoint,gameID:gameID),
               coopHash(saved).map({ String(format:"%02x",$0) }).joined()==recoveryDigest else { return }
         do {
             _=try BoundPlayerROMProfile(rom:Data(contentsOf:core.game.fileURL,options:.mappedIfSafe))
-            try core.load(DeltaCore.SaveState(fileURL:checkpoint,gameType:core.game.type))
+            try BoundServerMemoryFiles.loadState(core:core,from:checkpoint,gameID:gameID)
             if recoveryCut?.isAdmission == true {
                 guard let restored=BoundCooperativeSnapshot(BoundVBABattleBridge.cooperativeSnapshot()),restored.phase==3,
                       let capture,restored.encounter==capture.encounter,restored.partyHash==capture.partyHash,
@@ -640,9 +640,9 @@ final class BoundCooperativeDoublesSession {
             }
             guard let peerRecoveryNonce else { throw CocoaError(.fileReadCorruptFile) }
             let nextBranch=BoundCooperativeRecoveryBranch.next(recoveryBranch,local:recoveryNonce,peer:peerRecoveryNonce)
-            guard var entry=(try JSONSerialization.jsonObject(with:Data(contentsOf:journal))) as? [String:Any] else { throw CocoaError(.fileReadCorruptFile) }
+            guard var entry=(try JSONSerialization.jsonObject(with:BoundServerMemoryFiles.read(journal,gameID:gameID))) as? [String:Any] else { throw CocoaError(.fileReadCorruptFile) }
             entry["branch"]=nextBranch.base64EncodedString()
-            try JSONSerialization.data(withJSONObject:entry,options:[.sortedKeys]).write(to:journal,options:.atomic)
+            try BoundServerMemoryFiles.write(JSONSerialization.data(withJSONObject:entry,options:[.sortedKeys]),to:journal,gameID:gameID)
             recoveryBranch=nextBranch;encounter=recoveryNonce;peerEncounter=peerRecoveryNonce
             probe.protect(state:checkpoint,journal:journal,agreement:recoveryAgreement,branch:recoveryBranch,cable:cable)
             publish(flags:3);probe.checkpointNow(core)

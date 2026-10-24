@@ -149,6 +149,11 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
     func nakamaSessionRequest(roomID: String) throws -> URLRequest {
         try request(path: "/functions/v1/nakama-session", body: ["roomID": roomID, "protocol": "bound-room-v1"])
     }
+    func nakamaSaveSessionRequest(roomID: String? = nil) throws -> URLRequest {
+        var body = ["protocol": "bound-saves-v1"]
+        if let roomID { body["roomID"] = roomID.lowercased() }
+        return try request(path: "/functions/v1/nakama-session", body: body)
+    }
     func runLeaseRequest(action: String, payload: [String: Any]) throws -> URLRequest {
         try request(path: "/rest/v1/rpc/bound_run_lease_v1", body: ["action": action, "payload": payload])
     }

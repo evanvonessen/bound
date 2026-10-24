@@ -492,6 +492,7 @@ final class BoundSoulProbe: @unchecked Sendable {
     private var cooperativeBattleCoreID: ObjectIdentifier?
     private var coreID: ObjectIdentifier?
     private var url: URL?
+    private var gameID = ""
     private var ledger: BoundSoulLedger?
     private var installed = false
     private var reachedField = false
@@ -500,16 +501,16 @@ final class BoundSoulProbe: @unchecked Sendable {
     private var lastPolicy = Data()
     private var lastBoxes = Data()
     private var cachedBoxes: [BoundSoulMon] = []
-    func configure(core: EmulatorCore?, url: URL?) {
+    func configure(core: EmulatorCore?, url: URL?, gameID: String = "") {
         lock.lock(); defer { lock.unlock() }
-        self.coreID = core.map(ObjectIdentifier.init); self.url = url
+        self.coreID = core.map(ObjectIdentifier.init); self.url = url; self.gameID = gameID
         if friendlyBattleCoreID != self.coreID { friendlyBattleCoreID = nil }
         if cooperativeBattleCoreID != self.coreID { cooperativeBattleCoreID = nil }
         verified = false; ledger = nil; installed = false; reachedField = false; frame = 0; snapshot = Snapshot(); lastPolicy = Data(); lastBoxes = Data(); cachedBoxes = []
-        timeline.configure(url: url.map { $0.deletingPathExtension().appendingPathExtension("timeline.json") })
-        guard let url, FileManager.default.fileExists(atPath: url.path) else { return }
+        timeline.configure(url: url.map { $0.deletingPathExtension().appendingPathExtension("timeline.json") }, gameID: gameID)
+        guard let url, BoundServerMemoryFiles.exists(url, gameID: gameID) else { return }
         do {
-            let data = try Data(contentsOf: url)
+            let data = try BoundServerMemoryFiles.read(url, gameID: gameID)
             guard data.count <= 2_097_152 else { throw BoundSoulLedger.Error.corrupt }
             var value = try JSONDecoder().decode(BoundSoulLedger.self, from: data)
             guard value.valid else { throw BoundSoulLedger.Error.corrupt }
@@ -552,9 +553,9 @@ final class BoundSoulProbe: @unchecked Sendable {
         try value.observe(snapshot.mons, registering: true, fainted: [])
         if let old = ledger, old.ended, let url {
             let archive = url.deletingLastPathComponent().appendingPathComponent("Finished Runs", isDirectory: true)
-            try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+            try BoundServerMemoryFiles.directory(archive, gameID: gameID)
             let destination = archive.appendingPathComponent(old.run.uuidString + ".json")
-            if !FileManager.default.fileExists(atPath: destination.path) { try JSONEncoder().encode(old).write(to: destination, options: .atomic) }
+            if !BoundServerMemoryFiles.exists(destination, gameID: gameID) { try BoundServerMemoryFiles.write(JSONEncoder().encode(old), to: destination, gameID: gameID) }
         }
         try persist(value); ledger = value; snapshot.ledger = value
     }
@@ -566,10 +567,10 @@ final class BoundSoulProbe: @unchecked Sendable {
         guard ledger == nil || ledger?.ended == true else { throw BoundSoulLedger.Error.corrupt }
         if let old = ledger, let url {
             let archive = url.deletingLastPathComponent().appendingPathComponent("Finished Runs", isDirectory: true)
-            try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+            try BoundServerMemoryFiles.directory(archive, gameID: gameID)
             let destination = archive.appendingPathComponent(old.run.uuidString + ".json")
-            if !FileManager.default.fileExists(atPath: destination.path) {
-                try JSONEncoder().encode(old).write(to: destination, options: .atomic)
+            if !BoundServerMemoryFiles.exists(destination, gameID: gameID) {
+                try BoundServerMemoryFiles.write(JSONEncoder().encode(old), to: destination, gameID: gameID)
             }
         }
         let value = BoundSoulLedger(run: run, binding: binding)
@@ -591,17 +592,16 @@ final class BoundSoulProbe: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard let value = ledger, value.offering, let url else { return }
         let archive = url.deletingLastPathComponent().appendingPathComponent("Cancelled Invitations", isDirectory: true)
-        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
-        try FileManager.default.moveItem(at: url, to: archive.appendingPathComponent(value.run.uuidString + ".json"))
+        try BoundServerMemoryFiles.directory(archive, gameID: gameID)
+        try BoundServerMemoryFiles.move(url, to: archive.appendingPathComponent(value.run.uuidString + ".json"), gameID: gameID)
         ledger = nil; snapshot.ledger = nil
         if installed { BoundVBABattleBridge.closeSoulLink(); installed = false; lastPolicy = Data() }
     }
     private func persist(_ value: BoundSoulLedger) throws {
         do {
             guard let url, value.valid else { throw BoundSoulLedger.Error.corrupt }
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
-                                                    attributes: [.posixPermissions: 0o700])
-            try JSONEncoder().encode(value).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            try BoundServerMemoryFiles.directory(url.deletingLastPathComponent(), gameID: gameID)
+            try BoundServerMemoryFiles.write(JSONEncoder().encode(value), to: url, gameID: gameID)
             snapshot.error = nil
         } catch {
             snapshot.error = "Soul Link couldn’t save its rules. Your run is paused."
@@ -821,8 +821,8 @@ final class BoundSoulSession: ObservableObject {
     var permitsIndependentStateLoading: Bool { !active && probe.read().error == nil }
     static func hasProtectedRun(gameID: String) -> Bool {
         let url = directory.appendingPathComponent(hash(gameID) + ".json")
-        guard FileManager.default.fileExists(atPath: url.path) else { return false }
-        guard let bytes = try? Data(contentsOf: url), bytes.count <= 2_097_152,
+        guard BoundServerMemoryFiles.exists(url, gameID: gameID) else { return false }
+        guard let bytes = try? BoundServerMemoryFiles.read(url, gameID: gameID), bytes.count <= 2_097_152,
               let ledger = try? JSONDecoder().decode(BoundSoulLedger.self, from: bytes), ledger.valid else { return true }
         return !ledger.ended
     }
@@ -851,7 +851,7 @@ final class BoundSoulSession: ObservableObject {
         self.core = core; self.gameID = gameID; supported = false
         confirmed = false; lastPeer = 0; offered = nil; incoming = nil; cursor = 0
         let url = core.map { _ in Self.directory.appendingPathComponent(Self.hash(gameID) + ".json") }
-        probe.configure(core: core, url: url); ledger = probe.read().ledger
+        probe.configure(core: core, url: url, gameID: gameID); ledger = probe.read().ledger
         loadTask?.cancel()
         guard let core, core.deltaCore.identifier == "com.rileytestut.GBADeltaCore" else { return }
         let id = ObjectIdentifier(core), file = core.game.fileURL
@@ -1361,16 +1361,17 @@ final class BoundRunTimeline: @unchecked Sendable {
     private let lock = NSRecursiveLock()
     private var journal = Journal()
     private var url: URL?
+    private var gameID = ""
     private var error: String?
     private var inBattle = false
     private var battleID: UUID?
     private var battleFlags: UInt32 = 0
-    func configure(url: URL?) {
+    func configure(url: URL?, gameID: String = "") {
         lock.lock(); defer { lock.unlock() }
-        self.url = url; journal = Journal(); error = nil; inBattle = false; battleID = nil
-        guard let url, FileManager.default.fileExists(atPath: url.path) else { return }
+        self.url = url; self.gameID = gameID; journal = Journal(); error = nil; inBattle = false; battleID = nil
+        guard let url, BoundServerMemoryFiles.exists(url, gameID: gameID) else { return }
         do {
-            let bytes = try Data(contentsOf: url)
+            let bytes = try BoundServerMemoryFiles.read(url, gameID: gameID)
             guard bytes.count <= 8_388_608 else { throw BoundSoulLedger.Error.capacity }
             let value = try JSONDecoder().decode(Journal.self, from: bytes)
             guard value.version == 1, value.events.count <= 20000, value.known.count <= 20000,
@@ -1384,8 +1385,8 @@ final class BoundRunTimeline: @unchecked Sendable {
     }
     private func save(_ value: Journal) throws {
         guard let url, value.events.count <= 20000, value.known.count <= 20000 else { throw BoundSoulLedger.Error.capacity }
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try JSONEncoder().encode(value).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        try BoundServerMemoryFiles.directory(url.deletingLastPathComponent(), gameID: gameID)
+        try BoundServerMemoryFiles.write(JSONEncoder().encode(value), to: url, gameID: gameID)
         journal = value
     }
     func append(id: String, kind: BoundRunEvent.Kind, title: String, detail: String = "", at date: Date = Date()) {

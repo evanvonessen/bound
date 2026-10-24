@@ -10,6 +10,7 @@ namespace BoundIndependent {
     const digest = /^[0-9a-f]{64}$/;
     interface Cursor { contiguous: number; sparse: number[]; }
     interface Run {
+        save_id?: string; game_id?: string; created_at?: string; updated_at?: string; deleted?: boolean; profiles?: { [owner: string]: any };
         version: number; roomID: string; members: string[]; identity: any;
         committed: boolean; cancelled: boolean; epoch: number; revision: number;
         chooserSeen: number; cursors: { [origin: string]: Cursor };
@@ -50,7 +51,7 @@ namespace BoundIndependent {
             first ? value.owner : value.partner, first ? value.partner : value.owner,
             first ? value.localSeed : value.partnerSeed, first ? value.partnerSeed : value.localSeed]);
     }
-    function settingsValid(nk: nkruntime.Nakama, text: string): boolean {
+    export function settingsValid(nk: nkruntime.Nakama, text: string): boolean {
         const b = new Uint8Array(nk.base64Decode(text));
         if (b.length !== 32 || b[0] !== 4) return false;
         for (let i = 1; i <= 11; i++) if (b[i] > 1) return false;
@@ -94,14 +95,27 @@ namespace BoundIndependent {
         c.sparse.push(sequence); c.sparse.sort(function (a, b) { return a - b; });
         while (c.sparse.length && c.sparse[0] === c.contiguous + 1) { c.contiguous++; c.sparse.shift(); }
     }
-    function view(state: Run, events: any[] = []): any {
-        return { version: 2, identity: state.identity, committed: state.committed, cancelled: state.cancelled,
+    export function view(state: Run, events: any[] = [], owner?: string): any {
+        const result: any = { version: 2, identity: state.identity, committed: state.committed, cancelled: state.cancelled,
             epoch: state.epoch, revision: state.revision, cursors: state.cursors, deliveries: state.deliveries || {}, saves: state.saves,
             legacyHistory: state.legacyHistory || {}, events: events };
+        if (state.save_id && owner) {
+            const metadata = BoundSaveLibrary.metadata(state, owner);
+            for (const key of Object.keys(metadata)) result[key] = metadata[key];
+        }
+        return result;
     }
     export const rpc: nkruntime.RpcFunction = function (ctx, _logger, nk, payload) {
-        if (!payload || payload.length > 20000) fail("Invalid independent run request");
-        const request = JSON.parse(payload), ticket = BoundRooms.authorize(ctx, nk, request.ticket), owner = ticket.ownerID;
+        if (!payload || payload.length > 160000) fail("Invalid independent run request");
+        const request = JSON.parse(payload);
+        if (!request || typeof request !== "object" || Array.isArray(request)) fail("Invalid independent run request");
+        if (request.save_id !== undefined) {
+            if (request.runID !== undefined && request.runID !== request.save_id) fail("Conflicting run identity");
+            request.runID = request.save_id;
+        }
+        const library = BoundSaveLibrary.library(ctx, nk, request);
+        if (library !== null) return library;
+        const ticket = request.saveTicket !== undefined ? BoundSaveLibrary.admission(ctx, nk, request) : BoundRooms.authorize(ctx, nk, request.ticket), owner = ticket.ownerID;
         if (!id(request.runID) || typeof request.action !== "string") fail("Invalid run identity");
         const runID = request.runID, now = Math.floor(Date.now() / 1000);
         for (let attempt = 0; attempt < 5; attempt++) {
@@ -117,12 +131,23 @@ namespace BoundIndependent {
                     legacyHistory: migrated || {} };
             } else {
                 state = JSON.parse(JSON.stringify(record.value));
+                if (state.deleted) fail("Save was deleted");
                 if (state.version !== 2 || state.roomID !== ticket.roomID || state.members.indexOf(owner) < 0 ||
                     state.members.some(function (member) { return ticket.members.indexOf(member) < 0; })) fail("Run access denied");
             }
             let changed = !record;
+            const store = function (key: string, value: any, version: string, bucket: string = collection): void {
+                if (state.save_id) BoundSaveLibrary.guardedWrite(nk, runID, key, value, version, bucket);
+                else write(nk, key, value, version, bucket);
+            };
             const events: any[] = [];
-            if (request.action === "setup" || request.action === "migrate") {
+            if (state.save_id && ["setup", "migrate", "draft", "commit", "takeover", "cancelSetup"].indexOf(request.action) >= 0) fail("Server save configuration is immutable");
+            if (request.action === "profile") {
+                if (!state.save_id || !BoundSaveLibrary.profile(request.profile)) fail("Invalid player profile");
+                const profiles = state.profiles || {};
+                if (state.saves[owner] && canonical(profiles[owner]) !== canonical(request.profile)) fail("Player profile is already saved");
+                if (canonical(profiles[owner]) !== canonical(request.profile)) { profiles[owner] = request.profile; state.profiles = profiles; changed = true; }
+            } else if (request.action === "setup" || request.action === "migrate") {
                 const proposed = identity(request.identity, owner, ticket, runID);
                 if (shared(proposed) !== shared(state.identity)) fail("Shared setup conflict");
                 if (request.action === "migrate" && (!state.committed || proposed.settings !== state.identity.settings ||
@@ -168,13 +193,15 @@ namespace BoundIndependent {
                     if (!event || String(event.run).toLowerCase() !== runID || !event.id || String(event.id.origin).toLowerCase() !== owner ||
                         !integer(event.id.sequence) || event.id.sequence < 1 || typeof event.kind !== "string" || !event.kind.length || event.kind.length > 64 ||
                         typeof event.payload !== "string" || event.payload.length > 8192 || event.idempotencyKey != null && (typeof event.idempotencyKey !== "string" || event.idempotencyKey.length > 512)) fail("Invalid shared event");
+                    if (state.save_id && !BoundSaveLibrary.eventValid(nk, event, runID)) fail("Unsupported shared event");
                     const stored = { run: runID, id: { origin: owner, sequence: event.id.sequence }, kind: event.kind, payload: event.payload,
                         ...(event.idempotencyKey == null ? {} : { idempotencyKey: event.idempotencyKey }) };
-                    const c = cursor(state.cursors[owner]); admit(c, event.id.sequence);
+                    const c = cursor(state.cursors[owner]), before = canonical(c); admit(c, event.id.sequence);
                     const key = runID + "/" + owner + "/" + event.id.sequence, previous = read(nk, key, eventCollection);
                     if (previous && canonical(previous.value) !== canonical(stored)) fail("Immutable event conflict");
-                    if (!previous) { try { write(nk, key, stored, "*", eventCollection); } catch (_) { const saved = read(nk, key, eventCollection); if (!saved || canonical(saved.value) !== canonical(stored)) fail("Immutable event conflict"); } }
-                    state.cursors[owner] = c; changed = true;
+                    if (!previous) { try { store(key, stored, "*", eventCollection); } catch (_) { const saved = read(nk, key, eventCollection); if (!saved || canonical(saved.value) !== canonical(stored)) fail("Immutable event conflict"); } }
+                    if (!state.save_id || !previous || before !== canonical(c)) changed = true;
+                    state.cursors[owner] = c;
                 }
                 state.deliveries = state.deliveries || {};
                 const delivered: { [origin: string]: number } = {};
@@ -191,7 +218,8 @@ namespace BoundIndependent {
                         const event = read(nk, runID + "/" + origin + "/" + sequence, eventCollection); if (event) events.push(event.value);
                     }
                 }
-                state.deliveries[owner] = delivered; changed = true;
+                if (!state.save_id || canonical(state.deliveries[owner]) !== canonical(delivered)) changed = true;
+                state.deliveries[owner] = delivered;
             } else if (request.action === "save" || request.action === "saveChunk" || request.action === "saveSeal" || request.action === "saveDownload") {
                 if (!state.committed || state.cancelled || !id(request.checkpoint)) fail("Save is unavailable");
                 const key = runID + "/save/" + owner + "/" + request.checkpoint;
@@ -208,7 +236,7 @@ namespace BoundIndependent {
                     !integer(request.count) || request.count !== Math.ceil(Math.ceil(request.bytes / 3) * 4 / 12000)) fail("Invalid player save");
                 const descriptor = { receipt: r, count: request.count, bytes: request.bytes }, previous = read(nk, key);
                 if (previous && canonical(previous.value) !== canonical(descriptor)) fail("Immutable player save conflict");
-                if (request.action === "save") { if (!previous) write(nk, key, descriptor, "*"); }
+                if (request.action === "save") { if (!previous) store(key, descriptor, "*"); }
                 else {
                     if (!previous) fail("Save upload is unavailable");
                     if (request.action === "saveChunk") {
@@ -216,7 +244,7 @@ namespace BoundIndependent {
                             request.data.length !== Math.min(12000, Math.ceil(request.bytes / 3) * 4 - request.index * 12000) || !/^[A-Za-z0-9+/]*={0,2}$/.test(request.data)) fail("Invalid save chunk");
                         const part = read(nk, key + "/" + request.index);
                         if (part && part.value.data !== request.data) fail("Immutable save chunk conflict");
-                        if (!part) write(nk, key + "/" + request.index, { data: request.data }, "*");
+                        if (!part) store(key + "/" + request.index, { data: request.data }, "*");
                     } else {
                         const parts: string[] = [];
                         for (let i = 0; i < request.count; i++) { const part = read(nk, key + "/" + i); if (!part) fail("Save upload is incomplete"); parts.push(part.value.data); }
@@ -229,14 +257,16 @@ namespace BoundIndependent {
                         // Optimistic per-player head, independent of partner progress.
                         const head = state.saves[owner], expected = request.expectedHead == null ? null : request.expectedHead;
                         if (expected !== null && !id(expected)) fail("Invalid player save head");
+                        if (state.save_id && (saved.predecessor == null ? null : String(saved.predecessor).toLowerCase()) !== expected) fail("Player save ancestry changed");
                         if ((!head && expected !== null) || (head && head.receipt.checkpoint.toLowerCase() !== request.checkpoint && head.receipt.checkpoint.toLowerCase() !== expected)) fail("Player save changed; retry");
-                        state.saves[owner] = descriptor; changed = true;
+                        if (!state.save_id || canonical(head) !== canonical(descriptor)) { state.saves[owner] = descriptor; changed = true; }
                     }
                 }
             } else if (request.action !== "get") fail("Unknown independent run action");
-            if (!changed) return JSON.stringify(view(state, events));
+            if (!changed) return JSON.stringify(view(state, events, owner));
             state.revision++;
-            try { write(nk, runID, state, record ? record.version : "*"); return JSON.stringify(view(state, events)); }
+            if (state.save_id && request.action === "saveSeal") state.updated_at = BoundSaveLibrary.timestamp();
+            try { write(nk, runID, state, record ? record.version : "*"); return JSON.stringify(view(state, events, owner)); }
             catch (_) { if (attempt === 4) fail("Run changed; retry"); }
         }
         fail("Run changed; retry");

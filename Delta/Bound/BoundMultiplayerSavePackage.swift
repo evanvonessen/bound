@@ -203,6 +203,48 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
     private var activeGames = Set<String>()
     private let fm = FileManager.default
 
+    // Managed runs have no filesystem representation. Existing local packages
+    // remain untouched and cannot be selected by this server-only path.
+    private var serverGames = Set<String>()
+    private var serverManifests: [String: BoundMultiplayerRunManifest] = [:]
+    private var serverJournals: [String: BoundMultiplayerSharedJournal] = [:]
+    private var serverHeads: [String: BoundMultiplayerSavePackage] = [:]
+    func useServerStorage(gameID: String) {
+        lock.lock(); defer { lock.unlock() }
+        serverGames.insert(gameID); serverManifests[gameID] = nil; serverJournals[gameID] = nil; serverHeads[gameID] = nil
+    }
+    func beginServerSession(identity: BoundMultiplayerRunIdentity, package: BoundMultiplayerSavePackage?, target: BoundMultiplayerSharedCursor) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard serverGames.contains(identity.gameID), identity.valid else { throw Failure.incompatible }
+        var journal = BoundMultiplayerSharedJournal(run: identity.run, owner: identity.owner, partner: identity.partner)
+        if let package {
+            try validate(package, complete: true)
+            guard package.payload.manifest.identity == identity else { throw Failure.ownerMismatch }
+            if let blob = package.payload.files["shared-events.json"] {
+                journal = try JSONDecoder().decode(BoundMultiplayerSharedJournal.self, from: blob.data)
+                try validateJournal(journal, identity: identity)
+            }
+        }
+        serverManifests[identity.gameID] = .init(identity: identity, deviceOwner: deviceID,
+            requiresInitialHistorySync: !journal.applied.covers(target), initialHistoryTarget: target)
+        serverJournals[identity.gameID] = journal; serverHeads[identity.gameID] = package
+    }
+    func captureServerCheckpoint(gameID: String, files: [String: Data], history: String) throws -> BoundMultiplayerSavePackage {
+        lock.lock(); defer { lock.unlock() }
+        guard let manifest = serverManifests[gameID], files["game.sav"]?.count == 131072,
+              files["checkpoint.state"]?.isEmpty == false, Self.isDigest(history) else { throw Failure.incomplete }
+        var blobs = files.mapValues(BoundMultiplayerSavePackage.Blob.init)
+        blobs["shared-events.json"] = .init(try Self.encode(journal(gameID: gameID)))
+        let payload = BoundMultiplayerSavePackage.Payload(version: 2, manifest: manifest, checkpoint: UUID(),
+            predecessor: serverHeads[gameID]?.payload.checkpoint, sharedEventDigest: history, files: blobs)
+        let receipt = BoundMultiplayerCheckpointReceipt(run: manifest.identity.run, checkpoint: payload.checkpoint,
+            owner: manifest.identity.owner, payloadSHA256: Self.hash(try Self.encode(payload)), sharedEventDigest: history)
+        let package = BoundMultiplayerSavePackage(payload: payload, receipt: receipt)
+        try validate(package, complete: true)
+        serverHeads[gameID] = package
+        return package
+    }
+
     init(root: URL? = nil, support: URL? = nil, deviceID: UUID? = nil) {
         let support = support ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         self.support = support
@@ -229,6 +271,7 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
     func cloudBatteryURL(gameID: String) -> URL { directory(gameID: gameID).appendingPathComponent("complete.sav") }
     func hasRun(gameID: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
+        if serverGames.contains(gameID) { return true }
         if let manifest = try? manifest(gameID: gameID), manifest.ended {
             do {
                 if try inspectIncoming(gameID: gameID) != nil { return true }
@@ -252,6 +295,7 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
     }
     func manifest(gameID: String) throws -> BoundMultiplayerRunManifest? {
         lock.lock(); defer { lock.unlock() }
+        if serverGames.contains(gameID) { return serverManifests[gameID] }
         let url = directory(gameID: gameID).appendingPathComponent("run.json")
         guard fm.fileExists(atPath: url.path) else { return nil }
         let manifest: BoundMultiplayerRunManifest = try read(url, maximum: 16_384)
@@ -288,6 +332,10 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
     }
     func validateForResume(gameID: String, owner: UUID, romSHA256: String) throws -> BoundMultiplayerRunManifest? {
         lock.lock(); defer { lock.unlock() }
+        if serverGames.contains(gameID) {
+            guard let value = serverManifests[gameID], value.identity.owner == owner, value.identity.romSHA256 == romSHA256 else { throw Failure.incompatible }
+            return value
+        }
         guard let manifest = try manifest(gameID: gameID) else {
             guard !hasRun(gameID: gameID) else { throw Failure.conflict }
             return nil
@@ -381,6 +429,10 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
     /// after storing an event; pendingSharedEventsToApply replays it on reopen.
     func journal(gameID: String, identity: BoundMultiplayerRunIdentity? = nil) throws -> BoundMultiplayerSharedJournal {
         lock.lock(); defer { lock.unlock() }
+        if serverGames.contains(gameID) {
+            guard let value = serverJournals[gameID], identity == nil || serverManifests[gameID]?.identity == identity else { throw Failure.incompatible }
+            return value
+        }
         let manifest = try sharedJournalManifest(gameID: gameID, identity: identity)
         let url = sharedJournalURL(identity: manifest.identity)
         let result: BoundMultiplayerSharedJournal
@@ -402,6 +454,7 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
         try validateJournal(value, identity: manifest.identity)
         let data = try Self.encode(value)
         guard data.count <= 33_554_432 else { throw Failure.corrupt }
+        if serverGames.contains(gameID) { serverJournals[gameID] = value; return }
         let url = sharedJournalURL(identity: manifest.identity)
         try create(url.deletingLastPathComponent()); try writeData(data, to: url)
         try write(manifest, to: sharedJournalManifestURL(identity: manifest.identity))
@@ -410,6 +463,7 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
     /// partner's durable receipt. Starting another game never deletes this queue.
     func pendingSharedRunIdentities(gameID: String) throws -> [BoundMultiplayerRunIdentity] {
         lock.lock(); defer { lock.unlock() }
+        if serverGames.contains(gameID) { return [] }
         let folder = root.appendingPathComponent("Shared Event Journals", isDirectory: true)
         var result: [BoundMultiplayerRunIdentity] = []
         for run in (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [] {
@@ -427,6 +481,11 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
     @discardableResult
     func setInitialHistoryTarget(gameID: String, target: BoundMultiplayerSharedCursor) throws -> BoundMultiplayerSharedCursor {
         lock.lock(); defer { lock.unlock() }
+        if serverGames.contains(gameID) {
+            guard var value = serverManifests[gameID] else { throw Failure.incompatible }
+            if let frozen = value.initialHistoryTarget { return frozen }
+            value.initialHistoryTarget = target; serverManifests[gameID] = value; return target
+        }
         guard var manifest = try manifest(gameID: gameID), manifest.requiresInitialHistorySync else { throw Failure.conflict }
         try checkDevice(manifest)
         let participants = Set([manifest.identity.owner.uuidString, manifest.identity.partner.uuidString])
@@ -447,6 +506,7 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
         let value = try journal(gameID: gameID)
         guard value.received.covers(target), value.applied.covers(target) else { throw Failure.incomplete }
         manifest.requiresInitialHistorySync = false; manifest.initialHistoryTarget = nil
+        if serverGames.contains(gameID) { serverManifests[gameID] = manifest; return manifest }
         try write(manifest, to: directory(gameID: gameID).appendingPathComponent("run.json"))
         try preserveSharedJournal(manifest)
         return manifest
@@ -938,6 +998,7 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
     }
     func latestComplete(gameID: String) throws -> BoundMultiplayerSavePackage? {
         lock.lock(); defer { lock.unlock() }
+        if serverGames.contains(gameID) { return serverHeads[gameID] }
         let head = directory(gameID: gameID).appendingPathComponent("head.json")
         guard fm.fileExists(atPath: head.path) else { return nil }
         let id: UUID = try read(head, maximum: 128)
@@ -946,6 +1007,7 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
     }
     func checkpoint(gameID: String, id: UUID) throws -> BoundMultiplayerSavePackage? {
         lock.lock(); defer { lock.unlock() }
+        if serverGames.contains(gameID) { return serverHeads[gameID]?.payload.checkpoint == id ? serverHeads[gameID] : nil }
         for complete in [true, false] {
             let url = checkpointURL(gameID: gameID, id: id, complete: complete)
             guard fm.fileExists(atPath: url.path) else { continue }
@@ -1491,7 +1553,7 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
         }
     }
     private func validFileName(_ name: String) -> Bool {
-        if ["game.sav", "soul.json", "timeline.json", "checkpoint.state", "setup.json", "shared-events.json"].contains(name) { return true }
+        if ["game.sav", "soul.json", "timeline.json", "checkpoint.state", "setup.json", "shared-events.json", "memory-files.json"].contains(name) { return true }
         guard name.hasPrefix("recovery/") else { return false }
         let base = String(name.dropFirst(9))
         return validRecoveryName(base, extension: "json") || validRecoveryName(base, extension: "state")

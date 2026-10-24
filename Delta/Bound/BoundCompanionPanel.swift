@@ -442,7 +442,9 @@ final class BoundCompanionCoordinator {
                 && !self.isEditingNotes && !self.isEditingText
         }
         sharing.interactions.changed = { [weak friendPanel] in friendPanel?.render() }
-        playerStateDisplay.attachPresence(sharing.livePresence)
+        playerStateDisplay.attachPresence(sharing.livePresence, friendName: { [weak self] in
+            self?.onboarding.selected?.displayName ?? "Friend"
+        })
         playerStateDisplay.install(in: owner)
         #if DEBUG && targetEnvironment(simulator)
         BoundFullAppGameplayQA.current?.attach(self, owner: owner)
@@ -1529,6 +1531,9 @@ final class BoundCompanionCoordinator {
               core.game.type == .gba, core.state == .running || core.state == .paused else {
             throw BoundRRDexSave.ImportError.currentGameUnavailable
         }
+        if romMultiplayer.serverOnly {
+            return try captureRestoredRRDexSave(owner: owner, core: core, gameID: gameID)
+        }
         return try owner.boundRRDexSaveCache.value(completedSave: {
             try BoundRRDexCurrentSaveImport.readCompletedSave(at: game.gameSaveURL)
         }, restoredSave: {
@@ -1547,6 +1552,9 @@ final class BoundCompanionCoordinator {
                 }
             }
             guard core.state == .paused else { throw BoundRRDexSave.ImportError.cannotPause }
+            if self.romMultiplayer.serverOnly {
+                return try BoundRRDexSave.parse(BoundVBABattleBridge.captureServerBattery())
+            }
             return try BoundRRDexCurrentSaveImport.capture { url in
                 // Export the live battery buffer, including data restored from a save
                 // state, instead of importing a potentially older file from disk.

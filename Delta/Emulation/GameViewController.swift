@@ -19,6 +19,7 @@ import GPGXDeltaCore
 import Roxas
 import AltKit
 import SwiftUI
+import Combine
 import zlib
 
 /// Read the pinned VBA save format without loading RAM into the running core.
@@ -214,6 +215,26 @@ private extension GameViewController
 class GameViewController: DeltaCore.GameViewController
 {
     private let boundCompanion = BoundCompanionCoordinator()
+    private var serverSetupHost: UIHostingController<BoundMultiplayerSetupView>?
+    private var serverSetupObservation: AnyCancellable?
+    private func updateServerSetupOverlay(_ show: Bool) {
+        guard isViewLoaded else { return }
+        if show {
+            if serverSetupHost == nil {
+                let host = UIHostingController(rootView: BoundMultiplayerSetupView(coordinator: boundCompanion.romMultiplayer, openSettings: { [weak self] in
+                    guard let self else { return }; self.boundCompanion.presentSettings(from: self)
+                }, close: { [weak self] in self?.quitEmulation() }))
+                addChild(host); view.addSubview(host.view); host.view.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                    host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor), host.view.topAnchor.constraint(equalTo: view.topAnchor),
+                    host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)])
+                host.didMove(toParent: self); serverSetupHost = host
+            }
+            if let host = serverSetupHost { view.bringSubviewToFront(host.view) }
+        } else if let host = serverSetupHost {
+            host.willMove(toParent: nil); host.view.removeFromSuperview(); host.removeFromParent(); serverSetupHost = nil
+        }
+    }
     private let boundWorldAPressed = NSHashTable<AnyObject>.weakObjects()
     var boundCompanionForTesting: BoundCompanionCoordinator { boundCompanion }
     func releaseBoundFriendGameplayInputs() {
@@ -305,6 +326,16 @@ class GameViewController: DeltaCore.GameViewController
             
             let previousGame = self.game as? Game
             NotificationCenter.default.removeObserver(self, name: .NSManagedObjectContextDidSave, object: previousGame?.managedObjectContext)
+            if boundCompanion.romMultiplayer.serverOnly, oldValue?.fileURL != newValue?.fileURL {
+                _ = boundCompanion.romMultiplayer.suspend()
+            }
+            // Register the save/load fence before upstream creates or starts a core.
+            if let next = newValue as? Game, next.boundUsesServerMultiplayer {
+                BoundServerMemoryFiles.setEnabled(true, for: next.identifier)
+                guard next.type == .gba, BoundVBABattleBridge.setServerOnlyGameSave(true, for: next.gameSaveURL) else { return }
+            } else if let next = newValue as? Game, next.type == .gba {
+                _ = BoundVBABattleBridge.setServerOnlyGameSave(false, for: next.gameSaveURL)
+            }
             super.game = newValue
             BoundROMUpdateActivity.bindingChanged(self)
             self.emulatorCore?.addObserver(self, forKeyPath: #keyPath(EmulatorCore.state), options: [.old], context: &kvoContext)
@@ -315,9 +346,14 @@ class GameViewController: DeltaCore.GameViewController
             let gameIdentifier = game?.identifier
             let gameSaveURL = game?.gameSaveURL
             let isGBA = game?.type == .gba
+            let serverOnly = game?.boundUsesServerMultiplayer == true
             let dexSaveCache = BoundRRDexSaveCache()
             self.boundRRDexSaveCache = dexSaveCache
-            self.emulatorCore?.saveHandler = { [weak self, gameIdentifier, gameSaveURL, dexSaveCache] _ in
+            self.emulatorCore?.saveHandler = { [weak self, gameIdentifier, gameSaveURL, dexSaveCache, serverOnly] _ in
+                if serverOnly {
+                    Task { @MainActor [weak self] in self?.boundCompanion.romMultiplayer.nativeServerSaveRequested() }
+                    return
+                }
                 self?.updateGameSave()
                 guard isGBA, let gameIdentifier, let gameSaveURL,
                       !BoundRRDexSaveRefreshEvent.isSuppressed(gameID: gameIdentifier) else { return }
@@ -684,6 +720,9 @@ extension GameViewController
             self.view.setNeedsLayout()
         }
         boundCompanion.install(in: self)
+        serverSetupObservation = boundCompanion.romMultiplayer.$needsServerMenu
+            .receive(on: DispatchQueue.main).sink { [weak self] in self?.updateServerSetupOverlay($0) }
+        updateServerSetupOverlay(boundCompanion.romMultiplayer.needsServerMenu)
         
         self.view.layoutIfNeeded()
         
@@ -794,6 +833,7 @@ extension GameViewController
         // Native layout can change the controller bounds after rotation or Reset.
         // Refresh companion/Menu geometry only after those real frames settle.
         boundCompanion.bringControlsToFront()
+        if let host = serverSetupHost { view.bringSubviewToFront(host.view) }
         pauseViewController?.showsArrangeViews = boundCompanion.canArrangeLandscapeViews
         gameView.accessibilityIdentifier = "bound.game-screen"
         gameView.isAccessibilityElement = true
@@ -829,7 +869,7 @@ extension GameViewController
             
         case "pause":
             
-            if let game = self.game
+            if let game = self.game, !boundCompanion.romMultiplayer.serverOnly
             {
                 let fileURL = FileManager.default.uniqueTemporaryURL()
                 self.pausedSaveState = PausedSaveState(fileURL: fileURL, gameType: game.type)
@@ -983,7 +1023,8 @@ extension GameViewController
                     Logger.main.error("Failed to close game window. \(error.localizedDescription, privacy: .public)")
                 }
                 
-                // Ensure emulation stops when explicitly quit.
+                // Capture the final server package before the core is stopped.
+                if boundCompanion.romMultiplayer.serverOnly { boundCompanion.stop() }
                 self.emulatorCore?.stop()
             }
             else
@@ -1077,6 +1118,7 @@ private extension GameViewController
         }
         
         self.updateAutoSaveState()
+        if boundCompanion.romMultiplayer.serverOnly { boundCompanion.stop() }
         
         self.emulatorCore?.stop()
         self.game = nil
@@ -1458,7 +1500,7 @@ extension GameViewController {
     /// Package metadata can change after the cartridge battery was already
     /// uploaded. A completed paired checkpoint is independently sync-worthy.
     func boundDidCompleteMultiplayerCheckpoint() {
-        guard let game = game as? Game else { return }
+        guard let game = game as? Game, !game.boundUsesServerMultiplayer else { return }
         let id = game.objectID, gameID = game.identifier
         let storage = BoundROMUpdateStorage.live
         guard !storage.hasPendingSaveClear(gameID: gameID) else { return }
@@ -1485,7 +1527,7 @@ private extension GameViewController
 {
     func updateGameSave()
     {
-        guard let game = self.game as? Game else { return }
+        guard let game = self.game as? Game, !game.boundUsesServerMultiplayer else { return }
         let gameID = game.identifier
         let storage = BoundROMUpdateStorage.live
         guard !storage.hasPendingSaveClear(gameID: gameID) else { return }
@@ -1603,6 +1645,7 @@ extension GameViewController: SaveStatesViewControllerDelegate
     
     private func update(_ saveState: SaveState, with replacementSaveState: SaveStateProtocol? = nil)
     {
+        guard !boundCompanion.romMultiplayer.serverOnly else { return }
         guard boundAllowsManualStateSave else { return }
         guard !saveState.isDeleted, let savedGame = saveState.game,
               savedGame.identifier == (self.game as? Game)?.identifier,
@@ -1664,8 +1707,9 @@ extension GameViewController: SaveStatesViewControllerDelegate
         }
     }
     
-    var boundAllowsManualStateSave:Bool { !boundCompanion.sharing.cooperativeDoubles.blocksAutoSave }
+    var boundAllowsManualStateSave:Bool { !boundCompanion.romMultiplayer.serverOnly && !boundCompanion.sharing.cooperativeDoubles.blocksAutoSave }
     var boundPermitsIndependentStateLoad: Bool {
+        guard (game as? Game)?.boundUsesServerMultiplayer != true else { return false }
         guard !boundCompanion.sharing.cooperativeDoubles.blocksAutoSave else { return false }
         guard boundCompanion.sharing.soulLink.permitsIndependentStateLoading else { return false }
         guard game != nil else { return false }
@@ -3086,6 +3130,7 @@ private extension GameViewController
         Logger.main.info("Discarding current scene session, quitting emulation for game \((self.game as? Game)?.identifier ?? "nil", privacy: .public)")
         
         self.updateAutoSaveState()
+        if boundCompanion.romMultiplayer.serverOnly { boundCompanion.stop() }
         self.emulatorCore?.stop() // Required to ensure data isn't corrupted due to starting new game before previous EmulatorBridge state is reset.
     }
     

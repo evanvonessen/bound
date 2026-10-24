@@ -376,6 +376,7 @@ private extension BoundServerBackupManager {
     }
     nonisolated static func capture(gameID: String, owner: UUID, context: NSManagedObjectContext) throws -> BoundServerBackupPackage? {
         let game = try game(gameID, context: context)
+        guard !game.boundUsesServerMultiplayer else { return nil }
         guard gameID != Game.melonDSBIOSIdentifier, gameID != Game.melonDSDSiBIOSIdentifier else { return nil }
         try BoundROMUpdateRegistry.validateUpload(gameID: gameID)
         if try hasNativeRecovery(gameID: gameID) { throw Failure.recovery }
@@ -483,6 +484,7 @@ private extension BoundServerBackupManager {
         let context = DatabaseManager.shared.newBackgroundContext()
         try context.performAndWait {
             let manifest = package.manifest, game = try game(manifest.gameID, context: context)
+            guard !game.boundUsesServerMultiplayer else { throw Failure.incompatible }
             guard !hasPendingRestore(gameID: game.identifier), !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: game.identifier) else { throw Failure.recovery }
             try BoundROMUpdateRegistry.validateDownload(gameID: game.identifier, generation: manifest.generation, isSave: true)
             guard game.type.rawValue == manifest.gameType, try romHash(game.fileURL) == manifest.romSHA256 else { throw Failure.incompatible }

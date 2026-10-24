@@ -174,6 +174,40 @@ final class LivePresenceTests: XCTestCase {
         XCTAssertEqual(session.bufferedSamples, 1); XCTAssertEqual(session.pose(at: 20.4)?.x, 999)
     }
 
+    func testDistanceNeverRemovesPeerAndOffscreenUpdatesSurviveCameraReentry() throws {
+        let session = session(), peer = UUID()
+        let viewer = try XCTUnwrap(reading().player)
+        session.consume(reading(), at: 20)
+        for (index, tiles) in [1, 3, 5, 10, 30, 1].enumerated() {
+            let now = 20 + Double(index) * 0.1
+            let x = 104 + tiles * 16
+            session.receive(try packet(session, peer: peer, sequence: UInt64(index + 1),
+                time: now - 10, reading: reading(x: x)), at: now)
+            let pose = try XCTUnwrap(session.pose(at: now + 0.11))
+            XCTAssertEqual(pose.x, Double(x), "Distance and large updates only affect interpolation")
+            XCTAssertTrue(pose.isSpatiallyComparable(to: viewer))
+        }
+        XCTAssertEqual(session.receivedPackets, 6)
+        XCTAssertEqual(session.rejectedPackets, 0)
+        XCTAssertEqual(session.pose(at: 20.61)?.x, 120)
+    }
+
+    func testDifferentMapsAndElevationsRemainTrackedWithoutComparableDirections() throws {
+        let session = session(), peer = UUID(), viewer = try XCTUnwrap(reading().player)
+        session.receive(try packet(session, peer: peer, reading: reading(x: 500, map: 8)), at: 20)
+        let otherMap = try XCTUnwrap(session.pose(at: 20))
+        XCTAssertEqual(otherMap.x, 500)
+        XCTAssertFalse(otherMap.isSpatiallyComparable(to: viewer))
+        session.receive(try packet(session, peer: peer, sequence: 2, time: 10.1,
+                                   reading: reading(x: 600, elevation: 2)), at: 20.1)
+        let otherElevation = try XCTUnwrap(session.pose(at: 20.1))
+        XCTAssertEqual(otherElevation.x, 600)
+        XCTAssertFalse(otherElevation.isSpatiallyComparable(to: viewer))
+        session.receive(try packet(session, peer: peer, sequence: 3, time: 10.2,
+                                   reading: reading(x: 120)), at: 20.2)
+        XCTAssertTrue(try XCTUnwrap(session.pose(at: 20.2)).isSpatiallyComparable(to: viewer))
+    }
+
     func testPauseTimeoutRestoreAndReconnectRejectPreviousSession() throws {
         let session = session(), peer = UUID()
         let old = try packet(session, peer: peer, reading: reading())

@@ -3,7 +3,8 @@
 This server runtime replaces Agora's gameplay data path. It hosts a small room
 for verified Bound accounts while each phone continues to emulate, accept input,
 render and play audio locally. Agora remains available for ordinary friend video;
-Dropbox saves remain separate. The default legacy mode keeps the existing Supabase account bridge; the new self-hosted mode makes Nakama the account authority.
+Ordinary game backups remain separate; multiplayer save data uses the permanent
+Nakama run storage described below. The default legacy mode keeps the existing Supabase account bridge; the new self-hosted mode makes Nakama the account authority.
 
 The runtime works with Nakama or Nakama Enterprise on Heroic Cloud. The native
 transport uses secure WebSockets, which is also available in browsers. This
@@ -27,8 +28,9 @@ Self-hosted gameplay admission checks the Nakama UUID directly and does not
 accept the legacy `bound:<owner>` custom-identity mapping. The legacy deployment
 remains available until explicitly retired; do not set this mode on it.
 
-Only `/ws` is exposed from Nakama. Keep account RPCs, native REST auth, gRPC and
-the console private. The account runtime denies player-session calls to the
+Expose only `/ws` and the authenticated `/v2/rpc/bound_run_v1` and
+`/v2/rpc/bound_independent_v2` paths from Nakama. Keep account RPCs, native REST
+auth, gRPC and the console private. The account runtime denies player-session calls to the
 private RPC even when a player knows its name. Use the deployment and import
 instructions in `../selfhost/README.md` for the replacement server.
 
@@ -209,3 +211,167 @@ server-owned configuration and exposes monotonic legacy bit history separately
 from new event sequences. Clients merge it before emitting ordinary events.
 Production activation must also deploy the Caddy route for this authenticated
 RPC. Fixture validation does not establish WAN or physical-device behavior.
+
+
+## Permanent shared save library
+
+`src/saves.ts` extends `bound_independent_v2`; it does not introduce another
+snapshot protocol or account backend. The permanent, server-generated UUID
+`save_id` is the existing version-two run key and `identity.run`. Both accounts
+use that same ID. Manual saves, automatic checkpoints and disconnect captures
+use the existing `save`, `saveChunk`, `saveSeal` and `saveDownload` operations.
+They never allocate another run.
+
+The model is **one shared run with two independent player heads**. Its immutable
+configuration contains the ROM compatibility hash, shared native settings,
+participants, friendship room ID and two distinct server-generated seeds.
+The creator can begin while the friend is offline. Both accounts see the run
+immediately; the friend's first launch initializes their own character, and all
+subsequent launches load their own latest sealed snapshot. Shared progression
+continues through the existing per-origin event journal. One player's snapshot
+cannot replace the other player's snapshot or roll the journal backwards.
+
+| Server-owned storage | Content |
+| --- | --- |
+| `bound_independent_v2/<save_id>` | UUID, `game_id`, immutable participant list/configuration, per-account profiles, cursors/delivery receipts, independent snapshot heads, revision, UTC creation/update timestamps. |
+| `bound_independent_v2/<save_id>/save/<owner>/<checkpoint>` and child chunks | Existing immutable snapshot descriptor, package, battery save, emulator checkpoint and accompanying recovery state. |
+| `bound_events_v2/<save_id>/<owner>/<sequence>` | Existing immutable progression event identities and payloads. |
+| `bound_save_requests_v1/<owner>/<request_id>` | Creation retry key → permanent UUID and configuration hash. No snapshot or profile is stored here. |
+
+All objects have client read/write permissions zero. Authenticated RPCs enforce
+ownership; clients cannot choose a different account or mutate storage directly.
+The authorized `members` on the root are the participant relation. Listing
+queries those roots in Nakama's PostgreSQL storage and filters by authenticated
+account and game, avoiding a second index that could disagree with ownership.
+There are no expiry fields, TTLs, age-based deletions or retention jobs. Previous
+sealed checkpoints, incomplete upload chunks and events remain until the user
+explicitly clears the shared run. Deployments must plan storage capacity and
+backups accordingly. Older v1/v2 records remain intact; the library lists newly
+server-created saves and does not silently import existing local runs.
+
+### Library authorization and RPC contract
+
+The existing `nakama-session` broker accepts `{"protocol":"bound-saves-v1"}`
+for library access. For New Game it also accepts `roomID`, resolves its current
+friendship and signs the derived `partnerID` and room. Neither path opens a live
+match or requires the partner's socket. The broker returns `httpEndpoint`,
+`accessToken`, `ownerID`, `expiresAt` and `saveTicket`, plus `partnerID`/`roomID`
+when creation is authorized. The token uses the existing account authority.
+No account migration or backend-default switch is part of this feature.
+
+The HMAC envelope is unchanged. Save claims are exactly
+`{version:1,protocol:"bound-saves-v1",ownerID,issuedAt,expiresAt}`, optionally
+with **both** `partnerID` and `roomID`. Leases last at most 90 seconds. A renewed
+save ticket verifies the account without requiring the original room to remain
+open or the friendship to remain current; persisted participants control access.
+This retains both participants' recovery access after a friendship ends. Such a
+ticket cannot authorize live match entry. Live play still requires an ordinary
+room ticket and the existing current-friendship checks.
+
+All requests below go to `bound_independent_v2` with `saveTicket`. UUIDs in
+request keys are lowercase. `save_id` aliases the existing `runID`; supplying
+both with different values is rejected.
+
+| Action | Additional request | Result |
+| --- | --- | --- |
+| `list` | `gameID`, optional `cursor` UUID | `{version:2,runs:[...],cursor}`; at most 100 UUID-ordered roots. Follow cursors until null, then sort presentation by `updated_at` if desired. Refresh restarts the listing. |
+| `create` | Stable retry `request_id` UUID, authorized `partnerID`, `gameID`, `romSHA256`, version-four base64 `settings`, optional `profile` | Complete version-two run state with a server-generated `save_id`; creates the root and retry key atomically. |
+| `get` | `save_id` | Existing version-two run state, including snapshot descriptors, event cursors, profiles and caller-oriented identity/seeds. |
+| `profile` | `save_id`, `{name,gender}` | Updates only caller's profile before their first snapshot; name is 1–7 ASCII letters/digits, gender 0 or 1. Exact retries remain valid after saving. |
+| `events` | `save_id`, existing `events` and `after` | Existing upload/delivery acknowledgements and gap-aware missing-event batches. |
+| `save` / `saveChunk` / `saveSeal` / `saveDownload` | `save_id` plus existing snapshot fields | Existing independent snapshot protocol. |
+| `delete` | `save_id`, `confirmSharedDeletion:true`, current `expectedRevision` | `{save_id,deleted:true}` after deleting both participants' snapshots and events. |
+
+Every listed root and managed run response includes `save_id`, `game_id`,
+`roomID`, `participants`, `identity`, `revision`, `created_at`, `updated_at`,
+`profiles` and `saves`. Times are ISO 8601 UTC strings. `updated_at` records creation or the latest
+successfully sealed snapshot; no-op polls and identical retries do not change
+it or churn the revision. `identity` is oriented to
+the authenticated caller, while `settingsOwner` retains the original chooser.
+An offline friend with no snapshot receives their own identity and seed rather
+than the creator's save bytes.
+
+### Conflict resolution and deletion
+
+Creation retries reuse `request_id`; reusing it with changed configuration is an
+error. The root plus request mapping commit in a single Nakama storage batch, so
+a lost response or concurrent request cannot create duplicate runs.
+
+Snapshot chunks are immutable and checksum verified before publishing a head.
+`saveSeal.expectedHead` must equal **that player's** current head; the snapshot's
+predecessor must match. Different players may seal independently. Two devices
+saving the same account from one predecessor have one CAS winner. The loser must
+fetch the server head and restore/reconcile before a new capture; it must not
+silently overwrite the winner by substituting a newer expected head. Retrying
+the exact winning checkpoint is idempotent. A partial upload never replaces the
+last valid head. Shared event identity conflicts similarly reject changed
+payloads for the same `(save_id, origin, sequence)`.
+
+Clear Server Saves is shared deletion: the confirmation must state that the run
+is removed for **both** players. An authorized participant may confirm it; no
+partner connection is required. A stale `expectedRevision` fails and requires a
+refresh. Deletion first atomically replaces the run with a minimal participant
+and UUID tombstone, then removes every snapshot/chunk/event under that UUID.
+Each managed child write atomically checks the parent revision, fencing uploads
+already in flight. Repeating deletion completes interrupted cleanup safely. The
+tombstone and hashed creation retry mapping prevent delayed requests from
+resurrecting deleted gameplay data. No other run action permanently deletes it.
+
+## Operation classes and recovery
+
+| Class | Ordering, acknowledgement and retry | Validation / execution |
+| --- | --- | --- |
+| Local-only | No network sequence or acknowledgement. | Emulation, rendering and input stay on their current local paths. |
+| Position / presence | Coalesce newest poses; discard stale updates. No per-pose durable acknowledgement. | Existing owner/room admission, packet bounds and client movement continuity. Tracking is independent of rendering distance. |
+| Independent progression | Immutable per-account sequence IDs, server upload receipts, separate client delivery receipts, contiguous plus sparse gap cursors; retransmit identical unacknowledged events and poll missing operations. | Managed runs accept the existing `world` and `soul` event formats, validate their structure and origin, and reject unsupported/malformed operations or changed duplicate payloads. Nakama does not simulate Pokémon. |
+| Synchronized gameplay | Existing reliable battle/trade control ordering and peer confirmation; retain interrupted battle recovery. | Existing targeted room membership, native protocol checks and synchronization; ordinary movement never waits for these acknowledgements. |
+| Persistence | Atomic creation retry key, immutable chunks, checksum seal and per-account CAS head; retries keep the same run/checkpoint IDs. | Save-ticket authentication plus permanent participant authorization. Loading returns only caller's checkpoint bytes. Shared deletion is explicitly confirmed and revision checked. |
+| Session | Refresh bounded leases; rejoin the authorized live room separately from restoring a persistent save. | Account/session revocation checks, live-room ticket renewal and independent permanent-save authorization. |
+
+A reconnect refreshes save authorization, fetches `save_id`, downloads and
+verifies the caller's latest sealed package, restores its checkpoint, then
+continues the existing gap-aware event recovery. Lost event or seal responses
+retry the original identities. No acknowledgement grants permission to execute
+local frames. Unexpected disconnection can recover only the latest checkpoint
+successfully received by the server; untransmitted progress cannot be recovered
+by a server-only persistence design. Keep checkpoint upload and event polling
+off the emulator frame worker.
+
+For an intentional close, the client freezes its final package and RAM recovery
+files before detaching the core. `BoundServerDisconnectSave` owns that immutable
+package and the account session independently of the coordinator, waits for the
+previous upload, and holds an iOS background task while draining pending events
+and the last snapshot. Only event identities covered by a previously validated
+local server receipt are skipped; current GET cursors alone do not establish
+payload equality. Remaining events use the existing immutable batch protocol.
+The final seal accepts only the expected old head, the already-pending own head,
+or this task's exact checkpoint receipt. Changed ancestry gets a fresh checkpoint
+UUID while preserving the shared `save_id` and captured bytes. Another device's
+head is a conflict rather than overwrite permission. There are at most three
+attempts for transient network failure. Cancellation, expiry or failure reports
+an unconfirmed save; success is reported only after a matching server receipt.
+The latest 32 run outcomes remain in account-scoped RAM so a detached view does
+not lose the failure status. A confirmed retry or an explicit decision to use
+the last server save clears its error; an older task cannot overwrite a newer
+result.
+This task and its journal remain in RAM, so an OS kill or unavailable network
+still leaves only the last successfully confirmed server checkpoint recoverable.
+
+Bounds: 16 MiB per snapshot package; 12,000 base64 characters per chunk; at most
+16 uploaded events per request, 8,192 base64 characters per event, and 160,000
+characters per RPC envelope; at most 4,096 sparse/gap events per origin. The
+larger RPC bound accommodates a valid batch of 16 existing world snapshots.
+Exceeding a bound rejects the operation rather than dropping durable progress.
+
+### Validation limits
+
+The focused runtime fixtures cover offline friend listing, immutable creation
+retries and concurrent allocation, per-account snapshot isolation, same-account
+concurrent save/event conflicts, malformed operations and bounds, delayed and
+reordered events, missed acknowledgements, expiry-independent retention,
+confirmation/authorization, upload versus deletion races, and interrupted
+cleanup. Broker fixtures cover signed scopes, friendship rechecks, account
+revocation and expiry without allocating matches. They do not establish real
+PostgreSQL/Nakama deployment, WAN recovery, physical-device behavior, frame-time
+parity, video delivery or battle correctness. Those require the deployed runtime
+and broker and the two-device acceptance matrix in the feature documentation.

@@ -36,16 +36,34 @@ export function fixture(roomMembers = members) {
     matchGet: id => active.get(id) ?? null,
     matchSignal: (id, signal) => { active.delete(id); discarded.push({ id, signal: JSON.parse(signal) }); },
     storageRead: reads => reads.flatMap(read => {
-      const key = ['bound_independent_v2', 'bound_events_v2'].includes(read.collection) ? read.collection + ':' + read.key : read.key;
+      const key = ['bound_independent_v2', 'bound_events_v2', 'bound_save_requests_v1'].includes(read.collection) ? read.collection + ':' + read.key : read.key;
       return stored.has(key) ? [stored.get(key)] : [];
     }),
-    storageWrite: writes => writes.map(write => {
-      const key = ['bound_independent_v2', 'bound_events_v2'].includes(write.collection) ? write.collection + ':' + write.key : write.key;
-      const current = stored.get(key);
-      if ((write.version === '*' && current) || (write.version && write.version !== '*' && current?.version !== write.version)) throw Error('CAS conflict');
-      const record = { ...plain(write), version: String(++version) };
-      stored.set(key, record); return record;
-    }),
+    storageWrite: writes => {
+      const keyOf = write => ['bound_independent_v2', 'bound_events_v2', 'bound_save_requests_v1'].includes(write.collection) ? write.collection + ':' + write.key : write.key;
+      // Nakama performs a batch in one transaction. Check every CAS before
+      // applying anything, including create + idempotency and deletion fences.
+      for (const write of writes) {
+        const current = stored.get(keyOf(write));
+        if ((write.version === '*' && current) || (write.version && write.version !== '*' && current?.version !== write.version)) throw Error('CAS conflict');
+      }
+      return writes.map(write => {
+        const record = { ...plain(write), version: String(++version) };
+        stored.set(keyOf(write), record); return record;
+      });
+    },
+    sqlQuery: (sql, args) => {
+      if (!sql.startsWith('SELECT value FROM storage')) throw Error('Unsupported fixture query');
+      const [collection, system, gameID, member, after] = args;
+      return [...stored.values()].filter(row => row.collection === collection && row.userId === system && row.value.save_id && !row.value.deleted &&
+        row.value.game_id === gameID && row.value.members.includes(member) && row.key > after)
+        .sort((a, b) => a.key.localeCompare(b.key)).slice(0, 101).map(row => ({ value: plain(row.value) }));
+    },
+    sqlExec: (sql, args) => {
+      if (!sql.startsWith('DELETE FROM storage')) throw Error('Unsupported fixture mutation');
+      const [system, pattern] = args;
+      for (const [key, row] of stored) if (row.userId === system && ['bound_independent_v2', 'bound_events_v2'].includes(row.collection) && row.key.startsWith(pattern.slice(0, -1))) stored.delete(key);
+    },
   };
   const dispatcher = {
     broadcastMessage: (opcode, data, recipients, sender, reliable) => broadcasts.push({ opcode, data: JSON.parse(data), recipients: plain(recipients), sender: plain(sender), reliable }),
@@ -70,6 +88,6 @@ export function fixture(roomMembers = members) {
   const frame = (body = 'fixture', targetOwnerID) => ({ v: 1, body: Buffer.from(body).toString('base64'), ...(targetOwnerID ? { targetOwnerID } : {}) });
   const loop = messages => api.match.matchLoop(ctx, logger, nk, dispatcher, 0, state, messages);
   const init = () => context.InitModule(ctx, logger, nk, new Proxy({}, { get: (_target, name) => (...args) => { registrations[name] = args; } }));
-  return { api, runs: context.BoundRuns, independent: context.BoundIndependent, accounts: context.BoundAccounts, ctx, logger, nk, dispatcher, logs, broadcasts, kicks, registrations, active, stored, discarded,
+  return { api, runs: context.BoundRuns, independent: context.BoundIndependent, saveLibrary: context.BoundSaveLibrary, accounts: context.BoundAccounts, ctx, logger, nk, dispatcher, logs, broadcasts, kicks, registrations, active, stored, discarded,
     ticket, join, message, frame, loop, init, state, presence, now: value => { now = value; } };
 }
