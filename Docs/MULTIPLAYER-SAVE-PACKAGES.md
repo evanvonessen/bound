@@ -39,6 +39,13 @@ capture remain intact. A personal-history revision includes journal, timeline an
 native recovery journal changes, including victories and memorial updates that do
 not change the shared acquisition/death bitsets.
 
+The device also persists the last server-acknowledged acquisition/death bitsets
+and any submitted update before its request leaves the app. Reopening accepts
+either acknowledged result only when local history includes every recorded bit.
+A legacy run can bootstrap from an exact current or completed-checkpoint digest;
+unknown server history remains a conflict. These local recovery records contain
+no lease credentials and do not grant authority on another device.
+
 Harmony/Dropbox uploads one completed archive and its frozen battery. Each upload
 gets immutable copies, so a simultaneous checkpoint cannot mix file generations.
 Solo saves retain their ordinary battery behavior. Multipart downloads go into a
@@ -57,6 +64,13 @@ incomplete and incompatible archives remain in the inbox. Original files are
 copied into a restore transaction before replacement. Interrupted transactions
 block play and can be replayed from their validated package; completed restore
 originals remain in `Restored Originals`.
+Restore preparation is staged completely before atomic activation. An older
+interruption without a replay package is preserved aside without changing the
+originals, allowing retry; a present but corrupt package still blocks recovery.
+Explicit Last complete checkpoint recovery installs that exact head's battery,
+personal files and RAM together. It preserves the replaced suspension and rejects
+an unfinished successor, newer encounters/deaths/events, or native recovery that
+would otherwise be lost. It cannot validate one checkpoint and load another.
 A newer run can replace a different ended run only with an authenticated ownership
 grant for its account and exact ROM. The ended package folder and its current
 battery, journal and timeline are archived first. Delayed downloads for that same
@@ -77,6 +91,13 @@ checkpoints capture the new local owner. The authenticated lease, history-anchor
 and permanent end-run migrations are deployed; their concurrency and expiry tests
 passed against PostgreSQL. Signed-in hosted acquisition and competing physical
 devices still require live validation.
+
+Adopting locally restored app data preserves and retags the current suspension
+before publishing the new manifest owner. The coordinator reloads that manifest
+and validates the adopted suspension before resuming. Native soft reset revokes
+save authority before capture and enters recovery; only a validated snapshot and
+Retry can authorize the working game again. Snapshot restores rebase command IDs
+from a fresh emulator sample so saved commands are not executed twice.
 
 `MultiplayerSavePackageTests` covers local durability, both-party receipts,
 retry/ancestry behavior, immutable upload snapshots, tampering, owner/ROM/device

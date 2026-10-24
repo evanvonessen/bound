@@ -758,7 +758,8 @@ final class BoundCompanionCoordinator {
                                         title: count == 1 ? "Trade completed" : "\(count) trades completed")
         }
         sharing.sharedWorld.bind(core: core)
-        sharing.nativeBattle.restored = { [weak owner] in
+        sharing.nativeBattle.restored = { [weak self, weak owner] in
+            self?.romMultiplayer.didRestoreAuthorizedSnapshot()
             guard let owner, let core = owner.emulatorCore else { return }
             owner.boundRRDexDidLoadSaveState(core: core)
         }

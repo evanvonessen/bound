@@ -50,6 +50,7 @@
 		503000000000000000000005 /* BoundRunLease.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000006; };
 		503000000000000000000003 /* BoundMultiplayerSavePackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000004; };
 		503000000000000000000001 /* BoundROMMultiplayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000002; };
+		503000000000000000000011 /* BoundROMRecoveryPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000012; };
         501200000000000000000003 /* SharedWorldTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 501200000000000000000004; };
         501200000000000000000001 /* BoundSharedProgression.swift in Sources */ = {isa = PBXBuildFile; fileRef = 501200000000000000000002; };
 		501100000000000000000001 /* BoundSoulLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 501100000000000000000002; };
@@ -897,6 +898,7 @@
 		503000000000000000000006 /* BoundRunLease.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundRunLease.swift; sourceTree = "<group>"; };
 		503000000000000000000004 /* BoundMultiplayerSavePackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundMultiplayerSavePackage.swift; sourceTree = "<group>"; };
 		503000000000000000000002 /* BoundROMMultiplayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMMultiplayer.swift; sourceTree = "<group>"; };
+		503000000000000000000012 /* BoundROMRecoveryPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMRecoveryPolicy.swift; sourceTree = "<group>"; };
         501200000000000000000004 /* SharedWorldTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedWorldTests.swift; sourceTree = "<group>"; };
         501200000000000000000002 /* BoundSharedProgression.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundSharedProgression.swift; sourceTree = "<group>"; };
 		501100000000000000000002 /* BoundSoulLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundSoulLink.swift; sourceTree = "<group>"; };
@@ -1632,6 +1634,7 @@
 				A9231483D777DADAFDDAE6D0 /* BoundROMUpdateStorage.swift */,
 				5C0E4F6CC6BABCBBDC9229AD /* BoundGitHubAccount.swift */,
 				503000000000000000000002 /* BoundROMMultiplayer.swift */,
+				503000000000000000000012 /* BoundROMRecoveryPolicy.swift */,
                 501200000000000000000002 /* BoundSharedProgression.swift */,
 				B47710000000000000000004 /* BoundBattleCable.swift */,
 				A15F00000000000000000003 /* BoundFriendInteractionPanel.swift */,
@@ -3679,6 +3682,7 @@
 				0FC606D95C2C74C3A1BA8474 /* BoundROMUpdateStorage.swift in Sources */,
 				9AF18DFBD985AD5D4468DAD9 /* BoundGitHubAccount.swift in Sources */,
 				503000000000000000000001 /* BoundROMMultiplayer.swift in Sources */,
+				503000000000000000000011 /* BoundROMRecoveryPolicy.swift in Sources */,
                 501200000000000000000001 /* BoundSharedProgression.swift in Sources */,
 				B47710000000000000000005 /* BoundBattleCable.swift in Sources */,
 				A15F00000000000000000004 /* BoundFriendInteractionPanel.swift in Sources */,

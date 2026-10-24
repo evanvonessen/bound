@@ -3,6 +3,7 @@ import UIKit
 import CryptoKit
 import DeltaCore
 import Network
+import zlib
 @testable import Delta
 
 private struct NativeBattleGame:GameProtocol {
@@ -1064,4 +1065,92 @@ private final class NativeBattleRelayChannel:BoundBattleChannel,@unchecked Senda
         }
     }
     func close() { queue.async { [self] in active=false; connection.cancel() } }
+}
+
+final class BoundHandoffSafetyTests: XCTestCase {
+    private let iwram = 479
+    private var ewram: Int { iwram + 0x8400 }
+    private func fixture() -> Data {
+        var value = Data(repeating: 0, count: ewram + 0x40000)
+        set(10, at: 0, in: &value)
+        return value
+    }
+    private func set(_ word: UInt32, at offset: Int, in data: inout Data) {
+        for byte in 0..<4 { data[offset + byte] = UInt8(truncatingIfNeeded: word >> (byte * 8)) }
+    }
+    private func withGzip(_ bytes: Data, _ body: (URL) throws -> Void) throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".state")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = try XCTUnwrap(gzopen(url.path, "wb"))
+        let count = bytes.withUnsafeBytes { gzwrite(file, $0.baseAddress, UInt32($0.count)) }
+        XCTAssertEqual(count, Int32(bytes.count)); XCTAssertEqual(gzclose(file), Z_OK)
+        try body(url)
+    }
+    func testCleanAndClosedTradeStatesRemainTransferable() throws {
+        var bytes = fixture()
+        set(0x314D4642, at: iwram + 0x4030, in: &bytes)
+        set(0x09FFFC20, at: iwram + 0xEB8, in: &bytes)
+        try withGzip(bytes) { try BoundHandoffSaveStatePolicy.validateGBAState(at: $0, nativeBoundROM: true) }
+        // The mailbox and stopped script pointer are inert after native exit.
+        bytes[iwram + 0x3529] = 2
+        set(8, at: ewram + 0x22B4C, in: &bytes) // An ordinary trainer battle.
+        try withGzip(bytes) { try BoundHandoffSaveStatePolicy.validateGBAState(at: $0, nativeBoundROM: true) }
+    }
+    func testActiveNativeBattleTradeAndDialogueStatesAreRejectedBeforeLoad() throws {
+        var cases: [Data] = []
+        var bytes = fixture()
+        set(0x314D4642, at: iwram + 0x4030, in: &bytes)
+        bytes[iwram + 0x3FB1] = 4; cases.append(bytes) // Native trade/link menu.
+        bytes[iwram + 0x3FB1] = 0
+        bytes[iwram + 0x3529] = 2
+        set(2, at: ewram + 0x22B4C, in: &bytes); cases.append(bytes)
+        bytes = fixture(); bytes[iwram + 0xEB1] = 2
+        set(0x09FFFD20, at: iwram + 0xEB8, in: &bytes); cases.append(bytes)
+        bytes = fixture(); set(0x09FFF849, at: iwram + 0x30F4, in: &bytes); cases.append(bytes)
+        bytes = fixture(); set(0x09FFF8AD, at: 24 + 15 * 4, in: &bytes); cases.append(bytes)
+        bytes = fixture(); set(0x09FFF8AD, at: 459, in: &bytes); cases.append(bytes)
+        bytes = fixture(); bytes[iwram + 0x5094] = 1
+        set(0x09FFF89D, at: iwram + 0x5090, in: &bytes); cases.append(bytes)
+        for candidate in cases {
+            try withGzip(candidate) {
+                XCTAssertThrowsError(try BoundHandoffSaveStatePolicy.validateGBAState(at: $0, nativeBoundROM: true)) {
+                    guard case BoundHandoffSaveStatePolicy.Failure.temporaryNativeState = $0 else { return XCTFail("Unexpected error: \($0)") }
+                }
+            }
+        }
+    }
+    func testUnrelatedGBAGamesDoNotUseBoundNativeAddressPolicy() throws {
+        var bytes = fixture()
+        set(0x09FFF849, at: iwram + 0x30F4, in: &bytes)
+        try withGzip(bytes) { try BoundHandoffSaveStatePolicy.validateGBAState(at: $0, nativeBoundROM: false) }
+    }
+    func testUnknownTruncatedAndCorruptSnapshotsFailClosed() throws {
+        var unknown = fixture(); set(11, at: 0, in: &unknown)
+        for bytes in [unknown, Data(fixture().prefix(100))] {
+            try withGzip(bytes) { XCTAssertThrowsError(try BoundHandoffSaveStatePolicy.validateGBAState(at: $0, nativeBoundROM: true)) }
+        }
+        try withGzip(fixture()) { url in
+            var encoded = try Data(contentsOf: url)
+            encoded[encoded.count - 8] ^= 0xff // Gzip CRC.
+            try encoded.write(to: url)
+            XCTAssertThrowsError(try BoundHandoffSaveStatePolicy.validateGBAState(at: url, nativeBoundROM: true))
+        }
+        try withGzip(fixture()) { url in
+            let encoded = try Data(contentsOf: url)
+            try Data(encoded.dropLast(6)).write(to: url)
+            XCTAssertThrowsError(try BoundHandoffSaveStatePolicy.validateGBAState(at: url, nativeBoundROM: true))
+        }
+        try withGzip(Data(repeating: 0, count: 2 * 1024 * 1024 + 1)) {
+            XCTAssertThrowsError(try BoundHandoffSaveStatePolicy.validateGBAState(at: $0, nativeBoundROM: true))
+        }
+    }
+    func testAsyncHandoffCannotFollowAReplacementCoreOrNewProtection() {
+        let original = NSObject(), replacement = NSObject()
+        let identity = BoundHandoffCoreIdentity(gameID: "rom", core: original)
+        XCTAssertTrue(identity.matches(gameID: "rom", core: original, allowed: true))
+        XCTAssertFalse(identity.matches(gameID: "rom", core: replacement, allowed: true))
+        XCTAssertFalse(identity.matches(gameID: "other", core: original, allowed: true))
+        XCTAssertFalse(identity.matches(gameID: "rom", core: original, allowed: false))
+        XCTAssertFalse(identity.matches(gameID: "rom", core: nil, allowed: true))
+    }
 }

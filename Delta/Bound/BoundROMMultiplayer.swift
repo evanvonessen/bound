@@ -190,6 +190,7 @@ final class BoundROMMultiplayerProbe: @unchecked Sendable {
         desired = state.encoded(sequence: sequence)
     }
     func read() -> BoundROMRequest? { lock.lock(); defer { lock.unlock() }; return request }
+    func discardRequestAfterRestore() { lock.lock(); defer { lock.unlock() }; request = nil }
     func receive(_ core: EmulatorCore) {
         lock.lock(); defer { lock.unlock() }
         guard coreID == ObjectIdentifier(core), verified else { return }
@@ -354,6 +355,8 @@ final class BoundROMMultiplayerCoordinator {
     private var validatedFence: UInt64?
     private var anchorBaselineValidated = false
     private var baselineHistory: String?
+    private var historyJournal: BoundROMHistoryJournal?
+    private var romFrameClock = BoundROMFrameClock()
     private var leaseTask: Task<Void, Never>?
     private var leaseOperation = UUID()
     private var leaseRetryAt: TimeInterval = 0
@@ -377,10 +380,11 @@ final class BoundROMMultiplayerCoordinator {
     private var manifest: BoundMultiplayerRunManifest?
     private var incoming: BoundMultiplayerSaveStore.Incoming?
     private var finishedRun: UUID?
+    private var cancelledSetup: UUID?
     private var endingRun = false
     private var newGameAfterEnd = false
     private var recoveredNewGameChoice = false
-    private var lastRequest: UInt32 = 0
+    private var requestCursor = BoundROMRequestCursor()
     private var newGame = false
     private var lastSent: TimeInterval = -.infinity
     private var checkpoint: Checkpoint?
@@ -450,17 +454,17 @@ final class BoundROMMultiplayerCoordinator {
         if let old = self.game { store.setActive(false,gameID:old.identifier) }
         verification?.cancel(); leaseTask?.cancel(); leaseTask = nil; grant = nil; validatedFence = nil
         leaseOperation = UUID()
-        anchorBaselineValidated = false; baselineHistory = nil
+        anchorBaselineValidated = false; baselineHistory = nil; historyJournal = nil; romFrameClock.reset(); requestCursor = .init()
         self.core = core; self.game = game; verified = false; probe.configure(core:core)
         servicesActive = core != nil; transportWasConnected = false
         protectedStorage = game.map { store.hasRun(gameID:$0.identifier) } ?? false; lastInboxScanAt = -.infinity
         friendsRefresh.reset()
         host = BoundROMHostState(); channel.reset(); selectedRoom = nil; peerOwner = nil; peerHello = nil
         peerHelloAt = -.infinity; peerFence = 0; reconciled = false; peerCommitted = false
-        setup = nil; manifest = nil; incoming = nil; finishedRun = nil; checkpoint = nil; localReceipt = nil; partnerReceipt = nil
+        setup = nil; manifest = nil; incoming = nil; finishedRun = nil; cancelledSetup = nil; checkpoint = nil; localReceipt = nil; partnerReceipt = nil
         checkpointStartedAt = nil; checkpointCaptureAttempted = false; checkpointCancellation = .init(); cancelledCheckpoints = [:]; checkpointRetryAt = 0
         endingRun = false; newGameAfterEnd = false; recoveredNewGameChoice = false
-        lastRequest = 0; newGame = false; error = nil; pendingSnapshot = nil; didRestore = false; head = nil
+        newGame = false; error = nil; pendingSnapshot = nil; didRestore = false; head = nil
         validatedSnapshot = false; workingStateAuthorized = false
         wasConnected = false; lastSuspensionRevision = nil; pendingAction = nil
         sharing.soulLink.cartridgeManagesPause = false
@@ -589,6 +593,7 @@ final class BoundROMMultiplayerCoordinator {
     }
     private func cancelSetup() throws {
         guard manifest == nil else { return }
+        let cancelled = setup?.identity.run
         if let setup, let url = setupURL {
             let archive = url.deletingLastPathComponent().appendingPathComponent("Cancelled Setups",isDirectory:true)
             try FileManager.default.createDirectory(at:archive,withIntermediateDirectories:true)
@@ -600,7 +605,10 @@ final class BoundROMMultiplayerCoordinator {
         }
         leaseTask?.cancel(); leaseTask = nil; leaseOperation = UUID()
         setup = nil; selectedRoom = nil; peerOwner = nil; peerHello = nil; grant = nil; channel.reset()
-        onboarding.setMultiplayerPartner(roomID:nil); host.status = .idle; host.message = ""
+        cancelledSetup = cancelled ?? cancelledSetup
+        host.run = cancelledSetup; host.linked = false; host.connected = false; host.setupCommitted = false
+        host.recovery = false; host.saving = false; error = nil
+        onboarding.setMultiplayerPartner(roomID:nil); host.status = .declined; host.message = ""
     }
     private func finishRun() throws {
         guard let identity, let game else { return }
@@ -631,7 +639,7 @@ final class BoundROMMultiplayerCoordinator {
         checkpoint = nil; localReceipt = nil; partnerReceipt = nil; peerCommitted = false; host.saving = false
         checkpointStartedAt = nil; checkpointCaptureAttempted = false; checkpointCancellation = .init(); cancelledCheckpoints = [:]
         pendingSnapshot = nil; validatedSnapshot = false; workingStateAuthorized = false
-        head = nil; validatedFence = nil; anchorBaselineValidated = false; baselineHistory = nil
+        head = nil; validatedFence = nil; anchorBaselineValidated = false; baselineHistory = nil; historyJournal = nil
         channel.reset(); peerHello = nil; peerHelloAt = -.infinity; reconciled = false
         if newGameAfterEnd {
             selectedRoom = nil; peerOwner = nil; newGame = false; pendingAction = nil
@@ -715,6 +723,7 @@ final class BoundROMMultiplayerCoordinator {
         _ = sharing.sendMultiplayerPacket(data)
     }
     private func selectRoom(_ room: String) {
+        cancelledSetup = nil
         if selectedRoom != room {
             channel.reset(); peerOwner = nil; peerHello = nil; peerHelloAt = -.infinity
             peerFence = 0; reconciled = false; transportWasConnected = false
@@ -725,7 +734,7 @@ final class BoundROMMultiplayerCoordinator {
         guard !host.transferRequired || transfer else { return }
         guard leaseTask == nil, let identity, let session = account.session, session.owner == identity.owner,
               UIApplication.shared.applicationState == .active, now >= leaseRetryAt else { return }
-        if let grant, grant.isCurrent, grant.remaining > 25 { return }
+        if !transfer, let grant, grant.isCurrent, grant.remaining > 25 { return }
         let existing = grant
         let operation = UUID(); leaseOperation = operation
         leaseTask = Task { [weak self] in
@@ -748,7 +757,11 @@ final class BoundROMMultiplayerCoordinator {
                     guard value.checkpointID == receipt?.checkpoint,
                           value.checkpointHistory == receipt?.sharedEventDigest,
                           value.historyDigest == receipt?.sharedEventDigest else { throw BoundMultiplayerSaveStore.Failure.conflict }
-                    if self.manifest != nil { try self.store.adoptOwnership(gameID:game.identifier,grant:value) }
+                    if self.manifest != nil {
+                        self.manifest = try self.store.adoptOwnership(gameID:game.identifier,grant:value)
+                        self.historyJournal = nil; self.validatedFence = nil
+                        try self.selectStoredSnapshot()
+                    }
                     self.host.transferRequired = false; self.error = nil
                 }
             } catch {
@@ -781,10 +794,24 @@ final class BoundROMMultiplayerCoordinator {
         if grant.checkpointID != target?.payload.checkpoint {
             guard let target, target.payload.predecessor == grant.checkpointID else { throw BoundMultiplayerSaveStore.Failure.conflict }
         }
-        if !anchorBaselineValidated {
-            guard grant.historyDigest == baselineHistory else { throw BoundMultiplayerSaveStore.Failure.conflict }
-            anchorBaselineValidated = true
+        if let bits = historyBits(), let identity, let game {
+            if historyJournal == nil {
+                historyJournal = try BoundROMHistoryJournal(
+                    url:store.directory(gameID:game.identifier).appendingPathComponent("History Anchors/" + store.deviceID.uuidString + ".json"),
+                    run:identity.run,owner:identity.owner,device:store.deviceID)
+            }
+            var completed: [Data] = []
+            if let data = head?.payload.files["soul.json"]?.data,
+               let ledger = try? JSONDecoder().decode(BoundSoulLedger.self,from:data), ledger.valid,
+               let bits = historyBits(ledger:ledger) {
+                completed.append(bits)
+            }
+            try historyJournal?.reconcile(server:grant.historyDigest,current:bits,
+                completed:completed,allowUnanchored:target == nil && (baselineHistory == nil || bits.allSatisfy { $0 == 0 }))
+        } else {
+            guard grant.historyDigest == nil, baselineHistory == nil else { throw BoundMultiplayerSaveStore.Failure.conflict }
         }
+        anchorBaselineValidated = true
     }
     private func synchronizeAnchors() throws {
         guard manifest != nil, let grant, grant.isCurrent, let history = historyDigest(),
@@ -795,6 +822,9 @@ final class BoundROMMultiplayerCoordinator {
         // been registered, even if a late monotonic death merge arrives.
         if let checkpoint, localReceipt != nil, target?.payload.checkpoint != checkpoint.id { return }
         guard grant.historyDigest != history || grant.checkpointID != target?.payload.checkpoint else { return }
+        guard let submittedHistory = historyBits(), BoundROMHistoryJournal.digest(submittedHistory) == history,
+              let historyJournal else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+        try historyJournal.prepare(submittedHistory)
         let operation = UUID(); leaseOperation = operation
         leaseTask = Task { [weak self] in
             guard let self else { return }
@@ -811,6 +841,7 @@ final class BoundROMMultiplayerCoordinator {
                 guard !Task.isCancelled, self.leaseOperation == operation, self.identity?.run == next.runID,
                       self.account.session?.owner == next.ownerID else { return }
                 self.grant = next
+                try historyJournal.reconcile(server:next.historyDigest,current:submittedHistory)
             } catch {
                 guard !Task.isCancelled, self.leaseOperation == operation else { return }
                 self.leaseRetryAt = self.now + 3
@@ -954,12 +985,15 @@ final class BoundROMMultiplayerCoordinator {
             }
         } catch { self.error = error.localizedDescription }
     }
-    private func historyDigest() -> String? {
-        guard let identity, let ledger = sharing.soulLink.ledger, ledger.run == identity.run,
+    private func historyBits(ledger supplied: BoundSoulLedger? = nil) -> Data? {
+        guard let identity, let ledger = supplied ?? sharing.soulLink.ledger, ledger.run == identity.run,
               let remote = ledger.partnerAcquisitions else { return nil }
         let local = ledger.acquisitionBits, peer = BoundSoulLedger.bits(remote)
         let sorted = identity.owner.uuidString < identity.partner.uuidString ? local + peer : peer + local
-        return BoundMultiplayerSaveStore.hash(sorted + ledger.lossBits)
+        return sorted + ledger.lossBits
+    }
+    private func historyDigest() -> String? {
+        historyBits().map(BoundROMHistoryJournal.digest)
     }
     /// Friendly battle RAM belongs only to its recovery journal. A requested run
     /// save first restores the world; a failed restore keeps every save blocked.
@@ -1118,14 +1152,24 @@ final class BoundROMMultiplayerCoordinator {
         }
     }
     private func handle(_ request: BoundROMRequest) throws {
-        guard request.requestID != 0, request.requestID != lastRequest else { return }
+        let previousRequest = requestCursor.lastHandled
+        switch requestCursor.admit(request.requestID) {
+        case .ignore: return
+        case .rebase:
+            host.acknowledgedRequest = request.requestID
+            return
+        case .dispatch: break
+        }
         let previousAcknowledgement = host.acknowledgedRequest
-        let previousRequest = lastRequest
-        lastRequest = request.requestID; host.acknowledgedRequest = request.requestID
+        host.acknowledgedRequest = request.requestID
         friendsRefresh.reset()
         switch request.command {
         case .newGameReady:
-            guard manifest == nil, incoming == nil else { host.status = .waiting; return }
+            guard manifest == nil, incoming == nil else {
+                recoverAfterCartridgeReset()
+                return
+            }
+            cancelledSetup = nil
             host.acknowledgedRequest = previousAcknowledgement
             do {
                 if let game, let finishedRun, try store.pendingNewGame(gameID:game.identifier) == finishedRun {
@@ -1136,7 +1180,7 @@ final class BoundROMMultiplayerCoordinator {
                     error = nil; host.recovery = false
                 }
             } catch {
-                lastRequest = previousRequest
+                requestCursor.lastHandled = previousRequest
                 throw error
             }
             recoveredNewGameChoice = false
@@ -1222,17 +1266,71 @@ final class BoundROMMultiplayerCoordinator {
                 leaseRetryAt = 0; ensureLease(); host.status = .waiting
             }
             else if request.argument == 1, let head {
-                pendingSnapshot = head.payload.files["checkpoint.state"]?.data; didRestore = false; validatedSnapshot = false
-                workingStateAuthorized = false
-                error = nil
-                host.status = .waiting
+                try selectCompletedCheckpoint(head.payload.checkpoint)
             } else if request.argument == 2 { suspend(); host.message = "Run suspended. You can close the game." }
             else if request.argument == 3 { leaseRetryAt = 0; ensureLease(transfer:true) }
         case .none: break
         }
     }
+    /// A raw cartridge reset must never be captured as the working linked run.
+    /// Reload only a previously validated local snapshot, after explicit Retry.
+    private func recoverAfterCartridgeReset(resetRequests: Bool = false) {
+        if resetRequests { requestCursor = .init(); host.acknowledgedRequest = 0; friendsRefresh.reset() }
+        workingStateAuthorized = false
+        pendingSnapshot = nil; validatedSnapshot = false; didRestore = false
+        pendingAction = nil; host.connected = false; host.saving = false
+        anchorBaselineValidated = false; historyJournal = nil
+        let message = "Game restarted. Retry recovery to resume your saved run."
+        error = message
+        do {
+            try selectStoredSnapshot()
+        } catch { self.error = error.localizedDescription }
+        host.recovery = true; host.status = .recovery; host.message = error ?? message
+        probe.publish(host)
+    }
+    private func selectStoredSnapshot() throws {
+        pendingSnapshot = nil; validatedSnapshot = false; didRestore = false
+        guard let manifest, let game else { return }
+        if let suspension = try store.validateSuspensionForResume(gameID:game.identifier,
+            owner:manifest.identity.owner,romSHA256:BoundWorldContract.romSHA256,gameSaveURL:game.gameSaveURL) {
+            pendingSnapshot = suspension.snapshot; validatedSnapshot = true
+        } else if let checkpointID = checkpoint?.id ?? head?.payload.checkpoint,
+                  let package = try store.validateCheckpointForResume(gameID:game.identifier,checkpointID:checkpointID,
+                    owner:manifest.identity.owner,romSHA256:BoundWorldContract.romSHA256,gameSaveURL:game.gameSaveURL) {
+            pendingSnapshot = package.payload.files["checkpoint.state"]?.data
+            validatedSnapshot = pendingSnapshot != nil
+        }
+    }
+    private func selectCompletedCheckpoint(_ id: UUID) throws {
+        guard let game, let core, let identity, let grant, grant.isCurrent,
+              identity.owner == account.session?.owner else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+        let wasRunning = core.state == .running
+        try restoreFriendlyBattleBeforeSaving(resume:false)
+        guard core.state == .paused || core.pause() else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+        defer { if wasRunning, UIApplication.shared.applicationState == .active { core.resume() } }
+        if workingStateAuthorized { guard suspend() else { throw BoundMultiplayerSaveStore.Failure.incomplete } }
+        workingStateAuthorized = false
+        store.setActive(false,gameID:game.identifier)
+        defer { store.setActive(true,gameID:game.identifier) }
+        do {
+            let restored = try store.restoreCompletedCheckpoint(gameID:game.identifier,checkpointID:id,
+                owner:identity.owner,romSHA256:BoundWorldContract.romSHA256,gameSaveURL:game.gameSaveURL)
+            guard let snapshot = restored.payload.files["checkpoint.state"]?.data else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+            manifest = try store.validateForResume(gameID:game.identifier,owner:identity.owner,romSHA256:BoundWorldContract.romSHA256)
+            head = restored; checkpoint = nil; localReceipt = nil; partnerReceipt = nil; peerCommitted = false
+            pendingSnapshot = snapshot; didRestore = false; validatedSnapshot = true
+            baselineHistory = restored.payload.sharedEventDigest; anchorBaselineValidated = false; historyJournal = nil
+            sharing.soulLink.bind(core:nil,gameID:game.identifier)
+            sharing.soulLink.bind(core:core,gameID:game.identifier); sharing.soulLink.cartridgeManagesPause = true
+            validatedFence = nil; channel.reset(); reconciled = false
+            error = nil; host.status = .waiting
+        } catch {
+            recoverAfterCartridgeReset()
+            throw error
+        }
+    }
     private func restoreSnapshotIfNeeded() throws {
-        guard !sharing.nativeBattle.blocksAutoSave,
+        guard error == nil, !sharing.nativeBattle.blocksAutoSave,
               !didRestore, anchorBaselineValidated, let pendingSnapshot, let core, let game, grant?.isCurrent == true,
               peerHello?.run == identity?.run, peerHello?.fence ?? 0 > 0,
               now - peerHelloAt < 3, channel.fresh(at:now),
@@ -1253,9 +1351,16 @@ final class BoundROMMultiplayerCoordinator {
             showRecoveryWhilePaused(error,core:core)
             throw error
         }
+        didRestoreAuthorizedSnapshot()
         didRestore = true; workingStateAuthorized = true; didRestoreSnapshot?(); channel.reset()
         reconciled = false
         core.resume()
+    }
+    func didRestoreAuthorizedSnapshot() {
+        romFrameClock.reset()
+        // A verified native-battle restore also rewinds frames and requests.
+        // Rebase from fresh RAM without changing the run's existing authority.
+        probe.discardRequestAfterRestore(); requestCursor.didRestore(); friendsRefresh.reset()
     }
     private func restoreIncomingIfReady() throws {
         guard !sharing.nativeBattle.blocksAutoSave, let game, let core, let grant, grant.isCurrent,
@@ -1287,25 +1392,26 @@ final class BoundROMMultiplayerCoordinator {
             guard setup?.identity == manifest?.identity else { throw BoundMultiplayerSaveStore.Failure.corrupt }
         }
         head = try store.latestComplete(gameID:game.identifier)
-        baselineHistory = head?.payload.sharedEventDigest; anchorBaselineValidated = false
-        pendingSnapshot = head?.payload.files["checkpoint.state"]?.data; didRestore = false; validatedSnapshot = false
-        if let checkpointID = head?.payload.checkpoint {
-            _ = try store.validateCheckpointForResume(gameID:game.identifier,checkpointID:checkpointID,
-                owner:grant.ownerID,romSHA256:BoundWorldContract.romSHA256,gameSaveURL:game.gameSaveURL)
-            validatedSnapshot = true
-        }
+        baselineHistory = head?.payload.sharedEventDigest; anchorBaselineValidated = false; historyJournal = nil
+        // An old unstarted restore leaves the original suspension intact;
+        // an applied restore retires that pointer and selects its exact head.
+        try selectStoredSnapshot()
         sharing.soulLink.bind(core:nil,gameID:game.identifier)
         sharing.soulLink.bind(core:core,gameID:game.identifier); sharing.soulLink.cartridgeManagesPause = true
         validatedFence = nil; channel.reset(); core.resume()
     }
     func tick() {
         guard verified, saveFenceReady, let core, let game else { return }
+        let request = probe.read()
+        if let request, romFrameClock.observe(request.frame), workingStateAuthorized, manifest != nil {
+            recoverAfterCartridgeReset(resetRequests:true)
+        }
         host.enabled = BoundMultiplayerFeatures.isEnabled
         host.linked = manifest != nil || incoming != nil || protectedStorage
         host.ended = finishedRun != nil && !host.linked && setup == nil
         sharing.soulLink.cartridgeManagesPause = host.linked
         host.recovery = error != nil
-        host.run = identity?.run ?? finishedRun; host.localSeed = identity?.localSeed ?? 0; host.partnerSeed = identity?.partnerSeed ?? 0
+        host.run = identity?.run ?? cancelledSetup ?? finishedRun; host.localSeed = identity?.localSeed ?? 0; host.partnerSeed = identity?.partnerSeed ?? 0
         if let identity, identity.settings.count == 32 { host.settings = identity.settings }
         host.chooser = setup?.accepted == true && setup?.identity.settingsOwner == account.session?.owner
         if setup?.accepted == true, manifest == nil, error == nil { host.status = .accepted }
@@ -1354,7 +1460,6 @@ final class BoundROMMultiplayerCoordinator {
             host.page = UInt32(timelinePage)
             host.friends = events.dropFirst(timelinePage*12).prefix(12).map { .init(room:BoundROMBytes.zero,name:$0.title) }
         }
-        let request = probe.read()
         friendsRefresh.retireIfAcknowledged(request)
         do {
             if manifest == nil, incoming == nil, now - lastInboxScanAt > 1 {
@@ -1393,7 +1498,7 @@ final class BoundROMMultiplayerCoordinator {
                 protectedStorage = true
                 workingStateAuthorized = true
                 newGame = false
-                baselineHistory = nil; anchorBaselineValidated = false
+                baselineHistory = nil; anchorBaselineValidated = false; historyJournal = nil
                 store.setActive(true,gameID:game.identifier); host.status = .complete
                 suspend()
             }
@@ -1402,7 +1507,7 @@ final class BoundROMMultiplayerCoordinator {
                     throw BoundMultiplayerSaveStore.Failure.incomplete
                 }
                 if validatedFence != grant.fence {
-                    _ = try store.validateForResume(gameID:game.identifier,owner:manifest.identity.owner,romSHA256:BoundWorldContract.romSHA256)
+                    self.manifest = try store.validateForResume(gameID:game.identifier,owner:manifest.identity.owner,romSHA256:BoundWorldContract.romSHA256)
                     validatedFence = grant.fence
                 }
                 store.setActive(true,gameID:game.identifier)

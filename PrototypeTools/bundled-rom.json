@@ -1,6 +1,6 @@
 {
-  "sha256": "978385f66075f4819529183ec3867709a9f90547797b3e0cda5d2f023ad5a27a",
-  "url": "https://github.com/evanvonessen/multi_red/releases/download/rom-463269916e7d-a9a11203ef41/rrbin-integrated.gba",
+  "sha256": "ed07daecb5d38278dd6a0452b3113bab68bfb0fdc0a4cf9d95caff120404700c",
+  "url": "https://github.com/evanvonessen/multi_red/releases/download/cartridge-ed07daecb5d38278/rrbin-integrated.gba",
   "repository": "evanvonessen/multi_red",
-  "tag": "rom-463269916e7d-a9a11203ef41"
+  "tag": "cartridge-ed07daecb5d38278"
 }

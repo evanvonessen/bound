@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Darwin
 
 /// Shared run configuration. Battery saves, seeds and recovery remain player-owned.
 struct BoundMultiplayerRunIdentity: Codable, Equatable, Sendable {
@@ -371,14 +372,49 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
 
     /// Only the broker's live, typed lease can authorize adopting a foreign device
     /// checkpoint. The grant's initializer belongs to the lease client.
-    func adoptOwnership(gameID: String, grant: BoundRunLeaseGrant) throws {
+    @discardableResult
+    func adoptOwnership(gameID: String, grant: BoundRunLeaseGrant) throws -> BoundMultiplayerRunManifest {
         lock.lock(); defer { lock.unlock() }
         guard !activeGames.contains(gameID), var manifest = try manifest(gameID: gameID) else { throw Failure.activeGame }
         guard !manifest.ended else { throw Failure.conflict }
         try validateGrant(grant, identity: manifest.identity)
         guard manifest.deviceOwner == deviceID || grant.allowsTransfer else { throw Failure.deviceOwned }
+        if manifest.deviceOwner != deviceID {
+            guard let head = try latestComplete(gameID: gameID),
+                  grant.checkpointID == head.payload.checkpoint,
+                  grant.checkpointHistory == head.payload.sharedEventDigest,
+                  grant.historyDigest == head.payload.sharedEventDigest else { throw Failure.conflict }
+            try adoptSuspension(gameID: gameID, manifest: manifest)
+        }
         manifest.deviceOwner = deviceID; manifest.releasedForTransfer = false
         try write(manifest, to: directory(gameID: gameID).appendingPathComponent("run.json"))
+        return manifest
+    }
+    private func adoptSuspension(gameID: String, manifest: BoundMultiplayerRunManifest) throws {
+        let folder = directory(gameID: gameID), head = folder.appendingPathComponent("suspension-head.json")
+        guard fm.fileExists(atPath: head.path) else { return }
+        let id: UUID = try read(head, maximum: 128)
+        let url = folder.appendingPathComponent("Suspensions/" + id.uuidString + ".json")
+        let suspension: Suspension = try read(url, maximum: Self.maximumPackageBytes)
+        try validate(suspension.package, complete: false)
+        guard suspension.package.partnerReceipt == nil, suspension.package.payload.checkpoint == id,
+              suspension.manifest.identity == manifest.identity else { throw Failure.corrupt }
+        guard suspension.package.payload.predecessor == (try latestComplete(gameID: gameID))?.payload.checkpoint else { return }
+        // The local receipt is not a peer checkpoint. Retain its original and
+        // retag only ownership before publishing run.json; an interrupted
+        // adoption can retry with either the original or already-retagged copy.
+        guard suspension.manifest.deviceOwner != deviceID else { return }
+        guard suspension.manifest.deviceOwner == manifest.deviceOwner else { throw Failure.deviceOwned }
+        let archive = folder.appendingPathComponent("Ownership Transfers/" + UUID().uuidString, isDirectory: true)
+        try create(archive)
+        try write(manifest, to: archive.appendingPathComponent("run.json"))
+        try writeData(try readData(url, maximum: Self.maximumPackageBytes), to: archive.appendingPathComponent(id.uuidString + ".json"))
+        try synchronizeDirectory(archive.deletingLastPathComponent())
+        var package = suspension.package
+        package.payload.manifest.deviceOwner = deviceID
+        package.payload.manifest.releasedForTransfer = false
+        package.receipt.payloadSHA256 = Self.hash(try Self.encode(package.payload))
+        try write(Suspension(package: package, previous: suspension.previous), to: url)
     }
     private func validateGrant(_ grant: BoundRunLeaseGrant, identity: BoundMultiplayerRunIdentity) throws {
         guard identityAvailable, grant.isCurrent, grant.ownerID == identity.owner, grant.runID == identity.run,
@@ -470,10 +506,10 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
         guard suspension.package.partnerReceipt == nil, !suspension.snapshot.isEmpty,
               suspension.package.payload.checkpoint == id, let manifest = try manifest(gameID: gameID),
               suspension.manifest.identity == manifest.identity else { throw Failure.corrupt }
-        try checkDevice(suspension.manifest)
         // A completed checkpoint after this capture supersedes the old local
         // snapshot. Retain its bytes without treating it as current progress.
         guard suspension.package.payload.predecessor == (try latestComplete(gameID: gameID))?.payload.checkpoint else { return nil }
+        try checkDevice(suspension.manifest)
         return suspension
     }
     /// Reopen only the current personal snapshot. Journals may advance by merging
@@ -676,17 +712,28 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return fm.fileExists(atPath: directory(gameID: gameID).appendingPathComponent("Restore").path)
     }
+    private struct RestoreIntent: Codable {
+        let manifest: BoundMultiplayerRunManifest
+    }
     /// Reapply one fully validated restore transaction after a crash. Originals
-    /// stay untouched in its backup directory. A half-written transaction without
-    /// its complete package is preserved for explicit recovery instead.
+    /// stay untouched in its backup directory. Old versions could activate this
+    /// directory before writing the package; those unstarted attempts are kept
+    /// aside so the intact original save or incoming archive can be retried.
     func finishInterruptedRestore(gameID: String, owner: UUID, romSHA256: String, gameSaveURL: URL,
                                   grant: BoundRunLeaseGrant? = nil) throws {
         lock.lock(); defer { lock.unlock() }
         guard !activeGames.contains(gameID) else { throw Failure.activeGame }
         let transaction = directory(gameID: gameID).appendingPathComponent("Restore", isDirectory: true)
+        if try preserveUnstartedRestore(gameID: gameID) { return }
         let package: BoundMultiplayerSavePackage = try read(transaction.appendingPathComponent("pending.boundrun"), maximum: Self.maximumPackageBytes)
         try validate(package, complete: true)
         var manifest = package.payload.manifest
+        let intentURL = transaction.appendingPathComponent("intent.json")
+        if fm.fileExists(atPath: intentURL.path) {
+            let intent: RestoreIntent = try read(intentURL, maximum: 16_384)
+            guard intent.manifest.identity == manifest.identity, !intent.manifest.ended else { throw Failure.corrupt }
+            manifest = intent.manifest
+        }
         guard manifest.identity.gameID == gameID, manifest.identity.romSHA256 == romSHA256 else { throw Failure.incompatible }
         guard manifest.identity.owner == owner else { throw Failure.ownerMismatch }
         if let grant {
@@ -699,18 +746,26 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
             }
             manifest.deviceOwner = deviceID; manifest.releasedForTransfer = false
         } else { try checkDevice(manifest) }
-        for (name, url) in try restoreDestinations(package, gameSaveURL: gameSaveURL) {
-            guard let blob = package.payload.files[name] else { continue }
-            try create(url.deletingLastPathComponent())
-            try writeData(blob.data, to: url)
-        }
-        try write(package, to: checkpointURL(gameID: gameID, id: package.payload.checkpoint, complete: true))
-        try write(manifest, to: directory(gameID: gameID).appendingPathComponent("run.json"))
-        try write(package.payload.checkpoint, to: directory(gameID: gameID).appendingPathComponent("head.json"))
-        try exportCloud(gameID: gameID)
-        let preserved = directory(gameID: gameID).appendingPathComponent("Restored Originals", isDirectory: true)
-        try create(preserved)
-        try fm.moveItem(at: transaction, to: preserved.appendingPathComponent(UUID().uuidString, isDirectory: true))
+        try applyRestore(package, manifest: manifest, gameSaveURL: gameSaveURL, transaction: transaction)
+    }
+    /// Explicit local recovery can discard battery-only progress, but never a
+    /// prepared paired transaction or newer irreversible history. The returned
+    /// snapshot and the installed personal files always name the same head.
+    func restoreCompletedCheckpoint(gameID: String, checkpointID: UUID, owner: UUID,
+                                    romSHA256: String, gameSaveURL: URL) throws -> BoundMultiplayerSavePackage {
+        lock.lock(); defer { lock.unlock() }
+        guard !activeGames.contains(gameID) else { throw Failure.activeGame }
+        guard let manifest = try manifest(gameID: gameID), let package = try latestComplete(gameID: gameID),
+              package.payload.checkpoint == checkpointID, package.payload.manifest.identity == manifest.identity,
+              package.payload.files["checkpoint.state"] != nil else { throw Failure.incomplete }
+        guard manifest.identity.owner == owner else { throw Failure.ownerMismatch }
+        guard manifest.identity.romSHA256 == romSHA256 else { throw Failure.incompatible }
+        try checkDevice(manifest)
+        guard try preparedCheckpoints(gameID: gameID).isEmpty else { throw Failure.incomplete }
+        try checkHistoryDoesNotRegress(package)
+        try beginRestore(package, manifest: manifest, gameSaveURL: gameSaveURL)
+        try validatePersonalFiles(package, gameSaveURL: gameSaveURL)
+        return package
     }
     /// Import validates the whole archive before touching gameplay files. Active,
     /// divergent and differently owned versions stay in Incoming for ROM recovery.
@@ -762,29 +817,91 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
                 guard try read(url, maximum: Self.maximumPackageBytes) as BoundMultiplayerSavePackage == package else { throw Failure.conflict }
             } else { try write(package, to: url) }
         }
-        // Keep a transaction with every original file before the first replacement.
-        // An interrupted restore is replayed explicitly, never chosen by timestamp.
-        let transaction = directory(gameID: gameID).appendingPathComponent("Restore", isDirectory: true)
-        if fm.fileExists(atPath: transaction.path) { throw Failure.conflict }
-        try create(transaction)
-        let destinations = try restoreDestinations(newest, gameSaveURL: gameSaveURL)
-        for (name, url) in destinations where fm.fileExists(atPath: url.path) {
-            let backup = transaction.appendingPathComponent("originals", isDirectory: true).appendingPathComponent(name)
-            try create(backup.deletingLastPathComponent())
-            try fm.copyItem(at: url, to: backup)
+        try beginRestore(newest, manifest: manifest, gameSaveURL: gameSaveURL)
+    }
+    private func beginRestore(_ package: BoundMultiplayerSavePackage, manifest: BoundMultiplayerRunManifest,
+                              gameSaveURL: URL) throws {
+        let gameID = manifest.identity.gameID, folder = directory(gameID: manifest.identity.gameID)
+        _ = try preserveUnstartedRestore(gameID: gameID)
+        let transaction = folder.appendingPathComponent("Restore", isDirectory: true)
+        guard !fm.fileExists(atPath: transaction.path) else { throw Failure.conflict }
+        // Build complete replay instructions beside the active transaction.
+        // A crash or failed copy here leaves only untouched originals and an
+        // inactive staging folder; keep that evidence for later inspection.
+        let staging = folder.appendingPathComponent("Restore Staging/" + UUID().uuidString, isDirectory: true)
+        try create(staging)
+        try create(staging.appendingPathComponent("originals", isDirectory: true))
+        var destinations = try restoreDestinations(package, gameSaveURL: gameSaveURL)
+        for name in ["run.json", "head.json", "suspension-head.json"] {
+            destinations[name] = folder.appendingPathComponent(name)
         }
-        try write(newest, to: transaction.appendingPathComponent("pending.boundrun"))
-        for (name, url) in destinations {
-            guard let blob = newest.payload.files[name] else { continue }
+        for (name, url) in destinations where fm.fileExists(atPath: url.path) {
+            let backup = staging.appendingPathComponent("originals", isDirectory: true).appendingPathComponent(name)
+            try create(backup.deletingLastPathComponent())
+            try writeData(try readData(url, maximum: Self.maximumPackageBytes), to: backup)
+        }
+        try preserveCurrentSuspension(gameID: gameID, originals: staging.appendingPathComponent("originals"))
+        try write(RestoreIntent(manifest: manifest), to: staging.appendingPathComponent("intent.json"))
+        try write(package, to: staging.appendingPathComponent("pending.boundrun"))
+        try synchronizeDirectory(staging.appendingPathComponent("originals"))
+        try fm.moveItem(at: staging, to: transaction)
+        try synchronizeDirectory(folder)
+        try synchronizeDirectory(staging.deletingLastPathComponent())
+        try applyRestore(package, manifest: manifest, gameSaveURL: gameSaveURL, transaction: transaction)
+    }
+    private func applyRestore(_ package: BoundMultiplayerSavePackage, manifest: BoundMultiplayerRunManifest,
+                              gameSaveURL: URL, transaction: URL) throws {
+        let gameID = manifest.identity.gameID
+        for (name, url) in try restoreDestinations(package, gameSaveURL: gameSaveURL) {
+            guard let blob = package.payload.files[name] else { continue }
             try create(url.deletingLastPathComponent())
             try writeData(blob.data, to: url)
         }
+        try write(package, to: checkpointURL(gameID: gameID, id: package.payload.checkpoint, complete: true))
         try write(manifest, to: directory(gameID: gameID).appendingPathComponent("run.json"))
-        try write(newest.payload.checkpoint, to: directory(gameID: gameID).appendingPathComponent("head.json"))
+        try write(package.payload.checkpoint, to: directory(gameID: gameID).appendingPathComponent("head.json"))
+        // The explicit restored head supersedes any newer local suspension.
+        // Preserve both its pointer and snapshot bytes without selecting it on
+        // the next boot instead of the checkpoint the player just chose.
+        let suspension = directory(gameID: gameID).appendingPathComponent("suspension-head.json")
+        if fm.fileExists(atPath: suspension.path) {
+            try preserveCurrentSuspension(gameID: gameID, originals: transaction.appendingPathComponent("originals"))
+            let backup = transaction.appendingPathComponent("originals/suspension-head.json")
+            if !fm.fileExists(atPath: backup.path) {
+                try create(backup.deletingLastPathComponent())
+                try writeData(try readData(suspension, maximum: 128), to: backup)
+            }
+            try fm.removeItem(at: suspension)
+            try synchronizeDirectory(suspension.deletingLastPathComponent())
+        }
         try exportCloud(gameID: gameID)
+        try preserveRestore(transaction, gameID: gameID)
+    }
+    private func preserveCurrentSuspension(gameID: String, originals: URL) throws {
+        let backup = originals.appendingPathComponent("suspension.json")
+        guard !fm.fileExists(atPath: backup.path),
+              let id: UUID = try? read(directory(gameID: gameID).appendingPathComponent("suspension-head.json"), maximum: 128) else { return }
+        let snapshot = directory(gameID: gameID).appendingPathComponent("Suspensions/" + id.uuidString + ".json")
+        guard fm.fileExists(atPath: snapshot.path) else { return }
+        try create(originals)
+        try writeData(try readData(snapshot, maximum: Self.maximumPackageBytes), to: backup)
+    }
+    @discardableResult
+    private func preserveUnstartedRestore(gameID: String) throws -> Bool {
+        let transaction = directory(gameID: gameID).appendingPathComponent("Restore", isDirectory: true)
+        guard fm.fileExists(atPath: transaction.path),
+              !fm.fileExists(atPath: transaction.appendingPathComponent("pending.boundrun").path) else { return false }
+        // No gameplay destination is written before pending.boundrun exists.
+        // A present-but-corrupt package must still fail closed, not take this path.
+        try preserveRestore(transaction, gameID: gameID)
+        return true
+    }
+    private func preserveRestore(_ transaction: URL, gameID: String) throws {
         let preserved = directory(gameID: gameID).appendingPathComponent("Restored Originals", isDirectory: true)
         try create(preserved)
         try fm.moveItem(at: transaction, to: preserved.appendingPathComponent(UUID().uuidString, isDirectory: true))
+        try synchronizeDirectory(preserved)
+        try synchronizeDirectory(transaction.deletingLastPathComponent())
     }
     private func captureFiles(manifest: BoundMultiplayerRunManifest, gameSaveURL: URL,
                               additionalFiles: [String: Data]) throws -> [String: BoundMultiplayerSavePackage.Blob] {
@@ -898,6 +1015,23 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
                 guard old["run"] as? String == new["run"] as? String,
                       let previous = old[field] as? [String], let current = new[field] as? [String],
                       Set(previous).isSubset(of: Set(current)) else { throw Failure.conflict }
+                func identities(_ value: [String: Any]) throws -> Set<String> {
+                    guard value["records"] == nil || value["records"] is [[String: Any]] else { throw Failure.conflict }
+                    var result = Set<String>()
+                    for record in value["records"] as? [[String: Any]] ?? [] {
+                        guard let identity = record["identity"] as? [String: Any],
+                              record["aliases"] == nil || record["aliases"] is [[String: Any]] else { throw Failure.conflict }
+                        for identity in [identity] + (record["aliases"] as? [[String: Any]] ?? []) {
+                            result.insert(Self.hash(try JSONSerialization.data(withJSONObject: identity, options: .sortedKeys)))
+                        }
+                    }
+                    return result
+                }
+                guard try identities(old).isSubset(of: identities(new)),
+                      old["partnerAcquisitions"] == nil || old["partnerAcquisitions"] is [String],
+                      new["partnerAcquisitions"] == nil || new["partnerAcquisitions"] is [String],
+                      Set(old["partnerAcquisitions"] as? [String] ?? []).isSubset(of: Set(new["partnerAcquisitions"] as? [String] ?? [])),
+                      (old["nextEgg"] as? Int ?? 1) <= (new["nextEgg"] as? Int ?? 1) else { throw Failure.conflict }
             } else {
                 guard let previous = old[field] as? [[String: Any]], let current = new[field] as? [[String: Any]] else { throw Failure.conflict }
                 let ids = Set(current.compactMap { $0["id"] as? String })
@@ -976,5 +1110,12 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
         let handle = try FileHandle(forWritingTo: url)
         defer { try? handle.close() }
         try handle.synchronize()
+        try synchronizeDirectory(url.deletingLastPathComponent())
+    }
+    private func synchronizeDirectory(_ url: URL) throws {
+        let descriptor = Darwin.open(url.path, O_RDONLY)
+        guard descriptor >= 0 else { throw Failure.corrupt }
+        defer { Darwin.close(descriptor) }
+        guard Darwin.fsync(descriptor) == 0 else { throw Failure.corrupt }
     }
 }
