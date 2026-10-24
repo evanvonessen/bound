@@ -32,6 +32,8 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		BCD012340000000000000004 /* CooperativeDoublesContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCD012340000000000000003 /* CooperativeDoublesContractTests.swift */; };
+		BCD012340000000000000002 /* BoundCooperativeDoubles.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCD012340000000000000001 /* BoundCooperativeDoubles.swift */; };
 		53BC601F0D3B84D686006D98 /* BoundROMUpdateLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E30B4E74E195196F96EF6AA6 /* BoundROMUpdateLifecycleTests.swift */; };
 		CA44EE91DE2A83A0C6EC7C4F /* BoundROMUpdateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC30F861A4B600C26EC1B96D /* BoundROMUpdateTests.swift */; };
 		70EC871F843FF9D527947B75 /* BoundGitHubAccountTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 308B1B85AAFFFB2E0CF0A6EB /* BoundGitHubAccountTests.swift */; };
@@ -880,6 +882,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		BCD012340000000000000003 /* CooperativeDoublesContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CooperativeDoublesContractTests.swift; sourceTree = "<group>"; };
+		BCD012340000000000000001 /* BoundCooperativeDoubles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundCooperativeDoubles.swift; sourceTree = "<group>"; };
 		E30B4E74E195196F96EF6AA6 /* BoundROMUpdateLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMUpdateLifecycleTests.swift; sourceTree = "<group>"; };
 		EC30F861A4B600C26EC1B96D /* BoundROMUpdateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMUpdateTests.swift; sourceTree = "<group>"; };
 		308B1B85AAFFFB2E0CF0A6EB /* BoundGitHubAccountTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundGitHubAccountTests.swift; sourceTree = "<group>"; };
@@ -1489,6 +1493,7 @@
 				18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */,
 				A15E00000000000000000003 /* LivePresenceTests.swift */,
 				A15F00000000000000000005 /* FriendInteractionTests.swift */,
+				BCD012340000000000000003 /* CooperativeDoublesContractTests.swift */,
 				501100000000000000000004 /* SoulLinkTests.swift */,
 				50300000000000000000000A /* ROMMultiplayerContractTests.swift */,
 				503000000000000000000008 /* MultiplayerSavePackageTests.swift */,
@@ -1625,6 +1630,7 @@
 				B47710000000000000000001 /* BoundVBABattleBridge.mm */,
 				B47710000000000000000003 /* BoundVBABattleBridge.h */,
 				B47710000000000000000006 /* BoundNativeBattle.swift */,
+				BCD012340000000000000001 /* BoundCooperativeDoubles.swift */,
 				501100000000000000000002 /* BoundSoulLink.swift */,
 				503000000000000000000006 /* BoundRunLease.swift */,
 				503000000000000000000004 /* BoundMultiplayerSavePackage.swift */,
@@ -3341,6 +3347,7 @@
 				18BC10A8D7EF4D1397B91706 /* RecordedPlayerTests.swift in Sources */,
 				A15E00000000000000000004 /* LivePresenceTests.swift in Sources */,
 				A15F00000000000000000006 /* FriendInteractionTests.swift in Sources */,
+				BCD012340000000000000004 /* CooperativeDoublesContractTests.swift in Sources */,
 				501100000000000000000003 /* SoulLinkTests.swift in Sources */,
 				503000000000000000000009 /* ROMMultiplayerContractTests.swift in Sources */,
 				503000000000000000000007 /* MultiplayerSavePackageTests.swift in Sources */,
@@ -3673,6 +3680,7 @@
 				A15F00000000000000000002 /* BoundFriendInteraction.swift in Sources */,
 				B47710000000000000000002 /* BoundVBABattleBridge.mm in Sources */,
 				B47710000000000000000007 /* BoundNativeBattle.swift in Sources */,
+				BCD012340000000000000002 /* BoundCooperativeDoubles.swift in Sources */,
 				501100000000000000000001 /* BoundSoulLink.swift in Sources */,
 				503000000000000000000005 /* BoundRunLease.swift in Sources */,
 				503000000000000000000003 /* BoundMultiplayerSavePackage.swift in Sources */,

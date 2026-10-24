@@ -561,7 +561,7 @@ final class BoundROMMultiplayerCoordinator {
     @discardableResult func suspend() -> Bool {
         guard verified, saveFenceReady, workingStateAuthorized, let manifest, manifest.deviceOwner == store.deviceID,
               manifest.identity.owner == account.session?.owner,
-              !sharing.nativeBattle.blocksAutoSave,
+              !sharing.nativeBattle.blocksAutoSave && !sharing.cooperativeDoubles.blocksAutoSave,
               pendingSnapshot == nil || didRestore, let core, let game,
               core.state == .running || core.state == .paused else { return false }
         let wasRunning = core.state == .running
@@ -621,7 +621,7 @@ final class BoundROMMultiplayerCoordinator {
             if wasRunning, core?.state == .paused, UIApplication.shared.applicationState == .active { core?.resume() }
         }
         if newGameAfterEnd {
-            guard !sharing.nativeBattle.protectsTemporaryState else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+            guard !sharing.nativeBattle.protectsTemporaryState && !sharing.cooperativeDoubles.blocksAutoSave else { throw BoundMultiplayerSaveStore.Failure.incomplete }
             try store.finishNewGame(gameID:game.identifier,run:identity.run,owner:identity.owner)
             BoundVBABattleBridge.closeSoulLink()
             sharing.soulLink.bind(core:nil,gameID:game.identifier)
@@ -674,7 +674,7 @@ final class BoundROMMultiplayerCoordinator {
         let wasRunning = core?.state == .running
         try restoreFriendlyBattleBeforeSaving(resume:false)
         defer {
-            if wasRunning, core?.state == .paused, !sharing.nativeBattle.protectsTemporaryState,
+            if wasRunning, core?.state == .paused, !sharing.nativeBattle.protectsTemporaryState && !sharing.cooperativeDoubles.blocksAutoSave,
                UIApplication.shared.applicationState == .active { core?.resume() }
         }
         if !startNewGame || workingStateAuthorized {
@@ -953,7 +953,7 @@ final class BoundROMMultiplayerCoordinator {
                     guard !checkpointHasDurableReceipt, packet.owner.uuidString < owner.uuidString else { return }
                 }
                 installCheckpoint(request)
-                if probe.read()?.checkpointSafe != true || sharing.nativeBattle.blocksAutoSave {
+                if probe.read()?.checkpointSafe != true || sharing.nativeBattle.blocksAutoSave || sharing.cooperativeDoubles.blocksAutoSave {
                     cancelCheckpoint()
                 }
             case .prepared:
@@ -1001,7 +1001,7 @@ final class BoundROMMultiplayerCoordinator {
         if sharing.nativeBattle.isActive, sharing.nativeBattle.activity == .battle {
             sharing.nativeBattle.cancel(resume:resume)
         }
-        guard !sharing.nativeBattle.protectsTemporaryState else {
+        guard !sharing.nativeBattle.protectsTemporaryState && !sharing.cooperativeDoubles.blocksAutoSave else {
             throw BoundMultiplayerSaveStore.Failure.incomplete
         }
     }
@@ -1087,7 +1087,7 @@ final class BoundROMMultiplayerCoordinator {
         guard checkpoint == nil, now >= checkpointRetryAt, let manifest, let history = historyDigest(),
               channel.fresh(at:now), now - peerHelloAt < 3,
               probe.read()?.checkpointSafe == true, peerHello?.checkpointSafe == true,
-              !sharing.nativeBattle.blocksAutoSave else { return false }
+              !sharing.nativeBattle.blocksAutoSave && !sharing.cooperativeDoubles.blocksAutoSave else { return false }
         installCheckpoint(.init(id:UUID(),predecessor:head?.payload.checkpoint,history:history))
         if let checkpoint { send(.checkpoint,checkpoint) }
         return true
@@ -1097,7 +1097,7 @@ final class BoundROMMultiplayerCoordinator {
         if checkpointStartedAt == nil { checkpointStartedAt = now }
         let peerSafe = now - peerHelloAt < 3 ? peerHello?.checkpointSafe : nil
         switch checkpointCancellation.action(at:now,startedAt:checkpointStartedAt!,
-            localSafe:request?.checkpointSafe == true && !sharing.nativeBattle.blocksAutoSave,
+            localSafe:request?.checkpointSafe == true && !sharing.nativeBattle.blocksAutoSave && !sharing.cooperativeDoubles.blocksAutoSave,
             peerSafe:peerSafe,durable:checkpointHasDurableReceipt) {
         case .request: cancelCheckpoint(); return
         case .recover: checkpointRecovery(); return
@@ -1120,7 +1120,7 @@ final class BoundROMMultiplayerCoordinator {
             historyMatches:history == checkpoint.history && peerHello?.history == history
                 && anchorBaselineValidated && grant?.historyDigest == checkpoint.history,
             fresh:channel.fresh(at:now) && now - peerHelloAt < 3,
-            localSafe:request?.checkpointSafe == true && !sharing.nativeBattle.blocksAutoSave,
+            localSafe:request?.checkpointSafe == true && !sharing.nativeBattle.blocksAutoSave && !sharing.cooperativeDoubles.blocksAutoSave,
             peerSafe:peerHello?.checkpointSafe == true)
         guard stage != .wait else { return }
         if stage == .capture {
@@ -1243,7 +1243,7 @@ final class BoundROMMultiplayerCoordinator {
                               saved.identity.run == request.identifier, saved.identity.owner == owner else {
                             throw BoundMultiplayerSaveStore.Failure.ownerMismatch
                         }
-                        guard !sharing.nativeBattle.protectsTemporaryState else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+                        guard !sharing.nativeBattle.protectsTemporaryState && !sharing.cooperativeDoubles.blocksAutoSave else { throw BoundMultiplayerSaveStore.Failure.incomplete }
                         try store.preserveForNewGame(gameID:game.identifier,run:request.identifier,owner:owner,gameSaveURL:game.gameSaveURL)
                         manifest = saved; newGameAfterEnd = true; recoveredNewGameChoice = false
                         try finishRun()
@@ -1330,7 +1330,7 @@ final class BoundROMMultiplayerCoordinator {
         }
     }
     private func restoreSnapshotIfNeeded() throws {
-        guard error == nil, !sharing.nativeBattle.blocksAutoSave,
+        guard error == nil, !sharing.nativeBattle.blocksAutoSave && !sharing.cooperativeDoubles.blocksAutoSave,
               !didRestore, anchorBaselineValidated, let pendingSnapshot, let core, let game, grant?.isCurrent == true,
               peerHello?.run == identity?.run, peerHello?.fence ?? 0 > 0,
               now - peerHelloAt < 3, channel.fresh(at:now),
@@ -1363,7 +1363,7 @@ final class BoundROMMultiplayerCoordinator {
         probe.discardRequestAfterRestore(); requestCursor.didRestore(); friendsRefresh.reset()
     }
     private func restoreIncomingIfReady() throws {
-        guard !sharing.nativeBattle.blocksAutoSave, let game, let core, let grant, grant.isCurrent,
+        guard !sharing.nativeBattle.blocksAutoSave && !sharing.cooperativeDoubles.blocksAutoSave, let game, let core, let grant, grant.isCurrent,
               incoming != nil || store.hasInterruptedRestore(gameID:game.identifier) else { return }
         guard core.state == .paused || core.pause() else { throw BoundMultiplayerSaveStore.Failure.incomplete }
         do { try installIncoming(game:game,grant:grant,core:core) }

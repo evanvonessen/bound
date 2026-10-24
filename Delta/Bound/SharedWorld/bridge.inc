@@ -15,6 +15,9 @@ void worldRestoreBase(uint8_t *p) {
     // release before reconstructing the base view for the other native bridges.
     memset(p+GameHostOffset,0,GameHostSize);
     memset(p+GameUIHostOffset,0,GameUIHostSize);
+#ifdef BOUND_GAME_COOPERATIVE_DOUBLES
+    memset(p+GameCooperativeHostOffset,0,GameCooperativeHostSize);
+#endif
     uint8_t digest[32]; CC_SHA256(p,0x2000000,digest);
     if(memcmp(digest,GameCanonicalSHA256,32)) return;
     for(const auto &entry:GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size);
@@ -22,6 +25,10 @@ void worldRestoreBase(uint8_t *p) {
     memset(p+GameHostOffset,0xFF,GameHostSize);
     memset(p+GameUIHostOffset,0xFF,GameUIHostSize);
     memset(p+GameDescriptorOffset,0xFF,sizeof(GameDescriptor));
+#ifdef BOUND_GAME_COOPERATIVE_DOUBLES
+    memset(p+GameCooperativeCodeStart,0xFF,GameCooperativeCodeEnd-GameCooperativeCodeStart);
+    memset(p+GameCooperativeHostOffset,0xFF,GameCooperativeHostSize);
+#endif
 }
 void worldWritePolicy(bool enabled,NSData *checkpoints,unsigned group,unsigned number,NSData *boulders,bool fresh) {
     if(!worldOwnsROM()) return;

@@ -31,6 +31,8 @@ def download_private_release(manifest, destination):
     if source := os.environ.get('BOUND_DEVELOPMENT_ROM'):
         shutil.copyfile(source, destination)
         return
+    if manifest.get('local_only'):
+        raise SystemExit('Build this doubles worktree with BOUND_DEVELOPMENT_ROM pointing to its matching rrbin-doubles.gba.')
     if token := os.environ.get('BOUND_ROM_GITHUB_TOKEN'):
         opener = urllib.request.build_opener(PrivateReleaseRedirect())
         headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'}

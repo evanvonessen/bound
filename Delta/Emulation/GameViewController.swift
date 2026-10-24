@@ -517,7 +517,7 @@ class GameViewController: DeltaCore.GameViewController
     override func gameController(_ gameController: GameController, didActivate input: Input, value: Double)
     {
         if StandardGameControllerInput(input: input) == .menu, value >= 0.33 {
-            boundCompanion.sharing.nativeBattle.cancel()
+            boundCompanion.sharing.cooperativeDoubles.suspend(); boundCompanion.sharing.nativeBattle.cancel()
         }
         super.gameController(gameController, didActivate: input, value: value)
         let worldInput = BoundFriendWorldInput(input: input)
@@ -914,6 +914,7 @@ extension GameViewController
                 pauseViewController.cheatCodesItem = nil
             }
             
+            if !boundAllowsManualStateSave { pauseViewController.saveStateItem = nil;pauseViewController.loadStateItem = nil }
             if !boundPermitsIndependentStateLoad { pauseViewController.loadStateItem = nil }
             self.pauseViewController = pauseViewController
             
@@ -1063,7 +1064,7 @@ private extension GameViewController
 {
     func quitEmulation()
     {
-        boundCompanion.sharing.nativeBattle.cancel(resume: false)
+        boundCompanion.sharing.cooperativeDoubles.suspend(); boundCompanion.sharing.nativeBattle.cancel(resume: false)
         if let presentedViewController = self.presentedViewController
         {
             presentedViewController.dismiss(animated: true) {
@@ -1542,7 +1543,7 @@ extension GameViewController: SaveStatesViewControllerDelegate
 {
     private func updateAutoSaveState()
     {
-        guard !boundCompanion.sharing.nativeBattle.blocksAutoSave else { return }
+        guard !boundCompanion.sharing.nativeBattle.blocksAutoSave && !boundCompanion.sharing.cooperativeDoubles.blocksAutoSave else { return }
         // Ensures game is non-nil and also a Game subclass
         guard let game = self.game as? Game else { return }
         guard !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: game.identifier) else { return }
@@ -1599,6 +1600,7 @@ extension GameViewController: SaveStatesViewControllerDelegate
     
     private func update(_ saveState: SaveState, with replacementSaveState: SaveStateProtocol? = nil)
     {
+        guard boundAllowsManualStateSave else { return }
         guard !saveState.isDeleted, let savedGame = saveState.game,
               savedGame.identifier == (self.game as? Game)?.identifier,
               !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: savedGame.identifier) else { return }
@@ -1659,7 +1661,9 @@ extension GameViewController: SaveStatesViewControllerDelegate
         }
     }
     
-    private var boundPermitsIndependentStateLoad: Bool {
+    var boundAllowsManualStateSave:Bool { !boundCompanion.sharing.cooperativeDoubles.blocksAutoSave }
+    var boundPermitsIndependentStateLoad: Bool {
+        guard !boundCompanion.sharing.cooperativeDoubles.blocksAutoSave else { return false }
         guard boundCompanion.sharing.soulLink.permitsIndependentStateLoading else { return false }
         guard game != nil else { return false }
         guard let id = (game as? Game)?.identifier else { return true }
@@ -1670,8 +1674,8 @@ extension GameViewController: SaveStatesViewControllerDelegate
     @discardableResult private func load(_ saveState: SaveStateProtocol) -> Bool
     {
         guard boundPermitsIndependentStateLoad else { return false }
-        boundCompanion.sharing.nativeBattle.cancel()
-        guard !boundCompanion.sharing.nativeBattle.blocksAutoSave else { return false }
+        boundCompanion.sharing.cooperativeDoubles.suspend(); boundCompanion.sharing.nativeBattle.cancel()
+        guard !boundCompanion.sharing.nativeBattle.blocksAutoSave && !boundCompanion.sharing.cooperativeDoubles.blocksAutoSave else { return false }
         let isRunning = (self.emulatorCore?.state == .running)
         
         if isRunning
@@ -1749,6 +1753,7 @@ extension GameViewController: SaveStatesViewControllerDelegate
     
     func saveStatesViewController(_ saveStatesViewController: SaveStatesViewController, updateSaveState saveState: SaveState)
     {
+        guard boundAllowsManualStateSave else { return }
         guard !saveState.isDeleted, let savedGame = saveState.game,
               savedGame.identifier == (self.game as? Game)?.identifier,
               !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: savedGame.identifier) else { return }
@@ -1810,7 +1815,7 @@ extension GameViewController
 {
     @objc func performQuickSaveAction()
     {
-        guard !boundCompanion.sharing.nativeBattle.blocksAutoSave else { return }
+        guard !boundCompanion.sharing.nativeBattle.blocksAutoSave && !boundCompanion.sharing.cooperativeDoubles.blocksAutoSave else { return }
         guard let game = self.game as? Game, let emulatorCore, !emulatorCore.isWirelessMultiplayerActive else { return }
         
         let backgroundContext = DatabaseManager.shared.newBackgroundContext()
@@ -1880,7 +1885,7 @@ extension GameViewController
 
     func performFastForwardAction(activate: Bool, remember: Bool = true, showToast: Bool = true)
     {
-        guard !boundCompanion.sharing.nativeBattle.isActive else { return }
+        guard !boundCompanion.sharing.nativeBattle.isActive && !boundCompanion.sharing.cooperativeDoubles.isActive else { return }
         guard let emulatorCore = self.emulatorCore, !emulatorCore.isWirelessMultiplayerActive else { return }
 
         if remember {
@@ -2463,7 +2468,7 @@ private extension GameViewController
 extension GameViewController: NSUserActivityDelegate
 {
     private var boundAllowsHandoff: Bool {
-        !boundCompanion.sharing.nativeBattle.blocksAutoSave &&
+        !boundCompanion.sharing.nativeBattle.blocksAutoSave && !boundCompanion.sharing.cooperativeDoubles.blocksAutoSave &&
         !boundCompanion.sharing.soulLink.active && !boundCompanion.romMultiplayer.protectsRun
     }
 

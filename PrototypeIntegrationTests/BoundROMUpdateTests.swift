@@ -36,6 +36,41 @@ final class BoundROMUpdateTests: XCTestCase {
         .init(generation: generation, localNormal: localNormal, remoteNormal: remoteNormal, conflicted: conflicted, locked: locked)
     }
 
+    func testClearSavesIncludesOnlySelectedCooperativeRecoveryAndReleasesItsFenceAfterCommit() throws {
+        let f=try fixture(),folder=f.storage.support.appendingPathComponent("Cooperative Battles")
+        try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
+        let selected=try f.file("Database/Games/selected.sav",Data([1])),otherSave=try f.file("Database/Games/other.sav",Data([2]))
+        func recovery(_ gameID:String)->(URL,URL) {
+            (folder.appendingPathComponent(UUID().uuidString+".json"),folder.appendingPathComponent(UUID().uuidString+".state"))
+        }
+        let target=recovery("selected"),other=recovery("other")
+        for (id,pair) in [("selected",target),("other",other)] {
+            try JSONSerialization.data(withJSONObject:["gameID":id,"state":pair.1.lastPathComponent,"phase":5,"token":42]).write(to:pair.0)
+            try Data([3,4]).write(to:pair.1)
+        }
+        let paths=try f.storage.cooperativeRecoveryFiles(gameID:"selected")
+        XCTAssertEqual(Set(paths),Set([target.0,target.1]))
+        XCTAssertTrue(BoundVBABattleBridge.setCooperativeGameSaveAllowed(false,for:selected))
+        XCTAssertTrue(BoundVBABattleBridge.setCooperativeGameSaveAllowed(false,for:otherSave))
+        defer { _=BoundVBABattleBridge.setCooperativeGameSaveAllowed(true,for:selected);_=BoundVBABattleBridge.setCooperativeGameSaveAllowed(true,for:otherSave) }
+        XCTAssertThrowsError(try f.storage.clearSaveFiles([selected]+paths,cooperativeGameSaveURL:selected) { throw BoundROMUpdateError.storage })
+        XCTAssertEqual(try Data(contentsOf:target.1),Data([3,4]));XCTAssertTrue(FileManager.default.fileExists(atPath:target.0.path))
+        XCTAssertTrue(BoundVBABattleBridge.qaCooperativeGameSaveBlocked(selected))
+        try f.storage.clearSaveFiles([selected]+paths,cooperativeGameSaveURL:selected) {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath:target.0.path));XCTAssertFalse(FileManager.default.fileExists(atPath:target.1.path))
+        XCTAssertFalse(BoundVBABattleBridge.qaCooperativeGameSaveBlocked(selected))
+        XCTAssertTrue(BoundVBABattleBridge.qaCooperativeGameSaveBlocked(otherSave))
+        XCTAssertEqual(try Data(contentsOf:otherSave),Data([2]));XCTAssertEqual(try Data(contentsOf:other.1),Data([3,4]))
+        XCTAssertTrue(FileManager.default.fileExists(atPath:other.0.path))
+    }
+    func testClearSavesRejectsCooperativeRecoveryStatePathEscape() throws {
+        let f=try fixture(),folder=f.storage.support.appendingPathComponent("Cooperative Battles")
+        try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
+        let journal=folder.appendingPathComponent(UUID().uuidString+".json")
+        try JSONSerialization.data(withJSONObject:["gameID":"selected","state":"../"+UUID().uuidString+".state","phase":5]).write(to:journal)
+        XCTAssertThrowsError(try f.storage.cooperativeRecoveryFiles(gameID:"selected"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath:journal.path))
+    }
     func testClearSavesOnlyRemovesSelectedFilesAndRetainsBackup() throws {
         let f = try fixture()
         let selected = try f.file("Database/Games/selected.sav", Data([1, 2]))

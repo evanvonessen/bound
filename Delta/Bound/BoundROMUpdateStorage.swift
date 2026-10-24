@@ -152,8 +152,23 @@ final class BoundROMUpdateStorage {
         let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return .init(root: support.appendingPathComponent("ROM Updates", isDirectory: true), documents: documents, support: support)
     }
+    func cooperativeRecoveryFiles(gameID:String) throws -> [URL] {
+        let folder=support.appendingPathComponent("Cooperative Battles",isDirectory:true)
+        guard fm.fileExists(atPath:folder.path) else { return [] }
+        var files:[URL]=[]
+        for journal in try fm.contentsOfDirectory(at:folder,includingPropertiesForKeys:nil) where journal.pathExtension=="json" {
+            guard let bytes=try? Data(contentsOf:journal),bytes.count<=65536,
+                  let entry=try? JSONSerialization.jsonObject(with:bytes) as? [String:Any],entry["gameID"] as? String==gameID else { continue }
+            guard UUID(uuidString:journal.deletingPathExtension().lastPathComponent) != nil,
+                  let name=entry["state"] as? String,name==URL(fileURLWithPath:name).lastPathComponent,
+                  URL(fileURLWithPath:name).pathExtension=="state",
+                  UUID(uuidString:URL(fileURLWithPath:name).deletingPathExtension().lastPathComponent) != nil else { throw BoundROMUpdateError.unsafePath }
+            files += [journal,folder.appendingPathComponent(name)]
+        }
+        return files
+    }
     /// Keep a verified local recovery copy; remove only explicitly selected paths.
-    func clearSaveFiles(_ urls: [URL], commit: () throws -> Void) throws {
+    func clearSaveFiles(_ urls: [URL], cooperativeGameSaveURL:URL?=nil, commit: () throws -> Void) throws {
         let sources = try urls.map { try source(for: $0, remove: true) }
         let backup = root.appendingPathComponent("Cleared Saves/" + UUID().uuidString)
         try fm.createDirectory(at: backup, withIntermediateDirectories: true)
@@ -178,6 +193,7 @@ final class BoundROMUpdateStorage {
             }
             throw error
         }
+        if let cooperativeGameSaveURL { _=BoundVBABattleBridge.setCooperativeGameSaveAllowed(true,for:cooperativeGameSaveURL) }
     }
 
     func state() throws -> State {

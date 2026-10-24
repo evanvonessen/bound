@@ -121,6 +121,12 @@ enum BoundNativeCommandPacket {
 /// bytes, so an unsolicited or excess continuation must never enter RAM.
 struct BoundNativeBlockAdmission {
     private var remaining=0
+    var recoveryRemaining:Int { remaining }
+    init() {}
+    init?(recoveryRemaining:Int) {
+        guard (0...293).contains(recoveryRemaining) else { return nil }
+        remaining=recoveryRemaining
+    }
     mutating func accept(_ commands:Data)->Bool {
         var next=remaining
         for start in stride(from:0,to:commands.count,by:16) {

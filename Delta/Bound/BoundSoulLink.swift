@@ -409,6 +409,7 @@ final class BoundSoulProbe: @unchecked Sendable {
     private var verified = false
     private var nativeObservationAllowed = true
     private var friendlyBattleCoreID: ObjectIdentifier?
+    private var cooperativeBattleCoreID: ObjectIdentifier?
     private var coreID: ObjectIdentifier?
     private var url: URL?
     private var ledger: BoundSoulLedger?
@@ -423,6 +424,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         self.coreID = core.map(ObjectIdentifier.init); self.url = url
         if friendlyBattleCoreID != self.coreID { friendlyBattleCoreID = nil }
+        if cooperativeBattleCoreID != self.coreID { cooperativeBattleCoreID = nil }
         verified = false; ledger = nil; installed = false; reachedField = false; frame = 0; snapshot = Snapshot(); lastPolicy = Data(); lastBoxes = Data(); cachedBoxes = []
         timeline.configure(url: url.map { $0.deletingPathExtension().appendingPathExtension("timeline.json") })
         guard let url, FileManager.default.fileExists(atPath: url.path) else { return }
@@ -445,6 +447,21 @@ final class BoundSoulProbe: @unchecked Sendable {
         let identity = ObjectIdentifier(core)
         if active { friendlyBattleCoreID = identity }
         else if friendlyBattleCoreID == identity { friendlyBattleCoreID = nil }
+    }
+    func setCooperativeBattleActive(_ active:Bool,for core:EmulatorCore) {
+        lock.lock();defer { lock.unlock() }
+        if active { cooperativeBattleCoreID=ObjectIdentifier(core) }
+        else if cooperativeBattleCoreID==ObjectIdentifier(core) { cooperativeBattleCoreID=nil }
+    }
+    /// Cartridge-owned live projection excludes the friend's three records.
+    func observeCooperativeParty(_ party:Data,fainted:Set<BoundSoulIdentity>,for core:EmulatorCore) {
+        lock.lock();defer { lock.unlock() }
+        guard cooperativeBattleCoreID==ObjectIdentifier(core),party.count==600,var value=ledger,!value.ended else { return }
+        let mons=BoundSoulMon.decode(party,stride:100),previous=value
+        do {
+            try value.observe(mons,registering:false,fainted:fainted)
+            if value != previous { try persist(value);ledger=value;snapshot.ledger=value }
+        } catch { snapshot.error="Soul Link couldn’t preserve cooperative faints. Your run is paused." }
     }
     func start(run: UUID, binding: String, offering: Bool = false) throws {
         lock.lock(); defer { lock.unlock() }
@@ -560,7 +577,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         // Do not consume events, zero HP, team changes or victory history from
         // the temporary battle. Its state rollback restores the original faint
         // buffer too, so genuine events pending before entry are not discarded.
-        guard !friendlyBattle else { return }
+        guard !friendlyBattle,cooperativeBattleCoreID != ObjectIdentifier(core) else { return }
         let native = BoundVBABattleBridge.soulLinkSnapshot()
         let ready = native["ready"] as? Bool == true
         reachedField = reachedField || ready

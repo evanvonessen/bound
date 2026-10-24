@@ -5,6 +5,16 @@ NS_ASSUME_NONNULL_BEGIN
 /// Thread-safe battery admission fence. Blocked paths remain blocked until
 /// explicitly authorized, including after their core has stopped or unbound.
 + (BOOL)setROMGameSaveAllowed:(BOOL)allowed forURL:(NSURL *)url NS_SWIFT_NAME(setROMGameSaveAllowed(_:for:));
+/// Attaches to the resident cartridge co-op ABI; gameplay code is never installed by this adapter.
++ (BOOL)installCooperativeDoubles;
++ (BOOL)setCooperativeGameSaveAllowed:(BOOL)allowed forURL:(NSURL *)url NS_SWIFT_NAME(setCooperativeGameSaveAllowed(_:for:));
++ (NSData *)cooperativeSnapshot;
++ (void)setCooperativeHost:(NSData *)data;
+/// The existing reliable native command cable, without friendly entry/return hooks.
++ (BOOL)prepareCooperativeCableForPlayer:(NSUInteger)player;
++ (void)closeCooperativeCable;
++ (BOOL)resumeCooperativeCableForPlayer:(NSUInteger)player;
++ (NSData *)cooperativeCableSnapshot;
 + (BOOL)installROMMultiplayer;
 + (NSData *)romMultiplayerSnapshot;
 + (void)setROMMultiplayerHost:(NSData *)data;
@@ -41,6 +51,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)enforceSoulLink;
 + (void)closeSoulLink;
 #if DEBUG && TARGET_OS_SIMULATOR
++ (BOOL)qaCooperativeGameSaveBlocked:(NSURL *)url;
 + (NSData *)qaSharedWorldImmutableDigest;
 + (BOOL)qaStartSharedWorldWait;
 + (BOOL)qaStartSharedWorldSightlineWait;

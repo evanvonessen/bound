@@ -28,6 +28,9 @@ supported={'abi_major':1,'abi_minor':0,'wire_version':2,'checkpoint_format':1,
            'snapshot_region_size':2048,'snapshot_buffer_offset':64,'snapshot_buffers':2,
            'host_port_size':1024,'reserved_heap_bytes':4096,
            'ui_abi_major':1,'ui_abi_minor':0,'ui_host_port_size':2048,'ui_snapshot_size':256}
+if c.get('cooperative_doubles'):
+ supported.update(save_state_layout=4,reserved_heap_bytes=8192,cooperative_abi_major=1,cooperative_abi_minor=0,
+  cooperative_host_port_offset=0x1FE0000,cooperative_host_port_size=16384,cooperative_snapshot_address=0x02001800,cooperative_snapshot_size=2048)
 if any(c.get(key)!=value for key,value in supported.items()):
  raise SystemExit('This Bound adapter does not support the exported game layout')
 if a.from_game:
