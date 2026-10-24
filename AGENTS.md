@@ -11,7 +11,9 @@ Before publishing changes, run focused checks and a Release iPhone build, preser
 
 Publish completed, validated Bound changes by default unless the user explicitly says not to publish. This is standing project-wide authorization; do not ask for repeat permission. Verify the remote and push validated changes directly to `origin/main` with an explicit refspec; never push the current branch implicitly. Preserve unrelated work rather than including it in the publication. Use original upstream Delta playback smoothness as the performance baseline, and do not claim phone parity from simulator tests.
 
-Never upload to TestFlight or start an Xcode Cloud run that delivers to TestFlight.
+TestFlight uploads are allowed through the manually invoked Fastlane `beta`
+workflow, as explicitly authorized by the user. Do not upload through other
+entry points or start an Xcode Cloud run that delivers to TestFlight.
 Never check Xcode Cloud usage, available minutes, or capacity. These are standing
 user instructions for all chats and supersede older delivery guidance in this
 repository. Normal local validation, commits, and pushes remain authorized.

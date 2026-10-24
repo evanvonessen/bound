@@ -157,7 +157,7 @@ def deliver(root, commit, upload):
             print(f"Apple accepted the upload for {commit}. This is not a TestFlight processing confirmation.")
             if uploaded_build:
                 print(f"Exported build: {info['version']} ({uploaded_build}).")
-            print(f"Verify the processed build in {GROUP_NAME}, then keep Xcode Cloud's next build number above the uploaded build.")
+            print(f"Verify the processed build in {GROUP_NAME}. Apple processing is separate from upload acceptance.")
             print(f"Receipt: {receipt}")
 
 

@@ -1,0 +1,48 @@
+require "fileutils"
+
+opt_out_usage
+default_platform(:ios)
+
+platform :ios do
+  desc "Build Bound Release for iPhone locally without signing or uploading"
+  lane :verify do
+    root = File.expand_path("..", __dir__)
+    logs = File.join(root, ".build", "fastlane", "logs")
+    FileUtils.mkdir_p(logs)
+
+    build_app(
+      project: File.join(root, "Bound.xcodeproj"),
+      scheme: "Bound",
+      configuration: "Release",
+      sdk: "iphoneos",
+      destination: "generic/platform=iOS",
+      derived_data_path: File.join(root, ".build", "ReleaseDerivedData"),
+      buildlog_path: logs,
+      skip_archive: true,
+      skip_codesigning: true,
+      skip_package_ipa: true,
+      skip_profile_detection: true,
+      disable_package_automatic_updates: true,
+      suppress_xcode_output: true,
+      xcodebuild_formatter: "",
+      xcargs: "IPHONEOS_DEPLOYMENT_TARGET=17.0 ARCHS=arm64 ONLY_ACTIVE_ARCH=YES CODE_SIGNING_ALLOWED=NO"
+    )
+
+    UI.success("Bound Release iPhone build passed. Logs: #{logs}")
+  end
+
+  desc "Archive and upload published main to personal internal TestFlight testing"
+  lane :beta do |options|
+    root = File.expand_path("..", __dir__)
+    check = options[:check].to_s == "true"
+    archive_only = options[:archive_only].to_s == "true"
+    UI.user_error!("Choose check:true or archive_only:true, not both") if check && archive_only
+    revision = options[:revision] || sh("git", "-C", root, "rev-parse", "HEAD", log: false).strip
+    mode = check ? "--check" : (archive_only ? "--archive-only" : "--upload")
+
+    # Reuse the existing snapshot, remote, privacy and duplicate-upload checks.
+    # Xcode uses its signed-in account; no Apple credentials belong in this repo.
+    sh("python3", File.join(root, "PrototypeTools", "deliver-testflight.py"),
+       "--revision", revision, mode)
+  end
+end

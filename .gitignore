@@ -9,6 +9,12 @@
 build/
 DerivedData
 .build
+.bundle/
+fastlane/report.xml
+fastlane/README.md.bak
+fastlane/.env
+fastlane/.env.*
+!fastlane/.env.default
 
 ## Various settings
 *.pbxuser
