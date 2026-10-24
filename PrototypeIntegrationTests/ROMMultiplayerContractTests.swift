@@ -378,6 +378,22 @@ final class ROMMultiplayerContractTests: XCTestCase {
         XCTAssertEqual(BoundROMPacket.Kind.checkpointCancel.rawValue, 10)
     }
 
+    func testAutomaticFieldSaveWaitsForDialogueAndMenusToFinish() throws {
+        var bytes = Data(repeating: 0, count: 256)
+        bytes.replaceSubrange(0..<8, with: [82, 85, 82, 49, 1, 0, 0, 0])
+        word(2, 8, &bytes)
+        // Native item text retains the field callbacks, but its script owns
+        // input until the final receipt and warning have been dismissed.
+        for flags: UInt32 in [0, 1, 33, 64, 65 | 4, 65 | 2] {
+            word(flags, 80, &bytes)
+            XCTAssertFalse(try XCTUnwrap(BoundROMRequest.decode(bytes)).permitsAutomaticFieldSave, "flags: \(flags)")
+        }
+        for flags: UInt32 in [65, 65 | 32] {
+            word(flags, 80, &bytes)
+            XCTAssertTrue(try XCTUnwrap(BoundROMRequest.decode(bytes)).permitsAutomaticFieldSave)
+        }
+    }
+
     private func word(_ value: UInt32, _ offset: Int, _ data: inout Data) {
         for i in 0..<4 { data[offset+i] = UInt8(truncatingIfNeeded: value >> (i*8)) }
     }

@@ -3,10 +3,10 @@
   "passed": true,
   "kind": "multiplayer game variant; not byte-identical reconstruction",
   "baseline_sha256": "689299664a954c12dad66e03c2d18446b348cb31bd98b395c87b9b514b288066",
-  "integrated_sha256": "15f7be08ae295828ae95e2b7ede00e553ac5cbbea2b2e5789ad9a98494fe7707",
+  "integrated_sha256": "46fc4412b7a382ea939811c4d4e76186d3fcb4bdfd2f847d99716b3420f10523",
   "rom_size": 33554432,
-  "code_bytes": 12508,
-  "code_sha256": "d20eb2bb88d726893c0f70c58660424e04ff930acbcf40cc1ce535b215c01c78",
+  "code_bytes": 12496,
+  "code_sha256": "c6c9fed15f8d75bcbfbd7a70bc1216c23920310090caab818b76ffe3bc115db4",
   "contract": {
     "schema": 1,
     "abi_major": 1,
@@ -97,7 +97,7 @@
   },
   "source_sha256": {
     "game/game_runtime.c": "83c530bb13e30508a281a92c8d11ef059d1de09882630db84484610c4bec4af4",
-    "game/game_ui.c": "ddbb5a49d10c7f8fcce9bfa16ced6888fc643f7e190207d0c6c1c8b780a46260",
+    "game/game_ui.c": "7f285a4cae77a60ce2c519a827b03d5d63c2e681015ce8ee555d441dd629dbfe",
     "game/game_nickname.c": "75d50c62e175904164cd348e83e440eef5087e5518510caa8717a4118319e711",
     "shared_world/shared_world.c": "fc009fe8f9c453b6788ffb3731a18d5ec2737b985c4b3195a5673243e4831ca3"
   },
@@ -238,9 +238,9 @@
     {
       "definition": "compiled multiplayer game code",
       "offset": 33488896,
-      "size": 12508,
+      "size": 12496,
       "original_hex": null,
-      "sha256": "d20eb2bb88d726893c0f70c58660424e04ff930acbcf40cc1ce535b215c01c78"
+      "sha256": "c6c9fed15f8d75bcbfbd7a70bc1216c23920310090caab818b76ffe3bc115db4"
     },
     {
       "definition": "host data port",
@@ -264,10 +264,10 @@
       "sha256": "e5a00aa9991ac8a5ee3109844d84a55583bd20572ad3ffcd42792f3c36b183ad"
     }
   ],
-  "cache_key": "023be9169afc5991f1fbadf8b11fe7cbfcf692a3d9537584345d49f0b34cb241",
+  "cache_key": "d387c82b900890e982996c48ee134bf5c960b2fa4ee85c425875b55d1fa8e011",
   "cache_hit": false,
   "native_binding_scope": "Exact RR4.1 adapter in the game build. Bound uses the exported data ABI only.",
   "save_compatibility": "Battery-save format unchanged. Legacy emulator save states require cold boot; the native allocator rejects the old RAM layout without overwriting it.",
-  "bound_abi_header_sha256": "528a3a2c2b9da96d7bd880693bb1fab1098be149a3a239af818520cccfe62cb3",
+  "bound_abi_header_sha256": "70763aff4ac6a200e9bffa90c35b5699cc846bae6afcd6e3fa7f187c0d9e0b4f",
   "contract_sha256": "2c9ff1f8f8c2f207edfd96a6d6c3666586de43895d579849a6c4b67dc7072d29"
 }

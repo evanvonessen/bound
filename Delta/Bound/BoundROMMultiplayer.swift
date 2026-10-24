@@ -96,6 +96,7 @@ struct BoundROMRequest: Equatable, Sendable {
     var newGame: Bool { flags & 2 != 0 }
     var paused: Bool { flags & 4 != 0 }
     var checkpointSafe: Bool { flags & 64 != 0 }
+    var permitsAutomaticFieldSave: Bool { safeField && checkpointSafe && !paused && !newGame }
     var settingsApplied: Bool { flags & 32 != 0 }
     var requestsPregameSetupRestart: Bool { command == .setupRetry && newGame && !settingsApplied && setupError == 1 }
     var requestsNewMultiplayerRun: Bool { newGame && (command == .pair || command == .startSoulLink) }
@@ -2165,6 +2166,15 @@ extension BoundROMMultiplayerCoordinator {
         let wasRunning = core.state == .running
         guard core.state == .paused || core.pause() else { throw BoundMultiplayerSaveStore.Failure.incomplete }
         let state: Data, battery: Data, memory: [String: Data], history: String
+        // Recheck the cartridge's completed frame after stopping the core: a
+        // dialogue can begin between the timer's observation and this pause.
+        // Explicit suspension still captures the full interrupted state.
+        if !final, !sharing.nativeBattle.blocksAutoSave, !sharing.cooperativeDoubles.blocksAutoSave,
+           BoundROMRequest.decode(BoundVBABattleBridge.romMultiplayerSnapshot())?.permitsAutomaticFieldSave != true {
+            serverCapturePending = true
+            if wasRunning, UIApplication.shared.applicationState == .active { core.resume() }
+            return nil
+        }
         do {
             // A temporary battle's emulator RAM is never the world save. Its
             // recovery cut travels beside the last safe world snapshot instead.
@@ -2264,7 +2274,7 @@ extension BoundROMMultiplayerCoordinator {
         } else {
             host.friends = onboarding.rooms.compactMap { room in UUID(uuidString: room.roomID).map { .init(room: $0, name: room.displayName) } }
         }
-        if !serverStarting, (request?.safeField == true || sharing.nativeBattle.blocksAutoSave || sharing.cooperativeDoubles.blocksAutoSave), serverCapturePending || now >= nextAutomaticSave {
+        if !serverStarting, (request?.permitsAutomaticFieldSave == true || sharing.nativeBattle.blocksAutoSave || sharing.cooperativeDoubles.blocksAutoSave), serverCapturePending || now >= nextAutomaticSave {
             do { try captureServerCheckpoint() } catch { serverMenuError = error.localizedDescription; nextAutomaticSave = now + 3 }
         }
         synchronizeIndependentHistory()
