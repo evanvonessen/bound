@@ -2,6 +2,18 @@ import XCTest
 @testable import Delta
 
 final class ROMMultiplayerContractTests: XCTestCase {
+    func testNativePairSelectionCarriesItsOwnNewGameAuthorizationAfterHostRestart() {
+        func request(_ command: BoundROMCommand, flags: UInt32) -> BoundROMRequest {
+            .init(sequence: 2, command: command, friendIndex: 0, argument: 0, identifier: UUID(),
+                  settings: Data(repeating: 0, count: 32), flags: flags, frame: 200, requestID: 8)
+        }
+        XCTAssertTrue(request(.pair, flags: 2 | 4).requestsNewMultiplayerRun)
+        XCTAssertTrue(request(.startSoulLink, flags: 2 | 4).requestsNewMultiplayerRun)
+        XCTAssertFalse(request(.pair, flags: 1).requestsNewMultiplayerRun, "An existing game cannot become a new run")
+        XCTAssertFalse(request(.newGameReady, flags: 2).requestsNewMultiplayerRun, "An intro alone cannot select a friend")
+        XCTAssertFalse(request(.battle, flags: 2).requestsNewMultiplayerRun)
+    }
+
     @MainActor
     func testCommonCheatChoiceHasVersionedSharedSettingsAndRejectsUnknownBits() {
         var settings = Data(repeating: 0, count: 32)

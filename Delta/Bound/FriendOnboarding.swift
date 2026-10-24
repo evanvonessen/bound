@@ -141,6 +141,17 @@ final class FriendOnboarding: ObservableObject {
         }
         synchronizeMultiplayerConnection()
     }
+    /// A cartridge choice is sufficient to start the authenticated service. It
+    /// must not depend on Friends having opened or configured a transport first.
+    @discardableResult
+    func selectMultiplayerPartner(roomID: String, sharing: FriendSharingSession,
+                                  existing: @escaping () -> AppCloudSession?) -> Bool {
+        guard BoundMultiplayerFeatures.isEnabled, UUID(uuidString: roomID) != nil,
+              let identity = existing(), (try? identity.credentials()) != nil else { return false }
+        setMultiplayerServiceActive(true, sharing: sharing, existing: existing)
+        setMultiplayerPartner(roomID: roomID, userInitiated: true)
+        return true
+    }
     private func ensureAccountObservation() {
         guard observation == nil else { return }
         observation = observeAccount { [weak self] in
@@ -153,7 +164,7 @@ final class FriendOnboarding: ObservableObject {
         guard multiplayerServiceActive, BoundMultiplayerFeatures.isEnabled, permitsRTC,
               hasCurrentFriendList, let roomID = multiplayerPartnerRoomID, !disconnectedRooms.contains(roomID),
               let room = rooms.first(where: { $0.roomID == roomID }), currentIdentity() != nil else { return }
-        if selected?.roomID != roomID {
+        if selected?.roomID != roomID || sharing?.configuredRoomID != roomID {
             cancelPendingJiggle(); selected = room
             sharing?.configureAuthenticatedRoom(roomID, identity: { [weak self] in self?.sharingIdentity() })
         }

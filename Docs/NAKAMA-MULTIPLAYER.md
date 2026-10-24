@@ -44,6 +44,15 @@ and media connection. A video failure does not disconnect a healthy game room.
 Ordinary manually selected friend sharing retains video. Gameplay and video
 credentials renew independently.
 
+Choosing a friend in the ROM starts the account/friend service and requests its
+authenticated Nakama room directly; opening Friends or tapping Connect there is
+not required. Each player chooses the other. Only the selected room can exchange
+the fresh two-way setup handshake. A pending friend-list refresh gates admission;
+cancelling setup, changing accounts, or selecting another room fences the old
+choice. Native new-game flags permit retrying setup after an app restart without
+depending on a previously consumed intro event. Existing runs keep their recovery
+and manual-save requirements.
+
 Feature disable, backgrounding, sign-out and room changes fence old callbacks,
 close gameplay channels and retain existing interrupted-battle recovery. The
 paired-run ROM's intentional save, disconnect and recovery gates remain intact.

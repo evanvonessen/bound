@@ -52,6 +52,7 @@ struct BoundROMRequest: Equatable, Sendable {
     var newGame: Bool { flags & 2 != 0 }
     var paused: Bool { flags & 4 != 0 }
     var checkpointSafe: Bool { flags & 64 != 0 }
+    var requestsNewMultiplayerRun: Bool { newGame && (command == .pair || command == .startSoulLink) }
     static func decode(_ data: Data) -> Self? {
         guard data.count == 256, data.prefix(8) == Data([82,85,82,49,1,0,0,0]),
               let command = BoundROMCommand(rawValue: BoundROMBytes.word(data,12)) else { return nil }
@@ -455,6 +456,7 @@ final class BoundROMMultiplayerCoordinator {
     }
     func bind(core: EmulatorCore?, game: Game?) {
         guard self.core !== core || self.game?.identifier != game?.identifier else { return }
+        onboarding.setMultiplayerPartner(roomID: nil)
         if let old = self.game { store.setActive(false,gameID:old.identifier) }
         verification?.cancel(); leaseTask?.cancel(); serverTask?.cancel(); leaseTask = nil; grant = nil; validatedFence = nil
         leaseOperation = UUID()
@@ -727,13 +729,19 @@ final class BoundROMMultiplayerCoordinator {
         guard let owner = account.session?.owner, let data = channel.packet(kind,owner:owner,body:body) else { return }
         _ = sharing.sendMultiplayerPacket(data)
     }
-    private func selectRoom(_ room: String) {
+    private func selectRoom(_ room: String) -> Bool {
+        guard onboarding.selectMultiplayerPartner(roomID: room, sharing: sharing,
+            existing: { [weak account] in account?.session }) else {
+            host.status = .unavailable; host.message = "Sign in to Bound to connect."
+            return false
+        }
         cancelledSetup = nil
         if selectedRoom != room {
             channel.reset(); peerOwner = nil; peerHello = nil; peerHelloAt = -.infinity
             peerFence = 0; reconciled = false; transportWasConnected = false
         }
-        selectedRoom = room; onboarding.setMultiplayerPartner(roomID:room, userInitiated:true)
+        selectedRoom = room
+        return true
     }
     private func ensureLease(transfer: Bool = false) {
         guard !host.transferRequired || transfer else { return }
@@ -1260,13 +1268,16 @@ final class BoundROMMultiplayerCoordinator {
             host.acknowledgedRequest = previousAcknowledgement
             friendsRefresh.begin(requestID: request.requestID, onboarding: onboarding)
         case .pair, .startSoulLink:
-            guard BoundMultiplayerFeatures.isEnabled, newGame, manifest == nil,
+            guard BoundMultiplayerFeatures.isEnabled, request.requestsNewMultiplayerRun, manifest == nil, incoming == nil,
                   let room = onboarding.rooms.first(where: { UUID(uuidString:$0.roomID) == request.identifier }) else {
                 host.status = .unavailable; host.message = "Start Soul Link from a new game."; return
             }
             if let setup, setup.identity.roomID != room.roomID { throw BoundMultiplayerSaveStore.Failure.conflict }
-            selectRoom(room.roomID); host.partnerName = room.displayName; host.status = .waiting
-            host.message = "Waiting for friend to catch up. Press B to cancel."
+            guard selectRoom(room.roomID) else { return }
+            // The native request is the source of truth after an app relaunch:
+            // its earlier newGameReady event may already have been acknowledged.
+            newGame = true; host.partnerName = room.displayName; host.status = .waiting
+            host.message = "Waiting for " + room.displayName + ". Press B to cancel."
         case .cancel:
             if manifest == nil {
                 if let setup { send(.cancel,setup.identity.run) }
@@ -1289,7 +1300,7 @@ final class BoundROMMultiplayerCoordinator {
                   identity == nil || identity?.roomID == room.roomID else {
                 host.status = .unavailable; host.message = "Choose your connected friend."; return
             }
-            selectRoom(room.roomID)
+            guard selectRoom(room.roomID) else { return }
             pendingAction = request.command; pendingActionAt = now; host.status = .complete
         case .timeline, .page:
             if request.command == .timeline { timelinePage = 0 }

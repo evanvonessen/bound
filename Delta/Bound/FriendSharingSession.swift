@@ -241,6 +241,7 @@ final class FriendSharingSession: ObservableObject {
     var authenticatedSession: (() -> AppCloudSession?)?
     var multiplayerPacketReceiver: ((Data) -> Void)?
     var connectedRoomID: String? { active ? authRoom : nil }
+    var configuredRoomID: String? { authenticatedMode ? roomProvider() : nil }
     private var automaticMultiplayerConnection = false
     private var startedForMultiplayer = false
     private var tokenTask: Task<Void, Never>?

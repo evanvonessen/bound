@@ -244,10 +244,82 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
         XCTAssertEqual(media.starts, 1); channel.close()
     }
 
-    private func identity() throws -> AppCloudSession {
+    private func identity(owner: UUID? = nil) throws -> AppCloudSession {
+        let owner = owner ?? self.owner
         let bytes = try JSONSerialization.data(withJSONObject: BoundAccountTestFixture.claims(owner: owner, expiry: Date().timeIntervalSince1970 + 3600))
         let payload = bytes.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         return try AppCloudSession(owner: owner, key: "fixture-public-key", token: "fixture.\(payload).signature")
+    }
+
+    func testMutualROMSelectionConnectsTwoNakamaClientsWithoutFriendsOrVideo() async throws {
+        let wireA = NakamaTransportWire(match: match), wireB = NakamaTransportWire(match: match)
+        let mediaA = NakamaMediaFixture(), mediaB = NakamaMediaFixture()
+        let transportA = BoundNakamaSharingTransport(media: mediaA, client: BoundNakamaClient(socketFactory: { _ in wireA }))
+        let transportB = BoundNakamaSharingTransport(media: mediaB, client: BoundNakamaClient(socketFactory: { _ in wireB }))
+        let identityA = try identity(), identityB = try identity(owner: peer)
+        let leaseA = lease
+        let leaseB = BoundNakamaConfiguration(endpoint: leaseA.endpoint, accessToken: "peer-fixture-token",
+            expiresAt: leaseA.expiresAt, matchID: match, roomID: room, ownerID: peer,
+            nakamaUserID: peer, joinTicket: "peer-fixture-ticket", members: [owner, peer], peerOwnerID: owner)
+        let sharingA = FriendSharingSession(configuration: nil, transport: transportA, authenticatedMode: true,
+            tokenFetcher: { _, _ in XCTFail("ROM setup cannot require video"); throw FriendSharingTokenError.unavailable },
+            nakamaFetcher: { _, _ in leaseA })
+        let sharingB = FriendSharingSession(configuration: nil, transport: transportB, authenticatedMode: true,
+            tokenFetcher: { _, _ in XCTFail("ROM setup cannot require video"); throw FriendSharingTokenError.unavailable },
+            nakamaFetcher: { _, _ in leaseB })
+        let selectedRoom = room.uuidString.lowercased(), match = match, owner = owner, peer = peer
+        let onboardingA = FriendOnboarding(call: { _, _, _ in
+            .init(ok: true, rooms: [.init(roomID: selectedRoom, displayName: "Bob")])
+        }, sendJiggle: { _, _ in XCTFail("No Friends notification is required"); return "" })
+        let onboardingB = FriendOnboarding(call: { _, _, _ in
+            .init(ok: true, rooms: [.init(roomID: selectedRoom, displayName: "Alice")])
+        }, sendJiggle: { _, _ in XCTFail("No Friends notification is required"); return "" })
+        defer {
+            onboardingA.setMultiplayerServiceActive(false, sharing: sharingA, existing: { identityA })
+            onboardingB.setMultiplayerServiceActive(false, sharing: sharingB, existing: { identityB })
+            sharingA.stop(); sharingB.stop()
+        }
+        // The socket fixture supplies the same authenticated envelopes as Nakama.
+        wireA.observe { text in
+            guard let (opcode, bytes) = Self.outgoing(text), opcode == 2 else { return }
+            wireB.deliver(Self.relay(bytes, match: match, sender: owner, receiver: peer))
+        }
+        wireB.observe { text in
+            guard let (opcode, bytes) = Self.outgoing(text), opcode == 2 else { return }
+            wireA.deliver(Self.relay(bytes, match: match, sender: peer, receiver: owner))
+        }
+        var channelA = BoundROMChannel(), channelB = BoundROMChannel()
+        sharingA.multiplayerPacketReceiver = { bytes in
+            if let packet = BoundROMPacket.decode(bytes) { _ = channelA.admit(packet, at: ProcessInfo.processInfo.systemUptime) }
+        }
+        sharingB.multiplayerPacketReceiver = { bytes in
+            if let packet = BoundROMPacket.decode(bytes) { _ = channelB.admit(packet, at: ProcessInfo.processInfo.systemUptime) }
+        }
+        XCTAssertFalse(sharingA.active); XCTAssertFalse(sharingB.active)
+        XCTAssertTrue(onboardingA.selectMultiplayerPartner(roomID: selectedRoom, sharing: sharingA, existing: { identityA }))
+        for _ in 0..<200 where !sharingA.joined { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertTrue(sharingA.joined); XCTAssertFalse(sharingB.active)
+        XCTAssertNil(channelA.peerEpoch, "One selection alone cannot complete setup")
+        XCTAssertTrue(onboardingB.selectMultiplayerPartner(roomID: selectedRoom, sharing: sharingB, existing: { identityB }))
+        for _ in 0..<200 where !sharingB.joined { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertTrue(sharingB.joined)
+        for _ in 0..<100 {
+            _ = sharingA.sendMultiplayerPacket(try XCTUnwrap(channelA.packet(.hello, owner: owner, body: "setup")))
+            _ = sharingB.sendMultiplayerPacket(try XCTUnwrap(channelB.packet(.hello, owner: peer, body: "setup")))
+            try await Task.sleep(nanoseconds: 20_000_000)
+            if channelA.peerEpoch != nil && channelB.peerEpoch != nil { break }
+        }
+        XCTAssertEqual(channelA.peerEpoch, channelB.epoch)
+        XCTAssertEqual(channelB.peerEpoch, channelA.epoch)
+        XCTAssertEqual(sharingA.connectedRoomID, selectedRoom); XCTAssertEqual(sharingB.connectedRoomID, selectedRoom)
+        XCTAssertEqual(mediaA.starts, 0); XCTAssertEqual(mediaB.starts, 0)
+    }
+
+    nonisolated private static func relay(_ bytes: Data, match: String, sender: UUID, receiver: UUID) -> [String: Any] {
+        let envelope: [String: Any] = ["v": 1, "senderOwnerID": sender.uuidString,
+            "targetOwnerID": receiver.uuidString, "body": bytes.base64EncodedString()]
+        return ["match_data": ["match_id": match, "op_code": "2",
+            "data": try! JSONSerialization.data(withJSONObject: envelope).base64EncodedString()]]
     }
 
     func testAuthenticatedAutomaticMultiplayerFetchesNakamaOnlyAndStopsOnBackground() async throws {

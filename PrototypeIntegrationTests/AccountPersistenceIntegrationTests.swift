@@ -401,6 +401,76 @@ final class FriendModerationIntegrationTests: XCTestCase {
 
 @MainActor
 final class FriendTapToShareIntegrationTests: XCTestCase {
+    func testROMChoiceBootstrapsServiceAndWaitsForAuthorizedFriendList() async throws {
+        let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer {
+            UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key)
+            NotificationCenter.default.post(name: BoundMultiplayerFeatures.didChange, object: nil)
+        }
+        let identity = try makeIdentity(owner: UUID())
+        let room = FriendRoom(roomID: UUID().uuidString, displayName: "Selected in ROM")
+        var pending: CheckedContinuation<FriendResponse, Never>?
+        var requestedRooms: [String] = []
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+            tokenFetcher: { room, session in
+                requestedRooms.append(room)
+                return self.makeLease(room: room, owner: session.owner, request: requestedRooms.count)
+            })
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            XCTAssertEqual(action, "list")
+            return await withCheckedContinuation { pending = $0 }
+        }, sendJiggle: { _, _ in XCTFail("ROM choices do not send notifications"); return "" },
+            observeAccount: { OnboardingObservation($0) })
+        defer { onboarding.setMultiplayerServiceActive(false, sharing: sharing, existing: { identity }); sharing.stop() }
+        XCTAssertTrue(onboarding.selectMultiplayerPartner(roomID: room.roomID, sharing: sharing, existing: { identity }))
+        await waitUntil { pending != nil }
+        XCTAssertTrue(requestedRooms.isEmpty, "An uncached selection waits for server authorization")
+        pending?.resume(returning: .init(ok: true, rooms: [room])); pending = nil
+        await waitUntil { sharing.joined }
+        XCTAssertTrue(sharing.joined, "No Friends open or Connect action is needed")
+        XCTAssertEqual(requestedRooms, [room.roomID])
+
+        sharing.configureAuthenticatedRoom(nil, identity: { identity })
+        XCTAssertFalse(sharing.active)
+        XCTAssertTrue(onboarding.selectMultiplayerPartner(roomID: room.roomID, sharing: sharing, existing: { identity }))
+        await waitUntil { sharing.joined }
+        XCTAssertTrue(sharing.joined, "A cached Friends row must not hide a missing transport configuration")
+        XCTAssertEqual(requestedRooms.count, 2)
+        onboarding.setMultiplayerPartner(roomID: nil)
+        XCTAssertFalse(sharing.active, "Cancelling native setup releases its automatic connection")
+    }
+
+    func testCancelledROMChoiceCannotReconnectWhenFriendListArrives() async throws {
+        let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer {
+            UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key)
+            NotificationCenter.default.post(name: BoundMultiplayerFeatures.didChange, object: nil)
+        }
+        let identity = try makeIdentity(owner: UUID())
+        let room = FriendRoom(roomID: UUID().uuidString, displayName: "Friend")
+        var pending: CheckedContinuation<FriendResponse, Never>?
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+            tokenFetcher: { _, _ in XCTFail("Cancelled or unlisted choices cannot connect"); throw FriendSharingTokenError.unavailable })
+        let onboarding = FriendOnboarding(call: { _, _, _ in
+            await withCheckedContinuation { pending = $0 }
+        }, observeAccount: { OnboardingObservation($0) })
+        defer { onboarding.setMultiplayerServiceActive(false, sharing: sharing, existing: { identity }); sharing.stop() }
+        XCTAssertFalse(onboarding.selectMultiplayerPartner(roomID: room.roomID, sharing: sharing, existing: { nil }))
+        XCTAssertFalse(onboarding.selectMultiplayerPartner(roomID: "invalid", sharing: sharing, existing: { identity }))
+        XCTAssertTrue(onboarding.selectMultiplayerPartner(roomID: room.roomID, sharing: sharing, existing: { identity }))
+        await waitUntil { pending != nil }
+        onboarding.setMultiplayerPartner(roomID: nil)
+        pending?.resume(returning: .init(ok: true, rooms: [room])); pending = nil
+        await waitUntil { !onboarding.busy }
+        XCTAssertFalse(sharing.active)
+        XCTAssertNil(onboarding.multiplayerPartnerRoomID)
+        XCTAssertTrue(onboarding.selectMultiplayerPartner(roomID: UUID().uuidString, sharing: sharing, existing: { identity }))
+        await settle()
+        XCTAssertFalse(sharing.active, "An arbitrary UUID never authorizes a friend connection")
+    }
+
     func testROMPartnerConnectsWithoutOpeningFriendsOrSendingJiggleAndStopsOnOwnerChange() async throws {
         let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
         BoundMultiplayerFeatures.setEnabled(true)
