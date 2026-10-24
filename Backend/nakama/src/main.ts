@@ -37,6 +37,9 @@ namespace BoundRooms {
         cleanupToken: string;
         idleSince: number;
         discarded: boolean;
+        positions: { [owner: string]: { body: string; at: number; target?: string } };
+        positionsDirty: boolean;
+        positionsPersistedAt: number;
     }
     interface Frame { v: 1; body: string; targetOwnerID?: string; }
 
@@ -94,6 +97,13 @@ namespace BoundRooms {
         const customID = account.customId;
         if (typeof customID !== "string" || customID.substr(0, 6) !== "bound:" || !uuid.test(customID.substr(6))) reject("Bound account required");
         return customID.substr(6);
+    }
+
+    export function authorize(ctx: nkruntime.Context, nk: nkruntime.Nakama, value: any): Ticket {
+        if (!ctx.userId) reject("Authentication required", 16);
+        const ticket = verifyTicket(ctx, nk, value);
+        if (ownerForUser(ctx, nk, ctx.userId) !== ticket.ownerID) reject("Room access denied");
+        return ticket;
     }
 
     export const authenticate: nkruntime.BeforeHookFunction<nkruntime.AuthenticateCustomRequest> = function (ctx, _logger, nk, request) {
@@ -192,11 +202,30 @@ namespace BoundRooms {
         dispatcher.broadcastMessage(opcode, JSON.stringify(envelope), recipients, session.presence, opcode !== 1);
     }
 
+    function persistPositions(state: State, nk: nkruntime.Nakama): void {
+        if (!state.positionsDirty) return;
+        nk.storageWrite([{ collection: "bound_room_presence_v1", key: state.roomID, userId: systemUser,
+            value: { members: state.members, positions: state.positions }, permissionRead: 0, permissionWrite: 0 }]);
+        state.positionsDirty = false; state.positionsPersistedAt = seconds();
+    }
+
+    function sendPositions(state: State, dispatcher: nkruntime.MatchDispatcher, session: Session): void {
+        const now = seconds();
+        const positions = Object.keys(state.positions).filter(function (owner) {
+            const value = state.positions[owner];
+            return owner !== session.ownerID && now >= value.at && now - value.at < 60 && (!value.target || value.target === session.ownerID);
+        }).map(function (owner) { const value = state.positions[owner]; return { ownerID: owner, body: value.body, age: now - value.at }; });
+        if (positions.length) dispatcher.broadcastMessage(6, JSON.stringify({ v: 1, positions: positions }), [session.presence], null, true);
+    }
+
     export const match: nkruntime.MatchHandler<State> = {
-        matchInit: function (_ctx, _logger, _nk, params) {
+        matchInit: function (_ctx, _logger, nk, params) {
             if (typeof params.roomID !== "string" || !uuid.test(params.roomID) || !validMembers(params.members) || typeof params.cleanupToken !== "string") reject("Invalid room initialization", 3);
+            const records = nk.storageRead([{ collection: "bound_room_presence_v1", key: params.roomID, userId: systemUser }]);
+            const saved = records.length && sameMembers(records[0].value.members || [], params.members) ? records[0].value.positions : {};
             return {
-                state: { roomID: params.roomID, members: params.members.slice(), sessions: {}, cleanupToken: params.cleanupToken, idleSince: seconds(), discarded: false },
+                state: { roomID: params.roomID, members: params.members.slice(), sessions: {}, cleanupToken: params.cleanupToken, idleSince: seconds(), discarded: false,
+                    positions: saved || {}, positionsDirty: false, positionsPersistedAt: seconds() },
                 tickRate: tickRate,
                 label: JSON.stringify({ protocol: protocol })
             };
@@ -205,10 +234,12 @@ namespace BoundRooms {
             try {
                 const ticket = verifyTicket(ctx, nk, metadata.bound_ticket);
                 if (ticket.roomID !== state.roomID || !sameMembers(ticket.members, state.members) || ownerForUser(ctx, nk, presence.userId) !== ticket.ownerID) reject("Room access denied");
-                const duplicate = Object.keys(state.sessions).some(function (key) {
+                const duplicate = Object.keys(state.sessions).filter(function (key) {
                     return key !== presence.sessionId && state.sessions[key].ownerID === ticket.ownerID && state.sessions[key].expiresAt > seconds();
                 });
-                if (duplicate) return { state: state, accept: false, rejectMessage: "This player is already connected" };
+                // A freshly authenticated connection replaces a half-open old
+                // socket. Its obsolete messages are fenced by session ID.
+                duplicate.forEach(function (key) { removeSession(state, _dispatcher, key); });
                 state.sessions[presence.sessionId] = {
                     ownerID: ticket.ownerID, presence: presence, expiresAt: ticket.expiresAt,
                     admittedAt: seconds(), joined: false, buckets: {}
@@ -222,16 +253,18 @@ namespace BoundRooms {
                 if (session && session.presence.userId === presence.userId && session.expiresAt > seconds()) {
                     session.presence = presence;
                     session.joined = true;
+                    sendPositions(state, dispatcher, session);
                 } else dispatcher.matchKick([presence]);
             });
             state.idleSince = seconds();
             roster(state, dispatcher);
             return { state: state };
         },
-        matchLeave: function (_ctx, _logger, _nk, dispatcher, _tick, state, presences) {
+        matchLeave: function (_ctx, _logger, nk, dispatcher, _tick, state, presences) {
             presences.forEach(function (presence) { delete state.sessions[presence.sessionId]; });
             if (!Object.keys(state.sessions).length) state.idleSince = seconds();
             roster(state, dispatcher);
+            persistPositions(state, nk);
             return { state: state };
         },
         matchLoop: function (ctx, _logger, nk, dispatcher, _tick, state, messages) {
@@ -288,16 +321,29 @@ namespace BoundRooms {
                 // Nakama rematerializes state through Go map wrappers between
                 // callbacks; repeated lookups need not have JS object identity.
                 const current = state.sessions[pose.session.presence.sessionId];
-                if (current && current.joined && current.ownerID === pose.session.ownerID) forward(state, dispatcher, 1, current, pose.frame);
+                if (current && current.joined && current.ownerID === pose.session.ownerID) {
+                    forward(state, dispatcher, 1, current, pose.frame);
+                    try {
+                        const decoded = JSON.parse(nk.binaryToString(nk.base64Decode(pose.frame.body)));
+                        if (decoded.version === 1 && decoded.withdrawn === true) {
+                            delete state.positions[current.ownerID]; state.positionsDirty = true;
+                        } else if (decoded.version === 1 && object(decoded.pose)) {
+                            state.positions[current.ownerID] = { body: pose.frame.body, at: now, target: pose.frame.targetOwnerID };
+                            state.positionsDirty = true;
+                        }
+                    } catch (_) { /* Invalid poses are never retained for reconnect. */ }
+                }
             });
             if (rosterChanged) {
                 if (!Object.keys(state.sessions).length) state.idleSince = now;
                 roster(state, dispatcher);
             }
-            if (!Object.keys(state.sessions).length && now - state.idleSince >= 60) return null;
+            if (state.positionsDirty && now - state.positionsPersistedAt >= 5) persistPositions(state, nk);
+            if (!Object.keys(state.sessions).length && now - state.idleSince >= 60) { persistPositions(state, nk); return null; }
             return { state: state };
         },
-        matchTerminate: function (_ctx, _logger, _nk, dispatcher, _tick, state) {
+        matchTerminate: function (_ctx, _logger, nk, dispatcher, _tick, state) {
+            persistPositions(state, nk);
             const online = activePresences(state);
             if (online.length) dispatcher.matchKick(online);
             return { state: state };
@@ -368,6 +414,7 @@ function InitModule(ctx: nkruntime.Context, logger: nkruntime.Logger, _nk: nkrun
     // fresh reserved-key record with its own write permissions.
     initializer.registerBeforeWriteStorageObjects(boundDeny);
     initializer.registerBeforeDeleteStorageObjects(boundDeny);
+    initializer.registerRpc("bound_run_v1", boundRunRPC);
     initializer.registerRpc("bound_room_v1", boundRoomRPC);
     initializer.registerMatch("bound_room_v1", {
         matchInit: boundMatchInit,

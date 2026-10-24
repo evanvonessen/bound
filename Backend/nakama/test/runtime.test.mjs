@@ -86,7 +86,8 @@ test('signed room membership and protected custom identity are both required to 
   const f = fixture();
   assert.equal(f.join(owner).accept, true); assert.equal(f.join(peer).accept, true);
   assert.equal(f.join(third).accept, false);
-  assert.equal(f.join(owner, 2).accept, false);
+  assert.equal(f.join(owner, 2).accept, true);
+  assert.ok(f.kicks.some(p => p.sessionId === f.presence(owner).sessionId));
   const result = f.api.match.matchJoinAttempt(f.ctx, f.logger, f.nk, f.dispatcher, 0, f.state,
     f.presence(peer, 2), { bound_ticket: f.ticket(owner) });
   assert.equal(result.accept, false);

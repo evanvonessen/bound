@@ -95,3 +95,44 @@ interoperability tests, 11 real PostgreSQL authorization groups and nine checks
 against a local Nakama 3.41.0 server with three clients. Live Supabase readback
 matched the reviewed SQL and function files, existing API definitions stayed
 unchanged and anonymous, missing-session and browser-origin requests were denied.
+
+## Persistent runs and manual saves
+
+The `bound_run_v1` authenticated RPC stores logical run membership, immutable
+configuration, monotonic shared-history bitsets, latest ROM-owned world snapshots, and the checkpoint head in
+Nakama storage. These records outlive match shutdowns and socket reconnects.
+The existing account/run ownership leases remain enforced; no account migration
+or replacement of an existing lease is implied by a room connection.
+
+A cartridge Save action starts one server-allocated checkpoint. Both cartridges
+pause at a safe point, reserve the capture with Nakama, capture their own battery/recovery package, and upload it
+in immutable 12,000-character base64 chunks. The server verifies the full payload
+hash, run, owner, configuration, history and predecessor. It changes the head with
+a conditional storage write only after both uploads have been sealed. Retried
+requests are idempotent. A completed server checkpoint can be downloaded into the
+existing validated incoming-package path; network data never directly replaces a
+running game's files. Each player payload is limited to 16 MiB. Original local
+packages and the existing optional cloud exports remain available.
+
+There are no timed, timeline-event, or changed-working-state checkpoints during
+play. The ordinary Delta automatic save-state path is disabled for a protected
+multiplayer run. Lifecycle suspension may only capture an already-paused core;
+it cannot interrupt running gameplay to save. Native battle/trade recovery
+journals and shared history remain separate from manual game-save checkpoints.
+Unsaved emulator progress remains on the device until an explicit save.
+
+Room actors retain the last accepted pose separately from transport membership.
+They checkpoint this small presence record at most once every five seconds and
+on leave/termination, and restore it on room recreation. Opcode 6 carries these
+server snapshots as presentation-only data, with their original age. The client
+keeps a last-known avatar for up to 60 seconds, including reader stalls and socket
+recovery, while the existing 750 ms authority timeout and stricter interaction
+checks remain in force. No stale snapshot grants collision, trade, battle, or
+progression authority. ROM changes, local state restores and explicit withdrawal
+invalidate presentation. No emulator RAM or input simulation runs in Nakama.
+
+Self-hosted Caddy exposes exactly `/v2/rpc/bound_run_v1` alongside `/ws`; all other
+native Nakama endpoints remain private. Deploy the runtime and proxy route before
+using a client that requires durable runs. Session polling alone never allocates
+or captures a game save. Test real device/network interruption separately from
+unit and simulator results.

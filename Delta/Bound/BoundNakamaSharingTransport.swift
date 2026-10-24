@@ -21,8 +21,10 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     private var videoTask: Task<Void, Never>?
     private var videoDeadline: Task<Void, Never>?
     private var presenceReceiver: (@MainActor (Data) -> Void)?
+    private var retainedPresenceReceiver: (@MainActor (Data, TimeInterval) -> Void)?
     private var interactionReceiver: (@MainActor (Data?) -> Void)?
     private var pendingPresence: Data?
+    private var pendingRetainedPresence: (data: Data, age: TimeInterval, received: TimeInterval)?
     private var pendingInteractions: [Data] = []
     private var pendingInteractionBytes = 0
     private var acceptedSends = 0
@@ -36,7 +38,10 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         self.client = client
     }
 
-    func configureGameplay(_ configuration: BoundNakamaConfiguration) { gameplay = configuration }
+    func configureGameplay(_ configuration: BoundNakamaConfiguration) {
+        gameplay = configuration
+        Task { await BoundNakamaRunService.shared.configure(configuration) }
+    }
 
     func renewGameplay(_ configuration: BoundNakamaConfiguration) -> Bool {
         guard let previous = gameplay, connected,
@@ -47,6 +52,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
               configuration.endpoint == previous.endpoint,
               client.renewTicket(configuration.joinTicket, expiresAt: configuration.expiresAt) else { return false }
         gameplay = configuration
+        Task { await BoundNakamaRunService.shared.configure(configuration) }
         return true
     }
 
@@ -72,7 +78,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     func start(configuration: FriendSharingConfiguration, remoteView: UIView,
                event: @escaping @MainActor (FriendSharingEvent) -> Void) {
         generation = UUID(); client.stop(); battleInbox.close(); battleInbox = BoundNakamaBattleInbox()
-        connected = false; pendingPresence = nil; pendingInteractions.removeAll(); pendingInteractionBytes = 0
+        connected = false; pendingPresence = nil; pendingRetainedPresence = nil; pendingInteractions.removeAll(); pendingInteractionBytes = 0
         stopVideo()
         self.event = event; self.remoteView = remoteView; mediaConfiguration = configuration
         let run = generation
@@ -116,6 +122,9 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
                 }
                 pendingInteractions.append(data); pendingInteractionBytes += data.count
             }
+        case .retainedPresence(let data, let owner, let age):
+            guard owner == gameplay.peerOwnerID else { return }
+            pendingRetainedPresence = (data, age, ProcessInfo.processInfo.systemUptime)
         case .failed:
             connected = false; pendingPresence = nil; pendingInteractions.removeAll(); pendingInteractionBytes = 0
             event?(.failed(.init(.connectionLost)))
@@ -123,8 +132,13 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     }
 
     func setPresenceReceiver(_ receiver: (@MainActor (Data) -> Void)?) { presenceReceiver = receiver }
+    func setRetainedPresenceReceiver(_ receiver: (@MainActor (Data, TimeInterval) -> Void)?) { retainedPresenceReceiver = receiver }
     func setInteractionReceiver(_ receiver: (@MainActor (Data?) -> Void)?) { interactionReceiver = receiver }
     func pollPresence() {
+        if connected, let pending = pendingRetainedPresence {
+            pendingRetainedPresence = nil
+            retainedPresenceReceiver?(pending.data, pending.age + max(0, ProcessInfo.processInfo.systemUptime - pending.received))
+        }
         guard let data = pendingPresence else { return }
         pendingPresence = nil; presenceReceiver?(data)
     }
@@ -241,7 +255,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     func stop() {
         generation = UUID(); event = nil; connected = false; client.stop(); battleInbox.close()
         stopVideo(); gameplay = nil; mediaConfiguration = nil; remoteView = nil; spectatorView = nil
-        pendingPresence = nil; pendingInteractions.removeAll(); pendingInteractionBytes = 0; peerOnline = false
+        pendingPresence = nil; pendingRetainedPresence = nil; pendingInteractions.removeAll(); pendingInteractionBytes = 0; peerOnline = false
     }
 }
 

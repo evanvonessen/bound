@@ -74,6 +74,7 @@ struct BoundPresencePacket: Codable, Equatable, Sendable {
     let sequence: UInt64
     let time: TimeInterval
     let pose: BoundPresencePose?
+    var withdrawn: Bool? = nil
 
     func encoded() -> Data? {
         guard let data = try? JSONEncoder().encode(self), data.count <= Self.maximumBytes else { return nil }
@@ -90,12 +91,14 @@ struct BoundPresencePacket: Codable, Equatable, Sendable {
 
 /// Main-actor, bounded receive buffer driven by a monotonic wall clock, never by
 /// the viewer's emulated frame counter. Each transport/binding/restore gets a new
-/// challenge; packets must acknowledge it before their poses can be displayed.
+/// challenge; live samples must acknowledge it before granting any authority.
+/// Server-retained presentation never participates in that handshake.
 @MainActor
 final class BoundLivePresenceSession: ObservableObject {
     let connectionCheck = BoundPresenceConnectionCheck()
     static let interval: TimeInterval = 0.05
     static let timeout: TimeInterval = 0.75
+    static let visibilityGrace: TimeInterval = 60
     @Published private(set) var enabled = false
     @Published private(set) var connected = false
     @Published private(set) var status = "Connect to a friend, then enable live sprites on both devices."
@@ -108,7 +111,9 @@ final class BoundLivePresenceSession: ObservableObject {
     var demandChanged: (() -> Void)?
     var retainsNativeDialoguePose: (() -> Bool)?
     var presentationChanged: (() -> Void)?
-    var needsReader: Bool { BoundMultiplayerFeatures.isEnabled && enabled && connected }
+    var needsReader: Bool { BoundMultiplayerFeatures.isEnabled && enabled && (connected || retainedPose != nil) }
+    private var retainedPose: BoundPresencePose?
+    private var retainedAt: TimeInterval?
     private var send: ((Data) -> Bool)?
     private var sequence: UInt64 = 0
     private var lastSent: TimeInterval?
@@ -141,22 +146,23 @@ final class BoundLivePresenceSession: ObservableObject {
     }
     func start(send: @escaping (Data) -> Bool) {
         guard BoundMultiplayerFeatures.isEnabled else { return }
-        self.send = send; connected = true; resetTimeline()
+        self.send = send; connected = true; resetTimeline(keepPresentation: true)
         updateStatus(); demandChanged?(); presentationChanged?()
     }
-    func stop() {
+    func stop(keepPresentation: Bool = false) {
         localPose = nil
-        if connected && enabled { publish(at: ProcessInfo.processInfo.systemUptime, force: true) }
-        connected = false; send = nil; resetTimeline()
+        if connected && enabled { publish(at: ProcessInfo.processInfo.systemUptime, force: true, withdrawn: !keepPresentation) }
+        connected = false; send = nil; resetTimeline(keepPresentation: keepPresentation)
         updateStatus(); demandChanged?(); presentationChanged?()
     }
     func invalidateLocal() {
         resetTimeline(); updateStatus(); presentationChanged?()
     }
     func peerGone() {
-        resetTimeline(); updateStatus(); presentationChanged?()
+        resetTimeline(keepPresentation: true); updateStatus(); presentationChanged?()
     }
-    private func resetTimeline() {
+    private func resetTimeline(keepPresentation: Bool = false) {
+        if !keepPresentation { retainedPose = nil; retainedAt = nil }
         epoch = UUID(); sequence = 0; lastSent = nil
         localPose = nil; localAt = nil; settledLocal = nil; settledLocalAt = nil
         peerEpoch = nil; proposedPeer = nil; proposalAt = nil; clearPeer()
@@ -167,7 +173,16 @@ final class BoundLivePresenceSession: ObservableObject {
     }
     private func restartHandshakeKeepingLocal() {
         let local = localPose, at = localAt
-        resetTimeline(); localPose = local; localAt = at
+        resetTimeline(keepPresentation: true); localPose = local; localAt = at
+    }
+
+    /// A server snapshot is presentation only. It never refreshes collision,
+    /// interaction freshness, or the authenticated peer handshake.
+    func restorePresentation(_ data: Data, age: TimeInterval, at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard enabled, romVerified, age.isFinite, age >= 0, age < Self.visibilityGrace,
+              let packet = BoundPresencePacket.decode(data), packet.rom == BoundPlayerROMProfile.supportedSHA256,
+              packet.withdrawn != true, let pose = packet.pose, retainedAt.map({ now - age >= $0 }) ?? true else { return }
+        retainedPose = pose; retainedAt = now - age; presentationChanged?()
     }
 
     func consume(_ reading: BoundPlayerStateReading, at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
@@ -208,13 +223,14 @@ final class BoundLivePresenceSession: ObservableObject {
         guard enabled else { return }
         publish(at: now)
     }
-    private func publish(at now: TimeInterval, force: Bool = false) {
+    private func publish(at now: TimeInterval, force: Bool = false, withdrawn: Bool = false) {
         guard connected, let send, force || lastSent.map({ now - $0 >= Self.interval - 0.0001 }) ?? true else { return }
         lastSent = now; sequence &+= 1
         let fresh = enabled && localAt.map { now - $0 <= 0.5 } ?? false
-        let packet = BoundPresencePacket(version: 1,
+        var packet = BoundPresencePacket(version: 1,
             rom: romVerified ? BoundPlayerROMProfile.supportedSHA256 : String(repeating: "0", count: 64),
             sender: epoch, receiver: proposedPeer ?? peerEpoch, sequence: sequence, time: now, pose: fresh ? localPose : nil)
+        if withdrawn || !enabled { packet.withdrawn = true }
         guard let data = packet.encoded() else { return }
         if send(data) { sentPackets += 1 }
         else { setStatus("Live sprite transport unavailable") }
@@ -229,6 +245,7 @@ final class BoundLivePresenceSession: ObservableObject {
             if packet.receiver == nil, peerEpoch != nil, packet.sender != peerEpoch {
                 rejectedPackets += 1; return
             }
+            retainedPose = nil; retainedAt = nil
             restartHandshakeKeepingLocal()
             setStatus(packet.rom == String(repeating: "0", count: 64) ? "Friend reader is not ready" : "Friend ROM is incompatible")
             presentationChanged?(); return
@@ -255,10 +272,16 @@ final class BoundLivePresenceSession: ObservableObject {
         guard now - packet.time - offset <= 0.3 else { rejectedPackets += 1; return }
         clockOffset = offset; lastSequence = packet.sequence; lastSenderTime = packet.time; lastReceived = now
         receivedPackets += 1
+        if packet.withdrawn == true {
+            retainedPose = nil; retainedAt = nil
+            samples.removeAll(keepingCapacity: true); bufferedSamples = 0
+            presentationChanged?(); return
+        }
         guard let pose = packet.pose else {
             samples.removeAll(keepingCapacity: true); bufferedSamples = 0
             setStatus("Friend sprite unavailable or paused"); presentationChanged?(); return
         }
+        retainedPose = pose; retainedAt = now
         if let previous = samples.last, !Self.continuous(previous.pose, pose)
             || packet.time - previous.time > 0.2 { samples.removeAll(keepingCapacity: true) }
         samples.append(.init(time: packet.time, pose: pose))
@@ -286,7 +309,11 @@ final class BoundLivePresenceSession: ObservableObject {
 
     func pose(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundPresencePose? {
         guard needsReader, let lastReceived, now >= lastReceived, now - lastReceived <= Self.timeout,
-              let offset = clockOffset, let first = samples.first, let last = samples.last else { return nil }
+              let offset = clockOffset, let first = samples.first, let last = samples.last else {
+            guard enabled, romVerified, let retainedAt, now >= retainedAt,
+                  now - retainedAt < Self.visibilityGrace else { return nil }
+            return retainedPose
+        }
         let target = now - offset - 0.1
         if target <= first.time { return first.pose }
         for index in 1..<samples.count where target <= samples[index].time {

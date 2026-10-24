@@ -159,6 +159,7 @@ final class BoundNakamaClientTests: XCTestCase {
             case .roster(let members): XCTAssertEqual(members, [.init(ownerID: owner, online: true), .init(ownerID: peer, online: true)]); roster.fulfill()
             case .message(let opcode, let data, let sender): XCTAssertEqual(opcode, 2); XCTAssertEqual(data, Data([9])); XCTAssertEqual(sender, peer); message.fulfill()
             case .failed(let reason): XCTAssertEqual(reason, .invalidMessage); failed.fulfill()
+            case .retainedPresence: XCTFail("Unexpected retained snapshot")
             }
         }
         await fulfillment(of: [joined], timeout: 2)
@@ -168,6 +169,49 @@ final class BoundNakamaClientTests: XCTestCase {
         socket.deliver(incoming(opcode: 2, envelope: ["v": 1, "senderOwnerID": UUID().uuidString, "body": Data([9]).base64EncodedString()]))
         await fulfillment(of: [failed], timeout: 2)
         XCTAssertTrue(socket.cancelled)
+    }
+
+    func testRetainedSnapshotsAreSeparateFromFreshPeerMessages() async throws {
+        let socket = NakamaSocketFixture(matchID: match), client = BoundNakamaClient(socketFactory: { _ in socket })
+        defer { client.stop() }
+        let joined = expectation(description:"joined"), retained = expectation(description:"retained snapshot")
+        let peer = peer
+        try client.start(configuration:configuration()) { event in
+            if case .joined = event { joined.fulfill() }
+            if case .retainedPresence(let data, let owner, let age) = event {
+                XCTAssertEqual(data,Data([1,2])); XCTAssertEqual(owner,peer); XCTAssertEqual(age,12)
+                retained.fulfill()
+            }
+            if case .message = event { XCTFail("Snapshot cannot be admitted as live gameplay") }
+        }
+        await fulfillment(of:[joined],timeout:2)
+        socket.deliver(incoming(opcode:6,envelope:["v":1,"positions":[["ownerID":peer.uuidString,"age":12,"body":Data([1,2]).base64EncodedString()]]]))
+        await fulfillment(of:[retained],timeout:2)
+    }
+
+    func testDurableRunRPCUsesCurrentTicketWithoutOpeningAGameplaySocket() async throws {
+        let owner = owner, peer = peer, room = room, run = UUID()
+        let service = BoundNakamaRunService { request in
+            XCTAssertEqual(request.url?.absoluteString,"https://bound.example/v2/rpc/bound_run_v1")
+            XCTAssertEqual(request.httpMethod,"POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField:"Authorization"),"Bearer private-access-token")
+            let json = try JSONDecoder().decode(String.self,from:XCTUnwrap(request.httpBody))
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with:Data(json.utf8)) as? [String:Any])
+            XCTAssertEqual(body["ticket"] as? String,"private-membership-ticket")
+            XCTAssertEqual(body["action"] as? String,"session")
+            XCTAssertEqual(body["runID"] as? String,run.uuidString.lowercased())
+            return try JSONSerialization.data(withJSONObject:["payload":"{\"version\":1,\"revision\":1,\"ended\":false}"])
+        }
+        await service.configure(configuration())
+        let identity = BoundMultiplayerRunIdentity(run:run,gameID:"fixture",owner:owner,partner:peer,
+            roomID:room.uuidString,settingsOwner:owner,settings:Data(),localSeed:1,partnerSeed:2,romSHA256:String(repeating:"a",count:64))
+        let state = try await service.session(identity:identity,history:String(repeating:"a",count:64),bits:Data([1]),head:nil)
+        XCTAssertEqual(state.revision,1); XCTAssertNil(state.pending); XCTAssertNil(state.head)
+        var foreign = identity; foreign.owner = peer
+        do {
+            _ = try await service.session(identity:foreign,history:String(repeating:"a",count:64),bits:Data([1]),head:nil)
+            XCTFail("Foreign account cannot use the room ticket")
+        } catch { XCTAssertTrue(error is BoundNakamaRunService.Failure) }
     }
 
     func testStopDropsQueuedTrafficAndTicketRenewalUsesReservedOpcode() async throws {

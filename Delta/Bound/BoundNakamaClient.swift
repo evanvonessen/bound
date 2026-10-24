@@ -86,6 +86,7 @@ final class BoundNakamaClient: @unchecked Sendable {
         case joined
         case roster([Member])
         case message(opcode: Int, data: Data, senderOwnerID: UUID)
+        case retainedPresence(data: Data, ownerID: UUID, age: TimeInterval)
         case failed(Failure)
     }
     typealias SocketFactory = @Sendable (URLRequest) -> any BoundNakamaSocket
@@ -284,10 +285,22 @@ final class BoundNakamaClient: @unchecked Sendable {
         }
         guard let packet = value["match_data"] as? [String: Any] else { return }
         guard packet["match_id"] as? String == configuration.matchID,
-              let opcode = Self.integer(packet["op_code"]), (1...4).contains(opcode),
+              let opcode = Self.integer(packet["op_code"]), [1, 2, 3, 4, 6].contains(opcode),
               let encoded = packet["data"] as? String, encoded.utf8.count <= 48_000,
               let bytes = Data(base64Encoded: encoded),
               let envelope = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any], Self.integer(envelope["v"]) == 1 else { fail(.invalidMessage, run: run); return }
+        if opcode == 6 {
+            guard let rows = envelope["positions"] as? [[String: Any]], rows.count <= 8 else { fail(.invalidMessage, run: run); return }
+            for row in rows {
+                guard let ownerText = row["ownerID"] as? String, let owner = UUID(uuidString: ownerText),
+                      configuration.members.contains(owner), owner != configuration.ownerID,
+                      let age = row["age"] as? Double, age.isFinite, age >= 0, age < 60,
+                      let encoded = row["body"] as? String, encoded.utf8.count <= 1024,
+                      let body = Data(base64Encoded: encoded), body.count <= 768 else { fail(.invalidMessage, run: run); return }
+                emit(.retainedPresence(data: body, ownerID: owner, age: age), run: run)
+            }
+            return
+        }
         if opcode == 4 {
             guard let rows = envelope["members"] as? [[String: Any]], rows.count <= 8 else { fail(.invalidMessage, run: run); return }
             var members: [Member] = []
@@ -365,4 +378,136 @@ final class BoundNakamaBattleChannel: BoundBattleChannel, @unchecked Sendable {
         return client?.sendBattle(data, targetOwnerID: targetOwnerID) ?? false
     }
     func close() { lock.lock(); client = nil; lock.unlock() }
+}
+
+/// Durable run and manual-checkpoint RPCs share the room's short-lived admission
+/// ticket, but have no dependency on its WebSocket. No emulator work runs here.
+actor BoundNakamaRunService {
+    static let shared = BoundNakamaRunService()
+    struct Upload: Decodable, Sendable {
+        let receipt: BoundMultiplayerCheckpointReceipt
+        let count: Int
+        let bytes: Int
+    }
+    struct Checkpoint: Decodable, Sendable {
+        let id: UUID
+        let predecessor: UUID?
+        let history: String
+        let uploads: [String: Upload]
+        let reservations: [String: Bool]?
+        func upload(for owner: UUID) -> Upload? { uploads[owner.uuidString.lowercased()] }
+    }
+    struct State: Decodable, Sendable {
+        let version: Int
+        let revision: UInt64
+        let ended: Bool
+        let head: Checkpoint?
+        let pending: Checkpoint?
+    }
+    enum Failure: LocalizedError {
+        case unavailable, conflict, tooLarge
+        var errorDescription: String? {
+            switch self {
+            case .unavailable: return "Server save unavailable. Retry Save when connected."
+            case .conflict: return "The server checkpoint needs recovery. Your local saves were kept."
+            case .tooLarge: return "This save exceeds the server checkpoint limit. Your local save was kept."
+            }
+        }
+    }
+    private var configuration: BoundNakamaConfiguration?
+    private let perform: @Sendable (URLRequest) async throws -> Data
+    init(perform: @escaping @Sendable (URLRequest) async throws -> Data = { request in
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let response = response as? HTTPURLResponse, response.statusCode == 200 else { throw Failure.unavailable }
+        return data
+    }) { self.perform = perform }
+    func configure(_ configuration: BoundNakamaConfiguration) {
+        guard configuration.isValid() else { return }
+        if let old = self.configuration, old.ownerID == configuration.ownerID, old.roomID == configuration.roomID,
+           old.expiresAt > configuration.expiresAt { return }
+        self.configuration = configuration
+    }
+    private func request(_ action: String, identity: BoundMultiplayerRunIdentity, fields: [String: Any] = [:]) async throws -> Data {
+        guard let configuration, configuration.isValid(), configuration.ownerID == identity.owner,
+              configuration.roomID.uuidString.lowercased() == identity.roomID.lowercased(),
+              configuration.members.contains(identity.partner),
+              var url = URLComponents(url: configuration.endpoint, resolvingAgainstBaseURL: false) else { throw Failure.unavailable }
+        url.scheme = "https"; url.path = "/v2/rpc/bound_run_v1"; url.queryItems = nil
+        guard let endpoint = url.url else { throw Failure.unavailable }
+        var body = fields
+        body["action"] = action; body["runID"] = identity.run.uuidString.lowercased(); body["ticket"] = configuration.joinTicket
+        let json = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys, .withoutEscapingSlashes])
+        var request = URLRequest(url: endpoint); request.httpMethod = "POST"; request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer " + configuration.accessToken, forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONEncoder().encode(String(decoding: json, as: UTF8.self))
+        let data = try await perform(request)
+        struct Envelope: Decodable { let payload: String }
+        guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else { throw Failure.unavailable }
+        return Data(envelope.payload.utf8)
+    }
+    func session(identity: BoundMultiplayerRunIdentity, history: String, bits: Data, head: BoundMultiplayerSavePackage?, world: BoundWorldState? = nil) async throws -> State {
+        let value = try JSONSerialization.jsonObject(with: BoundMultiplayerSaveStore.encode(identity))
+        var fields: [String: Any] = ["identity": value, "history": history,
+            "bits": bits.base64EncodedString(), "checkpoint": head?.payload.checkpoint.uuidString.lowercased() as Any? ?? NSNull(),
+            "checkpointHistory": head?.payload.sharedEventDigest as Any? ?? NSNull()]
+        if let world, world.valid { fields["world"] = try JSONSerialization.jsonObject(with: BoundMultiplayerSaveStore.encode(world)) }
+        let data = try await request("session", identity: identity, fields: fields)
+        return try JSONDecoder().decode(State.self, from: data)
+    }
+    func begin(identity: BoundMultiplayerRunIdentity, history: String, predecessor: UUID?) async throws -> State {
+        let data = try await request("begin", identity: identity, fields: ["history": history,
+            "predecessor": predecessor?.uuidString.lowercased() as Any? ?? NSNull()])
+        return try JSONDecoder().decode(State.self, from: data)
+    }
+    func cancel(identity: BoundMultiplayerRunIdentity, checkpoint: UUID) async throws -> State {
+        let data = try await request("cancel", identity: identity, fields: ["checkpoint": checkpoint.uuidString.lowercased()])
+        return try JSONDecoder().decode(State.self, from: data)
+    }
+    func prepare(identity: BoundMultiplayerRunIdentity, checkpoint: UUID, history: String) async throws -> State {
+        let data = try await request("prepare", identity: identity, fields: ["checkpoint": checkpoint.uuidString.lowercased(), "history": history])
+        return try JSONDecoder().decode(State.self, from: data)
+    }
+    func end(identity: BoundMultiplayerRunIdentity) async throws {
+        _ = try await request("end", identity: identity)
+    }
+    func upload(_ package: BoundMultiplayerSavePackage) async throws -> State {
+        let bytes = try BoundMultiplayerSaveStore.encode(package.payload)
+        guard bytes.count <= 16 * 1024 * 1024 else { throw Failure.tooLarge }
+        let encoded = bytes.base64EncodedString(), size = 12000, count = (encoded.utf8.count + size - 1) / size
+        let receipt = try JSONSerialization.jsonObject(with: BoundMultiplayerSaveStore.encode(package.receipt))
+        let identity = package.payload.manifest.identity
+        var fields: [String: Any] = ["checkpoint": package.payload.checkpoint.uuidString.lowercased(),
+            "receipt": receipt, "count": count, "bytes": bytes.count]
+        _ = try await request("upload", identity: identity, fields: fields)
+        let ascii = Array(encoded.utf8)
+        for index in 0..<count {
+            try Task.checkCancellation()
+            var chunk = fields; chunk["index"] = index
+            chunk["data"] = String(decoding: ascii[(index * size)..<min(ascii.count, (index + 1) * size)], as: UTF8.self)
+            _ = try await request("chunk", identity: identity, fields: chunk)
+        }
+        fields["checkpoint"] = package.payload.checkpoint.uuidString.lowercased()
+        let data = try await request("seal", identity: identity, fields: fields)
+        return try JSONDecoder().decode(State.self, from: data)
+    }
+    func download(identity: BoundMultiplayerRunIdentity, checkpoint: Checkpoint) async throws -> BoundMultiplayerSavePackage {
+        guard let own = checkpoint.upload(for: identity.owner), let partner = checkpoint.upload(for: identity.partner),
+              own.bytes > 0, own.bytes <= 16 * 1024 * 1024, own.count == ((own.bytes + 2) / 3 * 4 + 11999) / 12000 else { throw Failure.conflict }
+        var encoded = ""
+        struct Chunk: Decodable { let data: String }
+        for index in 0..<own.count {
+            try Task.checkCancellation()
+            let data = try await request("download", identity: identity, fields: ["checkpoint": checkpoint.id.uuidString.lowercased(), "index": index])
+            let chunk = try JSONDecoder().decode(Chunk.self, from: data)
+            guard chunk.data.utf8.count <= 12000 else { throw Failure.conflict }
+            encoded += chunk.data
+        }
+        guard let bytes = Data(base64Encoded: encoded), bytes.count == own.bytes,
+              BoundMultiplayerSaveStore.hash(bytes) == own.receipt.payloadSHA256 else { throw Failure.conflict }
+        let payload = try JSONDecoder().decode(BoundMultiplayerSavePackage.Payload.self, from: bytes)
+        guard payload.manifest.identity == identity, payload.checkpoint == checkpoint.id,
+              payload.sharedEventDigest == checkpoint.history else { throw Failure.conflict }
+        return .init(payload: payload, receipt: own.receipt, partnerReceipt: partner.receipt)
+    }
 }

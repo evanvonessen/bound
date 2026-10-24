@@ -10,9 +10,12 @@
         Referrer-Policy no-referrer
         -Server
     }
-    # Only gameplay sockets are public. Native auth and runtime HTTP-key RPCs
-    # remain on the private container network behind the account gateway.
+    # Only gameplay sockets and the authenticated durable-run RPC are public.
+    # Native auth and administrative RPCs stay behind the account gateway.
     handle /ws {
+        reverse_proxy nakama:7350
+    }
+    handle /v2/rpc/bound_run_v1 {
         reverse_proxy nakama:7350
     }
     handle {

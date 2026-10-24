@@ -110,3 +110,17 @@ delivery across process reopen without rewriting either player's battery or deat
 journal. ABI tests exercise the actual cartridge packet decoder, bounded menu
 encoder and freshness channel. The integrated transfer test uses the real lease
 client with a synthetic server reply; it is not a live service test.
+
+## Nakama manual checkpoint authority
+
+Multiplayer no longer schedules periodic or gameplay-event checkpoints. Only the
+cartridge's explicit Save command begins a new paired checkpoint. Nakama allocates
+the identifier, retains the pending transaction across reconnects, and commits
+its head only after both immutable per-player payloads have been uploaded and
+verified. Peer receipt messages cannot commit a save. The local package format,
+lease checks, monotonic history and protected restore rules still apply.
+
+Automatic suspension cannot pause a running core to capture a save. Already-paused
+lifecycle recovery and native battle/trade journals preserve their safety roles;
+they do not advance the manual checkpoint head. Closing without a manual save may
+leave unsaved progress only in the current device's memory.

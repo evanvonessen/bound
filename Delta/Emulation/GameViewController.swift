@@ -1545,6 +1545,7 @@ extension GameViewController: SaveStatesViewControllerDelegate
 {
     private func updateAutoSaveState()
     {
+        guard !boundCompanion.romMultiplayer.protectsRun else { return }
         guard !boundCompanion.sharing.nativeBattle.blocksAutoSave && !boundCompanion.sharing.cooperativeDoubles.blocksAutoSave else { return }
         // Ensures game is non-nil and also a Game subclass
         guard let game = self.game as? Game else { return }

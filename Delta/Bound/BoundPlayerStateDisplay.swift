@@ -187,7 +187,7 @@ final class BoundPlayerStateDisplay {
         presence = session
         session.setROMVerified(profile != nil && supportsCore)
         session.demandChanged = { [weak self] in self?.refreshPreference() }
-        session.presentationChanged = { [weak self] in self?.livePlayerOverlay.show(pose: nil, scene: nil) }
+        session.presentationChanged = { [weak self] in self?.renderLivePresence() }
         refreshPreference()
     }
     func bind(core: EmulatorCore?) {
@@ -268,7 +268,9 @@ final class BoundPlayerStateDisplay {
         }
         probe.configure(coreID: core.map(ObjectIdentifier.init), profile: profile, active: active, status: status, detail: detail,
                         sceneEnabled: needsScene)
-        lastFrameAt = nil
+        if !needsScene || status == .stopped || status == .unsupportedROM || status == .unavailable {
+            lastFrameAt = nil; currentReading = nil
+        }
         refreshDisplay()
     }
 
@@ -278,23 +280,37 @@ final class BoundPlayerStateDisplay {
 
     func refreshDisplay() {
         if let reading = probe.takeLatest() {
-            currentReading = reading
+            if reading.status == .live, reading.player?.scene != nil {
+                currentReading = reading
+            } else if reading.status == .live,
+                      reading.player?.mapGroup != currentReading?.player?.mapGroup || reading.player?.mapNumber != currentReading?.player?.mapNumber || reading.player?.elevation != currentReading?.player?.elevation {
+                currentReading = nil
+            } else if reading.status != .live && reading.status != .waiting && reading.status != .paused {
+                currentReading = reading
+            }
             let changed = hud.update(reading)
             recordingSession.consume(reading)
             presence?.consume(reading)
             recordedPlayerOverlay.show(pose: recordingSession.pose, scene: reading.player?.scene)
-            lastFrameAt = reading.frame > 0 ? ProcessInfo.processInfo.systemUptime : nil
+            if reading.status == .live, reading.player?.scene != nil, reading.frame > 0 {
+                lastFrameAt = ProcessInfo.processInfo.systemUptime
+            }
             if changed { owner?.view.setNeedsLayout() }
         } else if let lastFrameAt, ProcessInfo.processInfo.systemUptime - lastFrameAt > 0.5 {
             let stale = BoundPlayerStateReading.inactive(.waiting, "No recent emulated frames")
-            currentReading = stale; presence?.consume(stale)
+            // Keep the last verified camera/map for presentation while the
+            // emulator stalls. Stale data cannot grant interaction authority.
+            presence?.consume(stale)
             if hud.update(stale) { owner?.view.setNeedsLayout() }
             recordingSession.consume(stale); recordedPlayerOverlay.show(pose: nil, scene: nil)
-            self.lastFrameAt = nil
         }
+        renderLivePresence()
+    }
+
+    private func renderLivePresence() {
         let now = ProcessInfo.processInfo.systemUptime
         if let presence, let reading = currentReading, reading.status == .live,
-           let lastFrameAt, now - lastFrameAt <= 0.5, let profile, let viewer = reading.player {
+           let lastFrameAt, now - lastFrameAt < BoundLivePresenceSession.visibilityGrace, let profile, let viewer = reading.player {
             let pose = presence.pose(at: now), rendered = pose?.rendered(profile: profile, viewer: viewer)
             livePlayerOverlay.show(pose: rendered, scene: viewer.scene)
             presence.observePresentation(pose: pose, viewer: viewer, frameResolved: rendered != nil,

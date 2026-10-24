@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import vm from 'node:vm';
-import { createHmac } from 'node:crypto';
+import { createHmac, createHash } from 'node:crypto';
 
 export const owner = '11111111-1111-4111-8111-111111111111';
 export const peer = '22222222-2222-4222-8222-222222222222';
@@ -22,6 +22,8 @@ export function fixture(roomMembers = members) {
     hmacSha256Hash: (input, key) => buffer(createHmac('sha256', key).update(input).digest()),
     base16Encode: input => Buffer.from(input).toString('hex'),
     base64UrlDecode: input => buffer(Buffer.from(input, 'base64url')),
+    base64Decode: input => buffer(Buffer.from(input, 'base64')),
+    sha256Hash: input => createHash('sha256').update(input).digest('hex'),
     base64UrlEncode: input => Buffer.from(input).toString('base64url'),
     binaryToString: input => Buffer.from(input).toString('utf8'),
     accountGetId: userID => ({ customId: userID.startsWith('nakama-') ? 'bound:' + userID.slice(7) : 'unbound' }),
@@ -36,7 +38,7 @@ export function fixture(roomMembers = members) {
     storageRead: reads => reads.flatMap(read => stored.has(read.key) ? [stored.get(read.key)] : []),
     storageWrite: writes => writes.map(write => {
       const current = stored.get(write.key);
-      if ((write.version === '*' && current) || (write.version !== '*' && current?.version !== write.version)) throw Error('CAS conflict');
+      if ((write.version === '*' && current) || (write.version && write.version !== '*' && current?.version !== write.version)) throw Error('CAS conflict');
       const record = { ...plain(write), version: String(++version) };
       stored.set(write.key, record); return record;
     }),
@@ -64,6 +66,6 @@ export function fixture(roomMembers = members) {
   const frame = (body = 'fixture', targetOwnerID) => ({ v: 1, body: Buffer.from(body).toString('base64'), ...(targetOwnerID ? { targetOwnerID } : {}) });
   const loop = messages => api.match.matchLoop(ctx, logger, nk, dispatcher, 0, state, messages);
   const init = () => context.InitModule(ctx, logger, nk, new Proxy({}, { get: (_target, name) => (...args) => { registrations[name] = args; } }));
-  return { api, accounts: context.BoundAccounts, ctx, logger, nk, dispatcher, logs, broadcasts, kicks, registrations, active, stored, discarded,
+  return { api, runs: context.BoundRuns, accounts: context.BoundAccounts, ctx, logger, nk, dispatcher, logs, broadcasts, kicks, registrations, active, stored, discarded,
     ticket, join, message, frame, loop, init, state, presence, now: value => { now = value; } };
 }

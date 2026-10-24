@@ -10,7 +10,7 @@ enum BoundWorldContract {
 // END GENERATED GAME CONTRACT
 
 /// Opaque game checkpoints. Bound transports them without interpreting game rules.
-struct BoundWorldState: Equatable, Sendable {
+struct BoundWorldState: Codable, Equatable, Sendable {
     var group: UInt8
     var number: UInt8
     var checkpoints: Data

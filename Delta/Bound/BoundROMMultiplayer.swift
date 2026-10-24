@@ -404,13 +404,18 @@ final class BoundROMMultiplayerCoordinator {
         didSet { updateWorkingStateAuthority() }
     }
     private var saveFenceReady = true
-    private var wasConnected = false
-    private var lastSuspensionRevision: String?
     private var pendingAction: BoundROMCommand?
     private var pendingActionAt: TimeInterval = 0
     private var error: String?
-    private var lastEventCount = 0
-    private var lastAutomaticCheckpoint: TimeInterval = 0
+    private let server = BoundNakamaRunService.shared
+    private var serverTask: Task<Void, Never>?
+    private var serverOperation = UUID()
+    private var serverRegisteredRun: UUID?
+    private var serverPollAt: TimeInterval = 0
+    private var serverUploaded: UUID?
+    private var manualSavePending = false
+    private var serverCaptureAuthorized: UUID?
+    private var serverReservedCheckpoint: UUID?
     private var timelinePage = 0
     private let friendsRefresh = BoundROMFriendsRefresh()
     var watch: (() -> Void)?
@@ -429,7 +434,7 @@ final class BoundROMMultiplayerCoordinator {
     deinit {
         let timer = timer
         BoundMainActorDisposal.enqueue { timer?.invalidate() }
-        verification?.cancel(); leaseTask?.cancel()
+        verification?.cancel(); leaseTask?.cancel(); serverTask?.cancel()
     }
     private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
     private var identity: BoundMultiplayerRunIdentity? { manifest?.identity ?? setup?.identity ?? incoming?.manifest.identity }
@@ -450,10 +455,11 @@ final class BoundROMMultiplayerCoordinator {
     }
     func bind(core: EmulatorCore?, game: Game?) {
         guard self.core !== core || self.game?.identifier != game?.identifier else { return }
-        suspend()
         if let old = self.game { store.setActive(false,gameID:old.identifier) }
-        verification?.cancel(); leaseTask?.cancel(); leaseTask = nil; grant = nil; validatedFence = nil
+        verification?.cancel(); leaseTask?.cancel(); serverTask?.cancel(); leaseTask = nil; grant = nil; validatedFence = nil
         leaseOperation = UUID()
+        serverTask?.cancel(); serverTask = nil; serverOperation = UUID()
+        serverRegisteredRun = nil; serverUploaded = nil; serverPollAt = 0; manualSavePending = false; serverCaptureAuthorized = nil; serverReservedCheckpoint = nil
         anchorBaselineValidated = false; baselineHistory = nil; historyJournal = nil; romFrameClock.reset(); requestCursor = .init()
         self.core = core; self.game = game; verified = false; probe.configure(core:core)
         servicesActive = core != nil; transportWasConnected = false
@@ -466,7 +472,7 @@ final class BoundROMMultiplayerCoordinator {
         endingRun = false; newGameAfterEnd = false; recoveredNewGameChoice = false
         newGame = false; error = nil; pendingSnapshot = nil; didRestore = false; head = nil
         validatedSnapshot = false; workingStateAuthorized = false
-        wasConnected = false; lastSuspensionRevision = nil; pendingAction = nil
+        pendingAction = nil
         sharing.soulLink.cartridgeManagesPause = false
         guard let core, let game, game.type == .gba else { return }
         do {
@@ -564,16 +570,13 @@ final class BoundROMMultiplayerCoordinator {
               !sharing.nativeBattle.blocksAutoSave && !sharing.cooperativeDoubles.blocksAutoSave,
               pendingSnapshot == nil || didRestore, let core, let game,
               core.state == .running || core.state == .paused else { return false }
-        let wasRunning = core.state == .running
-        guard core.state == .paused || core.pause() else { return false }
-        defer { if wasRunning, UIApplication.shared.applicationState == .active { core.resume() } }
+        guard core.state == .paused else { return false }
         do {
             let path = store.directory(gameID:game.identifier).appendingPathComponent("suspend.state")
             core.saveSaveState(to:path)
             core.deltaCore.emulatorBridge.saveGameSave(to:game.gameSaveURL)
             try store.captureSuspension(gameID:game.identifier,romSHA256:BoundWorldContract.romSHA256,
                 gameSaveURL:game.gameSaveURL,snapshot:Data(contentsOf:path))
-            lastSuspensionRevision = try store.workingRevision(gameID:game.identifier)
             return true
         } catch { self.error = error.localizedDescription; return false }
     }
@@ -678,6 +681,7 @@ final class BoundROMMultiplayerCoordinator {
                UIApplication.shared.applicationState == .active { core?.resume() }
         }
         if !startNewGame || workingStateAuthorized {
+            guard core?.state == .paused || core?.pause() == true else { throw BoundMultiplayerSaveStore.Failure.incomplete }
             guard suspend() else { throw BoundMultiplayerSaveStore.Failure.incomplete }
         }
         if startNewGame {
@@ -702,6 +706,7 @@ final class BoundROMMultiplayerCoordinator {
             guard let self else { return }
             defer { if self.leaseOperation == operation { self.leaseTask = nil } }
             do {
+                if let identity = self.identity { try await self.server.end(identity:identity) }
                 try await self.leaseClient.end(grant:grant,session:session)
                 guard !Task.isCancelled, self.leaseOperation == operation,
                       self.identity?.run == grant.runID, self.account.session?.owner == grant.ownerID else { return }
@@ -940,42 +945,10 @@ final class BoundROMMultiplayerCoordinator {
                 guard let current = setup, current.settingsCommitted, ack.run == current.identity.run,
                       ack.digest == setupDigest(current.identity) else { return }
                 setup?.peerReady = true; try persistSetup()
-            case .checkpoint:
-                let request = try JSONDecoder().decode(Checkpoint.self,from:packet.body)
-                guard manifest != nil, request.predecessor == head?.payload.checkpoint,
-                      BoundMultiplayerSaveStore.isDigest(request.history) else { return }
-                if let cancelled = cancelledCheckpoints[request.id] {
-                    send(.checkpointCancel,CheckpointCancel(run:manifest!.identity.run,transaction:cancelled,acknowledgement:true))
-                    return
-                }
-                if let checkpoint, checkpoint != request {
-                    // Only the deterministic coordinator arbitrates simultaneous requests.
-                    guard !checkpointHasDurableReceipt, packet.owner.uuidString < owner.uuidString else { return }
-                }
-                installCheckpoint(request)
-                if probe.read()?.checkpointSafe != true || sharing.nativeBattle.blocksAutoSave || sharing.cooperativeDoubles.blocksAutoSave {
-                    cancelCheckpoint()
-                }
-            case .prepared:
-                let receipt = try JSONDecoder().decode(BoundMultiplayerCheckpointReceipt.self,from:packet.body)
-                guard let checkpoint, receipt.run == manifest?.identity.run, receipt.checkpoint == checkpoint.id,
-                      receipt.owner == packet.owner, receipt.sharedEventDigest == checkpoint.history else { return }
-                if partnerReceipt == nil { checkpointStartedAt = now }
-                partnerReceipt = receipt
-                if checkpointCancellation.requestedAt != nil { checkpointRecovery() }
-            case .committed:
-                let receipt = try JSONDecoder().decode(BoundMultiplayerCheckpointReceipt.self,from:packet.body)
-                guard let checkpoint, receipt.run == manifest?.identity.run, receipt.checkpoint == checkpoint.id,
-                      receipt.owner == packet.owner, receipt.sharedEventDigest == checkpoint.history,
-                      partnerReceipt == nil || partnerReceipt == receipt else { return }
-                if !peerCommitted { checkpointStartedAt = now }
-                partnerReceipt = receipt; peerCommitted = true
-                if checkpointCancellation.requestedAt != nil { checkpointRecovery() }
-            case .checkpointCancel:
-                let cancellation = try JSONDecoder().decode(CheckpointCancel.self,from:packet.body)
-                guard cancellation.run == manifest?.identity.run,
-                      BoundMultiplayerSaveStore.isDigest(cancellation.transaction.history) else { return }
-                receiveCheckpointCancellation(cancellation)
+            case .checkpoint, .prepared, .committed, .checkpointCancel:
+                // Durable save proposals and receipts come from the authenticated
+                // Nakama RPC, never from a replayable peer message.
+                break
             case .end:
                 let id = try JSONDecoder().decode(UUID.self,from:packet.body)
                 if manifest?.identity.run == id { try requestEndRun() }
@@ -1006,7 +979,7 @@ final class BoundROMMultiplayerCoordinator {
         }
     }
     private var checkpointHasDurableReceipt: Bool {
-        checkpointCaptureAttempted || localReceipt != nil || partnerReceipt != nil || (checkpoint != nil && head?.payload.checkpoint == checkpoint?.id)
+        checkpointCaptureAttempted || localReceipt != nil || partnerReceipt != nil || (checkpoint != nil && (serverReservedCheckpoint == checkpoint?.id || head?.payload.checkpoint == checkpoint?.id))
     }
     private func persistedCheckpointMayExist(_ id: UUID) -> Bool {
         guard let game else { return true }
@@ -1017,6 +990,7 @@ final class BoundROMMultiplayerCoordinator {
     private func installCheckpoint(_ value: Checkpoint) {
         if checkpoint?.id != value.id {
             checkpointStartedAt = now; checkpointCaptureAttempted = false; checkpointCancellation = .init()
+            serverCaptureAuthorized = nil
         }
         checkpoint = value; host.saving = true; host.status = .waiting
     }
@@ -1026,12 +1000,20 @@ final class BoundROMMultiplayerCoordinator {
         if error == nil { error = Self.checkpointRecoveryMessage }
     }
     private func cancelCheckpoint() {
-        guard let checkpoint, let manifest else { return }
-        switch checkpointCancellation.request(at:now,durable:checkpointHasDurableReceipt || persistedCheckpointMayExist(checkpoint.id)) {
-        case .request:
-            send(.checkpointCancel,CheckpointCancel(run:manifest.identity.run,transaction:checkpoint,acknowledgement:false))
-        case .recover: checkpointRecovery()
-        default: break
+        guard let checkpoint, let identity = manifest?.identity, serverTask == nil else { return }
+        guard !checkpointHasDurableReceipt else { checkpointRecovery(); return }
+        let operation = UUID(); serverOperation = operation
+        serverTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.serverOperation == operation { self.serverTask = nil } }
+            do {
+                let state = try await self.server.cancel(identity:identity,checkpoint:checkpoint.id)
+                guard !Task.isCancelled, self.serverOperation == operation, self.identity?.run == identity.run else { return }
+                try self.applyServer(state)
+            } catch {
+                guard self.serverOperation == operation else { return }
+                self.checkpointRecovery()
+            }
         }
     }
     private func rememberCheckpointCancellation(_ cancelled: Checkpoint) {
@@ -1052,49 +1034,123 @@ final class BoundROMMultiplayerCoordinator {
             checkpointRetryAt = now + 10
         }
     }
-    private func receiveCheckpointCancellation(_ value: CheckpointCancel) {
-        let cancelled = value.transaction
-        if let old = cancelledCheckpoints[cancelled.id] {
-            if !value.acknowledgement {
-                send(.checkpointCancel,CheckpointCancel(run:value.run,transaction:old,acknowledgement:true))
-            }
-            return
-        }
-        guard cancelled.predecessor == head?.payload.checkpoint else { return }
-        guard checkpoint?.id == cancelled.id else {
-            guard !persistedCheckpointMayExist(cancelled.id) else { checkpointRecovery(); return }
-            // We never accepted this superseded proposal, so no capture for it
-            // can race our acknowledgement. Do not cancel a different attempt.
-            if !value.acknowledgement {
-                rememberCheckpointCancellation(cancelled)
-                send(.checkpointCancel,CheckpointCancel(run:value.run,transaction:cancelled,acknowledgement:true))
-            }
-            return
-        }
-        switch checkpointCancellation.receive(acknowledgement:value.acknowledgement,
-            durable:checkpointHasDurableReceipt || persistedCheckpointMayExist(cancelled.id)) {
-        case .acknowledge:
-            finishCheckpointCancellation(cancelled)
-            send(.checkpointCancel,CheckpointCancel(run:value.run,transaction:cancelled,acknowledgement:true))
-        case .finish: finishCheckpointCancellation(cancelled)
-        case .recover:
-            if let localReceipt { send(head?.payload.checkpoint == cancelled.id ? .committed:.prepared,localReceipt) }
-            checkpointRecovery()
-        default: break
-        }
-    }
+    /// Only an explicit cartridge Save action starts this server transaction.
     @discardableResult private func requestCheckpoint() -> Bool {
-        guard checkpoint == nil, now >= checkpointRetryAt, let manifest, let history = historyDigest(),
+        if checkpoint == nil, serverTask != nil {
+            manualSavePending = true; host.saving = true; return true
+        }
+        guard checkpoint == nil, serverTask == nil, now >= checkpointRetryAt,
+              let manifest, let history = historyDigest(), serverRegisteredRun == manifest.identity.run,
               channel.fresh(at:now), now - peerHelloAt < 3,
               probe.read()?.checkpointSafe == true, peerHello?.checkpointSafe == true,
               !sharing.nativeBattle.blocksAutoSave && !sharing.cooperativeDoubles.blocksAutoSave else { return false }
-        installCheckpoint(.init(id:UUID(),predecessor:head?.payload.checkpoint,history:history))
-        if let checkpoint { send(.checkpoint,checkpoint) }
+        let operation = UUID(); serverOperation = operation
+        host.saving = true
+        serverTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.serverOperation == operation { self.serverTask = nil } }
+            do {
+                let state = try await self.server.begin(identity:manifest.identity,history:history,predecessor:self.head?.payload.checkpoint)
+                guard !Task.isCancelled, self.serverOperation == operation, self.identity?.run == manifest.identity.run else { return }
+                try self.applyServer(state)
+            } catch {
+                guard self.serverOperation == operation else { return }
+                self.host.saving = false; self.host.status = .unavailable
+                self.host.message = error.localizedDescription; self.checkpointRetryAt = self.now + 3
+            }
+        }
         return true
+    }
+    private func applyServer(_ state: BoundNakamaRunService.State) throws {
+        guard state.version == 1, let identity else { throw BoundNakamaRunService.Failure.conflict }
+        if state.ended { try requestEndRun(); return }
+        serverRegisteredRun = nil
+        if let saved = state.head, let head, saved.id == head.payload.checkpoint {
+            guard saved.history == head.payload.sharedEventDigest,
+                  saved.upload(for:identity.owner)?.receipt == head.receipt else { throw BoundNakamaRunService.Failure.conflict }
+        }
+        if let committed = state.head, committed.id != head?.payload.checkpoint, committed.id != checkpoint?.id {
+            guard incoming != nil else { throw BoundNakamaRunService.Failure.conflict }
+            return
+        }
+        if let committed = state.head, committed.id == checkpoint?.id {
+            guard let own = committed.upload(for:identity.owner), let peer = committed.upload(for:identity.partner),
+                  own.receipt == localReceipt, peer.receipt.sharedEventDigest == checkpoint?.history else {
+                throw BoundNakamaRunService.Failure.conflict
+            }
+            partnerReceipt = peer.receipt; peerCommitted = true; checkpointStartedAt = now
+        } else if let pending = state.pending {
+            guard pending.predecessor == head?.payload.checkpoint else { throw BoundNakamaRunService.Failure.conflict }
+            if checkpoint == nil {
+                guard probe.read()?.checkpointSafe == true, !sharing.nativeBattle.blocksAutoSave,
+                      !sharing.cooperativeDoubles.blocksAutoSave else {
+                    throw BoundMultiplayerSaveStore.Failure.incomplete
+                }
+                installCheckpoint(.init(id:pending.id,predecessor:pending.predecessor,history:pending.history))
+            } else if checkpoint?.id != pending.id { throw BoundNakamaRunService.Failure.conflict }
+            else if localReceipt == nil { checkpoint?.history = pending.history }
+            if pending.reservations?.isEmpty == false { serverReservedCheckpoint = pending.id }
+            if pending.reservations?[identity.owner.uuidString.lowercased()] == true { serverCaptureAuthorized = pending.id }
+        } else if let checkpoint, !checkpointHasDurableReceipt {
+            finishCheckpointCancellation(checkpoint)
+        }
+        serverRegisteredRun = identity.run
+    }
+    private func synchronizeServer() {
+        guard serverTask == nil, now >= serverPollAt, let identity = manifest?.identity,
+              let history = historyDigest(), let bits = historyBits(), account.session?.owner == identity.owner else { return }
+        let operation = UUID(); serverOperation = operation; serverPollAt = now + 1
+        let package = checkpoint.flatMap { value in
+            localReceipt != nil && serverUploaded != value.id ? try? store.checkpoint(gameID:identity.gameID,id:value.id) : nil
+        }
+        serverTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.serverOperation == operation { self.serverTask = nil } }
+            do {
+                let state: BoundNakamaRunService.State
+                if let package {
+                    state = try await self.server.upload(package)
+                } else {
+                    state = try await self.server.session(identity:identity,history:history,bits:bits,head:self.head,world:self.sharing.sharedWorld.probe.read())
+                }
+                guard !Task.isCancelled, self.serverOperation == operation, self.identity?.run == identity.run else { return }
+                if let package { self.serverUploaded = package.payload.checkpoint; self.checkpointStartedAt = self.now }
+                if let committed = state.head, committed.id != self.head?.payload.checkpoint,
+                   self.checkpoint == nil, let grant = self.grant, let session = self.account.session {
+                    let restored = try await self.server.download(identity:identity,checkpoint:committed)
+                    let renewed = try await self.leaseClient.checkpoint(grant:grant,checkpointID:committed.id,
+                        predecessor:committed.predecessor,history:committed.history,session:session)
+                    guard !Task.isCancelled, self.serverOperation == operation, self.identity?.run == identity.run else { return }
+                    self.grant = renewed
+                    let store = self.store
+                    let previous = self.head
+                    try await Task.detached(priority:.utility) {
+                        let folder = try store.stageDownload(gameID:identity.gameID,version:committed.id.uuidString,run:identity.run)
+                        // Restore requires the known predecessor inside the
+                        // archive, not just a matching predecessor UUID.
+                        var chain = [restored]
+                        if let previous, restored.payload.predecessor == previous.payload.checkpoint { chain.append(previous) }
+                        let archive = BoundMultiplayerSaveStore.CloudArchive(checkpoints:chain)
+                        try BoundMultiplayerSaveStore.encode(archive).write(to:folder.appendingPathComponent("complete.boundrun"),options:.atomic)
+                    }.value
+                    guard !Task.isCancelled, self.serverOperation == operation else { return }
+                    self.incoming = try self.store.inspectIncoming(gameID:identity.gameID)
+                }
+                try self.applyServer(state)
+            } catch {
+                guard !Task.isCancelled, self.serverOperation == operation else { return }
+                self.serverPollAt = self.now + 3
+                if self.localReceipt != nil {
+                    self.host.message = "Waiting for server save. Reconnect to retry."
+                    self.checkpointStartedAt = self.now
+                }
+            }
+        }
     }
     private func advanceCheckpoint(_ request: BoundROMRequest?) throws {
         guard var checkpoint, let manifest, let game, let core else { return }
         if checkpointStartedAt == nil { checkpointStartedAt = now }
+        if localReceipt != nil, serverTask != nil { checkpointStartedAt = now }
         let peerSafe = now - peerHelloAt < 3 ? peerHello?.checkpointSafe : nil
         switch checkpointCancellation.action(at:now,startedAt:checkpointStartedAt!,
             localSafe:request?.checkpointSafe == true && !sharing.nativeBattle.blocksAutoSave && !sharing.cooperativeDoubles.blocksAutoSave,
@@ -1106,15 +1162,9 @@ final class BoundROMMultiplayerCoordinator {
         guard checkpointCancellation.requestedAt == nil, grant?.isCurrent == true else { return }
         host.saving = true
         let history = historyDigest()
-        // Negotiate the digest only after both cartridges have frozen. An event
-        // in the frame before the save request must belong to this checkpoint.
-        if !checkpointHasDurableReceipt, let history, checkpoint.history != history,
-           request?.paused == true, peerHello?.paused == true, peerHello?.pending == checkpoint.id,
-           peerHello?.history == history, channel.fresh(at:now),
-           manifest.identity.owner.uuidString < manifest.identity.partner.uuidString {
-            checkpoint.history = history; self.checkpoint = checkpoint
-        }
-        let stage = BoundROMCheckpointReadiness.stage(localStored:localReceipt != nil,partnerStored:partnerReceipt != nil,
+        // The server selects the common history before either package is uploaded.
+        checkpoint = self.checkpoint ?? checkpoint
+        let stage = peerCommitted && localReceipt != nil && partnerReceipt != nil ? BoundROMCheckpointStage.finish : BoundROMCheckpointReadiness.stage(localStored:localReceipt != nil,partnerStored:partnerReceipt != nil,
             peerCommitted:peerCommitted,localPaused:request?.paused == true,peerPaused:peerHello?.paused == true,
             peerPendingMatches:peerHello?.pending == checkpoint.id,
             historyMatches:history == checkpoint.history && peerHello?.history == history
@@ -1124,6 +1174,26 @@ final class BoundROMMultiplayerCoordinator {
             peerSafe:peerHello?.checkpointSafe == true)
         guard stage != .wait else { return }
         if stage == .capture {
+            // Reserve on the server before touching local files. Otherwise a
+            // peer cancellation could race a durable capture not yet uploaded.
+            if serverCaptureAuthorized != checkpoint.id {
+                guard serverTask == nil else { return }
+                let operation = UUID(); serverOperation = operation
+                serverTask = Task { [weak self] in
+                    guard let self else { return }
+                    defer { if self.serverOperation == operation { self.serverTask = nil } }
+                    do {
+                        let state = try await self.server.prepare(identity:manifest.identity,checkpoint:checkpoint.id,history:checkpoint.history)
+                        guard !Task.isCancelled, self.serverOperation == operation, self.checkpoint?.id == checkpoint.id else { return }
+                        try self.applyServer(state)
+                        self.serverCaptureAuthorized = checkpoint.id; self.checkpointStartedAt = self.now
+                    } catch {
+                        guard self.serverOperation == operation else { return }
+                        self.checkpointRecovery()
+                    }
+                }
+                return
+            }
             guard workingStateAuthorized else { return }
             let wasRunning = core.state == .running
             guard core.state == .paused || core.pause() else { throw BoundMultiplayerSaveStore.Failure.incomplete }
@@ -1147,7 +1217,7 @@ final class BoundROMMultiplayerCoordinator {
                 if let localReceipt { send(.committed,localReceipt) }
                 self.checkpoint = nil; localReceipt = nil; self.partnerReceipt = nil; peerCommitted = false
                 checkpointStartedAt = nil; checkpointCaptureAttempted = false; checkpointCancellation = .init()
-                host.saving = false; host.status = .complete; lastAutomaticCheckpoint = now
+                host.saving = false; host.status = .complete; serverUploaded = nil
             }
         }
     }
@@ -1426,7 +1496,7 @@ final class BoundROMMultiplayerCoordinator {
             && peerHello?.run == identity?.run && (peerHello?.fence ?? 0) > 0 && now - peerHelloAt < 3
             && peerHello?.ready == true
             && (manifest == nil || sharing.soulLink.paired && reconciled && peerHello?.history == historyDigest())
-            && (manifest == nil || workingStateAuthorized)
+            && (manifest == nil || workingStateAuthorized && serverRegisteredRun == identity?.run)
             && peerHello?.checkpoint == head?.payload.checkpoint
             && (peerHello?.pending == nil || peerHello?.pending.map { cancelledCheckpoints[$0] != nil } == true) && checkpoint == nil
         if !channel.fresh(at:now) { reconciled = false }
@@ -1439,8 +1509,6 @@ final class BoundROMMultiplayerCoordinator {
             }
             probe.publish(host)
         }
-        if wasConnected && !host.connected { suspend() }
-        wasConnected = host.connected
         guard host.enabled && servicesActive && UIApplication.shared.applicationState == .active else { host.connected = false; return }
         guard core.state == .running else { host.connected = false; return }
         if host.linked, let issue = sharing.soulLink.recoveryError { error = issue }
@@ -1500,7 +1568,6 @@ final class BoundROMMultiplayerCoordinator {
                 newGame = false
                 baselineHistory = nil; anchorBaselineValidated = false; historyJournal = nil
                 store.setActive(true,gameID:game.identifier); host.status = .complete
-                suspend()
             }
             if let manifest, let grant, grant.isCurrent {
                 guard workingStateAuthorized || pendingSnapshot != nil else {
@@ -1527,18 +1594,13 @@ final class BoundROMMultiplayerCoordinator {
                     }
                 }
             }
+            if manualSavePending, serverTask == nil {
+                manualSavePending = false
+                if !requestCheckpoint() { host.saving = false; host.status = .unavailable }
+            }
+            synchronizeServer()
             try advanceCheckpoint(request)
             try synchronizeAnchors()
-            if host.connected, manifest != nil, request?.checkpointSafe == true, peerHello?.checkpointSafe == true, !host.saving {
-                let count = sharing.soulLink.probe.timeline.read().events.count
-                if count != lastEventCount || now - lastAutomaticCheckpoint > 60 {
-                    if requestCheckpoint() { lastEventCount = count }
-                }
-            }
-            if manifest != nil, workingStateAuthorized,
-               let revision = try store.workingRevision(gameID:game.identifier), revision != lastSuspensionRevision {
-                suspend()
-            }
         } catch { self.error = error.localizedDescription }
         if let error {
             host.connected = false; host.recovery = true; host.status = .recovery; host.message = error
@@ -1562,14 +1624,7 @@ final class BoundROMMultiplayerCoordinator {
             } else if let current = setup, current.settingsCommitted {
                 send(.ready,SetupAck(run:current.identity.run,digest:setupDigest(current.identity)))
             }
-            if let checkpoint {
-                if checkpointCancellation.requestedAt != nil, !checkpointHasDurableReceipt, let manifest {
-                    send(.checkpointCancel,CheckpointCancel(run:manifest.identity.run,transaction:checkpoint,acknowledgement:false))
-                } else { send(.checkpoint,checkpoint) }
-                if let localReceipt { send(head?.payload.checkpoint == checkpoint.id ? .committed:.prepared,localReceipt) }
-            } else if let head {
-                send(.committed,head.receipt)
-            }
+
         }
         _ = core // retained only weakly outside this tick
     }

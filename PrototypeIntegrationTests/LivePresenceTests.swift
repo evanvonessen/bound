@@ -55,10 +55,12 @@ final class LivePresenceTests: XCTestCase {
     }
     func packet(_ session: BoundLivePresenceSession, peer: UUID, sequence: UInt64 = 1, time: Double = 10,
                 reading: BoundPlayerStateReading? = nil, acknowledge: Bool = true,
-                rom: String = BoundPlayerROMProfile.supportedSHA256) throws -> Data {
-        try XCTUnwrap(BoundPresencePacket(version: 1, rom: rom, sender: peer,
+                rom: String = BoundPlayerROMProfile.supportedSHA256, withdrawn: Bool = false) throws -> Data {
+        var value = BoundPresencePacket(version: 1, rom: rom, sender: peer,
             receiver: acknowledge ? session.epoch : nil, sequence: sequence, time: time,
-            pose: reading.flatMap(BoundPresencePose.init)).encoded())
+            pose: reading.flatMap(BoundPresencePose.init))
+        if withdrawn { value.withdrawn = true }
+        return try XCTUnwrap(value.encoded())
     }
     func session() -> BoundLivePresenceSession {
         let session = BoundLivePresenceSession(); session.setROMVerified(true)
@@ -177,13 +179,16 @@ final class LivePresenceTests: XCTestCase {
         let old = try packet(session, peer: peer, reading: reading())
         session.receive(old, at: 20); XCTAssertNotNil(session.pose(at: 20))
         session.receive(try packet(session, peer: peer, sequence: 2, time: 10.05), at: 20.05)
-        XCTAssertNil(session.pose(at: 20.05), "Peer pause withdraws immediately")
+        XCTAssertNotNil(session.pose(at: 20.05), "A temporarily paused reader retains its avatar")
+        XCTAssertNil(session.collision(at: 20.05))
         session.receive(try packet(session, peer: peer, sequence: 3, time: 10.1, reading: reading()), at: 20.1)
         XCTAssertEqual(session.pose(at: 20.6)?.x, 104, "A brief gap holds the confirmed position without extrapolation")
-        XCTAssertNil(session.pose(at: 20.851), "The normal presence deadline still removes an expired peer")
+        XCTAssertNotNil(session.pose(at: 20.851), "A stale avatar remains visible during the reconnect grace")
+        XCTAssertNil(session.collision(at: 20.851))
         let epoch = session.epoch; session.tick(at: 21)
         XCTAssertNotEqual(epoch, session.epoch)
-        session.receive(old, at: 21); XCTAssertNil(session.pose(at: 21))
+        session.receive(old, at: 21); XCTAssertNotNil(session.pose(at: 21))
+        XCTAssertNil(session.collision(at: 21), "Cached presentation never authorizes stale collision")
         let fresh = try packet(session, peer: peer, sequence: 4, time: 11, reading: reading())
         session.receive(fresh, at: 21); XCTAssertNotNil(session.pose(at: 21))
         session.invalidateLocal(); session.receive(fresh, at: 21.01)
@@ -202,7 +207,7 @@ final class LivePresenceTests: XCTestCase {
         session.receive(try packet(session, peer: peer, sequence: 2, time: 10.74, reading: reading()), at: 20.74)
         XCTAssertEqual(session.pose(at: 21.2)?.x, 104, "A stationary heartbeat renews its position")
         XCTAssertNotNil(session.collision(at: 21.2))
-        session.receive(try packet(session, peer: peer, sequence: 3, time: 11.21), at: 21.21)
+        session.receive(try packet(session, peer: peer, sequence: 3, time: 11.21, withdrawn: true), at: 21.21)
         XCTAssertNil(session.pose(at: 21.21)); XCTAssertNil(session.collision(at: 21.21))
     }
 
@@ -227,6 +232,35 @@ final class LivePresenceTests: XCTestCase {
         XCTAssertNil(BoundPresenceCollision(pose: diagonal))
         diagonal.y = 112; diagonal.x = 1_000_000
         XCTAssertNil(BoundPresenceCollision(pose: diagonal))
+    }
+
+    func testServerSnapshotHasADeadlineAndNeverGrantsInteractionAuthority() throws {
+        let session = session(), peer = UUID()
+        let snapshot = try packet(session, peer: peer, reading: reading(x:136))
+        session.restorePresentation(snapshot, age:20, at:100)
+        XCTAssertEqual(session.pose(at:100)?.x,136)
+        XCTAssertNil(session.collision(at:100))
+        XCTAssertNil(session.interactionContext(at:100))
+        XCTAssertNil(session.peerEpoch)
+        XCTAssertNil(session.pose(at:140))
+        session.restorePresentation(snapshot, age:60, at:200)
+        XCTAssertNil(session.pose(at:200))
+    }
+
+    func testReconnectRetainsPresentationButExplicitStopAndRestoreClearIt() throws {
+        let session = session(), peer = UUID()
+        session.receive(try packet(session,peer:peer,reading:reading()),at:20)
+        session.stop(keepPresentation:true)
+        XCTAssertEqual(session.pose(at:21)?.x,104)
+        XCTAssertNil(session.collision(at:21))
+        session.start { _ in true }
+        XCTAssertEqual(session.pose(at:22)?.x,104)
+        XCTAssertNil(session.interactionContext(at:22))
+        session.invalidateLocal()
+        XCTAssertNil(session.pose(at:22))
+        session.restorePresentation(try packet(session,peer:peer,reading:reading()),age:0,at:23)
+        session.stop()
+        XCTAssertNil(session.pose(at:23))
     }
 
     func testROMMismatchDelayedPacketsAndRetiredPeerCannotReappear() throws {
