@@ -15,17 +15,22 @@ enum BoundROMCommand: UInt32 {
 }
 enum BoundROMStatus: UInt32 { case idle, waiting, accepted, declined, complete, unavailable, busy, recovery, timeline, invitation }
 
-/// Optional actions expire even while disconnected or inside a native script.
-/// Reconnecting must not resurrect a button press from an earlier scene.
+/// Optional actions expire after idle connected time inside a native script.
+/// A transport outage does not consume the user's pending request; room/game
+/// changes and explicit cancellation still clear it before reconnect dispatch.
 struct BoundROMActionQueue {
     private(set) var command: BoundROMCommand?
-    private var queuedAt: TimeInterval = 0
+    private var observedAt: TimeInterval = 0
+    private var connectedElapsed: TimeInterval = 0
+    private var wasConnected = false
     mutating func enqueue(_ command: BoundROMCommand, at now: TimeInterval) {
-        self.command = command; queuedAt = now
+        self.command = command; observedAt = now; connectedElapsed = 0; wasConnected = false
     }
-    mutating func clear() { command = nil }
+    mutating func clear() { command = nil; connectedElapsed = 0; wasConnected = false }
     mutating func ready(request: BoundROMRequest?, connected: Bool, at now: TimeInterval) -> BoundROMCommand? {
-        if now - queuedAt >= 15 { clear() }
+        if connected && wasConnected { connectedElapsed += max(0, now - observedAt) }
+        observedAt = now; wasConnected = connected
+        if connectedElapsed >= 15 { clear() }
         guard connected, request?.permitsFieldInterruption == true else { return nil }
         return command
     }
@@ -833,7 +838,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
             return true
         } catch { self.error = error.localizedDescription; return false }
     }
-    func setServiceActive(_ value: Bool) {
+    func setServiceActive(_ value: Bool, temporary: Bool = false) {
         if value, serverOnly, finalServerSaveQueued, let run = identity?.run {
             finalServerSaveQueued = false
             let pending = finalServerSaveTask, selection = serverSelection
@@ -851,12 +856,28 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         if !value {
             friendsRefresh.cancel()
             captureSetupDraft()
-            // Owner teardown suspends the run before stopping its friend
-            // services. Restore friendly RAM first, while keeping it paused.
-            if sharing.nativeBattle.isActive, sharing.nativeBattle.activity == .battle {
-                sharing.nativeBattle.cancel(resume:false)
+            if temporary {
+                // Backgrounding retains this exact execution. A final disconnect
+                // save would force a server reload on foreground and discard a
+                // still-live native battle/trade, even without process death.
+                sharing.nativeBattle.suspendTransport()
+                sharing.cooperativeDoubles.transportInterrupted()
+                if core?.state == .running { core?.pause() }
+                if serverOnly {
+                    serverCapturePending = true
+                    if workingStateAuthorized, !serverStarting, manifest?.requiresInitialHistorySync == false {
+                        do { _ = try captureServerCheckpoint() }
+                        catch { serverMenuError = error.localizedDescription }
+                    }
+                } else { suspend() }
+            } else {
+                // Deliberate owner teardown restores friendly RAM before its
+                // last world save, retaining the existing recovery guarantees.
+                if sharing.nativeBattle.isActive, sharing.nativeBattle.activity == .battle {
+                    sharing.nativeBattle.cancel(resume:false)
+                }
+                suspend()
             }
-            suspend()
         }
         guard value != servicesActive else { return }
         servicesActive = value; channel.reset(); peerHello = nil; peerHelloAt = -.infinity; reconciled = false

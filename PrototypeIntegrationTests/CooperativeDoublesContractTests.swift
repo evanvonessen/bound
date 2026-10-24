@@ -174,6 +174,98 @@ final class CooperativeDoublesContractTests:XCTestCase {
         session.bind(core:nil,gameID:"",soul:soul)
     }
     @MainActor
+    func testLiveEncounterWaitsAcrossLongDisconnectAndRequiresFreshPeerBeforeResuming() throws {
+        let old = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer { UserDefaults.standard.set(old, forKey: BoundMultiplayerFeatures.key) }
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let rom=try XCTUnwrap(Bundle(for:Self.self).url(forResource:"BoundDiagnostic",withExtension:"gba"))
+        for previouslyRunning in [true,false] {
+            let core=try XCTUnwrap(EmulatorCore(game:CooperativeLifecycleGame(fileURL:rom,gameSaveURL:directory.appendingPathComponent(UUID().uuidString+".sav")),options:[.metal:true]))
+            var time:TimeInterval=100,online=true,identities=(UUID(),UUID()),permitted=true
+            var dropReady=false,cancelOnResume=false
+            let session=BoundCooperativeDoublesSession(clock:{ time }),soul=BoundSoulProbe()
+            var releasedInputs=0
+            session.releaseGameplayInputs={ releasedInputs+=1 }
+            session.bind(core:core,gameID:UUID().uuidString,soul:soul)
+            defer { _=core.stop();session.bind(core:nil,gameID:"",soul:soul) }
+            session.connected={ online };session.context={ identities };session.canResume={ permitted }
+            var sent:[BoundCooperativePacket]=[]
+            session.send={ [weak session] data in
+                if online,let packet=BoundCooperativePacket(data:data) {
+                    sent.append(packet)
+                    if packet.kind == .resumeOffer,cancelOnResume { online=false;session?.suspend();return false }
+                    return !(dropReady && packet.kind == .resumeReady)
+                }
+                return false
+            }
+            XCTAssertTrue(core.start())
+            if !previouslyRunning { XCTAssertTrue(core.pause()) }
+            var selection=snapshot(selected:0,order:[0,0,0]);put(1,&selection,12)
+            session.qaCompletedFrame(selection)
+            let initial=try XCTUnwrap(sent.first)
+            online=false;session.transportInterrupted()
+            XCTAssertEqual(releasedInputs,1,"Entering network wait releases held and sustained gameplay controls")
+            XCTAssertTrue(session.waitingForConnection);XCTAssertEqual(core.state,.paused)
+            for delta:TimeInterval in [16,60,3600] {
+                time+=delta;session.qaCompletedFrame(selection)
+                XCTAssertTrue(session.waitingForConnection);XCTAssertFalse(session.recoveryPending)
+                XCTAssertTrue(session.blocksAutoSave);XCTAssertEqual(core.state,.paused)
+                XCTAssertEqual(releasedInputs,1,"Repeated outage ticks must not repeat controller cleanup")
+            }
+            online=true;identities=(UUID(),UUID());session.transportResumed()
+            let challenge=try XCTUnwrap(sent.last(where:{ $0.kind == .resumeOffer }))
+            XCTAssertEqual(challenge.sender,initial.sender);XCTAssertEqual(challenge.id,initial.id)
+            XCTAssertTrue(session.waitingForConnection,"A transport rejoin alone cannot resume native gameplay")
+            let value=try XCTUnwrap(BoundCooperativeSnapshot(selection)),peerEncounter=UUID(),nonce=UUID()
+            var rawNonce=nonce.uuid
+            let peerChallenge=withUnsafeBytes(of:&rawNonce) { Data($0) }
+            func response(_ kind:BoundCooperativePacket.Kind,payload:Data)->Data {
+                BoundCooperativePacket(kind:kind,local:initial.receiver,peer:initial.sender,id:peerEncounter,
+                    peerID:initial.id,snapshot:value,payload:payload).data
+            }
+            XCTAssertNil(BoundCooperativePacket(data:response(.resumeReady,payload:challenge.payload)),"Ready must identify both transport attempts")
+            session.receive(response(.resumeReady,payload:Data(repeating:0x55,count:32)))
+            XCTAssertTrue(session.waitingForConnection,"An old or unrelated confirmation cannot resume this wait")
+            session.receive(response(.resumeOffer,payload:peerChallenge))
+            dropReady=true
+            let secondChallenge=Data(repeating:0x66,count:16)
+            session.receive(response(.resumeOffer,payload:secondChallenge))
+            session.receive(response(.resumeReady,payload:secondChallenge+challenge.payload))
+            XCTAssertTrue(session.waitingForConnection,"A successful Ready for an older peer challenge cannot release a renewed wait")
+            let renewedChallenge=Data(repeating:0x67,count:16)
+            session.receive(response(.resumeOffer,payload:renewedChallenge))
+            session.receive(response(.resumeReady,payload:secondChallenge+challenge.payload))
+            dropReady=false;time+=1
+            session.transportResumed()
+            XCTAssertTrue(session.waitingForConnection,"A delayed Ready from the previous peer transport cannot confirm its replacement")
+            XCTAssertEqual(sent.last(where:{ $0.kind == .resumeReady })?.payload,challenge.payload+renewedChallenge)
+            permitted=false
+            session.receive(response(.resumeReady,payload:renewedChallenge+challenge.payload))
+            if previouslyRunning {
+                XCTAssertTrue(session.waitingForConnection);XCTAssertEqual(core.state,.paused)
+                permitted=true;session.transportResumed()
+            }
+            XCTAssertFalse(session.waitingForConnection);XCTAssertFalse(session.recoveryPending)
+            XCTAssertEqual(core.state,previouslyRunning ? .running:.paused)
+            XCTAssertFalse(sent.contains(where:{ $0.kind == .cancel }))
+            // A lost Ready is answered again without pausing an already resumed encounter.
+            session.receive(response(.resumeOffer,payload:renewedChallenge))
+            XCTAssertFalse(session.waitingForConnection)
+            XCTAssertEqual(core.state,previouslyRunning ? .running:.paused)
+            online=false;session.transportInterrupted();time+=1
+            XCTAssertEqual(releasedInputs,2,"A new interruption performs a fresh input release")
+            online=true;cancelOnResume=true;session.transportResumed()
+            XCTAssertFalse(session.waitingForConnection,"Reentrant cancellation during a resume send cannot restart the encounter")
+            online=true;sent=[]
+            session.receive(response(.resumeOffer,payload:Data(repeating:0x77,count:16)))
+            XCTAssertEqual(sent.last?.kind,.cancel,"A lost explicit cancellation is repeated when the peer reconnects")
+            XCTAssertFalse(session.waitingForConnection);XCTAssertFalse(session.recoveryPending)
+        }
+    }
+    @MainActor
     func testRecoveredNativeCoreRespectsGameplayResumePermission() throws {
         let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)

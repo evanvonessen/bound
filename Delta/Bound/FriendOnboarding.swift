@@ -118,7 +118,7 @@ final class FriendOnboarding: ObservableObject {
         if !wasOpen && signedIn && !busy { refresh() }
     }
     func setMultiplayerServiceActive(_ requested: Bool, sharing: FriendSharingSession,
-                                     existing: @escaping () -> AppCloudSession?) {
+                                     existing: @escaping () -> AppCloudSession?, temporary: Bool = false) {
         multiplayerServiceActive = requested && BoundMultiplayerFeatures.isEnabled
         self.sharing = sharing; reusedSession = existing
         if multiplayerServiceActive {
@@ -126,7 +126,10 @@ final class FriendOnboarding: ObservableObject {
             synchronizeAccount()
             synchronizeMultiplayerConnection()
         } else {
-            sharing.setAutomaticMultiplayerConnection(false)
+            // Sharing.background() already suspends the socket while retaining
+            // its room and activity. Only a deliberate service shutdown revokes
+            // the ROM's connection request.
+            if !temporary || !BoundMultiplayerFeatures.isEnabled { sharing.setAutomaticMultiplayerConnection(false) }
             if !isOpen { observation?.cancel(); observation = nil; cancelPendingRequest() }
         }
     }
@@ -176,7 +179,10 @@ final class FriendOnboarding: ObservableObject {
         guard isOpen || multiplayerServiceActive else { return }
         let candidate = reusedSession?()
         let current = candidate.flatMap { (try? $0.credentials()) == nil ? nil : $0 }
-        guard current?.owner != ownerID else {
+        guard candidate?.owner != ownerID else {
+            // A saved session can expire while its account is retrying refresh
+            // offline. Preserve the selected owner/room; API calls still require
+            // currentIdentity(), which rejects expired credentials.
             // Names come from account profiles. Refresh an open Friends list so
             // a rename made on another device appears without reconnecting.
             if current != nil, !busy,
@@ -371,7 +377,11 @@ final class FriendOnboarding: ObservableObject {
     }
     private func request(_ action: String, payload: [String: String]) {
         guard !busy else { return }
-        guard let identity = currentIdentity() else { signOut(); return }
+        guard let identity = currentIdentity() else {
+            if sharingIdentity() == nil { signOut() }
+            else { message = "Reconnecting…"; finishRefresh(false) }
+            return
+        }
         busy = true; pendingRequestAction = action; message = "Updating friends…"
         let run = generation; let call = call
         task = Task { [weak self] in
@@ -379,7 +389,12 @@ final class FriendOnboarding: ObservableObject {
                 let response = try await call(identity, action, payload)
                 try Task.checkCancellation()
                 guard let self, self.generation == run else { return }
-                guard self.currentIdentity()?.owner == identity.owner else { self.signOut(); return }
+                guard self.currentIdentity()?.owner == identity.owner else {
+                    self.busy = false; self.task = nil; self.pendingRequestAction = nil
+                    if self.sharingIdentity()?.owner != identity.owner { self.signOut() }
+                    else { self.message = "Reconnecting…"; self.finishRefresh(false) }
+                    return
+                }
                 guard response.ok else {
                     self.busy = false; self.task = nil; self.pendingRequestAction = nil
                     switch response.error {

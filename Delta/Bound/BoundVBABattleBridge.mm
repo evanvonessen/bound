@@ -105,13 +105,16 @@ Hook hooks[]={
     {0xB29C,BoundBattleDisableSerialAddress},
     // Walk-up trades save the current map, not a stale cable-room dynamic warp.
     {0x4C1C0,BoundBattleLinkVSyncAddress},
-    {0x56854,BoundBattleTradeReturnAddress}
+    {0x56854,BoundBattleTradeReturnAddress},
+    // Original RR and the integrated ROM share this native cleanup tail. The
+    // latter's co-op wrapper is saved/restored with the other temporary hooks.
+    {0x1090958,BoundBattlePreserveLinkFlagsAddress}
 };
 uint8_t *verifiedROM=nullptr,*patchedROM=nullptr;
 bool armed=false,installed=false,failed=false,syntheticHeld=false,cooperativeCable=false;
 unsigned role=0,preparationFrames=0,tradeCount=0;
 bool tradeMode=false,tradeOpened=false,tradeScene=false;
-bool usesHook(size_t index) { return cooperativeCable ? index>=2&&index<9 : tradeMode ? index>=2 : index<9; }
+bool usesHook(size_t index) { return cooperativeCable ? index>=2&&index<9 : tradeMode ? index>=2&&index<11 : index<9||index==11; }
 uint16_t networkRead=0;
 uint32_t word(const uint8_t *p) { return p[0]|uint32_t(p[1])<<8|uint32_t(p[2])<<16|uint32_t(p[3])<<24; }
 unsigned half(const uint8_t *p) { return p[0]|unsigned(p[1])<<8; }
@@ -607,6 +610,7 @@ static uint8_t soulQAScriptBackup[128];
         @"outcome":@(workRAM[0x23E8A]),@"flags":@(word(workRAM+0x22B4C)),@"callback":@(callback),
         @"scriptStatus":@(internalRAM[0xEA8]),@"scriptResult":@(half(workRAM+0x370D0)),
         @"playerHP":partyHP(0x24284,workRAM[0x24029]),@"enemyHP":partyHP(0x2402C,6),
+        @"pendingCommands":@(mailboxReady()?uint16_t(half(internalRAM+Mailbox+6)-half(internalRAM+Mailbox+4)):0),
         @"tradeOpened":@(tradeOpened),@"tradeCount":@(tradeCount)};
 }
 + (void)close {
@@ -820,6 +824,18 @@ static uint8_t soulQAScriptBackup[128];
     if(!soulHooked()) return;
     memset(rom+SoulStart,0xFF,0x2000); memcpy(rom+SoulStart,BoundSoulCode,sizeof(BoundSoulCode));
     memcpy(rom+ScriptAddress-0x08000000,soulQAScriptBackup,128);
+}
++ (BOOL)qaStartNativePartyFixture {
+    if(!ownsROMUI()||!overworld()||workRAM[0x24029]) return NO;
+    // Same disposable starter recipe as multi_red's integrated gameplay QA:
+    // native givemon creates a valid Bulbasaur, then releases the script lock.
+    // Level five keeps Tackle first for the paired driver's normal A input.
+    const uint8_t script[]={0x79,1,0,5,0,0,0,0,0,0,0,0,0,0,0,0x6B,0x02};
+    memcpy(internalRAM+0x4280,script,sizeof(script));
+    memset(internalRAM+0xEB0,0,0x74);internalRAM[0xEB1]=1;put32(internalRAM+0xEB8,0x03004280);
+    put32(internalRAM+0xF0C,0x0815F9B4);put32(internalRAM+0xF10,0x0815FD08);
+    internalRAM[0xEA8]=0;internalRAM[0xF9C]=1;
+    return YES;
 }
 + (BOOL)qaPrepareTradeFixture:(NSUInteger)marker {
     if(!overworld()||verifiedROM!=rom||(marker!=0xBB&&marker!=0xBC)) return NO;

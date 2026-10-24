@@ -795,10 +795,10 @@ final class BoundSoulSession: ObservableObject {
     private var proposedEpoch: UUID?
     private var proposalAt: TimeInterval = 0
     private var retiredEpochs: [UUID] = []
+    private var retiredInvitations: [UUID] = []
     private var lastPeer: TimeInterval = 0
     private var sent: TimeInterval = 0
     private var cursor = 0
-    private var offeredAt: TimeInterval = 0
     private var timer: Timer?
     private var loadTask: Task<Void, Never>?
     var bannerChanged: ((String?) -> Void)?
@@ -872,9 +872,16 @@ final class BoundSoulSession: ObservableObject {
     static func hash(_ value: String) -> String { SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined() }
     func setConnection(owner: String?, room: String?) {
         let value = owner.flatMap { owner in room.map { Self.hash(owner + ":" + $0) } }
-        if value != connection { peerGone(); offered = nil; incoming = nil; connection = value }
+        if value != connection { peerGone(); offered = nil; incoming = nil; retiredInvitations = []; connection = value }
         binding = value
     }
+    private func retireInvitation(_ run: UUID) {
+        if !retiredInvitations.contains(run) { retiredInvitations.append(run) }
+        retiredInvitations = Array(retiredInvitations.suffix(32))
+    }
+    #if DEBUG && targetEnvironment(simulator)
+    func qaPermitIncomingInvitation() { canStart = true }
+    #endif
     private func transmit(_ kind: BoundSoulPacket.Kind, run: UUID, rows: [BoundSoulRow] = []) {
         if let data = BoundSoulPacket(version: 2, run: run, kind: kind, rows: rows,
                                       losses: ledger?.lossBits ?? Data(repeating: 0, count: 288),
@@ -887,7 +894,7 @@ final class BoundSoulSession: ObservableObject {
         let run = UUID()
         do {
             try probe.start(run: run, binding: binding, offering: true)
-            ledger = probe.read().ledger; offered = run; offeredAt = clock()
+            ledger = probe.read().ledger; offered = run
             transmit(.offer, run: run); status = "Waiting for your partner to accept Soul Link."
         } catch { status = "Couldn’t save the Soul Link invitation." }
     }
@@ -899,7 +906,7 @@ final class BoundSoulSession: ObservableObject {
         } catch { status = "Start a new game and receive only your starter first." }
     }
     func decline() {
-        if let incoming { transmit(.decline, run: incoming) }
+        if let incoming { retireInvitation(incoming); transmit(.decline, run: incoming) }
         incoming = nil
     }
     func receive(_ data: Data) {
@@ -917,6 +924,10 @@ final class BoundSoulSession: ObservableObject {
             status = "Partner update required for Soul Link sync."; return
         }
         guard let packet = BoundSoulPacket.decode(data) else { return }
+        if retiredInvitations.contains(packet.run) {
+            if packet.kind == .offer { transmit(.decline, run: packet.run) }
+            return
+        }
         if ledger?.run == packet.run, ledger?.ended == true, packet.kind != .end { return }
         guard !retiredEpochs.contains(packet.sender) else { return }
         let fresh = packet.receiver == epoch
@@ -935,7 +946,7 @@ final class BoundSoulSession: ObservableObject {
             do { try probe.merge(run: packet.run, rows: packet.rows, losses: packet.losses, acquired: packet.acquired); ledger = probe.read().ledger }
             catch { status = "Couldn’t preserve your partner’s Soul Link record."; haltForRecovery(); return }
         }
-        if !fresh && ![.offer, .end].contains(packet.kind) { return }
+        if !fresh && ![.offer, .end, .decline].contains(packet.kind) { return }
         switch packet.kind {
         case .end:
             guard let ledger, ledger.run == packet.run, ledger.binding == binding else { return }
@@ -943,7 +954,8 @@ final class BoundSoulSession: ObservableObject {
             confirmed = true; lastPeer = clock()
         case .offer:
             if let ledger, ledger.run == packet.run, ledger.binding == binding { transmit(.accept, run: ledger.run) }
-            else if canStart, offered == nil, incoming == nil { incoming = packet.run; offeredAt = clock() }
+            else if incoming == packet.run { break }
+            else if canStart, offered == nil, incoming == nil { incoming = packet.run }
             else { transmit(.decline, run: packet.run) }
         case .accept:
             if let ledger, ledger.run == packet.run, ledger.binding == binding {
@@ -967,6 +979,7 @@ final class BoundSoulSession: ObservableObject {
                 confirmed = true; lastPeer = clock()
             } catch { status = "Couldn’t preserve your partner’s Soul Link record."; haltForRecovery() }
         case .decline:
+            if incoming == packet.run { retireInvitation(packet.run); incoming = nil }
             if ledger?.run == packet.run, ledger?.offering == true { cancelInvitation() }
         }
     }
@@ -984,7 +997,9 @@ final class BoundSoulSession: ObservableObject {
         let wasRunning = core?.state == .running
         if wasRunning, core?.pause() != true { status = "Couldn’t pause this run safely."; return }
         do {
+            let cancelled = ledger?.offering == true ? ledger?.run : nil
             try probe.cancelOffer(); ledger = probe.read().ledger; offered = nil; status = "Soul Link invitation cancelled."
+            if let cancelled { retireInvitation(cancelled); transmit(.decline, run: cancelled) }
             if wasRunning { core?.resume() }
         }
         catch { status = "Couldn’t cancel the Soul Link invitation." }
@@ -1053,7 +1068,8 @@ final class BoundSoulSession: ObservableObject {
             status = "Partner update required for Soul Link sync."
         }
         if let error = snapshot.error { status = error; haltForRecovery(); return }
-        if incoming != nil, now - offeredAt > 30 { incoming = nil }
+        // An invitation belongs to this account/room until explicitly answered.
+        // Packet silence and challenge renewal do not revoke the user's prompt.
         guard let ledger else {
             if offered == nil && incoming == nil {
                 status = canStart ? "Ready to start Soul Link." : "Start a new game, receive only your starter, and connect to your partner."

@@ -442,6 +442,38 @@ final class SoulLinkTests: XCTestCase {
         XCTAssertTrue(BoundSoulProbe.mayApplyNativePolicy(ready: true, battle: false))
     }
     @MainActor
+    func testIncomingInvitationSurvivesRetriesAndDisconnectUntilExplicitAnswer() throws {
+        let old = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer { UserDefaults.standard.set(old, forKey: BoundMultiplayerFeatures.key) }
+        var time:TimeInterval=100,online=true
+        let session=BoundSoulSession(clock:{ time }),run=UUID(),sender=UUID()
+        session.setConnection(owner:"A",room:UUID().uuidString)
+        session.connected={ online };session.qaPermitIncomingInvitation()
+        var replies:[BoundSoulPacket]=[]
+        session.send={ data in if let packet=BoundSoulPacket.decode(data) { replies.append(packet) };return online }
+        let offer=try XCTUnwrap(BoundSoulPacket(version:2,run:run,kind:.offer,rows:[],sender:sender).encoded())
+        session.receive(offer)
+        XCTAssertEqual(session.incoming,run)
+        for _ in 0..<3 { session.receive(offer) }
+        XCTAssertEqual(session.incoming,run);XCTAssertFalse(replies.contains(where:{ $0.kind == .decline }))
+        online=false;session.peerGone();time+=3600;session.tick()
+        XCTAssertEqual(session.incoming,run)
+        online=true;session.receive(offer)
+        XCTAssertEqual(session.incoming,run)
+        session.decline();XCTAssertNil(session.incoming)
+        replies=[];session.receive(offer)
+        XCTAssertNil(session.incoming);XCTAssertEqual(replies.last?.kind,.decline)
+        // Deliberate sender cancellation also closes a prompt before the pose
+        // challenge has finished, while an unrelated run cannot close it.
+        let next=UUID();session.qaPermitIncomingInvitation()
+        session.receive(try XCTUnwrap(BoundSoulPacket(version:2,run:next,kind:.offer,rows:[],sender:sender).encoded()))
+        session.receive(try XCTUnwrap(BoundSoulPacket(version:2,run:UUID(),kind:.decline,rows:[],sender:sender).encoded()))
+        XCTAssertEqual(session.incoming,next)
+        session.receive(try XCTUnwrap(BoundSoulPacket(version:2,run:next,kind:.decline,rows:[],sender:sender).encoded()))
+        XCTAssertNil(session.incoming)
+    }
+    @MainActor
     func testDisconnectedSoulLinkContinuesWithoutPauseBannerOrRecoveryBarrier() throws {
         let old = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
         BoundMultiplayerFeatures.setEnabled(true)

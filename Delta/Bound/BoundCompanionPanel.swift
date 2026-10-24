@@ -767,8 +767,12 @@ final class BoundCompanionCoordinator {
             owner.boundRRDexDidLoadSaveState(core: core)
         }
         sharing.nativeBattle.canResume = { [weak owner] in
-            UIApplication.shared.applicationState == .active && owner?.view.window?.windowScene?.hasKeyboardFocus == true
+            guard let owner else { return false }
+            return UIApplication.shared.applicationState == .active && owner.view.window?.windowScene?.hasKeyboardFocus == true
+                && owner.gameViewControllerShouldResumeEmulation(owner)
         }
+        sharing.nativeBattle.releaseGameplayInputs = { [weak owner] in owner?.releaseBoundFriendGameplayInputs() }
+        sharing.cooperativeDoubles.releaseGameplayInputs = { [weak owner] in owner?.releaseBoundFriendGameplayInputs() }
         sharing.cooperativeDoubles.canResume = { [weak owner] in
             guard let owner else { return false }
             return UIApplication.shared.applicationState == .active && owner.view.window?.windowScene?.hasKeyboardFocus == true
@@ -809,10 +813,10 @@ final class BoundCompanionCoordinator {
         if usesLocalPairedFixture { sharing.start() }
         #endif
     }
-    private func refreshMultiplayerServices() {
+    private func refreshMultiplayerServices(temporary: Bool = false) {
         if !BoundMultiplayerFeatures.isEnabled { romMultiplayer.suspend() }
         onboarding.setMultiplayerServiceActive(multiplayerServicesForeground && boundCore != nil,
-            sharing: sharing, existing: { [weak account] in account?.session })
+            sharing: sharing, existing: { [weak account] in account?.session }, temporary: temporary)
     }
     func layout(in bounds: CGRect, safeArea: UIEdgeInsets, controllerSize: CGSize) -> CGRect? {
         guard let owner else { return nil }
@@ -1503,14 +1507,14 @@ final class BoundCompanionCoordinator {
         #endif
     }
     func background() {
-        romMultiplayer.setServiceActive(false)
+        romMultiplayer.setServiceActive(false, temporary: true)
         multiplayerServicesForeground = false
         foregroundTask?.cancel(); foregroundTask = nil
         landscapeArrangement.finish(save: false, resume: false); landscapeCompanion.finishArrangement(save: false, resume: false)
         notesDismissalTask?.cancel(); notesDismissalTask = nil
         let pendingAction = macHost == nil ? pendingControllerReferenceAction : nil
         cancelInteractions(); pendingControllerReferenceAction = pendingAction
-        tap.setEnabled(false); sharing.background(); refreshMultiplayerServices(); onboarding.close()
+        tap.setEnabled(false); sharing.background(); refreshMultiplayerServices(temporary: true); onboarding.close()
     }
     func stop() {
         romMultiplayer.setServiceActive(false)

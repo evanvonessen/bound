@@ -59,6 +59,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)enforceSoulLink;
 + (void)closeSoulLink;
 #if DEBUG && TARGET_OS_SIMULATOR
++ (BOOL)qaStartNativePartyFixture;
 + (BOOL)qaCooperativeGameSaveBlocked:(NSURL *)url;
 + (NSData *)qaSharedWorldImmutableDigest;
 + (BOOL)qaStartSharedWorldWait;

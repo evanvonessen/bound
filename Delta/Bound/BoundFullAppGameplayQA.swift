@@ -172,6 +172,8 @@ final class BoundFullAppGameplayQA {
         value["interactionMessage"] = sharing.interactions.message
         value["battleCancellation"] = sharing.nativeBattle.lastCancellation
         value["battleFailure"] = sharing.nativeBattle.lastFailure
+        value["nativeActivityID"] = sharing.interactions.requestID?.uuidString ?? ""
+        value["nativeTransportSuspended"] = sharing.nativeBattle.isTransportSuspended
         value["battleCable"] = sharing.nativeBattle.lastCableDiagnostic
         value["battlesCompleted"] = sharing.nativeBattle.completedBattles
         value["battlesRestored"] = sharing.nativeBattle.restoredBattles

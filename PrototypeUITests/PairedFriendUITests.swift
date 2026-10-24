@@ -321,14 +321,14 @@ final class FullAppGameplayUITests: XCTestCase {
                         try press("a",duration:0.08); pause(0.3)
                     }
                     XCTAssertEqual(try snapshot()["tradeOpened"] as? Bool,true)
-                case "trade-exchange":
+                case "trade-exchange", "trade-resume-exchange":
                     let end=Date().addingTimeInterval(180)
                     var selectedTrade=false
                     while Date()<end {
                         let value=try snapshot()
                         XCTAssertEqual(value["battleFailure"] as? String,"")
                         XCTAssertEqual(value["interactionPhase"] as? String,"playing","Unexpected cancellation: \(value["battleCancellation"] ?? "")")
-                        if mode == "exchange-disconnect", value["battleCallback"] as? Int == 0x08053D85 { break }
+                        if stage == "trade-exchange", mode == "exchange-disconnect", value["battleCallback"] as? Int == 0x08053D85 { break }
                         if (value["tradeCount"] as? Int ?? 0)>0 { break }
                         if value["tradeMenuID"] as? Int == 1, !selectedTrade {
                             try press("down",duration:0.08); selectedTrade=true
@@ -339,7 +339,7 @@ final class FullAppGameplayUITests: XCTestCase {
                         pause(0.3)
                     }
                     let value=try snapshot()
-                    if mode == "exchange-disconnect" {
+                    if stage == "trade-exchange", mode == "exchange-disconnect" {
                         XCTAssertEqual(value["tradeCount"] as? Int,0,"Interrupt before native exchange/save completion")
                     } else {
                     XCTAssertEqual(value["tradeCount"] as? Int,1)
@@ -361,26 +361,36 @@ final class FullAppGameplayUITests: XCTestCase {
                     try acknowledgeNativeResult()
                     try waitFor { $0["reader"] as? String == "live" }
                 case "trade-disconnect":
-                    if peer == "A" { XCUIDevice.shared.press(.home); pause(4); app.activate(); pause(1); resume() }
-                    try waitFor(timeout:35) { $0["interactionPhase"] as? String == "ended" && $0["tradeOpened"] as? Bool == true }
-                    // Interrupted trade boots the actual cartridge save. Continue
-                    // through its native title/menu, using only controller touches.
-                    let end=Date().addingTimeInterval(55)
-                    while Date()<end {
-                        let value=try snapshot()
-                        if value["reader"] as? String == "live" { break }
-                        try press("start",duration:0.08); try press("a",duration:0.08); pause(0.3)
-                    }
-                    try waitFor { $0["reader"] as? String == "live" }
-                    if try snapshot()["interactionPhase"] as? String == "ended" { try acknowledgeNativeResult() }
-                    try waitFor { $0["interactionPhase"] as? String == "idle" }
-                case "trade-verify":
-                    let value=try snapshot(),exchanged=mode != "menu-disconnect"
-                    if mode == "exchange-disconnect" {
-                        XCTAssertTrue([0xBB,0xBC].contains(value["tradeMarker"] as? Int ?? 0))
+                    let consent=try XCTUnwrap(snapshot()["nativeActivityID"] as? String)
+                    XCTAssertFalse(consent.isEmpty)
+                    if peer == "A" {
+                        XCUIDevice.shared.press(.home); pause(18); app.activate(); pause(1); resume()
                     } else {
-                    XCTAssertEqual(value["tradeMarker"] as? Int,exchanged ? (peer == "A" ? 0xBC:0xBB):(peer == "A" ? 0xBB:0xBC))
+                        var sawSuspended=false
+                        let end=Date().addingTimeInterval(18)
+                        while Date()<end {
+                            let value=try snapshot()
+                            XCTAssertTrue(["playing","connecting"].contains(value["interactionPhase"] as? String ?? ""))
+                            XCTAssertEqual(value["nativeActivityID"] as? String,consent)
+                            XCTAssertEqual(value["battleFailure"] as? String,"")
+                            XCTAssertEqual(value["tradeRecoveryBlocked"] as? Bool,true)
+                            if value["nativeTransportSuspended"] as? Bool == true {
+                                sawSuspended=true
+                                XCTAssertEqual(value["interactionPhase"] as? String,"connecting")
+                            }
+                            pause(0.2)
+                        }
+                        XCTAssertTrue(sawSuspended,"The active native trade must wait for the backgrounded peer")
                     }
+                    try waitFor(timeout:45) {
+                        $0["joined"] as? Bool == true && $0["nativeTransportSuspended"] as? Bool == false
+                            && $0["interactionPhase"] as? String == "playing" && $0["nativeActivityID"] as? String == consent
+                    }
+                    XCTAssertEqual(try snapshot()["tradesCompleted"] as? Int,0,"The original native activity must resume without rebooting or finishing early")
+                case "trade-verify":
+                    let value=try snapshot()
+                    XCTAssertEqual(value["tradeMarker"] as? Int,peer == "A" ? 0xBC:0xBB)
+                    XCTAssertEqual(value["tradesCompleted"] as? Int,1)
                     XCTAssertEqual(value["tradeOT"] as? Int,value["tradeMarker"] as? Int)
                     XCTAssertEqual(value["tradeUnofferedUnchanged"] as? Bool,true)
                     XCTAssertEqual(value["tradeRecoveryBlocked"] as? Bool,false)

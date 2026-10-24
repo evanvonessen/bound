@@ -80,6 +80,7 @@ private final class TransitionCount: @unchecked Sendable {
     func interruptInteractions() { interactionReceiver?(nil) }
     func peerGone() { event?(.remoteGone) }
     func peerJoined() { event?(.remoteJoined) }
+    func failConnection() { event?(.failed(.init(.connectionLost))) }
     private var previousFingerprint: [UInt8]?
     private(set) var changedFrames = 0
     var delay: UInt64 = 0
@@ -569,20 +570,22 @@ extension PlaybackSharingTests {
         XCTAssertEqual(preferences.opacity(for: .friend), 0.5)
         XCTAssertEqual(BoundPiPPreferences(defaults: defaults).opacity(for: .friend), 0.5)
     }
-    func testPiPReleaseKeepsLastPreviewAndPanelPreferencesAcrossRestart() throws {
+    func testPiPReleaseCommitsFinalSampleAndKeepsPanelPreferencesAcrossRestart() throws {
         let suite = "BoundPiPRelease." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = BoundPiPPreferences(defaults: defaults)
+        // Exercise all three panels independently of the newer split-button defaults.
+        preferences.buttonType = .option1
         let state = BoundCompanionState(preferences: preferences)
         state.landscape = true
         let coordinator = BoundCompanionCoordinator(state: state)
         for (selected, content) in [(0, BoundPiPContent.friend), (1, .notes), (2, .types)] {
             state.selected = selected
             coordinator.resize(.began, scale: 1)
-            coordinator.resize(.changed, scale: 1.2 + CGFloat(selected) * 0.1)
-            // Lifting may report a default value. Commit the last preview, exactly once.
-            coordinator.resize(.ended, scale: 1)
+            coordinator.resize(.changed, scale: 1.1)
+            // Since October 5, the final UIKit sample is committed exactly once.
+            coordinator.resize(.ended, scale: 1.2 + CGFloat(selected) * 0.1)
             coordinator.resize(.ended, scale: 0.1)
             XCTAssertEqual(preferences.scale(for: content), 1.2 + Double(selected) * 0.1, accuracy: 0.0001)
             coordinator.resize(.began, scale: 1)
@@ -593,8 +596,8 @@ extension PlaybackSharingTests {
         for (selected, content) in [(0, BoundPiPContent.friend), (1, .notes)] {
             state.selected = selected
             coordinator.fade(.began, dy: 0)
-            coordinator.fade(.changed, dy: 40)
-            coordinator.fade(.ended, dy: 0)
+            coordinator.fade(.changed, dy: 20)
+            coordinator.fade(.ended, dy: 40)
             coordinator.fade(.ended, dy: 160)
             XCTAssertLessThan(preferences.opacity(for: content), 1)
             let stored = preferences.opacity(for: content)
@@ -1063,6 +1066,49 @@ private final class ForegroundReconnectFixture {
 }
 
 extension PlaybackSharingTests {
+    func testManualAuthenticatedSessionRetriesSocketLossWithoutDiscardingInteractionOrSpectator() async throws {
+        let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer { UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key) }
+        let fixture = ForegroundReconnectFixture(), transport = OfflineVideoTransport()
+        let session = authenticatedReconnectSession(fixture, transport: transport)
+        defer { session.stop() }
+        session.configureAuthenticatedRoom(fixture.room, identity: { try? fixture.identity() })
+        let local = try JSONDecoder().decode(BoundFriendWorldPosition.self, from: Data(
+            #"{"mapGroup":4,"mapNumber":1,"elevation":0,"x":6,"y":6,"facing":4}"#.utf8))
+        let peer = try JSONDecoder().decode(BoundFriendWorldPosition.self, from: Data(
+            #"{"mapGroup":4,"mapNumber":1,"elevation":0,"x":7,"y":6,"facing":3}"#.utf8))
+        let context = BoundFriendInteractionSession.Context(localSession: UUID(), peerSession: UUID(), local: local, peer: peer)
+        session.interactions.context = { context }
+        session.start(); try await wait(0.05)
+        XCTAssertTrue(session.joined)
+        XCTAssertTrue(session.interactions.open())
+        session.watchPartner()
+        transport.failConnection()
+        XCTAssertFalse(session.active)
+        XCTAssertTrue(session.connectionRequested)
+        XCTAssertTrue(session.watchingPartner)
+        XCTAssertFalse(session.spectatorLive)
+        XCTAssertEqual(session.interactions.phase, .choosing)
+        XCTAssertFalse(session.interactions.connected)
+        try await wait(1.2)
+        XCTAssertTrue(session.joined)
+        XCTAssertEqual(fixture.tokenRequests, 2)
+        XCTAssertEqual(session.configuration?.channel, "fresh-2")
+        XCTAssertEqual(session.interactions.phase, .choosing)
+        XCTAssertTrue(session.interactions.connected)
+        XCTAssertTrue(session.watchingPartner)
+
+        // A changed account is a deliberate boundary, not another network gap.
+        transport.failConnection(); fixture.owner = UUID()
+        try await wait(1.2)
+        XCTAssertFalse(session.active)
+        XCTAssertFalse(session.connectionRequested)
+        XCTAssertEqual(fixture.tokenRequests, 2)
+        XCTAssertEqual(session.interactions.phase, .ended)
+        XCTAssertFalse(session.watchingPartner)
+    }
+
     private func authenticatedReconnectSession(_ fixture: ForegroundReconnectFixture,
                                                transport: OfflineVideoTransport? = nil) -> FriendSharingSession {
         FriendSharingSession(configuration: nil, transport: transport ?? OfflineVideoTransport(), authenticatedMode: true,

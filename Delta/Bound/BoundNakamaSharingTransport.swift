@@ -20,6 +20,10 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     private var videoConnected = false
     private var videoTask: Task<Void, Never>?
     private var videoDeadline: Task<Void, Never>?
+    private var videoRetry: Task<Void, Never>?
+    private var videoRecoveryDeadline: Task<Void, Never>?
+    private var videoGeneration = UUID()
+    private var videoRetryAttempts = 0
     private var presenceReceiver: (@MainActor (Data) -> Void)?
     private var retainedPresenceReceiver: (@MainActor (Data, TimeInterval) -> Void)?
     private var interactionReceiver: (@MainActor (Data?) -> Void)?
@@ -108,6 +112,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         case .joined:
             connected = true; event?(.joined)
             if peerOnline { event?(.remoteJoined) }
+            ensureVideo()
         case .roster(let members):
             let online = members.contains { $0.ownerID == gameplay.peerOwnerID && $0.online }
             if online != peerOnline {
@@ -172,9 +177,9 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     }
 
     private func ensureVideo() {
-        guard event != nil, (videoRequested || spectatorView != nil), !videoStarted, videoTask == nil,
+        guard event != nil, (videoRequested || spectatorView != nil), !videoStarted, videoTask == nil, videoRetry == nil,
               let remoteView else { return }
-        let run = generation
+        let run = generation, attempt = UUID(); videoGeneration = attempt
         if gameplay == nil, let mediaConfiguration {
             // The ordinary video session owns its existing lease/renewal loop.
             beginVideo(mediaConfiguration, view: remoteView, run: run)
@@ -185,25 +190,31 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
                 do {
                     let lease = try await videoAuthorization()
                     try Task.checkCancellation()
-                    guard let self, self.generation == run, self.event != nil,
+                    guard let self, self.generation == run, self.videoGeneration == attempt, self.event != nil,
                           self.videoRequested || self.spectatorView != nil else { return }
                     self.videoTask = nil; self.beginVideo(lease.configuration, view: remoteView, run: run)
                     self.scheduleVideoRenewal(lease, run: run)
                 } catch {
-                    guard let self, self.generation == run else { return }
+                    guard !Task.isCancelled, let self, self.generation == run, self.videoGeneration == attempt else { return }
                     self.videoTask = nil
                     if self.gameplay == nil { self.event?(.failed(.init(.tokenRequired))) }
+                    else { self.scheduleVideoRetry() }
                 }
             }
         } else if let mediaConfiguration { beginVideo(mediaConfiguration, view: remoteView, run: run) }
     }
 
     private func beginVideo(_ configuration: FriendSharingConfiguration, view: UIView, run: UUID) {
+        let attempt = UUID(); videoGeneration = attempt
         mediaConfiguration = configuration; videoStarted = true; videoStateChanged?()
+        scheduleVideoRecoveryDeadline(run: run, attempt: attempt)
         media.start(configuration: configuration, remoteView: view) { [weak self] value in
-            guard let self, self.generation == run, self.videoStarted else { return }
+            guard let self, self.generation == run, self.videoGeneration == attempt, self.videoStarted else { return }
             switch value {
-            case .joined, .rejoined: self.videoConnected = true; self.videoStateChanged?()
+            case .joined, .rejoined:
+                self.videoConnected = true; self.videoRetryAttempts = 0
+                self.videoRecoveryDeadline?.cancel(); self.videoRecoveryDeadline = nil
+                self.videoStateChanged?()
             case .failed, .reconnecting: self.videoConnected = false; self.videoStateChanged?()
             default: break
             }
@@ -212,7 +223,11 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
                 switch value {
                 case .remoteFrame: self.event?(value)
                 case .tokenNeeded: break // Independently renewed below.
-                case .failed, .reconnecting, .remoteGone:
+                case .failed: self.retryVideoAfterFailure()
+                case .reconnecting:
+                    self.scheduleVideoRecoveryDeadline(run: run, attempt: attempt)
+                    self.videoStateChanged?()
+                case .remoteGone:
                     // A media outage cannot tear down a healthy gameplay room.
                     self.videoStateChanged?()
                 default: break
@@ -223,24 +238,59 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     }
 
     private func scheduleVideoRenewal(_ lease: FriendSharingTokenLease, run: UUID) {
+        guard videoStarted else { return }
+        let attempt = videoGeneration
         videoDeadline?.cancel()
         videoDeadline = Task { [weak self] in
             let delay = max(1, lease.expiresAt - Date().timeIntervalSince1970 - 30)
             try? await Task.sleep(for: .seconds(delay))
-            guard !Task.isCancelled, let self, self.generation == run, self.videoStarted,
+            guard !Task.isCancelled, let self, self.generation == run, self.videoGeneration == attempt, self.videoStarted,
                   let authorize = self.videoAuthorization else { return }
             do {
                 let next = try await authorize()
-                guard !Task.isCancelled, self.generation == run, self.videoStarted else { return }
+                guard !Task.isCancelled, self.generation == run, self.videoGeneration == attempt, self.videoStarted else { return }
                 guard let previous = self.mediaConfiguration, previous.channel == next.channel,
                       previous.uid == next.uid, previous.remoteUID == next.remoteUID,
-                      self.media.renewToken(next.token) else { self.stopVideo(); return }
+                      self.media.renewToken(next.token) else { self.retryVideoAfterFailure(); return }
                 self.mediaConfiguration = next.configuration; self.scheduleVideoRenewal(next, run: run)
-            } catch { self.stopVideo() }
+            } catch {
+                guard !Task.isCancelled, self.generation == run, self.videoGeneration == attempt else { return }
+                self.retryVideoAfterFailure()
+            }
         }
     }
 
-    private func stopVideo() {
+    private func retryVideoAfterFailure() {
+        stopVideo(resetRetry: false)
+        scheduleVideoRetry()
+    }
+    private func scheduleVideoRetry() {
+        guard gameplay != nil, connected, event != nil, videoRequested || spectatorView != nil, videoRetry == nil else { return }
+        videoRetryAttempts += 1
+        let delay = min(30.0, pow(2.0, Double(min(videoRetryAttempts - 1, 5))))
+        let run = generation, attempt = videoGeneration
+        videoRetry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self, self.generation == run, self.videoGeneration == attempt else { return }
+            self.videoRetry = nil
+            guard self.connected else { return }
+            self.ensureVideo()
+        }
+    }
+    private func scheduleVideoRecoveryDeadline(run: UUID, attempt: UUID) {
+        guard gameplay != nil, videoRecoveryDeadline == nil else { return }
+        videoRecoveryDeadline = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled, let self, self.generation == run, self.videoGeneration == attempt,
+                  self.videoStarted, !self.videoConnected else { return }
+            self.videoRecoveryDeadline = nil
+            self.retryVideoAfterFailure()
+        }
+    }
+    private func stopVideo(resetRetry: Bool = true) {
+        videoGeneration = UUID()
+        videoRetry?.cancel(); videoRetry = nil; videoRecoveryDeadline?.cancel(); videoRecoveryDeadline = nil
+        if resetRetry { videoRetryAttempts = 0 }
         videoTask?.cancel(); videoTask = nil; videoDeadline?.cancel(); videoDeadline = nil
         media.stop(); videoStarted = false; videoConnected = false; videoStateChanged?()
     }
@@ -276,6 +326,14 @@ private final class BoundNakamaBattleInbox: @unchecked Sendable {
     }
     func receive(_ data: Data) { lock.lock(); let deliver = receiver; lock.unlock(); deliver?(data) }
     func fail() { lock.lock(); let failed = failure; receiver = nil; failure = nil; lock.unlock(); failed?() }
+    func send(_ data: Data, through channel: BoundNakamaBattleChannel, expected: UUID) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        // A retained activity gets a replacement channel after rejoining. Its
+        // previous sender must never enqueue into the replacement socket, nor
+        // into a later activity sharing the same authenticated client.
+        guard id == expected, receiver != nil else { return false }
+        return channel.send(data)
+    }
     func close(_ expected: UUID? = nil) {
         lock.lock(); defer { lock.unlock() }
         guard expected == nil || id == expected else { return }
@@ -290,7 +348,7 @@ private final class BoundNakamaRoutedBattleChannel: BoundBattleChannel, @uncheck
     init(client: BoundNakamaClient, peer: UUID, inbox: BoundNakamaBattleInbox, id: UUID) {
         channel = BoundNakamaBattleChannel(client: client, targetOwnerID: peer); self.inbox = inbox; self.id = id
     }
-    func send(_ data: Data) -> Bool { channel.send(data) }
+    func send(_ data: Data) -> Bool { inbox.send(data, through: channel, expected: id) }
     func close() { channel.close(); inbox.close(id) }
     deinit { close() }
 }

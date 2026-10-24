@@ -132,7 +132,7 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
     private var mediaConfiguration: FriendSharingConfiguration {
         .init(appID: String(repeating: "0", count: 32), channel: "fixture-video", uid: 1, remoteUID: 2, token: "fixture-video-token")
     }
-    private func battleFrame() -> Data { BoundBattleWire.prefix + Data(repeating: 1, count: 32) }
+    private func battleFrame() -> Data { BoundBattleWire.prefix + Data(repeating: 1, count: 40) }
     nonisolated private static func outgoing(_ text: String) -> (Int, Data)? {
         guard let root = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
               let packet = root["match_data_send"] as? [String: Any], let code = packet["op_code"] as? String,
@@ -285,10 +285,58 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
         XCTAssertTrue(transport.sendPresence(Data([1])))
         await fulfillment(of: [pose], timeout: 2)
         media.callbacks[0](.rejoined)
+        XCTAssertFalse(transport.videoPublishing, "A stale callback from the failed media attempt cannot restore Live")
+        try await Task.sleep(for: .milliseconds(1200))
+        XCTAssertEqual(media.starts, 2)
+        XCTAssertTrue(transport.videoPublishing, "Optional video reconnects without restarting gameplay")
         let frame = try SharingFrame(copying: Data(repeating: 0, count: SharingFrame.byteCount), sequence: 1, capturedAt: 0)
         _ = transport.send(frame) { result in if case .failure = result { XCTFail("A media frame error must not stop gameplay") } }
         XCTAssertEqual(media.frameSends, 1); XCTAssertEqual(media.presenceSends, 0)
         XCTAssertTrue(transport.presenceConnectionCheck.streamCreated)
+    }
+
+    func testOptionalVideoAuthorizationRetriesAndDisablingOrStoppingCancelsRecovery() async throws {
+        let wire = NakamaTransportWire(match: match), media = NakamaMediaFixture()
+        let transport = BoundNakamaSharingTransport(media: media, client: BoundNakamaClient(socketFactory: { _ in wire }))
+        defer { media.started = nil; transport.stop() }
+        let firstVideo = expectation(description: "video recovers after authorization outage")
+        let secondVideo = expectation(description: "explicit video request starts again")
+        media.started = { if media.starts == 1 { firstVideo.fulfill() } else if media.starts == 2 { secondVideo.fulfill() } }
+        var authorizations = 0
+        let owner = owner, room = room.uuidString
+        transport.videoAuthorization = {
+            authorizations += 1
+            if authorizations == 1 { throw URLError(.networkConnectionLost) }
+            return FriendSharingTokenLease(roomID: room, ownerID: owner, appID: String(repeating: "0", count: 32),
+                channel: "fixture-video", uid: 1, remoteUID: 2, token: "fixture-video-token",
+                issuedAt: Date().timeIntervalSince1970, expiresAt: Date().timeIntervalSince1970 + 90)
+        }
+        transport.configureGameplay(lease); transport.setVideoRequired(true)
+        transport.start(configuration: mediaConfiguration, remoteView: UIView()) { event in
+            if case .failed = event { XCTFail("Optional video recovery cannot terminate gameplay") }
+        }
+        await fulfillment(of: [firstVideo], timeout: 3)
+        XCTAssertEqual(authorizations, 2)
+        XCTAssertTrue(transport.videoPublishing)
+        XCTAssertTrue(transport.sendPresence(Data([1])))
+        let stale = media.callbacks[0]
+        stale(.failed(.init(.connectionLost)))
+        XCTAssertFalse(transport.videoPublishing)
+        transport.setVideoRequired(false)
+        try await Task.sleep(for: .milliseconds(1200))
+        XCTAssertEqual(authorizations, 2); XCTAssertEqual(media.starts, 1)
+        stale(.rejoined)
+        XCTAssertFalse(transport.videoPublishing)
+        transport.setVideoRequired(true)
+        await fulfillment(of: [secondVideo], timeout: 2)
+        XCTAssertTrue(transport.videoPublishing)
+        stale(.failed(.init(.connectionLost)))
+        XCTAssertTrue(transport.videoPublishing, "An old media attempt cannot tear down its replacement")
+        media.callbacks[1](.failed(.init(.connectionLost)))
+        transport.stop()
+        try await Task.sleep(for: .milliseconds(1200))
+        XCTAssertEqual(authorizations, 3); XCTAssertEqual(media.starts, 2)
+        XCTAssertFalse(transport.videoPublishing)
     }
 
     func testRejectedOptionalVideoRenewalStopsVideoAndKeepsGameplay() async throws {
@@ -328,17 +376,42 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
         transport.configureGameplay(lease); transport.setVideoRequired(true)
         transport.start(configuration: mediaConfiguration, remoteView: UIView()) { if $0 == .joined { first.fulfill() } }
         await fulfillment(of: [first], timeout: 2)
+        let oldChannel = try XCTUnwrap(transport.makeBattleChannel(receiver: { _ in stale.fulfill() }, failed: { stale.fulfill() }))
         let oldVideo = media.callbacks[0]
         transport.stop(); transport.configureGameplay(lease); transport.setVideoRequired(false)
         transport.start(configuration: mediaConfiguration, remoteView: UIView()) { event in
             if event == .joined { second.fulfill() } else { stale.fulfill() }
         }
         await fulfillment(of: [second], timeout: 2)
+        XCTAssertFalse(oldChannel.send(battleFrame()), "An old channel cannot enqueue into a new authenticated socket")
         let channel = try XCTUnwrap(transport.makeBattleChannel(receiver: { _ in stale.fulfill() }, failed: { stale.fulfill() }))
+        oldChannel.close()
         firstWire.deliverStaleFailure(); oldVideo(.remoteFrame); oldVideo(.failed(.init(.connectionLost)))
         await fulfillment(of: [stale], timeout: 0.1)
         XCTAssertFalse(transport.videoPublishing); XCTAssertTrue(channel.send(battleFrame()))
         XCTAssertEqual(media.starts, 1); channel.close()
+    }
+
+    func testReplacingBattleChannelFencesOldSenderAndAllowsAcknowledgementOnlyFrames() async throws {
+        let wire = NakamaTransportWire(match: match), media = NakamaMediaFixture()
+        let transport = BoundNakamaSharingTransport(media: media, client: BoundNakamaClient(socketFactory: { _ in wire }))
+        defer { transport.stop() }
+        let joined = expectation(description: "joined"), acknowledgement = expectation(description: "acknowledgement routed")
+        let bytes = BoundBattleWire.prefix + Data(repeating: 0, count: 34)
+        wire.observe { text in
+            guard let (opcode, data) = Self.outgoing(text), opcode == 3 else { return }
+            XCTAssertEqual(data, bytes); acknowledgement.fulfill()
+        }
+        transport.configureGameplay(lease); transport.setVideoRequired(false)
+        transport.start(configuration: mediaConfiguration, remoteView: UIView()) { if $0 == .joined { joined.fulfill() } }
+        await fulfillment(of: [joined], timeout: 2)
+        let old = try XCTUnwrap(transport.makeBattleChannel(receiver: { _ in }, failed: {}))
+        let replacement = try XCTUnwrap(transport.makeBattleChannel(receiver: { _ in }, failed: {}))
+        XCTAssertFalse(old.send(battleFrame()))
+        old.close()
+        XCTAssertTrue(replacement.send(bytes), "Closing the old sender must not close its replacement")
+        await fulfillment(of: [acknowledgement], timeout: 2)
+        replacement.close(); XCTAssertFalse(replacement.send(bytes))
     }
 
     private func identity(owner: UUID? = nil) throws -> AppCloudSession {
@@ -464,6 +537,32 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
         try XCTUnwrap(pendingAuthorization).resume(returning: lease)
         await fulfillment(of: [reopened], timeout: 0.1)
         XCTAssertFalse(sharing.active); XCTAssertFalse(sharing.joined); XCTAssertEqual(media.starts, 0)
+    }
+
+    func testReconnectCannotRebindRetainedInteractionToDifferentPeerInSameRoom() async throws {
+        let wire = NakamaTransportWire(match: match), media = NakamaMediaFixture()
+        let transport = BoundNakamaSharingTransport(media: media, client: BoundNakamaClient(socketFactory: { _ in wire }))
+        let identity = try identity(), firstLease = lease
+        let replacementPeer = UUID()
+        let changedLease = BoundNakamaConfiguration(endpoint: firstLease.endpoint, accessToken: firstLease.accessToken,
+            expiresAt: firstLease.expiresAt, matchID: firstLease.matchID, roomID: firstLease.roomID,
+            ownerID: firstLease.ownerID, nakamaUserID: firstLease.nakamaUserID, joinTicket: firstLease.joinTicket,
+            members: [owner, peer, replacementPeer], peerOwnerID: replacementPeer)
+        var authorizations = 0
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            nakamaFetcher: { _, _ in authorizations += 1; return authorizations == 1 ? firstLease : changedLease })
+        defer { sharing.stop() }
+        sharing.configureAuthenticatedRoom(room.uuidString, identity: { identity })
+        sharing.setAutomaticMultiplayerConnection(true)
+        for _ in 0..<200 where !sharing.joined { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(sharing.joined)
+        sharing.background(); sharing.foreground()
+        for _ in 0..<200 where authorizations < 2 || sharing.active { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(authorizations, 2)
+        XCTAssertFalse(sharing.active)
+        XCTAssertFalse(sharing.connectionRequested)
+        XCTAssertEqual(sharing.status, "Friend changed · Reopen multiplayer")
+        XCTAssertEqual(media.starts, 0)
     }
 
     func testDisablingMultiplayerClosesAutomaticRoomWithoutStartingVideo() async throws {

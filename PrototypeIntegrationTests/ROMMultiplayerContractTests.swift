@@ -2,7 +2,7 @@ import XCTest
 @testable import Delta
 
 final class ROMMultiplayerContractTests: XCTestCase {
-    func testQueuedActionsWaitForIdleFieldAndExpireWhileBlocked() {
+    func testQueuedActionsWaitForIdleFieldAndDoNotExpireDuringDisconnect() {
         func request(_ flags: UInt32) -> BoundROMRequest {
             .init(sequence: 2, command: .none, friendIndex: 0, argument: 0, identifier: UUID(),
                   settings: Data(repeating: 0, count: 32), flags: flags, frame: 1, requestID: 1)
@@ -21,12 +21,20 @@ final class ROMMultiplayerContractTests: XCTestCase {
             XCTAssertNil(queue.ready(request: request(65), connected: true, at: 105), "Cancelled actions cannot run later")
             for connected in [true, false] {
                 queue.enqueue(command, at: 200)
+                XCTAssertNil(queue.ready(request: request(1), connected: connected, at: 200))
                 XCTAssertNil(queue.ready(request: request(1), connected: connected, at: 215))
-                XCTAssertNil(queue.command, "Expiry must run even during dialogue or disconnection")
-                XCTAssertNil(queue.ready(request: request(65), connected: true, at: 216))
+                XCTAssertEqual(queue.command, connected ? nil:command)
+                XCTAssertEqual(queue.ready(request: request(65), connected: true, at: 216), connected ? nil:command)
             }
             queue.enqueue(command, at: 300)
-            XCTAssertNil(queue.ready(request: request(65), connected: true, at: 315), "Expiry precedes dispatch on reconnect")
+            XCTAssertNil(queue.ready(request: request(1), connected: true, at: 300))
+            XCTAssertNil(queue.ready(request: request(1), connected: true, at: 305))
+            XCTAssertNil(queue.ready(request: request(65), connected: false, at: 306))
+            XCTAssertNil(queue.ready(request: request(65), connected: false, at: 3906))
+            XCTAssertEqual(queue.ready(request: request(65), connected: true, at: 3907), command,
+                           "An hour offline cannot expire a request that still has a safe field context")
+            queue.clear()
+            XCTAssertNil(queue.ready(request: request(65), connected: true, at: 3908))
         }
     }
 

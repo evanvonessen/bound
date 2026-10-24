@@ -291,6 +291,60 @@ final class AccountPersistenceIntegrationTests: XCTestCase {
         XCTAssertEqual(persisted.refreshToken, "synthetic-rotated-refresh")
         restored.signOut()
     }
+
+    func testPersistingExpiredRefreshSnapshotDoesNotPublishAccountReplacement() async throws {
+        let owner = UUID()
+        let storage = AccountFriendsMemoryStorage(try JSONEncoder().encode(BoundSavedSession(
+            origin: BoundFriendAccount.origin, owner: owner,
+            accessToken: try token(owner: owner, expires: 30), refreshToken: "synthetic-original-refresh")))
+        var requests = 0
+        let account = BoundFriendAccount(storage: storage, deletionStorage: AccountFriendsMemoryStorage(),
+            automaticRefresh: false, configuration: { "fixture-key" }, transport: { request in
+                requests += 1
+                if requests == 2 { throw URLError(.notConnectedToInternet) }
+                XCTAssertEqual(request.url?.query, requests == 1 ? "grant_type=refresh_token" : "grant_type=password")
+                return BoundAuthTransport.Response(data: try JSONSerialization.data(withJSONObject: [
+                    "access_token": self.token(owner: owner, expires: requests == 1 ? 0.5 : 3600),
+                    "refresh_token": "synthetic-rotated-refresh", "user": ["id": owner.uuidString]
+                ]), status: 200)
+            })
+        let original = try XCTUnwrap(account.session)
+        var changes: [UUID?] = []
+        let observer = NotificationCenter.default.addObserver(
+            forName: BoundFriendAccount.sessionDidChangeNotification, object: nil, queue: .main
+        ) { notification in
+            MainActor.assumeIsolated {
+                guard let source = notification.object as? BoundFriendAccount, source === account else { return }
+                changes.append(source.session?.owner)
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(observer); account.signOut() }
+
+        storage.failWrites = true
+        await account.refreshIfNeeded()
+        XCTAssertEqual(requests, 1)
+        XCTAssertTrue(original.isSameSession(as: account.session))
+        XCTAssertTrue(changes.isEmpty)
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertThrowsError(try original.credentials())
+        XCTAssertFalse(original.isSameSession(as: account.session), "Authenticated guards must reject expired tokens")
+
+        storage.failWrites = false
+        await account.refreshIfNeeded()
+        XCTAssertEqual(requests, 2)
+        XCTAssertEqual(account.session?.owner, owner)
+        XCTAssertTrue(changes.isEmpty, "Persisting the same expired snapshot must not reset live multiplayer")
+        XCTAssertThrowsError(try XCTUnwrap(account.session).friendSharingRequest(roomID: UUID().uuidString))
+        XCTAssertEqual(try JSONDecoder().decode(BoundSavedSession.self, from: XCTUnwrap(storage.read())).refreshToken,
+                       "synthetic-rotated-refresh")
+
+        await account.signIn(email: "fixture@example.invalid", password: "synthetic-password")
+        XCTAssertEqual(changes, [nil, owner], "An explicit sign-in must publish removal and a new session, even for the same owner")
+        XCTAssertFalse(original.isSameSession(as: account.session))
+        XCTAssertNoThrow(try XCTUnwrap(account.session).credentials())
+        account.signOut()
+        XCTAssertEqual(changes, [nil, owner, nil], "Explicit logout must still notify multiplayer")
+    }
 }
 
 @MainActor
@@ -401,6 +455,76 @@ final class FriendModerationIntegrationTests: XCTestCase {
 
 @MainActor
 final class FriendTapToShareIntegrationTests: XCTestCase {
+    func testExpiredAccountDuringRefreshDoesNotRevokeExistingRoomButCannotSendFriendRequests() async throws {
+        let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer { UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key) }
+        let owner = UUID(), identity = try makeIdentity(owner: owner, expires: 0.5)
+        var current: AppCloudSession? = identity
+        let room = FriendRoom(roomID: UUID().uuidString, displayName: "Friend")
+        var friendRequests = 0
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+            tokenFetcher: { room, identity in self.makeLease(room: room, owner: identity.owner, request: 1) })
+        let onboarding = FriendOnboarding(call: { _, _, _ in friendRequests += 1; return .init(ok: true, rooms: [room]) },
+            observeAccount: { OnboardingObservation($0) })
+        defer { onboarding.setMultiplayerServiceActive(false, sharing: sharing, existing: { current }); sharing.stop() }
+        XCTAssertTrue(onboarding.selectMultiplayerPartner(roomID: room.roomID, sharing: sharing, existing: { current }))
+        await waitUntil { sharing.joined }
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertThrowsError(try identity.credentials())
+        onboarding.synchronizeAccount()
+        XCTAssertNil(onboarding.currentIdentity(), "Expired credentials cannot authorize a friend API request")
+        let requests = friendRequests
+        onboarding.refresh()
+        XCTAssertEqual(friendRequests, requests)
+        XCTAssertEqual(onboarding.selected?.roomID, room.roomID)
+        XCTAssertEqual(sharing.authenticatedSession?()?.owner, owner)
+        XCTAssertTrue(sharing.connectionRequested)
+        current = nil; onboarding.synchronizeAccount()
+        XCTAssertNil(onboarding.selected)
+        XCTAssertFalse(sharing.connectionRequested, "Actual logout/revocation still closes the retained connection")
+    }
+
+    func testTemporaryROMServiceBackgroundKeepsInteractionAndAutomaticReconnectIntent() async throws {
+        let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer { UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key) }
+        let identity = try makeIdentity(owner: UUID())
+        let room = FriendRoom(roomID: UUID().uuidString, displayName: "Friend")
+        var requests = 0
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+            tokenFetcher: { room, identity in
+                requests += 1; return self.makeLease(room: room, owner: identity.owner, request: requests)
+            })
+        let onboarding = FriendOnboarding(call: { _, _, _ in .init(ok: true, rooms: [room]) },
+            observeAccount: { OnboardingObservation($0) })
+        defer { onboarding.setMultiplayerServiceActive(false, sharing: sharing, existing: { identity }); sharing.stop() }
+        XCTAssertTrue(onboarding.selectMultiplayerPartner(roomID: room.roomID, sharing: sharing, existing: { identity }))
+        await waitUntil { sharing.joined }
+        let local = try JSONDecoder().decode(BoundFriendWorldPosition.self, from: Data(
+            #"{"mapGroup":4,"mapNumber":1,"elevation":0,"x":6,"y":6,"facing":4}"#.utf8))
+        let peer = try JSONDecoder().decode(BoundFriendWorldPosition.self, from: Data(
+            #"{"mapGroup":4,"mapNumber":1,"elevation":0,"x":7,"y":6,"facing":3}"#.utf8))
+        let context = BoundFriendInteractionSession.Context(localSession: UUID(), peerSession: UUID(), local: local, peer: peer)
+        sharing.interactions.context = { context }
+        XCTAssertTrue(sharing.interactions.open())
+        sharing.background()
+        onboarding.setMultiplayerServiceActive(false, sharing: sharing, existing: { identity }, temporary: true)
+        onboarding.close()
+        XCTAssertFalse(sharing.active)
+        XCTAssertTrue(sharing.connectionRequested, "Backgrounding cannot revoke the ROM's retained connection")
+        XCTAssertEqual(sharing.interactions.phase, .choosing)
+        sharing.foreground()
+        onboarding.setMultiplayerServiceActive(true, sharing: sharing, existing: { identity })
+        await waitUntil { sharing.joined }
+        XCTAssertEqual(requests, 2)
+        XCTAssertEqual(sharing.interactions.phase, .choosing)
+        XCTAssertTrue(sharing.interactions.connected)
+        onboarding.setMultiplayerServiceActive(false, sharing: sharing, existing: { identity })
+        XCTAssertFalse(sharing.connectionRequested, "Deliberate disable still clears the connection")
+        XCTAssertEqual(sharing.interactions.phase, .ended)
+    }
+
     func testFriendRowHighlightsOnlyConnectedPeerAndStopRemovesItsBadge() async throws {
         let identity = try makeIdentity(owner: UUID())
         let room = FriendRoom(roomID: UUID().uuidString, displayName: "Friend")
@@ -1508,8 +1632,8 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
             })
     }
 
-    private func makeIdentity(owner: UUID) throws -> AppCloudSession {
-        let claims = try JSONSerialization.data(withJSONObject: BoundAccountTestFixture.claims(owner: owner, expiry: Date().timeIntervalSince1970 + 3600))
+    private func makeIdentity(owner: UUID, expires: TimeInterval = 3600) throws -> AppCloudSession {
+        let claims = try JSONSerialization.data(withJSONObject: BoundAccountTestFixture.claims(owner: owner, expiry: Date().timeIntervalSince1970 + expires))
         let payload = claims.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         return try AppCloudSession(owner: owner, key: "fixture-public-key", token: "fixture.\(payload).signature")
     }
@@ -1786,8 +1910,12 @@ final class RunLeaseClientTests: XCTestCase {
 @MainActor
 private final class AccountFriendsMemoryStorage: BoundSessionStorage {
     private var data: Data?
+    var failWrites = false
     init(_ data: Data? = nil) { self.data = data }
     func read() throws -> Data? { data }
-    func write(_ data: Data) throws { self.data = data }
+    func write(_ data: Data) throws {
+        if failWrites { throw BoundKeychainSessionStorage.Failure(status: errSecInteractionNotAllowed) }
+        self.data = data
+    }
     func remove() throws { data = nil }
 }

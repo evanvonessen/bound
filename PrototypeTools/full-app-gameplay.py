@@ -113,7 +113,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--duration', type=int, default=900)
     parser.add_argument('--smoke', action='store_true')
-    parser.add_argument('--trade', choices=['invitation','complete','menu-disconnect','exchange-disconnect','saved-disconnect'], help='Normal walk-up native trade over Agora and disconnect recovery')
+    parser.add_argument('--trade', choices=['invitation','complete','menu-disconnect','exchange-disconnect','saved-disconnect'], help='Normal walk-up native trade over Agora, including active disconnect/resume')
     parser.add_argument('--battles-only', action='store_true', help='Actual walk-up/A native battle over real Agora, damage, outcome and world restore')
     parser.add_argument('--interactions-only', action='store_true', help='Short walk-up/A and reliable invitation regression; does not launch a battle or trade')
     parser.add_argument('--native-only', action='store_true', help='Preflight maps and native states without an RTC connection')
@@ -158,16 +158,17 @@ def main():
         if args.trade:
             wait('positioned native players',lambda v:reported(v,'positioned') and visible(v),360)
             stages=(['trade-decline-invite','trade-decline'] if args.trade=='invitation' else [])+['trade-invite','trade-accept']
-            if args.trade!='menu-disconnect': stages.append('trade-exchange')
-            stages += ['trade-exit' if args.trade in ('complete','invitation') else 'trade-disconnect','trade-verify']
+            if args.trade=='menu-disconnect':stages+=['trade-disconnect','trade-exchange']
+            else:
+                stages.append('trade-exchange')
+                if args.trade in ('exchange-disconnect','saved-disconnect'):stages.append('trade-disconnect')
+                if args.trade=='exchange-disconnect':stages.append('trade-resume-exchange')
+            stages+=['trade-exit','trade-verify']
             for stage in stages:
                 state.change(stage); result=wait(stage,lambda v:reported(v,stage),200)
             parties={p:result['peers'][p].get('tradeMarker') for p in PEERS}
-            expected={'A':0xBB,'B':0xBC} if args.trade=='menu-disconnect' else {'A':0xBC,'B':0xBB}
-            if args.trade=='exchange-disconnect':
-                if parties not in ({'A':0xBB,'B':0xBC},{'A':0xBC,'B':0xBB}):
-                    raise RuntimeError('Interrupted trade lost or duplicated an offered Pokemon')
-            elif parties!=expected: raise RuntimeError('Trade party identities do not match the expected result')
+            expected={'A':0xBC,'B':0xBB}
+            if parties!=expected: raise RuntimeError('Resumed trade did not complete the expected exchange exactly once')
             if not all(v.get('reader')=='live' and v.get('tradeUnofferedUnchanged') and not v.get('tradeRecoveryBlocked') for v in result['peers'].values()):
                 raise RuntimeError('Trade recovery did not restore both playable worlds with intact unoffered parties')
         elif args.battles_only:

@@ -48,7 +48,7 @@ struct BoundCooperativeSnapshot: Sendable {
 /// Separate team/enemy messages fit the existing 1 KiB transport admission limit.
 struct BoundCooperativePacket: Sendable {
     static let prefix=Data("BCD1".utf8)
-    enum Kind: UInt32 { case offer=1, team=2, enemy=3, ready=4, cancel=5, xp=6, finished=7, cableReady=8, recoveryOffer=9, recoveryReady=10, resultsReady=11 }
+    enum Kind: UInt32 { case offer=1, team=2, enemy=3, ready=4, cancel=5, xp=6, finished=7, cableReady=8, recoveryOffer=9, recoveryReady=10, resultsReady=11, resumeOffer=12, resumeReady=13 }
     let data: Data
     let kind: Kind
     var sender: UUID { coopID(data,8) }; var receiver: UUID { coopID(data,24) }
@@ -63,7 +63,7 @@ struct BoundCooperativePacket: Sendable {
         guard b.count >= 148, b.count <= 1024, b.starts(with:Self.prefix), let k=Kind(rawValue:coopWord(b,4)),
               coopWord(b,144) == b.count-148, coopID(b,8) != coopID(b,24), coopWord(b,72) != 0 else { return nil }
         let size=b.count-148
-        guard (k == .team || k == .enemy) ? size == 600 : k == .xp ? [192,404].contains(size) : (k == .recoveryOffer || k == .recoveryReady) ? size == 124 : size == 0 else { return nil }
+        guard (k == .team || k == .enemy) ? size == 600 : k == .xp ? [192,404].contains(size) : (k == .recoveryOffer || k == .recoveryReady) ? size == 124 : k == .resumeOffer ? size == 16 : k == .resumeReady ? size == 32 : size == 0 else { return nil }
         if k == .team {
             let n=coopWord(b,136), selected=Int(b[143]), order=Array(b[140..<143])
             guard (1...6).contains(n),(1...3).contains(selected),Set(order.prefix(selected)).count == selected,
@@ -246,6 +246,11 @@ final class BoundCooperativeProbe: @unchecked Sendable {
 
 @MainActor
 final class BoundCooperativeDoublesSession {
+    private struct TerminalEncounter {
+        let local:UUID,peer:UUID,id:UUID,peerID:UUID?
+        let capture:BoundCooperativeSnapshot,proof:Data
+        let kind:BoundCooperativePacket.Kind
+    }
     let probe=BoundCooperativeProbe(), cable=BoundNativeBattleProbe()
     private weak var core:EmulatorCore?
     private weak var soul:BoundSoulProbe?
@@ -260,18 +265,28 @@ final class BoundCooperativeDoublesSession {
     private var channel:(any BoundBattleChannel)?,wire:BoundBattleWire?
     private var checkpoint:URL?,journal:URL?,lastXP=Data(),incomingXP=Data(),sequence:UInt32=0
     private var controlCursor=0
-    private var lastSent:TimeInterval=0,lastPeer=ProcessInfo.processInfo.systemUptime
+    private var lastSent:TimeInterval=0,lastPeer=ProcessInfo.processInfo.systemUptime,lastXPSent:TimeInterval=0
+    private var interruptedAt:TimeInterval?,resumeAfterTransport=false
+    private var retryChannelAt:TimeInterval=0
+    private var channelGeneration=UUID(),wireGeneration=UUID(),transportNonce=UUID(),peerTransportNonce:UUID?
+    private var retiredTransportNonces:[UUID]=[]
+    private var terminalEncounters:[UUID:TerminalEncounter]=[:],terminalOrder:[UUID]=[]
+    private var peerTransportReady=false,sentTransportReady=false
+    private let clock:()->TimeInterval
+    private(set) var waitingForConnection=false
     private(set) var status="" { didSet { if status != oldValue { changed?(status) } } }
     private(set) var recoveryPending=false
     var changed:((String)->Void)?
     var context:(()->(UUID,UUID)?)?
     var connected:(()->Bool)?
     var canResume:(()->Bool)?
+    var releaseGameplayInputs:(()->Void)?
     var makeChannel:((@escaping @Sendable (Data)->Void,@escaping @Sendable ()->Void)->(any BoundBattleChannel)?)?
     var send:((Data)->Bool)?
     var isActive:Bool { snapshot.map { (1...7).contains($0.phase) || $0.phase == 9 } ?? false }
     var blocksAutoSave:Bool { isActive || recoveryPending }
     private var isHost:Bool { if let fixedRole { return fixedRole == 0 };guard let local,let peer else { return false };return local.uuidString < peer.uuidString }
+    init(clock:@escaping ()->TimeInterval={ ProcessInfo.processInfo.systemUptime }) { self.clock=clock }
     func bind(core:EmulatorCore?,gameID:String,soul:BoundSoulProbe) {
         guard self.core !== core || self.gameID != gameID else { return }
         // Delta may already have stopped the old core and replaced its bridge.
@@ -288,7 +303,10 @@ final class BoundCooperativeDoublesSession {
         recoveryPending=false;recoveryLoaded=false;recoveryPeerReady=false;recoveryReadySent=false
         recoveryCut=nil;recoveryBranch=Data();recoveryCable=Data();recoveryDigest="";recoveryAgreement=Data();peerRecoveryNonce=nil
         checkpoint=nil;journal=nil;lastXP=Data();incomingXP=Data();encounter=UUID();recoveryNonce=UUID()
-        lastSent=0;lastPeer=ProcessInfo.processInfo.systemUptime;controlCursor=0;status=""
+        lastSent=0;lastPeer=clock();lastXPSent=0;controlCursor=0;status=""
+        waitingForConnection=false;interruptedAt=nil;resumeAfterTransport=false;retryChannelAt=0
+        channelGeneration=UUID();wireGeneration=UUID();transportNonce=UUID();peerTransportNonce=nil;peerTransportReady=false;sentTransportReady=false
+        retiredTransportNonces=[]
         self.core=core;self.gameID=gameID;self.soul=soul
         probe.configure(core:core,gameID:gameID,soul:soul);cable.configure(core:nil)
         if let core,core.deltaCore.identifier == "com.rileytestut.GBADeltaCore" {
@@ -307,16 +325,28 @@ final class BoundCooperativeDoublesSession {
     #endif
     private func resetEncounter(_ value:BoundCooperativeSnapshot,local:UUID,peer:UUID) {
         self.local=local;self.peer=peer;capture=value;encounter=UUID();peerEncounter=nil;peerTeam=nil;enemy=isHost ? value.enemy:Data()
-        proof=Data();peerReady=false;readySent=false;started=false;prepared=false;peerCableReady=false;peerResultsReady=false;peerFinished=false;fixedRole=isHost ? 0:1;lastXP=Data();incomingXP=Data();lastPeer=ProcessInfo.processInfo.systemUptime;lastSent=0;controlCursor=0
+        proof=Data();peerReady=false;readySent=false;started=false;prepared=false;peerCableReady=false;peerResultsReady=false;peerFinished=false;fixedRole=isHost ? 0:1;lastXP=Data();incomingXP=Data();lastPeer=clock();lastSent=0;lastXPSent=0;controlCursor=0
+        transportNonce=UUID();peerTransportNonce=nil;peerTransportReady=false;sentTransportReady=false
+        retiredTransportNonces=[]
     }
     func receive(_ data:Data) {
         guard let packet=BoundCooperativePacket(data:data) else { return }
+        if let terminal=terminalEncounters[packet.peerID],packet.sender == terminal.peer,packet.receiver == terminal.local,
+           terminal.peerID == nil || packet.id == terminal.peerID,packet.encounter == terminal.capture.encounter {
+            if ![.cancel,.finished].contains(packet.kind) {
+                _=send?(BoundCooperativePacket(kind:terminal.kind,local:terminal.local,peer:terminal.peer,
+                    id:terminal.id,peerID:packet.id,snapshot:terminal.capture,proof:terminal.proof).data)
+            }
+            return
+        }
         if packet.kind == .recoveryOffer || packet.kind == .recoveryReady { receiveRecovery(packet);return }
         guard let value=snapshot,let local,let peer,
               packet.sender == peer,packet.receiver == local,packet.encounter == value.encounter,
               peerEncounter == nil || peerEncounter == packet.id else { return }
-        if packet.kind != .offer,packet.peerID != encounter { return }
-        peerEncounter=packet.id;lastPeer=ProcessInfo.processInfo.systemUptime
+        if ![.offer,.resumeOffer].contains(packet.kind),packet.peerID != encounter { return }
+        if packet.kind == .resumeOffer,packet.peerID != encounter,
+           !coopUUID(packet.peerID).allSatisfy({ $0 == 0 }) { return }
+        peerEncounter=packet.id;lastPeer=clock()
         switch packet.kind {
         case .offer: break
         case .team:
@@ -333,6 +363,22 @@ final class BoundCooperativeDoublesSession {
         case .finished: if packet.proof==proof,proof.count==32 { peerFinished=true;peerResultsReady=true;peerCableReady=true }
         case .resultsReady: if packet.proof==proof,proof.count==32 { peerResultsReady=true;peerCableReady=true }
         case .cableReady: if packet.proof == proof,proof.count == 32 { peerCableReady=true }
+        case .resumeOffer:
+            guard !prepared && !started || packet.proof == proof else { return }
+            let nonce=coopID(packet.payload,0)
+            guard !retiredTransportNonces.contains(nonce) else { return }
+            if peerTransportNonce != nonce {
+                if let previous=peerTransportNonce { retiredTransportNonces=Array((retiredTransportNonces+[previous]).suffix(32)) }
+                transportInterrupted();peerTransportNonce=nonce
+                peerTransportReady=false;sentTransportReady=false
+            }
+            sendTransportReady(nonce)
+        case .resumeReady:
+            guard waitingForConnection,let peerTransportNonce,
+                  coopID(packet.payload,0) == peerTransportNonce,
+                  coopID(packet.payload,16) == transportNonce,
+                  !prepared && !started || packet.proof == proof else { return }
+            peerTransportReady=true
         case .recoveryOffer,.recoveryReady: break
         }
         advance()
@@ -367,8 +413,24 @@ final class BoundCooperativeDoublesSession {
             return
         }
         if (value.phase == 0 || value.phase == 8),prepared || started { finish() }
-        let enabled=BoundMultiplayerFeatures.isEnabled && connected?() == true
-        if !enabled { if started || (1...7).contains(value.phase) { suspend() };publish(flags:0);return }
+        if capture == nil,(1...7).contains(value.phase),let local,let peer {
+            resetEncounter(value,local:local,peer:peer)
+        }
+        guard BoundMultiplayerFeatures.isEnabled else {
+            if started || (1...7).contains(value.phase) { suspend() }
+            publish(flags:0);return
+        }
+        guard connected?() == true else {
+            if started || (1...7).contains(value.phase) { transportInterrupted() }
+            else { publish(flags:0) }
+            return
+        }
+        if waitingForConnection {
+            if core.state == .running { resumeAfterTransport=true;_=core.pause() }
+            resumeTransportIfReady()
+            guard !waitingForConnection else { return }
+        }
+        wire?.tick()
         if value.phase == 0 || value.phase == 8 {
             if started { finish() }
             if !started && !prepared { fixedRole=nil }
@@ -376,17 +438,21 @@ final class BoundCooperativeDoublesSession {
             else { publish(flags:0) }
             return
         }
-        guard let identities=context?() else { suspend();return }
+        // The transport authenticates the room and account. A presence rejoin
+        // rotates its field-pose challenge, but cannot replace a resident
+        // encounter's identities or already agreed teams.
+        guard let identities=(local.flatMap { l in peer.map { (l,$0) } }) ?? context?() else {
+            transportInterrupted();return
+        }
         if (!started && old?.token != value.token) || local == nil {
             guard !started else { interrupt("Cooperative encounter changed");return }
             resetEncounter(value,local:identities.0,peer:identities.1)
         }
-        guard local == identities.0,peer == identities.1 else { interrupt("Friend session changed");return }
         if !started { capture=value }
         if value.phase == 9 { interrupt("Cooperative recovery kept. Reconnect with your friend.");return }
         if value.phase == 7 {
-            let now=ProcessInfo.processInfo.systemUptime
-            if now-lastPeer>15 { interrupt("Cooperative connection timed out");return }
+            let now=clock()
+            if now-lastPeer>2 { transportInterrupted();return }
             if now-lastSent>=0.25 { _=transmit(.finished);lastSent=now }
             publish(flags:peerFinished ? 1:11);status="Finishing cooperative battle"
             return
@@ -394,10 +460,10 @@ final class BoundCooperativeDoublesSession {
         if value.error != 0 { interrupt("Cooperative battle needs recovery");return }
         if started {
             if cable.take()?.error == true { interrupt("Cooperative native connection needs recovery");return }
-            if cable.networkAge>15 { interrupt("Cooperative connection timed out");return }
+            if cable.networkAge>2 { transportInterrupted();return }
         }
-        if ProcessInfo.processInfo.systemUptime-lastPeer > (started ? 15:30) { interrupt("Friend connection timed out");return }
-        let now=ProcessInfo.processInfo.systemUptime
+        if clock()-lastPeer>2 { transportInterrupted();return }
+        let now=clock()
         if now-lastSent >= 0.25 {
             var delivered=true
             if started {
@@ -420,7 +486,7 @@ final class BoundCooperativeDoublesSession {
                 }
             }
             lastSent=now
-            if !delivered { suspend();return }
+            if !delivered { transportInterrupted();return }
         }
         if value.selected,readySent,peerReady,!prepared {
             do {
@@ -430,8 +496,11 @@ final class BoundCooperativeDoublesSession {
             } catch { interrupt("Couldn’t prepare cooperative recovery");return }
         }
         if prepared,peerCableReady { started=true;status="Cooperative battle" }
-        if started,!value.xp.isEmpty,value.xp != lastXP {
-            if transmit(.xp,payload:value.xp) { lastXP=value.xp }
+        // The ROM identifies XP barriers by token and imports identical records
+        // idempotently. Retrying a pending barrier cannot award XP twice, while
+        // a locally accepted send may still have been lost during a socket gap.
+        if started,!value.xp.isEmpty,value.xp != lastXP || now-lastXPSent>=0.5 {
+            if transmit(.xp,payload:value.xp) { lastXP=value.xp;lastXPSent=now }
         }
         if value.phase==6,durable {
             publish(flags:peerResultsReady ? 11:3)
@@ -441,17 +510,100 @@ final class BoundCooperativeDoublesSession {
         guard self.core === core,core.state == .paused,canResume?() == true else { return }
         _=core.resume()
     }
+    /// Retain the resident cartridge, command queues and ownership journal.
+    /// A network interruption never selects a recovery snapshot or rolls back XP.
+    func transportInterrupted() {
+        guard !recoveryPending,isActive || started || prepared else { return }
+        if !waitingForConnection {
+            waitingForConnection=true;interruptedAt=clock();transportNonce=UUID()
+            peerTransportReady=false;sentTransportReady=false
+            resumeAfterTransport=core?.state == .running
+            releaseGameplayInputs?()
+        }
+        if core?.state == .running { resumeAfterTransport=true;_=core?.pause() }
+        if let core,core.state == .paused { core.deltaCore.emulatorBridge.resetInputs() }
+        channelGeneration=UUID();channel?.close();channel=nil;wire?.suspend()
+        cable.suspendTransport();retryChannelAt=0
+        status="Waiting for your friend"
+    }
+    func transportResumed() {
+        guard waitingForConnection else { return }
+        resumeTransportIfReady()
+    }
+    private func sendTransportReady(_ nonce:UUID) {
+        let currentEncounter=encounter,currentNonce=transportNonce
+        let delivered=transmit(.resumeReady,payload:coopUUID(currentNonce)+coopUUID(nonce))
+        guard waitingForConnection,encounter == currentEncounter,transportNonce == currentNonce,
+              peerTransportNonce == nonce else { return }
+        sentTransportReady=sentTransportReady || delivered
+    }
+    private func resumeTransportIfReady() {
+        guard waitingForConnection,connected?() == true,BoundMultiplayerFeatures.isEnabled,
+              let core,core.state != .stopped else { return }
+        if core.state == .running { resumeAfterTransport=true;_=core.pause() }
+        if core.state == .paused { core.deltaCore.emulatorBridge.resetInputs() }
+        let now=clock()
+        if capture == nil,let snapshot,let identities=context?() {
+            resetEncounter(snapshot,local:identities.0,peer:identities.1)
+        }
+        let currentEncounter=encounter,currentNonce=transportNonce
+        // Phase 7 already contains the cartridge's completed owner projection.
+        // A terminal peer may have closed its wire after completing too; its
+        // matching Finished control is sufficient to release native cleanup.
+        let completing=snapshot?.phase == 7 && peerFinished
+        if prepared,!completing,channel == nil,now >= retryChannelAt {
+            retryChannelAt=now+1
+            guard bindTransportChannel() else { return }
+        }
+        if now-lastSent>=0.25 {
+            lastSent=now
+            _=transmit(.resumeOffer,payload:coopUUID(transportNonce))
+            guard waitingForConnection,encounter == currentEncounter,transportNonce == currentNonce else { return }
+            if let peerTransportNonce { sendTransportReady(peerTransportNonce) }
+        }
+        wire?.tick()
+        guard waitingForConnection,encounter == currentEncounter,transportNonce == currentNonce else { return }
+        guard completing || peerTransportReady && sentTransportReady && (!prepared || channel != nil) else { return }
+        guard !resumeAfterTransport || canResume?() == true else { return }
+        waitingForConnection=false;interruptedAt=nil;lastPeer=now
+        cable.resumeTransport()
+        status=started ? "Cooperative battle":"Preparing cooperative battle"
+        if resumeAfterTransport {
+            resumeIfPermitted(core)
+            guard core.state == .running else { waitingForConnection=true;cable.suspendTransport();return }
+            resumeAfterTransport=false
+        }
+    }
+    private func bindTransportChannel()->Bool {
+        guard let wire else { return false }
+        let generation=UUID();channelGeneration=generation
+        let interrupted:@Sendable ()->Void={ [weak self] in Task { @MainActor in
+            guard let self,self.channelGeneration == generation else { return }
+            self.transportInterrupted()
+        } }
+        guard let channel=makeChannel?({ bytes in wire.receive(bytes) },interrupted) else { return false }
+        self.channel=channel;wire.setSender { [channel] bytes in channel.send(bytes) }
+        return true
+    }
     private func prepareCable(recovery:Bool=false)->Bool {
         guard let core,let peerEncounter else { return false }
-        let failure:@Sendable ()->Void={ [weak self] in Task { @MainActor in self?.interrupt("Cooperative connection lost") } }
+        let generation=UUID();wireGeneration=generation
+        let failure:@Sendable ()->Void={ [weak self] in Task { @MainActor in
+            guard let self,self.wireGeneration == generation else { return }
+            self.interrupt("Cooperative native connection needs recovery")
+        } }
+        let interrupted:@Sendable ()->Void={ [weak self] in Task { @MainActor in
+            guard let self,self.wireGeneration == generation else { return }
+            self.transportInterrupted()
+        } }
         cable.configure(core:core)
         if recovery,recoveryCut?.isAdmission != true,!cable.restoreRecoveryData(recoveryCable) { return false }
         let ids=(recovery ? [recoveryNonce,peerRecoveryNonce ?? peerEncounter]:[encounter,peerEncounter]).sorted { $0.uuidString < $1.uuidString }
         var namespace=proof;namespace.append(coopUUID(ids[0]));namespace.append(coopUUID(ids[1]))
-        let safe=BoundBattleWire(id:coopID(coopHash(namespace),0),receive:{ [cable] bytes in if !cable.receiveNetworkPacket(bytes) { failure() } },failed:failure)
-        guard let channel=makeChannel?({ bytes in safe.receive(bytes) },failure) else { return false }
-        self.channel=channel;wire=safe;safe.setSender { [channel] bytes in channel.send(bytes) }
-        cable.setSender({ bytes in safe.send(bytes) },failed:failure)
+        let safe=BoundBattleWire(id:coopID(coopHash(namespace),0),receive:{ [cable] bytes in if !cable.receiveNetworkPacket(bytes) { failure() } },failed:failure,interrupted:interrupted)
+        wire=safe
+        cable.setSender({ bytes in safe.send(bytes) },failed:failure,interrupted:interrupted)
+        let channelReady=bindTransportChannel()
         let running=core.state == .running
         if running { _=core.pause() }
         let prepared=BoundVBABattleBridge.prepareCooperativeCable(forPlayer:isHost ? 0:1)
@@ -462,6 +614,7 @@ final class BoundCooperativeDoublesSession {
             if checkpointReady { cable.enableSender() }
         }
         if running && !recovery { resumeIfPermitted(core) }
+        if prepared && checkpointReady && !channelReady && !recovery { transportInterrupted() }
         return prepared && checkpointReady
     }
     private func publish(flags:UInt32) {
@@ -489,11 +642,21 @@ final class BoundCooperativeDoublesSession {
     func suspend() {
         guard !recoveryPending else { return }
         guard isActive || started else { return }
-        _=transmit(.cancel);publish(flags:4)
-        if started { interrupt("Cooperative recovery kept. Reconnect with your friend.") }
+        _=transmit(.cancel)
+        interrupt("Cooperative recovery kept. Reconnect with your friend.")
+    }
+    private func retireEncounter(_ kind:BoundCooperativePacket.Kind) {
+        guard let local,let peer,let capture else { return }
+        if terminalEncounters[encounter] == nil { terminalOrder.append(encounter) }
+        terminalEncounters[encounter] = .init(local:local,peer:peer,id:encounter,peerID:peerEncounter,capture:capture,
+            proof:proof.count == 32 ? proof:Data(repeating:0,count:32),kind:kind)
+        if terminalOrder.count>32 { terminalEncounters.removeValue(forKey:terminalOrder.removeFirst()) }
     }
     private func interrupt(_ message:String) {
+        retireEncounter(.cancel)
         status=message
+        let wasWaiting=waitingForConnection,resume=resumeAfterTransport
+        waitingForConnection=false;interruptedAt=nil;resumeAfterTransport=false;channelGeneration=UUID();wireGeneration=UUID()
         if recoveryPending {
             channel?.close();wire?.close();channel=nil;wire=nil;prepared=false
             recoveryPeerReady=false;recoveryReadySent=false
@@ -502,6 +665,7 @@ final class BoundCooperativeDoublesSession {
         guard started,(snapshot?.phase ?? 0)>=4 else {
             started=false;publish(flags:4);cancellingBeforeEntry=true
             channel?.close();wire?.close();channel=nil;wire=nil;cable.configure(core:nil)
+            if wasWaiting,resume,let core { resumeIfPermitted(core) }
             return
         }
         recoveryPending=true;recoveryNonce=UUID();peerRecoveryNonce=nil;recoveryPeerReady=false;recoveryReadySent=false;recoveryLoaded=false
@@ -522,6 +686,8 @@ final class BoundCooperativeDoublesSession {
     }
     private func finish() {
         let completed=started
+        retireEncounter(completed ? .finished:.cancel)
+        channelGeneration=UUID();wireGeneration=UUID()
         channel?.close();wire?.close();channel=nil;wire=nil;cable.configure(core:nil)
         if let core {
             let running=core.state == .running;if running { _=core.pause() }
@@ -537,6 +703,7 @@ final class BoundCooperativeDoublesSession {
         if let checkpoint { try? BoundServerMemoryFiles.remove(checkpoint,gameID:gameID) }
         probe.clearProtection()
         journal=nil;checkpoint=nil;started=false;prepared=false;fixedRole=nil;recoveryPending=false;status=completed ? "Cooperative battle complete":"Cooperative battle ended"
+        waitingForConnection=false;interruptedAt=nil;resumeAfterTransport=false;peerTransportNonce=nil
         local=nil;peer=nil
     }
     private func findRecovery() {

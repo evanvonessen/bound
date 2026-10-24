@@ -373,7 +373,7 @@ final class BoundNakamaBattleChannel: BoundBattleChannel, @unchecked Sendable {
     private let targetOwnerID: UUID
     init(client: BoundNakamaClient, targetOwnerID: UUID) { self.client = client; self.targetOwnerID = targetOwnerID }
     func send(_ data: Data) -> Bool {
-        guard data.count > 30, data.count <= 4126, data.starts(with: BoundBattleWire.prefix) else { return false }
+        guard data.count >= 38, data.count <= 4134, data.starts(with: BoundBattleWire.prefix) else { return false }
         lock.lock(); defer { lock.unlock() }
         return client?.sendBattle(data, targetOwnerID: targetOwnerID) ?? false
     }

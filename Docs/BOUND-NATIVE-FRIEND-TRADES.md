@@ -3,7 +3,7 @@
 Integrated into `main` from `codex/friend-trading`. Native trade runtime evidence
 and remaining device/network verification limits are recorded below.
 
-Enable **Settings → Enable Experimental Features** on both devices. Connect in
+Enable **Settings → Enable Experimental Multiplayer** on both devices. Connect in
 Friends, turn on **Show friend on map**, walk to the cardinal tile beside the
 friend, face them and press **A**, then choose **Trade** in the game. The friend answers
 the native **YES/NO** dialogue with ordinary game controls. **NO** or **B**
@@ -44,8 +44,10 @@ The on-disk ROM and save are untouched by this invitation layer.
 After explicit acceptance, confirmation is fenced by the invitation/session ID
 and original anchor, rather than requiring a render pose during the peer's
 brief snapshot pause. An early prepared control is held only for that consented
-invitation; game-data sequence 1 is sent only after both native receivers exist. A real disconnect still ends the invitation; confirmation
-retains its bounded timeout. A received acceptance waits for the local dialogue to close before invoking the
+invitation; game-data sequence 1 is sent only after both native receivers exist.
+Packet gaps and temporary disconnections keep invitations open and retry them
+without an expiry timer. Deliberate cancellation/disconnection still ends them.
+A received acceptance waits for the local dialogue to close before invoking the
 unchanged trade coordinator. Canceled/stale completions cannot start an activity.
 Cancellation dismisses the native window through B; production code never
 synthesizes YES or A. Quick/automatic state capture stays blocked while a staged
@@ -53,11 +55,12 @@ invitation could be captured. Interrupted-trade title/Continue inputs remain
 available before a native result can be shown in the overworld. New core binding
 forgets the previous cartridge's pending dialogue/selection.
 
-Interaction admission and pending anchors retain the original 200 ms freshness
-limit. Native field windows temporarily make the local sprite image unavailable;
+Initial interaction admission retains the original 200 ms freshness
+limit. A missing pose pauses pending admission; fresh verified movement to an
+invalid anchor cancels it. Native field windows temporarily make the local sprite image unavailable;
 during an owned dialogue only, the last appearance is retained when fresh native
 world data confirms the same map, tile, elevation and facing. Movement, fades,
-battles, other menus, missing frames and changed sessions still invalidate it.
+battles and unrelated menus still invalidate an unaccepted field interaction.
 
 Source references: [field-script commands](https://github.com/pret/pokefirered/blob/master/asm/macros/event.inc)
 and [native script menus](https://github.com/pret/pokefirered/blob/master/src/script_menu.c).
@@ -68,7 +71,9 @@ Exact-profile addresses and runtime checks are separate from those references.
 `BoundNativeBattleSession` now coordinates both native link activities; its
 existing name and recovery folder remain for compatibility with battle journals.
 Both activities use the existing bounded, generation-tagged native command
-transport and the Agora reliable command channel. Invitation IDs bind the
+transport and authenticated Nakama gameplay connection, separate from Agora
+friend video. The `BFS2` wire retains bounded unacknowledged packets, retries
+them after reconnection and deduplicates delivery. Invitation IDs bind the
 activity, prepared/connected/finished/abort controls and the link wire. There is
 no new backend, cloud configuration, SDK or emulator-core patch.
 
@@ -88,7 +93,7 @@ a stale Pokémon Center return warp. A second adapts ReturnToFieldFromMultiplaye
 initialize/unlock scripts and call the native local return/fade (080568FC).
 The linked-room return would otherwise emit physical overworld key commands;
 those remain rejected by the bounded command admission. Native map/position,
-party and completed-save data remain intact. The shared guest is 932 bytes. All hooks and the
+party and completed-save data remain intact. The shared guest is 964 bytes. All hooks and the
 unused ROM-tail entry are removed before normal world play or a cartridge reboot.
 The on-disk ROM remains untouched and must match the full supported digest.
 
@@ -113,8 +118,16 @@ the activity writes a `tradeStarted` marker to its private recovery journal.
 After that boundary, **the pre-trade party is never automatically restored**.
 
 A normal return keeps the actual exchanged party, native save and world state.
-Opening the app menu, disabling Experimental Features, backgrounding, leaving
-sharing or losing the link after trade entry closes the cable and reboots from
+A temporary transport interruption or background/foreground reconnect pauses
+the resident cartridge on its current trade screen, preserving native offers,
+exchange state, command queues and the same recovery journal. It retries in the
+background until the authenticated peer completes a fresh resume handshake.
+There is no elapsed-time cancellation, reboot, party restore or repeated
+exchange during that wait. Native commands are delivered once; the cartridge
+continues to own confirmation, exchange and linked save.
+
+Opening the app menu, disabling Experimental Multiplayer or deliberately leaving
+sharing after trade entry closes the cable and reboots from
 the native cartridge save. The player selects Continue. The game owns selection
 of its valid save after an interrupted linked save. An explicit cancellation before the menu opened can safely restore the
 pre-session snapshot because no Pokémon could be offered; the coordinator reads
@@ -126,19 +139,27 @@ If the app stops unexpectedly, binding the same game discovers its journal
 before automatic state loading. For a started trade it preserves the cartridge
 save, verifies the ROM and retained snapshot digest, and boots the native save;
 it does not load the old party from that snapshot. Recovery remains available
-with Experimental Features off. A failed recovery keeps its journal/snapshot
+with Experimental Multiplayer off. A failed recovery keeps its journal/snapshot
 and blocks automatic/quick state capture. Ordinary game, snapshot and backup
-storage remain separate. This follows the cartridge's linked-save semantics,
+storage remain separate. If iOS terminates a backgrounded app, this process-loss
+recovery applies instead of live continuation. This follows the cartridge's linked-save semantics,
 not a server-authoritative cross-account trade ledger.
 
 ## Validation workflow
+
+The October 24 transport changes add retained wire replay, fresh resume
+challenges, cancellation tombstones and temporary-loss coverage. New physical
+device and separate-network validation remains pending. Dated results below
+remain evidence for the builds named there.
 
 `PrototypeTools/native-link-battle.py --trade --relay` and
 `NativeBattleRuntimeTests.testActualNativeTrade` exercise the production activity
 coordinator and wire on two explicitly owned simulators. The driver uses native
 inputs, offers distinct trainer identities/nicknames, verifies the unoffered
 party member remains unchanged, exits to the real overworld with hooks removed,
-and cold-boots a new core from the resulting cartridge save to check persistence.
+and restores the resulting server state and cartridge battery into a new core
+to check persistence. Current ROMs use Bound's admitted setup and server restore;
+the legacy title-screen Continue flow is not part of this check.
 The two-member test parties are created only through a DEBUG/Simulator helper
 in disposable working saves. Original ROM and seed files are checksum-checked
 and never modified. Release excludes the fixture helper.
@@ -157,26 +178,64 @@ that path. Failed/interrupted attempts are retained and are not acceptance evide
 `PrototypeTools/full-app-gameplay.py --trade complete` drives the normal Friends
 selection, live map visibility, adjacent-tile/facing/A invitation, acceptance,
 native save/link prompts, Pokémon selection, confirmation, exchange and return
-through two full app UIs over real Agora. It checks both offered trainer/nickname
+through two full app UIs and the configured authenticated gameplay transport,
+alongside Agora friend video. It checks both offered trainer/nickname
 identities, the unchanged unoffered party member, playable worlds and released
-save restrictions. It does not substitute a loopback cable for the Agora path.
+save restrictions. It does not substitute a loopback cable for the app's network path.
 
 The same coordinator supports `--trade menu-disconnect`, `--trade
 exchange-disconnect`, and `--trade saved-disconnect`. The initiator backgrounds
 the app before offering, during the native animation before completion, or after
-the native exchange/save returns to the party menu. Both peers use native
-Continue inputs after recovery; the last two modes verify that the pair of saves
-contains either the original pair or the exchanged pair as appropriate, rejecting
-duplicated or lost offer identities. Fixture preparation and party/menu
+the native exchange/save returns to the party menu. The backgrounded peer returns
+after 18 seconds; both peers must retain the same activity ID, resume the current
+native screen and complete exactly one exchange. All three modes require the
+exchanged identities and unchanged unoffered party member. Fixture preparation and party/menu
 observations are DEBUG/Simulator-only and run on the completed-frame owner;
-all invitations, selections, confirmations and recovery inputs use normal UI.
+all invitations, selections, confirmations and resume inputs use normal UI.
 
 Trade recovery/completion messages now survive transport shutdown, reconnect and
-Experimental Features disable until the player acknowledges Return to game.
+Experimental Multiplayer disable until the player acknowledges Return to game.
 Repeated join callbacks preserve an already active activity's consent and input
 handoff. Cancellation diagnostics identify the calling source without account or
 credential data. The UIKit tests wait for stable control rectangles after a
 foreground transition before touching them.
+
+## Observed results — October 24, 2026
+
+The current native harness uses the integrated ROM with SHA-256
+`d2a206998f67db500f88ccc197fc9977ebd437f714661916abbc7b484e38370a`.
+`native-reconnect-trade-menu-fresh` passed on both owned simulators in **122.3
+seconds** after an 18-second interruption during trade entry. Both peers retained
+the same activity, completed one native exchange and linked save, and returned
+to their worlds. Restoring the resulting server state and cartridge battery into
+a new core preserved the offered Pokémon and original-trainer identities and
+left the unoffered party member unchanged. This receipt covers entry.
+
+`native-reconnect-trade-menu-final` passed in **121.4 seconds**, interrupting both
+peers for 18 seconds at the visible native party selector (`0804D639`). It
+resumed the same activity and passed the same exact exchange, linked-save,
+world-return and fresh-core persistence checks, with empty final command queues.
+
+`native-reconnect-trade-exchange-silent` passed in **124.0 seconds**. Both
+transports silently dropped packets for 18 seconds during the exchange animation
+(`08053D85`); no test callback explicitly suspended the activity. Production
+liveness detection paused both games, and a fresh resume exchange continued the
+same native trade. Each peer completed exactly one exchange and passed the same
+party, original-trainer, world-return and fresh-core persistence checks. Final
+wire and native command queues were empty.
+
+`native-reconnect-trade-saved` passed in **123.0 seconds**, interrupting both
+peers for 18 seconds after the cartridge recorded the completed linked save.
+Reconnection preserved that single completed exchange, returned both games to
+the world and passed the same fresh-core party/identity persistence checks.
+Final wire and native command queues were empty.
+
+The focused hosted suite executed **215 tests**, with zero failures and one
+optional exclusive-host performance test skipped. All 14 cooperative contract
+tests passed again after the final resume-challenge correction. The unsigned
+Release iPhone build, generated 964-byte guest check, 17,061 pinned-source checks
+and privacy checks passed. Local native relay tests do not establish physical
+phone, separate-network or current full-app Agora/Nakama acceptance.
 
 ## Observed results — October 21, 2026
 

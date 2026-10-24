@@ -10,46 +10,113 @@ protocol BoundBattleChannel: AnyObject, Sendable {
 /// Explicit numbering protects the native byte stream from duplicate/reordered
 /// messages. A wrong activity never reaches RAM.
 final class BoundBattleWire: @unchecked Sendable {
-    static let prefix = Data([0x42,0x46,0x53,0x31]) // BFS1
+    static let prefix = Data([0x42,0x46,0x53,0x32]) // BFS2: piggybacked cumulative acknowledgements
     private let lock = NSLock()
     private let id: UUID
     private var outgoing: UInt64 = 0
     private var expected: UInt64 = 1
     private var pending: [UInt64:Data] = [:]
     private var pendingBytes = 0
+    private var unacknowledged: [UInt64: Data] = [:]
+    private var lastTransmitted: [UInt64:TimeInterval] = [:]
+    private var unacknowledgedBytes = 0
+    private var lastRetry: TimeInterval?
+    private var lastReceived = ProcessInfo.processInfo.systemUptime
+    private var interruptionReported = false
+    private var acknowledgementPending = false
+    private var lastAcknowledgedAt: TimeInterval = 0
     private var active = true
     private var sender: (@Sendable (Data) -> Bool)?
+    private var senderGeneration=UUID()
     private let receiveBytes: @Sendable (Data) -> Void
     private let failed: @Sendable () -> Void
-    init(id: UUID, receive: @escaping @Sendable (Data) -> Void, failed: @escaping @Sendable () -> Void) {
-        self.id=id; receiveBytes=receive; self.failed=failed
+    private let interrupted: @Sendable () -> Void
+    init(id: UUID, receive: @escaping @Sendable (Data) -> Void, failed: @escaping @Sendable () -> Void,
+         interrupted: @escaping @Sendable () -> Void = {}) {
+        self.id=id; receiveBytes=receive; self.failed=failed; self.interrupted=interrupted
     }
-    func setSender(_ sender: @escaping @Sendable (Data) -> Bool) { lock.lock(); self.sender=sender; lock.unlock() }
+    func setSender(_ sender: @escaping @Sendable (Data) -> Bool) {
+        lock.lock(); self.sender=sender; senderGeneration=UUID(); lastRetry=nil; lastTransmitted.removeAll(); interruptionReported=false; lock.unlock()
+        tick()
+    }
+    func suspend() { lock.lock(); sender=nil; senderGeneration=UUID(); lastRetry=nil; lock.unlock() }
+    private func packet(sequence: UInt64, bytes: Data) -> Data {
+        var data=Self.prefix
+        var uuid=id.uuid; withUnsafeBytes(of:&uuid) { data.append(contentsOf:$0) }
+        for shift in stride(from:56,through:0,by:-8) { data.append(UInt8(truncatingIfNeeded:sequence >> shift)) }
+        for shift in stride(from:56,through:0,by:-8) { data.append(UInt8(truncatingIfNeeded:(expected-1) >> shift)) }
+        data.append(UInt8(bytes.count >> 8)); data.append(UInt8(truncatingIfNeeded:bytes.count))
+        data.append(bytes); return data
+    }
+    private func transmit(_ data: Data, using sender: (@Sendable (Data) -> Bool)?, generation:UUID) {
+        guard let sender, !sender(data) else { return }
+        lock.lock()
+        let report=active && generation==senderGeneration && !interruptionReported
+        if report { interruptionReported=true }
+        lock.unlock()
+        if report { interrupted() }
+    }
     func send(_ bytes: Data) -> Bool {
         guard !bytes.isEmpty, bytes.count <= 4096 else { return false }
         lock.lock()
-        guard active, let sender else { lock.unlock(); return false }
+        guard active else { lock.unlock(); return false }
+        guard unacknowledged.count<64, unacknowledgedBytes+bytes.count<=131072, outgoing<UInt64.max else {
+            active=false; lock.unlock(); failed(); return false
+        }
         outgoing &+= 1
-        var data=Self.prefix
-        var uuid=id.uuid; withUnsafeBytes(of:&uuid) { data.append(contentsOf:$0) }
-        for shift in stride(from:56,through:0,by:-8) { data.append(UInt8(truncatingIfNeeded:outgoing >> shift)) }
-        data.append(UInt8(bytes.count >> 8)); data.append(UInt8(truncatingIfNeeded:bytes.count))
-        data.append(bytes)
-        // Keep a strong sender; channel invalidation fences SDK destruction.
+        let data=packet(sequence:outgoing,bytes:bytes), sender=self.sender, generation=senderGeneration
+        unacknowledged[outgoing]=data; unacknowledgedBytes+=bytes.count
+        if sender != nil { lastTransmitted[outgoing]=ProcessInfo.processInfo.systemUptime }
+        if sender != nil { acknowledgementPending=false; lastAcknowledgedAt=ProcessInfo.processInfo.systemUptime }
         lock.unlock()
-        return sender(data)
+        // Success means retained for reliable delivery. A failed socket send
+        // cannot discard a native command or consume its sequence number.
+        transmit(data,using:sender,generation:generation); return true
+    }
+    func tick(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        lock.lock()
+        guard active, let sender else { lock.unlock(); return }
+        let generation=senderGeneration
+        var replay:[Data]=[]
+        if lastRetry.map({ now-$0>=0.25 }) ?? true {
+            lastRetry=now
+            // Repair the oldest gap first without flooding the server's shared
+            // battle lane with a whole backlog every retry interval.
+            let due=unacknowledged.keys.sorted().filter { lastTransmitted[$0].map { now-$0>=0.25 } ?? true }.prefix(4)
+            replay=due.compactMap { key in
+                unacknowledged[key].map { packet(sequence:key,bytes:Data($0.dropFirst(38))) }
+            }
+            for key in due { lastTransmitted[key]=now }
+        }
+        if replay.isEmpty, acknowledgementPending, now-lastAcknowledgedAt>=0.05 {
+            replay=[packet(sequence:0,bytes:Data())]
+        }
+        if !replay.isEmpty { acknowledgementPending=false; lastAcknowledgedAt=now }
+        lock.unlock()
+        for packet in replay { transmit(packet,using:sender,generation:generation) }
     }
     func receive(_ data: Data) {
-        guard data.count>30, data.count<=4126, data.starts(with:Self.prefix) else { return }
+        guard data.count>=38, data.count<=4134, data.starts(with:Self.prefix) else { return }
         var uuid=id.uuid
         let matches=withUnsafeBytes(of:&uuid) { Data($0)==data.subdata(in:4..<20) }
         guard matches else { return }
         let sequence=data[20..<28].reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
-        let count=Int(data[28]) << 8 | Int(data[29])
-        guard count>0,count<=4096,data.count==30+count else { return }
-        let bytes=data.subdata(in:30..<data.count)
+        let acknowledgement=data[28..<36].reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+        let count=Int(data[36]) << 8 | Int(data[37])
+        guard count<=4096,data.count==38+count,(count==0)==(sequence==0) else { return }
+        let bytes=data.subdata(in:38..<data.count)
         lock.lock()
-        guard active, sequence>=expected, pending[sequence]==nil else { lock.unlock(); return }
+        guard active, acknowledgement<=outgoing else { lock.unlock(); return }
+        lastReceived=ProcessInfo.processInfo.systemUptime
+        for key in unacknowledged.keys.filter({ $0<=acknowledgement }) {
+            if let packet=unacknowledged.removeValue(forKey:key) { unacknowledgedBytes-=packet.count-38 }
+            lastTransmitted.removeValue(forKey:key)
+        }
+        if count==0 { lock.unlock(); return }
+        acknowledgementPending=true
+        if sequence<expected || pending[sequence] != nil {
+            lock.unlock(); return
+        }
         guard sequence-expected<64, pendingBytes+bytes.count<=131072 else {
             active=false; pending.removeAll(); pendingBytes=0; lock.unlock(); failed(); return
         }
@@ -63,11 +130,13 @@ final class BoundBattleWire: @unchecked Sendable {
         for bytes in ready { receiveBytes(bytes) }
         lock.unlock()
     }
+    var hasPending: Bool { lock.lock(); defer { lock.unlock() }; return !unacknowledged.isEmpty }
+    var networkAge: TimeInterval { lock.lock(); defer { lock.unlock() }; return ProcessInfo.processInfo.systemUptime-lastReceived }
     var diagnostics:String {
         lock.lock(); defer { lock.unlock() }
-        return "sent=\(outgoing) received=\(expected-1) pending=\(pending.count) active=\(active)"
+        return "sent=\(outgoing) received=\(expected-1) pending=\(pending.count) unacknowledged=\(unacknowledged.count) active=\(active)"
     }
-    func close() { lock.lock(); active=false; sender=nil; pending.removeAll(); pendingBytes=0; lock.unlock() }
+    func close() { lock.lock(); active=false; sender=nil; pending.removeAll(); pendingBytes=0; unacknowledged.removeAll(); lastTransmitted.removeAll(); unacknowledgedBytes=0; lock.unlock() }
 }
 
 /// Only native battle/link command records enter the emulated link queues.

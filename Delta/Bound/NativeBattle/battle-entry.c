@@ -99,3 +99,15 @@ void BoundBattleTradeReturn(void)
     ((void (*)(void))0x0806994D)();
     ((void (*)(void))0x080568FD)();
 }
+
+/* RR's loss cleanup clears the link flag before the native terminal controller
+ * command is emitted. Keep that command on the cable, so the guest receives its
+ * native outcome. Installed only for a friendly battle; no outcome is invented.
+ * r7 still points to the native flags, and the native epilogue restores r0-r2,
+ * r4-r7 and PC. Non-link cleanup retains its original flag-clear decision. */
+void __attribute__((naked)) BoundBattlePreserveLinkFlags(void)
+{
+    __asm__ volatile("ldr r3,[r7]\nmovs r2,#2\ntst r3,r2\nbne 1f\n"
+        "movs r2,#128\nlsl r2,r2,#3\nand r3,r2\nldr r2,=0x09090961\nbx r2\n"
+        "1: ldr r2,=0x09090967\nbx r2\n.ltorg");
+}

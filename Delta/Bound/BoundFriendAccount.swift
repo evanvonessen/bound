@@ -119,6 +119,10 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
         guard let other else { return false }
         return owner == other.owner && snapshot === other.snapshot && (try? credentials()) != nil
     }
+    fileprivate func hasSameSessionIdentity(as other: AppCloudSession?) -> Bool {
+        guard let other else { return false }
+        return owner == other.owner && snapshot === other.snapshot
+    }
     private func validToken() throws -> String {
         let value = snapshot.read()
         guard let token = value.token, value.expiry > Date() else { throw BoundFriendError.signIn }
@@ -347,7 +351,9 @@ final class BoundFriendAccount: ObservableObject {
         didSet {
             guard publishesSessionChanges else { return }
             if oldValue == nil && session == nil { return }
-            if let oldValue, oldValue.isSameSession(as: session) { return }
+            // Credential expiry during an offline refresh does not replace the
+            // account. Authenticated operations still use isSameSession/credentials.
+            if let oldValue, oldValue.hasSameSessionIdentity(as: session) { return }
             NotificationCenter.default.post(name: Self.sessionDidChangeNotification, object: self)
         }
     }

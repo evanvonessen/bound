@@ -135,6 +135,36 @@ final class FriendInteractionTests: XCTestCase {
         XCTAssertFalse(p.a.blocksGameplay)
     }
 
+    func testActiveBattleAndTradeConsentSurviveRepeatedTransportLossUntilExplicitCancel() {
+        for activity in [Packet.Activity.battle,.trade] {
+            let p=peers()
+            XCTAssertTrue(p.a.open(at:10)); p.a.request(activity,at:10)
+            let consent=p.a.requestID
+            p.a.activityProgress(activity.title,playing:true)
+            var cancellations=0
+            p.a.cancelActivity={ [weak a=p.a] in
+                cancellations+=1; a?.activityEnded("Ended by player")
+            }
+            for epoch in 1...3 {
+                p.online=false; p.a.suspend()
+                p.a.tick(at:Double(epoch)*3600)
+                XCTAssertEqual(p.a.phase,.playing)
+                XCTAssertEqual(p.a.requestID,consent)
+                XCTAssertEqual(p.a.activity,activity)
+                XCTAssertFalse(p.a.requiresResultAcknowledgement)
+                XCTAssertEqual(cancellations,0)
+                p.online=true; p.aID=UUID(); p.bID=UUID()
+                p.a.start(send:{ _ in true })
+                XCTAssertEqual(p.a.phase,.playing)
+                XCTAssertEqual(p.a.requestID,consent)
+            }
+            p.online=false; p.a.suspend(); p.a.cancel()
+            XCTAssertEqual(cancellations,1)
+            XCTAssertEqual(p.a.phase,.ended)
+            XCTAssertTrue(p.a.requiresResultAcknowledgement)
+        }
+    }
+
     func testRecoveryResultSurvivesDisconnectAndReconnectUntilAcknowledged() {
         let p = peers()
         p.a.open(at:10); p.a.request(.trade,at:10)
@@ -438,6 +468,7 @@ final class BattleCableTests:XCTestCase {
         private var values:[Data]=[]
         func add(_ data:Data) { lock.lock(); values.append(data); lock.unlock() }
         var snapshot:[Data] { lock.lock(); defer { lock.unlock() }; return values }
+        func drain()->[Data] { lock.lock(); defer { lock.unlock() }; let copy=values; values.removeAll(); return copy }
     }
     func testWireReordersAndDeduplicatesAndRejectsWrongActivity() throws {
         let id=UUID(),sent=Box(),received=Box(),failures=Box()
@@ -451,7 +482,7 @@ final class BattleCableTests:XCTestCase {
         XCTAssertEqual(received.snapshot,[Data([1]),Data([2,3])]); XCTAssertTrue(failures.snapshot.isEmpty)
         let wrong=BoundBattleWire(id:UUID(),receive:{ _ in XCTFail("Wrong activity delivered") },failed:{ XCTFail() })
         wrong.receive(packets[0])
-        var malformed=packets[0]; malformed[29]=2
+        var malformed=packets[0]; malformed[37]=2
         incoming.receive(malformed)
         incoming.close(); XCTAssertFalse(incoming.send(Data([1])))
         XCTAssertFalse(outgoing.send(Data(repeating:1,count:4097)))
@@ -460,10 +491,129 @@ final class BattleCableTests:XCTestCase {
         let id=UUID(),sent=Box(),failures=Box()
         let outgoing=BoundBattleWire(id:id,receive:{ _ in },failed:{ XCTFail() })
         outgoing.setSender { sent.add($0); return true }
-        for _ in 0..<65 { XCTAssertTrue(outgoing.send(Data([1]))) }
+        XCTAssertTrue(outgoing.send(Data([1])))
+        var tooFar=sent.snapshot[0]; tooFar[27]=65
         let incoming=BoundBattleWire(id:id,receive:{ _ in XCTFail() },failed:{ failures.add(Data([1])) })
-        incoming.receive(sent.snapshot[64]); incoming.receive(sent.snapshot[0])
+        incoming.receive(tooFar); incoming.receive(sent.snapshot[0])
         XCTAssertEqual(failures.snapshot.count,1)
+    }
+    func testFailedSocketSendRetainsCommandsAndResumesSameSequenceInOrder() throws {
+        let id=UUID(),attempts=Box(),received=Box(),interruptions=Box(),replayed=Box()
+        let outgoing=BoundBattleWire(id:id,receive:{ _ in XCTFail() },failed:{ XCTFail("Transient failure cannot retire the wire") },
+            interrupted:{ interruptions.add(Data([1])) })
+        let incoming=BoundBattleWire(id:id,receive:{ received.add($0) },failed:{ XCTFail() })
+        outgoing.setSender { attempts.add($0); return false }
+        XCTAssertTrue(outgoing.send(Data([1,2])))
+        XCTAssertTrue(outgoing.send(Data([3,4])))
+        XCTAssertTrue(outgoing.hasPending)
+        XCTAssertEqual(interruptions.snapshot.count,1)
+        let original=attempts.snapshot
+        outgoing.suspend(); XCTAssertTrue(outgoing.send(Data([5,6])))
+        incoming.setSender { outgoing.receive($0); return true }
+        outgoing.setSender { replayed.add($0); return true }
+        let packets=replayed.snapshot
+        XCTAssertEqual(packets.count,3)
+        XCTAssertEqual(Array(packets.prefix(2)),original,"A socket reset must not assign replacement sequence numbers")
+        incoming.receive(packets[2]); incoming.receive(packets[1])
+        XCTAssertTrue(received.snapshot.isEmpty)
+        incoming.receive(packets[0]); incoming.receive(packets[1]); incoming.receive(packets[2])
+        incoming.tick(at:ProcessInfo.processInfo.systemUptime+1)
+        XCTAssertEqual(received.snapshot,[Data([1,2]),Data([3,4]),Data([5,6])])
+        XCTAssertFalse(outgoing.hasPending)
+        outgoing.tick(at:ProcessInfo.processInfo.systemUptime+1)
+        XCTAssertEqual(replayed.snapshot.count,3,"Acknowledged native commands must not keep replaying")
+    }
+    func testLostAcknowledgementReplaysWithoutRepeatingNativeCommand() throws {
+        let id=UUID(),sent=Box(),received=Box(),acks=Box()
+        let outgoing=BoundBattleWire(id:id,receive:{ _ in XCTFail() },failed:{ XCTFail() })
+        let incoming=BoundBattleWire(id:id,receive:{ received.add($0) },failed:{ XCTFail() })
+        outgoing.setSender { sent.add($0); return true }
+        incoming.setSender { acks.add($0); return true } // Deliberately lose every initial ACK.
+        XCTAssertTrue(outgoing.send(Data([0xBB,0x88])))
+        incoming.receive(try XCTUnwrap(sent.snapshot.first))
+        incoming.tick(at:ProcessInfo.processInfo.systemUptime+1)
+        XCTAssertEqual(received.snapshot.count,1); XCTAssertTrue(outgoing.hasPending)
+        let lost=try XCTUnwrap(acks.snapshot.first)
+        XCTAssertEqual(lost.count,38,"The acknowledgement is an empty wire frame")
+        incoming.setSender { outgoing.receive($0); return true }
+        outgoing.tick(at:ProcessInfo.processInfo.systemUptime+1)
+        incoming.receive(try XCTUnwrap(sent.snapshot.last))
+        incoming.tick(at:ProcessInfo.processInfo.systemUptime+2)
+        XCTAssertFalse(outgoing.hasPending)
+        XCTAssertEqual(received.snapshot,[Data([0xBB,0x88])],"An ACK loss cannot duplicate a native continuation or trade operation")
+        outgoing.receive(lost); XCTAssertFalse(outgoing.hasPending)
+    }
+    func testSynchronousBidirectionalDeliveryAcknowledgesWithoutDeadlock() {
+        let id=UUID(),atA=Box(),atB=Box()
+        let a=BoundBattleWire(id:id,receive:{ atA.add($0) },failed:{ XCTFail() })
+        let b=BoundBattleWire(id:id,receive:{ atB.add($0) },failed:{ XCTFail() })
+        a.setSender { b.receive($0); return true }; b.setSender { a.receive($0); return true }
+        let now=ProcessInfo.processInfo.systemUptime
+        for index in 0..<100 {
+            XCTAssertTrue(a.send(Data([UInt8(index)]))); XCTAssertTrue(b.send(Data([UInt8(100+index)])))
+            a.tick(at:now+Double(index)); b.tick(at:now+Double(index))
+        }
+        XCTAssertEqual(atA.snapshot.count,100); XCTAssertEqual(atB.snapshot.count,100)
+        XCTAssertFalse(a.hasPending); XCTAssertFalse(b.hasPending)
+        a.close(); b.close()
+    }
+    func testReplacedSenderCannotSuspendItsReplacementAfterAnOldSendFails() {
+        let id=UUID(),replayed=Box(),received=Box(),interruptions=Box()
+        let outgoing=BoundBattleWire(id:id,receive:{ _ in XCTFail() },failed:{ XCTFail() },interrupted:{ interruptions.add(Data([1])) })
+        defer { outgoing.close() }
+        let incoming=BoundBattleWire(id:id,receive:{ received.add($0) },failed:{ XCTFail() })
+        incoming.setSender { outgoing.receive($0); return true }
+        outgoing.setSender { _ in
+            outgoing.setSender { replayed.add($0); return true }
+            return false // Old socket completion races with the new sender.
+        }
+        XCTAssertTrue(outgoing.send(Data([9])))
+        XCTAssertTrue(interruptions.snapshot.isEmpty,"Failure from a retired channel cannot suspend its replacement")
+        XCTAssertEqual(replayed.snapshot.count,1)
+        for packet in replayed.snapshot { incoming.receive(packet) }
+        incoming.tick(at:ProcessInfo.processInfo.systemUptime+1)
+        XCTAssertEqual(received.snapshot,[Data([9])]); XCTAssertFalse(outgoing.hasPending)
+    }
+    func testRepairBatchesAreRateBoundedAndDrainEveryRetainedCommand() {
+        let id=UUID(),sent=Box(),received=Box()
+        let outgoing=BoundBattleWire(id:id,receive:{ _ in XCTFail() },failed:{ XCTFail() })
+        let incoming=BoundBattleWire(id:id,receive:{ received.add($0) },failed:{ XCTFail() })
+        outgoing.suspend()
+        for value in 0..<12 { XCTAssertTrue(outgoing.send(Data([UInt8(value)]))) }
+        incoming.setSender { outgoing.receive($0); return true }
+        outgoing.setSender { sent.add($0); return true }
+        let now=ProcessInfo.processInfo.systemUptime
+        for batch in 0..<4 {
+            let packets=sent.drain()
+            XCTAssertLessThanOrEqual(packets.count,4,"Repair traffic cannot burst every unacknowledged native packet at once")
+            for packet in packets { incoming.receive(packet) }
+            incoming.tick(at:now+Double(batch)+1)
+            outgoing.tick(at:now+Double(batch)+1)
+        }
+        XCTAssertEqual(received.snapshot,(0..<12).map { Data([UInt8($0)]) })
+        XCTAssertFalse(outgoing.hasPending)
+        XCTAssertTrue(sent.snapshot.isEmpty)
+    }
+    func testUnacknowledgedQueueIsBoundedAndWrongActivityCannotAcknowledgeIt() throws {
+        let id=UUID(),sent=Box(),failures=Box(),acks=Box()
+        let outgoing=BoundBattleWire(id:id,receive:{ _ in XCTFail() },failed:{ failures.add(Data([1])) })
+        outgoing.setSender { sent.add($0); return true }
+        XCTAssertTrue(outgoing.send(Data([1])))
+        let other=BoundBattleWire(id:UUID(),receive:{ _ in XCTFail() },failed:{ XCTFail() })
+        other.setSender { acks.add($0); return true }
+        other.receive(try XCTUnwrap(sent.snapshot.first)); XCTAssertTrue(acks.snapshot.isEmpty)
+        var forged=try XCTUnwrap(sent.snapshot.first)
+        forged.removeSubrange(38..<forged.count); forged[36]=0; forged[37]=0
+        forged.replaceSubrange(20..<28,with:Data(repeating:0,count:8)); forged[35]=1; forged[4] ^= 1
+        outgoing.receive(forged); XCTAssertTrue(outgoing.hasPending)
+        forged[4] ^= 1; forged[35]=2
+        outgoing.receive(forged); XCTAssertTrue(outgoing.hasPending,"A future acknowledgement cannot retire a command the peer has not received")
+        for _ in 1..<64 { XCTAssertTrue(outgoing.send(Data([1]))) }
+        XCTAssertFalse(outgoing.send(Data([1])))
+        XCTAssertEqual(failures.snapshot.count,1)
+        outgoing.close(); outgoing.setSender { _ in XCTFail("A retired activity must not replay"); return true }
+        outgoing.tick(at:ProcessInfo.processInfo.systemUptime+1)
+        XCTAssertFalse(outgoing.hasPending)
     }
     func testNativeBlockAdmissionRejectsUnsolicitedAndExcessWrites() {
         var admission=BoundNativeBlockAdmission()

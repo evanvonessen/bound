@@ -2,11 +2,13 @@
 
 Walk to the cardinal tile beside a connected friend, face their tile and press
 A. Choose Battle in the native game menu; the friend answers its YES/NO dialogue. Bound prepares a private recovery
-snapshot, transports the game's two-player link commands over the existing Agora
-session, and starts the cartridge's native single battle with each current party.
+snapshot, transports the game's two-player link commands over the authenticated
+Nakama gameplay connection, and starts the cartridge's native single battle with each current party.
 The ordinary game controls select moves and Pokémon. Opening the app menu,
-leaving sharing or losing the connection ends the friendly battle and restores
-the local pre-battle world. Quick saves and fast-forward are suppressed during
+or deliberately leaving sharing ends the friendly battle and restores
+the local pre-battle world. A temporary network interruption keeps the same
+battle on screen, pauses native emulation and reconnects in the background.
+Quick saves and fast-forward are suppressed during
 battle; quick load ends the battle before loading the selected state.
 
 Friendly battles are also available during Soul Link. A core-scoped observation
@@ -30,9 +32,9 @@ manufacture a win/loss or rewrite party data to simulate a battle. Trade now use
 `BoundVBABattleBridge` is called only with the core paused or on its completed
 frame owner. It verifies the entire loaded 32 MiB ROM and an unused 2 KiB tail.
 It installs Bound's small, original ARM7TDMI Thumb entry there and temporarily
-branches nine native entry points: battle-to-overworld and cable-room return,
+branches ten native entry points: battle-to-overworld and cable-room return,
 physical link exchange, serial VSync, multiplayer ID, send/receive queue counts,
-and serial enable/disable. No on-disk ROM patch is applied. `NativeBattle/battle-entry.c` calls the existing native task,
+serial enable/disable and Radical Red's cleanup flag check. No on-disk ROM patch is applied. `NativeBattle/battle-entry.c` calls the existing native task,
 including Radical Red's own battle-start hook. The generated header is checked
 with `PrototypeTools/build-battle-entry.py --check` using devkitARM.
 
@@ -68,14 +70,16 @@ incoming/loopback queues reset when that connection opens. This prevents setup
 shutdown commands from closing the subsequent battle. No socket or vendored core
 patch is required.
 
-The installed Agora 4.6.4 reliable data transmission API carries these commands
-as priority `cmd` messages, capped at 256 bytes and paced below 80 packets/second.
-The client enables the installed SDK's RDT connection flags before joining. This
-API is marked technical preview by the SDK. No SDK version, cloud configuration
-or backend resource changes. `BFB1` prepared/connected/finished/abort controls use
-the existing reliable ordered stream separately from movement.
+The current Nakama gameplay route carries native commands independently of
+Agora friend video. The legacy Agora channel remains supported without changing
+its pinned SDK. `BFB1` prepared/connected/finished/abort and resume controls use
+the authenticated expected-peer interaction route separately from movement.
 
-`BFS1` frames bind the activity UUID, monotonic sequence and bounded length.
+`BFS2` frames bind the activity UUID, monotonic sequence, cumulative receipt
+acknowledgement and bounded length. The wire retains unacknowledged packets and
+retries them after loss or channel replacement; the receiver delivers each
+sequence once. Each direction permits at most 64 queued packets and 128 KiB of
+payload; individual payloads are at most 4 KiB. Both peers need this protocol.
 Admission rejects oversized records, unknown opcodes, invalid block lengths,
 unsolicited or excess block continuation writes,
 wrong activities and excessive reordering or queued bytes. The mailbox holds
@@ -83,8 +87,43 @@ wrong activities and excessive reordering or queued bytes. The mailbox holds
 plus 2 KiB of connection/sequence tags. SDK receive
 callbacks copy bounded commands only; they never access emulated RAM. The frame
 owner alone installs hooks and reads/writes the mailbox. Channel closure fences
-SDK destruction. A missing heartbeat, overflow or native link error restores the
-private pre-battle state.
+SDK destruction. Temporary transport failure or heartbeat silence suspends the
+existing wire and cartridge without resetting either sequence. Backpressure
+pauses emulation before the native command queue fills. A fresh activity-bound
+challenge/response is required before replaying gameplay; a room/account change,
+explicit cancellation, corrupt packet or native link error remains a terminal
+boundary with the existing private-state recovery.
+
+## Temporary connection loss — October 24, 2026
+
+Temporary loss has no timer that expels either player from a battle. Bound keeps
+the activity ID, consent, native memory, command ordering and recovery journal.
+Retries run while the connection recovers; incoming duplicate commands and
+controls do not start another battle. Foreground resume cannot advance a waiting
+cartridge before its authenticated peer is ready. Explicit cancellation is
+remembered and repeated if its first notification was lost.
+
+This continuation requires the resident process and cartridge. App termination,
+changing games/accounts/rooms, disabling Experimental Multiplayer or explicitly
+ending the session still uses the existing recovery path. A process restart
+cannot reconstruct arbitrary unsaved live link state from a socket reconnect.
+Physical-phone and separate-network validation remains pending; the dated
+runtime results below distinguish the current native harness from earlier
+full-app acceptance.
+
+The same validation exposed a separate result stall without any outage: Radical
+Red's loss cleanup cleared the native link flag before command 55 (`EndLinkBattle`)
+was emitted. The host received its result locally while the guest waited with no
+outcome. A temporary friendly-battle-only hook at `09090958` preserves native
+link flags through that emission. The cartridge still produces the outcome and
+terminal command; trade and cooperative hooks are unchanged. Closing the battle
+restores the exact original ROM bytes, including the integrated co-op wrapper.
+
+`PrototypeTools/qa-python PrototypeTools/verify-battle-entry.py --rom <ROM>`
+reproduces that routing failure and checks the repair against the original and
+current integrated ROM hashes. It verifies actual native win/loss/draw payloads,
+non-link behavior, and native epilogue register/stack restoration. The generated
+entry occupies 964 bytes of its 1008-byte allocation.
 
 ## Friendly state and interruption
 
@@ -123,6 +162,41 @@ real Agora native commands, party damage, a normal knockout, matching outcomes
 and restored distinct locations.
 Credentials, ROMs, saves, screenshots and test receipts remain in ignored local
 validation storage. See the current results below for executed coverage.
+
+## Observed results — October 24, 2026
+
+`native-reconnect-battle-ready` passed on both owned simulators in **168.3
+seconds** with integrated ROM SHA-256
+`d2a206998f67db500f88ccc197fc9977ebd437f714661916abbc7b484e38370a`.
+Both transports silently dropped packets for 18 seconds after native entry.
+Production liveness detection paused the resident games without an injected
+disconnect callback; fresh resume challenges continued the same activity.
+Native moves caused actual damage and a knockout, producing matching **won (1)**
+and **lost (2)** outcomes. Both wire and native command queues were empty.
+
+Both games restored their exact pre-battle HP and returned to a clean overworld
+with temporary hooks removed. Soul Link ledger, loss bits, memorials, timeline
+and journal bytes were unchanged, with no recovery error. Original fixture ROM
+and seed files remained unchanged. The disposable fixture waits for its native
+starter to appear in the ordinary Soul reader before creating the test ledger;
+earlier attempts that raced that observation are retained as failed evidence.
+This run uses two actual VBA-M cores over a local relay, without live account,
+Nakama/Agora, physical-phone or separate-network acceptance. Current full-app
+background/foreground and paired native cooperative-battle validation remain
+pending.
+
+The hosted focused suite executed **215 tests**, with zero failures and one
+optional exclusive-host performance test skipped. The final cooperative resume
+challenge passed all 14 cooperative contract tests again. The unsigned Release
+iPhone build passed with the 964-byte native cleanup repair. Generated guest,
+pinned-source and privacy checks passed.
+
+The native instruction regression reproduced the missing terminal link command
+on both the original and current integrated ROM, then verified native win, loss
+and draw command routing through the repair. Non-link flag behavior and the
+native epilogue's stack and registers remained unchanged. These instruction
+checks supplement complete paired-game execution; they are not phone/network
+acceptance.
 
 ## Observed results — October 20, 2026
 

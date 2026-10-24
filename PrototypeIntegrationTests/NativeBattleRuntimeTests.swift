@@ -14,13 +14,15 @@ private struct NativeBattleGame:GameProtocol {
 private final class NativeBattleDriver:@unchecked Sendable {
     private let lock=NSLock()
     private let reader=BoundVBAPlayerStateProbe()
+    private let setup:NativePlayerSceneSetup?
     private var frame=0,battleFrame:Int?,lastMask=0
     private var playing=false,moves=false,didBoot=false,didDamage=false
     private var initialHP:[Int]?
     let booted=XCTestExpectation(description:"Native overworld")
     let entered=XCTestExpectation(description:"Native battle")
     let damage=XCTestExpectation(description:"Native battle damage")
-    init(core:EmulatorCore,profile:BoundPlayerROMProfile) {
+    init(core:EmulatorCore,profile:BoundPlayerROMProfile,admittedSetup:Bool=false) {
+        setup=admittedSetup ? NativePlayerSceneSetup(core:core):nil
         reader.configure(coreID:ObjectIdentifier(core),profile:profile,active:true,status:.waiting,detail:"Native battle cold boot")
     }
     func play(moves:Bool) { lock.lock(); playing=true; self.moves=moves; lock.unlock() }
@@ -29,9 +31,11 @@ private final class NativeBattleDriver:@unchecked Sendable {
         frame+=1
         lock.lock(); let playing=playing,moves=moves; lock.unlock()
         if !playing {
+            setup?.receive(core)
             let value=reader.receive(core)
-            if value?.status == .live,!didBoot { didBoot=true; booted.fulfill() }
-            apply(didBoot ? 0:(1300..<1302).contains(frame) ? 8:(1600..<1602).contains(frame)||(2200..<2202).contains(frame) ? 1:0,core:core)
+            if value?.status == .live,setup?.isReady != false,!didBoot { didBoot=true; booted.fulfill() }
+            if frame%1800==0,!didBoot { NSLog("Native battle boot frame=%d status=%@ setupReady=%d",frame,String(describing:value?.status),setup?.isReady == true) }
+            apply(didBoot || setup != nil ? 0:(1300..<1302).contains(frame) ? 8:(1600..<1602).contains(frame)||(2200..<2202).contains(frame) ? 1:0,core:core)
             return
         }
         let battle=BoundVBABattleBridge.isInBattle()
@@ -56,23 +60,28 @@ private final class NativeBattleDriver:@unchecked Sendable {
 
 private final class NativeTradeDriver:@unchecked Sendable {
     private let lock=NSLock(),reader=BoundVBAPlayerStateProbe()
+    private let setup:NativePlayerSceneSetup?
     private var frame=0,lastMask=0,playing=false,boot=false
     private var callbackID = -1,stateFrame=0
     private var count=0,marker=0
-    private let offersEnabled:Bool
+    private var offersEnabled:Bool,exitEnabled=true
     let booted=XCTestExpectation(description:"Trade overworld boot")
-    init(core:EmulatorCore,profile:BoundPlayerROMProfile,offersEnabled:Bool=true) {
+    init(core:EmulatorCore,profile:BoundPlayerROMProfile,offersEnabled:Bool=true,admittedSetup:Bool=false) {
         self.offersEnabled=offersEnabled
+        setup=admittedSetup ? NativePlayerSceneSetup(core:core):nil
         reader.configure(coreID:ObjectIdentifier(core),profile:profile,active:true,status:.waiting,detail:"Trade boot")
     }
     func begin() { lock.lock(); playing=true; lock.unlock() }
+    func progress(offers:Bool,exit:Bool) { lock.lock(); offersEnabled=offers; exitEnabled=exit; lock.unlock() }
     var currentMarker:Int { lock.lock(); defer { lock.unlock() }; return marker }
     func receive(_ core:EmulatorCore) {
         frame+=1
-        lock.lock(); let playing=playing; lock.unlock()
+        lock.lock(); let playing=playing,offersEnabled=offersEnabled,exitEnabled=exitEnabled; lock.unlock()
         if !playing {
-            if reader.receive(core)?.status == .live,!boot { boot=true; booted.fulfill() }
-            apply(boot ? 0:(1300..<1302).contains(frame) ? 8:(1600..<1602).contains(frame)||(2200..<2202).contains(frame) ? 1:0,core)
+            setup?.receive(core)
+            if reader.receive(core)?.status == .live,setup?.isReady != false,!boot { boot=true; booted.fulfill() }
+            if frame%1800==0,!boot { NSLog("Native trade boot frame=%d setupReady=%d",frame,setup?.isReady == true) }
+            apply(boot || setup != nil ? 0:(1300..<1302).contains(frame) ? 8:(1600..<1602).contains(frame)||(2200..<2202).contains(frame) ? 1:0,core)
             return
         }
         let value=BoundVBABattleBridge.advanceAndObserve()
@@ -96,8 +105,8 @@ private final class NativeTradeDriver:@unchecked Sendable {
         let elapsed=frame-stateFrame
         if id==0 {
             if trades==0 { mask=offersEnabled && elapsed%30<2 ? 1:0 }
-            else if cursor != 12 { mask=elapsed%30<2 ? 64:0 } // Up selects native Cancel with one party member.
-            else { mask=elapsed%30<2 ? 1:0 }
+            else if exitEnabled,cursor != 12 { mask=elapsed%30<2 ? 64:0 } // Up selects native Cancel with one party member.
+            else if exitEnabled { mask=elapsed%30<2 ? 1:0 }
         } else if id==1 {
             if elapsed==8 || elapsed==9 { mask=128 } // Native Summary/Trade selector: Down.
             else if elapsed>=20 { mask=elapsed%30<2 ? 1:0 }
@@ -830,25 +839,34 @@ final class NativeBattleRuntimeTests:XCTestCase {
         let rom=fixtures.appendingPathComponent("RadicalRed.gba"),seed=fixtures.appendingPathComponent("seed.sav")
         let originalROM=try Data(contentsOf:rom),originalSeed=try Data(contentsOf:seed)
         let cancelMode=env["BOUND_NATIVE_TRADE_CANCEL"]=="1"
+        let disconnectSeconds=Double(env["BOUND_NATIVE_DISCONNECT_SECONDS"] ?? "0") ?? 0
+        let disconnectStage=env["BOUND_NATIVE_DISCONNECT_STAGE"] ?? "menu"
+        let silentDisconnect=env["BOUND_NATIVE_SILENT_DISCONNECT"]=="1"
         let profile=try BoundPlayerROMProfile(rom:originalROM)
         let output=fixtures.appendingPathComponent("native-trade-"+UUID().uuidString,isDirectory:true)
         try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
-        let battery=output.appendingPathComponent("work.sav"); try originalSeed.write(to:battery)
+        // Admitted New Game owns a fresh battery. A previous trainer's seed
+        // would introduce an unrelated native overwrite-confirmation prompt.
+        let battery=output.appendingPathComponent("work.sav"); try Data(repeating:0xFF,count:0x20000).write(to:battery)
         let core=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
         let scene=try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previous=scene.windows.first { $0.isKeyWindow },window=UIWindow(windowScene:scene),owner=UIViewController(),view=GameView()
         window.rootViewController=owner; window.makeKeyAndVisible(); owner.view.addSubview(view)
         view.frame=CGRect(x:0,y:150,width:window.bounds.width,height:window.bounds.width*2/3); core.add(view)
-        let driver=NativeTradeDriver(core:core,profile:profile,offersEnabled:!cancelMode),native=BoundNativeBattleSession(),interactions=BoundFriendInteractionSession()
+        let driver=NativeTradeDriver(core:core,profile:profile,offersEnabled:!cancelMode,admittedSetup:true),native=BoundNativeBattleSession(),interactions=BoundFriendInteractionSession()
+        try primeNativeInteraction(interactions,activity:.trade)
+        driver.progress(offers:!cancelMode && !(disconnectSeconds>0 && disconnectStage=="menu"),exit:disconnectSeconds==0)
         let probe=native.probe
         core.updateHandler={ core in driver.receive(core); probe.receive(core) }
         var channel:NativeBattleRelayChannel?
+        var networkAvailable=true,disconnectResumed=false
         defer {
             native.cancel(resume:false); channel?.close(); _=core.pause(); BoundVBABattleBridge.close(); _=core.stop()
             window.isHidden=true; previous?.makeKeyAndVisible()
         }
         core.rate=8; XCTAssertTrue(core.start()); await fulfillment(of:[driver.booted],timeout:90)
         _=core.pause(); core.rate=1
+        try await prepareNativeParty(core)
         XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady())
         let offered=peer=="A" ? 0xBB:0xBC
         let expected=cancelMode ? offered : peer=="A" ? 0xBC:0xBB
@@ -856,6 +874,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         let beforeTrade=BoundVBABattleBridge.qaTradeParty()
         native.bind(core:core,gameID:output.lastPathComponent,interactions:interactions); native.canResume={ true }
         native.makeChannel={ receiver,failed in
+            guard networkAvailable else { return nil }
             let value=NativeBattleRelayChannel(port:relayPort,peer:peer,receive:{ data in
                 if data.starts(with:BoundBattleControlPacket.prefix) { Task { @MainActor in native.receive(data) } }
                 else { receiver(data) }
@@ -866,6 +885,13 @@ final class NativeBattleRuntimeTests:XCTestCase {
         driver.begin(); _=core.resume(); native.begin(activity:.trade,id:id,initiator:peer=="A")
         for tick in 0..<9000 {
             if tick%200==0 { NSLog("Native trade %@ callback=%08x script=%d trades=%d %@",peer,native.observation?.callback ?? 0,native.observation?.scriptResult ?? -1,native.observation?.tradeCount ?? 0,native.probe.diagnostics) }
+            let reachedDisconnect = disconnectStage=="exchange" ? native.observation?.callback==0x08053D85
+                : disconnectStage=="saved" ? (native.observation?.tradeCount ?? 0)>0 : native.observation?.callback==0x0804D639
+            if disconnectSeconds>0,!disconnectResumed,reachedDisconnect {
+                try await verifyNativeReconnect(native:native,id:id,core:core,interactions:interactions,port:port,peer:peer,seconds:disconnectSeconds,
+                    silent:silentDisconnect,disconnect:{ networkAvailable=false; if silentDisconnect { channel?.dropTraffic() } else { channel?.close() } },reconnect:{ networkAvailable=true })
+                disconnectResumed=true; driver.progress(offers:!cancelMode,exit:true)
+            }
             if cancelMode,native.observation?.tradeOpened==true {
                 _=try await request(port:port,peer:peer,body:["stage":"menu"])
                 for _ in 0..<200 {
@@ -880,7 +906,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
             if native.completedTrades>0 || !native.isActive { break }
             try await Task.sleep(for:.milliseconds(50))
         }
-        XCTAssertEqual(native.completedTrades,cancelMode ? 0:1,"Native trade failed: \(native.lastFailure) \(native.lastCableDiagnostic)")
+        XCTAssertEqual(native.completedTrades,cancelMode ? 0:1,"Native trade failed: \(native.lastFailure) \(native.lastCableDiagnostic) callback=\(String(native.observation?.callback ?? 0,radix:16)) scriptResult=\(native.observation?.scriptResult ?? -1) returned=\(native.observation?.returned == true) cancellation=\(native.lastCancellation)")
         _=core.pause()
         if !cancelMode {
             let received=BoundVBABattleBridge.qaTradeParty()
@@ -890,18 +916,28 @@ final class NativeBattleRuntimeTests:XCTestCase {
             XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady(),"Return to the real overworld with all hooks removed")
         }
         XCTAssertFalse(native.blocksAutoSave)
-        // Start a new emulator instance from the actual cartridge save, not a state.
+        // Current Bound reopens server checkpoints; the cartridge deliberately
+        // has no legacy battery Continue. Recreate the actual production pair
+        // of native state and battery on a fresh core after the native save.
+        let savedState=BoundVBABattleBridge.captureServerState()
+        let savedBattery=BoundVBABattleBridge.captureServerBattery()
+        XCTAssertFalse(savedState.isEmpty); XCTAssertFalse(savedBattery.isEmpty)
         XCTAssertTrue(core.stop()); core.updateHandler=nil
         let reopened=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
         let reboot=NativeTradeDriver(core:reopened,profile:profile)
         reopened.updateHandler={ reboot.receive($0) }; reopened.rate=8; reopened.add(view)
-        XCTAssertTrue(reopened.start()); await fulfillment(of:[reboot.booted],timeout:90); _=reopened.pause()
+        XCTAssertTrue(reopened.start()); _=reopened.pause()
+        XCTAssertTrue(BoundVBABattleBridge.restoreServerBattery(savedBattery))
+        XCTAssertTrue(BoundVBABattleBridge.restoreServerState(savedState))
+        _=reopened.resume(); await fulfillment(of:[reboot.booted],timeout:90); _=reopened.pause()
         let persisted=BoundVBABattleBridge.qaTradeParty(); XCTAssertEqual(persisted[8],UInt8(expected))
         XCTAssertEqual(persisted[4],UInt8(expected))
         XCTAssertEqual(persisted.subdata(in:100..<200),beforeTrade.subdata(in:100..<200))
         XCTAssertTrue(reopened.stop())
         XCTAssertEqual(try Data(contentsOf:rom),originalROM); XCTAssertEqual(try Data(contentsOf:seed),originalSeed)
-        let report:[String:Any]=["stage":"done","trade":native.completedTrades==1,"canceled":cancelMode && !native.isActive,"persisted":persisted[8]==UInt8(expected),"cable":native.lastCableDiagnostic]
+        XCTAssertEqual(disconnectResumed,disconnectSeconds>0)
+        let report:[String:Any]=["stage":"done","trade":native.completedTrades==1,"canceled":cancelMode && !native.isActive,"persisted":persisted[8]==UInt8(expected),"restorationMode":"server-state-and-battery","cable":native.lastCableDiagnostic,
+            "disconnectResumed":disconnectResumed,"disconnectSeconds":disconnectSeconds,"disconnectPhase":4,"silentDisconnect":silentDisconnect]
         try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("report.json"))
         _=try await request(port:port,peer:peer,body:report)
     }
@@ -910,6 +946,8 @@ final class NativeBattleRuntimeTests:XCTestCase {
     private func runNativeBattle(entryOnly:Bool) async throws {
         continueAfterFailure=false
         let env=ProcessInfo.processInfo.environment
+        let disconnectSeconds=Double(env["BOUND_NATIVE_DISCONNECT_SECONDS"] ?? "0") ?? 0
+        let silentDisconnect=env["BOUND_NATIVE_SILENT_DISCONNECT"]=="1"
         guard let peer=env["BOUND_NATIVE_BATTLE_PEER"],["A","B"].contains(peer),
               let raw=env["BOUND_NATIVE_BATTLE_PORT"],let port=Int(raw),(1024...65535).contains(port),
               let relayPort=env["BOUND_NATIVE_BATTLE_RELAY_PORT"].flatMap(UInt16.init),
@@ -921,20 +959,22 @@ final class NativeBattleRuntimeTests:XCTestCase {
         let rom=try Data(contentsOf:romURL),profile=try BoundPlayerROMProfile(rom:rom),seedBytes=try Data(contentsOf:seed)
         let output=root.appendingPathComponent("native-battle-"+UUID().uuidString,isDirectory:true)
         try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
-        let battery=output.appendingPathComponent("work.sav"); try seedBytes.write(to:battery)
+        let battery=output.appendingPathComponent("work.sav"); try Data(repeating:0xFF,count:0x20000).write(to:battery)
         let core=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:romURL,gameSaveURL:battery),options:[.metal:true]))
         let scene=try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previous=scene.windows.first { $0.isKeyWindow },window=UIWindow(windowScene:scene),owner=UIViewController(),gameView=GameView()
         window.rootViewController=owner; window.makeKeyAndVisible()
         gameView.frame=CGRect(x:0,y:150,width:window.bounds.width,height:window.bounds.width*2/3)
         owner.view.addSubview(gameView); core.add(gameView)
-        let driver=NativeBattleDriver(core:core,profile:profile)
+        let driver=NativeBattleDriver(core:core,profile:profile,admittedSetup:true)
         let native=BoundNativeBattleSession(),interactions=BoundFriendInteractionSession(),probe=native.probe
+        try primeNativeInteraction(interactions,activity:.battle)
         let soulProbe=BoundSoulProbe(),soulJournal=output.appendingPathComponent("run.json")
         soulProbe.configure(core:core,url:soulJournal); soulProbe.setVerified(true); soulProbe.setPreviewEnabled(true)
         native.soulProbe=soulProbe
         core.updateHandler={ core in driver.receive(core); soulProbe.receive(core); probe.receive(core) }
         var channel:NativeBattleRelayChannel?
+        var networkAvailable=true,disconnectResumed=false
         defer {
             native.cancel(resume:false); channel?.close(); native.makeChannel=nil; native.sendControl=nil
             _=core.pause(); BoundVBABattleBridge.close(); _=core.stop()
@@ -947,7 +987,17 @@ final class NativeBattleRuntimeTests:XCTestCase {
             try await Task.sleep(for:.milliseconds(100))
         }
         _=core.pause(); core.rate=1
+        try await prepareNativeParty(core)
         XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady())
+        // Native givemon can finish between the idle Soul probe's 30-frame
+        // samples. Start the ledger only after it observes the actual party.
+        for _ in 0..<60 {
+            let snapshot=soulProbe.read()
+            if snapshot.ready,snapshot.mons.count==1 { break }
+            _=core.resume(); try await Task.sleep(for:.milliseconds(50)); _=core.pause()
+        }
+        XCTAssertTrue(soulProbe.read().ready)
+        XCTAssertEqual(soulProbe.read().mons.count,1)
         try soulProbe.start(run:UUID(),binding:String(repeating:"a",count:64))
         _=core.resume(); try await Task.sleep(for:.milliseconds(150)); _=core.pause()
         let soulBefore=try XCTUnwrap(soulProbe.read().ledger)
@@ -958,6 +1008,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         native.bind(core:core,gameID:output.lastPathComponent,interactions:interactions)
         native.canResume={ true }
         native.makeChannel={ receiver,failed in
+            guard networkAvailable else { return nil }
             let value=NativeBattleRelayChannel(port:relayPort,peer:peer,receive:{ data in
                 if data.starts(with:BoundBattleControlPacket.prefix) { Task { @MainActor in native.receive(data) } }
                 else { receiver(data) }
@@ -979,14 +1030,46 @@ final class NativeBattleRuntimeTests:XCTestCase {
         _=try await request(port:port,peer:peer,body:["stage":"entered"])
         for _ in 0..<200 {
             let status=try await request(port:port)
-            if let peers=status["peers"] as? [String:[String:Any]],peers.count==2,peers.values.allSatisfy({ ["entered","done"].contains($0["stage"] as? String ?? "") }) { break }
+            if let peers=status["peers"] as? [String:[String:Any]],peers.count==2,peers.values.allSatisfy({ ["entered","disconnect","done"].contains($0["stage"] as? String ?? "") }) { break }
             try await Task.sleep(for:.milliseconds(50))
+        }
+        if disconnectSeconds>0 {
+            try await verifyNativeReconnect(native:native,id:uuid,core:core,interactions:interactions,port:port,peer:peer,seconds:disconnectSeconds,
+                silent:silentDisconnect,disconnect:{ networkAvailable=false; if silentDisconnect { channel?.dropTraffic() } else { channel?.close() } },reconnect:{ networkAvailable=true })
+            disconnectResumed=true
         }
         if entryOnly { native.cancel() }
         else {
-            var done=false
+            var done=false,terminalCaptured=false
+            var terminalObservedAt:TimeInterval?
             for tick in 0..<8000 {
-                if tick%200==0 { NSLog("Native battle %@: frame=%llu callback=%08x HP=%@ %@",peer,native.observation?.frame ?? 0,native.observation?.callback ?? 0,String(describing:native.observation?.playerHP),native.probe.diagnostics) }
+                let terminal=Dictionary(uniqueKeysWithValues:Mirror(reflecting:native).children.compactMap { child -> (String,Bool)? in
+                    guard let name=child.label,["localFinished","peerFinished","peerLinkClosed","played","isTransportSuspended","pausedForTransport"].contains(name),let value=child.value as? Bool else { return nil }
+                    return (name,value)
+                })
+                if tick%200==0 {
+                    let value=native.observation
+                    NSLog("Native battle %@: frame=%llu callback=%08x HP=%@ enemyHP=%@ outcome=%d flags=%08x returned=%d connected=%d battle=%d error=%d %@ %@",
+                        peer,value?.frame ?? 0,value?.callback ?? 0,String(describing:value?.playerHP),String(describing:value?.enemyHP),value?.outcome ?? -1,value?.flags ?? 0,
+                        value?.returned == true,value?.connected == true,value?.battle == true,value?.error == true,native.probe.diagnostics,String(describing:terminal))
+                }
+                if terminalObservedAt==nil,(terminal["localFinished"]==true || terminal["peerFinished"]==true) {
+                    terminalObservedAt=ProcessInfo.processInfo.systemUptime
+                }
+                if !terminalCaptured,let terminalObservedAt,ProcessInfo.processInfo.systemUptime-terminalObservedAt>=10 {
+                    terminalCaptured=true
+                    let running=core.state == .running; _=core.pause()
+                    try BoundVBABattleBridge.captureServerState().write(to:output.appendingPathComponent("native-terminal.vba-state"))
+                    func word(_ address:Int,size:Int=4)->Int {
+                        guard let data=core.deltaCore.emulatorBridge.readMemory?(at:address,size:size) else { return -1 }
+                        return data.enumerated().reduce(0) { $0 | Int($1.element)<<($1.offset*8) }
+                    }
+                    let registers=["receivedRemoteLinkPlayers":word(0x3F64,size:1),"callback1":word(0x30F0),
+                        "battleScript":word(0x23D74+0x8000),"battleMain":word(0x4F84),"battleControllerExecFlags":word(0x23BC8+0x8000),"disconnectRequested":word(0x402E,size:1)]
+                    NSLog("Native terminal %@: %@",peer,String(describing:registers))
+                    try JSONSerialization.data(withJSONObject:registers,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("native-terminal.json"))
+                    if running,!native.isTransportSuspended { _=core.resume() }
+                }
                 if native.completedBattles==1 { done=true; break }
                 if !native.isActive { break }
                 try await Task.sleep(for:.milliseconds(50))
@@ -1009,9 +1092,114 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertEqual(try Data(contentsOf:seed),seedBytes)
         let report:[String:Any]=["stage":"done","entryOnly":entryOnly,"battle":entered,
             "damaged":driver.damaged,"restored":native.restoredBattles==1,"cable":native.lastCableDiagnostic,
-            "outcome":native.observation?.outcome ?? 0,"soulLedgerUnchanged":soulProbe.read().ledger==soulBefore]
+            "outcome":native.observation?.outcome ?? 0,"soulLedgerUnchanged":soulProbe.read().ledger==soulBefore,
+            "disconnectResumed":disconnectResumed,"disconnectSeconds":disconnectSeconds,"disconnectPhase":4,"silentDisconnect":silentDisconnect]
         try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("report.json"))
         _=try await request(port:port,peer:peer,body:report)
+    }
+    /// New cartridges start before a starter exists. The same native givemon
+    /// recipe as integrated ROM gameplay QA creates this disposable party.
+    private func prepareNativeParty(_ core:EmulatorCore) async throws {
+        XCTAssertEqual(core.state,.paused)
+        XCTAssertTrue(BoundVBABattleBridge.qaStartNativePartyFixture())
+        for _ in 0..<200 {
+            _=core.resume(); try await Task.sleep(for:.milliseconds(50)); _=core.pause()
+            if BoundVBABattleBridge.verifyBattleReady() { return }
+        }
+        XCTFail("Native givemon did not return a valid party to the overworld")
+    }
+    /// The paired runtime harness bypasses Friends/UI but still establishes the
+    /// production chooser's activity and input-gate state before native entry.
+    /// Actual friend identity and UI consent remain the full-app suite's job.
+    private func primeNativeInteraction(_ interactions:BoundFriendInteractionSession,
+        activity:BoundFriendInteractionPacket.Activity) throws {
+        func position(_ x:Int,facing:Int) throws -> BoundFriendWorldPosition {
+            let value=["mapGroup":4,"mapNumber":3,"elevation":0,"x":x,"y":8,"facing":facing]
+            return try JSONDecoder().decode(BoundFriendWorldPosition.self,from:JSONSerialization.data(withJSONObject:value))
+        }
+        let local=try position(6,facing:4),peer=try position(7,facing:3),localSession=UUID(),peerSession=UUID()
+        interactions.context={ .init(localSession:localSession,peerSession:peerSession,local:local,peer:peer) }
+        interactions.start { _ in true }
+        XCTAssertTrue(interactions.open())
+        interactions.request(activity)
+        XCTAssertEqual(interactions.activity,activity)
+        XCTAssertNotNil(interactions.requestID)
+    }
+    /// Disconnect actual channels while the native activity owns the cartridge.
+    /// The same running core and journal must survive longer than the former
+    /// fifteen-second cable timeout, then complete via newly created channels.
+    private func verifyNativeReconnect(native:BoundNativeBattleSession,id:UUID,core:EmulatorCore,
+        interactions:BoundFriendInteractionSession,port:Int,peer:String,seconds:Double,
+        silent:Bool,disconnect:()->Void,reconnect:()->Void) async throws {
+        func barrier(_ phase:Int) async throws {
+            _=try await request(port:port,peer:peer,body:["stage":"disconnect","disconnectPhase":phase])
+            for _ in 0..<1200 {
+                let status=try await request(port:port)
+                if let peers=status["peers"] as? [String:[String:Any]],peers.count==2,
+                   peers.values.allSatisfy({ ($0["disconnectPhase"] as? Int ?? 0)>=phase }) { return }
+                try await Task.sleep(for:.milliseconds(50))
+            }
+            XCTFail("Both native peers did not reach reconnect phase \(phase)")
+            throw NSError(domain:"NativeReconnectBarrier",code:phase)
+        }
+        try await barrier(1)
+        let activity=native.activity,consent=interactions.requestID
+        disconnect()
+        if silent {
+            // No error callback and no explicit suspension: successful sends
+            // disappear until production liveness detection stops the engine.
+            for _ in 0..<100 {
+                if native.isTransportSuspended { break }
+                XCTAssertTrue(native.isActive,"Native timeout fired before the transport liveness guard: \(native.lastFailure)")
+                try await Task.sleep(for:.milliseconds(50))
+            }
+        } else { native.suspendTransport() }
+        try await Task.sleep(for:.milliseconds(100))
+        XCTAssertTrue(native.isTransportSuspended)
+        XCTAssertEqual(core.state,.paused,"The native engine must not run link timeouts while transport is unavailable")
+        for packet in [BoundBattleControlPacket(id:id,kind:.prepared),BoundBattleControlPacket(id:id,kind:.connected),
+            BoundBattleControlPacket(id:id,kind:.resumeReady,nonce:UUID(),acknowledgement:UUID()),
+            BoundBattleControlPacket(id:UUID(),kind:.abort)] {
+            native.receive(try XCTUnwrap(packet.encoded()))
+            XCTAssertTrue(native.isTransportSuspended,"Old barriers and another activity cannot satisfy fresh reconnect consent")
+            XCTAssertTrue(native.isActive)
+            XCTAssertEqual(core.state,.paused)
+        }
+        let heldFrame=native.observation?.frame
+        let heldHP=native.observation?.playerHP
+        let heldTrades=native.observation?.tradeCount
+        try await barrier(2)
+        for _ in 0..<Int(ceil(seconds*10)) {
+            XCTAssertTrue(native.isActive,"Temporary loss must not end the native activity: \(native.lastFailure)")
+            XCTAssertTrue(native.blocksAutoSave,"A suspended native transaction remains protected")
+            XCTAssertTrue(native.isTransportSuspended)
+            XCTAssertEqual(native.activity,activity)
+            XCTAssertEqual(interactions.requestID,consent)
+            XCTAssertEqual(interactions.phase,.connecting)
+            XCTAssertTrue(interactions.blocksGameplay,"Reconnect must not let new input mutate a paused transaction")
+            XCTAssertEqual(core.state,.paused)
+            XCTAssertEqual(native.observation?.frame,heldFrame)
+            XCTAssertEqual(native.observation?.playerHP,heldHP)
+            XCTAssertEqual(native.observation?.tradeCount,heldTrades)
+            XCTAssertEqual(native.restoredBattles,0)
+            XCTAssertEqual(native.completedTrades,0)
+            XCTAssertTrue(native.lastFailure.isEmpty)
+            try await Task.sleep(for:.milliseconds(100))
+        }
+        try await barrier(3)
+        reconnect(); native.resumeTransport()
+        for _ in 0..<600 {
+            if !native.isTransportSuspended { break }
+            XCTAssertTrue(native.isActive,"Fresh-channel handshake must retain the same activity")
+            try await Task.sleep(for:.milliseconds(50))
+        }
+        XCTAssertFalse(native.isTransportSuspended,"Both peers must agree to resume through the replacement channels")
+        XCTAssertTrue(native.isActive)
+        XCTAssertEqual(core.state,.running)
+        XCTAssertEqual(native.activity,activity)
+        XCTAssertEqual(interactions.phase,.playing)
+        XCTAssertTrue(native.lastFailure.isEmpty)
+        try await barrier(4)
     }
     private func request(port:Int,peer:String?=nil,body:[String:Any]?=nil) async throws->[String:Any] {
         var request=URLRequest(url:URL(string:"http://127.0.0.1:\(port)/"+(peer ?? "status"))!)
@@ -1030,6 +1218,7 @@ private final class NativeBattleRelayChannel:BoundBattleChannel,@unchecked Senda
     private var buffered=Data()
     private var active=true
     private var ready=false
+    private var dropping=false
     private var waiting:[Data]=[]
     private let receive:@Sendable (Data)->Void
     private let failed:@Sendable ()->Void
@@ -1051,7 +1240,7 @@ private final class NativeBattleRelayChannel:BoundBattleChannel,@unchecked Senda
         connection.start(queue:queue)
     }
     func send(_ data:Data)->Bool {
-        guard data.count<=4126 else { return false }
+        guard data.count<=4134 else { return false }
         queue.async { [self] in
             guard active else { return }
             if ready { write(data) }
@@ -1061,6 +1250,7 @@ private final class NativeBattleRelayChannel:BoundBattleChannel,@unchecked Senda
         return true
     }
     private func write(_ data:Data) {
+        guard !dropping else { return }
         let count=data.count
         let header=Data([UInt8(count>>24),UInt8(truncatingIfNeeded:count>>16),UInt8(truncatingIfNeeded:count>>8),UInt8(truncatingIfNeeded:count)])
         connection.send(content:header+data,completion:.contentProcessed { [weak self] error in
@@ -1074,9 +1264,9 @@ private final class NativeBattleRelayChannel:BoundBattleChannel,@unchecked Senda
             guard self.buffered.count<=131072 else { self.failed(); return }
             while self.buffered.count>=4 {
                 let count=self.buffered.prefix(4).reduce(0) { ($0<<8)|Int($1) }
-                guard count>30,count<=4126 else { self.failed(); return }
+                guard count>=38,count<=4134 else { self.failed(); return }
                 guard self.buffered.count>=count+4 else { break }
-                self.receive(Data(self.buffered.dropFirst(4).prefix(count)))
+                if !self.dropping { self.receive(Data(self.buffered.dropFirst(4).prefix(count))) }
                 self.buffered.removeFirst(count+4)
             }
             if ended || error != nil { self.failed(); return }
@@ -1084,6 +1274,7 @@ private final class NativeBattleRelayChannel:BoundBattleChannel,@unchecked Senda
         }
     }
     func close() { queue.async { [self] in active=false; connection.cancel() } }
+    func dropTraffic() { queue.sync { dropping=true } }
 }
 
 final class BoundHandoffSafetyTests: XCTestCase {
