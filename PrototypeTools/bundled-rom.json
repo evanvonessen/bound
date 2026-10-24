@@ -1,6 +1,6 @@
 {
-  "sha256": "ed07daecb5d38278dd6a0452b3113bab68bfb0fdc0a4cf9d95caff120404700c",
-  "url": "https://github.com/evanvonessen/multi_red/releases/download/cartridge-ed07daecb5d38278/rrbin-integrated.gba",
+  "sha256": "b427230dc4e07e0b576b904af9ff6aa959ae281477bc7093ad596d552f6bd7d0",
   "repository": "evanvonessen/multi_red",
-  "tag": "cartridge-ed07daecb5d38278"
+  "local_only": true,
+  "variant": "cooperative-doubles"
 }
