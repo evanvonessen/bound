@@ -107,17 +107,21 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         switch value {
         case .joined:
             connected = true; event?(.joined)
+            if peerOnline { event?(.remoteJoined) }
         case .roster(let members):
             let online = members.contains { $0.ownerID == gameplay.peerOwnerID && $0.online }
-            if peerOnline && !online { pendingPresence = nil; event?(.remoteGone) }
-            peerOnline = online
+            if online != peerOnline {
+                peerOnline = online
+                if !online { pendingPresence = nil }
+                if connected { event?(online ? .remoteJoined : .remoteGone) }
+            }
         case .message(let opcode, let data, let sender):
             guard connected, sender == gameplay.peerOwnerID else { return }
             receivedMessages += 1
             if opcode == 1 { pendingPresence = data }
             else if opcode == 2 {
                 guard pendingInteractions.count < 128, pendingInteractionBytes + data.count <= 131_072 else {
-                    client.stop(); connected = false; battleInbox.fail()
+                    client.stop(); connected = false; peerOnline = false; battleInbox.fail()
                     event?(.failed(.init(.connectionLost))); return
                 }
                 pendingInteractions.append(data); pendingInteractionBytes += data.count
@@ -126,7 +130,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
             guard owner == gameplay.peerOwnerID else { return }
             pendingRetainedPresence = (data, age, ProcessInfo.processInfo.systemUptime)
         case .failed:
-            connected = false; pendingPresence = nil; pendingInteractions.removeAll(); pendingInteractionBytes = 0
+            connected = false; peerOnline = false; pendingPresence = nil; pendingInteractions.removeAll(); pendingInteractionBytes = 0
             event?(.failed(.init(.connectionLost)))
         }
     }

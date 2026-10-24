@@ -1961,6 +1961,27 @@ struct BoundFriendsSheet: View {
     }
 }
 
+enum BoundFriendRowConnection: Equatable {
+    case inactive, connecting, connected
+
+    @MainActor
+    init(roomID: String, selectedRoomID: String?, sharing: FriendSharingSession) {
+        guard selectedRoomID == roomID, sharing.configuredRoomID == roomID,
+              sharing.connectionRequested else { self = .inactive; return }
+        self = sharing.active && sharing.joined && !sharing.reconnecting && sharing.peerConnected
+            ? .connected : .connecting
+    }
+
+    var title: String? {
+        switch self {
+        case .inactive: return nil
+        case .connecting: return "Connecting"
+        case .connected: return "Connected"
+        }
+    }
+    var symbol: String { self == .connected ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath" }
+}
+
 /// The Friends tile and Account settings use identical rows and actions.
 struct BoundFriendsListSections: View {
     @ObservedObject var sharing: FriendSharingSession
@@ -2035,19 +2056,21 @@ struct BoundFriendsListSections: View {
 
     @ViewBuilder
     private func friendRow(_ room: FriendRoom) -> some View {
-        let selected = onboarding.selected?.roomID == room.roomID
+        let connection = BoundFriendRowConnection(roomID: room.roomID,
+            selectedRoomID: onboarding.selected?.roomID, sharing: sharing)
+        let connected = connection == .connected
         HStack(spacing: 10) {
             Button {
                 onboarding.select(room, startSharing: true)
             } label: {
                 HStack(spacing: 8) {
-                    Text(room.displayName).fontWeight(selected ? .semibold : .regular)
+                    Text(room.displayName).fontWeight(connected ? .semibold : .regular)
                         .lineLimit(1).truncationMode(.tail)
                     Spacer(minLength: 8)
-                    if selected {
-                        Label(sharingStatus, systemImage: sharingStatusSymbol)
+                    if let title = connection.title {
+                        Label(title, systemImage: connection.symbol)
                             .font(.caption.weight(.medium))
-                            .foregroundStyle(sharing.active ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(connected ? Color.accentColor : Color.secondary)
                             .lineLimit(1)
                     }
                 }
@@ -2058,7 +2081,7 @@ struct BoundFriendsListSections: View {
             .buttonStyle(.plain)
             .disabled(onboarding.busy)
             .accessibilityHint("Starts sharing your game and sends this friend a notification")
-            if selected && sharing.active {
+            if connection != .inactive {
                 Button("Stop") {
                     onboarding.disconnect()
                 }
@@ -2080,22 +2103,9 @@ struct BoundFriendsListSections: View {
         }
         .padding(.horizontal, 8)
         .frame(minHeight: 44)
-        .background(selected ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1))
-        .accessibilityIdentifier(selected ? "bound.friend-row-selected" : "bound.friend-row")
-    }
-
-    private var sharingStatus: String {
-        guard sharing.active else { return "Not sharing" }
-        if sharing.reconnecting { return "Connecting" }
-        if !sharing.joined { return "Connecting" }
-        return sharing.remoteVisible ? "Sharing" : "Waiting for friend"
-    }
-
-    private var sharingStatusSymbol: String {
-        guard sharing.active else { return "pause.circle" }
-        if sharing.reconnecting || !sharing.joined { return "arrow.triangle.2.circlepath" }
-        return sharing.remoteVisible ? "dot.radiowaves.left.and.right" : "hourglass"
+        .background(connected ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(connected ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1))
+        .accessibilityIdentifier(connected ? "bound.friend-row-selected" : "bound.friend-row")
     }
 
 }

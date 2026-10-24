@@ -23,7 +23,7 @@ struct AgoraSharingTimestamp {
 }
 
 enum FriendSharingEvent: Equatable, Sendable {
-    case joined, remoteFrame, remoteGone, reconnecting, rejoined, tokenNeeded
+    case joined, remoteJoined, remoteFrame, remoteGone, reconnecting, rejoined, tokenNeeded
     case connection(state: Int, reason: Int)
     case failed(FriendSharingFailure)
 }
@@ -38,6 +38,7 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
     private var count = 0
     private var acceptsFrames = true
     private var suspended = false
+    private var peerPresent = false
     private var frameGeneration: UInt64 = 0
     private var converting = false
     private var convertedFrames = 0
@@ -75,6 +76,17 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
         self.remoteUID = remoteUID; self.event = event
     }
     var receivedFrames: Int { lock.lock(); defer { lock.unlock() }; return count }
+    var expectedPeerPresent: Bool { lock.lock(); defer { lock.unlock() }; return peerPresent }
+    func remoteJoined(uid: UInt) {
+        guard uid == remoteUID else { return }
+        lock.lock(); peerPresent = true; lock.unlock()
+        resetFrames(enabled: true); event(.remoteJoined, uid)
+    }
+    func remoteLeft(uid: UInt) {
+        guard uid == remoteUID else { return }
+        lock.lock(); peerPresent = false; lock.unlock()
+        resetFrames(enabled: false); event(.remoteGone, uid)
+    }
     func resetFrames(enabled: Bool) { lock.lock(); count = 0; frameGeneration &+= 1; acceptsFrames = enabled; convertedFrames = 0; replacedFrames = 0; busyDrops = 0; staleDrops = 0; lastReceivedAt = nil; lastConvertedAt = nil; pixelEvidence = [:]; firstRendered = false; latestPixels = nil; lock.unlock() }
     func onRenderVideoFrame(_ videoFrame: AgoraOutputVideoFrame, uid: UInt, channelId: String) -> Bool {
         guard uid == remoteUID else { return false }
@@ -188,7 +200,7 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
         if uid == remoteUID { sdkEvidence["sdkExpectedPeerJoins", default: 0] += 1 }
         lock.unlock()
         #endif
-        if uid == remoteUID { resetFrames(enabled: true); event(.remoteFrame, uid) }
+        remoteJoined(uid: uid)
     }
     #if DEBUG
     func rtcEngine(_ engine: AgoraRtcEngineKit, firstLocalVideoFramePublishedWithElapsed elapsed: Int,
@@ -221,7 +233,7 @@ final class AgoraSharingCallbacks: NSObject, AgoraRtcEngineDelegate, AgoraVideoF
     }
     #endif
     func rtcEngine(_ engine: AgoraRtcEngineKit, didOfflineOfUid uid: UInt, reason: AgoraUserOfflineReason) {
-        if uid == remoteUID { resetFrames(enabled: false); event(.remoteGone, uid) }
+        remoteLeft(uid: uid)
     }
     func rtcEngine(_ engine: AgoraRtcEngineKit, didOccurError errorCode: AgoraErrorCode) { event(.failed(.init(.sdkError, code: Int(errorCode.rawValue))), nil) }
     func rtcEngineConnectionDidLost(_ engine: AgoraRtcEngineKit) { connectionLost() }
@@ -450,14 +462,23 @@ final class AgoraSharingTransport: FriendSharingTransport {
                 switch value {
                 case .joined:
                     if self.recovering { self.completeRecovery() }
-                    else { self.joined = true; event(.joined) }
-                case .remoteFrame:
+                    else {
+                        self.joined = true; event(.joined)
+                        if self.callbacks?.expectedPeerPresent == true {
+                            self.engine?.muteRemoteVideoStream(self.remoteUID, mute: false)
+                            self.bindRemote()
+                            event(.remoteJoined)
+                        }
+                    }
+                case .remoteJoined:
                     // Presence only binds the canvas. Receipt is measured separately
                     // by the actual pre-render frame observer, never this join event.
-                    if uid == self.remoteUID, !self.recovering {
+                    if uid == self.remoteUID, self.joined, !self.recovering {
                         self.engine?.muteRemoteVideoStream(self.remoteUID, mute: false)
                         self.bindRemote()
+                        event(.remoteJoined)
                     }
+                case .remoteFrame: break
                 case .remoteGone: self.clearRemote(); if !self.recovering { event(.remoteGone) }
                 case .connection(let state, let reason):
                     self.lastConnectionState = state; self.lastConnectionReason = reason
@@ -575,6 +596,7 @@ final class AgoraSharingTransport: FriendSharingTransport {
         engine.muteRemoteVideoStream(remoteUID, mute: false)
         bindRemote()
         eventHandler?(.rejoined)
+        if callbacks?.expectedPeerPresent == true { eventHandler?(.remoteJoined) }
     }
 
     func recordRecoveryTimeout() { recordFailure(.init(.reconnectionTimeout)) }

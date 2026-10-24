@@ -226,6 +226,7 @@ final class FriendSharingSession: ObservableObject {
     @Published private(set) var status = "Friend screen"
     @Published private(set) var active = false
     @Published private(set) var joined = false
+    @Published private(set) var peerConnected = false
     @Published private(set) var reconnecting = false
     @Published private(set) var videoPublishing = false
     // Numeric counters feed diagnostics, not the production companion UI.
@@ -241,6 +242,7 @@ final class FriendSharingSession: ObservableObject {
     var authenticatedSession: (() -> AppCloudSession?)?
     var multiplayerPacketReceiver: ((Data) -> Void)?
     var connectedRoomID: String? { active ? authRoom : nil }
+    var connectionRequested: Bool { active || foregroundReconnectIntent != nil }
     var configuredRoomID: String? { authenticatedMode ? roomProvider() : nil }
     private var automaticMultiplayerConnection = false
     private var startedForMultiplayer = false
@@ -514,6 +516,7 @@ final class FriendSharingSession: ObservableObject {
 
     private func beginStart() {
         guard !active, !backgrounded else { return }
+        peerConnected = false
         if authenticatedMode {
             guard let room = roomProvider(), let identity = authenticatedSession?() else {
                 status = "Sign in to share"; return
@@ -534,7 +537,7 @@ final class FriendSharingSession: ObservableObject {
         soulLink.setConnection(owner: tokenOwner?.uuidString ?? (authenticatedMode ? nil : String(configuration.uid)), room: authRoom ?? configuration.channel)
         generation = UUID()
         let run = generation
-        receivedFrames = 0; publishedFrames = 0; remoteVisible = false
+        receivedFrames = 0; publishedFrames = 0; remoteVisible = false; peerConnected = false
         sourceFramesAccepted = 0; receiverCadence = FriendSharingReceiveCadence(); sourceFrameNumber = 0; sourceButtons = 0; publicationToken = nil
         lastDisplayTick = nil; largestDisplayGap = 0
         reconnecting = false; recoveryAttempts = 0; recoveryCompletions = 0; recoveryTimeouts = 0
@@ -570,10 +573,14 @@ final class FriendSharingSession: ObservableObject {
                 self.startPresence()
                 self.status = "Waiting for friend"
                 self.beginReceiving(run: run)
+            case .remoteJoined:
+                guard self.joined, !self.reconnecting, !self.backgrounded else { return }
+                self.peerConnected = true
             case .remoteFrame:
                 self.receivedFrames += 1
                 // Freshness is established by the decoded-frame clock below.
             case .remoteGone:
+                self.peerConnected = false
                 self.invalidateSpectatorVideo()
                 self.sharedWorld.peerGone(); self.soulLink.peerGone()
                 self.cooperativeDoubles.suspend(); self.nativeBattle.cancel(resume: !self.backgrounded)
@@ -731,7 +738,7 @@ final class FriendSharingSession: ObservableObject {
         invalidateSpectatorVideo()
         guard !reconnecting else { return } // Repeated SDK events never extend the deadline.
         sharedWorld.peerGone()
-        reconnecting = true; joined = false; recoveryAttempts += 1
+        reconnecting = true; joined = false; peerConnected = false; recoveryAttempts += 1
         cooperativeDoubles.suspend(); nativeBattle.cancel(resume: false); interactions.stop(); livePresence.stop(keepPresentation: true)
         receivePlaybackFrame(nil)
         remoteVisible = false; receivedFrames = 0
@@ -832,7 +839,7 @@ final class FriendSharingSession: ObservableObject {
         publicationToken = nil
         sourceFrameNumber = 0; sourceButtons = 0
         transport.stop()
-        active = false; joined = false; videoPublishing = false; remoteVisible = false; receivedFrames = 0
+        active = false; joined = false; peerConnected = false; videoPublishing = false; remoteVisible = false; receivedFrames = 0
         status = !isConfigured ? "Friend screen" : "Game sharing stopped"
         writeEvidence()
     }
@@ -881,7 +888,7 @@ final class FriendSharingSession: ObservableObject {
             return
         }
         foregroundReconnectRetry?.cancel(); foregroundReconnectRetry = nil
-        generation = UUID(); active = true; status = "Restoring sharing"
+        generation = UUID(); active = true; peerConnected = false; status = "Restoring sharing"
         authRoom = intent.room; tokenOwner = intent.owner; tokenRenewals = 0
         requestToken(initial: true)
     }
@@ -904,7 +911,7 @@ final class FriendSharingSession: ObservableObject {
         recoveryID = nil; recoveryDeadline?.cancel(); recoveryDeadline = nil
         reconnecting = false; sharing.stop(); publicationToken = nil
         sourceFrameNumber = 0; sourceButtons = 0; transport.stop()
-        active = false; joined = false; videoPublishing = false; remoteVisible = false; receivedFrames = 0
+        active = false; joined = false; peerConnected = false; videoPublishing = false; remoteVisible = false; receivedFrames = 0
         status = failureStatus
         scheduleForegroundReconnectRetry()
         writeEvidence()

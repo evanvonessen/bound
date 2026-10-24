@@ -401,6 +401,93 @@ final class FriendModerationIntegrationTests: XCTestCase {
 
 @MainActor
 final class FriendTapToShareIntegrationTests: XCTestCase {
+    func testFriendRowHighlightsOnlyConnectedPeerAndStopRemovesItsBadge() async throws {
+        let identity = try makeIdentity(owner: UUID())
+        let room = FriendRoom(roomID: UUID().uuidString, displayName: "Friend")
+        let otherRoom = UUID().uuidString
+        let transport = FriendTapSharingTransport()
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            tokenFetcher: { room, session in self.makeLease(room: room, owner: session.owner, request: 1) })
+        let onboarding = FriendOnboarding(call: { _, _, _ in .init(ok: true, rooms: [room]) },
+            sendJiggle: { _, _ in "" }, observeAccount: { OnboardingObservation($0) })
+        func row(_ roomID: String? = nil) -> BoundFriendRowConnection {
+            .init(roomID: roomID ?? room.roomID, selectedRoomID: onboarding.selected?.roomID, sharing: sharing)
+        }
+        defer { onboarding.close(); sharing.stop() }
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+        onboarding.select(room)
+        XCTAssertEqual(row(), .inactive, "Remembering a friend does not highlight their row")
+        XCTAssertNil(row().title, "An idle row has no Not sharing badge")
+        onboarding.select(room, startSharing: true)
+        await waitUntil { sharing.joined }
+        XCTAssertTrue(sharing.joined)
+        XCTAssertEqual(row(), .connecting, "Joining locally is not proof that both friends are connected")
+        XCTAssertEqual(row(otherRoom), .inactive)
+        transport.emit(.remoteJoined)
+        XCTAssertTrue(sharing.peerConnected)
+        XCTAssertFalse(sharing.remoteVisible, "A connection does not require decoded video")
+        XCTAssertEqual(row(), .connected)
+        XCTAssertEqual(row().title, "Connected")
+        sharing.stop()
+        XCTAssertNotNil(onboarding.selected, "A cached row may remain after a transport stops")
+        XCTAssertEqual(row(), .inactive, "A stopped selection loses its purple box and badge")
+        XCTAssertNil(row().title)
+        onboarding.select(room, startSharing: true)
+        await waitUntil { sharing.joined }
+        transport.emit(.remoteJoined)
+        XCTAssertEqual(row(), .connected)
+        transport.emit(.remoteGone)
+        XCTAssertEqual(row(), .connecting)
+        transport.emit(.remoteJoined)
+        XCTAssertEqual(row(), .connected)
+        transport.emit(.reconnecting)
+        XCTAssertEqual(row(), .connecting, "Reconnection clears the connected highlight")
+        transport.emit(.remoteJoined)
+        XCTAssertFalse(sharing.peerConnected, "A peer event cannot bypass local recovery")
+        transport.emit(.rejoined)
+        transport.emit(.remoteJoined)
+        XCTAssertEqual(row(), .connected)
+        onboarding.disconnect()
+        XCTAssertEqual(row(), .inactive)
+        XCTAssertNil(row().title)
+        XCTAssertFalse(sharing.connectionRequested)
+        XCTAssertFalse(sharing.peerConnected)
+        XCTAssertFalse(sharing.active)
+        transport.emit(.remoteJoined)
+        XCTAssertFalse(sharing.peerConnected, "A late callback cannot restore a stopped highlight")
+        XCTAssertEqual(row(), .inactive)
+    }
+
+    func testStopDuringROMConnectionRetryClearsRowAndCancelsRetry() async throws {
+        let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer {
+            UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key)
+            NotificationCenter.default.post(name: BoundMultiplayerFeatures.didChange, object: nil)
+        }
+        let identity = try makeIdentity(owner: UUID())
+        let room = FriendRoom(roomID: UUID().uuidString, displayName: "Friend")
+        var requests = 0
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+            tokenFetcher: { _, _ in requests += 1; throw FriendSharingTokenError.unavailable })
+        let onboarding = FriendOnboarding(call: { _, _, _ in .init(ok: true, rooms: [room]) },
+            observeAccount: { OnboardingObservation($0) })
+        defer { onboarding.setMultiplayerServiceActive(false, sharing: sharing, existing: { identity }); sharing.stop() }
+        XCTAssertTrue(onboarding.selectMultiplayerPartner(roomID: room.roomID, sharing: sharing, existing: { identity }))
+        await waitUntil { requests == 1 && !sharing.active }
+        let pending = BoundFriendRowConnection(roomID: room.roomID, selectedRoomID: onboarding.selected?.roomID, sharing: sharing)
+        XCTAssertEqual(pending, .connecting, "Stop remains available during retry backoff")
+        XCTAssertTrue(sharing.connectionRequested)
+        onboarding.disconnect()
+        for _ in 0..<3 { onboarding.setMultiplayerPartner(roomID: room.roomID) }
+        try await Task.sleep(nanoseconds: 1_100_000_000)
+        XCTAssertEqual(requests, 1, "Stop cancels the scheduled retry and suppresses ROM demand")
+        XCTAssertFalse(sharing.connectionRequested)
+        XCTAssertEqual(BoundFriendRowConnection(roomID: room.roomID,
+            selectedRoomID: onboarding.selected?.roomID, sharing: sharing), .inactive)
+    }
+
     func testROMChoiceBootstrapsServiceAndWaitsForAuthorizedFriendList() async throws {
         let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
         BoundMultiplayerFeatures.setEnabled(true)
@@ -1447,6 +1534,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
 @MainActor
 private final class FriendTapSharingTransport: FriendSharingTransport {
     private(set) var configurations: [FriendSharingConfiguration] = []
+    private var event: (@MainActor (FriendSharingEvent) -> Void)?
     var publishedFrames: Int { 0 }
     var receivedFrames: Int { 0 }
     var diagnostics: [String: Any] { [:] }
@@ -1454,9 +1542,11 @@ private final class FriendTapSharingTransport: FriendSharingTransport {
     func start(configuration: FriendSharingConfiguration, remoteView: UIView,
                event: @escaping @MainActor (FriendSharingEvent) -> Void) {
         configurations.append(configuration)
+        self.event = event
         event(.joined)
     }
 
+    func emit(_ event: FriendSharingEvent) { self.event?(event) }
     func stop() {}
     func send(_ frame: SharingFrame, completion: @escaping @MainActor (Result<Void, SharingFailure>) -> Void) -> any SharingCancellation {
         OnboardingObservation({})

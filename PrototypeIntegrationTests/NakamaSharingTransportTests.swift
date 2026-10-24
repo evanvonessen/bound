@@ -6,13 +6,15 @@ import Combine
 private final class NakamaTransportWire: BoundNakamaSocket, @unchecked Sendable {
     private let lock = NSLock()
     private let match: String
+    private var automaticallyJoin: Bool
+    private var pendingJoin: [String: Any]?
     private var receiver: (@Sendable (Result<Data, Error>) -> Void)?
     private var savedReceiver: (@Sendable (Result<Data, Error>) -> Void)?
     private var pending: [Data] = []
     private var observer: (@Sendable (String) -> Void)?
     private var completions: [@Sendable (Error?) -> Void] = []
     private var held = false
-    init(match: String) { self.match = match }
+    init(match: String, automaticallyJoin: Bool = true) { self.match = match; self.automaticallyJoin = automaticallyJoin }
     func resume() {}
     func observe(_ observer: @escaping @Sendable (String) -> Void) { lock.lock(); self.observer = observer; lock.unlock() }
     func holdSends() { lock.lock(); held = true; lock.unlock() }
@@ -22,7 +24,16 @@ private final class NakamaTransportWire: BoundNakamaSocket, @unchecked Sendable 
         observer?(text)
         if !held { completion(nil) }
         if let value = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
-           value["match_join"] != nil, let cid = value["cid"] as? String { deliver(["cid": cid, "match": ["match_id": match]]) }
+           value["match_join"] != nil, let cid = value["cid"] as? String {
+            let response: [String: Any] = ["cid": cid, "match": ["match_id": match]]
+            lock.lock(); let automaticallyJoin = self.automaticallyJoin
+            if !automaticallyJoin { pendingJoin = response }; lock.unlock()
+            if automaticallyJoin { deliver(response) }
+        }
+    }
+    func completeJoin() {
+        lock.lock(); automaticallyJoin = true; let response = pendingJoin; pendingJoin = nil; lock.unlock()
+        if let response { deliver(response) }
     }
     func receive(_ completion: @escaping @Sendable (Result<Data, Error>) -> Void) {
         lock.lock(); savedReceiver = completion
@@ -85,6 +96,20 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
         XCTAssertEqual(media.presenceConnectionCheck.kind, .unavailable)
     }
 
+    func testAgoraPeerMembershipSurvivesFrameRecoveryUntilExpectedPeerLeaves() {
+        let callbacks = AgoraSharingCallbacks(remoteUID: 2) { _, _ in }
+        callbacks.remoteJoined(uid: 3)
+        XCTAssertFalse(callbacks.expectedPeerPresent)
+        callbacks.remoteJoined(uid: 2)
+        XCTAssertTrue(callbacks.expectedPeerPresent)
+        callbacks.suspendFrames(); callbacks.resumeFrames()
+        XCTAssertTrue(callbacks.expectedPeerPresent, "Local frame recovery cannot forget the authenticated peer join")
+        callbacks.remoteLeft(uid: 3)
+        XCTAssertTrue(callbacks.expectedPeerPresent)
+        callbacks.remoteLeft(uid: 2)
+        XCTAssertFalse(callbacks.expectedPeerPresent)
+    }
+
     private let owner = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
     private let peer = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
     private let room = UUID(uuidString: "33333333-3333-4333-8333-333333333333")!
@@ -119,6 +144,78 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
     private func incoming(opcode: Int, bytes: Data) -> [String: Any] {
         let envelope: [String: Any] = ["v": 1, "senderOwnerID": peer.uuidString, "targetOwnerID": owner.uuidString, "body": bytes.base64EncodedString()]
         return ["match_data": ["match_id": match, "op_code": String(opcode), "data": try! JSONSerialization.data(withJSONObject: envelope).base64EncodedString()]]
+    }
+
+    private func roster(peerOnline: Bool) -> [String: Any] {
+        let envelope: [String: Any] = ["v": 1, "members": [
+            ["ownerID": owner.uuidString, "online": true],
+            ["ownerID": peer.uuidString, "online": peerOnline]
+        ]]
+        return ["match_data": ["match_id": match, "op_code": "4",
+            "data": try! JSONSerialization.data(withJSONObject: envelope).base64EncodedString()]]
+    }
+
+    func testPeerRosterBeforeLocalJoinIsReconciledAfterJoinAcknowledgement() async throws {
+        let wire = NakamaTransportWire(match: match, automaticallyJoin: false), media = NakamaMediaFixture()
+        let transport = BoundNakamaSharingTransport(media: media, client: BoundNakamaClient(socketFactory: { _ in wire }))
+        defer { transport.stop() }
+        let requested = expectation(description: "socket join requested")
+        wire.observe { if $0.contains("match_join") { requested.fulfill() } }
+        let joined = expectation(description: "local join acknowledged"), peerJoined = expectation(description: "cached peer reconciled")
+        var events: [FriendSharingEvent] = []
+        transport.configureGameplay(lease); transport.setVideoRequired(false)
+        transport.start(configuration: mediaConfiguration, remoteView: UIView()) { event in
+            events.append(event)
+            if event == .joined { joined.fulfill() }
+            if event == .remoteJoined { peerJoined.fulfill() }
+        }
+        await fulfillment(of: [requested], timeout: 2)
+        wire.deliver(roster(peerOnline: true))
+        wire.completeJoin()
+        await fulfillment(of: [joined, peerJoined], timeout: 2)
+        XCTAssertEqual(events, [.joined, .remoteJoined])
+        XCTAssertEqual(media.starts, 0)
+    }
+
+    func testAuthenticatedPeerConnectionFollowsNakamaRosterWithoutVideoAndClearsOnStop() async throws {
+        let wire = NakamaTransportWire(match: match), media = NakamaMediaFixture()
+        let transport = BoundNakamaSharingTransport(media: media, client: BoundNakamaClient(socketFactory: { _ in wire }))
+        let identity = try identity(), lease = lease
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            tokenFetcher: { _, _ in XCTFail("Peer connection cannot require video"); throw FriendSharingTokenError.unavailable },
+            nakamaFetcher: { _, _ in lease })
+        defer { sharing.stop() }
+        sharing.configureAuthenticatedRoom(room.uuidString, identity: { identity })
+        let joined = expectation(description: "local socket joined")
+        let joinedObservation = sharing.$joined.dropFirst().filter { $0 }.sink { _ in joined.fulfill() }
+        sharing.setAutomaticMultiplayerConnection(true)
+        await fulfillment(of: [joined], timeout: 2)
+        joinedObservation.cancel()
+        XCTAssertTrue(sharing.connectionRequested)
+        XCTAssertFalse(sharing.peerConnected, "Joining the server alone is not a mutual connection")
+        XCTAssertFalse(sharing.remoteVisible)
+        XCTAssertEqual(media.starts, 0)
+
+        let changes = expectation(description: "peer joins, leaves, and reconnects")
+        changes.expectedFulfillmentCount = 3
+        var peerStates: [Bool] = []
+        let peerObservation = sharing.$peerConnected.dropFirst().sink { value in
+            peerStates.append(value); changes.fulfill()
+        }
+        wire.deliver(roster(peerOnline: true))
+        wire.deliver(roster(peerOnline: false))
+        wire.deliver(roster(peerOnline: true))
+        await fulfillment(of: [changes], timeout: 2)
+        peerObservation.cancel()
+        XCTAssertEqual(peerStates, [true, false, true])
+        XCTAssertTrue(sharing.peerConnected)
+        XCTAssertFalse(sharing.remoteVisible, "A data-only connection has no video canvas")
+        XCTAssertEqual(media.starts, 0)
+
+        sharing.stop()
+        XCTAssertFalse(sharing.peerConnected)
+        XCTAssertFalse(sharing.connectionRequested)
+        XCTAssertFalse(sharing.joined)
     }
 
     func testDataOnlyRoomRoutesEveryGameplayLaneThroughNakamaWithoutStartingVideo() async throws {
