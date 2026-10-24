@@ -1,6 +1,7 @@
 import XCTest
 import DeltaCore
 @testable import Delta
+@testable import class Delta.GameViewController
 
 private struct CooperativeLifecycleGame:GameProtocol {
     let fileURL:URL
@@ -64,28 +65,73 @@ final class CooperativeDoublesContractTests:XCTestCase {
         XCTAssertEqual(host.subdata(in:1024..<1624),enemy)
         XCTAssertEqual(host.subdata(in:80..<112),proof)
     }
-    func testRecoveryCutRejectsForgottenOrUnproducedNativeCommands() throws {
-        func cut(read:UInt16,write:UInt16,consumed:UInt16,generation:UInt16=2,ackGeneration:UInt16?=nil)->BoundCooperativeCableCut {
-            var bytes=Data(repeating:0,count:16);put(0x31545543,&bytes,0)
-            for (offset,value) in [(4,generation),(6,read),(8,write),(10,consumed),(12,ackGeneration ?? generation)] {
-                bytes[offset]=UInt8(truncatingIfNeeded:value);bytes[offset+1]=UInt8(value >> 8)
-            }
-            return BoundCooperativeCableCut(data:bytes)!
+    private func cut(read:UInt16,write:UInt16,consumed:UInt16,role:UInt32,generation:UInt16=2,ackGeneration:UInt16?=nil,xpPhase:UInt32=0,xpToken:UInt32=0)->BoundCooperativeCableCut {
+        var bytes=Data(repeating:0,count:92);put(0x32545543,&bytes,0)
+        for (offset,value) in [(4,generation),(6,read),(8,write),(10,consumed),(12,ackGeneration ?? generation)] {
+            bytes[offset]=UInt8(truncatingIfNeeded:value);bytes[offset+1]=UInt8(value >> 8)
         }
-        let a=cut(read:10,write:15,consumed:24),b=cut(read:22,write:26,consumed:13)
+        put(xpPhase,&bytes,16);put(xpToken,&bytes,20);put(role,&bytes,24)
+        return BoundCooperativeCableCut(data:bytes)!
+    }
+    func testRecoveryCutRejectsForgottenOrUnproducedNativeCommands() throws {
+        let a=cut(read:10,write:10,consumed:22,role:0),b=cut(read:22,write:22,consumed:10,role:1)
         XCTAssertTrue(a.compatible(with:b));XCTAssertTrue(b.compatible(with:a))
-        XCTAssertFalse(a.compatible(with:cut(read:22,write:26,consumed:9))) // Peer forgot data already discarded.
-        XCTAssertFalse(a.compatible(with:cut(read:22,write:26,consumed:16))) // Peer consumed data absent from our checkpoint.
-        XCTAssertFalse(a.compatible(with:cut(read:22,write:26,consumed:13,generation:3)))
-        XCTAssertFalse(a.compatible(with:cut(read:22,write:26,consumed:13,ackGeneration:1)))
-        XCTAssertTrue(cut(read:65534,write:2,consumed:0).compatible(with:cut(read:65535,write:2,consumed:1)))
+        XCTAssertFalse(a.compatible(with:cut(read:22,write:22,consumed:9,role:1)))
+        XCTAssertFalse(a.compatible(with:cut(read:22,write:22,consumed:11,role:1)))
+        XCTAssertFalse(a.compatible(with:cut(read:22,write:22,consumed:10,role:1,generation:3)))
+        XCTAssertFalse(a.compatible(with:cut(read:22,write:22,consumed:10,role:1,ackGeneration:1)))
+        XCTAssertFalse(cut(read:10,write:15,consumed:24,role:0).compatible(with:cut(read:22,write:26,consumed:13,role:1)),"Outstanding commands cannot establish a durable common cut")
+        XCTAssertTrue(cut(read:0,write:0,consumed:65535,role:0).compatible(with:cut(read:65535,write:65535,consumed:0,role:1)))
+        var differentHistory=b.data;differentHistory[60]=1
+        XCTAssertFalse(a.compatible(with:try XCTUnwrap(BoundCooperativeCableCut(data:differentHistory))),"Matching wrapped counters cannot authorize a different command history")
+    }
+    func testRecoveryCutSupportsCompletedOwnedXPAndRejectsInProgressOrDifferentAwards() throws {
+        func pair(_ hostPhase:UInt32,_ guestPhase:UInt32,_ hostToken:UInt32,_ guestToken:UInt32)->Bool {
+            cut(read:10,write:10,consumed:22,role:0,xpPhase:hostPhase,xpToken:hostToken)
+                .compatible(with:cut(read:22,write:22,consumed:10,role:1,xpPhase:guestPhase,xpToken:guestToken))
+        }
+        XCTAssertTrue(pair(0,0,0,0));XCTAssertTrue(pair(0,4,7,7));XCTAssertTrue(pair(6,6,7,7))
+        XCTAssertFalse(pair(0,4,8,7));XCTAssertFalse(pair(0,0,7,7))
+        XCTAssertFalse(pair(2,4,7,7));XCTAssertFalse(pair(0,3,7,7));XCTAssertFalse(pair(6,4,7,7))
+    }
+    func testRecoveryRejectsAcceptedFutureCommandsAndUndrainedNativeOrHostQueues() throws {
+        var mailbox=Data(repeating:0,count:1176);put(0x314D4642,&mailbox,0)
+        for (at,value) in [(4,10),(6,10),(8,5),(10,5),(14,10),(16,2),(18,2),(20,25),(22,2)] {
+            mailbox[at]=UInt8(value);mailbox[at+1]=0
+        }
+        func host(accepted:Int=25,incoming:Data=Data(),remaining:Int=0)->Data {
+            try! JSONSerialization.data(withJSONObject:["incoming":incoming.base64EncodedString(),"remaining":remaining,
+                "peerGeneration":2,"receivedGeneration":2,"lastAcceptedSequence":accepted,"pendingAcknowledgement":"","sentHistory":Data(repeating:0,count:32).base64EncodedString(),"receivedHistory":Data(repeating:0,count:32).base64EncodedString()])
+        }
+        XCTAssertTrue(BoundNativeBattleProbe.recoveryIsQuiescent(host(),mailbox:mailbox))
+        XCTAssertFalse(BoundNativeBattleProbe.recoveryIsQuiescent(host(accepted:26),mailbox:mailbox),"An accepted future move must not survive an older producing peer checkpoint")
+        XCTAssertFalse(BoundNativeBattleProbe.recoveryIsQuiescent(host(incoming:Data(repeating:0,count:20)),mailbox:mailbox))
+        XCTAssertFalse(BoundNativeBattleProbe.recoveryIsQuiescent(host(remaining:1),mailbox:mailbox))
+        var nativePending=mailbox;nativePending[10]=6
+        XCTAssertFalse(BoundNativeBattleProbe.recoveryIsQuiescent(host(),mailbox:nativePending))
+        nativePending=mailbox;nativePending[6]=11
+        XCTAssertFalse(BoundNativeBattleProbe.recoveryIsQuiescent(host(),mailbox:nativePending))
+        nativePending=mailbox;nativePending[14]=9
+        XCTAssertFalse(BoundNativeBattleProbe.recoveryIsQuiescent(host(),mailbox:nativePending))
+    }
+    func testRecoveryBranchRejectsPreResumeHistoryAndKeepsControlEnvelopeBounded() throws {
+        let proof=Data(repeating:0xA5,count:32),initial=BoundCooperativeRecoveryBranch.initial(proof:proof)
+        let local=UUID(),peer=UUID(),next=BoundCooperativeRecoveryBranch.next(initial,local:local,peer:peer)
+        XCTAssertEqual(next,BoundCooperativeRecoveryBranch.next(initial,local:peer,peer:local));XCTAssertNotEqual(initial,next)
+        let native=cut(read:10,write:10,consumed:22,role:0)
+        XCTAssertFalse(BoundCooperativeRecoveryBranch.accepts(native.data+initial,current:next))
+        XCTAssertTrue(BoundCooperativeRecoveryBranch.accepts(native.data+next,current:next))
+        let state=try XCTUnwrap(BoundCooperativeSnapshot(snapshot()))
+        let packet=BoundCooperativePacket(kind:.recoveryOffer,local:local,peer:peer,id:UUID(),peerID:nil,snapshot:state,proof:proof,payload:native.data+next)
+        XCTAssertEqual(packet.data.count,272);XCTAssertNotNil(BoundCooperativePacket(data:packet.data))
+        XCTAssertNil(BoundCooperativePacket(data:packet.data.dropLast()))
     }
     func testUnstartedAdmissionRecoveryRequiresBothExactSelectedCheckpoints() throws {
         let admission=try XCTUnwrap(BoundCooperativeCableCut(admissionPhase:3))
         XCTAssertTrue(admission.isAdmission)
         XCTAssertTrue(admission.compatible(with:try XCTUnwrap(BoundCooperativeCableCut(data:admission.data))))
         for phase:UInt32 in [0,1,2,4,5,6,7,8,9] { XCTAssertNil(BoundCooperativeCableCut(admissionPhase:phase)) }
-        var active=Data(repeating:0,count:16);put(0x31545543,&active,0)
+        var active=Data(repeating:0,count:92);put(0x32545543,&active,0)
         let activeCut=try XCTUnwrap(BoundCooperativeCableCut(data:active))
         XCTAssertFalse(admission.compatible(with:activeCut));XCTAssertFalse(activeCut.compatible(with:admission))
         var changed=admission.data;changed[4]=1
@@ -112,7 +158,10 @@ final class CooperativeDoublesContractTests:XCTestCase {
         let session=BoundCooperativeDoublesSession(),soul=BoundSoulProbe()
         session.bind(core:oldCore,gameID:UUID().uuidString,soul:soul)
         var active=snapshot();put(5,&active,12)
-        session.qaInterruptedCheckpoint(active,state:state,journal:journal)
+        session.qaInterruptedCheckpoint(active,state:state,journal:journal,recovering:true)
+        var cancelled=0;session.send={ _ in cancelled+=1;return true }
+        session.suspend();session.suspend()
+        XCTAssertEqual(cancelled,0,"Repeated disable/stop callbacks must preserve the existing recovery transaction")
         XCTAssertTrue(session.blocksAutoSave)
         session.bind(core:newCore,gameID:UUID().uuidString,soul:soul)
         var idle=snapshot();put(0,&idle,12)
@@ -123,6 +172,61 @@ final class CooperativeDoublesContractTests:XCTestCase {
         XCTAssertTrue(BoundVBABattleBridge.qaCooperativeGameSaveBlocked(oldSave))
         XCTAssertTrue(BoundVBABattleBridge.qaCooperativeGameSaveBlocked(newSave))
         session.bind(core:nil,gameID:"",soul:soul)
+    }
+    @MainActor
+    func testRecoveredNativeCoreRespectsGameplayResumePermission() throws {
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let rom=try XCTUnwrap(Bundle(for:Self.self).url(forResource:"BoundDiagnostic",withExtension:"gba"))
+        let core=try XCTUnwrap(EmulatorCore(game:CooperativeLifecycleGame(fileURL:rom,gameSaveURL:directory.appendingPathComponent("game.sav")),options:[.metal:true]))
+        let session=BoundCooperativeDoublesSession(),soul=BoundSoulProbe()
+        session.bind(core:core,gameID:UUID().uuidString,soul:soul)
+        defer { _=core.stop();session.bind(core:nil,gameID:"",soul:soul) }
+        XCTAssertTrue(core.start());XCTAssertTrue(core.pause())
+        var permitted=false,requests=0
+        session.canResume={ requests+=1;return permitted }
+        session.qaResumeRecoveredCore()
+        XCTAssertEqual(requests,1);XCTAssertEqual(core.state,.paused)
+        permitted=true
+        session.qaResumeRecoveredCore()
+        XCTAssertEqual(requests,2);XCTAssertEqual(core.state,.running)
+        XCTAssertTrue(core.pause());permitted=false
+        session.qaResumeRecoveredCore()
+        XCTAssertEqual(requests,3);XCTAssertEqual(core.state,.paused)
+    }
+    @MainActor
+    func testManualStateControlsRejectMixedPartyAndRecoverySnapshots() throws {
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let rom=try XCTUnwrap(Bundle(for:Self.self).url(forResource:"BoundDiagnostic",withExtension:"gba"))
+        let controller=GameViewController()
+        controller.game=CooperativeLifecycleGame(fileURL:rom,gameSaveURL:directory.appendingPathComponent("game.sav"))
+        defer { controller.game=nil }
+        XCTAssertTrue(controller.boundAllowsManualStateSave)
+        XCTAssertTrue(controller.boundPermitsIndependentStateLoad)
+        let session=controller.boundCompanionForTesting.sharing.cooperativeDoubles
+        for phase:UInt32 in [1,2,3,4,5,6,7,9] {
+            var bytes=snapshot();put(phase,&bytes,12)
+            session.qaInterruptedCheckpoint(bytes,state:directory.appendingPathComponent("retained.state"),journal:directory.appendingPathComponent("retained.json"))
+            XCTAssertFalse(controller.boundAllowsManualStateSave,"Phase \(phase) must not export temporary ownership")
+            XCTAssertFalse(controller.boundPermitsIndependentStateLoad,"Phase \(phase) must keep its recovery transaction")
+        }
+    }
+    @MainActor
+    func testNativeCommandHistoryDeduplicatesReplayAndDistinguishesPayload() throws {
+        let rom=try XCTUnwrap(Bundle(for:Self.self).url(forResource:"BoundDiagnostic",withExtension:"gba"))
+        let core=try XCTUnwrap(EmulatorCore(game:CooperativeLifecycleGame(fileURL:rom,gameSaveURL:FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString+".sav")),options:[.metal:true]))
+        let probe=BoundNativeBattleProbe();probe.configure(core:core)
+        var command=Data(repeating:0,count:16);command[0]=0x22;command[1]=0x22
+        let packet=try XCTUnwrap(BoundNativeCommandPacket.encode(command,generation:2,sequence:1))
+        XCTAssertTrue(probe.receiveNetworkPacket(packet))
+        let first=try XCTUnwrap(BoundNativeBattleProbe.recoveryHistories(probe.recoveryData()))
+        XCTAssertTrue(probe.receiveNetworkPacket(packet))
+        XCTAssertEqual(first.1,try XCTUnwrap(BoundNativeBattleProbe.recoveryHistories(probe.recoveryData())).1)
+        command[15]=7
+        let other=BoundNativeBattleProbe();other.configure(core:core)
+        XCTAssertTrue(other.receiveNetworkPacket(try XCTUnwrap(BoundNativeCommandPacket.encode(command,generation:2,sequence:1))))
+        XCTAssertNotEqual(first.1,try XCTUnwrap(BoundNativeBattleProbe.recoveryHistories(other.recoveryData())).1)
     }
     func testNativeBlockContinuationAdmissionSurvivesCheckpoint() throws {
         var admission=BoundNativeBlockAdmission()

@@ -204,7 +204,8 @@ final class BoundROMUpdateManager: ObservableObject {
                     paths += [journal, recovery.appendingPathComponent(name)]
                 }
             }
-            try self.storage.clearSaveFiles(paths) {
+            paths += try self.storage.cooperativeRecoveryFiles(gameID:record.identifier)
+            try self.storage.clearSaveFiles(paths,cooperativeGameSaveURL:record.gameSaveURL) {
                 record.previewSaveState = nil
                 for state in record.saveStates { context.delete(state) }
                 if let save = record.gameSave { context.delete(save); record.gameSave = nil }

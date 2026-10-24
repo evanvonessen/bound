@@ -93,10 +93,10 @@
     "word": 167706625
   },
   "source_sha256": {
-    "game/game_runtime.c": "c8f19d0aa55d4bd3faaba852ad0795e80d1f24c6a885a561f8bf05500a086e4d",
-    "game/game_ui.c": "88ace92e921d3210a12671b578a7c620d2a603b12df7abf5e76600084ad58330",
+    "game/game_runtime.c": "65ca8350152cf1637c04b6c9ad0ca55dfa3058fde70a72d44882cbce7dc24174",
+    "game/game_ui.c": "23af8576d6cb9aa58154f75b30cadea949e64ef2a3c83dabda7de712b8e9ac4e",
     "game/game_nickname.c": "75d50c62e175904164cd348e83e440eef5087e5518510caa8717a4118319e711",
-    "shared_world/shared_world.c": "e5449f31e8f56433d44c2caae3e58fe3d1c53c56eaf7b4f5b3b1e8dd238b1edb"
+    "shared_world/shared_world.c": "220e3d93efe2be282517f8b371dd809a89ffc572871e03bd6b861e2b5576b410"
   },
   "definitions": [
     {
@@ -261,7 +261,7 @@
       "sha256": "e5a00aa9991ac8a5ee3109844d84a55583bd20572ad3ffcd42792f3c36b183ad"
     }
   ],
-  "cache_key": "519548f3c990e2c40e9f97b6814ae10131731837ba1268d3505d5da091ee9531",
+  "cache_key": "e708331eeaefe203d73635b07197bd455206b9e29afbc44c5eadbcc37beb07b6",
   "cache_hit": false,
   "native_binding_scope": "Exact RR4.1 adapter in the game build. Bound uses the exported data ABI only.",
   "save_compatibility": "Battery-save format unchanged. Legacy emulator save states require cold boot; the native allocator rejects the old RAM layout without overwriting it.",

@@ -23,6 +23,7 @@ struct BoundCooperativeSnapshot: Sendable {
     let flags: UInt32, trainerA: UInt32, trainerB: UInt32, group: UInt32, number: UInt32
     let count: UInt32, selectedCount: UInt32, partyHash: UInt32, enemyHash: UInt32
     let order: Data, party: Data, enemy: Data, owned: Data, proof: Data, xp: Data
+    let xpPhase:UInt32,xpToken:UInt32
     let faintedMask:UInt8
     init?(_ source: Data) {
         let data = Data(source)
@@ -33,7 +34,7 @@ struct BoundCooperativeSnapshot: Sendable {
         group=coopWord(data,56); number=coopWord(data,60); count=coopWord(data,64); selectedCount=coopWord(data,68)
         order=data.subdata(in:72..<75);faintedMask=data[75]; partyHash=coopWord(data,80); enemyHash=coopWord(data,84)
         proof=data.subdata(in:88..<120); party=data.subdata(in:128..<728); enemy=data.subdata(in:728..<1328)
-        owned=party
+        owned=party;xpPhase=coopWord(data,1328);xpToken=coopWord(data,1332)
         let kind=coopWord(data,1528), size=coopWord(data,1532)
         guard kind <= 2, (kind == 0 && size == 0) || (kind == 1 && size == 184) || (kind == 2 && size == 396) else { return nil }
         xp=kind == 0 ? Data() : data.subdata(in:1528..<1536 + Int(size))
@@ -62,7 +63,7 @@ struct BoundCooperativePacket: Sendable {
         guard b.count >= 148, b.count <= 1024, b.starts(with:Self.prefix), let k=Kind(rawValue:coopWord(b,4)),
               coopWord(b,144) == b.count-148, coopID(b,8) != coopID(b,24), coopWord(b,72) != 0 else { return nil }
         let size=b.count-148
-        guard (k == .team || k == .enemy) ? size == 600 : k == .xp ? [192,404].contains(size) : (k == .recoveryOffer || k == .recoveryReady) ? size == 16 : size == 0 else { return nil }
+        guard (k == .team || k == .enemy) ? size == 600 : k == .xp ? [192,404].contains(size) : (k == .recoveryOffer || k == .recoveryReady) ? size == 124 : size == 0 else { return nil }
         if k == .team {
             let n=coopWord(b,136), selected=Int(b[143]), order=Array(b[140..<143])
             guard (1...6).contains(n),(1...3).contains(selected),Set(order.prefix(selected)).count == selected,
@@ -103,8 +104,8 @@ struct BoundCooperativeHost {
     }
 }
 
-/// A compatible durable cut may replay retained native commands. Each peer's
-/// consumed frontier must fall within the other's retained outgoing interval.
+/// Recovery requires fully drained native and host queues at one command cut.
+/// An accepted but unconsumed future command cannot survive an older peer state.
 struct BoundCooperativeCableCut:Sendable {
     let data:Data
     private func half(_ offset:Int)->UInt16 { UInt16(data[offset]) | UInt16(data[offset+1]) << 8 }
@@ -114,31 +115,52 @@ struct BoundCooperativeCableCut:Sendable {
     var outWrite:UInt16 { half(8) }
     var peerConsumed:UInt16 { half(10) }
     var consumedGeneration:UInt16 { half(12) }
+    var xpPhase:UInt32 { coopWord(data,16) }
+    var xpToken:UInt32 { coopWord(data,20) }
+    var role:UInt32 { coopWord(data,24) }
+    var sentHistory:Data { data.subdata(in:28..<60) }
+    var receivedHistory:Data { data.subdata(in:60..<92) }
     init?(data:Data) {
-        guard data.count==16,[UInt32(0x31545543),0x31444143].contains(coopWord(data,0)),
-              UInt16(data[14]) | UInt16(data[15]) << 8 == 0 else { return nil }
+        guard data.count==92,[UInt32(0x32545543),0x31444143].contains(coopWord(data,0)),Self.halfWord(data,14)==0 else { return nil }
         if coopWord(data,0)==0x31444143,!data.dropFirst(4).allSatisfy({ $0==0 }) { return nil }
         self.data=data
-        guard outWrite &- outRead <= 32 else { return nil }
+        guard outWrite &- outRead<=32,role<=1 else { return nil }
     }
-    /// No native cable command exists before the cartridge accepts START.
-    /// This marker is valid only for the exact selected admission checkpoint.
+    private static func halfWord(_ data:Data,_ offset:Int)->UInt16 { UInt16(data[offset]) | UInt16(data[offset+1]) << 8 }
     init?(admissionPhase:UInt32) {
         guard admissionPhase==3 else { return nil }
-        var bytes=Data(repeating:0,count:16);coopPut(0x31444143,in:&bytes,at:0)
-        self.init(data:bytes)
+        var bytes=Data(repeating:0,count:92);coopPut(0x31444143,in:&bytes,at:0);self.init(data:bytes)
     }
-    init?(mailbox:Data) {
-        guard mailbox.count==1176,coopWord(mailbox,0)==0x314D4642 else { return nil }
-        var out=Data(repeating:0,count:16);coopPut(0x31545543,in:&out,at:0)
+    init?(mailbox:Data,snapshot:BoundCooperativeSnapshot,hostRecovery:Data) {
+        guard mailbox.count==1176,coopWord(mailbox,0)==0x314D4642,
+              BoundNativeBattleProbe.recoveryIsQuiescent(hostRecovery,mailbox:mailbox),
+              let histories=BoundNativeBattleProbe.recoveryHistories(hostRecovery),snapshot.role<=1,[UInt32(0),4,6].contains(snapshot.xpPhase) else { return nil }
+        var out=Data(repeating:0,count:92);coopPut(0x32545543,in:&out,at:0)
         for (target,source) in [(4,16),(6,4),(8,6),(10,20),(12,22),(14,12)] { out.replaceSubrange(target..<target+2,with:mailbox[source..<source+2]) }
+        out.replaceSubrange(28..<60,with:histories.0);out.replaceSubrange(60..<92,with:histories.1)
+        coopPut(snapshot.xpPhase,in:&out,at:16);coopPut(snapshot.xpToken,in:&out,at:20);coopPut(snapshot.role,in:&out,at:24)
         self.init(data:out)
     }
     func compatible(with peer:Self)->Bool {
         if isAdmission || peer.isAdmission { return isAdmission && peer.isAdmission }
-        return generation==peer.generation && consumedGeneration==peer.generation && peer.consumedGeneration==generation
-            && peer.peerConsumed &- outRead <= outWrite &- outRead
-            && peerConsumed &- peer.outRead <= peer.outWrite &- peer.outRead
+        guard role != peer.role,generation>0,generation==peer.generation,
+              consumedGeneration==peer.generation,peer.consumedGeneration==generation,
+              outRead==outWrite,peer.outRead==peer.outWrite,
+              peer.peerConsumed==outWrite,peerConsumed==peer.outWrite,xpToken==peer.xpToken,
+              sentHistory==peer.receivedHistory,receivedHistory==peer.sentHistory else { return false }
+        let host=role==0 ? self:peer,guest=role==1 ? self:peer
+        return (host.xpPhase==0 && guest.xpPhase==0 && xpToken==0)
+            || (host.xpPhase==0 && guest.xpPhase==4 && xpToken>0)
+            || (host.xpPhase==6 && guest.xpPhase==6)
+    }
+}
+
+struct BoundCooperativeRecoveryBranch {
+    static func initial(proof:Data)->Data { coopHash(Data("Bound co-op branch v1".utf8)+proof) }
+    static func accepts(_ payload:Data,current:Data)->Bool { payload.count==124 && current.count==32 && payload.suffix(32)==current }
+    static func next(_ current:Data,local:UUID,peer:UUID)->Data {
+        let ids=[local,peer].sorted { $0.uuidString<$1.uuidString }
+        return coopHash(current+coopUUID(ids[0])+coopUUID(ids[1]))
     }
 }
 
@@ -156,17 +178,17 @@ final class BoundCooperativeProbe: @unchecked Sendable {
     private let lock=NSLock()
     private var coreID:ObjectIdentifier?, host=Data(), latest:BoundCooperativeSnapshot?
     private var checkpoint:URL?, journal:URL?, gameID="", lastDurable=Data(), durable=false
-    private var lastError:String?, soul:BoundSoulProbe?, agreement=Data()
+    private var lastError:String?, soul:BoundSoulProbe?, agreement=Data(),branch=Data()
     private weak var cable:BoundNativeBattleProbe?
     func configure(core:EmulatorCore?,gameID:String,soul:BoundSoulProbe?) {
         lock.lock();defer { lock.unlock() }
-        coreID=core.map(ObjectIdentifier.init);self.gameID=gameID;self.soul=soul;host=Data();latest=nil;checkpoint=nil;journal=nil;lastDurable=Data();durable=false;lastError=nil
+        coreID=core.map(ObjectIdentifier.init);self.gameID=gameID;self.soul=soul;host=Data();latest=nil;checkpoint=nil;journal=nil;lastDurable=Data();durable=false;lastError=nil;branch=Data()
     }
     func setHost(_ data:Data) { lock.lock();host=data;lock.unlock() }
-    func protect(state:URL,journal:URL,agreement:Data,cable:BoundNativeBattleProbe) {
-        lock.lock();checkpoint=state;self.journal=journal;self.agreement=agreement;self.cable=cable;durable=false;lock.unlock()
+    func protect(state:URL,journal:URL,agreement:Data,branch:Data,cable:BoundNativeBattleProbe) {
+        lock.lock();checkpoint=state;self.journal=journal;self.agreement=agreement;self.branch=branch;self.cable=cable;durable=false;lock.unlock()
     }
-    func clearProtection() { lock.lock();checkpoint=nil;journal=nil;agreement=Data();durable=false;lastDurable=Data();lock.unlock() }
+    func clearProtection() { lock.lock();checkpoint=nil;journal=nil;agreement=Data();branch=Data();durable=false;lastDurable=Data();lock.unlock() }
     func recoveryLocation()->(URL?,URL?) { lock.lock();defer { lock.unlock() };return(checkpoint,journal) }
     func read()->(BoundCooperativeSnapshot?,Bool,String?) { lock.lock();defer { lock.unlock() };return(latest,durable,lastError) }
     func receive(_ core:EmulatorCore) {
@@ -204,7 +226,7 @@ final class BoundCooperativeProbe: @unchecked Sendable {
             let bytes=try Data(contentsOf:next)
             guard bytes.count > 1024 else { throw CocoaError(.fileReadCorruptFile) }
             let entry:[String:Any]=["gameID":gameID,"state":next.lastPathComponent,"sha256":coopHash(bytes).map { String(format:"%02x",$0) }.joined(),"phase":value.phase,"token":value.token,"snapshot":value.bytes.base64EncodedString(),"rom":BoundPlayerROMProfile.supportedSHA256,
-                "agreement":agreement.base64EncodedString(),"cable":(cable?.recoveryData() ?? Data()).base64EncodedString(),
+                "agreement":agreement.base64EncodedString(),"branch":branch.base64EncodedString(),"cable":(cable?.recoveryData() ?? Data()).base64EncodedString(),
                 "nativeCable":BoundVBABattleBridge.cooperativeCableSnapshot().base64EncodedString()]
             try JSONSerialization.data(withJSONObject:entry,options:[.sortedKeys]).write(to:journal,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
             self.checkpoint=next
@@ -234,6 +256,7 @@ final class BoundCooperativeDoublesSession {
     private var recoveryNonce=UUID(),peerRecoveryNonce:UUID?,recoveryPeerReady=false,recoveryReadySent=false
     private var recoveryCable=Data(),recoveryDigest="",recoveryAgreement=Data(),recoveryLoaded=false
     private var recoveryCut:BoundCooperativeCableCut?
+    private var recoveryBranch=Data()
     private var channel:(any BoundBattleChannel)?,wire:BoundBattleWire?
     private var checkpoint:URL?,journal:URL?,lastXP=Data(),incomingXP=Data(),sequence:UInt32=0
     private var controlCursor=0
@@ -243,6 +266,7 @@ final class BoundCooperativeDoublesSession {
     var changed:((String)->Void)?
     var context:(()->(UUID,UUID)?)?
     var connected:(()->Bool)?
+    var canResume:(()->Bool)?
     var makeChannel:((@escaping @Sendable (Data)->Void,@escaping @Sendable ()->Void)->(any BoundBattleChannel)?)?
     var send:((Data)->Bool)?
     var isActive:Bool { snapshot.map { (1...7).contains($0.phase) || $0.phase == 9 } ?? false }
@@ -262,7 +286,7 @@ final class BoundCooperativeDoublesSession {
         enemy=Data();proof=Data();started=false;prepared=false;fixedRole=nil;cancellingBeforeEntry=false
         peerReady=false;readySent=false;peerCableReady=false;peerResultsReady=false;peerFinished=false
         recoveryPending=false;recoveryLoaded=false;recoveryPeerReady=false;recoveryReadySent=false
-        recoveryCut=nil;recoveryCable=Data();recoveryDigest="";recoveryAgreement=Data();peerRecoveryNonce=nil
+        recoveryCut=nil;recoveryBranch=Data();recoveryCable=Data();recoveryDigest="";recoveryAgreement=Data();peerRecoveryNonce=nil
         checkpoint=nil;journal=nil;lastXP=Data();incomingXP=Data();encounter=UUID();recoveryNonce=UUID()
         lastSent=0;lastPeer=ProcessInfo.processInfo.systemUptime;controlCursor=0;status=""
         self.core=core;self.gameID=gameID;self.soul=soul
@@ -274,11 +298,12 @@ final class BoundCooperativeDoublesSession {
         }
     }
     #if DEBUG && targetEnvironment(simulator)
-    func qaInterruptedCheckpoint(_ bytes:Data,state:URL,journal:URL) {
+    func qaInterruptedCheckpoint(_ bytes:Data,state:URL,journal:URL,recovering:Bool=false) {
         guard let value=BoundCooperativeSnapshot(bytes) else { return }
-        snapshot=value;capture=value;checkpoint=state;self.journal=journal;started=true;prepared=true
+        snapshot=value;capture=value;checkpoint=state;self.journal=journal;started=true;prepared=true;recoveryPending=recovering
     }
     func qaCompletedFrame(_ bytes:Data) { probe.qaCompletedFrame(bytes);advance() }
+    func qaResumeRecoveredCore() { if let core { resumeIfPermitted(core) } }
     #endif
     private func resetEncounter(_ value:BoundCooperativeSnapshot,local:UUID,peer:UUID) {
         self.local=local;self.peer=peer;capture=value;encounter=UUID();peerEncounter=nil;peerTeam=nil;enemy=isHost ? value.enemy:Data()
@@ -412,6 +437,10 @@ final class BoundCooperativeDoublesSession {
             publish(flags:peerResultsReady ? 11:3)
         } else { publish(flags:started ? 3:1) }
     }
+    private func resumeIfPermitted(_ core:EmulatorCore) {
+        guard self.core === core,core.state == .paused,canResume?() == true else { return }
+        _=core.resume()
+    }
     private func prepareCable(recovery:Bool=false)->Bool {
         guard let core,let peerEncounter else { return false }
         let failure:@Sendable ()->Void={ [weak self] in Task { @MainActor in self?.interrupt("Cooperative connection lost") } }
@@ -426,9 +455,14 @@ final class BoundCooperativeDoublesSession {
         let running=core.state == .running
         if running { _=core.pause() }
         let prepared=BoundVBABattleBridge.prepareCooperativeCable(forPlayer:isHost ? 0:1)
-        if prepared && !recovery { cable.enableSender();probe.checkpointNow(core) }
-        if running && !recovery { _=core.resume() }
-        return prepared
+        var checkpointReady=true
+        if prepared && !recovery {
+            probe.checkpointNow(core)
+            let (_,durable,error)=probe.read();checkpointReady=durable && error==nil
+            if checkpointReady { cable.enableSender() }
+        }
+        if running && !recovery { resumeIfPermitted(core) }
+        return prepared && checkpointReady
     }
     private func publish(flags:UInt32) {
         sequence &+= 2;if sequence == 0 { sequence=2 }
@@ -442,24 +476,29 @@ final class BoundCooperativeDoublesSession {
         checkpoint=folder.appendingPathComponent(encounter.uuidString+".state");journal=folder.appendingPathComponent(encounter.uuidString+".json")
         guard let checkpoint,let journal else { throw CocoaError(.fileWriteUnknown) }
         let running=core.state == .running;if running { _=core.pause() }
-        defer { if running,core.state == .paused { _=core.resume() } }
+        defer { if running { resumeIfPermitted(core) } }
         core.saveSaveState(to:checkpoint)
         let saved=try Data(contentsOf:checkpoint);guard saved.count > 1024 else { throw CocoaError(.fileReadCorruptFile) }
         guard let capture,let peerTeam,proof.count==32,enemy.count==600 else { throw CocoaError(.fileReadCorruptFile) }
         let agreement=try JSONEncoder().encode(BoundCooperativeRecovery(capture:capture.bytes,proof:proof,enemy:enemy,role:isHost ? 0:1,peerTeam:peerTeam.data))
-        recoveryAgreement=agreement
-        let entry:[String:String]=["gameID":gameID,"state":checkpoint.lastPathComponent,"rom":BoundPlayerROMProfile.supportedSHA256,"sha256":coopHash(saved).map { String(format:"%02x",$0) }.joined(),"agreement":agreement.base64EncodedString(),"snapshot":capture.bytes.base64EncodedString(),"cable":cable.recoveryData().base64EncodedString()]
+        recoveryAgreement=agreement;recoveryBranch=BoundCooperativeRecoveryBranch.initial(proof:proof)
+        let entry:[String:String]=["gameID":gameID,"state":checkpoint.lastPathComponent,"rom":BoundPlayerROMProfile.supportedSHA256,"sha256":coopHash(saved).map { String(format:"%02x",$0) }.joined(),"agreement":agreement.base64EncodedString(),"branch":recoveryBranch.base64EncodedString(),"snapshot":capture.bytes.base64EncodedString(),"cable":cable.recoveryData().base64EncodedString()]
         try JSONSerialization.data(withJSONObject:entry,options:[.sortedKeys]).write(to:journal,options:.atomic)
-        probe.protect(state:checkpoint,journal:journal,agreement:agreement,cable:cable)
-        if running { _=core.resume() }
+        probe.protect(state:checkpoint,journal:journal,agreement:agreement,branch:recoveryBranch,cable:cable)
     }
     func suspend() {
+        guard !recoveryPending else { return }
         guard isActive || started else { return }
         _=transmit(.cancel);publish(flags:4)
         if started { interrupt("Cooperative recovery kept. Reconnect with your friend.") }
     }
     private func interrupt(_ message:String) {
         status=message
+        if recoveryPending {
+            channel?.close();wire?.close();channel=nil;wire=nil;prepared=false
+            recoveryPeerReady=false;recoveryReadySent=false
+            return
+        }
         guard started,(snapshot?.phase ?? 0)>=4 else {
             started=false;publish(flags:4);cancellingBeforeEntry=true
             channel?.close();wire?.close();channel=nil;wire=nil;cable.configure(core:nil)
@@ -475,8 +514,10 @@ final class BoundCooperativeDoublesSession {
             probe.checkpointNow(core)
         }
         let locations=probe.recoveryLocation();checkpoint=locations.0 ?? checkpoint;journal=locations.1 ?? journal
-        recoveryCable=cable.recoveryData();recoveryCut=BoundCooperativeCableCut(mailbox:BoundVBABattleBridge.cooperativeCableSnapshot());prepared=false
-        if let checkpoint,let bytes=try? Data(contentsOf:checkpoint) { recoveryDigest=coopHash(bytes).map { String(format:"%02x",$0) }.joined() }
+        prepared=false
+        let (_,durable,error)=probe.read()
+        let retained=durable && error==nil && (journal.map { adoptRecovery(from:$0,expectedProof:proof) } ?? false)
+        if !retained { recoveryCut=nil;status="Recovery kept. Compatible cable checkpoint required." }
         cable.configure(core:nil)
     }
     private func finish() {
@@ -489,7 +530,7 @@ final class BoundCooperativeDoublesSession {
             }
             BoundVBABattleBridge.closeCooperativeCable();soul?.setCooperativeBattleActive(false,for:core)
             _=BoundVBABattleBridge.setCooperativeGameSaveAllowed(true,for:core.game.gameSaveURL)
-            if running { _=core.resume() }
+            if running { resumeIfPermitted(core) }
         }
         let locations=probe.recoveryLocation();checkpoint=locations.0 ?? checkpoint;journal=locations.1 ?? journal
         if let journal { try? FileManager.default.removeItem(at:journal) }
@@ -505,36 +546,40 @@ final class BoundCooperativeDoublesSession {
             ((try? $0.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast) >
             ((try? $1.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast)
         }
-        for url in ordered.prefix(64) {
-            guard let bytes=try? Data(contentsOf:url),bytes.count <= 65536,
-                  let entry=try? JSONSerialization.jsonObject(with:bytes) as? [String:Any],entry["gameID"] as? String == gameID,
-                  entry["rom"] as? String == BoundPlayerROMProfile.supportedSHA256,
-                  let encoded=entry["agreement"] as? String,let agreement=Data(base64Encoded:encoded),
-                  let record=try? JSONDecoder().decode(BoundCooperativeRecovery.self,from:agreement),record.proof.count==32,record.enemy.count==600,record.role<=1,
-                  let capture=BoundCooperativeSnapshot(record.capture),capture.selected,
-                  let team=BoundCooperativePacket(data:record.peerTeam),team.kind == .team,team.encounter==capture.encounter,
-                  let name=entry["state"] as? String,name==URL(fileURLWithPath:name).lastPathComponent,
-                  UUID(uuidString:URL(fileURLWithPath:name).deletingPathExtension().lastPathComponent) != nil,
-                  let digest=entry["sha256"] as? String,digest.count==64,
-                  let encodedCable=entry["cable"] as? String,let cable=Data(base64Encoded:encodedCable),cable.count<=32768,
-                  let encodedSnapshot=entry["snapshot"] as? String,let snapshotData=Data(base64Encoded:encodedSnapshot),
-                  let savedSnapshot=BoundCooperativeSnapshot(snapshotData),[UInt32(3),4,5,6,7,9].contains(savedSnapshot.phase) else { continue }
-            self.capture=capture;peerTeam=team;proof=record.proof;enemy=record.enemy;fixedRole=record.role
-            snapshot=savedSnapshot
-            journal=url;checkpoint=folder.appendingPathComponent(name);recoveryAgreement=agreement;recoveryCable=cable;recoveryDigest=digest
-            if savedSnapshot.phase==3 { recoveryCut=BoundCooperativeCableCut(admissionPhase:3) }
-            else if let encoded=entry["nativeCable"] as? String,let raw=Data(base64Encoded:encoded) { recoveryCut=BoundCooperativeCableCut(mailbox:raw) }
-            else { recoveryCut=nil }
-            recoveryPending=true;recoveryNonce=UUID();peerRecoveryNonce=nil;recoveryPeerReady=false;recoveryReadySent=false;recoveryLoaded=false
-            status="Waiting for friend to recover cooperative battle"
-            if let core { _=BoundVBABattleBridge.setCooperativeGameSaveAllowed(false,for:core.game.gameSaveURL) }
-            return
-        }
+        for url in ordered.prefix(64) { if adoptRecovery(from:url) { return } }
+    }
+    private func adoptRecovery(from url:URL,expectedProof:Data?=nil)->Bool {
+        let folder=url.deletingLastPathComponent()
+        guard let bytes=try? Data(contentsOf:url),bytes.count<=65536,
+              let entry=try? JSONSerialization.jsonObject(with:bytes) as? [String:Any],entry["gameID"] as? String==gameID,
+              entry["rom"] as? String==BoundPlayerROMProfile.supportedSHA256,
+              let encoded=entry["agreement"] as? String,let agreement=Data(base64Encoded:encoded),
+              let record=try? JSONDecoder().decode(BoundCooperativeRecovery.self,from:agreement),record.proof.count==32,record.enemy.count==600,record.role<=1,
+              expectedProof==nil || expectedProof==record.proof,
+              let capture=BoundCooperativeSnapshot(record.capture),capture.selected,
+              let team=BoundCooperativePacket(data:record.peerTeam),team.kind == .team,team.encounter==capture.encounter,
+              let name=entry["state"] as? String,name==URL(fileURLWithPath:name).lastPathComponent,
+              UUID(uuidString:URL(fileURLWithPath:name).deletingPathExtension().lastPathComponent) != nil,
+              let digest=entry["sha256"] as? String,digest.count==64,
+              let encodedCable=entry["cable"] as? String,let cable=Data(base64Encoded:encodedCable),cable.count<=32768,
+              let encodedSnapshot=entry["snapshot"] as? String,let snapshotData=Data(base64Encoded:encodedSnapshot),
+              let savedSnapshot=BoundCooperativeSnapshot(snapshotData),[UInt32(3),4,5,6,7,9].contains(savedSnapshot.phase),
+              let encodedBranch=entry["branch"] as? String,let branch=Data(base64Encoded:encodedBranch),branch.count==32 else { return false }
+        self.capture=capture;peerTeam=team;proof=record.proof;enemy=record.enemy;fixedRole=record.role;snapshot=savedSnapshot
+        journal=url;checkpoint=folder.appendingPathComponent(name);recoveryAgreement=agreement;recoveryCable=cable;recoveryDigest=digest;recoveryBranch=branch
+        if savedSnapshot.phase==3 { recoveryCut=BoundCooperativeCableCut(admissionPhase:3) }
+        else if let encoded=entry["nativeCable"] as? String,let raw=Data(base64Encoded:encoded) {
+            recoveryCut=BoundCooperativeCableCut(mailbox:raw,snapshot:savedSnapshot,hostRecovery:cable)
+        } else { recoveryCut=nil }
+        recoveryPending=true;recoveryNonce=UUID();peerRecoveryNonce=nil;recoveryPeerReady=false;recoveryReadySent=false;recoveryLoaded=false
+        status="Waiting for friend to recover cooperative battle"
+        if let core { _=BoundVBABattleBridge.setCooperativeGameSaveAllowed(false,for:core.game.gameSaveURL) }
+        return true
     }
     private func recoveryPacket(_ kind:BoundCooperativePacket.Kind)->Data? {
-        guard let capture,let pair=context?(),let recoveryCut,proof.count==32 else { return nil }
+        guard let capture,let pair=context?(),let recoveryCut,recoveryBranch.count==32,proof.count==32 else { return nil }
         var bytes=BoundCooperativePacket(kind:kind,local:pair.0,peer:pair.1,id:recoveryNonce,peerID:peerRecoveryNonce,
-            snapshot:capture,proof:proof,enemyHash:coopFNV(enemy),payload:recoveryCut.data).data
+            snapshot:capture,proof:proof,enemyHash:coopFNV(enemy),payload:recoveryCut.data+recoveryBranch).data
         coopPut(isHost ? 0:1,in:&bytes,at:136)
         bytes[143]=UInt8(snapshot?.phase ?? 9)
         return bytes
@@ -545,7 +590,7 @@ final class BoundCooperativeDoublesSession {
               packet.proof==proof,packet.encounter==capture?.encounter,packet.count==(isHost ? 1:0),
               peerRecoveryNonce==nil || peerRecoveryNonce==packet.id else { return }
         if packet.kind == .recoveryReady,packet.peerID != recoveryNonce { return }
-        guard let recoveryCut,let peerCut=BoundCooperativeCableCut(data:packet.payload),recoveryCut.compatible(with:peerCut) else {
+        guard BoundCooperativeRecoveryBranch.accepts(packet.payload,current:recoveryBranch),let recoveryCut,let peerCut=BoundCooperativeCableCut(data:Data(packet.payload.prefix(92))),recoveryCut.compatible(with:peerCut) else {
             status="Cooperative checkpoints differ. Both recoveries were kept.";return
         }
         let ownBefore=snapshot?.phase==3,peerBefore=packet.data[143]==3
@@ -593,11 +638,20 @@ final class BoundCooperativeDoublesSession {
             } else {
                 guard BoundVBABattleBridge.resumeCooperativeCable(forPlayer:isHost ? 0:1) else { throw CocoaError(.fileReadCorruptFile) }
             }
-            probe.protect(state:checkpoint,journal:journal,agreement:recoveryAgreement,cable:cable)
+            guard let peerRecoveryNonce else { throw CocoaError(.fileReadCorruptFile) }
+            let nextBranch=BoundCooperativeRecoveryBranch.next(recoveryBranch,local:recoveryNonce,peer:peerRecoveryNonce)
+            guard var entry=(try JSONSerialization.jsonObject(with:Data(contentsOf:journal))) as? [String:Any] else { throw CocoaError(.fileReadCorruptFile) }
+            entry["branch"]=nextBranch.base64EncodedString()
+            try JSONSerialization.data(withJSONObject:entry,options:[.sortedKeys]).write(to:journal,options:.atomic)
+            recoveryBranch=nextBranch;encounter=recoveryNonce;peerEncounter=peerRecoveryNonce
+            probe.protect(state:checkpoint,journal:journal,agreement:recoveryAgreement,branch:recoveryBranch,cable:cable)
+            publish(flags:3);probe.checkpointNow(core)
+            let (_,durable,error)=probe.read()
+            guard durable,error==nil else { recoveryCut=nil;throw CocoaError(.fileWriteUnknown) }
             recoveryLoaded=true;recoveryPending=false;started=true;prepared=true;peerCableReady=true;lastXP=Data();incomingXP=Data()
-            publish(flags:3);probe.checkpointNow(core);cable.enableSender()
+            cable.enableSender()
             status="Cooperative battle recovered"
-            _=core.resume()
+            resumeIfPermitted(core)
         } catch { status="Cooperative recovery could not be loaded. Checkpoint kept." }
     }
 }

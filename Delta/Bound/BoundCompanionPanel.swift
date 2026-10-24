@@ -767,6 +767,11 @@ final class BoundCompanionCoordinator {
         sharing.nativeBattle.canResume = { [weak owner] in
             UIApplication.shared.applicationState == .active && owner?.view.window?.windowScene?.hasKeyboardFocus == true
         }
+        sharing.cooperativeDoubles.canResume = { [weak owner] in
+            guard let owner else { return false }
+            return UIApplication.shared.applicationState == .active && owner.view.window?.windowScene?.hasKeyboardFocus == true
+                && owner.gameViewControllerShouldResumeEmulation(owner)
+        }
         playerStateDisplay.bind(core: core)
         friendInteractionPanel?.bind(core: core)
         guard boundCore !== core || self.gameID != gameID else { return }

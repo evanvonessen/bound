@@ -914,6 +914,7 @@ extension GameViewController
                 pauseViewController.cheatCodesItem = nil
             }
             
+            if !boundAllowsManualStateSave { pauseViewController.saveStateItem = nil;pauseViewController.loadStateItem = nil }
             if !boundPermitsIndependentStateLoad { pauseViewController.loadStateItem = nil }
             self.pauseViewController = pauseViewController
             
@@ -1599,6 +1600,7 @@ extension GameViewController: SaveStatesViewControllerDelegate
     
     private func update(_ saveState: SaveState, with replacementSaveState: SaveStateProtocol? = nil)
     {
+        guard boundAllowsManualStateSave else { return }
         guard !saveState.isDeleted, let savedGame = saveState.game,
               savedGame.identifier == (self.game as? Game)?.identifier,
               !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: savedGame.identifier) else { return }
@@ -1659,7 +1661,9 @@ extension GameViewController: SaveStatesViewControllerDelegate
         }
     }
     
-    private var boundPermitsIndependentStateLoad: Bool {
+    var boundAllowsManualStateSave:Bool { !boundCompanion.sharing.cooperativeDoubles.blocksAutoSave }
+    var boundPermitsIndependentStateLoad: Bool {
+        guard !boundCompanion.sharing.cooperativeDoubles.blocksAutoSave else { return false }
         guard boundCompanion.sharing.soulLink.permitsIndependentStateLoading else { return false }
         guard game != nil else { return false }
         guard let id = (game as? Game)?.identifier else { return true }
@@ -1749,6 +1753,7 @@ extension GameViewController: SaveStatesViewControllerDelegate
     
     func saveStatesViewController(_ saveStatesViewController: SaveStatesViewController, updateSaveState saveState: SaveState)
     {
+        guard boundAllowsManualStateSave else { return }
         guard !saveState.isDeleted, let savedGame = saveState.game,
               savedGame.identifier == (self.game as? Game)?.identifier,
               !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: savedGame.identifier) else { return }
