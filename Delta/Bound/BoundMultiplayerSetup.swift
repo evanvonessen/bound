@@ -88,7 +88,7 @@ struct BoundMultiplayerSetupView: View {
                                 }
                             }
                         }
-                        Button("New Game") { requestID = UUID(); stage = 1; coordinator.refreshServerFriends() }
+                        Button("New Game") { requestID = UUID(); stage = 1; coordinator.beginServerGameSetup() }
                         Button("Refresh", systemImage: "arrow.clockwise") { Task { await coordinator.refreshServerRuns() } }
                     }
                     Button("Clear Server Saves", role: .destructive) { confirmingClear = true }.disabled(coordinator.serverRuns.isEmpty)

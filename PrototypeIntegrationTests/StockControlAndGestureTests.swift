@@ -32,6 +32,30 @@ private final class StaticButtonTouch: UITouch {
 
 @MainActor
 final class StockControlAndGestureTests: XCTestCase {
+    func testServerNewGameStartsAStoppedCoreAndDoesNotRestartAPausedCore() throws {
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rom = directory.appendingPathComponent("server-restore.gba")
+        try FileManager.default.copyItem(at: fixture, to: rom)
+        let core = try XCTUnwrap(EmulatorCore(game: RendererFixtureGame(fileURL: rom, type: .gba), options: [.metal: true]))
+        defer { core.stop() }
+        XCTAssertEqual(core.state, .stopped)
+        XCTAssertFalse(core.pause(), "This is the stopped-core case previously misreported as save recovery.")
+        try BoundROMMultiplayerCoordinator.prepareServerCoreForSelection(core)
+        XCTAssertEqual(core.state, .paused)
+        let snapshot = BoundVBABattleBridge.captureServerState()
+        XCTAssertGreaterThan(snapshot.count, 1024)
+        try BoundROMMultiplayerCoordinator.prepareServerCoreForSelection(core)
+        XCTAssertEqual(BoundVBABattleBridge.captureServerState(), snapshot,
+                       "Preparing an already paused core must preserve its loaded gameplay.")
+        XCTAssertTrue(core.resume())
+        try BoundROMMultiplayerCoordinator.prepareServerCoreForSelection(core)
+        XCTAssertEqual(core.state, .paused)
+        XCTAssertTrue(BoundVBABattleBridge.restoreServerState(snapshot))
+    }
+
     func testMultiplayerSetupButtonsDoNotFeedGameGestures() throws {
         let controller = GameViewController()
         controller.loadViewIfNeeded()

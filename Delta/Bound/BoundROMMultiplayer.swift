@@ -1977,6 +1977,20 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
 }
 
 extension BoundROMMultiplayerCoordinator {
+    enum ServerCoreFailure: LocalizedError {
+        case startup
+        var errorDescription: String? { "The game could not start. Close and reopen it." }
+    }
+    static func prepareServerCoreForSelection(_ core: EmulatorCore) throws {
+        // The setup menu intentionally prevents Delta's automatic startup.
+        // Initialize the native core before applying a new run's settings.
+        if core.state == .stopped, !core.start() { throw ServerCoreFailure.startup }
+        guard core.state == .paused || core.pause() else { throw ServerCoreFailure.startup }
+    }
+    func beginServerGameSetup() {
+        if !hasUnconfirmedServerSave { serverMenuError = nil }
+        refreshServerFriends()
+    }
     func serverFriendName(roomID: String) -> String {
         onboarding.rooms.first { $0.roomID.lowercased() == roomID.lowercased() }?.displayName ?? "Shared Run"
     }
@@ -2111,7 +2125,6 @@ extension BoundROMMultiplayerCoordinator {
         else { package = nil }
         guard selection == serverSelection, session.isSameSession(as: account.session) else { throw CancellationError() }
         server = client
-        guard core.state == .paused || core.pause() else { throw BoundMultiplayerSaveStore.Failure.incomplete }
         let memory: [String: Data]
         if let blob = package?.payload.files["memory-files.json"] {
             guard BoundMultiplayerSaveStore.hash(blob.data) == blob.sha256 else { throw BoundMultiplayerSaveStore.Failure.corrupt }
@@ -2123,9 +2136,9 @@ extension BoundROMMultiplayerCoordinator {
             // A new UUID must never inherit a previously loaded player's RAM.
             host = BoundROMHostState(); probe.publish(host)
             _ = core.stop(); probe.configure(core: core); probe.setVerified(true)
-            guard core.start(), core.pause() else { throw BoundMultiplayerSaveStore.Failure.incomplete }
             requestCursor = .init(); romFrameClock.reset()
         }
+        try Self.prepareServerCoreForSelection(core)
         try BoundServerMemoryFiles.restore(memory, gameID: game.identifier)
         try store.beginServerSession(identity: state.identity, package: package, target: state.serverCursor)
         if let package {
