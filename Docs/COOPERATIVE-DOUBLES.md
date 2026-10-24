@@ -19,3 +19,22 @@ The complete reconstruction gate passed 452 tests, all retained runtime comparis
 Two separate native mGBA cores completed both natural Sabrina doubles and the original NPC-partner encounter with the same physical-cable adapter as Bound. Both players received native EXP, learned moves, evolved their own selected Pokémon, earned the original payout and trainer flags, and returned with their complete party and unchanged bench records. A complete loss preserved owned faint evidence through native blackout healing and restored both owners’ original parties. Generated reports identify the exact cartridge tested.
 
 See the game worktree’s `docs/cooperative-doubles.md` and generated `build/` reports for the current acceptance results. Simulator/compiled/headless checks do not establish real iPhone performance or internet transport reliability. Physical-device pairing, internet disconnect/relaunch and long-play acceptance remain separate from these local runtime checks. No TestFlight or Xcode Cloud delivery is part of this work.
+
+
+## Follow-up review
+
+The doubles worktrees now pin cartridge
+`ab40d6b7faa27d56db44915e50183bb60c997fef8502d1cdd5a533b3d141d965`.
+The cartridge admits ordinary mode-9 continuation/partner setups while excluding
+actual tutorials, preserves native single-foe fallbacks, and retains the original
+provider's double-battle flags for native rewards. Opponent definitions are
+unchanged. Native coverage checks all 35 double-marked records in the verified
+743-entry trainer table, plus all seventeen configured trainer modes.
+
+Fresh Sabrina and NPC-partner victories, frozen-core recovery, both ownership
+exhaustion directions and native four-move replacement have passed local checks.
+The updated app passed all 76 cooperative/ROM/Soul Link/Handoff checks and an
+unsigned Release iPhone build; its embedded cartridge hash matches the pin.
+See the game's `build/doubles-review/` receipts and documentation for exact scope.
+No main branch or permanent ROM download is changed by this review. Physical
+pairing, authenticated internet and durable application relaunch remain unverified.
