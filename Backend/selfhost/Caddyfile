@@ -18,6 +18,9 @@
     handle /v2/rpc/bound_run_v1 {
         reverse_proxy nakama:7350
     }
+    handle /v2/rpc/bound_independent_v2 {
+        reverse_proxy nakama:7350
+    }
     handle {
         reverse_proxy gateway:8080 {
             header_up X-Bound-Client-IP {remote_host}

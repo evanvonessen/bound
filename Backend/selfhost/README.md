@@ -60,7 +60,7 @@ IP, managed database or control panel without approval.
 
    Build output stays in Docker, not Git. Caddy obtains TLS for the new hostname.
    Only ports 80/443 are published; the database, Nakama native authentication,
-   privileged RPCs and console stay private. Only `/ws` and the authenticated `/v2/rpc/bound_run_v1` reach Nakama publicly.
+   privileged RPCs and console stay private. Only `/ws` and the authenticated `/v2/rpc/bound_run_v1` and `/v2/rpc/bound_independent_v2` reach Nakama publicly.
    Container memory limits and rotating logs leave space for the host. The
    deployment script retains earlier source releases and persistent volumes.
 

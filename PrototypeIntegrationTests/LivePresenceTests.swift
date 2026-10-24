@@ -197,32 +197,29 @@ final class LivePresenceTests: XCTestCase {
         XCTAssertNil(session.pose(at: 21.02))
     }
 
-    func testPacketJitterKeepsStationarySpriteAndCollisionUntilExplicitWithdrawal() throws {
+    func testPacketJitterKeepsStationarySpriteWithoutBlockingUntilExplicitWithdrawal() throws {
         let session = session(), peer = UUID()
         session.receive(try packet(session, peer: peer, time: 10, reading: reading()), at: 20)
         for elapsed in [0.05, 0.35, 0.5, 0.74] {
             XCTAssertEqual(session.pose(at: 20 + elapsed)?.x, 104)
-            XCTAssertEqual(session.collision(at: 20 + elapsed)?.current, .init(x: 6, y: 6))
+            XCTAssertNil(session.collision(at: 20 + elapsed), "A remote avatar never owns local collision")
         }
         session.receive(try packet(session, peer: peer, sequence: 2, time: 10.74, reading: reading()), at: 20.74)
         XCTAssertEqual(session.pose(at: 21.2)?.x, 104, "A stationary heartbeat renews its position")
-        XCTAssertNotNil(session.collision(at: 21.2))
+        XCTAssertNil(session.collision(at: 21.2))
         session.receive(try packet(session, peer: peer, sequence: 3, time: 11.21, withdrawn: true), at: 21.21)
         XCTAssertNil(session.pose(at: 21.21)); XCTAssertNil(session.collision(at: 21.21))
     }
 
-    func testCollisionUsesNewestRawStepAndClearsForLifecycleOrInvalidCoordinates() throws {
+    func testRemoteAvatarsNeverBlockDivergentPuzzleOrStoryWorlds() throws {
         let session = session(), peer = UUID()
         session.receive(try packet(session, peer: peer, reading: reading(x: 104)), at: 20)
         session.receive(try packet(session, peer: peer, sequence: 2, time: 10.05, reading: reading(x: 112)), at: 20.05)
-        let collision = try XCTUnwrap(session.collision(at: 20.05))
-        XCTAssertEqual(collision.current, .init(x: 6, y: 6))
-        XCTAssertEqual(collision.previous, .init(x: 7, y: 6))
-        XCTAssertEqual(session.pose(at: 20.05)?.x, 104, "Visual interpolation must not delay occupancy")
-        var host = BoundROMHostState(); host.enabled = true; host.peerCollision = collision
+        XCTAssertNil(session.collision(at: 20.05), "Even a fresh walking sprite may overlap a different local puzzle")
+        XCTAssertEqual(session.pose(at: 20.05)?.x, 104)
+        var host = BoundROMHostState(); host.enabled = true; host.peerCollision = session.collision(at: 20.05)
         let encoded = host.encoded(sequence: 2)
-        XCTAssertEqual(Array(encoded[1360..<1364]), [1, 0, 0, 0])
-        XCTAssertEqual(Array(encoded[1364..<1376]), [4, 3, 0, 0, 6, 0, 6, 0, 7, 0, 6, 0])
+        XCTAssertTrue(encoded[1360..<1376].allSatisfy { $0 == 0 })
         host.enabled = false
         XCTAssertTrue(host.encoded(sequence: 4)[1360..<1376].allSatisfy { $0 == 0 })
         XCTAssertNil(session.collision(at: 20.801))

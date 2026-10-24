@@ -89,6 +89,7 @@ final class BoundFriendInteractionSession {
     private(set) var phase: Phase = .idle
     private(set) var activity: Packet.Activity?
     private(set) var message = ""
+    private(set) var requiresResultAcknowledgement = false
     private(set) var requestID: UUID?
     var changed: (() -> Void)?
     var context: (() -> Context?)?
@@ -111,15 +112,15 @@ final class BoundFriendInteractionSession {
     private var deadline: TimeInterval?
     private var retired: [UUID] = []
     private(set) var connected = false
-    var blocksGameplay: Bool { phase != .idle && phase != .playing }
+    var blocksGameplay: Bool { phase != .idle && phase != .playing && phase != .ended }
     var cancelActivity: (() -> Void)?
     func activityProgress(_ message: String, playing: Bool) {
         guard activity != nil else { return }
         phase = playing ? .playing : .connecting; self.message = message; deadline = nil; notify()
     }
-    func activityEnded(_ message: String) { end(message) }
+    func activityEnded(_ message: String) { requiresResultAcknowledgement = true; end(message) }
     var canInteract: Bool {
-        guard BoundMultiplayerFeatures.isEnabled, connected, phase == .idle, (!nativeDialogueManaged || nativeDialogueReady && !nativeDialogueBusy), canPresent?() ?? true, let value = context?() else { return false }
+        guard BoundMultiplayerFeatures.isEnabled, connected, (phase == .idle || phase == .ended && !requiresResultAcknowledgement), (!nativeDialogueManaged || nativeDialogueReady && !nativeDialogueBusy), canPresent?() ?? true, let value = context?() else { return false }
         return value.local.isFacing(value.peer)
     }
 
@@ -138,6 +139,7 @@ final class BoundFriendInteractionSession {
     }
     @discardableResult func open(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
         guard canInteract, let value = context?() else { return false }
+        requiresResultAcknowledgement = false
         anchor = value; deadline = now + 30; phase = .choosing; message = "Choose an interaction"
         notify(); return true
     }
@@ -171,8 +173,8 @@ final class BoundFriendInteractionSession {
     }
     func tick(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         refreshInputGate()
-        guard ![.idle, .ended, .agreed, .connecting, .playing].contains(phase) else { return }
-        if phase != .confirming && !validAnchor() {
+        guard ![.idle, .ended, .connecting, .playing].contains(phase) else { return }
+        if phase != .confirming && phase != .agreed && !validAnchor() {
             if let anchor { _ = emit(.cancel, anchor: anchor) }
             end("Your friend is no longer next to you")
         } else if let deadline, now >= deadline {
@@ -205,14 +207,14 @@ final class BoundFriendInteractionSession {
         switch packet.action {
         case .accept:
             guard phase == .outgoing, initiator, validAnchor() else { return }
-            phase = .agreed; deadline = nil; message = "\(packet.activity.title) invitation accepted"
+            phase = .agreed; deadline = now + 10; message = "\(packet.activity.title) invitation accepted"
             guard emit(.confirm, anchor: anchor) else { end("Couldn’t confirm the request"); return }
             notify(); finishAgreement(packet, initiator:true)
         case .confirm:
             // Both peers already consented at verified adjacent anchors. The
             // initiator can now pause for its snapshot, withholding live pose.
             guard phase == .confirming, !initiator else { return }
-            phase = .agreed; deadline = nil; message = "\(packet.activity.title) invitation accepted"
+            phase = .agreed; deadline = now + 10; message = "\(packet.activity.title) invitation accepted"
             notify(); finishAgreement(packet, initiator:false)
         case .decline:
             guard phase == .outgoing else { return }
@@ -249,10 +251,12 @@ final class BoundFriendInteractionSession {
         if let requestID { retired.append(requestID); if retired.count > 32 { retired.removeFirst() } }
     }
     private func end(_ message: String) {
+        if phase == .connecting || phase == .playing { requiresResultAcknowledgement = true }
         retireRequest(); deadline = nil; phase = .ended; self.message = message; notify()
     }
     private func reset() {
         retireRequest(); phase = .idle; anchor = nil; activity = nil; requestID = nil; deadline = nil; message = ""
+        requiresResultAcknowledgement = false
         notify()
     }
 }

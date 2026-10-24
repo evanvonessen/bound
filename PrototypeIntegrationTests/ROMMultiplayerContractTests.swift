@@ -83,7 +83,14 @@ final class ROMMultiplayerContractTests: XCTestCase {
         settings[17] = 0
         XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings), "Padding after the terminator must be canonical")
         settings[17] = 0xFF
-        for reserved in 20..<32 {
+        for debug in [UInt8(0), 1] {
+            settings[20] = debug
+            XCTAssertTrue(BoundROMMultiplayerCoordinator.validSettings(settings), "Version four carries the shared debug-start choice")
+        }
+        settings[20] = 2
+        XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings))
+        settings[20] = 0
+        for reserved in 21..<32 {
             settings[reserved] = 1
             XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings))
             settings[reserved] = 0
@@ -94,6 +101,152 @@ final class ROMMultiplayerContractTests: XCTestCase {
         XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings), "Seven characters and a terminator is the maximum")
         settings[19] = 0xFF
         XCTAssertTrue(BoundROMMultiplayerCoordinator.validSettings(settings))
+    }
+
+    @MainActor
+    func testDebugStartupChoiceRequiresVersionFourAndPreservesNativeOptions() {
+        var settings = Data(repeating: 0, count: 32)
+        settings[20] = 1
+        for version in UInt8(1)...3 {
+            settings[0] = version
+            XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings), "Legacy records cannot silently opt into debug startup")
+        }
+        settings[0] = 4
+        settings[1] = 1 // Minimal Grind, with native difficulty/randomizer defaults.
+        settings[10] = 1 // The five custom cheats.
+        settings[11] = 0 // Automatic Pokemon name-change behavior is disabled.
+        settings.replaceSubrange(12..<20, with: [0xC1, 0xD5, 0xE6, 0xED, 0xFF, 0xFF, 0xFF, 0xFF])
+        XCTAssertTrue(BoundROMMultiplayerCoordinator.validSettings(settings))
+        settings[1] = 2
+        XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings), "Debug startup still validates native option bits")
+        settings[1] = 1; settings[21] = 1
+        XCTAssertFalse(BoundROMMultiplayerCoordinator.validSettings(settings), "Debug does not relax unused-byte validation")
+    }
+
+    @MainActor
+    private func setupFixture() -> BoundROMMultiplayerCoordinator.Setup {
+        let owner = UUID(), partner = UUID()
+        var options = Data(repeating: 0, count: 32)
+        options[0] = 4; options[1] = 1; options[10] = 1; options[20] = 1
+        options.replaceSubrange(12..<20, with: [0xC1, 0xD5, 0xE6, 0xED, 0xFF, 0xFF, 0xFF, 0xFF])
+        return .init(identity: .init(run: UUID(), gameID: "local-game", owner: owner, partner: partner,
+            roomID: UUID().uuidString, settingsOwner: owner, settings: options, localSeed: 17, partnerSeed: 29,
+            romSHA256: String(repeating: "a", count: 64)), accepted: true, settingsCommitted: true,
+            peerReady: false, serverEpoch: 1, serverCommitted: false)
+    }
+
+    @MainActor
+    func testDelayedSetupPollCannotEraseChoicesSubmittedWhileItWasInFlight() throws {
+        let submitted = setupFixture()
+        var stalePoll = submitted.identity; stalePoll.settings = Data()
+        let merged = try BoundROMMultiplayerCoordinator.mergingSetup(submitted, remote: stalePoll, epoch: 1, committed: false)
+        XCTAssertEqual(merged.identity.settings, submitted.identity.settings)
+        XCTAssertTrue(merged.settingsCommitted)
+        XCTAssertFalse(merged.serverCommitted ?? true)
+        let committed = try BoundROMMultiplayerCoordinator.mergingSetup(merged, remote: merged.identity, epoch: 1, committed: true)
+        XCTAssertTrue(committed.serverCommitted == true)
+        XCTAssertFalse(committed.peerReady, "Committing a configuration requires no peer-start receipt")
+        XCTAssertEqual(committed.identity.localSeed, 17)
+        XCTAssertEqual(committed.identity.partnerSeed, 29)
+    }
+    @MainActor
+    func testDelayedSetupPollPreservesPartialOwnerDraftWithoutCommittingIt() throws {
+        var draft = setupFixture()
+        draft.settingsCommitted = false
+        draft.identity.settings[10] = 0
+        var stalePoll = draft.identity; stalePoll.settings = Data()
+        let merged = try BoundROMMultiplayerCoordinator.mergingSetup(draft, remote: stalePoll, epoch: 1, committed: false)
+        XCTAssertEqual(merged.identity.settings, draft.identity.settings)
+        XCTAssertFalse(merged.settingsCommitted, "Preserving the owner's draft cannot commit choices not yet submitted")
+        XCTAssertFalse(merged.serverCommitted ?? true)
+        XCTAssertEqual(merged.serverDraftDigest, BoundMultiplayerSaveStore.hash(stalePoll.settings),
+            "The next background draft update can distinguish these unsent choices from the delayed server response")
+    }
+
+    @MainActor
+    func testTakeoverDiscardsFormerChooserDraftAndFencesDelayedResponses() throws {
+        let initial = setupFixture()
+        var takeover = initial.identity
+        takeover.settingsOwner = initial.identity.partner; takeover.settings = Data()
+        XCTAssertThrowsError(try BoundROMMultiplayerCoordinator.mergingSetup(initial, remote: takeover, epoch: 1, committed: false),
+            "Ownership cannot change without a new server fence")
+        let changed = try BoundROMMultiplayerCoordinator.mergingSetup(initial, remote: takeover, epoch: 2, committed: false)
+        XCTAssertEqual(changed.identity.settingsOwner, initial.identity.partner)
+        XCTAssertTrue(changed.identity.settings.isEmpty)
+        XCTAssertFalse(changed.settingsCommitted)
+        XCTAssertEqual(changed.serverEpoch, 2)
+        XCTAssertThrowsError(try BoundROMMultiplayerCoordinator.mergingSetup(changed, remote: initial.identity, epoch: 1, committed: true),
+            "The previous chooser's delayed commit cannot replace the new fence")
+        XCTAssertEqual(changed.identity.localSeed, initial.identity.localSeed)
+        XCTAssertEqual(changed.identity.partnerSeed, initial.identity.partnerSeed)
+    }
+
+    @MainActor
+    func testCommittedSetupIsImmutableAndPartnerCanRetrieveItWithoutStartReceipt() throws {
+        var local = setupFixture()
+        local.identity.settingsOwner = local.identity.partner
+        local.settingsCommitted = false
+        var complete = local.identity
+        complete.settings = setupFixture().identity.settings
+        local.identity.settings = Data()
+        let retrieved = try BoundROMMultiplayerCoordinator.mergingSetup(local, remote: complete, epoch: 1, committed: true)
+        XCTAssertTrue(retrieved.settingsCommitted)
+        XCTAssertTrue(retrieved.serverCommitted == true)
+        XCTAssertFalse(retrieved.peerReady)
+        XCTAssertEqual(try BoundROMMultiplayerCoordinator.mergingSetup(retrieved, remote: complete, epoch: 1, committed: true).identity, complete,
+            "Retrieving the same committed configuration is harmless")
+        var changed = complete; changed.settings[10] = 0
+        XCTAssertThrowsError(try BoundROMMultiplayerCoordinator.mergingSetup(retrieved, remote: changed, epoch: 1, committed: true))
+        XCTAssertThrowsError(try BoundROMMultiplayerCoordinator.mergingSetup(retrieved, remote: complete, epoch: 1, committed: false))
+        changed = complete; changed.localSeed += 1
+        XCTAssertThrowsError(try BoundROMMultiplayerCoordinator.mergingSetup(retrieved, remote: changed, epoch: 1, committed: true))
+    }
+
+    @MainActor
+    func testSetupCancellationSurvivesOfflineReopenAndDoesNotBlockFreshRunWithSameFriend() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("queue.json")
+        let identity = setupFixture().identity
+        var queue = BoundROMSetupCancellationQueue()
+        try queue.enqueue(identity: identity, epoch: 0) // First setup RPC has not replied.
+        try BoundROMMultiplayerCoordinator.persistSetupCancellations(queue, at: file)
+        var reopened = try BoundROMMultiplayerCoordinator.loadSetupCancellations(at: file)
+        XCTAssertEqual(reopened.pending(owner: identity.owner)?.identity, identity)
+        XCTAssertEqual(reopened.pending(owner: identity.owner)?.epoch, 0)
+        XCTAssertNil(reopened.pending(owner: identity.partner), "Only the original account may send a pending cancellation")
+        // A failed HTTP request does not remove the persisted retry.
+        XCTAssertEqual(try BoundROMMultiplayerCoordinator.loadSetupCancellations(at: file), reopened)
+        try reopened.enqueue(identity: identity, epoch: 3)
+        XCTAssertEqual(reopened.entries.count, 1, "Retransmission preserves the original cancellation intent")
+        try reopened.resolve(identity.run, alreadyStarted: false)
+        try BoundROMMultiplayerCoordinator.persistSetupCancellations(reopened, at: file)
+        reopened = try BoundROMMultiplayerCoordinator.loadSetupCancellations(at: file)
+        XCTAssertNil(reopened.pending(owner: identity.owner))
+        XCTAssertTrue(reopened.contains(identity.run), "A late Hello or proposal remains fenced after server acknowledgement")
+        var fresh = identity; fresh.run = UUID()
+        XCTAssertFalse(reopened.contains(fresh.run), "Selecting the same friend again may create a new run")
+        try reopened.enqueue(identity: fresh, epoch: 1)
+        XCTAssertEqual(reopened.pending(owner: identity.owner)?.identity.run, fresh.run)
+    }
+
+    @MainActor
+    func testSetupCancellationCommitRaceRetiresRetryWithoutRemovingTombstoneOrOtherIntents() throws {
+        let identity = setupFixture().identity
+        var other = identity; other.run = UUID(); other.roomID = UUID().uuidString
+        var queue = BoundROMSetupCancellationQueue()
+        try queue.enqueue(identity: identity, epoch: 1)
+        try queue.enqueue(identity: other, epoch: 2)
+        try queue.resolve(identity.run, alreadyStarted: true)
+        XCTAssertEqual(queue.entries.first?.alreadyStarted, true, "A server commit cannot be rolled back by cancellation")
+        XCTAssertTrue(queue.contains(identity.run))
+        XCTAssertEqual(queue.pending(owner: identity.owner)?.identity, other)
+        try queue.resolve(identity.run, alreadyStarted: false)
+        XCTAssertEqual(queue.entries.first?.alreadyStarted, true, "An older response cannot erase the committed outcome")
+        var conflict = identity; conflict.partnerSeed += 1
+        XCTAssertThrowsError(try queue.enqueue(identity: conflict, epoch: 1))
+        XCTAssertThrowsError(try queue.resolve(UUID(), alreadyStarted: false))
+        XCTAssertEqual(try JSONDecoder().decode(BoundROMSetupCancellationQueue.self, from: JSONEncoder().encode(queue)), queue)
     }
 
     func testCheckpointCaptureWaitsUntilBothCartridgesFreezeTheSameHistory() {
@@ -221,6 +374,34 @@ final class ROMMultiplayerContractTests: XCTestCase {
         word(3, 8, &bytes); XCTAssertNil(BoundROMRequest.decode(bytes))
         word(2, 8, &bytes); word(999, 12, &bytes); XCTAssertNil(BoundROMRequest.decode(bytes))
         word(0, 12, &bytes); bytes[4] = 2; XCTAssertNil(BoundROMRequest.decode(bytes))
+    }
+    func testNativeSetupRecoveryCommandsAndDebugChoiceKeepTheirWireOffsets() throws {
+        XCTAssertEqual(BoundROMCommand.setupTakeover.rawValue, 28)
+        XCTAssertEqual(BoundROMCommand.setupRetry.rawValue, 29)
+        var bytes = Data(repeating: 0, count: 256)
+        bytes.replaceSubrange(0..<8, with: [82,85,82,49,1,0,0,0])
+        word(2, 8, &bytes); word(28, 12, &bytes); word(6, 80, &bytes); word(1, 160, &bytes)
+        let takeover = try XCTUnwrap(BoundROMRequest.decode(bytes))
+        XCTAssertEqual(takeover.command, .setupTakeover)
+        XCTAssertTrue(takeover.debugSetup)
+        XCTAssertTrue(takeover.newGame)
+        XCTAssertFalse(takeover.requestsNewMultiplayerRun, "Taking over a draft cannot create a second run")
+        word(29, 12, &bytes); word(0, 160, &bytes)
+        let retry = try XCTUnwrap(BoundROMRequest.decode(bytes))
+        XCTAssertEqual(retry.command, .setupRetry)
+        XCTAssertFalse(retry.debugSetup)
+        XCTAssertFalse(retry.requestsPregameSetupRestart)
+        word(1, 164, &bytes)
+        XCTAssertTrue(try XCTUnwrap(BoundROMRequest.decode(bytes)).requestsPregameSetupRestart)
+        word(38, 80, &bytes)
+        XCTAssertFalse(try XCTUnwrap(BoundROMRequest.decode(bytes)).requestsPregameSetupRestart,
+            "Retry cannot restart a cartridge that has already applied its setup")
+        word(1, 80, &bytes)
+        XCTAssertFalse(try XCTUnwrap(BoundROMRequest.decode(bytes)).requestsPregameSetupRestart,
+            "An ordinary field error cannot authorize a new-game restart")
+        var host = BoundROMHostState()
+        host.restartSetup = true
+        XCTAssertEqual(uint32(host.encoded(sequence: 2), 12), 2048)
     }
     func testHostMenuLimitsRowsAndNullTerminatesText() {
         var host = BoundROMHostState()

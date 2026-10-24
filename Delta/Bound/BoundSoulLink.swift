@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Combine
 import SwiftUI
 import DeltaCore
 import UIKit
@@ -82,7 +83,7 @@ struct BoundSoulRecord: Codable, Equatable, Sendable {
     let identity: BoundSoulIdentity
     let slot: String
     var name: String
-    let eligible: Bool
+    var eligible: Bool
     var aliases: Set<BoundSoulIdentity> = []
     var pendingHatch = false
     var identities: Set<BoundSoulIdentity> { aliases.union([identity]) }
@@ -116,8 +117,11 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
     var partnerAcquisitions: Set<String>?
     var partnerNames: [String: String]?
     var memorials: [BoundSoulDeath]?
+    // An authenticated own-origin catch may outlive an older native snapshot.
+    // Preserve the spent slot without assigning it a fabricated mon identity.
+    var consumedSlots: Set<String>?
     var partnerSlots: Set<String> { partnerAcquisitions ?? [] }
-    var acquired: Set<String> { Set(records.filter(\.eligible).map(\.slot)) }
+    var acquired: Set<String> { Set(records.filter(\.eligible).map(\.slot)).union(consumedSlots ?? []) }
     var acquisitionBits: Data { Self.bits(acquired) }
     static func validSlot(_ slot: String) -> Bool {
         let parts = slot.split(separator: ":")
@@ -130,6 +134,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
         && records.reduce(0, { $0 + $1.identities.count }) <= 2048
         && records.allSatisfy { Self.validSlot($0.slot) && $0.name.count <= 20 }
         && dead.allSatisfy(Self.validSlot)
+        && (consumedSlots ?? []).count <= 2304 && (consumedSlots ?? []).allSatisfy(Self.validSlot)
         && partnerSlots.count <= 2304 && partnerSlots.allSatisfy(Self.validSlot)
         && (partnerNames ?? [:]).allSatisfy { partnerSlots.contains($0.key) && $0.value.count <= 20 }
         && (memorials ?? []).count <= 2304
@@ -156,6 +161,64 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
     var denied: Set<BoundSoulIdentity> {
         Set(records.filter { !$0.eligible || dead.contains($0.slot) }.flatMap(\.identities))
     }
+    /// These facts come only from the durable ledger. Names are presentation,
+    /// so a nickname change cannot mutate an event already in the outbox.
+    var sharedEvents: [BoundSoulSharedEvent] {
+        acquired.sorted().map { .init(run: run, kind: .acquired, slot: $0) }
+        + dead.sorted().map { .init(run: run, kind: .death, slot: $0) }
+        + (ended ? [.init(run: run, kind: .ended, slot: nil)] : [])
+    }
+    /// Restoring a player's older save restores its native world, never its
+    /// permission to reuse an encounter or revive a permanently lost pair.
+    static func mergeForIndependentRestore(current: Data, incoming: Data) throws -> Data {
+        guard current.count <= 2_097_152, incoming.count <= 2_097_152 else { throw Error.corrupt }
+        var value = try JSONDecoder().decode(Self.self, from: current)
+        let older = try JSONDecoder().decode(Self.self, from: incoming)
+        guard value.valid, older.valid, value.run == older.run, value.binding == older.binding else { throw Error.corrupt }
+        for record in older.records {
+            let matches = value.records.indices.filter { !value.records[$0].identities.isDisjoint(with: record.identities) }
+            guard matches.count <= 1 else { throw Error.corrupt }
+            if let index = matches.first {
+                guard value.records[index].slot == record.slot else { throw Error.corrupt }
+                value.records[index].aliases.formUnion(record.identities.subtracting([value.records[index].identity]))
+                value.records[index].eligible = value.records[index].eligible && record.eligible
+                value.records[index].pendingHatch = value.records[index].pendingHatch && record.pendingHatch
+            } else {
+                var additional = record
+                // Divergent older saves cannot introduce another eligible catch
+                // for a slot already consumed by this player's durable history.
+                if value.acquired.contains(additional.slot) { additional.eligible = false }
+                value.records.append(additional)
+            }
+        }
+        let priorDeaths = value.dead
+        value.dead.formUnion(older.dead)
+        if value.consumedSlots != nil || older.consumedSlots != nil {
+            value.consumedSlots = (value.consumedSlots ?? []).union(older.consumedSlots ?? [])
+        }
+        value.nextEgg = max(value.nextEgg, older.nextEgg)
+        value.offering = value.offering && older.offering
+        value.ended = value.ended || older.ended
+        if value.partnerAcquisitions != nil || older.partnerAcquisitions != nil {
+            value.partnerAcquisitions = value.partnerSlots.union(older.partnerSlots)
+        }
+        value.partnerNames = (older.partnerNames ?? [:]).merging(value.partnerNames ?? [:]) { _, latest in latest }
+        var memorials = value.memorials ?? []
+        for memorial in older.memorials ?? [] {
+            if let index = memorials.firstIndex(where: { $0.slot == memorial.slot }) {
+                memorials[index].announced = memorials[index].announced || memorial.announced
+                memorials[index].localName = memorials[index].localName ?? memorial.localName
+                memorials[index].partnerName = memorials[index].partnerName ?? memorial.partnerName
+                if memorial.localCaught == true { memorials[index].localCaught = true }
+                if memorial.partnerCaught == true { memorials[index].partnerCaught = true }
+            } else { memorials.append(memorial) }
+        }
+        value.memorials = memorials
+        value.recordDeaths(previous: priorDeaths)
+        guard value.valid else { throw Error.corrupt }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(value)
+    }
     /// Existing journal losses are quiet history; only newly committed losses queue a moment.
     mutating func recordDeaths(previous: Set<String>, at date: Date = Date()) {
         guard !dead.isEmpty else { return }
@@ -166,7 +229,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
             if let index = indices[slot] {
                 // A delayed rotating name or a later catch can fill a missing name,
                 // but renaming/evolving never rewrites a known memorial name.
-                if local[slot] != nil { entries[index].localCaught = true }
+                if acquired.contains(slot) { entries[index].localCaught = true }
                 if partnerSlots.contains(slot) { entries[index].partnerCaught = true }
                 else if entries[index].partnerCaught == nil, partnerAcquisitions != nil { entries[index].partnerCaught = false }
                 if entries[index].localName == nil { entries[index].localName = local[slot] }
@@ -176,7 +239,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
                 indices[slot] = entries.count
                 entries.append(.init(slot: slot, recordedAt: historical ? nil : date,
                                      localName: local[slot], partnerName: partnerNames?[slot], announced: historical,
-                                     localCaught: local[slot] != nil, partnerCaught: partnerAcquisitions == nil ? nil : partnerSlots.contains(slot)))
+                                     localCaught: acquired.contains(slot), partnerCaught: partnerAcquisitions == nil ? nil : partnerSlots.contains(slot)))
             }
         }
         memorials = entries
@@ -199,7 +262,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
                 let slot: String
                 if mon.eggOrigin { slot = "egg:\(nextEgg)"; nextEgg += 1 }
                 else { slot = "area:\(mon.area)" }
-                let eligible = !records.contains { $0.slot == slot && $0.eligible }
+                let eligible = !acquired.contains(slot)
                 records.append(.init(identity: mon.identity, slot: slot, name: mon.name, eligible: eligible, pendingHatch: mon.isEgg))
             }
         }
@@ -212,6 +275,23 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
         guard valid else { throw Error.capacity }
     }
     enum Error: Swift.Error { case capacity, corrupt }
+}
+
+/// Journal payloads are monotonic slot facts, independent of arrival order,
+/// transport sessions and the time either player reaches an area.
+struct BoundSoulSharedEvent: Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Sendable { case acquired, death, ended }
+    var version = 1
+    let run: UUID
+    let kind: Kind
+    let slot: String?
+    var id: String { "soul:\(run.uuidString):\(kind.rawValue):\(slot ?? "run")" }
+    var valid: Bool { version == 1 && (kind == .ended ? slot == nil : slot.map(BoundSoulLedger.validSlot) == true) }
+    var payload: Data? {
+        guard valid else { return nil }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return try? encoder.encode(self)
+    }
 }
 
 struct BoundSoulRow: Codable, Equatable, Sendable {
@@ -382,9 +462,9 @@ struct BoundSoulEncounter: Identifiable, Equatable {
     var occupied: Bool { localName != nil || partnerName != nil || state == .lost }
     static func rows(ledger: BoundSoulLedger, areas: Set<Int>) -> [Self] {
         let local = Dictionary(uniqueKeysWithValues: ledger.records.filter(\.eligible).map { ($0.slot, $0.name) })
-        let slots = Set(areas.map { "area:\($0)" }).union(local.keys).union(ledger.partnerSlots).union(ledger.dead)
+        let slots = Set(areas.map { "area:\($0)" }).union(ledger.acquired).union(ledger.partnerSlots).union(ledger.dead)
         return slots.sorted().map { slot in
-            let mine = local[slot], theirs = ledger.partnerSlots.contains(slot) ? (ledger.partnerNames?[slot] ?? "Pokémon") : nil
+            let mine = local[slot] ?? (ledger.acquired.contains(slot) ? "Pokémon" : nil), theirs = ledger.partnerSlots.contains(slot) ? (ledger.partnerNames?[slot] ?? "Pokémon") : nil
             let state: State = ledger.dead.contains(slot) ? .lost : ledger.partnerAcquisitions == nil ? .syncing : mine != nil && theirs != nil ? .linked : mine != nil ? .localOnly : theirs != nil ? .partnerOnly : .available
             return .init(slot: slot, localName: mine, partnerName: theirs, state: state)
         }
@@ -478,8 +558,8 @@ final class BoundSoulProbe: @unchecked Sendable {
         }
         try persist(value); ledger = value; snapshot.ledger = value
     }
-    /// Called only after the cartridge's new-game handshake has durably paired
-    /// both players. No starter exists yet; ordinary play enrolls it later.
+    /// Called after this cartridge applies the committed shared configuration.
+    /// No starter exists yet; ordinary play enrolls it later.
     func startPreparedRun(run: UUID, binding: String) throws {
         lock.lock(); defer { lock.unlock() }
         if let ledger, ledger.run == run, ledger.binding == binding, !ledger.ended { return }
@@ -544,6 +624,34 @@ final class BoundSoulProbe: @unchecked Sendable {
         value.recordDeaths(previous: previous.dead)
         if value != previous { try persist(value); ledger = value; snapshot.ledger = value }
     }
+    func sharedEvents() -> [BoundSoulSharedEvent] {
+        lock.lock(); defer { lock.unlock() }
+        return ledger?.sharedEvents ?? []
+    }
+    /// The event journal persists receipt before this call. Apply to the ledger
+    /// first; native enforcement is picked up by the frame owner in the field.
+    func receiveSharedEvent(_ payload: Data, localOrigin: Bool = false) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard payload.count <= 1024,
+              let event = try? JSONDecoder().decode(BoundSoulSharedEvent.self, from: payload), event.valid,
+              var value = ledger, value.run == event.run else { throw BoundSoulLedger.Error.corrupt }
+        let previous = value
+        switch event.kind {
+        case .acquired:
+            if let slot = event.slot {
+                if localOrigin {
+                    value.consumedSlots = (value.consumedSlots ?? []).union([slot])
+                    if slot.hasPrefix("egg:"), let ordinal = Int(slot.dropFirst(4)) { value.nextEgg = max(value.nextEgg, ordinal + 1) }
+                } else { value.partnerAcquisitions = value.partnerSlots.union([slot]) }
+            }
+        case .death:
+            if let slot = event.slot { value.dead.insert(slot) }
+        case .ended: value.ended = true; value.offering = false
+        }
+        value.recordDeaths(previous: previous.dead)
+        if value != previous { try persist(value); ledger = value; snapshot.ledger = value }
+    }
+    static func mayApplyNativePolicy(ready: Bool, battle: Bool) -> Bool { ready && !battle }
     func acknowledgeDeath(run: UUID, slot: String) throws {
         lock.lock(); defer { lock.unlock() }
         guard var value = ledger, value.run == run,
@@ -552,27 +660,51 @@ final class BoundSoulProbe: @unchecked Sendable {
         try persist(value); ledger = value; snapshot.ledger = value
     }
     func read() -> Snapshot { lock.lock(); defer { lock.unlock() }; return snapshot }
+    /// Restore is a local integrity boundary. The coordinator has verified the
+    /// exact cartridge and paused it after loading its authorized snapshot. The
+    /// bridge verifies the loaded native image again before installing policy;
+    /// no asynchronously scheduled verifier or resumed frame is needed.
+    func prepareRestoredState(_ core: EmulatorCore) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard coreID == ObjectIdentifier(core), core.deltaCore.identifier == "com.rileytestut.GBADeltaCore",
+              core.state == .paused, friendlyBattleCoreID != ObjectIdentifier(core),
+              cooperativeBattleCoreID != ObjectIdentifier(core), let ledger, ledger.valid,
+              snapshot.error == nil else { throw BoundSoulLedger.Error.corrupt }
+        if ledger.ended {
+            BoundVBABattleBridge.closeSoulLink(); installed = false; lastPolicy = Data()
+            return
+        }
+        guard BoundVBABattleBridge.installSoulLink() else {
+            snapshot.error = "Soul Link restore rules are unavailable. Retry recovery."
+            throw BoundSoulLedger.Error.corrupt
+        }
+        installed = true
+        let policy = ledger.denied.sorted().reduce(into: Data()) { $0.append($1.bytes) }
+        guard BoundVBABattleBridge.setSoulLinkDenied(policy) else {
+            snapshot.error = "Soul Link restore rules are unavailable. Retry recovery."
+            throw BoundSoulLedger.Error.corrupt
+        }
+        // Known durable tombstones must precede the first restored frame, even
+        // for a battle snapshot whose party originally contained healthy mons.
+        lastPolicy = policy; BoundVBABattleBridge.enforceSoulLink()
+        verified = true; reachedField = true
+    }
     func receive(_ core: EmulatorCore) {
         lock.lock(); defer { lock.unlock() }
         guard verified, nativeObservationAllowed,
-              (previewEnabled || (ledger != nil && ledger?.ended == false)), coreID == ObjectIdentifier(core) else { return }
+              (previewEnabled || installed || (ledger != nil && ledger?.ended == false)), coreID == ObjectIdentifier(core) else { return }
         frame += 1
         // No ROM/RAM access on unrelated cores or before exact file verification.
         guard core.deltaCore.identifier == "com.rileytestut.GBADeltaCore" else { return }
         if ledger == nil || ledger?.ended == true { if frame % 30 != 1 { return } }
         let friendlyBattle = friendlyBattleCoreID == ObjectIdentifier(core)
+        if installed, ledger?.ended == true, !friendlyBattle {
+            BoundVBABattleBridge.closeSoulLink(); installed = false; lastPolicy = Data()
+        }
         if ledger != nil, ledger?.ended == false, !installed {
             if friendlyBattle { return }
             installed = BoundVBABattleBridge.installSoulLink()
             if !installed { snapshot.error = "Soul Link requires the supported Radical Red 4.1 game."; return }
-        }
-        if let ledger, !ledger.ended {
-            let policy = ledger.denied.sorted().reduce(into: Data()) { $0.append($1.bytes) }
-            if policy != lastPolicy {
-                guard BoundVBABattleBridge.setSoulLinkDenied(policy) else { snapshot.error = "Soul Link enforcement unavailable."; return }
-                lastPolicy = policy
-            }
-            BoundVBABattleBridge.enforceSoulLink()
         }
         // Do not consume events, zero HP, team changes or victory history from
         // the temporary battle. Its state rollback restores the original faint
@@ -580,6 +712,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         guard !friendlyBattle,cooperativeBattleCoreID != ObjectIdentifier(core) else { return }
         let native = BoundVBABattleBridge.soulLinkSnapshot()
         let ready = native["ready"] as? Bool == true
+        let safePolicyBoundary = Self.mayApplyNativePolicy(ready: ready, battle: native["battle"] as? Bool == true)
         reachedField = reachedField || ready
         let party = BoundSoulMon.decode(native["party"] as? Data ?? Data(), stride: 100)
         let boxBytes = native["boxes"] as? Data ?? Data()
@@ -608,11 +741,11 @@ final class BoundSoulProbe: @unchecked Sendable {
             }
             BoundVBABattleBridge.acknowledgeSoulLinkFaints()
             let policy = value.denied.sorted().reduce(into: Data()) { $0.append($1.bytes) }
-            if policy != lastPolicy || !installed {
+            if safePolicyBoundary && (policy != lastPolicy || !installed) {
                 guard BoundVBABattleBridge.setSoulLinkDenied(policy) else { throw BoundSoulLedger.Error.corrupt }
                 lastPolicy = policy
             }
-            BoundVBABattleBridge.enforceSoulLink()
+            if safePolicyBoundary { BoundVBABattleBridge.enforceSoulLink() }
         } catch { snapshot.error = "Soul Link couldn’t save its rules. Your run is paused." }
     }
 }
@@ -672,8 +805,7 @@ final class BoundSoulSession: ObservableObject {
     var send: ((Data) -> Bool)?
     var connected: (() -> Bool)?
     var nativeActivity: (() -> Bool)?
-    /// ROM-driven runs use the cartridge's callback gate for a visible native
-    /// disconnect dialogue while all gameplay callbacks remain suspended.
+    /// ROM-driven runs surface local integrity errors in their native UI.
     var cartridgeManagesPause = false
     private(set) var recoveryError: String?
     func retryRecovery() { recoveryError = nil }
@@ -782,7 +914,7 @@ final class BoundSoulSession: ObservableObject {
         }
         if data.starts(with: BoundSoulPacket.legacyPrefix) || (data.starts(with: BoundSoulPacket.prefix) && data.count > 4 && data[4] != 2) {
             incompatiblePeer = true; confirmed = false; canStart = false
-            status = "Both players need the latest Bound for paired encounters."; haltForRecovery(); return
+            status = "Partner update required for Soul Link sync."; return
         }
         guard let packet = BoundSoulPacket.decode(data) else { return }
         if ledger?.run == packet.run, ledger?.ended == true, packet.kind != .end { return }
@@ -800,7 +932,7 @@ final class BoundSoulSession: ObservableObject {
         // Tombstones are monotonic and safe even before the challenge completes.
         // An old alive packet can never mark a reconnected partner ready.
         if ledger?.run == packet.run, ledger?.binding == binding, packet.kind == .state {
-            do { try probe.merge(run: packet.run, rows: packet.rows, losses: packet.losses); ledger = probe.read().ledger }
+            do { try probe.merge(run: packet.run, rows: packet.rows, losses: packet.losses, acquired: packet.acquired); ledger = probe.read().ledger }
             catch { status = "Couldn’t preserve your partner’s Soul Link record."; haltForRecovery(); return }
         }
         if !fresh && ![.offer, .end].contains(packet.kind) { return }
@@ -845,13 +977,16 @@ final class BoundSoulSession: ObservableObject {
             try probe.endRun(); ledger = probe.read().ledger
             if let ledger { transmit(.end, run: ledger.run) }
             status = "Soul Link ended. Your run record is kept."; offered = nil; incoming = nil
-            if cartridgeManagesPause && wasRunning { core?.resume() }
+            if wasRunning { core?.resume() }
         } catch { status = "Couldn’t save the end of this run." }
     }
     func cancelInvitation() {
         let wasRunning = core?.state == .running
         if wasRunning, core?.pause() != true { status = "Couldn’t pause this run safely."; return }
-        do { try probe.cancelOffer(); ledger = probe.read().ledger; offered = nil; status = "Soul Link invitation cancelled." }
+        do {
+            try probe.cancelOffer(); ledger = probe.read().ledger; offered = nil; status = "Soul Link invitation cancelled."
+            if wasRunning { core?.resume() }
+        }
         catch { status = "Couldn’t cancel the Soul Link invitation." }
     }
     func peerGone() {
@@ -907,7 +1042,7 @@ final class BoundSoulSession: ObservableObject {
         let now = time ?? clock()
         if proposedEpoch != nil, now - proposalAt > 1 { peerGone() }
         probe.setPreviewEnabled(BoundMultiplayerFeatures.isEnabled)
-        defer { updateTeams(at: now); updateDeathMoment(at: now); bannerChanged?(!cartridgeManagesPause && (probe.read().error != nil || (active && !paired)) ? status : nil) }
+        defer { updateTeams(at: now); updateDeathMoment(at: now); bannerChanged?(!cartridgeManagesPause && (probe.read().error != nil || recoveryError != nil) ? status : nil) }
         let snapshot = probe.read(); if snapshot.ledger != ledger { ledger = snapshot.ledger }
         if let ledger { probe.timeline.observeSoul(ledger) }
         canStart = BoundMultiplayerFeatures.isEnabled && supported && snapshot.ready && snapshot.mons.count == 1
@@ -915,7 +1050,7 @@ final class BoundSoulSession: ObservableObject {
             && (ledger == nil || ledger?.ended == true) && binding != nil && connected?() == true && nativeActivity?() != true
         if incompatiblePeer {
             canStart = false
-            status = "Both players need the latest Bound for paired encounters."; haltForRecovery(); return
+            status = "Partner update required for Soul Link sync."
         }
         if let error = snapshot.error { status = error; haltForRecovery(); return }
         if incoming != nil, now - offeredAt > 30 { incoming = nil }
@@ -926,11 +1061,10 @@ final class BoundSoulSession: ObservableObject {
             if let offered, now - sent > 1 { sent = now; transmit(.offer, run: offered) }
             return
         }
-        let transportReady = BoundMultiplayerFeatures.isEnabled && connected?() == true && binding == ledger.binding
+        let transportReady = !incompatiblePeer && BoundMultiplayerFeatures.isEnabled && connected?() == true && binding == ledger.binding
         if ledger.ended { status = "Soul Link ended. Your run record is kept." }
         else if !transportReady || !confirmed || now - lastPeer > 3 {
-            status = "Soul Link paused. Reconnect to your partner to continue."
-            if !cartridgeManagesPause, core?.state == .running { _ = core?.pause() }
+            status = incompatiblePeer ? "Soul Link active · Partner update required" : "Soul Link active · Sync pending"
         } else { status = "Soul Link active" }
         guard transportReady, now - sent >= 0.25 else { return }
         sent = now
@@ -995,7 +1129,7 @@ struct BoundSoulControls: View {
             .confirmationDialog("Start Soul Link with this friend?", isPresented: $confirming, titleVisibility: .visible) {
                 Button("Start Soul Link") { if session.incoming != nil { session.accept() } else { session.invite() } }
             } message: {
-                Text("Start after receiving only your starter. One catch per named area, including raids. Eggs pair as Egg 1, Egg 2. Fainting permanently disables both linked Pokémon, except in friendly battles. Stay connected to play this run. Trades are unavailable during the run.")
+                Text("Start after receiving only your starter. One catch per named area, including raids. Eggs pair as Egg 1, Egg 2. Fainting permanently disables both linked Pokémon, except in friendly battles. Offline losses apply when received. Trades are unavailable during the run.")
             }
         }
     }

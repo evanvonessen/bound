@@ -504,8 +504,8 @@ final class MultiplayerSavePackageTests: XCTestCase {
             romSHA256: String(repeating: "e", count: 64), gameSaveURL: save))
         _ = try writeSoul(store, identity, dead: ["area:2"])
         let permanentDeath = try Data(contentsOf: journal)
-        XCTAssertThrowsError(try store.validateSuspensionForResume(gameID: identity.gameID, owner: identity.owner,
-            romSHA256: identity.romSHA256, gameSaveURL: save))
+        XCTAssertNotNil(try store.validateSuspensionForResume(gameID: identity.gameID, owner: identity.owner,
+            romSHA256: identity.romSHA256, gameSaveURL: save), "Background deaths cannot block the player's matching local snapshot")
         XCTAssertEqual(try Data(contentsOf: journal), permanentDeath)
         let updated = try store.captureSuspension(gameID: identity.gameID, romSHA256: identity.romSHA256, gameSaveURL: save, snapshot: state)
         XCTAssertEqual(updated.package.payload.files["soul.json"]?.data, permanentDeath)
@@ -697,6 +697,206 @@ final class MultiplayerSavePackageTests: XCTestCase {
             owner: identity.owner, romSHA256: identity.romSHA256, gameSaveURL: save))
         XCTAssertEqual(try store.manifest(gameID: identity.gameID)?.identity.run, identity.run)
         XCTAssertEqual(try Data(contentsOf: save), Data(repeating: 3, count: 131_072))
+    }
+    func testIndependentSaveCompletesOfflineAndMigratesPairedHistoryWithoutPartnerReceipt() throws {
+        let (store, identity, save) = try fixture()
+        let legacy = try complete(store, identity, save)
+        try Data(repeating: 9, count: 131_072).write(to: save)
+        let id = UUID(), digest = String(repeating: "d", count: 64)
+        let local = try store.saveLocal(gameID: identity.gameID, checkpointID: id, sharedEventDigest: digest,
+            gameSaveURL: save, additionalFiles: ["checkpoint.state": Data(repeating: 4, count: 2048)])
+        XCTAssertTrue(local.complete)
+        XCTAssertEqual(local.payload.version, 2)
+        XCTAssertNil(local.partnerReceipt)
+        XCTAssertEqual(local.payload.predecessor, legacy.payload.checkpoint)
+        let reopened = BoundMultiplayerSaveStore(root: store.root, support: store.support, deviceID: store.deviceID)
+        XCTAssertEqual(try reopened.latestComplete(gameID: identity.gameID), local)
+        XCTAssertEqual(try reopened.saveLocal(gameID: identity.gameID, checkpointID: id,
+            sharedEventDigest: digest, gameSaveURL: save), local)
+        XCTAssertEqual(try reopened.validateCheckpointForResume(gameID: identity.gameID, checkpointID: id,
+            owner: identity.owner, romSHA256: identity.romSHA256, gameSaveURL: save), local)
+        let archive = try JSONDecoder().decode(BoundMultiplayerSaveStore.CloudArchive.self,
+            from: Data(contentsOf: store.cloudURL(gameID: identity.gameID)))
+        XCTAssertEqual(archive.checkpoints, [local, legacy])
+        XCTAssertEqual(try reopened.checkpoint(gameID: identity.gameID, id: legacy.payload.checkpoint), legacy)
+    }
+    func testEventOutboxPersistsBeforeTransmissionAndIdempotencyDoesNotAllocateAnotherSequence() throws {
+        let (store, identity, _) = try fixture()
+        let first = try store.appendSharedEvent(gameID: identity.gameID, kind: "death", payload: Data("area:9".utf8), idempotencyKey: "death:area:9")
+        let reopened = BoundMultiplayerSaveStore(root: store.root, support: store.support, deviceID: store.deviceID)
+        XCTAssertEqual(try reopened.sharedEventsToSend(gameID: identity.gameID), [first])
+        XCTAssertEqual(try reopened.appendSharedEvent(gameID: identity.gameID, kind: "death", payload: first.payload,
+            idempotencyKey: "death:area:9"), first)
+        XCTAssertEqual(try reopened.journal(gameID: identity.gameID).nextSequence, 2)
+        XCTAssertThrowsError(try reopened.appendSharedEvent(gameID: identity.gameID, kind: "death", payload: Data(), idempotencyKey: "death:area:9"))
+        XCTAssertTrue(try reopened.pendingSharedEventsToApply(gameID: identity.gameID).isEmpty)
+    }
+    func testIndependentResumeStillValidatesAccountDeviceROMAndImmutableConfiguration() throws {
+        let (store, identity, save) = try fixture()
+        let package = try store.saveLocal(gameID: identity.gameID, sharedEventDigest: String(repeating: "d", count: 64),
+            gameSaveURL: save, additionalFiles: ["checkpoint.state": Data(repeating: 7, count: 2048)])
+        XCTAssertThrowsError(try store.validateCheckpointForResume(gameID: identity.gameID, checkpointID: package.payload.checkpoint,
+            owner: UUID(), romSHA256: identity.romSHA256, gameSaveURL: save))
+        XCTAssertThrowsError(try store.validateCheckpointForResume(gameID: identity.gameID, checkpointID: package.payload.checkpoint,
+            owner: identity.owner, romSHA256: String(repeating: "f", count: 64), gameSaveURL: save))
+        let foreign = BoundMultiplayerSaveStore(root: store.root, support: store.support, deviceID: UUID())
+        XCTAssertThrowsError(try foreign.validateCheckpointForResume(gameID: identity.gameID, checkpointID: package.payload.checkpoint,
+            owner: identity.owner, romSHA256: identity.romSHA256, gameSaveURL: save))
+        let manifestURL = store.directory(gameID: identity.gameID).appendingPathComponent("run.json")
+        let original = try Data(contentsOf: manifestURL)
+        for changed in ["seed", "partner", "run", "game"] {
+            var manifest = try XCTUnwrap(store.manifest(gameID: identity.gameID))
+            switch changed {
+            case "seed": manifest.identity.localSeed = 9
+            case "partner": manifest.identity.partner = UUID()
+            case "run": manifest.identity.run = UUID()
+            default: manifest.identity.gameID = "another-game"
+            }
+            try BoundMultiplayerSaveStore.encode(manifest).write(to: manifestURL)
+            XCTAssertThrowsError(try store.validateCheckpointForResume(gameID: identity.gameID, checkpointID: package.payload.checkpoint,
+                owner: identity.owner, romSHA256: identity.romSHA256, gameSaveURL: save))
+            try original.write(to: manifestURL)
+        }
+        XCTAssertEqual(try store.validateCheckpointForResume(gameID: identity.gameID, checkpointID: package.payload.checkpoint,
+            owner: identity.owner, romSHA256: identity.romSHA256, gameSaveURL: save), package)
+    }
+    func testEndedOutboxSurvivesNewGameArchivalAndStillAcceptsDurablePartnerAcknowledgements() throws {
+        let (store, identity, save) = try fixture()
+        let ended = try store.appendSharedEvent(gameID: identity.gameID, kind: "soul-link", payload: Data("ended".utf8), idempotencyKey: "ended")
+        let soul = try writeSoul(store, identity, dead: [])
+        try JSONSerialization.data(withJSONObject: ["run": identity.run.uuidString, "ended": true, "dead": []]).write(to: soul)
+        try store.endRun(gameID: identity.gameID)
+        XCTAssertEqual(try store.sharedEventsToSend(gameID: identity.gameID), [ended])
+        XCTAssertEqual(try store.sharedEventAcknowledgement(gameID: identity.gameID).run, identity.run)
+        XCTAssertThrowsError(try store.appendSharedEvent(gameID: identity.gameID, kind: "death", payload: Data()))
+        try store.preserveForNewGame(gameID: identity.gameID, run: identity.run, owner: identity.owner, gameSaveURL: save)
+        try store.finishNewGame(gameID: identity.gameID, run: identity.run, owner: identity.owner)
+        var next = identity; next.run = UUID()
+        try store.begin(next, gameSaveURL: save)
+        let reopened = BoundMultiplayerSaveStore(root: store.root, support: store.support, deviceID: store.deviceID)
+        XCTAssertEqual(try reopened.pendingSharedRunIdentities(gameID: identity.gameID), [identity])
+        XCTAssertEqual(try reopened.sharedEventsToSend(gameID: identity.gameID, identity: identity), [ended])
+        XCTAssertTrue(try reopened.journal(gameID: identity.gameID).events.isEmpty)
+        let otherDevice = BoundMultiplayerSaveStore(root: store.root, support: store.support, deviceID: UUID())
+        XCTAssertThrowsError(try otherDevice.journal(gameID: identity.gameID, identity: identity))
+        var cursor = BoundMultiplayerSharedCursor(); cursor.insert(ended.id)
+        try reopened.acknowledgeSharedEvents(gameID: identity.gameID,
+            acknowledgement: .init(run: identity.run, receiver: identity.partner, cursor: cursor), identity: identity)
+        XCTAssertTrue(try reopened.pendingSharedRunIdentities(gameID: identity.gameID).isEmpty)
+        XCTAssertTrue(try reopened.sharedEventsToSend(gameID: identity.gameID, identity: identity).isEmpty)
+        XCTAssertEqual(try reopened.manifest(gameID: identity.gameID)?.identity.run, next.run)
+    }
+    func testEventReceiptsKeepGapsAndDurableNativeReplaySurvivesCrashAndDuplicateDelivery() throws {
+        let (store, identity, _) = try fixture()
+        func event(_ sequence: UInt64) -> BoundMultiplayerSharedEvent {
+            .init(run: identity.run, id: .init(origin: identity.partner, sequence: sequence), kind: "death",
+                  payload: Data("area:\(sequence)".utf8))
+        }
+        let second = event(2), first = event(1)
+        XCTAssertTrue(try store.receiveSharedEvent(gameID: identity.gameID, event: second))
+        let ack = try store.sharedEventAcknowledgement(gameID: identity.gameID)
+        XCTAssertEqual(ack.cursor.origins[identity.partner.uuidString]?.contiguous, 0)
+        XCTAssertEqual(ack.cursor.origins[identity.partner.uuidString]?.sparse, [2])
+        let reopened = BoundMultiplayerSaveStore(root: store.root, support: store.support, deviceID: store.deviceID)
+        XCTAssertEqual(try reopened.pendingSharedEventsToApply(gameID: identity.gameID), [second])
+        XCTAssertFalse(try reopened.receiveSharedEvent(gameID: identity.gameID, event: second))
+        try reopened.markSharedEventApplied(gameID: identity.gameID, eventID: second.id)
+        XCTAssertTrue(try reopened.receiveSharedEvent(gameID: identity.gameID, event: first))
+        XCTAssertEqual(try reopened.sharedEventAcknowledgement(gameID: identity.gameID).cursor.origins[identity.partner.uuidString]?.contiguous, 2)
+        XCTAssertEqual(try reopened.pendingSharedEventsToApply(gameID: identity.gameID), [first])
+        var conflicting = second; conflicting.payload = Data("changed".utf8)
+        XCTAssertThrowsError(try reopened.receiveSharedEvent(gameID: identity.gameID, event: conflicting))
+        var foreign = event(3); foreign.run = UUID()
+        XCTAssertThrowsError(try reopened.receiveSharedEvent(gameID: identity.gameID, event: foreign))
+        XCTAssertEqual(try reopened.pendingSharedEventsToApply(gameID: identity.gameID), [first])
+    }
+    func testAuthoritativeOwnHistoryReplaysBeforeResumeAndNeverReusesAnImportedEventIdentity() throws {
+        let (store, identity, _) = try fixture()
+        let event = BoundMultiplayerSharedEvent(run: identity.run, id: .init(origin: identity.owner, sequence: 2),
+            kind: "soul-link", payload: Data("older-device-death".utf8), idempotencyKey: "death:area:8")
+        XCTAssertThrowsError(try store.receiveSharedEvent(gameID: identity.gameID, event: event))
+        XCTAssertTrue(try store.receiveAuthoritativeSharedEvent(gameID: identity.gameID, event: event))
+        let reopened = BoundMultiplayerSaveStore(root: store.root, support: store.support, deviceID: store.deviceID)
+        XCTAssertEqual(try reopened.pendingSharedEventsToApply(gameID: identity.gameID), [event])
+        XCTAssertEqual(try reopened.journal(gameID: identity.gameID).received.origins[identity.owner.uuidString]?.sparse, [2])
+        XCTAssertEqual(try reopened.journal(gameID: identity.gameID).nextSequence, 3)
+        XCTAssertFalse(try reopened.receiveAuthoritativeSharedEvent(gameID: identity.gameID, event: event))
+        var changed = event; changed.payload = Data()
+        XCTAssertThrowsError(try reopened.receiveAuthoritativeSharedEvent(gameID: identity.gameID, event: changed))
+        try reopened.markSharedEventApplied(gameID: identity.gameID, eventID: event.id)
+        let next = try reopened.appendSharedEvent(gameID: identity.gameID, kind: "soul-link", payload: Data([3]))
+        XCTAssertEqual(next.id.sequence, 3)
+        XCTAssertTrue(try reopened.pendingSharedEventsToApply(gameID: identity.gameID).isEmpty)
+    }
+    func testTransferredHistoryTargetIsDurableFiniteAndRequiresAppliedReceiptsFromBothOrigins() throws {
+        let (store, identity, _) = try fixture()
+        var manifest = try XCTUnwrap(store.manifest(gameID: identity.gameID)); manifest.requiresInitialHistorySync = true
+        try BoundMultiplayerSaveStore.encode(manifest).write(to: store.directory(gameID: identity.gameID).appendingPathComponent("run.json"))
+        let own = BoundMultiplayerSharedEvent(run: identity.run, id: .init(origin: identity.owner, sequence: 1), kind: "soul-link", payload: Data([1]))
+        let peer = BoundMultiplayerSharedEvent(run: identity.run, id: .init(origin: identity.partner, sequence: 1), kind: "soul-link", payload: Data([2]))
+        var target = BoundMultiplayerSharedCursor(); target.insert(own.id); target.insert(peer.id)
+        XCTAssertEqual(try store.setInitialHistoryTarget(gameID: identity.gameID, target: target), target)
+        let reopened = BoundMultiplayerSaveStore(root: store.root, support: store.support, deviceID: store.deviceID)
+        XCTAssertTrue(try XCTUnwrap(reopened.manifest(gameID: identity.gameID)).requiresInitialHistorySync)
+        var newer = target; newer.insert(.init(origin: identity.partner, sequence: 2))
+        XCTAssertEqual(try reopened.setInitialHistoryTarget(gameID: identity.gameID, target: newer), target)
+        XCTAssertThrowsError(try reopened.completeInitialHistorySync(gameID: identity.gameID))
+        try reopened.receiveAuthoritativeSharedEvent(gameID: identity.gameID, event: own)
+        try reopened.receiveAuthoritativeSharedEvent(gameID: identity.gameID, event: peer)
+        try reopened.markSharedEventApplied(gameID: identity.gameID, eventID: peer.id)
+        XCTAssertThrowsError(try reopened.completeInitialHistorySync(gameID: identity.gameID), "Own-origin saved deaths also require replay")
+        try reopened.markSharedEventApplied(gameID: identity.gameID, eventID: own.id)
+        let complete = try reopened.completeInitialHistorySync(gameID: identity.gameID)
+        XCTAssertFalse(complete.requiresInitialHistorySync); XCTAssertNil(complete.initialHistoryTarget)
+    }
+    func testAcknowledgementsAreDurableAndMissingEarlierEventsRetryUntilAcknowledged() throws {
+        let (store, identity, _) = try fixture()
+        let first = try store.appendSharedEvent(gameID: identity.gameID, kind: "catch", payload: Data([1]))
+        let second = try store.appendSharedEvent(gameID: identity.gameID, kind: "death", payload: Data([2]))
+        var cursor = BoundMultiplayerSharedCursor(); cursor.insert(second.id)
+        let partial = BoundMultiplayerSharedAcknowledgement(run: identity.run, receiver: identity.partner, cursor: cursor)
+        try store.acknowledgeSharedEvents(gameID: identity.gameID, acknowledgement: partial)
+        let reopened = BoundMultiplayerSaveStore(root: store.root, support: store.support, deviceID: store.deviceID)
+        XCTAssertEqual(try reopened.sharedEventsToSend(gameID: identity.gameID), [first])
+        cursor.insert(first.id)
+        try reopened.acknowledgeSharedEvents(gameID: identity.gameID,
+            acknowledgement: .init(run: identity.run, receiver: identity.partner, cursor: cursor))
+        XCTAssertTrue(try reopened.sharedEventsToSend(gameID: identity.gameID).isEmpty)
+        try reopened.acknowledgeSharedEvents(gameID: identity.gameID, acknowledgement: partial)
+        XCTAssertTrue(try reopened.sharedEventsToSend(gameID: identity.gameID).isEmpty, "An old acknowledgement cannot regress the outbox")
+        var wrong = partial; wrong.run = UUID()
+        XCTAssertThrowsError(try reopened.acknowledgeSharedEvents(gameID: identity.gameID, acknowledgement: wrong))
+        cursor.insert(.init(origin: identity.owner, sequence: 8))
+        XCTAssertThrowsError(try reopened.acknowledgeSharedEvents(gameID: identity.gameID,
+            acknowledgement: .init(run: identity.run, receiver: identity.partner, cursor: cursor)))
+    }
+    func testRestoringOlderIndependentSaveRetainsPermanentLossesPendingEventsAndLocalSequence() throws {
+        let (store, identity, save) = try fixture()
+        let stem = BoundMultiplayerSaveStore.hash(Data(identity.gameID.utf8))
+        let soulURL = store.support.appendingPathComponent("Soul Link/" + stem + ".json")
+        try FileManager.default.createDirectory(at: soulURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var ledger = BoundSoulLedger(run: identity.run, binding: String(repeating: "b", count: 64))
+        try JSONEncoder().encode(ledger).write(to: soulURL)
+        let old = try store.saveLocal(gameID: identity.gameID, sharedEventDigest: String(repeating: "c", count: 64),
+            gameSaveURL: save, additionalFiles: ["checkpoint.state": Data(repeating: 10, count: 2048)])
+        ledger.dead.insert("area:9")
+        try JSONEncoder().encode(ledger).write(to: soulURL)
+        let local = try store.appendSharedEvent(gameID: identity.gameID, kind: "death", payload: Data("area:9".utf8))
+        let remote = BoundMultiplayerSharedEvent(run: identity.run, id: .init(origin: identity.partner, sequence: 2),
+            kind: "death", payload: Data("area:10".utf8))
+        try store.receiveSharedEvent(gameID: identity.gameID, event: remote)
+        try Data(repeating: 8, count: 131_072).write(to: save)
+        _ = try store.saveLocal(gameID: identity.gameID, sharedEventDigest: String(repeating: "d", count: 64),
+            gameSaveURL: save, additionalFiles: ["checkpoint.state": Data(repeating: 11, count: 2048)])
+        _ = try store.restoreCompletedCheckpoint(gameID: identity.gameID, checkpointID: old.payload.checkpoint,
+            owner: identity.owner, romSHA256: identity.romSHA256, gameSaveURL: save)
+        XCTAssertEqual(try Data(contentsOf: save), old.payload.files["game.sav"]?.data)
+        XCTAssertTrue(try JSONDecoder().decode(BoundSoulLedger.self, from: Data(contentsOf: soulURL)).dead.contains("area:9"))
+        XCTAssertEqual(try store.sharedEventsToSend(gameID: identity.gameID), [local])
+        XCTAssertEqual(try store.pendingSharedEventsToApply(gameID: identity.gameID), [remote])
+        let next = try store.appendSharedEvent(gameID: identity.gameID, kind: "catch", payload: Data("area:20".utf8))
+        XCTAssertEqual(next.id.sequence, 2, "Loading an older checkpoint cannot reuse an event identity")
+        XCTAssertEqual(try store.journal(gameID: identity.gameID).received.origins[identity.partner.uuidString]?.sparse, [2])
     }
 #if canImport(Delta)
     @MainActor

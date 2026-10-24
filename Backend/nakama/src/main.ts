@@ -415,6 +415,7 @@ function InitModule(ctx: nkruntime.Context, logger: nkruntime.Logger, _nk: nkrun
     initializer.registerBeforeWriteStorageObjects(boundDeny);
     initializer.registerBeforeDeleteStorageObjects(boundDeny);
     initializer.registerRpc("bound_run_v1", boundRunRPC);
+    initializer.registerRpc("bound_independent_v2", boundIndependentRPC);
     initializer.registerRpc("bound_room_v1", boundRoomRPC);
     initializer.registerMatch("bound_room_v1", {
         matchInit: boundMatchInit,

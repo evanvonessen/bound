@@ -137,7 +137,7 @@ final class FriendInteractionTests: XCTestCase {
         p.a.stop()
         XCTAssertEqual(p.a.phase,.ended)
         XCTAssertEqual(p.a.message,recovery)
-        XCTAssertTrue(p.a.blocksGameplay)
+        XCTAssertFalse(p.a.blocksGameplay, "An interrupted transaction's retained result cannot block ordinary controls")
         p.a.start(send:{ _ in true })
         XCTAssertEqual(p.a.message,recovery)
         XCTAssertFalse(p.a.canInteract)
@@ -209,6 +209,38 @@ final class FriendInteractionTests: XCTestCase {
             XCTAssertEqual(p.a.phase,.agreed); XCTAssertEqual(launches,0)
             if cancel { p.a.cancel() }
             ready?(); XCTAssertEqual(launches,cancel ? 0:1)
+        }
+    }
+    func testUnavailableInvitationsReleaseControlsAndLateCleanupCannotLaunch() {
+        let p = peers(); var cleanup: (() -> Void)?, launched = false
+        p.a.beforeAgreement = { cleanup = $0 }
+        p.a.agreed = { _, _, _ in launched = true }
+        p.a.open(at: 10); p.a.request(.trade, at: 10); p.deliver()
+        p.b.accept(at: 10); p.deliver(at: 10)
+        XCTAssertEqual(p.a.phase, .agreed)
+        p.online = false
+        p.a.tick(at: 20.1)
+        XCTAssertEqual(p.a.phase, .ended)
+        XCTAssertFalse(p.a.blocksGameplay)
+        XCTAssertEqual(AnyInput(p.a.inputGate.filter(GBAGameInput.up)), AnyInput(GBAGameInput.up))
+        cleanup?(); XCTAssertFalse(launched)
+        p.a.stop(); p.a.start { _ in true }
+        XCTAssertFalse(p.a.blocksGameplay)
+        p.online = true
+        XCTAssertTrue(p.a.canInteract, "An expired invitation can be replaced without a catch-up acknowledgement")
+    }
+
+    func testDeclinedAndExpiredRequestsNeverKeepMovementPermission() {
+        for decline in [false, true] {
+            let p = peers()
+            p.a.open(at: 10); p.a.request(.battle, at: 10); p.deliver()
+            if decline { p.b.decline(); p.deliver(at: 11) }
+            else { p.a.tick(at: 41) }
+            XCTAssertEqual(p.a.phase, .ended)
+            XCTAssertFalse(p.a.blocksGameplay)
+            XCTAssertFalse(p.a.requiresResultAcknowledgement)
+            XCTAssertTrue(p.a.canInteract)
+            XCTAssertEqual(AnyInput(p.a.inputGate.filter(GBAGameInput.up)), AnyInput(GBAGameInput.up))
         }
     }
 

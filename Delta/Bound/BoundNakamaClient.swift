@@ -427,12 +427,12 @@ actor BoundNakamaRunService {
            old.expiresAt > configuration.expiresAt { return }
         self.configuration = configuration
     }
-    private func request(_ action: String, identity: BoundMultiplayerRunIdentity, fields: [String: Any] = [:]) async throws -> Data {
+    private func request(_ action: String, identity: BoundMultiplayerRunIdentity, fields: [String: Any] = [:], rpc: String = "bound_run_v1") async throws -> Data {
         guard let configuration, configuration.isValid(), configuration.ownerID == identity.owner,
               configuration.roomID.uuidString.lowercased() == identity.roomID.lowercased(),
               configuration.members.contains(identity.partner),
               var url = URLComponents(url: configuration.endpoint, resolvingAgainstBaseURL: false) else { throw Failure.unavailable }
-        url.scheme = "https"; url.path = "/v2/rpc/bound_run_v1"; url.queryItems = nil
+        url.scheme = "https"; url.path = "/v2/rpc/" + rpc; url.queryItems = nil
         guard let endpoint = url.url else { throw Failure.unavailable }
         var body = fields
         body["action"] = action; body["runID"] = identity.run.uuidString.lowercased(); body["ticket"] = configuration.joinTicket
@@ -454,6 +454,85 @@ actor BoundNakamaRunService {
         if let world, world.valid { fields["world"] = try JSONSerialization.jsonObject(with: BoundMultiplayerSaveStore.encode(world)) }
         let data = try await request("session", identity: identity, fields: fields)
         return try JSONDecoder().decode(State.self, from: data)
+    }
+
+    struct IndependentState: Decodable, Sendable {
+        struct LegacyHistory: Decodable, Sendable { let history: String; let bits: Data }
+        let version: Int
+        let identity: BoundMultiplayerRunIdentity
+        let committed: Bool
+        let cancelled: Bool
+        let epoch: UInt64
+        let revision: UInt64
+        let cursors: [String: BoundMultiplayerSharedCursor.Position]
+        let deliveries: [String: [String: UInt64]]
+        let saves: [String: Upload]
+        let events: [BoundMultiplayerSharedEvent]
+        let legacyHistory: [String: LegacyHistory]?
+
+        var serverCursor: BoundMultiplayerSharedCursor {
+            .init(origins: Dictionary(uniqueKeysWithValues: cursors.compactMap { key, value in UUID(uuidString:key).map { ($0.uuidString,value) } }))
+        }
+        func peerCursor(_ owner: UUID) -> BoundMultiplayerSharedCursor {
+            .init(origins: Dictionary(uniqueKeysWithValues: (deliveries[owner.uuidString.lowercased()] ?? [:]).compactMap { key, value in
+                UUID(uuidString:key).map { ($0.uuidString,.init(contiguous:value)) }
+            }))
+        }
+    }
+    func sharedSetup(identity: BoundMultiplayerRunIdentity, action: String = "setup", epoch: UInt64 = 0) async throws -> IndependentState {
+        let value = try JSONSerialization.jsonObject(with: BoundMultiplayerSaveStore.encode(identity))
+        let data = try await request(action, identity:identity, fields:["identity":value,"epoch":epoch,"authorized":action == "takeover"], rpc:"bound_independent_v2")
+        return try JSONDecoder().decode(IndependentState.self,from:data)
+    }
+    func sharedEvents(identity: BoundMultiplayerRunIdentity, events: [BoundMultiplayerSharedEvent], cursor: BoundMultiplayerSharedCursor) async throws -> IndependentState {
+        var batch: [BoundMultiplayerSharedEvent] = []
+        for event in events.prefix(16) {
+            let candidate = batch + [event]
+            if try BoundMultiplayerSaveStore.encode(candidate).count > 14000 {
+                guard !batch.isEmpty else { throw Failure.tooLarge }
+                break
+            }
+            batch = candidate
+        }
+        let values = try JSONSerialization.jsonObject(with:BoundMultiplayerSaveStore.encode(batch))
+        let after = Dictionary(uniqueKeysWithValues: cursor.origins.map { ($0.key.lowercased(),$0.value.contiguous) })
+        let data = try await request("events",identity:identity,fields:["events":values,"after":after],rpc:"bound_independent_v2")
+        return try JSONDecoder().decode(IndependentState.self,from:data)
+    }
+    func uploadIndependent(_ package: BoundMultiplayerSavePackage, expectedHead: UUID?, session: AppCloudSession? = nil,
+                           authorize: (@Sendable () async throws -> Void)? = nil) async throws -> IndependentState {
+        let bytes = try BoundMultiplayerSaveStore.encode(package.payload)
+        guard bytes.count <= 16 * 1024 * 1024, package.payload.version == 2 else { throw Failure.tooLarge }
+        let encoded = Array(bytes.base64EncodedString().utf8), size = 12000, count = (encoded.count + size - 1) / size
+        let receipt = try JSONSerialization.jsonObject(with:BoundMultiplayerSaveStore.encode(package.receipt))
+        let identity = package.payload.manifest.identity
+        try await authorize?()
+        try await refreshUploadAuthorization(identity:identity,session:session)
+        var fields: [String:Any] = ["checkpoint":package.payload.checkpoint.uuidString.lowercased(),"receipt":receipt,
+            "count":count,"bytes":bytes.count,"expectedHead":expectedHead?.uuidString.lowercased() as Any? ?? NSNull()]
+        _ = try await request("save",identity:identity,fields:fields,rpc:"bound_independent_v2")
+        for index in 0..<count {
+            try Task.checkCancellation()
+            try await authorize?()
+            try await refreshUploadAuthorization(identity:identity,session:session)
+            fields["index"] = index
+            fields["data"] = String(decoding:encoded[(index*size)..<min(encoded.count,(index+1)*size)],as:UTF8.self)
+            _ = try await request("saveChunk",identity:identity,fields:fields,rpc:"bound_independent_v2")
+        }
+        fields.removeValue(forKey:"data"); fields.removeValue(forKey:"index")
+        try await authorize?()
+        try await refreshUploadAuthorization(identity:identity,session:session)
+        let data = try await request("saveSeal",identity:identity,fields:fields,rpc:"bound_independent_v2")
+        return try JSONDecoder().decode(IndependentState.self,from:data)
+    }
+    private func refreshUploadAuthorization(identity: BoundMultiplayerRunIdentity, session: AppCloudSession?) async throws {
+        guard let session else { return }
+        guard session.owner == identity.owner else { throw Failure.conflict }
+        if let configuration, configuration.ownerID == identity.owner,
+           configuration.roomID.uuidString.lowercased() == identity.roomID.lowercased(),
+           configuration.expiresAt > Date().timeIntervalSince1970 + 25 { return }
+        let value = try await BoundNakamaAuthorization.fetch(room:identity.roomID,session:session)
+        configure(value)
     }
     func begin(identity: BoundMultiplayerRunIdentity, history: String, predecessor: UUID?) async throws -> State {
         let data = try await request("begin", identity: identity, fields: ["history": history,

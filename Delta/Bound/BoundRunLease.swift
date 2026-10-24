@@ -140,6 +140,44 @@ actor BoundRunLeaseClient {
             extra: ["checkpointID": checkpointID.uuidString.lowercased(),
                     "predecessor": predecessor.map { $0.uuidString.lowercased() as Any } ?? NSNull()], session: session)
     }
+    /// Background HTTP operations need current account/device ownership. Cached
+    /// authority expires independently of ordinary local cartridge execution.
+    func independentAuthority(runID: UUID, session: AppCloudSession) async throws -> BoundRunLeaseGrant {
+        let key = Key(owner: session.owner, run: runID, device: try device())
+        if let previous = lastGrants[key], previous.isCurrent, previous.identity.isSameSession(as: session) {
+            if previous.remaining > 25 { return previous }
+            return try await renew(grant: previous, session: session)
+        }
+        return try await acquire(runID: runID, session: session)
+    }
+    /// Call only after the independent save service durably seals this exact
+    /// player's package. This updates transfer authority for that generation;
+    /// it never grants ordinary gameplay permission or anchors later live events.
+    func publishIndependentCheckpoint(package: BoundMultiplayerSavePackage, session: AppCloudSession) async throws -> BoundRunLeaseGrant {
+        let payload = package.payload, manifest = payload.manifest, identity = manifest.identity, receipt = package.receipt
+        let deviceID = try device()
+        guard payload.version == 2, identity.valid, !manifest.ended, !manifest.releasedForTransfer,
+              identity.owner == session.owner, manifest.deviceOwner == deviceID,
+              receipt.owner == identity.owner, receipt.run == identity.run, receipt.checkpoint == payload.checkpoint,
+              receipt.sharedEventDigest == payload.sharedEventDigest, Self.validDigest(payload.sharedEventDigest),
+              receipt.payloadSHA256 == BoundMultiplayerSaveStore.hash(try BoundMultiplayerSaveStore.encode(payload)) else {
+            throw BoundRunLeaseError.unauthorized
+        }
+        var grant = try await independentAuthority(runID: identity.run, session: session)
+        if grant.checkpointID == payload.checkpoint, grant.checkpointHistory != payload.sharedEventDigest {
+            throw BoundRunLeaseError.anchorConflict
+        }
+        // The existing checkpoint RPC requires history to be anchored first.
+        // Keep this at the uploaded snapshot's digest, not working live history.
+        if grant.historyDigest != payload.sharedEventDigest {
+            grant = try await recordHistory(grant: grant, digest: payload.sharedEventDigest, session: session)
+        }
+        if grant.checkpointID != payload.checkpoint {
+            grant = try await checkpoint(grant: grant, checkpointID: payload.checkpoint,
+                predecessor: grant.checkpointID, history: payload.sharedEventDigest, session: session)
+        }
+        return grant
+    }
     private func mutate(grant: BoundRunLeaseGrant, action: String, history: String, extra: [String: Any],
                         session: AppCloudSession) async throws -> BoundRunLeaseGrant {
         guard Self.validDigest(history), grant.ownerID == session.owner, grant.identity.isSameSession(as: session),

@@ -1,93 +1,116 @@
 # ROM-driven experimental multiplayer
 
-Enable Experimental Multiplayer activates the ROM service, friend roster,
-authenticated room transport, presence, shared progression and automatic reconnect.
-The switch remains off by default. Friend accounts and ordinary Agora video remain
-independent. Connection checks, player-state displays, recorded movement and the
-older gameplay controls are available only with Developer Features enabled.
+Enable Experimental Multiplayer remains off by default. It activates the ROM
+friend roster, authenticated gameplay transport, presence and background shared
+events. Ordinary Bound friend accounts and Agora video remain independent.
+Diagnostics stay behind Enable Developer Features.
 
-In the integrated cartridge, Oak offers Soul Link, vanilla Radical Red v4.1 and
-Back using native multichoice windows. Selecting Soul Link opens the Bound friend
-roster. Both players must choose each other from a new game. A durable run proposal
-chooses the settings player randomly and generates distinct, nonzero player seeds.
-The selected player uses Radical Red's native difficulty and randomization options;
-both cartridges apply the same verified option flags. The persisted trainer-ID seed
-feeds the native species, ability and move randomizers. Continuing never generates
-replacement seeds or changes the settings owner into a permanent host.
+## One shared setup
 
-Press Select in the overworld for the friend/action menu. It includes Soul Link,
-battle, trade, Watch partner, Run timeline and explicit End Soul Link. Nearby battle
-and trade invitations retain the existing native dialogue and native link services.
-Battle/trade requests wait for the ROM menu to close before opening those services.
-Friendly battles are available during Soul Link without permanent losses. Their
-temporary party HP, faint events and results are excluded from the run until the
-prebattle state is restored. Run saves defer or safely end the battle before
-capturing world state. Friend trades remain unavailable during an active run.
-Watch partner opens the existing live video viewer from the ROM action.
+With experimental multiplayer enabled, New Game offers Debug mode before the
+native introduction. After selecting Soul
+Link and choosing each other from the friend roster, the two players establish a
+single run. A randomly selected chooser is recorded once with distinct nonzero
+player seeds, exact ROM compatibility and versioned shared settings. The chooser
+answers the shared rival, difficulty, randomizer, common-cheat and nickname
+questions. The partner has a blank screen displaying only:
 
-A callback gate in the cartridge freezes both main callbacks, including battles
-and scripts, while its native disconnect/recovery dialogue remains responsive.
-The service publishes a short frame lease; an expired lease, disabled switch,
-missing partner, incompatible history or expired server authority keeps the gate
-closed. Cold recovery also has a native screen before Continue is initialized.
-The exact snapshot is restored only after local and server-anchor validation and a
-fresh peer challenge. Battery writes and native Soul Link observation remain
-blocked until that working state is authorized. Both players must agree on the
-run, checkpoint and shared history
-before gameplay resumes. Disabling or backgrounding preserves a local suspension;
-it does not end the run. Independent emulator save-state loading is blocked for
-active or unresolved linked saves.
+> Waiting for your partner to set up the game.
 
-The in-game Save success callback requests a paired checkpoint. Automatic requests
-follow timeline events and periodically while playing. Automatic requests require
-both players to report an idle, stationary field without an active script, dialogue,
-fade or battle. Native Save requests wait for that same safe point. Both cartridges
-freeze before negotiating the shared digest, flush separate batteries and persist
-separate snapshots/receipts. A battle or script that starts before the freeze cancels
-the attempt through an authenticated request/acknowledgement: both parties must
-confirm that neither has prepared a receipt before gameplay is released. A delayed
-request for a cancelled ID cannot restart capture, and automatic retry waits ten
-seconds. Eight seconds without readiness starts cancellation; eight more without
-its acknowledgement opens recovery instead of leaving a saving message indefinitely.
-Once either durable receipt exists, cancellation cannot discard it. The existing
-commit/recovery path retains both saves; a thirty-second durable wait opens recovery.
-Both durable receipts are required for completion. Lost commit messages can be
-replayed after reopening. Local suspension snapshots preserve more
-recent working progress without becoming incomplete cloud backups. See
-[MULTIPLAYER-SAVE-PACKAGES.md](MULTIPLAYER-SAVE-PACKAGES.md).
+The setup document is stored with compare-and-swap ownership and an epoch before
+the chooser advances. Commitment is immutable. Each ROM validates and applies
+its configuration through the native setup path; native option/name/seed readback
+and application guards make retry harmless. The chooser starts after commitment
+and local application. The partner starts after retrieval and local application.
+Neither startup requires a partner start acknowledgement or first-field barrier.
 
-The authenticated backend grants one device per player/run. Its monotonically
-fenced checkpoint and history anchors reject a stale cloud archive on a replacement
-device, including when both players select the same older checkpoint. A transfer
-requires a native confirmation, expired/released previous authority and a complete
-package matching current server anchors. If newer progress has not reached Dropbox,
-keep using the original device until a compatible complete package is available.
-Network failure delays publication/renewal and pauses advancement when necessary;
-local suspension and checkpoint persistence do not depend on Dropbox. See
-[backend lease contract](../Backend/multiplayer/README.md).
+Debug Yes chooses Gary, Minimal Grind, default difficulty/randomizers, all five
+common cheats (Woyaopp, SO2Toxic, DexAll, TeamPreview and EZCatch), and automatic
+nickname prompts off. An unspecified player identity uses the native default.
+After connection and configuration, the stock new-game continuation starts in
+the bedroom without further setup input. It does not warp an existing save.
+Debug mode belongs to this new run; Continue never applies its preset again.
 
-End Soul Link first records a local pending-end receipt, then permanently ends that
-player's run UUID on the server before completing the local end. A lost response
-can be recovered after reopening. Older cloud packages cannot reactivate an ended
-UUID; a new game uses a different run identity.
+Setup drafts and native setup snapshots survive suspension. B cancels locally
+and records cancellation for background delivery. Start opens a takeover
+confirmation. Yes can claim an uncommitted setup after the chooser has been absent for 30 seconds;
+a new epoch rejects the previous chooser's late writes. Retry preserves the
+configuration. Setup/network/application failures expose a recoverable native
+action rather than an unbounded invisible wait.
 
-## Compatibility and evidence
+If a former chooser returns inside an obsolete naming prompt after takeover,
+Retry restarts only their unapplied native introduction with the same committed
+run and seeds. It cannot restart an already initialized cartridge.
 
-Bound imports the data-only ABI exported by `multi_red`; it does not embed a second
-game implementation. The UI ports are separate from BWP2 shared-world data. The new
-reserved heap/save-state layout is version 2; original battery saves remain version
-1. Exact integrated-ROM admission, data sizes and descriptor bytes are checked
-before publishing host data. Old solo batteries and completed/working recovery
-originals are preserved.
+## Independent play and background events
 
-Validation includes native ARM execution of callback freezes, native Save detection,
-option flags and all three randomizer consumers; native mGBA runs of Oak, both
-settings roles and cold recovery; focused iOS integration tests of account/video
-services, wire challenges, local packages, lost receipts and anchored transfer;
-and PostgreSQL concurrency, session revocation, expiry, transfer and stale-anchor
-checks. An unsigned Release iPhone build is required before publication.
+Each cartridge owns story flags, trainer defeats, badges, puzzles, boulders,
+inventory, rewards and saves. The native flag, collision and trainer handlers
+retain their original local behavior. Peer progress and freshness never decide
+whether walking, a native battle, a story script or a map transition can proceed.
+Remote avatars are presentation only and never create collision obstacles.
 
-These checks do not establish a complete physical two-device session, live Agora
-packet-loss recovery, signed-in hosted lease acquisition or live Dropbox transfer.
-Those network/device paths remain to be exercised together. No TestFlight release
-or Xcode Cloud run is part of this change.
+Connection loss expires presentation/interaction freshness, queues shared facts
+and keeps ordinary native callbacks running. Reconnection exchanges missing
+history without a catch-up screen, warps, flag copying or reward grants. A local
+integrity error still enters recovery rather than allowing an unrecorded loss.
+Disabling experimental multiplayer safely closes its services and preserves
+transaction recovery; it does not erase the run.
+
+The durable shared journal assigns each event an origin account and sequence.
+Receipt and application are separate persisted operations. A crash between them
+replays the effect idempotently. Per-origin contiguous and sparse cursors retain
+gaps; duplicates and reordered delivery cannot hide missing events. Nakama keeps
+immutable events independently of live matches. Acknowledgements confirm durable
+synchronization and never release a gameplay gate.
+
+World snapshots also enter this outbox before sharing, including while offline.
+Replayed world history updates presentation records only; it never writes local
+story, trainer, inventory or puzzle state.
+
+Soul Link pairs the first eligible encounter by its area slot; eggs use their
+defined ordinal slots. A death tombstone survives arrival before its matching
+catch and survives restoring an older save. Remote losses apply at the next safe
+native field boundary after receipt. During a disconnection, enforcement is
+eventual: an unreachable phone cannot receive an instantaneous remote faint.
+
+## Independent saves and optional interactions
+
+Native Save completes this player's version-2 package, internal recovery snapshot,
+shared journal and cursor locally. Each player has a separate checkpoint chain.
+The short local capture pauses only that core; background server/Dropbox upload
+never requires the partner to save, acknowledge, reach a town or share a digest.
+Normal reopening validates the local account, device, exact ROM and personal
+files before restoring that player's snapshot, even with the partner offline.
+Version-1 paired packages remain readable; original files are preserved.
+See [save packages](MULTIPLAYER-SAVE-PACKAGES.md).
+
+Trades, friendly battles and cooperative battles retain explicit mutual consent
+and bounded invitations. Expiry or an unavailable participant releases invitation
+controls. A delayed acceptance callback cannot start an expired activity.
+An interrupted native transaction retains its own recovery journal; it does not
+introduce a general partner catch-up condition. Raw cross-build emulator states
+remain incompatible; native recovery and explicit device transfers retain their
+save ownership safeguards.
+
+## Validation boundaries
+
+Required checks include native cold-boot startup for both setup roles, verified
+debug option/name/seed values, native movement and trainer entry with stale or
+missing peers, independent save/reopen, duplicate/reordered events and death before
+catch, old-save rollback, takeover fencing and interrupted transaction cleanup.
+Focused iOS integration tests and an unsigned Release iPhone build are required
+before publication. Local native/model/Simulator evidence does not establish a
+physical two-phone playthrough, phone performance parity or live hostile-network
+behavior. The multiplayer variant remains separate from byte-identical baseline
+ROM reconstruction.
+
+October 24, 2026 validation passed 190 focused iOS Simulator tests, including an
+actual native HP/save-state test that enforces known losses before restored play
+resumes. The authenticated Nakama service passed 68 tests; the self-hosted API
+passed 51 tests, with two database-dependent checks skipped. The unsigned Release
+iPhone build succeeded. Native cartridge checks exercised both setup roles,
+same-run Retry after naming-screen takeover, stale/disconnected-peer movement,
+trainer entry and older-save loss enforcement. The server runtime and RPC route
+were deployed and health-checked; no two-phone live-account playthrough or adverse
+network test was performed.

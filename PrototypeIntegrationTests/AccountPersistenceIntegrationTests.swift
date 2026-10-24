@@ -1562,6 +1562,7 @@ private actor RunLeaseClientFixture {
     var pendingRenewal: CheckedContinuation<Void, Never>?
     var requests: [String] = []
     var actions: [String] = []
+    var checkpointParents: [String?] = []
     var anchorVersion: UInt64 = 0
     var checkpointID: String?
     var checkpointHistory: String?
@@ -1582,6 +1583,7 @@ private actor RunLeaseClientFixture {
         let action = try XCTUnwrap(body["action"] as? String)
         let payload = try XCTUnwrap(body["payload"] as? [String: Any])
         actions.append(action)
+        if action == "checkpoint" { checkpointParents.append(payload["predecessor"] as? String) }
         if action == "release" { return Data("{\"ok\":true}".utf8) }
         if action == "end" {
             ended = true
@@ -1618,6 +1620,62 @@ final class RunLeaseClientTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: BoundAccountTestFixture.claims(owner: owner, expiry: Date().timeIntervalSince1970 + 3600))
         let payload = data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         return try AppCloudSession(owner: owner, key: "fixture", token: "fixture." + payload + ".signature")
+    }
+    private func independentPackage(owner: UUID, run: UUID, device: UUID, checkpoint: UUID = UUID(),
+                                    predecessor: UUID? = nil, digest: String = String(repeating: "a", count: 64)) throws -> BoundMultiplayerSavePackage {
+        let identity = BoundMultiplayerRunIdentity(run: run, gameID: "fixture", owner: owner, partner: UUID(),
+            roomID: "room-fixture", settingsOwner: owner, settings: Data(), localSeed: 1, partnerSeed: 2,
+            romSHA256: String(repeating: "a", count: 64))
+        let payload = BoundMultiplayerSavePackage.Payload(version: 2, manifest: .init(identity: identity, deviceOwner: device),
+            checkpoint: checkpoint, predecessor: predecessor, sharedEventDigest: digest,
+            files: ["game.sav": .init(Data(repeating: 7, count: 131_072)), "checkpoint.state": .init(Data(repeating: 8, count: 2048))])
+        let receipt = BoundMultiplayerCheckpointReceipt(run: run, checkpoint: checkpoint, owner: owner,
+            payloadSHA256: BoundMultiplayerSaveStore.hash(try BoundMultiplayerSaveStore.encode(payload)), sharedEventDigest: digest)
+        return .init(payload: payload, receipt: receipt)
+    }
+    func testIndependentUploadAnchorsSavedGenerationWithServerParentAndRetriesWithoutRewritingCheckpoint() async throws {
+        let owner = UUID(), run = UUID(), device = UUID(), session = try identity(owner: owner)
+        let fixture = RunLeaseClientFixture(owner: owner)
+        let client = BoundRunLeaseClient(perform: { try await fixture.perform($0) }, device: { device })
+        let authority = try await client.independentAuthority(runID: run, session: session)
+        XCTAssertFalse(authority.allowsTransfer)
+        let cached = try await client.independentAuthority(runID: run, session: session)
+        XCTAssertTrue(cached.isCurrent)
+        let first = try independentPackage(owner: owner, run: run, device: device)
+        let firstGrant = try await client.publishIndependentCheckpoint(package: first, session: session)
+        XCTAssertEqual(firstGrant.checkpointID, first.payload.checkpoint)
+        XCTAssertEqual(firstGrant.historyDigest, first.payload.sharedEventDigest)
+        let firstActions = await fixture.actions
+        XCTAssertEqual(firstActions, ["acquire", "history", "checkpoint"])
+        _ = try await client.publishIndependentCheckpoint(package: first, session: session)
+        let retriedActions = await fixture.actions
+        XCTAssertEqual(retriedActions, ["acquire", "history", "checkpoint"], "A lost publish response cannot change the remembered checkpoint parent")
+        let second = try independentPackage(owner: owner, run: run, device: device, predecessor: UUID(), digest: String(repeating: "b", count: 64))
+        let secondGrant = try await client.publishIndependentCheckpoint(package: second, session: session)
+        XCTAssertEqual(secondGrant.checkpointID, second.payload.checkpoint)
+        XCTAssertEqual(secondGrant.checkpointHistory, second.payload.sharedEventDigest)
+        let parents = await fixture.checkpointParents, finalActions = await fixture.actions
+        XCTAssertEqual(parents, [nil, first.payload.checkpoint.uuidString.lowercased()], "Offline local saves may skip the last uploaded generation")
+        XCTAssertEqual(finalActions, ["acquire", "history", "checkpoint", "history", "checkpoint"])
+    }
+    func testIndependentPublishRejectsForeignDeviceAccountAndChangedConfigurationBeforeNetworkAccess() async throws {
+        let owner = UUID(), run = UUID(), device = UUID(), session = try identity(owner: owner)
+        let fixture = RunLeaseClientFixture(owner: owner)
+        let client = BoundRunLeaseClient(perform: { try await fixture.perform($0) }, device: { device })
+        let original = try independentPackage(owner: owner, run: run, device: device)
+        for variation in ["account", "device", "seed", "rom"] {
+            var package = original
+            switch variation {
+            case "account": package.payload.manifest.identity.owner = UUID()
+            case "device": package.payload.manifest.deviceOwner = UUID()
+            case "seed": package.payload.manifest.identity.localSeed = 11
+            default: package.payload.manifest.identity.romSHA256 = String(repeating: "b", count: 64)
+            }
+            do { _ = try await client.publishIndependentCheckpoint(package: package, session: session); XCTFail("Changed package must fail") }
+            catch BoundRunLeaseError.unauthorized {}
+        }
+        let actions = await fixture.actions
+        XCTAssertTrue(actions.isEmpty)
     }
     func testUncertainAcquireReusesRequestAndRenewReleaseInvalidateOldGrants() async throws {
         let owner = UUID(), run = UUID(), device = UUID(), session = try identity(owner: owner)

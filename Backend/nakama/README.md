@@ -187,3 +187,25 @@ References: [Nakama TypeScript runtime](https://heroiclabs.com/docs/nakama/serve
 [server configuration](https://heroiclabs.com/docs/nakama/getting-started/configuration/),
 [Heroic Cloud repository setup](https://heroiclabs.com/docs/heroic-cloud/concepts/titles/builders/repository-setup/),
 [Heroic Cloud builders](https://heroiclabs.com/docs/heroic-cloud/concepts/builders/best-practices/).
+
+## Independent progression protocol
+
+`bound_independent_v2` uses the authenticated room ticket without requiring an
+active match or partner socket. A CAS-protected setup document records one
+chooser, ownership epoch, exact compatibility and distinct player seeds. Commit
+validates native options, the rival and Debug preset. Explicit takeover requires
+30 seconds of chooser absence and advances the epoch. Commitment is immutable.
+Cancellation is idempotent and retains an absent-run tombstone.
+
+Immutable events use run/origin/sequence identities. Server upload receipts and
+client delivery receipts are distinct. Gap-aware cursors preserve reordered and
+missing events, even with an offline backlog larger than one request batch.
+Acknowledgements never grant permission to move or save. Each player's chunked
+version-2 snapshot seals against its own expected head, independently of the
+partner's progress. Snapshot upload and event polling run separately.
+
+Version-1 records remain intact. Explicit migration verifies the original
+server-owned configuration and exposes monotonic legacy bit history separately
+from new event sequences. Clients merge it before emitting ordinary events.
+Production activation must also deploy the Caddy route for this authenticated
+RPC. Fixture validation does not establish WAN or physical-device behavior.

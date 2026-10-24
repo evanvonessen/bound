@@ -329,10 +329,10 @@ final class BoundLivePresenceSession: ObservableObject {
         return last.pose
     }
     func collision(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundPresenceCollision? {
-        guard needsReader, romVerified, peerEpoch != nil, let lastReceived,
-              now >= lastReceived, now - lastReceived <= Self.timeout,
-              let last = samples.last else { return nil }
-        return BoundPresenceCollision(pose: last.pose)
+        // Each cartridge owns its puzzle objects and story state. A remote
+        // avatar is presentation only, including while both peers are fresh:
+        // occupying a doorway or a differently solved puzzle cannot block play.
+        nil
     }
 
     private static func continuous(_ a: BoundPresencePose, _ b: BoundPresencePose) -> Bool {

@@ -102,6 +102,7 @@ final class BoundFriendInteractionPanel: UIView {
         if phase != session.phase || phase == .ended && shownMessage != session.message {
             phase=session.phase; shownMessage=session.message
             request=nil
+            if phase != .agreed { closeCompletion=nil }
             let mode:Int, text:String
             switch phase {
             case .choosing: mode=0; text="What would you like to do\nwith your friend?"
@@ -109,7 +110,9 @@ final class BoundFriendInteractionPanel: UIView {
                 mode=1; text="Your friend wants to \(session.activity?.rawValue ?? "trade").\nWill you accept?"
             case .outgoing: mode=2; text="Waiting for your friend.\nA or B: Cancel."
             case .confirming: mode=2; text="Confirming with your friend.\nA or B: Cancel."
-            case .ended: mode=2; text=Self.message(session.message)
+            case .ended:
+                guard session.requiresResultAcknowledgement else { probe.show(nil); return }
+                mode=2; text=Self.message(session.message)
             default: probe.show(nil); return
             }
             willOpen?()

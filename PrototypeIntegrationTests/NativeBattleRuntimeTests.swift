@@ -768,7 +768,11 @@ final class NativeBattleRuntimeTests:XCTestCase {
         BoundVBABattleBridge.qaFinishSoulCheck()
         try core.load(DeltaCore.SaveState(fileURL: before, gameType: .gba))
         XCTAssertGreaterThan(BoundVBABattleBridge.playerHP().first?.intValue ?? 0, 0, "The old state really contained a healthy party")
-        let reopened = BoundSoulProbe(); reopened.configure(core: core, url: journal); reopened.setVerified(true)
+        let reopened = BoundSoulProbe(); reopened.configure(core: core, url: journal)
+        try reopened.prepareRestoredState(core)
+        XCTAssertEqual(core.state, .paused)
+        XCTAssertEqual(BoundVBABattleBridge.playerHP().first?.intValue, 0,
+            "Durable losses must be enforced before the first restored frame and before asynchronous verification completes")
         core.updateHandler = { core in
             if core.audioManager.isEnabled { core.audioManager.isEnabled = false }
             driver.receive(core); reopened.receive(core)

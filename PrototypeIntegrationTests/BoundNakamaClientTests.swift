@@ -41,6 +41,17 @@ private final class NakamaSocketFixture: BoundNakamaSocket, @unchecked Sendable 
     func cancel() { lock.lock(); cancellationCount += 1; receiver = nil; lock.unlock() }
 }
 
+private actor NakamaRPCRecordingFixture {
+    private var captured: [URLRequest] = []
+    private var authorizationCount = 0
+    private let response: Data
+    init(response: Data) { self.response = response }
+    func perform(_ request: URLRequest) -> Data { captured.append(request); return response }
+    func requests() -> [URLRequest] { captured }
+    func authorize() { authorizationCount += 1 }
+    func authorizations() -> Int { authorizationCount }
+}
+
 final class BoundNakamaClientTests: XCTestCase {
     private let owner = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
     private let peer = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
@@ -212,6 +223,146 @@ final class BoundNakamaClientTests: XCTestCase {
             _ = try await service.session(identity:foreign,history:String(repeating:"a",count:64),bits:Data([1]),head:nil)
             XCTFail("Foreign account cannot use the room ticket")
         } catch { XCTAssertTrue(error is BoundNakamaRunService.Failure) }
+    }
+
+    private func independentIdentity() -> BoundMultiplayerRunIdentity {
+        .init(run: UUID(), gameID: "local-game", owner: owner, partner: peer, roomID: room.uuidString,
+              settingsOwner: owner, settings: Data(repeating: 0, count: 32), localSeed: 1, partnerSeed: 2,
+              romSHA256: String(repeating: "a", count: 64))
+    }
+    private func independentResponse(identity: BoundMultiplayerRunIdentity, fields: [String: Any] = [:]) throws -> Data {
+        var value: [String: Any] = ["version": 2, "identity": try JSONSerialization.jsonObject(with: BoundMultiplayerSaveStore.encode(identity)),
+            "committed": true, "cancelled": false, "epoch": 1, "revision": 1,
+            "cursors": [:], "deliveries": [:], "saves": [:], "events": []]
+        value.merge(fields) { _, latest in latest }
+        return try JSONSerialization.data(withJSONObject: ["payload": String(decoding: JSONSerialization.data(withJSONObject: value), as: UTF8.self)])
+    }
+    private func independentBody(_ request: URLRequest) throws -> [String: Any] {
+        XCTAssertEqual(request.url?.absoluteString, "https://bound.example/v2/rpc/bound_independent_v2")
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer private-access-token")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        let text = try JSONDecoder().decode(String.self, from: XCTUnwrap(request.httpBody))
+        let value = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        XCTAssertEqual(value["ticket"] as? String, "private-membership-ticket")
+        return value
+    }
+    func testIndependentSetupUsesAuthenticatedRPCAndDecodesAnEmptyPartnerStateWithoutReadiness() async throws {
+        let identity = independentIdentity()
+        let fixture = NakamaRPCRecordingFixture(response: try independentResponse(identity: identity, fields: ["committed": false]))
+        let service = BoundNakamaRunService { request in await fixture.perform(request) }
+        await service.configure(configuration())
+        let state = try await service.sharedSetup(identity: identity)
+        XCTAssertEqual(state.identity, identity); XCTAssertFalse(state.committed)
+        XCTAssertTrue(state.cursors.isEmpty); XCTAssertTrue(state.deliveries.isEmpty); XCTAssertTrue(state.saves.isEmpty); XCTAssertTrue(state.events.isEmpty)
+        let captured = await fixture.requests()
+        XCTAssertEqual(captured.count, 1)
+        let body = try independentBody(XCTUnwrap(captured.first))
+        XCTAssertEqual(body["action"] as? String, "setup")
+        XCTAssertEqual(body["runID"] as? String, identity.run.uuidString.lowercased())
+        XCTAssertNil(body["peerReady"]); XCTAssertNil(body["checkpoint"])
+        let proposed = try XCTUnwrap(body["identity"] as? [String: Any])
+        XCTAssertEqual(proposed["localSeed"] as? Int, 1); XCTAssertEqual(proposed["partnerSeed"] as? Int, 2)
+        var foreign = identity; foreign.owner = peer
+        do { _ = try await service.sharedSetup(identity: foreign); XCTFail("A foreign account cannot reuse this room ticket") }
+        catch { XCTAssertTrue(error is BoundNakamaRunService.Failure) }
+        let afterRejected = await fixture.requests()
+        XCTAssertEqual(afterRejected.count, 1)
+    }
+    func testIndependentEventsEncodeNestedIDsAndOfflineCursorBeyondUploadedBatchAndDecodeSparseRemoteHistory() async throws {
+        let identity = independentIdentity()
+        let local = (1...50).map { sequence in
+            BoundMultiplayerSharedEvent(run: identity.run, id: .init(origin: owner, sequence: UInt64(sequence)),
+                kind: "soul-link", payload: Data([UInt8(sequence)]), idempotencyKey: "death:\(sequence)")
+        }
+        let remote = BoundMultiplayerSharedEvent(run: identity.run, id: .init(origin: peer, sequence: 2),
+            kind: "soul-link", payload: Data("death-before-catch".utf8))
+        let fields: [String: Any] = ["cursors": [owner.uuidString.lowercased(): ["contiguous": 16, "sparse": []],
+            peer.uuidString.lowercased(): ["contiguous": 0, "sparse": [2]]],
+            "deliveries": [peer.uuidString.lowercased(): [owner.uuidString.lowercased(): 8]],
+            "legacyHistory": [:], "events": try JSONSerialization.jsonObject(with: BoundMultiplayerSaveStore.encode([remote]))]
+        let fixture = NakamaRPCRecordingFixture(response: try independentResponse(identity: identity, fields: fields))
+        let service = BoundNakamaRunService { request in await fixture.perform(request) }
+        await service.configure(configuration())
+        var cursor = BoundMultiplayerSharedCursor(); local.forEach { cursor.insert($0.id) }; cursor.insert(remote.id)
+        let state = try await service.sharedEvents(identity: identity, events: local, cursor: cursor)
+        XCTAssertEqual(state.events, [remote])
+        XCTAssertEqual(state.serverCursor.origins[owner.uuidString]?.contiguous, 16)
+        XCTAssertEqual(state.serverCursor.origins[peer.uuidString]?.sparse, [2])
+        XCTAssertEqual(state.peerCursor(peer).origins[owner.uuidString]?.contiguous, 8)
+        let captured = await fixture.requests()
+        let body = try independentBody(XCTUnwrap(captured.first))
+        XCTAssertEqual(body["action"] as? String, "events")
+        XCTAssertEqual((body["after"] as? [String: Int])?[owner.uuidString.lowercased()], 50)
+        let sent = try XCTUnwrap(body["events"] as? [[String: Any]])
+        XCTAssertEqual(sent.count, 16)
+        XCTAssertEqual((sent[0]["id"] as? [String: Any])?["sequence"] as? Int, 1)
+        XCTAssertEqual((sent[0]["id"] as? [String: Any])?["origin"] as? String, owner.uuidString)
+        XCTAssertNil(sent[0]["sequence"])
+        XCTAssertEqual(sent[0]["payload"] as? String, local[0].payload.base64EncodedString())
+    }
+    func testOfflineWorldEventsAreBatchedWithinTheRPCByteLimitWithoutDroppingTheNextEvent() async throws {
+        let identity = independentIdentity()
+        let events = (1...16).map { sequence in
+            BoundMultiplayerSharedEvent(run: identity.run, id: .init(origin: owner, sequence: UInt64(sequence)),
+                kind: "world", payload: Data(repeating: UInt8(sequence), count: 3600))
+        }
+        let fixture = NakamaRPCRecordingFixture(response: try independentResponse(identity: identity))
+        let service = BoundNakamaRunService { request in await fixture.perform(request) }
+        await service.configure(configuration())
+        _ = try await service.sharedEvents(identity: identity, events: events, cursor: .init())
+        let captured = await fixture.requests()
+        let body = try independentBody(XCTUnwrap(captured.first))
+        let sent = try XCTUnwrap(body["events"] as? [[String: Any]])
+        XCTAssertGreaterThan(sent.count, 0)
+        XCTAssertLessThan(sent.count, events.count)
+        XCTAssertLessThan(try JSONSerialization.data(withJSONObject: body).count, 20000)
+        let next = Array(events.dropFirst(sent.count))
+        _ = try await service.sharedEvents(identity: identity, events: next, cursor: .init())
+        let retryRequests = await fixture.requests()
+        let retryBody = try independentBody(XCTUnwrap(retryRequests.last))
+        let retryEvents = try XCTUnwrap(retryBody["events"] as? [[String: Any]])
+        XCTAssertEqual((retryEvents.first?["id"] as? [String: Any])?["sequence"] as? Int, sent.count + 1)
+    }
+    func testIndependentUploadChunksOnlyOnePlayersSaveAndCarriesExpectedServerHeadOnEveryRequest() async throws {
+        let identity = independentIdentity(), checkpoint = UUID(), predecessor = UUID()
+        let files: [String: BoundMultiplayerSavePackage.Blob] = ["game.sav": .init(Data(repeating: 7, count: 131_072)),
+            "checkpoint.state": .init(Data(repeating: 8, count: 2048))]
+        let payload = BoundMultiplayerSavePackage.Payload(version: 2, manifest: .init(identity: identity, deviceOwner: user),
+            checkpoint: checkpoint, predecessor: predecessor, sharedEventDigest: String(repeating: "b", count: 64), files: files)
+        let bytes = try BoundMultiplayerSaveStore.encode(payload), encoded = bytes.base64EncodedString()
+        let receipt = BoundMultiplayerCheckpointReceipt(run: identity.run, checkpoint: checkpoint, owner: owner,
+            payloadSHA256: BoundMultiplayerSaveStore.hash(bytes), sharedEventDigest: payload.sharedEventDigest)
+        let package = BoundMultiplayerSavePackage(payload: payload, receipt: receipt)
+        XCTAssertTrue(package.complete); XCTAssertNil(package.partnerReceipt)
+        let count = (encoded.utf8.count + 11999) / 12000
+        let upload: [String: Any] = ["receipt": try JSONSerialization.jsonObject(with: BoundMultiplayerSaveStore.encode(receipt)), "bytes": bytes.count, "count": count]
+        let fixture = NakamaRPCRecordingFixture(response: try independentResponse(identity: identity,
+            fields: ["saves": [owner.uuidString.lowercased(): upload]]))
+        let service = BoundNakamaRunService { request in await fixture.perform(request) }
+        await service.configure(configuration())
+        let state = try await service.uploadIndependent(package, expectedHead: predecessor, authorize: { await fixture.authorize() })
+        XCTAssertEqual(Set(state.saves.keys), [owner.uuidString.lowercased()])
+        XCTAssertEqual(state.saves[owner.uuidString.lowercased()]?.receipt, receipt)
+        let captured = await fixture.requests()
+        XCTAssertEqual(captured.count, count + 2)
+        let authorizations = await fixture.authorizations()
+        XCTAssertEqual(authorizations, count + 2, "Long uploads recheck local device authority before every chunk and seal")
+        let bodies = try captured.map(independentBody)
+        XCTAssertEqual(bodies.first?["action"] as? String, "save")
+        XCTAssertEqual(bodies.last?["action"] as? String, "saveSeal")
+        var chunks = [Int: String]()
+        for body in bodies {
+            XCTAssertEqual(body["expectedHead"] as? String, predecessor.uuidString.lowercased())
+            XCTAssertEqual(body["checkpoint"] as? String, checkpoint.uuidString.lowercased())
+            XCTAssertEqual(body["bytes"] as? Int, bytes.count)
+            XCTAssertNil(body["partnerReceipt"]); XCTAssertNil(body["peerReady"])
+            if body["action"] as? String == "saveChunk" {
+                chunks[try XCTUnwrap(body["index"] as? Int)] = try XCTUnwrap(body["data"] as? String)
+            }
+        }
+        XCTAssertEqual(chunks.count, count)
+        XCTAssertEqual((0..<count).compactMap { chunks[$0] }.joined(), encoded)
     }
 
     func testStopDropsQueuedTrafficAndTicketRenewalUsesReservedOpcode() async throws {

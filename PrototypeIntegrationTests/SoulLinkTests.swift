@@ -154,6 +154,136 @@ final class SoulLinkTests: XCTestCase {
         try ledger.observe([mon(1, area: 101)], registering: true, fainted: [])
         XCTAssertTrue(ledger.denied.contains(mon(1).identity))
     }
+    func testDurableSharedFactsRemainStableAcrossNamesAndDuplicateOutOfOrderDelivery() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        var value = makeLedger()
+        try value.observe([mon(1)], registering: true, fainted: [])
+        let acquisition = try XCTUnwrap(value.sharedEvents.first)
+        let originalPayload = try XCTUnwrap(acquisition.payload)
+        value.records[0].name = "Renamed"
+        XCTAssertEqual(value.sharedEvents.first?.id, acquisition.id)
+        XCTAssertEqual(value.sharedEvents.first?.payload, originalPayload)
+        try JSONEncoder().encode(value).write(to: file)
+        let probe = BoundSoulProbe(); probe.configure(core: nil, url: file)
+        let death = try XCTUnwrap(BoundSoulSharedEvent(run: value.run, kind: .death, slot: "area:101").payload)
+        let remoteCatch = try XCTUnwrap(BoundSoulSharedEvent(run: value.run, kind: .acquired, slot: "area:101").payload)
+        try probe.receiveSharedEvent(death)
+        try probe.receiveSharedEvent(death)
+        try probe.receiveSharedEvent(remoteCatch)
+        try probe.receiveSharedEvent(originalPayload)
+        var latest = try XCTUnwrap(probe.read().ledger)
+        XCTAssertEqual(latest.dead, ["area:101"])
+        XCTAssertEqual(latest.partnerSlots, ["area:100", "area:101"])
+        XCTAssertEqual(latest.memorials?.count, 1)
+        try latest.observe([mon(2, area: 101)], registering: true, fainted: [])
+        XCTAssertTrue(latest.denied.contains(mon(2).identity), "A much later local catch inherits the permanent pair death")
+        let reopened = BoundSoulProbe(); reopened.configure(core: nil, url: file)
+        XCTAssertEqual(reopened.read().ledger?.dead, ["area:101"])
+        XCTAssertThrowsError(try reopened.receiveSharedEvent(try XCTUnwrap(BoundSoulSharedEvent(run: UUID(), kind: .death, slot: "area:100").payload)))
+        XCTAssertNil(BoundSoulSharedEvent(run: value.run, kind: .death, slot: "area:999").payload)
+    }
+    func testAuthoritativeOwnHistoryConsumesSlotsWithoutInventingMonIdentitiesAfterOlderRestore() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let older = makeLedger()
+        try JSONEncoder().encode(older).write(to: file)
+        let probe = BoundSoulProbe(); probe.configure(core: nil, url: file)
+        let death = try XCTUnwrap(BoundSoulSharedEvent(run: older.run, kind: .death, slot: "area:101").payload)
+        let acquired = try XCTUnwrap(BoundSoulSharedEvent(run: older.run, kind: .acquired, slot: "area:101").payload)
+        let spent = try XCTUnwrap(BoundSoulSharedEvent(run: older.run, kind: .acquired, slot: "area:102").payload)
+        try probe.receiveSharedEvent(death, localOrigin: true)
+        try probe.receiveSharedEvent(acquired, localOrigin: true)
+        try probe.receiveSharedEvent(spent, localOrigin: true)
+        try probe.receiveSharedEvent(acquired, localOrigin: true)
+        let reopened = BoundSoulProbe(); reopened.configure(core: nil, url: file)
+        var latest = try XCTUnwrap(reopened.read().ledger)
+        XCTAssertTrue(latest.records.isEmpty, "Server catch facts cannot fabricate native Pokemon identities")
+        XCTAssertTrue(latest.partnerSlots.isEmpty, "Own history cannot be presented as the partner's catches")
+        XCTAssertEqual(latest.acquired, ["area:101", "area:102"])
+        XCTAssertEqual(latest.dead, ["area:101"])
+        XCTAssertEqual(latest.memorials?.first?.localCaught, true)
+        XCTAssertNil(latest.memorials?.first?.localName)
+        XCTAssertEqual(latest.sharedEvents.filter { $0.kind == .acquired }.count, 2)
+        try latest.observe([mon(1, area: 101), mon(2, area: 102)], registering: true, fainted: [])
+        XCTAssertTrue(latest.records.allSatisfy { !$0.eligible })
+        XCTAssertEqual(latest.denied, [mon(1).identity, mon(2).identity], "Neither a dead pair nor a previously spent area may be caught again after rewind")
+        XCTAssertTrue(latest.valid)
+        let merged = try JSONDecoder().decode(BoundSoulLedger.self, from: BoundSoulLedger.mergeForIndependentRestore(
+            current: JSONEncoder().encode(latest), incoming: JSONEncoder().encode(older)))
+        XCTAssertEqual(merged.consumedSlots, latest.consumedSlots)
+        XCTAssertEqual(merged.denied, latest.denied)
+    }
+    func testOwnEggHistoryAdvancesOrdinalsWhilePeerAcquisitionKeepsIndependentSlots() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let older = makeLedger(); try JSONEncoder().encode(older).write(to: file)
+        let probe = BoundSoulProbe(); probe.configure(core: nil, url: file)
+        try probe.receiveSharedEvent(try XCTUnwrap(BoundSoulSharedEvent(run: older.run, kind: .acquired, slot: "egg:3").payload), localOrigin: true)
+        try probe.receiveSharedEvent(try XCTUnwrap(BoundSoulSharedEvent(run: older.run, kind: .acquired, slot: "area:105").payload))
+        var value = try XCTUnwrap(probe.read().ledger)
+        XCTAssertEqual(value.nextEgg, 4)
+        XCTAssertEqual(value.acquired, ["egg:3"])
+        XCTAssertEqual(value.partnerSlots, ["area:105"])
+        try value.observe([mon(1, egg: true, isEgg: true), mon(2, area: 105)], registering: true, fainted: [])
+        XCTAssertEqual(value.records.map(\.slot), ["egg:4", "area:105"])
+        XCTAssertTrue(value.records.allSatisfy(\.eligible), "Peer arrival order never consumes this player's encounter slot")
+        let rows = BoundSoulEncounter.rows(ledger: value, areas: [])
+        XCTAssertTrue(rows.first { $0.slot == "egg:3" }?.occupied == true)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(older)) as? [String: Any])
+        legacy.removeValue(forKey: "consumedSlots")
+        XCTAssertTrue(try JSONDecoder().decode(BoundSoulLedger.self, from: JSONSerialization.data(withJSONObject: legacy)).valid)
+    }
+    func testIndependentSaveRestoreMergesPermanentLossesAndConsumedSlots() throws {
+        var old = makeLedger()
+        try old.observe([mon(1)], registering: true, fainted: [])
+        var current = old
+        try current.observe([mon(2, area: 101), mon(3, egg: true, isEgg: true)], registering: true, fainted: [])
+        try current.observe([mon(1, hp: 0)], registering: true, fainted: [])
+        current.partnerAcquisitions = ["area:101"]
+        let encoder = JSONEncoder()
+        let bytes = try BoundSoulLedger.mergeForIndependentRestore(current: encoder.encode(current), incoming: encoder.encode(old))
+        var restored = try JSONDecoder().decode(BoundSoulLedger.self, from: bytes)
+        XCTAssertEqual(restored.dead, ["area:100"])
+        XCTAssertEqual(restored.nextEgg, 2)
+        XCTAssertEqual(restored.partnerSlots, ["area:101"])
+        try restored.observe([mon(1), mon(4, area: 101)], registering: true, fainted: [])
+        XCTAssertTrue(restored.denied.contains(mon(1).identity))
+        XCTAssertTrue(restored.denied.contains(mon(4).identity), "Rewinding cannot replace the area's already consumed identity")
+        var incoming = old
+        incoming.dead.insert("area:102")
+        let combined = try JSONDecoder().decode(BoundSoulLedger.self, from: BoundSoulLedger.mergeForIndependentRestore(current: encoder.encode(current), incoming: encoder.encode(incoming)))
+        XCTAssertEqual(combined.dead, ["area:100", "area:102"])
+        XCTAssertThrowsError(try BoundSoulLedger.mergeForIndependentRestore(current: encoder.encode(current), incoming: encoder.encode(makeLedger())))
+    }
+    func testRemoteLossPolicyWaitsForNativeSafeFieldBoundary() {
+        XCTAssertFalse(BoundSoulProbe.mayApplyNativePolicy(ready: false, battle: true))
+        XCTAssertFalse(BoundSoulProbe.mayApplyNativePolicy(ready: false, battle: false))
+        XCTAssertFalse(BoundSoulProbe.mayApplyNativePolicy(ready: true, battle: true))
+        XCTAssertTrue(BoundSoulProbe.mayApplyNativePolicy(ready: true, battle: false))
+    }
+    @MainActor
+    func testDisconnectedSoulLinkContinuesWithoutPauseBannerOrRecoveryBarrier() throws {
+        let old = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer { UserDefaults.standard.set(old, forKey: BoundMultiplayerFeatures.key) }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        var value = makeLedger(); try value.observe([mon(1)], registering: true, fainted: [])
+        try JSONEncoder().encode(value).write(to: file)
+        let probe = BoundSoulProbe(); probe.configure(core: nil, url: file)
+        let session = BoundSoulSession(probe: probe)
+        var banner: String? = "unread"
+        session.bannerChanged = { banner = $0 }
+        session.connected = { false }
+        session.peerGone(); session.tick()
+        XCTAssertTrue(session.active)
+        XCTAssertFalse(session.paired)
+        XCTAssertEqual(session.status, "Soul Link active · Sync pending")
+        XCTAssertNil(banner)
+        XCTAssertNil(session.recoveryError)
+        XCTAssertEqual(probe.sharedEvents().map(\.id), value.sharedEvents.map(\.id))
+    }
     func testMalformedOrWrongVersionNetworkRowsAreRejected() throws {
         let valid = BoundSoulPacket(version: 2, run: UUID(), kind: .state, rows: [.init(slot: "egg:1", name: "Egg", dead: true)])
         XCTAssertNotNil(BoundSoulPacket.decode(try XCTUnwrap(valid.encoded())))
@@ -411,14 +541,22 @@ final class SoulLinkTests: XCTestCase {
         XCTAssertEqual(session.encounters.first { $0.slot == "area:103" }?.state, .available)
     }
     @MainActor
-    func testLegacyPeerPausesWithUpdateMessageUntilReconnect() {
+    func testLegacyPeerNeedsUpdateWithoutPausingTheLocalRun() throws {
         let old = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
         BoundMultiplayerFeatures.setEnabled(true)
         defer { UserDefaults.standard.set(old, forKey: BoundMultiplayerFeatures.key) }
-        let session = BoundSoulSession(); session.setConnection(owner: "A", room: "room"); session.connected = { true }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        var value = makeLedger(); try value.observe([mon(1)], registering: true, fainted: [])
+        try JSONEncoder().encode(value).write(to: file)
+        let probe = BoundSoulProbe(); probe.configure(core: nil, url: file)
+        let session = BoundSoulSession(probe: probe); session.setConnection(owner: "A", room: "room"); session.connected = { true }
+        var banner: String? = "unread"; session.bannerChanged = { banner = $0 }
         session.receive(BoundSoulPacket.legacyPrefix + Data("old packet".utf8)); session.tick()
-        XCTAssertTrue(session.status.contains("latest Bound")); XCTAssertFalse(session.paired)
-        session.peerGone(); session.tick(); XCTAssertFalse(session.status.contains("latest Bound"))
+        XCTAssertTrue(session.status.contains("Partner update required")); XCTAssertFalse(session.paired)
+        XCTAssertTrue(session.active); XCTAssertNil(session.recoveryError); XCTAssertNil(banner)
+        session.peerGone(); session.tick(); XCTAssertFalse(session.status.contains("Partner update required"))
+        XCTAssertTrue(session.active); XCTAssertNil(session.recoveryError)
     }
     func testUnsyncedPartnerIsNeverPresentedAsAnAvailableCatch() throws {
         var ledger = makeLedger(); try ledger.observe([mon(1)], registering: true, fainted: [])

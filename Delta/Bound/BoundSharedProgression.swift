@@ -3,7 +3,7 @@ import DeltaCore
 
 // BEGIN GENERATED GAME CONTRACT
 enum BoundWorldContract {
-    static let romSHA256 = "c14ccd452d8d7efe7f8f11dadce6a2e955f53127620c1218c550fab059aae79b"
+    static let romSHA256 = "3552b07fdb942aab0950c1d025d51fca4cd0834b49c245f1ac3071f98de74e88"
     static let compatibility = Data([162,199,70,57,213,239,76,159,163,75,126,31,1,153,168,65,1,0,0,0,1,0,1,0])
     static let ruleset = Data([162,199,70,57,213,239,76,159,163,75,126,31,1,153,168,65])
 }
@@ -55,8 +55,8 @@ struct BoundWorldPacket: Equatable, Sendable {
     }
 }
 
-/// Nonce/sequence admission is separate from cartridge enforcement. Reconnect
-/// requires a new acknowledgment; cached packets cannot reopen a barrier.
+/// Nonce and sequence admission protect fresh remote presentation. Cached
+/// snapshots never grant authority over the local cartridge's native progress.
 struct BoundWorldTimeline {
     private(set) var epoch = UUID()
     private(set) var peer: UUID?
@@ -113,7 +113,7 @@ struct BoundWorldSourceClock {
 }
 
 /// Only the completed-frame owner touches the core. Network/UI callers update
-/// bounded policy mailboxes; the ROM lease expires if the main thread stalls.
+/// bounded presentation mailboxes; stale peer data has no gameplay authority.
 final class BoundWorldProbe: @unchecked Sendable {
     private let lock = NSLock()
     private var coreID: ObjectIdentifier?
@@ -173,15 +173,26 @@ final class BoundWorldProbe: @unchecked Sendable {
 final class BoundSharedProgression {
     let probe = BoundWorldProbe()
     var send: ((Data) -> Bool)?
+    /// The active run's outbox commits this snapshot before it is published.
+    /// Storage failure withholds only sharing, never the cartridge's callbacks.
+    var beforeSendSnapshot: ((BoundWorldState) throws -> Void)?
     private(set) var timeline = BoundWorldTimeline()
+    private(set) var latestSharedWorldState: BoundWorldState?
+    private(set) var latestSharedWorldSequence: UInt64 = 0
+    private var sharedWorldRecords: [Int: BoundWorldState] = [:]
+    private var sharedWorldSequences: [Int: UInt64] = [:]
+    private var snapshotReader: (() -> BoundWorldState?)?
     private var sequence: UInt64 = 0
     private var enabled = false
     private var lastSent: TimeInterval = -.infinity
     private var coreID: ObjectIdentifier?
     private var verification: Task<Void, Never>?
     private var observedGameGeneration: UInt64 = 0
+    init(snapshotReader: (() -> BoundWorldState?)? = nil) { self.snapshotReader = snapshotReader }
     func bind(core: EmulatorCore?) {
         guard core.map(ObjectIdentifier.init) != coreID else { return }
+        latestSharedWorldState = nil; latestSharedWorldSequence = 0
+        sharedWorldRecords = [:]; sharedWorldSequences = [:]
         coreID = core.map(ObjectIdentifier.init); verification?.cancel(); probe.configure(core: core); observedGameGeneration = 0; peerGone()
         guard let core, core.deltaCore.identifier == "com.rileytestut.GBADeltaCore" else { return }
         let id = ObjectIdentifier(core), url = core.game.fileURL
@@ -203,16 +214,38 @@ final class BoundSharedProgression {
         guard enabled, let packet = BoundWorldPacket.decode(data) else { return }
         timeline.receive(packet, at: ProcessInfo.processInfo.systemUptime)
     }
+    /// A durable event projects the partner's recorded world for presentation.
+    /// It deliberately never enters the live timeline or native policy mailbox.
+    func resetSharedWorldRecords() {
+        latestSharedWorldState = nil; latestSharedWorldSequence = 0
+        sharedWorldRecords = [:]; sharedWorldSequences = [:]
+    }
+    func recordSharedWorldEvent(state: BoundWorldState, sequence: UInt64) {
+        guard state.valid, sequence > 0 else { return }
+        let map = Int(state.group) * 256 + Int(state.number)
+        guard sequence > (sharedWorldSequences[map] ?? 0) else { return }
+        sharedWorldSequences[map] = sequence; sharedWorldRecords[map] = state
+        if sequence > latestSharedWorldSequence {
+            latestSharedWorldSequence = sequence; latestSharedWorldState = state
+        }
+    }
+    func sharedWorldRecord(group: UInt8, number: UInt8) -> BoundWorldState? {
+        sharedWorldRecords[Int(group) * 256 + Int(number)]
+    }
     func tick(enabled: Bool, connected: Bool, at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         let generation = probe.gameGeneration
         if generation != observedGameGeneration { observedGameGeneration = generation; peerGone() }
         if self.enabled != enabled { self.enabled = enabled; peerGone() }
         timeline.expire(at: now)
         probe.publishPolicy(enabled: enabled, peer: timeline.state, fresh: connected && timeline.fresh(at: now))
-        guard enabled, connected, now - lastSent >= 0.5, let state = probe.read(), sequence < UInt64.max else { return }
-        sequence += 1
-        let packet = BoundWorldPacket(sender: timeline.epoch, receiver: timeline.peer, sequence: sequence, state: state)
+        guard enabled, now - lastSent >= 0.5, let state = snapshotReader?() ?? probe.read(), sequence < UInt64.max else { return }
+        let packet = BoundWorldPacket(sender: timeline.epoch, receiver: timeline.peer, sequence: sequence + 1, state: state)
+        guard let data = packet.encoded() else { return }
         lastSent = now
-        if let data = packet.encoded() { _ = send?(data) }
+        do { try beforeSendSnapshot?(state) } catch { return }
+        // Offline snapshots still enter the outbox. Acknowledgements and live
+        // connection freshness never authorize local movement or map scripts.
+        guard connected else { return }
+        sequence += 1; _ = send?(data)
     }
 }
