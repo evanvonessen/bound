@@ -2,6 +2,34 @@ import XCTest
 @testable import Delta
 
 final class ROMMultiplayerContractTests: XCTestCase {
+    func testQueuedActionsWaitForIdleFieldAndExpireWhileBlocked() {
+        func request(_ flags: UInt32) -> BoundROMRequest {
+            .init(sequence: 2, command: .none, friendIndex: 0, argument: 0, identifier: UUID(),
+                  settings: Data(repeating: 0, count: 32), flags: flags, frame: 1, requestID: 1)
+        }
+        for command in [BoundROMCommand.battle, .trade, .watch] {
+            var queue = BoundROMActionQueue()
+            queue.enqueue(command, at: 100)
+            let blockedFlags: [UInt32] = [1, 0, 65 | 4, 65 | 2]
+            for flags in blockedFlags {
+                XCTAssertNil(queue.ready(request: request(flags), connected: true, at: 101))
+            }
+            XCTAssertNil(queue.ready(request: nil, connected: true, at: 102))
+            XCTAssertNil(queue.ready(request: request(65), connected: false, at: 103))
+            XCTAssertEqual(queue.ready(request: request(65), connected: true, at: 104), command)
+            queue.clear()
+            XCTAssertNil(queue.ready(request: request(65), connected: true, at: 105), "Cancelled actions cannot run later")
+            for connected in [true, false] {
+                queue.enqueue(command, at: 200)
+                XCTAssertNil(queue.ready(request: request(1), connected: connected, at: 215))
+                XCTAssertNil(queue.command, "Expiry must run even during dialogue or disconnection")
+                XCTAssertNil(queue.ready(request: request(65), connected: true, at: 216))
+            }
+            queue.enqueue(command, at: 300)
+            XCTAssertNil(queue.ready(request: request(65), connected: true, at: 315), "Expiry precedes dispatch on reconnect")
+        }
+    }
+
     func testSoulOutboxCopiesEachFactOnceAndRetriesAnInterruptedDurableWrite() throws {
         let run = UUID(), otherRun = UUID()
         let catchEvent = BoundSoulSharedEvent(run: run, kind: .acquired, slot: "area:1")

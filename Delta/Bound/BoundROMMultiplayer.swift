@@ -15,6 +15,22 @@ enum BoundROMCommand: UInt32 {
 }
 enum BoundROMStatus: UInt32 { case idle, waiting, accepted, declined, complete, unavailable, busy, recovery, timeline, invitation }
 
+/// Optional actions expire even while disconnected or inside a native script.
+/// Reconnecting must not resurrect a button press from an earlier scene.
+struct BoundROMActionQueue {
+    private(set) var command: BoundROMCommand?
+    private var queuedAt: TimeInterval = 0
+    mutating func enqueue(_ command: BoundROMCommand, at now: TimeInterval) {
+        self.command = command; queuedAt = now
+    }
+    mutating func clear() { command = nil }
+    mutating func ready(request: BoundROMRequest?, connected: Bool, at now: TimeInterval) -> BoundROMCommand? {
+        if now - queuedAt >= 15 { clear() }
+        guard connected, request?.permitsFieldInterruption == true else { return nil }
+        return command
+    }
+}
+
 /// Cancellation has a durable identity even before the first server response.
 /// Resolved entries remain tombstones so a delayed proposal cannot revive one.
 struct BoundROMSetupCancellationQueue: Codable, Equatable, Sendable {
@@ -96,7 +112,8 @@ struct BoundROMRequest: Equatable, Sendable {
     var newGame: Bool { flags & 2 != 0 }
     var paused: Bool { flags & 4 != 0 }
     var checkpointSafe: Bool { flags & 64 != 0 }
-    var permitsAutomaticFieldSave: Bool { safeField && checkpointSafe && !paused && !newGame }
+    var permitsFieldInterruption: Bool { safeField && checkpointSafe && !paused && !newGame }
+    var permitsAutomaticFieldSave: Bool { permitsFieldInterruption }
     var settingsApplied: Bool { flags & 32 != 0 }
     var requestsPregameSetupRestart: Bool { command == .setupRetry && newGame && !settingsApplied && setupError == 1 }
     var requestsNewMultiplayerRun: Bool { newGame && (command == .pair || command == .startSoulLink) }
@@ -489,8 +506,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         didSet { updateWorkingStateAuthority() }
     }
     private var saveFenceReady = true
-    private var pendingAction: BoundROMCommand?
-    private var pendingActionAt: TimeInterval = 0
+    private var pendingAction = BoundROMActionQueue()
     private var error: String?
     private var server = BoundNakamaRunService.shared
     private var serverTask: Task<Void, Never>?
@@ -637,7 +653,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         endingRun = false; newGameAfterEnd = false; recoveredNewGameChoice = false
         newGame = false; error = nil; pendingSnapshot = nil; didRestore = false; head = nil
         validatedSnapshot = false; workingStateAuthorized = false
-        pendingAction = nil
+        pendingAction.clear()
         sharing.soulLink.cartridgeManagesPause = false
         guard let core, let game, game.type == .gba else { return }
         if serverOnly {
@@ -946,7 +962,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         head = nil; validatedFence = nil; anchorBaselineValidated = false; baselineHistory = nil; historyJournal = nil
         channel.reset(); peerHello = nil; peerHelloAt = -.infinity; reconciled = false
         if newGameAfterEnd {
-            selectedRoom = nil; peerOwner = nil; newGame = false; pendingAction = nil
+            selectedRoom = nil; peerOwner = nil; newGame = false; pendingAction.clear()
             onboarding.setMultiplayerPartner(roomID:nil)
         }
         newGameAfterEnd = false
@@ -1529,6 +1545,17 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
             }
         } catch { archivedEventRetryAt = now + 5 }
     }
+    private func dispatchPendingAction(request: BoundROMRequest?, connected: Bool, at now: TimeInterval) {
+        guard let action = pendingAction.ready(request: request, connected: connected, at: now) else { return }
+        if action == .watch {
+            watch?()
+            pendingAction.clear()
+        } else if sharing.interactions.open() {
+            sharing.interactions.request(action == .battle ? .battle : .trade)
+            pendingAction.clear()
+        }
+    }
+
     private func handle(_ request: BoundROMRequest) throws {
         let previousRequest = requestCursor.lastHandled
         switch requestCursor.admit(request.requestID) {
@@ -1611,13 +1638,17 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                 host.status = .unavailable; host.message = "Choose your connected friend."; return
             }
             guard selectRoom(room.roomID) else { return }
-            pendingAction = request.command; pendingActionAt = now; host.status = .complete
+            pendingAction.enqueue(request.command, at: now); host.status = .complete
         case .timeline, .page:
             if request.command == .timeline { timelinePage = 0 }
             else { timelinePage = max(0,timelinePage + (request.argument == 0 ? -1:1)) }
             host.status = .timeline
         case .accept: sharing.interactions.accept()
-        case .decline: sharing.interactions.decline()
+        case .decline:
+            pendingAction.clear()
+            if sharing.interactions.phase == .incoming { sharing.interactions.decline() }
+            else { sharing.interactions.cancel() }
+            host.status = .complete
         case .endSoulLink:
             guard request.argument <= 1 else { host.status = .unavailable; return }
             if request.argument == 1 {
@@ -1667,7 +1698,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         if resetRequests { requestCursor = .init(); host.acknowledgedRequest = 0; friendsRefresh.reset() }
         workingStateAuthorized = false
         pendingSnapshot = nil; validatedSnapshot = false; didRestore = false
-        pendingAction = nil; host.connected = false; host.saving = false
+        pendingAction.clear(); host.connected = false; host.saving = false
         anchorBaselineValidated = false; historyJournal = nil
         let message = "Game restarted. Retry recovery to resume your saved run."
         error = message
@@ -1914,18 +1945,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                 if sharing.soulLink.ledger == nil { try sharing.soulLink.startPreparedRun(run:manifest.identity.run) }
                 try journalSoulEvents()
             }
-            if let action = pendingAction, request?.safeField == true, request?.paused == false {
-                if now - pendingActionAt > 15 {
-                    pendingAction = nil
-                    sharing.interactions.activityEnded(action == .watch ? "Friend video is unavailable." : "Stand beside your friend and face them.")
-                }
-                else if sharing.connectedRoomID == selectedRoom {
-                    if action == .watch { watch?(); if sharing.watchingPartner { pendingAction = nil } }
-                    else if sharing.interactions.open() {
-                        sharing.interactions.request(action == .battle ? .battle:.trade); pendingAction = nil
-                    }
-                }
-            }
+            dispatchPendingAction(request: request, connected: sharing.connectedRoomID == selectedRoom, at: now)
             synchronizeIndependentHistory()
         } catch { self.error = error.localizedDescription }
         if let error {
@@ -1995,7 +2015,7 @@ extension BoundROMMultiplayerCoordinator {
         finalServerSaveTask = nil; finalServerSaveRetry = nil; finalServerSaveRun = nil; finalServerSaveOwner = nil; finalServerSaveQueued = false
         hasUnconfirmedServerSave = false
         snapshotTask?.cancel(); snapshotTask = nil; snapshotOperation = UUID(); snapshotRetryAt = 0
-        pendingAction = nil; channel.reset(); peerHello = nil
+        pendingAction.clear(); channel.reset(); peerHello = nil
     }
     func retryFinalServerSave() async {
         guard !serverMenuBusy, let retry = finalServerSaveRetry, let run = finalServerSaveRun else { return }
@@ -2262,11 +2282,7 @@ extension BoundROMMultiplayerCoordinator {
             host.acknowledgedRequest = request.requestID
             host.status = .unavailable; host.message = "Manage runs in Bound."
         }
-        if let action = pendingAction, request?.safeField == true, request?.paused == false, connected {
-            if action == .watch { watch?(); pendingAction = nil }
-            else if sharing.interactions.open() { sharing.interactions.request(action == .battle ? .battle : .trade); pendingAction = nil }
-            else if now - pendingActionAt > 15 { pendingAction = nil }
-        }
+        dispatchPendingAction(request: request, connected: connected, at: now)
         if host.status == .timeline {
             let events = Array(sharing.soulLink.probe.timeline.read().events.reversed())
             timelinePage = min(timelinePage, max(0, (events.count - 1) / 12)); host.page = UInt32(timelinePage)
