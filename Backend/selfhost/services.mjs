@@ -70,7 +70,8 @@ async function apnsFetch(url, options) {
   });
 }
 
-export function createServices({ pool, authenticate, config = process.env, fetchImpl = fetch, signAgora } = {}) {
+export function createServices({ pool, authenticate, config = process.env, fetchImpl = fetch, signAgora,
+  withDropbox = async (_identity, _action, work) => work() } = {}) {
   const internalKey = randomBytes(32).toString('hex');
   async function rpc(identity, name, args = {}, { service = false } = {}) {
     const statement = statements[name];
@@ -190,8 +191,13 @@ export function createServices({ pool, authenticate, config = process.env, fetch
         return await createTokenHandler({ appID: config.AGORA_APP_ID, certificate: config.AGORA_APP_CERTIFICATE,
           publishableKey: internalKey, rooms: {}, sign, fetchImpl: adapter })(adapted);
       }
-      if (name === 'bound-dropbox') return await createDropboxHandler({ serviceKey: internalKey, publishableKey: internalKey,
-        appKey: config.DROPBOX_APP_KEY, encryptionKey: config.DROPBOX_ENCRYPTION_KEY, fetchImpl: adapter })(adapted);
+      if (name === 'bound-dropbox') {
+        let input;
+        try { input = await readJSON(adapted.clone(), 4096); }
+        catch { return reply(400, { error: 'invalid_request' }); }
+        return await withDropbox(identity, input?.action, () => createDropboxHandler({ serviceKey: internalKey, publishableKey: internalKey,
+          appKey: config.DROPBOX_APP_KEY, encryptionKey: config.DROPBOX_ENCRYPTION_KEY, fetchImpl: adapter })(adapted));
+      }
       return await createJiggleHandler({ publishableKey: internalKey, serviceRoleKey: internalKey,
         apnsKeyID: config.APNS_KEY_ID, apnsTeamID: config.APNS_TEAM_ID, apnsPrivateKey: config.APNS_PRIVATE_KEY,
         apnsSandboxKeyID: config.APNS_SANDBOX_KEY_ID, apnsSandboxTeamID: config.APNS_SANDBOX_TEAM_ID, apnsSandboxPrivateKey: config.APNS_SANDBOX_PRIVATE_KEY,

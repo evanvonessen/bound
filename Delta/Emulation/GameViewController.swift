@@ -290,6 +290,8 @@ class GameViewController: DeltaCore.GameViewController
             guard newValue == nil || !BoundROMUpdateManager.shared.isApplying else { return }
             if let game = newValue as? Game,
                BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier) { return }
+            if let game = newValue as? Game,
+               BoundServerBackupManager.hasPendingRestore(gameID: game.identifier) { return }
             let oldValue = super.game
             if newValue == nil, let oldGame = oldValue as? Game,
                BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: oldGame.identifier) {

@@ -23,6 +23,13 @@ test('oversized account requests are rejected before dispatch', async t => {
   assert.equal(response.status, 413);
   assert.equal(dispatched, false);
 });
+test('save backup PUT accepts file-sized bodies while provider requests keep the JSON limit', async t => {
+  let received = 0;
+  const origin = await server(t, async request => { received = (await request.arrayBuffer()).byteLength; return new Response('ok'); });
+  assert.equal((await fetch(origin + '/backups/v1/saves/game', { method: 'PUT', body: 'x'.repeat(70000) })).status, 200);
+  assert.equal(received, 70000);
+  assert.equal((await fetch(origin + '/backups/v1/provider', { method: 'PUT', body: 'x'.repeat(70000) })).status, 413);
+});
 test('anonymous username queries have a bounded per-client rate', async t => {
   const origin = await server(t, async () => new Response('ok'));
   const statuses = [];

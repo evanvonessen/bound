@@ -16,6 +16,7 @@ struct BoundSaveClearCloudContext: Codable, Equatable {
     let dropboxAccountID: String?
     let includesDropbox: Bool
     let saveStateIDs: [String]
+    var serverBackupOwner: UUID? = nil
 }
 
 private extension UserDefaults
@@ -75,6 +76,7 @@ extension SyncManager
 
     static var currentBoundService: Service? {
         guard Settings.syncingService == .dropbox,
+              BoundServerBackupManager.dropboxAllowedForCurrentAccount,
               !UserDefaults.standard.bool(forKey: "bound.dropbox.device-paused.v1") else { return nil }
         return .dropbox
     }
@@ -100,6 +102,7 @@ extension SyncManager
         case nilService
         case providerNotConfigured(Service)
         case saveClearSyncUnavailable
+        case saveClearDropboxBeforeServer
         
         var errorDescription: String? {
             switch self
@@ -109,6 +112,8 @@ extension SyncManager
                 return String(format: NSLocalizedString("%@ sign-in is not configured for Bound yet.", comment: ""), service.localizedName)
             case .saveClearSyncUnavailable:
                 return "Turn on Dropbox sync in Account, Friends, & Sync, then try Clear Saves again."
+            case .saveClearDropboxBeforeServer:
+                return "Select Dropbox in Cloud Backups, then clear this game's saves to remove both its Dropbox and server backups."
             }
         }
     }
@@ -151,11 +156,14 @@ final class SyncManager
     private var startGeneration = UUID()
     private var providerGeneration = UUID()
     private var isChangingBoundAccount = false
+    var changingCloudBackupProvider = false
+    private var checkingDropboxProvider = false
     private static let boundOwnerKey = "bound.dropbox.harmony-owner.v1"
     private var startingCoordinator: SyncCoordinator?
     private var coordinatorWaitingToStop: SyncCoordinator?
     private var pendingROMUpdates = 0
     private var manualRecordMutations = 0
+    var canChangeCloudBackupProvider: Bool { pendingROMUpdates == 0 && manualRecordMutations == 0 }
     private var waitingROMUpdate: (() -> Void)?
     private var verifiedSaveClearConnections = [UUID: String]()
     
@@ -170,6 +178,9 @@ final class SyncManager
         NotificationCenter.default.addObserver(self, selector: #selector(SyncManager.syncingDidFinish(_:)), name: SyncCoordinator.didFinishSyncingNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(SyncManager.didEnterBackground(_:)), name: UIApplication.didEnterBackgroundNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(SyncManager.willEnterForeground(_:)), name: UIApplication.willEnterForegroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(SyncManager.cloudBackupProviderDidChange(_:)),
+            name: BoundServerBackupManager.providerDidChangeNotification, object: nil)
+        Task { @MainActor in _ = BoundServerBackupManager.shared }
     }
 }
 
@@ -228,7 +239,8 @@ extension SyncManager
                 Task { @MainActor in
                     await BoundFriendAccount.shared.refreshIfNeeded()
                     guard let self, self.startGeneration == epoch, self.providerGeneration == providerEpoch,
-                          let identity, identity.isSameSession(as: BoundFriendAccount.shared.session) else {
+                          let identity, identity.isSameSession(as: BoundFriendAccount.shared.session),
+                          BoundServerBackupManager.dropboxAllowedForCurrentAccount else {
                         completion(.failure(.other(BoundDropboxOAuth.Failure.signIn)))
                         return
                     }
@@ -364,7 +376,7 @@ extension SyncManager
     /// Include it in the ROM update fence without stopping record observation.
     @MainActor func beginManualRecordMutation() -> (() -> Void)?
     {
-        guard pendingROMUpdates == 0 else { return nil }
+        guard pendingROMUpdates == 0, !changingCloudBackupProvider else { return nil }
         manualRecordMutations += 1
         var finished = false
         return {
@@ -388,8 +400,18 @@ extension SyncManager
               MainActor.assumeIsolated({ BoundFriendAccount.shared.session != nil && !BoundFriendAccount.shared.deletionPending }),
               !UserDefaults.standard.shouldRepairDatabase else { return }
         
-        let progress = self.coordinator?.sync()
-        self.syncProgress = progress
+        if BoundBackendConfiguration.bundled?.kind == .selfhost {
+            guard !checkingDropboxProvider, !changingCloudBackupProvider else { return }
+            checkingDropboxProvider = true
+            Task { @MainActor in
+                defer { checkingDropboxProvider = false }
+                guard (try? await BoundServerBackupManager.shared.refreshProvider()) == .dropbox else { return }
+                guard pendingROMUpdates == 0, !isChangingBoundAccount, Self.currentBoundService == .dropbox else { return }
+                syncProgress = coordinator?.sync()
+            }
+        } else {
+            self.syncProgress = self.coordinator?.sync()
+        }
     }
 }
 
@@ -606,6 +628,17 @@ private extension SyncManager
         }
     }
 
+    @objc func cloudBackupProviderDidChange(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            guard let owner = notification.userInfo?["owner"] as? UUID,
+                  owner == BoundFriendAccount.shared.session?.owner,
+                  notification.userInfo?["provider"] as? String != "dropbox" else { return }
+            Settings.syncingService = nil
+            UserDefaults.standard.set(true, forKey: "bound.dropbox.device-paused.v1")
+            if self.coordinator != nil { self.suspendForBoundAccountChange() }
+        }
+    }
+
     @objc func syncingDidFinish(_ notification: Notification)
     {
         guard let finishedCoordinator = notification.object as? SyncCoordinator else { return }
@@ -632,6 +665,7 @@ extension SyncManager {
     /// Run inside performROMUpdate, before writing the deletion receipt. This
     /// only verifies authorization and reads identifiers; no saves are changed.
     @MainActor func prepareSaveClearCloudContext(gameID: String) async throws -> BoundSaveClearCloudContext {
+        await BoundServerBackupManager.shared.cancelPendingOperationsAndWait()
         let identity = BoundFriendAccount.shared.session
         let owner = identity?.owner
         let savedConnection = owner.flatMap { UserDefaults.standard.string(forKey: "bound.dropbox.connection.v1." + $0.uuidString) }.flatMap(UUID.init(uuidString:))
@@ -648,6 +682,14 @@ extension SyncManager {
             guard !hasHistory else { throw BoundDropboxOAuth.Failure.signIn }
             return BoundSaveClearCloudContext(owner: nil, connection: nil, dropboxAccountID: nil, includesDropbox: false, saveStateIDs: identifiers)
         }
+        let serverOwner = BoundBackendConfiguration.bundled?.kind == .selfhost ? owner : nil
+        if serverOwner != nil, try await BoundServerBackupManager.shared.refreshProvider() != .dropbox {
+            // A raw Dropbox token also permits uploads. Require an explicit
+            // provider switch before clearing an older Dropbox connection.
+            guard !hasHistory else { throw Error.saveClearDropboxBeforeServer }
+            return BoundSaveClearCloudContext(owner: owner, connection: savedConnection, dropboxAccountID: nil,
+                includesDropbox: false, saveStateIDs: identifiers, serverBackupOwner: serverOwner)
+        }
         do {
             let token = try await saveClearAccessToken()
             guard identity.isSameSession(as: BoundFriendAccount.shared.session), !BoundFriendAccount.shared.deletionPending,
@@ -659,11 +701,21 @@ extension SyncManager {
                   currentSaveClearConnection(owner: identity.owner) == connection else { throw BoundDropboxOAuth.Failure.changed }
             try validateSaveClearRecordStore(owner: identity.owner)
             verifiedSaveClearConnections[connection] = accountID
-            return BoundSaveClearCloudContext(owner: owner, connection: connection, dropboxAccountID: accountID, includesDropbox: true, saveStateIDs: identifiers)
+            return BoundSaveClearCloudContext(owner: owner, connection: connection, dropboxAccountID: accountID,
+                includesDropbox: true, saveStateIDs: identifiers, serverBackupOwner: serverOwner)
         } catch AuthenticationError.noSavedCredentials {
             guard identity.isSameSession(as: BoundFriendAccount.shared.session), !hasHistory else { throw BoundDropboxOAuth.Failure.notLinked }
-            return BoundSaveClearCloudContext(owner: owner, connection: nil, dropboxAccountID: nil, includesDropbox: false, saveStateIDs: identifiers)
+            return BoundSaveClearCloudContext(owner: owner, connection: nil, dropboxAccountID: nil,
+                includesDropbox: false, saveStateIDs: identifiers, serverBackupOwner: serverOwner)
         }
+    }
+
+    @MainActor func deleteCloudSaves(gameID: String, context: BoundSaveClearCloudContext) async throws {
+        try validateSaveClearContext(context, requireVerifiedConnection: false)
+        if let owner = context.serverBackupOwner {
+            try await BoundServerBackupManager.shared.delete(gameID: gameID, expectedOwner: owner)
+        }
+        try await deleteDropboxSaves(gameID: gameID, context: context)
     }
 
     /// The caller must have persisted the context and fenced normal syncing.

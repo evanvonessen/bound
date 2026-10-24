@@ -41,6 +41,7 @@ struct BoundSettingsGameplayContext {
 final class BoundSettingsHostingController: UIHostingController<SettingsView>, UIAdaptivePresentationControllerDelegate {
     private let closed: () -> Void
     private let syncOnClose: () -> Void
+    private let friends: BoundAccountFriendsContext
     private var finished = false
     private var closing = false
 
@@ -49,7 +50,9 @@ final class BoundSettingsHostingController: UIHostingController<SettingsView>, U
          closed: @escaping () -> Void = {}) {
         self.closed = closed
         self.syncOnClose = syncOnClose
-        super.init(rootView: SettingsView(model: model, gameplay: gameplay))
+        let friends = gameplay?.friends ?? BoundAccountFriendsContext()
+        self.friends = friends
+        super.init(rootView: SettingsView(model: model, gameplay: gameplay, friends: friends))
         rootView.close = { [weak self] in self?.closeSettings() }
     }
     @available(*, unavailable)
@@ -72,6 +75,7 @@ final class BoundSettingsHostingController: UIHostingController<SettingsView>, U
     func finishPresentation() {
         guard !finished else { return }
         finished = true
+        friends.close()
         syncOnClose()
         closed()
     }
@@ -121,11 +125,14 @@ struct SettingsView: View {
     @State private var exportingConfiguration = false
     @State private var configurationExportFailed = false
     var gameplay: BoundSettingsGameplayContext?
+    private let friends: BoundAccountFriendsContext
     var close: () -> Void = {}
 
-    init(model: BoundCompanionSettingsModel? = nil, gameplay: BoundSettingsGameplayContext? = nil) {
+    init(model: BoundCompanionSettingsModel? = nil, gameplay: BoundSettingsGameplayContext? = nil,
+         friends: BoundAccountFriendsContext? = nil) {
         _model = StateObject(wrappedValue: model ?? BoundCompanionSettingsModel())
         self.gameplay = gameplay
+        self.friends = friends ?? gameplay?.friends ?? BoundAccountFriendsContext()
     }
 
     var body: some View {
@@ -161,7 +168,7 @@ struct SettingsView: View {
                             SettingsRow(label: Text("Video"), systemImage: "display", color: .teal)
                         }.accessibilityIdentifier("bound.settings-video")
                         NavigationLink {
-                            BoundAccountFriendsSyncSettings(context: gameplay?.friends)
+                            BoundAccountFriendsSyncSettings(context: friends)
                                 .boundSettingsPage()
                         } label: {
                             SettingsRow(label: Text("Account, Friends, & Sync"), systemImage: "person.crop.circle", color: .indigo)
@@ -267,6 +274,14 @@ struct SettingsView: View {
                             .disabled(exportingConfiguration)
                             .accessibilityIdentifier("bound.settings-export-all-config")
                         }
+                    } footer: {
+                        Text(BoundSettingsBuildFooter.text())
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                            .textCase(nil)
+                            .accessibilityIdentifier("bound.settings-build-footer")
                     }
                 }
                 .safeAreaPadding(.top, 8)
@@ -297,6 +312,13 @@ struct SettingsView: View {
         }
     }
 
+}
+
+enum BoundSettingsBuildFooter {
+    static func text(bundle: Bundle = .main) -> String {
+        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
+        return "Bound Testflight Build #\(build)"
+    }
 }
 
 // MARK: - Controls
@@ -485,7 +507,8 @@ struct BoundAccountFriendsSyncSettings: View {
         .navigationTitle("Account, Friends, & Sync")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { context.open() }
-        .onDisappear { context.close() }
+        // The outer Settings presenter owns cleanup. A pushed account/friend
+        // page must keep the same onboarding session alive while it is open.
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { context.open() }
             else { context.close() }
@@ -510,11 +533,10 @@ private struct DeltaSyncSettingsSection: View
     var body: some View {
         Section {
             NavigationLink {
-                SyncingServicesViewController.ViewRepresentable()
-                    .ignoresSafeArea(.container, edges: [.top, .horizontal])
+                BoundCloudBackupSettingsView()
                     .boundSettingsPage()
             } label: {
-                SettingsRow(label: Text("Delta Sync"), systemImage: "arrow.triangle.2.circlepath", color: .indigo) {
+                SettingsRow(label: Text("Cloud Backups"), systemImage: "arrow.triangle.2.circlepath", color: .indigo) {
                     if let name = syncingServiceName {
                         Text(name).foregroundStyle(.secondary)
                     }
@@ -554,6 +576,9 @@ private struct DeltaSyncSettingsSection: View
         .onReceive(NotificationCenter.default.publisher(for: SyncCoordinator.didFinishSyncingNotification).receive(on: DispatchQueue.main)) { _ in
             refreshSyncStatus()
         }
+        .onReceive(NotificationCenter.default.publisher(for: BoundServerBackupManager.providerDidChangeNotification)) { _ in
+            refreshSyncStatus()
+        }
         .onAppear {
             refreshSyncStatus()
         }
@@ -561,7 +586,7 @@ private struct DeltaSyncSettingsSection: View
 
     private func refreshSyncStatus()
     {
-        syncingServiceName = SyncManager.currentBoundService?.localizedName
+        syncingServiceName = BoundServerBackupManager.serverEnabledForCurrentAccount ? "Server Backups" : SyncManager.currentBoundService?.localizedName
         isAccountConnected = SyncManager.shared.coordinator?.account != nil
 
         do {

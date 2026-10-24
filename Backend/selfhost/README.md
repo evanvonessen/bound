@@ -9,7 +9,7 @@ Dropbox sync keeps transferring ROMs and saves directly to Dropbox.
 New Bound builds use `https://bound.evanvonessen.com`. Existing installed builds
 continue using the original backend; changes made there after the migration
 snapshot are not automatically copied. Nothing here deletes or pauses it. The Heroic runtime repository
-is not used or changed. No backups or paid add-ons are configured.
+is not used or changed. No off-server backups or paid add-ons are configured.
 
 ## Server and cost
 
@@ -79,7 +79,10 @@ deleting accounts revoke the appropriate server sessions.
 
 The file service handles temporary transfers. It uses
 live Nakama identity and current room membership, limits file sizes/disk use, and
-removes expired transfers. Dropbox remains the save destination. Historical
+removes expired transfers. Dropbox remains the default cloud provider. Approved
+users can select private server save backups instead; one account-authoritative
+provider prevents updated clients from syncing to both. See [BACKUPS.md](BACKUPS.md)
+for approval commands, limits, and the save-backup HTTP contract. Historical
 Supabase files and save-history rows are retained in a separate private archive,
 without expiry, and removed when their owner deletes their new-backend account.
 

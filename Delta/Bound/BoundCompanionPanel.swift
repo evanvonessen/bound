@@ -1966,12 +1966,9 @@ struct BoundFriendsListSections: View {
     @ObservedObject var sharing: FriendSharingSession
     @ObservedObject var onboarding: FriendOnboarding
     @ObservedObject var account: BoundFriendAccount
-    @State private var friendUsername = ""
     @State private var reportingRoom: FriendRoom?
     @State private var blockingRoom: FriendRoom?
     @State private var removingRoom: FriendRoom?
-    @State private var showingAddFriend = false
-    @State private var roomIDsBeforeAdding: Set<String> = []
 
     var body: some View {
         Group {
@@ -1989,11 +1986,8 @@ struct BoundFriendsListSections: View {
                     Text("Friends")
                         .accessibilityIdentifier("bound.friends-list-heading")
                     Spacer()
-                    Button {
-                        guard account.session != nil else { return }
-                        roomIDsBeforeAdding = Set(onboarding.rooms.map(\.roomID))
-                        friendUsername = ""
-                        showingAddFriend = true
+                    NavigationLink {
+                        BoundAddFriendView(onboarding: onboarding, account: account)
                     } label: {
                         Label("Add", systemImage: "person.badge.plus")
                             .font(.subheadline.weight(.semibold))
@@ -2002,6 +1996,7 @@ struct BoundFriendsListSections: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
+                    .disabled(account.session == nil)
                     .accessibilityLabel("Add friend")
                     .accessibilityIdentifier("bound.add-friend-open")
                 }
@@ -2020,36 +2015,11 @@ struct BoundFriendsListSections: View {
             }
         }
         .onChange(of: account.session?.owner) { _, _ in
-            showingAddFriend = false
             reportingRoom = nil
             blockingRoom = nil
             removingRoom = nil
-            friendUsername = ""
         }
         .sheet(item: $reportingRoom) { room in BoundReportView(onboarding: onboarding, room: room) }
-        .sheet(isPresented: $showingAddFriend) {
-            NavigationStack {
-                Form {
-                    Section {
-                        TextField("Friend's username", text: $friendUsername)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
-                            .submitLabel(.go)
-                            .onSubmit { addFriendByUsername() }
-                            .accessibilityIdentifier("bound.add-friend-username")
-                    }
-                    if !onboarding.message.isEmpty { Text(onboarding.message).font(.caption) }
-                    Button("Add friend") { addFriendByUsername() }
-                        .disabled(account.session == nil || onboarding.busy || !BoundSocialAPI.validUsername(friendUsername.trimmingCharacters(in: .whitespacesAndNewlines)))
-                        .accessibilityIdentifier("bound.add-friend")
-                }
-                .navigationTitle("Add a Friend")
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingAddFriend = false } } }
-            }
-            .presentationDetents([.medium])
-            .onChange(of: onboarding.rooms.map(\.roomID)) { _, ids in
-                if !Set(ids).subtracting(roomIDsBeforeAdding).isEmpty { showingAddFriend = false }
-            }
-        }
         .confirmationDialog("Remove this friend?", isPresented: Binding(get: { removingRoom != nil }, set: { if !$0 { removingRoom = nil } }), titleVisibility: .visible) {
             Button("Remove Friend", role: .destructive) {
                 if let room = removingRoom { onboarding.remove(room) }
@@ -2128,9 +2098,54 @@ struct BoundFriendsListSections: View {
         return sharing.remoteVisible ? "dot.radiowaves.left.and.right" : "hourglass"
     }
 
-    private func addFriendByUsername() {
-        guard showingAddFriend, account.session != nil else { return }
-        onboarding.add(username: friendUsername)
+}
+
+/// Use the existing navigation stack so opening this form cannot dismiss its
+/// Settings/Friends presenter or interrupt that presenter's account lifetime.
+private struct BoundAddFriendView: View {
+    @ObservedObject var onboarding: FriendOnboarding
+    @ObservedObject var account: BoundFriendAccount
+    @Environment(\.dismiss) private var dismiss
+    @State private var username = ""
+    @State private var roomIDsBeforeAdding: Set<String>?
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("Friend's username", text: $username)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .submitLabel(.go)
+                    .onSubmit { addFriend() }
+                    .accessibilityIdentifier("bound.add-friend-username")
+            }
+            if !onboarding.message.isEmpty { Text(onboarding.message).font(.caption) }
+            Button("Add friend") { addFriend() }
+                .disabled(account.session == nil || onboarding.busy || !validUsername)
+                .accessibilityIdentifier("bound.add-friend")
+        }
+        .navigationTitle("Add a Friend")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done") { dismiss() }
+                    .accessibilityIdentifier("bound.add-friend-close")
+            }
+        }
+        .onChange(of: account.session?.owner) { _, _ in dismiss() }
+        .onChange(of: onboarding.rooms.map(\.roomID)) { _, ids in
+            guard let roomIDsBeforeAdding else { return }
+            if !Set(ids).subtracting(roomIDsBeforeAdding).isEmpty { dismiss() }
+        }
+    }
+
+    private var validUsername: Bool {
+        BoundSocialAPI.validUsername(username.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func addFriend() {
+        guard account.session != nil, !onboarding.busy, validUsername else { return }
+        roomIDsBeforeAdding = Set(onboarding.rooms.map(\.roomID))
+        onboarding.add(username: username)
     }
 }
 

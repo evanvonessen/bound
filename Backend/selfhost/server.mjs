@@ -10,6 +10,7 @@ import { createServices } from './services.mjs';
 import { createFileService } from './files.mjs';
 import { createArchive } from './archive.mjs';
 import { createDeletion } from './deletion.mjs';
+import { createBackups } from './backups.mjs';
 import { migrate } from './migrate.mjs';
 
 const json = (status, error) => new Response(JSON.stringify({ error }), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
@@ -21,8 +22,9 @@ export function httpHandler({ config, handle }) {
     try {
       const url = new URL(incoming.url, config.PUBLIC_URL);
       if (url.origin !== new URL(config.PUBLIC_URL).origin) { outgoing.writeHead(400); outgoing.end(); return; }
+      const backupUpload = incoming.method === 'PUT' && url.pathname.startsWith('/backups/v1/saves/');
       const upload = incoming.method === 'PUT' && url.pathname.startsWith('/files/');
-      const limit = upload ? Number(config.FILE_MAX_BYTES ?? 67108864) : 65536;
+      const limit = backupUpload ? Number(config.BACKUP_MAX_BYTES ?? 67108864) : upload ? Number(config.FILE_MAX_BYTES ?? 67108864) : 65536;
       if (Number(incoming.headers['content-length'] ?? 0) > limit) { outgoing.writeHead(413); outgoing.end(); return; }
       const headers = new Headers();
       for (const [key, value] of Object.entries(incoming.headers)) if (value !== undefined && !['host', 'connection', 'transfer-encoding', 'x-bound-client-ip', 'x-forwarded-for', 'forwarded'].includes(key)) headers.set(key, Array.isArray(value) ? value.join(',') : value);
@@ -71,21 +73,24 @@ export async function start(env = process.env) {
   await migrate(pool);
   const nakama = createNakamaClient(config);
   const auth = createAuth({ nakama, config });
-  const services = createServices({ pool, authenticate: auth.authenticate, config });
+  let backups;
+  const services = createServices({ pool, authenticate: auth.authenticate, config,
+    withDropbox: (...args) => backups.withDropbox(...args) });
   const files = createFileService({ pool, authenticate: auth.authenticate, rpc: services.rpc, config });
   const archive = createArchive({ pool, authenticate: auth.authenticate, rpc: services.rpc, config });
-  const deletion = createDeletion({ pool, auth, files, archive });
+  backups = createBackups({ pool, authenticate: auth.authenticate, rpc: services.rpc, config });
+  const deletion = createDeletion({ pool, auth, files, archive, backups });
   const handle = async request => {
     if (new URL(request.url).pathname === '/healthz' && request.method === 'GET') {
       try { await pool.query('SELECT 1'); return new Response('{"status":"ok"}', { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }); }
       catch { return json(503, 'unavailable'); }
     }
-    return await deletion.handle(request) ?? await auth.handle(request) ?? await services.handle(request) ?? await files.handle(request) ?? await archive.handle(request) ?? json(404, 'not_found');
+    return await deletion.handle(request) ?? await auth.handle(request) ?? await services.handle(request) ?? await backups.handle(request) ?? await files.handle(request) ?? await archive.handle(request) ?? json(404, 'not_found');
   };
   const server = http.createServer({ maxHeaderSize: 16384, requestTimeout: 60000, headersTimeout: 15000 }, httpHandler({ config, handle }));
   server.maxConnections = 256;
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(config.PORT, config.HOST ?? '0.0.0.0', resolve); });
-  const cleanup = setInterval(() => files.cleanup().catch(() => console.error('File cleanup failed')), 60000);
+  const cleanup = setInterval(() => Promise.all([files.cleanup(), backups.cleanup()]).catch(() => console.error('File cleanup failed')), 60000);
   cleanup.unref();
   console.log('Bound gateway ready');
   return async () => { clearInterval(cleanup); await new Promise(resolve => server.close(resolve)); await services.close(); await pool.end(); };

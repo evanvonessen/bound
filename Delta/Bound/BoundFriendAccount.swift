@@ -158,6 +158,23 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
         if let verifier { body["verifier"] = verifier }
         return try request(path: "/functions/v1/bound-dropbox", body: body)
     }
+    /// Self-hosted save endpoints reuse the invalidatable account session snapshot.
+    func serverBackupRequest(path: String, method: String = "GET", body: Data? = nil,
+                             headers: [String: String] = [:]) throws -> URLRequest {
+        let prefix = "/backups/v1/saves/"
+        let gameID = path.hasPrefix(prefix) ? String(path.dropFirst(prefix.count)) : ""
+        let savePath = !gameID.isEmpty && gameID.utf8.count <= 128 && gameID.utf8.allSatisfy {
+            (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95
+        }
+        guard backend.kind == .selfhost, ["GET", "PUT", "DELETE"].contains(method),
+              path == "/backups/v1/status" || path == "/backups/v1/provider" || path == "/backups/v1/saves" || savePath else { throw BoundFriendError.unavailable }
+        var result = URLRequest(url: try backend.url(path: path))
+        result.timeoutInterval = 90
+        result.httpMethod = method; result.httpBody = body
+        for (key, value) in headers { result.setValue(value, forHTTPHeaderField: key) }
+        result.setValue("Bearer " + (try validToken()), forHTTPHeaderField: "Authorization")
+        return result
+    }
     func accountUserRequest() throws -> URLRequest {
         var result = try request(path: "/auth/v1/user", body: [:])
         result.httpMethod = "GET"; result.httpBody = nil

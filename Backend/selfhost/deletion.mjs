@@ -3,7 +3,7 @@ import { readJSON, reply } from './services.mjs';
 
 // A random device-held capability resumes an already-authorized deletion after
 // session revocation or a lost reply. Store only its digest, including afterward.
-export function createDeletion({ pool, auth, files, archive }) {
+export function createDeletion({ pool, auth, files, archive, backups }) {
   async function finish(job) {
     const client = await pool.connect();
     try {
@@ -11,9 +11,11 @@ export function createDeletion({ pool, auth, files, archive }) {
       const current = await client.query('SELECT complete FROM cup117_private.deletion_jobs WHERE token_hash=$1', [job.token_hash]);
       if (current.rows[0]?.complete) return reply(200, { status: 'complete' });
       const exists = await client.query('SELECT 1 FROM public.users WHERE id=$1', [job.owner]);
+      if (exists.rowCount) await backups?.prepareDeletion(job.owner);
       if (exists.rowCount) await auth.deleteAccount(job.owner);
       await files.purgeOwner(job.owner);
       await archive.purgeOwner(job.owner);
+      await backups?.purgeOwner(job.owner);
       await client.query('BEGIN');
       await client.query('UPDATE cup117_private.deletions SET complete=true WHERE owner=$1', [job.owner]);
       await client.query('UPDATE cup117_private.deletion_jobs SET complete=true WHERE token_hash=$1', [job.token_hash]);

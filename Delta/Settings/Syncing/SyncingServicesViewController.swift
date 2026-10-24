@@ -131,27 +131,16 @@ private extension SyncingServicesViewController
             return
         }
 
-        SyncManager.shared.reset(for: service) { (result) in
-            DispatchQueue.main.async {
+        Task { @MainActor in
                 do
                 {
-                    try result.get()
+                    try await SyncManager.shared.selectCloudBackupProvider(service == .dropbox ? .dropbox : .none)
                     
                     let previousService = self.selectedSyncingService
                     self.selectedSyncingService = service
                     
-                    // Same check as below when showing Sign In or Sign Out.
-                    if self.isDropboxConnected
-                    {
-                        // Authenticated, so assign syncingService.
-                        Settings.syncingService = service
-                        SyncManager.shared.sync()
-                    }
-                    else
-                    {
-                        // Set to non-nil if we later authenticate.
-                        Settings.syncingService = nil
-                    }
+                    Settings.syncingService = service
+                    if self.isDropboxConnected { SyncManager.shared.sync() }
                                         
                     if (previousService == nil && service != nil) || (previousService != nil && service == nil)
                     {
@@ -171,7 +160,6 @@ private extension SyncingServicesViewController
                     let alertController = UIAlertController(title: NSLocalizedString("Unable to Change Syncing Service", comment: ""), error: error)
                     self.present(alertController, animated: true, completion: nil)
                 }
-            }
         }
     }
 
@@ -191,7 +179,7 @@ private extension SyncingServicesViewController
                         do {
                             try result.get()
                             guard identity.isSameSession(as: BoundFriendAccount.shared.session) else { throw BoundDropboxOAuth.Failure.changed }
-                            Settings.syncingService = nil
+                            try await SyncManager.shared.selectCloudBackupProvider(.none)
                             self.selectedSyncingService = nil
                             self.syncingEnabledSwitch.setOn(false, animated: true)
                             if unlink { try await BoundDropboxOAuth.shared.unlink() }

@@ -48,3 +48,38 @@ test('account deletion completes only after durable archive cleanup succeeds', a
   assert.equal(actions.filter(action => action === 'account').length, 1);
   assert.ok(statements.some(sql => sql.startsWith('UPDATE cup117_private.deletion_jobs')));
 });
+
+test('account deletion stays pending until server save backup bytes are purged', async () => {
+  const statements = [], actions = [];
+  const job = { owner: identity.id, token_hash: 'receipt' };
+  let fails = true;
+  const client = { async query(sql) {
+    statements.push(sql);
+    if (sql.startsWith('SELECT complete')) return { rows: [{ complete: false }] };
+    if (sql.startsWith('SELECT 1 FROM public.users')) return { rows: [], rowCount: 0 };
+    return { rows: [] };
+  }, release() {} };
+  const deletion = createDeletion({ pool: { query: async () => ({ rows: [job] }), connect: async () => client }, auth: {},
+    files: { purgeOwner: async () => {} }, archive: { purgeOwner: async () => {} },
+    backups: { purgeOwner: async owner => { actions.push(owner); if (fails) throw Error('disk unavailable'); } } });
+  assert.equal((await deletion.handle(request({ operationToken: 'a'.repeat(64) }))).status, 202);
+  assert.equal(statements.some(sql => sql.startsWith('UPDATE cup117_private.deletion_jobs')), false);
+  fails = false;
+  assert.equal((await deletion.handle(request({ operationToken: 'a'.repeat(64) }))).status, 200);
+  assert.deepEqual(actions, [identity.id, identity.id]);
+});
+
+test('deletion clears pending email approvals before removing the native identity', async () => {
+  const actions = [];
+  const job = { owner: identity.id, token_hash: 'receipt' };
+  const client = { async query(sql) {
+    if (sql.startsWith('SELECT complete')) return { rows: [{ complete: false }] };
+    if (sql.startsWith('SELECT 1 FROM public.users')) return { rows: [{ id: identity.id }], rowCount: 1 };
+    return { rows: [] };
+  }, release() {} };
+  const deletion = createDeletion({ pool: { query: async () => ({ rows: [job] }), connect: async () => client },
+    auth: { deleteAccount: async () => { actions.push('native'); } }, files: { purgeOwner: async () => {} }, archive: { purgeOwner: async () => {} },
+    backups: { prepareDeletion: async () => { actions.push('prepare'); }, purgeOwner: async () => { actions.push('purge'); } } });
+  assert.equal((await deletion.handle(request({ operationToken: 'a'.repeat(64) }))).status, 200);
+  assert.deepEqual(actions, ['prepare', 'native', 'purge']);
+});

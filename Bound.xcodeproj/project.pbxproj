@@ -32,6 +32,10 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		7F4D62F4E73C84D5370C7696 /* BoundServerBackupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B216D18DCBA716E8ADA2A73C /* BoundServerBackupView.swift */; };
+		FA8034E464163C5A453FEF2D /* BoundServerBackupManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7AFBC9246DF97A56D45A76D /* BoundServerBackupManager.swift */; };
+		7285B8C1DB24FE670A654597 /* BoundServerBackupPackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 226771F97D1E13D90E45BC8C /* BoundServerBackupPackage.swift */; };
+		E980970B792FBC76098B1840 /* BoundCloudBackupSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1BE667EB9B3C746C94612BB /* BoundCloudBackupSettingsView.swift */; };
 		BCD012340000000000000004 /* CooperativeDoublesContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCD012340000000000000003 /* CooperativeDoublesContractTests.swift */; };
 		BCD012340000000000000002 /* BoundCooperativeDoubles.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCD012340000000000000001 /* BoundCooperativeDoubles.swift */; };
 		53BC601F0D3B84D686006D98 /* BoundROMUpdateLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E30B4E74E195196F96EF6AA6 /* BoundROMUpdateLifecycleTests.swift */; };
@@ -882,6 +886,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		B216D18DCBA716E8ADA2A73C /* BoundServerBackupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundServerBackupView.swift; sourceTree = "<group>"; };
+		C7AFBC9246DF97A56D45A76D /* BoundServerBackupManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundServerBackupManager.swift; sourceTree = "<group>"; };
+		226771F97D1E13D90E45BC8C /* BoundServerBackupPackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundServerBackupPackage.swift; sourceTree = "<group>"; };
+		C1BE667EB9B3C746C94612BB /* BoundCloudBackupSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundCloudBackupSettingsView.swift; sourceTree = "<group>"; };
 		BCD012340000000000000003 /* CooperativeDoublesContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CooperativeDoublesContractTests.swift; sourceTree = "<group>"; };
 		BCD012340000000000000001 /* BoundCooperativeDoubles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundCooperativeDoubles.swift; sourceTree = "<group>"; };
 		E30B4E74E195196F96EF6AA6 /* BoundROMUpdateLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMUpdateLifecycleTests.swift; sourceTree = "<group>"; };
@@ -1575,6 +1583,10 @@
 				F0756130DACFA8B7912B7CD5 /* BoundPasskeyAuthorization.swift */,
 				8747653C8B7C6C2DD2586A01 /* BoundAccountSecurityView.swift */,
 				73551A9F3458410E9D491E3B /* BoundAccountSocial.swift */,
+				B216D18DCBA716E8ADA2A73C /* BoundServerBackupView.swift */,
+				C7AFBC9246DF97A56D45A76D /* BoundServerBackupManager.swift */,
+				226771F97D1E13D90E45BC8C /* BoundServerBackupPackage.swift */,
+				C1BE667EB9B3C746C94612BB /* BoundCloudBackupSettingsView.swift */,
 				EAA7562AAABA52F743D74FFA /* BoundNotesStore.swift */,
 				CD57C331890EA530190F8FB0 /* FriendOnboarding.swift */,
 				5A0C6786CF517CB9DDCDEA08 /* FriendSharingConfiguration.swift */,
@@ -3631,6 +3643,10 @@
 				6A17BE0980A8001F718195FB /* BoundPasskeyAuthorization.swift in Sources */,
 				13F19494F424DCFFA2760ABF /* BoundAccountSecurityView.swift in Sources */,
 				F9AFD206089B4A1CA0FCFDBC /* BoundAccountSocial.swift in Sources */,
+				7F4D62F4E73C84D5370C7696 /* BoundServerBackupView.swift in Sources */,
+				FA8034E464163C5A453FEF2D /* BoundServerBackupManager.swift in Sources */,
+				7285B8C1DB24FE670A654597 /* BoundServerBackupPackage.swift in Sources */,
+				E980970B792FBC76098B1840 /* BoundCloudBackupSettingsView.swift in Sources */,
 				48B56AE0B73C7AAE7DAC60F2 /* BoundNotesStore.swift in Sources */,
 				E8A7206B7421C6BC0900D58C /* FriendOnboarding.swift in Sources */,
 				72E6585EF2788D220A64B750 /* FriendSharingConfiguration.swift in Sources */,

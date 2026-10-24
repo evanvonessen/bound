@@ -69,6 +69,8 @@ class PreviewGameViewController: DeltaCore.GameViewController
             guard newValue == nil || !BoundROMUpdateManager.shared.isApplying else { return }
             if let game = newValue as? Game,
                BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier) { return }
+            if let game = newValue as? Game,
+               BoundServerBackupManager.hasPendingRestore(gameID: game.identifier) { return }
             self.emulatorCore?.removeObserver(self, forKeyPath: #keyPath(EmulatorCore.state), context: &kvoContext)
             super.game = newValue
             BoundROMUpdateActivity.bindingChanged(self)

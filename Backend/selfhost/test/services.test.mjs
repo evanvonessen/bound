@@ -53,6 +53,18 @@ test('invalid sessions and privileged owner spoofing cannot reach the database',
   assert.equal(pool.calls.length, 0);
 });
 
+test('Dropbox token broker honors the shared cloud-provider gate before provider traffic', async () => {
+  let guarded = false;
+  const services = createServices({ pool: db({}), authenticate: async () => identity,
+    withDropbox: async (actual, action) => {
+      assert.equal(actual.id, owner); assert.equal(action, 'token'); guarded = true;
+      return new Response('{"error":"backup_not_enabled"}', { status: 403 });
+    },
+    fetchImpl: async () => assert.fail('disabled Dropbox must not contact a provider') });
+  const response = await services.handle(request('/functions/v1/bound-dropbox', { action: 'token' }));
+  assert.equal(response.status, 403); assert.equal(guarded, true);
+});
+
 test('Agora authorization runs in process and blocked rooms never receive a token', async () => {
   let signed = false;
   const services = createServices({ pool: db(false), authenticate: async () => identity,

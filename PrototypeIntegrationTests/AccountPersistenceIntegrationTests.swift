@@ -1271,6 +1271,55 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         XCTAssertFalse(sharing.active)
     }
 
+    func testSettingsKeepsFriendsOpenAcrossChildPagesAndClosesOnDismissal() async throws {
+        let account = try accountFixture()
+        var observation: OnboardingObservation?
+        var actions: [String] = []
+        let newFriend = FriendRoom(roomID: UUID().uuidString, displayName: "Navi")
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            actions.append(action)
+            return FriendResponse(ok: true, room: action == "add" ? newFriend : nil,
+                                  rooms: action == "list" ? [] : nil, username: "River")
+        }, observeAccount: { observation = OnboardingObservation($0); return observation! })
+        let sharing = FriendSharingSession(configuration: nil, authenticatedMode: true)
+        let context = BoundAccountFriendsContext(sharing: sharing, onboarding: onboarding, account: account)
+        let settings = BoundSettingsHostingController(
+            gameplay: BoundSettingsGameplayContext(emulationDetails: nil, friends: context),
+            syncOnClose: {})
+        let page = UIHostingController(rootView: AnyView(NavigationStack { BoundAccountFriendsSyncSettings(context: context) }))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = page
+        window.makeKeyAndVisible()
+        page.view.layoutIfNeeded()
+        defer {
+            settings.finishPresentation()
+            window.isHidden = true
+            window.rootViewController = nil
+            previousWindow?.makeKeyAndVisible()
+            account.signOut()
+        }
+        await waitUntil { context.signedInUsername == "River" && !onboarding.busy }
+        XCTAssertEqual(context.signedInUsername, "River")
+        XCTAssertFalse(try XCTUnwrap(observation).cancelled)
+
+        // A navigation destination replaces the visible Account page. Its
+        // disappearance must not cancel the session the child still uses.
+        page.rootView = AnyView(Text("Add a Friend"))
+        page.view.layoutIfNeeded()
+        await settle()
+        XCTAssertFalse(try XCTUnwrap(observation).cancelled)
+        onboarding.add(username: "Navi")
+        await waitUntil { !onboarding.busy }
+        XCTAssertEqual(actions, ["list", "add"])
+        XCTAssertEqual(onboarding.rooms, [newFriend])
+
+        settings.finishPresentation()
+        XCTAssertTrue(try XCTUnwrap(observation).cancelled,
+                      "Only closing the outer Settings presentation stops its account observation")
+    }
+
     func testLibraryAccountFriendsDisposalCancelsItsObservation() async throws {
         let account = try accountFixture()
         var observation: OnboardingObservation?
