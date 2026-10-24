@@ -111,7 +111,7 @@ struct BoundCooperativeHost {
     }
 }
 
-/// Recovery requires fully drained native and host queues at one command cut.
+/// Recovery binds consumed histories and retains bounded never-sent output.
 /// An accepted but unconsumed future command cannot survive an older peer state.
 struct BoundCooperativeCableCut:Sendable {
     let data:Data
@@ -159,8 +159,7 @@ struct BoundCooperativeCableCut:Sendable {
         if isAdmission || peer.isAdmission { return isAdmission && peer.isAdmission }
         guard role != peer.role,generation>0,generation==peer.generation,
               consumedGeneration==peer.generation,peer.consumedGeneration==generation,
-              outRead==outWrite,peer.outRead==peer.outWrite,
-              peer.peerConsumed==outWrite,peerConsumed==peer.outWrite,xpToken==peer.xpToken,
+              peer.peerConsumed==outRead,peerConsumed==peer.outRead,xpToken==peer.xpToken,
               sentHistory==peer.receivedHistory,receivedHistory==peer.sentHistory else { return false }
         let host=role==0 ? self:peer,guest=role==1 ? self:peer
         return (host.xpPhase==0 && guest.xpPhase==0 && xpToken==0)
@@ -272,9 +271,12 @@ final class BoundCooperativeDoublesSession {
     private var recoveryNonce=UUID(),peerRecoveryNonce:UUID?,recoveryPeerReady=false,recoveryReadySent=false
     private var recoveryCable=Data(),recoveryDigest="",recoveryAgreement=Data(),recoveryLoaded=false
     private var recoveryCut:BoundCooperativeCableCut?
-    private var recoveryBranch=Data()
+    private var recoveryBranch=Data(),freezingRecovery=false
     private var channel:(any BoundBattleChannel)?,wire:BoundBattleWire?
     private var checkpoint:URL?,journal:URL?,lastXP=Data(),incomingXP=Data(),sequence:UInt32=0
+    private var finishedSent=false
+    private var resumedRecoveryAt:TimeInterval?
+    private var lastXPSent:TimeInterval=0
     private var controlCursor=0
     private var lastSent:TimeInterval=0,lastPeer=ProcessInfo.processInfo.systemUptime
     private(set) var status="" { didSet { if status != oldValue { changed?(status) } } }
@@ -300,8 +302,8 @@ final class BoundCooperativeDoublesSession {
         }
         snapshot=nil;capture=nil;local=nil;peer=nil;peerEncounter=nil;peerTeam=nil;peerContext=Data()
         enemy=Data();proof=Data();started=false;prepared=false;fixedRole=nil;cancellingBeforeEntry=false
-        peerReady=false;readySent=false;peerCableReady=false;peerResultsReady=false;peerFinished=false
-        recoveryPending=false;recoveryLoaded=false;recoveryPeerReady=false;recoveryReadySent=false
+        peerReady=false;readySent=false;peerCableReady=false;peerResultsReady=false;peerFinished=false;finishedSent=false
+        recoveryPending=false;freezingRecovery=false;resumedRecoveryAt=nil;recoveryLoaded=false;recoveryPeerReady=false;recoveryReadySent=false
         recoveryCut=nil;recoveryBranch=Data();recoveryCable=Data();recoveryDigest="";recoveryAgreement=Data();peerRecoveryNonce=nil
         checkpoint=nil;journal=nil;lastXP=Data();incomingXP=Data();encounter=UUID();recoveryNonce=UUID()
         lastSent=0;lastPeer=ProcessInfo.processInfo.systemUptime;controlCursor=0;status=""
@@ -319,11 +321,13 @@ final class BoundCooperativeDoublesSession {
         snapshot=value;capture=value;checkpoint=state;self.journal=journal;started=true;prepared=true;recoveryPending=recovering
     }
     func qaCompletedFrame(_ bytes:Data) { probe.qaCompletedFrame(bytes);advance() }
+    var qaRecoveryCut:Data? { recoveryCut?.data }
+    var qaIncomingXPBytes:Int { incomingXP.count }
     func qaResumeRecoveredCore() { if let core { resumeIfPermitted(core) } }
     #endif
     private func resetEncounter(_ value:BoundCooperativeSnapshot,local:UUID,peer:UUID) {
         self.local=local;self.peer=peer;capture=value;encounter=UUID();peerEncounter=nil;peerTeam=nil;peerContext=Data();enemy=isHost ? value.enemy:Data()
-        proof=Data();peerReady=false;readySent=false;started=false;prepared=false;peerCableReady=false;peerResultsReady=false;peerFinished=false;fixedRole=isHost ? 0:1;lastXP=Data();incomingXP=Data();lastPeer=ProcessInfo.processInfo.systemUptime;lastSent=0;controlCursor=0
+        proof=Data();peerReady=false;readySent=false;started=false;prepared=false;peerCableReady=false;peerResultsReady=false;peerFinished=false;finishedSent=false;fixedRole=isHost ? 0:1;lastXP=Data();incomingXP=Data();lastPeer=ProcessInfo.processInfo.systemUptime;lastSent=0;controlCursor=0
     }
     func receive(_ data:Data) {
         guard let packet=BoundCooperativePacket(data:data) else { return }
@@ -406,12 +410,23 @@ final class BoundCooperativeDoublesSession {
         }
         guard local == identities.0,peer == identities.1 else { interrupt("Friend session changed");return }
         if !started { capture=value }
+        // Loading retains the resident freeze acknowledgement until its next
+        // callback consumes START. A timer tick may observe that saved phase
+        // before the CPU runs; it is not another disconnect.
+        if let resumedRecoveryAt {
+            if value.phase==9,(core.state == .paused || ProcessInfo.processInfo.systemUptime-resumedRecoveryAt<3) {
+                publish(flags:3);return
+            }
+            self.resumedRecoveryAt=nil
+        }
         if value.phase == 9 { interrupt("Cooperative recovery kept. Reconnect with your friend.");return }
         if value.phase == 7 {
             let now=ProcessInfo.processInfo.systemUptime
             if now-lastPeer>15 { interrupt("Cooperative connection timed out");return }
-            if now-lastSent>=0.25 { _=transmit(.finished);lastSent=now }
-            publish(flags:peerFinished ? 1:11);status="Finishing cooperative battle"
+            if !finishedSent || now-lastSent>=0.25 {
+                finishedSent=transmit(.finished) || finishedSent;lastSent=now
+            }
+            publish(flags:peerFinished && finishedSent ? 1:11);status="Finishing cooperative battle"
             return
         }
         if value.error != 0 { interrupt("Cooperative battle needs recovery");return }
@@ -426,7 +441,7 @@ final class BoundCooperativeDoublesSession {
             if started {
                 delivered=transmit(value.phase==6 && durable ? .resultsReady:.cableReady)
             } else if prepared {
-                delivered=transmit(.ready) && transmit(.cableReady)
+                delivered=transmit(.ready) && (!durable || transmit(.cableReady))
             } else if peerEncounter==nil || !value.selected {
                 delivered=transmit(.offer)
             } else {
@@ -449,12 +464,13 @@ final class BoundCooperativeDoublesSession {
             do {
                 try protect(core:core)
                 guard prepareCable() else { throw CocoaError(.featureUnsupported) }
-                prepared=true;_ = transmit(.cableReady)
+                prepared=true;if probe.read().1 { _ = transmit(.cableReady) }
             } catch { interrupt("Couldn’t prepare cooperative recovery");return }
         }
-        if prepared,peerCableReady { started=true;status="Cooperative battle" }
-        if started,!value.xp.isEmpty,value.xp != lastXP {
-            if transmit(.xp,payload:value.xp) { lastXP=value.xp }
+        if prepared,durable,!started { cable.enableSender() }
+        if prepared,peerCableReady,durable { started=true;status="Cooperative battle" }
+        if started,!value.xp.isEmpty,(value.xp != lastXP || now-lastXPSent>=0.25) {
+            if transmit(.xp,payload:value.xp) { lastXP=value.xp;lastXPSent=now }
         }
         if value.phase==6,durable {
             publish(flags:peerResultsReady ? 11:3)
@@ -466,7 +482,12 @@ final class BoundCooperativeDoublesSession {
     }
     private func prepareCable(recovery:Bool=false)->Bool {
         guard let core,let peerEncounter else { return false }
-        if recovery,recoveryCut?.isLocalCatch==true { return true }
+        if recovery,recoveryCut?.isLocalCatch==true {
+            // A saved PC/return address may still reference the adapter during
+            // native catch teardown. Keep code installed until field cleanup;
+            // no live peer channel or sender is opened for independent catches.
+            return BoundVBABattleBridge.prepareCooperativeCable(forPlayer:isHost ? 0:1)
+        }
         let failure:@Sendable ()->Void={ [weak self] in Task { @MainActor in self?.interrupt("Cooperative connection lost") } }
         cable.configure(core:core)
         if recovery,recoveryCut?.isAdmission != true,!cable.restoreRecoveryData(recoveryCable) { return false }
@@ -486,7 +507,9 @@ final class BoundCooperativeDoublesSession {
             if checkpointReady { cable.enableSender() }
         }
         if running && !recovery { resumeIfPermitted(core) }
-        return prepared && checkpointReady
+        // A paused video frame may bisect the output seqlock. The next
+        // committed frame writes protection; readiness remains gated on durable.
+        return prepared
     }
     private func publish(flags:UInt32) {
         sequence &+= 2;if sequence == 0 { sequence=2 }
@@ -530,17 +553,23 @@ final class BoundCooperativeDoublesSession {
         }
         recoveryPending=true;recoveryNonce=UUID();peerRecoveryNonce=nil;recoveryPeerReady=false;recoveryReadySent=false;recoveryLoaded=false
         fixedRole=isHost ? 0:1;publish(flags:4)
-        // Keep the live checkpoint, including earned XP and faint tombstones.
-        // Never load the pre-entry snapshot or run friendly-battle rollback.
+        // A video-frame pause can interrupt a resident snapshot transaction.
+        // Let the cartridge finish that callback and acknowledge CANCEL before
+        // fencing the CPU; the existing owned checkpoint then has one native cut.
+        cable.fenceForCooperativeRecovery()
         channel?.close();wire?.close();channel=nil;wire=nil
-        if let core {
-            if core.state == .running { _=core.pause() }
-            probe.checkpointNow(core)
-        }
+        freezingRecovery=true;prepared=false
+        if let core,core.state == .paused,snapshot?.localStage==0 { _=core.resume() }
+        finishRecoveryFence()
+    }
+    private func finishRecoveryFence() {
+        guard freezingRecovery,let core else { return }
+        let (value,durable,error)=probe.read()
+        guard let value,(value.phase==9 || value.localStage==1 || value.phase==7),durable else { return }
+        if core.state == .running { _=core.pause() }
         let locations=probe.recoveryLocation();checkpoint=locations.0 ?? checkpoint;journal=locations.1 ?? journal
-        prepared=false
-        let (_,durable,error)=probe.read()
-        let retained=durable && error==nil && (journal.map { adoptRecovery(from:$0,expectedProof:proof) } ?? false)
+        freezingRecovery=false
+        let retained=error==nil && (journal.map { adoptRecovery(from:$0,expectedProof:proof) } ?? false)
         if !retained { recoveryCut=nil;status="Recovery kept. Compatible cable checkpoint required." }
         cable.configure(core:nil)
     }
@@ -611,7 +640,7 @@ final class BoundCooperativeDoublesSession {
         return bytes
     }
     private func receiveRecovery(_ packet:BoundCooperativePacket) {
-        guard recoveryPending,BoundMultiplayerFeatures.isEnabled,connected?() == true,
+        guard recoveryPending,!freezingRecovery,BoundMultiplayerFeatures.isEnabled,connected?() == true,
               let identities=context?(),packet.sender==identities.1,packet.receiver==identities.0,
               packet.proof==proof,packet.encounter==capture?.encounter,packet.count==(isHost ? 1:0),
               peerRecoveryNonce==nil || peerRecoveryNonce==packet.id else { return }
@@ -627,6 +656,7 @@ final class BoundCooperativeDoublesSession {
         advanceRecovery()
     }
     private func advanceRecovery() {
+        if freezingRecovery { finishRecoveryFence();return }
         guard let core,core.state != .stopped else { return }
         if core.state == .running { _=core.pause() }
         guard BoundMultiplayerFeatures.isEnabled,connected?() == true,let identities=context?() else { return }
@@ -657,7 +687,7 @@ final class BoundCooperativeDoublesSession {
                 guard let restored=BoundCooperativeSnapshot(BoundVBABattleBridge.cooperativeSnapshot()),BoundCooperativeCableCut(localCatch:restored) != nil,
                       let capture,restored.encounter==capture.encounter,restored.partyHash==capture.partyHash,restored.proof==proof,
                       restored.role==(isHost ? 0:1),restored.hasCompatibleRules(peerContext) else { throw CocoaError(.fileReadCorruptFile) }
-                BoundVBABattleBridge.closeCooperativeCable()
+                guard BoundVBABattleBridge.resumeCooperativeCable(forPlayer:isHost ? 0:1) else { throw CocoaError(.fileReadCorruptFile) }
             } else if recoveryCut?.isAdmission == true {
                 guard let restored=BoundCooperativeSnapshot(BoundVBABattleBridge.cooperativeSnapshot()),restored.phase==3,
                       let capture,restored.encounter==capture.encounter,restored.partyHash==capture.partyHash,
@@ -679,6 +709,7 @@ final class BoundCooperativeDoublesSession {
             publish(flags:recoveryCut?.isLocalCatch==true ? 11:3);probe.checkpointNow(core)
             let (_,durable,error)=probe.read()
             guard durable,error==nil else { recoveryCut=nil;throw CocoaError(.fileWriteUnknown) }
+            resumedRecoveryAt=ProcessInfo.processInfo.systemUptime;finishedSent=false;peerFinished=false
             recoveryLoaded=true;recoveryPending=false;started=true;prepared=true;peerCableReady=true;lastXP=Data();incomingXP=Data()
             if recoveryCut?.isLocalCatch != true { cable.enableSender() }
             peerResultsReady=recoveryCut?.isLocalCatch==true

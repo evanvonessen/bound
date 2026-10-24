@@ -52,6 +52,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)closeSoulLink;
 #if DEBUG && TARGET_OS_SIMULATOR
 + (BOOL)qaCooperativeGameSaveBlocked:(NSURL *)url;
++ (BOOL)qaPrepareCooperativeFixture:(NSUInteger)stage encounter:(NSUInteger)encounter player:(NSUInteger)player;
++ (NSDictionary<NSString *,id> *)qaCooperativeStatus;
 + (NSData *)qaSharedWorldImmutableDigest;
 + (BOOL)qaStartSharedWorldWait;
 + (BOOL)qaStartSharedWorldSightlineWait;

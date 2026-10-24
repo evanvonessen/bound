@@ -60,22 +60,28 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
     private var pendingAcknowledgement=Data(),lastAcknowledgement=Data()
     private var sentHistory=Data(repeating:0,count:32),receivedHistory=Data(repeating:0,count:32)
     private var sender:(@Sendable (Data)->Bool)?
-    private var senderEnabled=false
+    private var senderEnabled=false,cooperativeRecoveryFenced=false
     private var failed:(@Sendable ()->Void)?
     private var lastSent:TimeInterval=0
     private var lastReceived=ProcessInfo.processInfo.systemUptime
     private var sentCommands=0,receivedCommands=0
+    private var sentThrough:UInt16=0
     func configure(core:EmulatorCore?) {
         lock.lock(); defer { lock.unlock() }
         coreID=core.map(ObjectIdentifier.init); entryPlayer=nil; peerDisconnectPending=false; latest=nil; frame=0
-        incoming.removeAll(); blockAdmission=BoundNativeBlockAdmission(); sender=nil; senderEnabled=false; failed=nil; lastSent=0
+        incoming.removeAll(); blockAdmission=BoundNativeBlockAdmission(); sender=nil; senderEnabled=false; cooperativeRecoveryFenced=false; failed=nil; lastSent=0
         peerGeneration=0; receivedGeneration=0; announcedGeneration=0;lastAcceptedSequence=0
         pendingAcknowledgement.removeAll(); lastAcknowledgement.removeAll()
         sentHistory=Data(repeating:0,count:32);receivedHistory=Data(repeating:0,count:32)
-        lastReceived=ProcessInfo.processInfo.systemUptime; sentCommands=0; receivedCommands=0
+        lastReceived=ProcessInfo.processInfo.systemUptime; sentCommands=0; receivedCommands=0;sentThrough=0
     }
     func setSender(_ sender:@escaping @Sendable (Data)->Bool,failed:@escaping @Sendable ()->Void) {
         lock.lock(); self.sender=sender; self.failed=failed; lock.unlock()
+    }
+    /// Stop external sends before the cartridge acknowledges its recovery fence.
+    /// Retain incoming data/admission/history for the same durable transaction.
+    func fenceForCooperativeRecovery() {
+        lock.lock();cooperativeRecoveryFenced=true;senderEnabled=false;sender=nil;failed=nil;lock.unlock()
     }
     func enableSender() {
         lock.lock(); senderEnabled=true; lastReceived=ProcessInfo.processInfo.systemUptime; lock.unlock()
@@ -116,6 +122,7 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
         let receivedGeneration:UInt16
         let lastAcceptedSequence:UInt16
         let pendingAcknowledgement:Data
+        let sentThrough:UInt16?
         let sentHistory:Data
         let receivedHistory:Data
     }
@@ -125,7 +132,7 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
         lock.lock();defer { lock.unlock() }
         return (try? JSONEncoder().encode(RecoveryState(incoming:incoming,remaining:blockAdmission.recoveryRemaining,
             peerGeneration:peerGeneration,receivedGeneration:receivedGeneration,lastAcceptedSequence:lastAcceptedSequence,
-            pendingAcknowledgement:pendingAcknowledgement,sentHistory:sentHistory,receivedHistory:receivedHistory))) ?? Data()
+            pendingAcknowledgement:pendingAcknowledgement,sentThrough:sentThrough,sentHistory:sentHistory,receivedHistory:receivedHistory))) ?? Data()
     }
     func restoreRecoveryData(_ bytes:Data)->Bool {
         guard bytes.count<=32768,let value=try? JSONDecoder().decode(RecoveryState.self,from:bytes),
@@ -136,6 +143,7 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
         incoming=value.incoming;blockAdmission=admission;peerGeneration=value.peerGeneration
         receivedGeneration=value.receivedGeneration;lastAcceptedSequence=value.lastAcceptedSequence
         pendingAcknowledgement=value.pendingAcknowledgement;announcedGeneration=0;lastAcknowledgement=Data()
+        sentThrough=value.sentThrough ?? 0
         sentHistory=value.sentHistory;receivedHistory=value.receivedHistory
         lastReceived=ProcessInfo.processInfo.systemUptime
         return true
@@ -143,10 +151,18 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
     static func recoveryIsQuiescent(_ bytes:Data,mailbox:Data)->Bool {
         guard bytes.count<=32768,mailbox.count==1176,
               let value=try? JSONDecoder().decode(RecoveryState.self,from:bytes),
-              value.incoming.isEmpty,value.remaining==0,value.pendingAcknowledgement.isEmpty,
+              value.incoming.isEmpty,value.remaining==0,
               value.sentHistory.count==32,value.receivedHistory.count==32 else { return false }
         func half(_ at:Int)->UInt16 { UInt16(mailbox[at]) | UInt16(mailbox[at+1]) << 8 }
-        return half(12)==0 && half(4)==half(6) && half(14)==half(4) && half(8)==half(10)
+        let ack=value.pendingAcknowledgement
+        let redundantAck=ack.isEmpty || (ack.count==4 && (UInt16(ack[0])|UInt16(ack[1])<<8)==half(16)
+            && (UInt16(ack[2])|UInt16(ack[3])<<8)==half(4))
+        // Repeating the already-applied acknowledgement cannot introduce a
+        // command or advance this cut; it may be queued after frame capture.
+        // Never-sent output remains in the saved native ring and is replayed
+        // once on the fresh wire. Sent/unacknowledged or incoming future
+        // commands still fail closed. Histories bind the consumed prefix.
+        return redundantAck && half(12)==0 && half(6) &- half(4)<=32 && (value.sentThrough.map {$0==half(4)} ?? (half(4)==half(6))) && half(14)==half(4) && half(8)==half(10)
             && half(16)>0 && half(16)==half(18) && value.peerGeneration==half(16)
             && value.receivedGeneration==half(16) && value.lastAcceptedSequence==half(20)
     }
@@ -182,7 +198,9 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
         }
         lock.unlock()
         let generation=UInt16(BoundVBABattleBridge.connectionGeneration())
-        let outgoing=BoundVBABattleBridge.takeOutgoingCommands()
+        lock.lock()
+        let outgoing=cooperativeRecoveryFenced ? Data():BoundVBABattleBridge.takeOutgoingCommands()
+        lock.unlock()
         var delivered=0,bad=false,didSend=false
         let acknowledged=BoundVBABattleBridge.peerAcknowledgement()
         if !acknowledged.isEmpty,acknowledged != lastAcknowledgement,send != nil {
@@ -201,7 +219,7 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
                     let code=commands.prefix(2).reduce(UInt16(0)) { ($0>>8)|(UInt16($1)<<8) }
                     NSLog("Bound native command send failed: %04x",code); bad=true; break
                 }
-                lock.lock();sentHistory=Data(SHA256.hash(data:sentHistory+outgoing.subdata(in:start..<start+20)));lock.unlock()
+                lock.lock();sentHistory=Data(SHA256.hash(data:sentHistory+outgoing.subdata(in:start..<start+20)));sentThrough=sequence;lock.unlock()
                 delivered+=1; didSend=true
             }
         } else if send != nil,ProcessInfo.processInfo.systemUptime-lastSent>=1 {

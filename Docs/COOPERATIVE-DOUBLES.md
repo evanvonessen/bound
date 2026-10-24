@@ -4,7 +4,7 @@ Bound supports `multi_red`’s optional doubles cartridge. The isolated `doubles
 
 The cartridge owns encounter admission, native team selection, party ownership, opponent generation, combat, EXP, move learning, rewards and evolution. Bound transports native cable commands and the versioned co-op data ABI. Admission binds the selected teams, both fresh encounter tokens and the captured original enemy team before starting cable setup. Each owner selects up to three living Pokémon through the native team menu. Unselected owned Pokémon stay in their original slots; borrowed teammate records never enter the owner’s battery save.
 
-Interrupted native battles retain recovery checkpoints and a journal. Both authenticated owners must agree to recovery with a fresh wire namespace before resuming the paused native state. Battery/autosave writes remain fenced until each owner has restored their complete party and safely returned through native evolution/field cleanup. Recovery does not roll back to the party before battle. Automatic rejoin requires mutually drained native and host command queues, cross-matching SHA-256 command histories, matching completed EXP rounds, acknowledged command generations and the same durable recovery branch. The branch changes after each recovery so an older checkpoint cannot join a later battle timeline. Incompatible cuts stay paused with their recovery files intact. Normal manual save states, quick saves, autosaves, independent loads and Handoff remain blocked during an active or interrupted cooperative battle. Switching games preserves the previous game’s recovery; automatic recovery obeys the current pause screen. Explicitly clearing a ROM’s saves also clears that ROM’s cooperative recovery. Soul Link captures owned faints before native loss cleanup can heal them.
+Interrupted native battles retain recovery checkpoints and a journal. Both authenticated owners must agree to recovery with a fresh wire namespace before resuming the paused native state. Battery/autosave writes remain fenced until each owner has restored their complete party and safely returned through native evolution/field cleanup. Recovery does not roll back to the party before battle. Automatic rejoin requires drained incoming native and host queues, cross-matching SHA-256 histories for the consumed command prefix, matching completed EXP rounds, acknowledged command generations and the same durable recovery branch. Bounded output records that have never been sent remain in the native checkpoint and replay once on the fresh wire. Sent but unacknowledged or accepted future commands cannot establish that prefix. The branch changes after each recovery so an older checkpoint cannot join a later battle timeline. Incompatible cuts stay paused with their recovery files intact. Normal manual save states, quick saves, autosaves, independent loads and Handoff remain blocked during an active or interrupted cooperative battle. Switching games preserves the previous game’s recovery; automatic recovery obeys the current pause screen. Explicitly clearing a ROM’s saves also clears that ROM’s cooperative recovery. Soul Link captures owned faints before native loss cleanup can heal them.
 
 ## Build
 
@@ -68,3 +68,50 @@ Both repositories remain on `codex/doubles` in the doubles worktrees. Main and
 the permanent ROM download remain unchanged. Physical devices, authenticated
 internet interruption/relaunch, every facility streak/tier and long-play
 performance still need acceptance testing.
+
+
+## Disconnect review (2026-10-24)
+
+The optional cartridge pin is now
+`f1c03b0d755d4a52bab6d121e8c8c3d67e691f9d3d02eecbd9bb97fbf19141dd`.
+Confirmation validates the sealed owner roster, and moved host heartbeat epochs
+retry without cancelling selection. The app waits for committed protection
+before advertising cable readiness, waits for the cartridge's disconnect fence
+before pausing, and waits for its resume acknowledgement after loading. Pending
+owned EXP exchanges retry until the cartridge advances their token. Native field completion closes the logical link before the app restores ordinary serial timing; catch recovery keeps any still-referenced adapter code installed until that return.
+
+Recovery retains bounded, never-sent native output in its checkpoint. A saved
+send cursor and cross-matching consumed histories distinguish that output from
+sent but unacknowledged records. Incoming future commands, partial blocks,
+unacknowledged histories and different recovery branches still fail closed with
+the existing files preserved. No earlier owned progress is silently loaded.
+
+`PrototypeTools/test-doubles-reconnect.py` drives two separately named
+`Doubles Recovery QA` simulators through native encounter entry, selection,
+connection loss, rejoin, fresh emulator/session recovery from durable files,
+and delayed old-wire packet injection. Raid entry uses the original native
+pre-battle selector as well as cooperative admission. Fixtures copy a native
+battery and create only owned parties through original native scripts; opponent
+records are never supplied or edited. Detailed receipts stay under ignored
+`.build/doubles-reconnect/`, including unsuccessful iterations. These local
+loopback tests use synthetic identities, not an authenticated friend service.
+
+
+The completed two-app receipts are `doubles-26`, `raid-6` and `facility-4`.
+All three pass native entry, two disconnect/rejoin cycles (one recreates the
+emulator and session from durable files), old-wire packet rejection, native
+completion, full original owner identity/order restoration and save-lock release.
+Each case also interrupts after combat has progressed. Raid checks both
+the shared pre-catch cut and an already-local catch interruption, then verifies
+a separate capture on each owner. The original opponent definitions stay intact.
+
+The field receipt exchange now sends each owner's finish message before allowing
+that owner to leave the cooperative state, even if a previous control message
+was sent less than 250 ms earlier. This prevents one completed owner from closing
+before its friend receives the final receipt. The 78 focused app checks and an
+unsigned Release iPhone build pass; the embedded cartridge matches the pin. The
+cartridge also passes native facility-loss and raid-storm-loss recovery/field
+checks. No main branch or permanent download is changed. Matching completed
+command/EXP cuts are still required: incompatible histories remain paused with
+their files preserved. Physical devices, authenticated internet and long-play
+performance remain unverified.

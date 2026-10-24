@@ -633,6 +633,65 @@ static uint8_t soulQAScriptBackup[128];
 }
 
 #if DEBUG && TARGET_OS_SIMULATOR
+// Disposable simulator-only native scripts. No foe record or game instruction
+// is supplied: givemon, den specials and trainerbattle use the original engine.
++ (BOOL)qaPrepareCooperativeFixture:(NSUInteger)stage encounter:(NSUInteger)encounter player:(NSUInteger)player {
+    if(player>1||encounter>2||stage>3||!rom||!workRAM||!internalRAM||!overworld()) return NO;
+    if(![self installCooperativeDoubles]) return NO;
+    uint8_t script[768]={};size_t count=0;uint32_t address=0x030074A0;
+    auto byte=[&](uint8_t value){script[count++]=value;};
+    auto halfword=[&](uint16_t value){byte(value);byte(value>>8);};
+    auto pointer=[&](uint32_t value){halfword(value);halfword(value>>16);};
+    auto call=[&](uint32_t value){byte(0x23);pointer(value);};
+    auto flag=[&](uint16_t value){byte(0x29);halfword(value);};
+    auto variable=[&](uint16_t key,uint16_t value){byte(0x16);halfword(key);halfword(value);};
+    if(stage==0) {
+        const uint32_t save=word(internalRAM+0x500C);
+        if(save<0x02000000||save>0x0203F000) return NO;
+        put32(workRAM+save-0x02000000+10,0xD0B10000+player);
+        put32(internalRAM+0x5000,0x12345678+player);workRAM[0x24029]=0;
+        call(0x0803DA15);
+        const uint16_t ordinary[]={400,400,10,133,25,6},facility[]={6,25,133,1,4,7},raidGuest[]={6,25,10};
+        unsigned mons=encounter==1?3:6;
+        for(unsigned i=0;i<mons;i++) {
+            byte(0x79);halfword(encounter==2?(i==0&&player?400:facility[i]):(encounter==1&&player?raidGuest[i]:ordinary[i]));
+            byte(i<2||encounter==2&&i<3?100:(i==2?6:15));halfword(0);for(unsigned j=0;j<9;j++)byte(0);
+        }
+        for(unsigned i=0;i<(encounter==2?3:2);i++) {
+            const unsigned move=encounter==2?(i==2?44:i==1?85:player?8:53):(encounter==1&&player?(i?85:53):418);
+            byte(0x7B);byte(i);byte(0);halfword(move);
+        }
+        flag(0x906);
+        if(encounter==1){byte(0x44);halfword(1);halfword(2+player);}
+        byte(0x6B);byte(2);
+    } else if(stage==1) {
+        byte(0x39);byte(3);byte(encounter==1?20:0);byte(255);halfword(encounter==1?20:3);halfword(encounter==1?61:11);byte(2);
+    } else if(stage==2&&encounter==1) {
+        flag(0x820);flag(0x908);flag(0x918);variable(0x500F,0x395);variable(0x800F,10);
+        call(0x0908F21D);call(0x0908F291);call(0x0908F381);byte(0x25);halfword(0x117);byte(0x6B);byte(2);
+    } else if(stage==2&&encounter==0) {
+        address=0x09059CD4;
+    } else if(stage==2&&encounter==2) {
+        flag(0x930);
+        for(auto pair:{std::pair<uint16_t,uint16_t>{0x403A,0},{0x5015,3},{0x5016,50},{0x5017,1},{0x5018,0},{0x500F,0x396},{0x5010,0x399}})variable(pair.first,pair.second);
+        byte(0x5C);byte(9);halfword(0x399);halfword(0);pointer(0x09059CD4);pointer(0x09059CD4);byte(0x6B);byte(2);
+    } else if(stage==3&&encounter==1) address=0x0905274A;
+    else return NO;
+    if(count)memcpy(internalRAM+0x74A0,script,count);
+    memset(internalRAM+0xEB0,0,0x74);internalRAM[0xEB1]=1;put32(internalRAM+0xEB8,address);
+    put32(internalRAM+0xF0C,0x0815F9B4);put32(internalRAM+0xF10,0x0815FD08);internalRAM[0xEA8]=0;internalRAM[0xF9C]=1;
+    if(stage==3&&encounter==1){internalRAM[0xEB0]=1;put32(internalRAM+0xEBC,0x090526D5);}
+    return YES;
+}
++ (NSDictionary<NSString *,id> *)qaCooperativeStatus {
+    if(!workRAM||!internalRAM) return @{};
+    unsigned allowed=0,bank=role?2:0,index=half(workRAM + 0x23BCE + bank*2);
+    for(unsigned i=role?3:0;i<(role?6:3);i++)if(i!=index&&half(workRAM+0x24284+i*100+86))allowed|=1u<<i;
+    return @{@"callback":@(word(internalRAM+0x30F4)),@"script":@(internalRAM[0xEB1]),@"locked":@(internalRAM[0xF9C]),
+             @"menu":@(workRAM[0x3B0A8]&15),@"slot":@(workRAM[0x3B0A9]),@"bag":@(workRAM[0x3ACFC+5]),@"pocket":@(half(workRAM+0x3ACFC+6)),
+             @"outcome":@(workRAM[0x23E8A]),@"count":@(workRAM[0x24029]),@"exec":@(word(workRAM+0x23BC8)),
+             @"ownCommand":@(workRAM[0x22BC4+(role?2:0)*512]),@"allowed":@(allowed),@"hostXP":@(rom?word(rom+0x1FE0800):0),@"indexes":@[@(half(workRAM+0x23BCE)),@(half(workRAM+0x23BD0)),@(half(workRAM+0x23BD2)),@(half(workRAM+0x23BD4))],@"hostSeq":@(rom?word(rom+0x1FE0008):0),@"hostFlags":@(rom?word(rom+0x1FE000C):0),@"hostLease":@(rom?word(rom+0x1FE0010):0),@"residentLease":@(word(workRAM+0xA20)),@"cancelled":@(workRAM[0xAB7]),@"required":@(word(workRAM+0xA70)),@"ownCount":@(word(workRAM+0xA3C)),@"selection":[NSData dataWithBytes:workRAM+0x3C750 length:6],@"party":[NSData dataWithBytes:workRAM+0x24284 length:600]};
+}
 + (BOOL)qaCooperativeGameSaveBlocked:(NSURL *)url {
     auto &fence=gameSaveFence();std::lock_guard<std::mutex> lock(fence.lock);
     return fence.cooperativeBlockedPaths.count(canonicalSavePath(url))!=0;
