@@ -65,6 +65,41 @@ final class CooperativeDoublesContractTests:XCTestCase {
         XCTAssertEqual(host.subdata(in:1024..<1624),enemy)
         XCTAssertEqual(host.subdata(in:80..<112),proof)
     }
+    func testRaidAgreementAllowsNativeDenSeedButRequiresMatchingFacilityAndCatchRules() throws {
+        var bytes=snapshot();bytes[1336]=2;bytes[1356]=1
+        let raid=try XCTUnwrap(BoundCooperativeSnapshot(bytes))
+        var other=raid.encounterContext;other[16]=127;other[18]=6;other[19]=80
+        XCTAssertTrue(raid.hasCompatibleRules(other))
+        other[21]=1;XCTAssertFalse(raid.hasCompatibleRules(other))
+        other=raid.encounterContext;other[4]=6;XCTAssertFalse(raid.hasCompatibleRules(other))
+        other=raid.encounterContext;other[0]=1;XCTAssertFalse(raid.hasCompatibleRules(other))
+        XCTAssertFalse(raid.hasCompatibleRules(Data()))
+        let packet=BoundCooperativePacket(kind:.context,local:UUID(),peer:UUID(),id:UUID(),peerID:UUID(),snapshot:raid,payload:raid.encounterContext)
+        XCTAssertEqual(packet.data.count,212);XCTAssertEqual(try XCTUnwrap(BoundCooperativePacket(data:packet.data)).payload,raid.encounterContext)
+        XCTAssertNil(BoundCooperativePacket(data:packet.data.dropLast()))
+        let team=BoundCooperativePacket(kind:.team,local:UUID(),peer:UUID(),id:UUID(),peerID:UUID(),snapshot:raid,payload:raid.party)
+        other=raid.encounterContext;other[16]=127
+        let host=BoundCooperativeHost.transaction(sequence:8,flags:3,role:1,capture:raid,peerTeam:team,proof:Data(repeating:1,count:32),enemy:raid.enemy,xp:Data(),enemyContext:other)
+        XCTAssertEqual(host.subdata(in:728..<792),other)
+    }
+    func testLocalRaidCatchRecoveryCannotReplaySharedCombatOrAdmission() throws {
+        var bytes=snapshot();put(6,&bytes,12);put(6,&bytes,1328);bytes[1336]=2;bytes[1400]=1
+        let a=try XCTUnwrap(BoundCooperativeCableCut(localCatch:try XCTUnwrap(BoundCooperativeSnapshot(bytes))))
+        put(1,&bytes,20)
+        let b=try XCTUnwrap(BoundCooperativeCableCut(localCatch:try XCTUnwrap(BoundCooperativeSnapshot(bytes))))
+        XCTAssertTrue(a.isLocalCatch);XCTAssertTrue(a.compatible(with:b));XCTAssertFalse(a.compatible(with:a))
+        XCTAssertFalse(a.compatible(with:try XCTUnwrap(BoundCooperativeCableCut(admissionPhase:3))))
+        XCTAssertFalse(a.compatible(with:cut(read:0,write:0,consumed:0,role:1,xpPhase:6)))
+        bytes[1400]=0;XCTAssertNil(BoundCooperativeCableCut(localCatch:try XCTUnwrap(BoundCooperativeSnapshot(bytes))))
+        bytes[1400]=2
+        let pending=try XCTUnwrap(BoundCooperativeCableCut(localCatch:try XCTUnwrap(BoundCooperativeSnapshot(bytes))))
+        XCTAssertTrue(a.compatible(with:pending),"An acknowledged pre-catch cut can recover alongside a local catch")
+        put(9,&bytes,12);put(1,&bytes,16)
+        XCTAssertNotNil(BoundCooperativeCableCut(localCatch:try XCTUnwrap(BoundCooperativeSnapshot(bytes))))
+        put(7,&bytes,16);XCTAssertNil(BoundCooperativeCableCut(localCatch:try XCTUnwrap(BoundCooperativeSnapshot(bytes))))
+        bytes[1400]=3;XCTAssertNil(BoundCooperativeSnapshot(bytes))
+        var forged=a.data;forged[6]=1;XCTAssertNil(BoundCooperativeCableCut(data:forged))
+    }
     private func cut(read:UInt16,write:UInt16,consumed:UInt16,role:UInt32,generation:UInt16=2,ackGeneration:UInt16?=nil,xpPhase:UInt32=0,xpToken:UInt32=0)->BoundCooperativeCableCut {
         var bytes=Data(repeating:0,count:92);put(0x32545543,&bytes,0)
         for (offset,value) in [(4,generation),(6,read),(8,write),(10,consumed),(12,ackGeneration ?? generation)] {

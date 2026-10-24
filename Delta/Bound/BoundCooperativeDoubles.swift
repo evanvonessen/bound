@@ -25,6 +25,7 @@ struct BoundCooperativeSnapshot: Sendable {
     let order: Data, party: Data, enemy: Data, owned: Data, proof: Data, xp: Data
     let xpPhase:UInt32,xpToken:UInt32
     let faintedMask:UInt8
+    let encounterContext:Data,localStage:UInt8
     init?(_ source: Data) {
         let data = Data(source)
         guard data.count == 2048, coopWord(data,0) == 0x31474443, data[4] == 1, data[5...7].allSatisfy({ $0 == 0 }),
@@ -34,11 +35,16 @@ struct BoundCooperativeSnapshot: Sendable {
         group=coopWord(data,56); number=coopWord(data,60); count=coopWord(data,64); selectedCount=coopWord(data,68)
         order=data.subdata(in:72..<75);faintedMask=data[75]; partyHash=coopWord(data,80); enemyHash=coopWord(data,84)
         proof=data.subdata(in:88..<120); party=data.subdata(in:128..<728); enemy=data.subdata(in:728..<1328)
+        encounterContext=data.subdata(in:1336..<1400);localStage=data[1400]
         owned=party;xpPhase=coopWord(data,1328);xpToken=coopWord(data,1332)
         let kind=coopWord(data,1528), size=coopWord(data,1532)
         guard kind <= 2, (kind == 0 && size == 0) || (kind == 1 && size == 184) || (kind == 2 && size == 396) else { return nil }
         xp=kind == 0 ? Data() : data.subdata(in:1528..<1536 + Int(size))
-        guard group < 43, count <= 6, selectedCount <= 3,faintedMask & 0xC0 == 0 else { return nil }
+        guard group < 43, count <= 6, selectedCount <= 3,faintedMask & 0xC0 == 0,localStage<=2,encounterContext[0]<=2 else { return nil }
+    }
+    func hasCompatibleRules(_ other:Data)->Bool {
+        guard other.count==64 else { return other.isEmpty && encounterContext.allSatisfy { $0==0 } }
+        return other==encounterContext || (encounterContext[0]==2 && other.prefix(16)==encounterContext.prefix(16) && other.suffix(44)==encounterContext.suffix(44))
     }
     var selected: Bool { (1...3).contains(selectedCount) && Set(order.prefix(Int(selectedCount))).count == Int(selectedCount) && order.prefix(Int(selectedCount)).allSatisfy({ (1...count).contains(UInt32($0)) }) && order.dropFirst(Int(selectedCount)).allSatisfy({ $0 == 0 }) }
     var encounter: Data { var out=Data(); for value in [flags,trainerA,trainerB,group,number] { var b=Data(repeating:0,count:4); coopPut(value,in:&b,at:0); out.append(b) }; return out }
@@ -48,7 +54,7 @@ struct BoundCooperativeSnapshot: Sendable {
 /// Separate team/enemy messages fit the existing 1 KiB transport admission limit.
 struct BoundCooperativePacket: Sendable {
     static let prefix=Data("BCD1".utf8)
-    enum Kind: UInt32 { case offer=1, team=2, enemy=3, ready=4, cancel=5, xp=6, finished=7, cableReady=8, recoveryOffer=9, recoveryReady=10, resultsReady=11 }
+    enum Kind: UInt32 { case offer=1, team=2, enemy=3, ready=4, cancel=5, xp=6, finished=7, cableReady=8, recoveryOffer=9, recoveryReady=10, resultsReady=11,context=12 }
     let data: Data
     let kind: Kind
     var sender: UUID { coopID(data,8) }; var receiver: UUID { coopID(data,24) }
@@ -63,7 +69,7 @@ struct BoundCooperativePacket: Sendable {
         guard b.count >= 148, b.count <= 1024, b.starts(with:Self.prefix), let k=Kind(rawValue:coopWord(b,4)),
               coopWord(b,144) == b.count-148, coopID(b,8) != coopID(b,24), coopWord(b,72) != 0 else { return nil }
         let size=b.count-148
-        guard (k == .team || k == .enemy) ? size == 600 : k == .xp ? [192,404].contains(size) : (k == .recoveryOffer || k == .recoveryReady) ? size == 124 : size == 0 else { return nil }
+        guard (k == .team || k == .enemy) ? size == 600 : k == .context ? size == 64 : k == .xp ? [192,404].contains(size) : (k == .recoveryOffer || k == .recoveryReady) ? size == 124 : size == 0 else { return nil }
         if k == .team {
             let n=coopWord(b,136), selected=Int(b[143]), order=Array(b[140..<143])
             guard (1...6).contains(n),(1...3).contains(selected),Set(order.prefix(selected)).count == selected,
@@ -88,7 +94,7 @@ struct BoundCooperativePacket: Sendable {
 /// separate fields: choosing three records does not shrink the owner's party.
 struct BoundCooperativeHost {
     static func transaction(sequence:UInt32,flags:UInt32,role:UInt32,capture:BoundCooperativeSnapshot?,
-                            peerTeam:BoundCooperativePacket?,proof:Data,enemy:Data,xp:Data)->Data {
+                            peerTeam:BoundCooperativePacket?,proof:Data,enemy:Data,xp:Data,enemyContext:Data=Data())->Data {
         var out=Data(repeating:0,count:16384);coopPut(0x31484443,in:&out,at:0);out[4]=1
         coopPut(sequence,in:&out,at:8);coopPut(flags,in:&out,at:12);coopPut(flags == 0 ? 0:180,in:&out,at:16);coopPut(role,in:&out,at:20)
         if let value=capture,let peerTeam,proof.count==32,enemy.count==600 {
@@ -97,6 +103,7 @@ struct BoundCooperativeHost {
             coopPut(value.partyHash,in:&out,at:52);coopPut(coopFNV(enemy),in:&out,at:56)
             for (offset,n) in [(60,value.flags),(64,value.trainerA),(68,value.trainerB),(72,value.group),(76,value.number),(116,value.token)] { coopPut(n,in:&out,at:offset) }
             out.replaceSubrange(80..<112,with:proof);out.replaceSubrange(112..<115,with:value.order);out[115]=peerTeam.data[143]
+            out.replaceSubrange(728..<792,with:enemyContext.count==64 ? enemyContext:value.encounterContext)
             out.replaceSubrange(128..<728,with:peerTeam.payload);out.replaceSubrange(1024..<1624,with:enemy)
             if !xp.isEmpty,xp.count<=520 { out.replaceSubrange(2048..<2048+xp.count,with:xp) }
         }
@@ -109,6 +116,7 @@ struct BoundCooperativeHost {
 struct BoundCooperativeCableCut:Sendable {
     let data:Data
     private func half(_ offset:Int)->UInt16 { UInt16(data[offset]) | UInt16(data[offset+1]) << 8 }
+    var isLocalCatch:Bool { coopWord(data,0)==0x31434C43 }
     var isAdmission:Bool { coopWord(data,0)==0x31444143 }
     var generation:UInt16 { half(4) }
     var outRead:UInt16 { half(6) }
@@ -121,12 +129,17 @@ struct BoundCooperativeCableCut:Sendable {
     var sentHistory:Data { data.subdata(in:28..<60) }
     var receivedHistory:Data { data.subdata(in:60..<92) }
     init?(data:Data) {
-        guard data.count==92,[UInt32(0x32545543),0x31444143].contains(coopWord(data,0)),Self.halfWord(data,14)==0 else { return nil }
+        guard data.count==92,[UInt32(0x32545543),0x31444143,0x31434C43].contains(coopWord(data,0)),Self.halfWord(data,14)==0 else { return nil }
         if coopWord(data,0)==0x31444143,!data.dropFirst(4).allSatisfy({ $0==0 }) { return nil }
+        if coopWord(data,0)==0x31434C43,(!data[4..<24].allSatisfy({ $0==0 }) || !data[28...].allSatisfy({ $0==0 })) { return nil }
         self.data=data
         guard outWrite &- outRead<=32,role<=1 else { return nil }
     }
     private static func halfWord(_ data:Data,_ offset:Int)->UInt16 { UInt16(data[offset]) | UInt16(data[offset+1]) << 8 }
+    init?(localCatch snapshot:BoundCooperativeSnapshot) {
+        guard [UInt8(1),2].contains(snapshot.localStage),snapshot.encounterContext[0]==2,[UInt32(6),7,9].contains(snapshot.phase),snapshot.xpPhase==6,snapshot.error<=1 else { return nil }
+        var bytes=Data(repeating:0,count:92);coopPut(0x31434C43,in:&bytes,at:0);coopPut(snapshot.role,in:&bytes,at:24);self.init(data:bytes)
+    }
     init?(admissionPhase:UInt32) {
         guard admissionPhase==3 else { return nil }
         var bytes=Data(repeating:0,count:92);coopPut(0x31444143,in:&bytes,at:0);self.init(data:bytes)
@@ -142,6 +155,7 @@ struct BoundCooperativeCableCut:Sendable {
         self.init(data:out)
     }
     func compatible(with peer:Self)->Bool {
+        if isLocalCatch || peer.isLocalCatch { return isLocalCatch && peer.isLocalCatch && role != peer.role }
         if isAdmission || peer.isAdmission { return isAdmission && peer.isAdmission }
         guard role != peer.role,generation>0,generation==peer.generation,
               consumedGeneration==peer.generation,peer.consumedGeneration==generation,
@@ -170,6 +184,7 @@ private struct BoundCooperativeRecovery:Codable {
     let enemy:Data
     let role:UInt32
     let peerTeam:Data
+    let enemyContext:Data
 }
 
 /// The completed-frame owner performs all port access and durable checkpoints.
@@ -213,7 +228,7 @@ final class BoundCooperativeProbe: @unchecked Sendable {
         guard let checkpoint,let journal,value.phase >= 3,value.phase != 8 else { return }
         // Full emulator checkpoints occur at phase/XP/faint boundaries, never
         // for every damage tick. Soul Link commits small owned-only tombstones.
-        var identity=Data(value.xp.prefix(12));identity.append(value.faintedMask)
+        var identity=Data(value.xp.prefix(12));identity.append(value.faintedMask);identity.append(value.localStage)
         for index in 0..<6 where value.owned[index*100+86] == 0 && value.owned[index*100+87] == 0 {
             identity.append(value.owned.subdata(in:index*100..<index*100+8))
         }
@@ -251,6 +266,7 @@ final class BoundCooperativeDoublesSession {
     private weak var soul:BoundSoulProbe?
     private var gameID="",timer:Timer?,snapshot:BoundCooperativeSnapshot?,capture:BoundCooperativeSnapshot?
     private var local:UUID?,peer:UUID?,encounter=UUID(),peerEncounter:UUID?
+    private var peerContext=Data()
     private var peerTeam:BoundCooperativePacket?,enemy=Data(),proof=Data(),peerReady=false,readySent=false,started=false
     private var prepared=false,peerCableReady=false,peerResultsReady=false,peerFinished=false,cancellingBeforeEntry=false,fixedRole:UInt32?
     private var recoveryNonce=UUID(),peerRecoveryNonce:UUID?,recoveryPeerReady=false,recoveryReadySent=false
@@ -282,7 +298,7 @@ final class BoundCooperativeDoublesSession {
             self.soul?.setCooperativeBattleActive(false,for:oldCore)
             BoundVBABattleBridge.closeCooperativeCable()
         }
-        snapshot=nil;capture=nil;local=nil;peer=nil;peerEncounter=nil;peerTeam=nil
+        snapshot=nil;capture=nil;local=nil;peer=nil;peerEncounter=nil;peerTeam=nil;peerContext=Data()
         enemy=Data();proof=Data();started=false;prepared=false;fixedRole=nil;cancellingBeforeEntry=false
         peerReady=false;readySent=false;peerCableReady=false;peerResultsReady=false;peerFinished=false
         recoveryPending=false;recoveryLoaded=false;recoveryPeerReady=false;recoveryReadySent=false
@@ -306,7 +322,7 @@ final class BoundCooperativeDoublesSession {
     func qaResumeRecoveredCore() { if let core { resumeIfPermitted(core) } }
     #endif
     private func resetEncounter(_ value:BoundCooperativeSnapshot,local:UUID,peer:UUID) {
-        self.local=local;self.peer=peer;capture=value;encounter=UUID();peerEncounter=nil;peerTeam=nil;enemy=isHost ? value.enemy:Data()
+        self.local=local;self.peer=peer;capture=value;encounter=UUID();peerEncounter=nil;peerTeam=nil;peerContext=Data();enemy=isHost ? value.enemy:Data()
         proof=Data();peerReady=false;readySent=false;started=false;prepared=false;peerCableReady=false;peerResultsReady=false;peerFinished=false;fixedRole=isHost ? 0:1;lastXP=Data();incomingXP=Data();lastPeer=ProcessInfo.processInfo.systemUptime;lastSent=0;controlCursor=0
     }
     func receive(_ data:Data) {
@@ -319,10 +335,17 @@ final class BoundCooperativeDoublesSession {
         peerEncounter=packet.id;lastPeer=ProcessInfo.processInfo.systemUptime
         switch packet.kind {
         case .offer: break
+        case .context:
+            if !peerContext.isEmpty,peerContext != packet.payload { interrupt("Cooperative battle rules changed");return }
+            guard value.hasCompatibleRules(packet.payload) else { interrupt("Cooperative battle rules differ");return }
+            peerContext=packet.payload
         case .team:
             if let old=peerTeam,(old.payload != packet.payload || old.order != packet.order || old.count != packet.count || old.token != packet.token) { interrupt("Friend’s selected team changed");return }
             peerTeam=packet
-        case .enemy: if !isHost { enemy=packet.payload }
+        case .enemy: if !isHost {
+            if !enemy.isEmpty,enemy != packet.payload { interrupt("Cooperative opponents changed");return }
+            enemy=packet.payload
+        }
         case .ready: if let expected=agreementProof(),packet.proof == expected { peerReady=true }
         case .xp:
             guard started,packet.proof == proof else { return }
@@ -338,10 +361,10 @@ final class BoundCooperativeDoublesSession {
         advance()
     }
     private func agreementProof()->Data? {
-        guard let value=capture,value.selected,let local,let peer,let peerEncounter,let peerTeam,enemy.count == 600 else { return nil }
+        guard let value=capture,value.selected,let local,let peer,let peerEncounter,let peerTeam,enemy.count == 600,value.hasCompatibleRules(peerContext) else { return nil }
         var bytes=Data("Bound cooperative doubles v1".utf8)
         for id in isHost ? [local,peer,encounter,peerEncounter]:[peer,local,peerEncounter,encounter] { bytes.append(coopUUID(id)) }
-        bytes.append(value.encounter)
+        bytes.append(value.encounter);bytes.append(isHost || peerContext.isEmpty ? value.encounterContext:peerContext)
         var own=coopHash(value.party)+value.order,other=coopHash(peerTeam.payload)+peerTeam.order
         for n in [value.count,value.token] { var b=Data(repeating:0,count:4);coopPut(n,in:&b,at:0);own.append(b) }
         for n in [peerTeam.count,peerTeam.token] { var b=Data(repeating:0,count:4);coopPut(n,in:&b,at:0);other.append(b) }
@@ -392,7 +415,7 @@ final class BoundCooperativeDoublesSession {
             return
         }
         if value.error != 0 { interrupt("Cooperative battle needs recovery");return }
-        if started {
+        if started,(value.localStage==0 || (value.localStage==2 && !peerResultsReady)) {
             if cable.take()?.error == true { interrupt("Cooperative native connection needs recovery");return }
             if cable.networkAge>15 { interrupt("Cooperative connection timed out");return }
         }
@@ -408,7 +431,7 @@ final class BoundCooperativeDoublesSession {
                 delivered=transmit(.offer)
             } else {
                 if let agreed=agreementProof() { proof=agreed }
-                var messages:[(BoundCooperativePacket.Kind,Data)]=[(.team,value.party)]
+                var messages:[(BoundCooperativePacket.Kind,Data)]=[(.team,value.party),(.context,value.encounterContext)]
                 if isHost { messages.append((.enemy,enemy)) }
                 if proof.count==32 { messages.append((.ready,Data())) }
                 // Two packets per250ms bounds pre-entry control to8/s while
@@ -443,6 +466,7 @@ final class BoundCooperativeDoublesSession {
     }
     private func prepareCable(recovery:Bool=false)->Bool {
         guard let core,let peerEncounter else { return false }
+        if recovery,recoveryCut?.isLocalCatch==true { return true }
         let failure:@Sendable ()->Void={ [weak self] in Task { @MainActor in self?.interrupt("Cooperative connection lost") } }
         cable.configure(core:core)
         if recovery,recoveryCut?.isAdmission != true,!cable.restoreRecoveryData(recoveryCable) { return false }
@@ -467,7 +491,7 @@ final class BoundCooperativeDoublesSession {
     private func publish(flags:UInt32) {
         sequence &+= 2;if sequence == 0 { sequence=2 }
         probe.setHost(BoundCooperativeHost.transaction(sequence:sequence,flags:flags,role:isHost ? 0:1,
-            capture:capture,peerTeam:peerTeam,proof:proof,enemy:enemy,xp:incomingXP))
+            capture:capture,peerTeam:peerTeam,proof:proof,enemy:enemy,xp:incomingXP,enemyContext:isHost ? (capture?.encounterContext ?? Data()):peerContext))
     }
     private func protect(core:EmulatorCore) throws {
         let folder=try FileManager.default.url(for:.applicationSupportDirectory,in:.userDomainMask,appropriateFor:nil,create:true).appendingPathComponent("Cooperative Battles",isDirectory:true)
@@ -480,7 +504,7 @@ final class BoundCooperativeDoublesSession {
         core.saveSaveState(to:checkpoint)
         let saved=try Data(contentsOf:checkpoint);guard saved.count > 1024 else { throw CocoaError(.fileReadCorruptFile) }
         guard let capture,let peerTeam,proof.count==32,enemy.count==600 else { throw CocoaError(.fileReadCorruptFile) }
-        let agreement=try JSONEncoder().encode(BoundCooperativeRecovery(capture:capture.bytes,proof:proof,enemy:enemy,role:isHost ? 0:1,peerTeam:peerTeam.data))
+        let agreement=try JSONEncoder().encode(BoundCooperativeRecovery(capture:capture.bytes,proof:proof,enemy:enemy,role:isHost ? 0:1,peerTeam:peerTeam.data,enemyContext:isHost ? capture.encounterContext:peerContext))
         recoveryAgreement=agreement;recoveryBranch=BoundCooperativeRecoveryBranch.initial(proof:proof)
         let entry:[String:String]=["gameID":gameID,"state":checkpoint.lastPathComponent,"rom":BoundPlayerROMProfile.supportedSHA256,"sha256":coopHash(saved).map { String(format:"%02x",$0) }.joined(),"agreement":agreement.base64EncodedString(),"branch":recoveryBranch.base64EncodedString(),"snapshot":capture.bytes.base64EncodedString(),"cable":cable.recoveryData().base64EncodedString()]
         try JSONSerialization.data(withJSONObject:entry,options:[.sortedKeys]).write(to:journal,options:.atomic)
@@ -554,9 +578,9 @@ final class BoundCooperativeDoublesSession {
               let entry=try? JSONSerialization.jsonObject(with:bytes) as? [String:Any],entry["gameID"] as? String==gameID,
               entry["rom"] as? String==BoundPlayerROMProfile.supportedSHA256,
               let encoded=entry["agreement"] as? String,let agreement=Data(base64Encoded:encoded),
-              let record=try? JSONDecoder().decode(BoundCooperativeRecovery.self,from:agreement),record.proof.count==32,record.enemy.count==600,record.role<=1,
+              let record=try? JSONDecoder().decode(BoundCooperativeRecovery.self,from:agreement),record.proof.count==32,record.enemy.count==600,record.enemyContext.count==64,record.role<=1,
               expectedProof==nil || expectedProof==record.proof,
-              let capture=BoundCooperativeSnapshot(record.capture),capture.selected,
+              let capture=BoundCooperativeSnapshot(record.capture),capture.selected,capture.role==record.role,capture.hasCompatibleRules(record.enemyContext),
               let team=BoundCooperativePacket(data:record.peerTeam),team.kind == .team,team.encounter==capture.encounter,
               let name=entry["state"] as? String,name==URL(fileURLWithPath:name).lastPathComponent,
               UUID(uuidString:URL(fileURLWithPath:name).deletingPathExtension().lastPathComponent) != nil,
@@ -564,10 +588,12 @@ final class BoundCooperativeDoublesSession {
               let encodedCable=entry["cable"] as? String,let cable=Data(base64Encoded:encodedCable),cable.count<=32768,
               let encodedSnapshot=entry["snapshot"] as? String,let snapshotData=Data(base64Encoded:encodedSnapshot),
               let savedSnapshot=BoundCooperativeSnapshot(snapshotData),[UInt32(3),4,5,6,7,9].contains(savedSnapshot.phase),
+              savedSnapshot.role==record.role,savedSnapshot.encounter==capture.encounter,savedSnapshot.hasCompatibleRules(record.enemyContext),
               let encodedBranch=entry["branch"] as? String,let branch=Data(base64Encoded:encodedBranch),branch.count==32 else { return false }
-        self.capture=capture;peerTeam=team;proof=record.proof;enemy=record.enemy;fixedRole=record.role;snapshot=savedSnapshot
+        self.capture=capture;peerTeam=team;peerContext=record.enemyContext;proof=record.proof;enemy=record.enemy;fixedRole=record.role;snapshot=savedSnapshot
         journal=url;checkpoint=folder.appendingPathComponent(name);recoveryAgreement=agreement;recoveryCable=cable;recoveryDigest=digest;recoveryBranch=branch
-        if savedSnapshot.phase==3 { recoveryCut=BoundCooperativeCableCut(admissionPhase:3) }
+        if let localCatch=BoundCooperativeCableCut(localCatch:savedSnapshot) { recoveryCut=localCatch }
+        else if savedSnapshot.phase==3 { recoveryCut=BoundCooperativeCableCut(admissionPhase:3) }
         else if let encoded=entry["nativeCable"] as? String,let raw=Data(base64Encoded:encoded) {
             recoveryCut=BoundCooperativeCableCut(mailbox:raw,snapshot:savedSnapshot,hostRecovery:cable)
         } else { recoveryCut=nil }
@@ -627,7 +653,12 @@ final class BoundCooperativeDoublesSession {
         do {
             _=try BoundPlayerROMProfile(rom:Data(contentsOf:core.game.fileURL,options:.mappedIfSafe))
             try core.load(DeltaCore.SaveState(fileURL:checkpoint,gameType:core.game.type))
-            if recoveryCut?.isAdmission == true {
+            if recoveryCut?.isLocalCatch==true {
+                guard let restored=BoundCooperativeSnapshot(BoundVBABattleBridge.cooperativeSnapshot()),BoundCooperativeCableCut(localCatch:restored) != nil,
+                      let capture,restored.encounter==capture.encounter,restored.partyHash==capture.partyHash,restored.proof==proof,
+                      restored.role==(isHost ? 0:1),restored.hasCompatibleRules(peerContext) else { throw CocoaError(.fileReadCorruptFile) }
+                BoundVBABattleBridge.closeCooperativeCable()
+            } else if recoveryCut?.isAdmission == true {
                 guard let restored=BoundCooperativeSnapshot(BoundVBABattleBridge.cooperativeSnapshot()),restored.phase==3,
                       let capture,restored.encounter==capture.encounter,restored.partyHash==capture.partyHash,
                       restored.party==capture.party,restored.order==capture.order,restored.role==(isHost ? 0:1) else { throw CocoaError(.fileReadCorruptFile) }
@@ -645,11 +676,12 @@ final class BoundCooperativeDoublesSession {
             try JSONSerialization.data(withJSONObject:entry,options:[.sortedKeys]).write(to:journal,options:.atomic)
             recoveryBranch=nextBranch;encounter=recoveryNonce;peerEncounter=peerRecoveryNonce
             probe.protect(state:checkpoint,journal:journal,agreement:recoveryAgreement,branch:recoveryBranch,cable:cable)
-            publish(flags:3);probe.checkpointNow(core)
+            publish(flags:recoveryCut?.isLocalCatch==true ? 11:3);probe.checkpointNow(core)
             let (_,durable,error)=probe.read()
             guard durable,error==nil else { recoveryCut=nil;throw CocoaError(.fileWriteUnknown) }
             recoveryLoaded=true;recoveryPending=false;started=true;prepared=true;peerCableReady=true;lastXP=Data();incomingXP=Data()
-            cable.enableSender()
+            if recoveryCut?.isLocalCatch != true { cable.enableSender() }
+            peerResultsReady=recoveryCut?.isLocalCatch==true
             status="Cooperative battle recovered"
             resumeIfPermitted(core)
         } catch { status="Cooperative recovery could not be loaded. Checkpoint kept." }

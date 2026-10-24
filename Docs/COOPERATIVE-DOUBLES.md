@@ -38,3 +38,33 @@ unsigned Release iPhone build; its embedded cartridge hash matches the pin.
 See the game's `build/doubles-review/` receipts and documentation for exact scope.
 No main branch or permanent ROM download is changed by this review. Physical
 pairing, authenticated internet and durable application relaunch remain unverified.
+
+
+## Raid and facility doubles
+
+The current optional cartridge pin is
+`bd92f48c9f4f33810f409f134fb44c1eda34f312efeeacd642804c22d75f34ee`.
+Existing raid and battle-facility doubles now use both connected owners,
+including native NPC-partner and rental formats. Original opponents, boss
+parameters and native facility selection rules are retained. Singles stay native.
+
+Authenticated agreement and recovery bind the native encounter rules as well as
+both teams and the original opponents. After shared raid combat, each owner runs
+their own native catch, Bag, party/PC storage and rewards. Committed pre-catch and
+local-catch recovery cuts prevent replaying shared combat. The cartridge retains
+native outcome rules, including win-only evolution and the raid storm ending.
+
+The additional review fixes forced raid switches, cancellation across heap reset,
+raid storm terminal exchange, facility can-lose return, and field input during
+native connection setup. Paired core checks cover separate party/PC catches,
+ball spending, local OTs, uncatchable raids, storm loss, rental/NPC facilities and
+facility loss. Native provider comparisons cover 20 facility/raid cases and
+cancellation, alongside the existing complete double-marked trainer inventory.
+The matching app passes 78 selected integration tests and an unsigned Release
+iPhone build. Exact cartridge and input-state identities are retained in the
+game's `build/doubles-expansion/` receipts.
+
+Both repositories remain on `codex/doubles` in the doubles worktrees. Main and
+the permanent ROM download remain unchanged. Physical devices, authenticated
+internet interruption/relaunch, every facility streak/tier and long-play
+performance still need acceptance testing.
