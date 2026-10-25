@@ -336,3 +336,22 @@ Run/forfeit path remain unverified. Interruption recovery is implemented, but th
 final run does not establish a complete interruption matrix. The trade status in this historical battle acceptance predates the
 [native trade implementation](BOUND-NATIVE-FRIEND-TRADES.md). The earlier serial-word tunnel drafts and unsuccessful
 finish/menu-automation attempts remain private; they are not acceptance evidence.
+
+
+### October 25 two-player regression rerun
+
+After the connected-sprite regression, the current main integration completed a
+fresh 3× host / 1× guest battle over the local reliable relay. Fight/Back/Fight
+took 6/5/5 local frames on the host and 6/6/6 on the guest; Growl cursor navigation
+also passed. Native outcomes were 1/2, with both original parties and Soul Link
+histories unchanged afterward. Both peers passed cold-owner continuation and
+retained their respective battle rates. The output is ignored
+`.build/paired-battle-fast-host/summary.json`.
+
+The reversed 1× host / 3× guest run also passed with 100 ms added relay latency
+and a three-second silent outage. Detection took 1.988 seconds at 1× and 1.936
+seconds at 3×. Both peers resumed the same battle, retained their rates and
+restored their original parties and Soul Link histories after complementary
+native outcomes. Local Fight/Back/Fight and Growl navigation passed throughout.
+The output is `.build/paired-battle-recovery/summary.json`. These are paired
+simulator/local-relay results, not authenticated Nakama or physical-phone proof.

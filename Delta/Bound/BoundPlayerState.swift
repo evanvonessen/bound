@@ -167,9 +167,15 @@ enum BoundPlayerStateDecoder {
         if flags & (1 << 13) != 0 || sprite[0x3E] & 4 != 0 {
             return .inactive(.transition, "Player is hidden", frame: frame)
         }
-        let tile = BoundPlayerState.Point(x: coordinate(object, 0x10) - 7, y: coordinate(object, 0x12) - 7)
-        let previous = BoundPlayerState.Point(x: coordinate(object, 0x14) - 7, y: coordinate(object, 0x16) - 7)
+        var tile = BoundPlayerState.Point(x: coordinate(object, 0x10) - 7, y: coordinate(object, 0x12) - 7)
+        var previous = BoundPlayerState.Point(x: coordinate(object, 0x14) - 7, y: coordinate(object, 0x16) - 7)
         let cameraTile = BoundPlayerState.Point(x: coordinate(save, 0), y: coordinate(save, 2))
+        if presentationOnly, tile != cameraTile, avatar[2] == 2, avatar[3] == 2,
+           let delta = BoundPlayerMapConnections.pendingBoundaryOffset(in: .init(group: group, number: number),
+               tile: tile, previous: previous, camera: cameraTile, rom: romBytes) {
+            tile = .init(x: tile.x + delta.x, y: tile.y + delta.y)
+            previous = .init(x: previous.x + delta.x, y: previous.y + delta.y)
+        }
         let pendingCameraStep = presentationOnly && previous == cameraTile
             && abs(tile.x - cameraTile.x) + abs(tile.y - cameraTile.y) == 1
             && avatar[2] == 2 && avatar[3] == 2

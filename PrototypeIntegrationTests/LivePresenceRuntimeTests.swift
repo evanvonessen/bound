@@ -120,6 +120,144 @@ final class LivePresenceRuntimeTests: XCTestCase {
         super.tearDown()
     }
 
+    /// Two independent cores exchange actual production presence packets. One
+    /// runs native shoes at 3x while the other remains stationary at 1x, then swap.
+    func testConnectedBoundaryRunning() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let peer = env["BOUND_PAIR_PEER"], let port = env["BOUND_PAIR_PORT"].flatMap(Int.init) else {
+            throw XCTSkip("Use live-presence-relay.py --boundaries")
+        }
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("MultiplayerValidation")
+        let rom = root.appendingPathComponent("RadicalRed.gba"), seed = root.appendingPathComponent("seed.sav")
+        let romHash = SHA256.hash(data: try Data(contentsOf: rom)), seedHash = SHA256.hash(data: try Data(contentsOf: seed))
+        let battery = root.appendingPathComponent("boundary-\(peer).sav")
+        try Data(repeating: 0xFF, count: 0x20000).write(to: battery)
+        let profile = try BoundPlayerROMProfile(rom: Data(contentsOf: rom))
+        let core = try XCTUnwrap(EmulatorCore(game: PresenceRuntimeGame(fileURL: rom, gameSaveURL: battery), options: [.metal: true]))
+        core.audioManager.isEnabled = false
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let oldWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene), owner = UIViewController(), view = GameView()
+        window.rootViewController = owner; window.makeKeyAndVisible(); owner.view.frame = window.bounds
+        view.frame = CGRect(x: 0, y: 180, width: owner.view.bounds.width, height: owner.view.bounds.width * 2 / 3)
+        owner.view.addSubview(view); core.add(view)
+        let transport = PresenceHTTPTransport(peer: peer, port: port)
+        let sharing = FriendSharingSession(configuration: .init(appID: String(repeating: "0", count: 32), channel: "boundary-fixture",
+            uid: peer == "A" ? 1 : 2, remoteUID: peer == "A" ? 2 : 1, token: "offline-fixture"), transport: transport, authenticatedMode: false)
+        let display = BoundPlayerStateDisplay(), presence = sharing.livePresence
+        let oldPreference = UserDefaults.standard.object(forKey: BoundPlayerStatePreferences.key)
+        UserDefaults.standard.set(true, forKey: BoundPlayerStatePreferences.key)
+        display.attachPresence(presence); display.install(in: owner); display.bind(core: core); display.layout(in: owner, gameView: view)
+        defer {
+            sharing.stop(); display.stop(); _ = core.stop(); window.isHidden = true; oldWindow?.makeKeyAndVisible()
+            UserDefaults.standard.set(oldPreference, forKey: BoundPlayerStatePreferences.key)
+        }
+        presence.setEnabled(true); sharing.start()
+        let setup = NativePlayerSceneSetup(core: core, debugPlayer: peer == "A" ? 1 : 2), probe = display.probe
+        let booted = expectation(description: "Native field \(peer)")
+        var ready = false
+        core.updateHandler = { core in
+            setup.receive(core)
+            if let reading = probe.receive(core), !ready, setup.isReady, reading.player?.scene != nil { ready = true; booted.fulfill() }
+        }
+        core.rate = 8; XCTAssertTrue(core.start()); core.audioManager.isEnabled = false
+        await fulfillment(of: [booted], timeout: 90)
+        XCTAssertTrue(core.pause()); core.rate = 1
+        XCTAssertTrue(BoundVBABattleBridge.qaWarpPalletEntrance()); XCTAssertTrue(core.resume())
+        for _ in 0..<400 {
+            try await Task.sleep(for: .milliseconds(20)); display.refreshDisplay()
+            if display.hud.reading.player?.mapNumber == 0, display.hud.reading.player?.scene != nil { break }
+        }
+        let anchor = try XCTUnwrap(display.hud.reading.player)
+        XCTAssertTrue(core.pause())
+        XCTAssertEqual(anchor.mapNumber, 0)
+        UserDefaults.standard.set(false, forKey: BoundPlayerStatePreferences.key)
+        NotificationCenter.default.post(name: BoundPlayerStatePreferences.didChange, object: nil)
+        let samples = BoundaryPresentationSamples(), control = BoundaryPhaseControl()
+        var stage = "", nativeStage = "ready", movementFrame = 0, lastMask = 0, active = false
+        probe.compositor.observeFrame = { reading, rendered, pixels in
+            guard active else { return }
+            samples.append(reading: reading, rendered: rendered, pixels: pixels, profile: profile, anchor: anchor)
+        }
+        core.updateHandler = { core in
+            probe.receive(core)
+            let next = control.read()
+            if next != nativeStage {
+                nativeStage = next; samples.reset(stage: next)
+                movementFrame = next == "run" + peer ? 0 : 360
+                active = next.hasPrefix("run")
+            }
+            guard active else { return }
+            // Four up/down excursions through the Pallet/Route 1 seam, followed
+            // by horizontal running. Inputs and duration use native frames.
+            let segment = movementFrame / 36
+            let route = [64, 128, 64, 128, 64, 128, 64, 128, 32, 16]
+            let mask = segment < route.count ? route[segment] | 2 : 0
+            for bit in [2, 16, 32, 64, 128] where (mask & bit) != (lastMask & bit) {
+                if mask & bit != 0 { core.deltaCore.emulatorBridge.activateInput(bit, value: 1, playerIndex: 0) }
+                else { core.deltaCore.emulatorBridge.deactivateInput(bit, playerIndex: 0) }
+            }
+            lastMask = mask; movementFrame += 1
+        }
+        XCTAssertTrue(core.resume())
+        var reports: [[String: Any]] = [], missingPoseTicks = 0
+        let deadline = ProcessInfo.processInfo.systemUptime + 180
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            let next = try await transport.control()
+            if next == "done" { stage = next; break }
+            if next != stage {
+                if stage.hasPrefix("run") { reports.append(samples.report(stage: stage, moving: stage == "run" + peer)) }
+                stage = next; missingPoseTicks = 0
+                // Switch roles without pausing either core or the presence session.
+                core.rate = stage == "run" + peer ? 3 : 1
+                control.set(stage)
+                if stage == "reset" {
+                    // Separate the two cases at the same clear entrance. The
+                    // preceding horizontal route can end behind town scenery.
+                    while samples.report(stage: stage, moving: false)["stage"] as? String != stage {
+                        try await Task.sleep(for: .milliseconds(20))
+                    }
+                    if peer == "A" {
+                        XCTAssertTrue(core.pause()); XCTAssertTrue(BoundVBABattleBridge.qaWarpPalletEntrance())
+                        XCTAssertTrue(core.resume()); core.audioManager.isEnabled = false
+                    }
+                }
+            }
+            try await Task.sleep(for: .milliseconds(20))
+            display.refreshDisplay(); display.layout(in: owner, gameView: view)
+            if stage.hasPrefix("run"), presence.pose() == nil { missingPoseTicks += 1 }
+            var report = samples.report(stage: stage, moving: stage == "run" + peer)
+            report["ready"] = presence.receivedPackets > 10 && presence.pose() != nil
+            let local = display.hud.reading.player
+            let remote = presence.pose()
+            report["resetReady"] = local?.mapNumber == 0 && local?.tile == anchor.tile
+                && local?.scene != nil && remote?.mapNumber == 0
+                && remote?.x == Double(anchor.scene!.worldFoot.x) && remote?.y == Double(anchor.scene!.worldFoot.y)
+            report["finished"] = (report["frames"] as? Int ?? 0) >= 420
+            report["received"] = presence.receivedPackets; report["sent"] = presence.sentPackets
+            report["missingPoseTicks"] = missingPoseTicks
+            try await transport.report(report)
+        }
+        XCTAssertTrue(core.pause())
+        if stage == "done" { reports.append(samples.report(stage: "runB", moving: peer == "B")) }
+        XCTAssertEqual(stage, "done")
+        for report in reports {
+            XCTAssertGreaterThan(report["frames"] as? Int ?? 0, 60)
+            XCTAssertEqual(report["missingScenes"] as? Int, 0)
+            XCTAssertEqual(report["missingProjectedPeers"] as? Int, 0)
+            XCTAssertEqual(report["missingVisibleSprites"] as? Int, 0)
+            XCTAssertGreaterThan(report["clearVisibleFrames"] as? Int ?? 0, 10)
+            XCTAssertGreaterThan(report["crossMapFrames"] as? Int ?? 0, 10)
+            if report["moving"] as? Bool == true {
+                XCTAssertGreaterThan(report["routeFrames"] as? Int ?? 0, 10)
+                XCTAssertLessThanOrEqual(report["stationaryWorldSpread"] as? Double ?? 999, 0.01)
+            }
+        }
+        XCTAssertEqual(SHA256.hash(data: try Data(contentsOf: rom)), romHash)
+        XCTAssertEqual(SHA256.hash(data: try Data(contentsOf: seed)), seedHash)
+        try JSONSerialization.data(withJSONObject: reports, options: [.prettyPrinted, .sortedKeys]).write(to: root.appendingPathComponent("boundary-\(peer)-report.json"))
+    }
+
     func testTwoVBAMInstancesExchangeLivePoses() async throws {
         let env = ProcessInfo.processInfo.environment
         guard let peer = env["BOUND_PAIR_PEER"], ["A", "B"].contains(peer),
@@ -278,4 +416,65 @@ final class LivePresenceRuntimeTests: XCTestCase {
         try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
             .write(to: root.appendingPathComponent("live-peer-\(peer)-report.json"), options: .atomic)
     }
+}
+
+/// Stores scalar evidence only; no ROM, RAM or image payloads in relay reports.
+private final class BoundaryPresentationSamples: @unchecked Sendable {
+    private let lock = NSLock()
+    private var measuredStage = "ready"
+    private var missingDetails: [String] = []
+    private var frames = 0, missingScenes = 0, missingPeers = 0, missingSprites = 0
+    private var visible = 0, crossMap = 0, route = 0
+    private var xs: [Double] = [], ys: [Double] = []
+    func reset(stage: String) {
+        lock.lock(); defer { lock.unlock() }; measuredStage = stage
+        frames = 0; missingScenes = 0; missingPeers = 0; missingSprites = 0; missingDetails = []
+        visible = 0; crossMap = 0; route = 0; xs = []; ys = []
+    }
+    func append(reading: BoundPlayerStateReading, rendered: BoundRecordedPlayerPose?, pixels: Int,
+                profile: BoundPlayerROMProfile, anchor: BoundPlayerState) {
+        lock.lock(); defer { lock.unlock() }; frames += 1
+        guard let player = reading.player, let scene = player.scene else {
+            missingScenes += 1; if missingDetails.count < 5 { missingDetails.append(reading.detail) }; return
+        }
+        if player.mapNumber == 19 { route += 1 }
+        guard let rendered else { missingPeers += 1; return }
+        if let offset = profile.sceneAssets.mapOffset(fromGroup: anchor.mapGroup, number: anchor.mapNumber,
+            toGroup: player.mapGroup, number: player.mapNumber, rom: profile.bytes) {
+            xs.append(rendered.x + Double(offset.x * 16)); ys.append(rendered.y + Double(offset.y * 16))
+        }
+        // Different local maps are evidenced by the stationary peer being in
+        // Pallet while the mover's native map is Route 1 (or vice versa).
+        if player.mapNumber == 19 || rendered.y < 0 { crossMap += 1 }
+        let origin = BoundPlayerViewport.origin(pose: rendered, scene: scene)
+        if abs(rendered.y - Double(scene.worldFoot.y)) >= 32,
+           abs(rendered.x - Double(scene.worldFoot.x)) < 16 {
+            // The town camera is clamped at its north edge: the approaching
+            // runner is partially visible at the top, not a full 32px sprite.
+            // Account for clipping and the native map-name popup explicitly.
+            let ui = BoundPlayerBackground(tiles: scene.background.tiles,
+                layers: scene.background.layers.filter(\.masksWholeTiles))
+            let expected = (0..<32).reduce(0) { count, y in count + (0..<16).filter { x in
+                let sx = origin.x + x, sy = origin.y + y
+                return (0..<240).contains(sx) && (0..<160).contains(sy)
+                    && rendered.appearance.colorIndex(x: x, y: y) != 0
+                    && !ui.covers(x: sx, y: sy, priority: rendered.appearance.priority)
+            }.count }
+            if expected > 0 { visible += 1; if pixels == 0 { missingSprites += 1 } }
+        }
+    }
+    func report(stage: String, moving: Bool) -> [String: Any] {
+        lock.lock(); defer { lock.unlock() }
+        return ["stage": measuredStage, "moving": moving, "frames": frames, "missingScenes": missingScenes,
+            "missingProjectedPeers": missingPeers, "missingVisibleSprites": missingSprites, "missingDetails": missingDetails,
+            "clearVisibleFrames": visible, "crossMapFrames": crossMap, "routeFrames": route,
+            "stationaryWorldSpread": (xs.max() ?? 0) - (xs.min() ?? 0) + (ys.max() ?? 0) - (ys.min() ?? 0)]
+    }
+}
+
+private final class BoundaryPhaseControl: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stage = "ready"
+    func set(_ value: String) { lock.lock(); stage = value; lock.unlock() }
+    func read() -> String { lock.lock(); defer { lock.unlock() }; return stage }
 }

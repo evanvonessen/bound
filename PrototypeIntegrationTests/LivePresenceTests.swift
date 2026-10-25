@@ -308,6 +308,28 @@ final class LivePresenceTests: XCTestCase {
         }
     }
 
+    func testPendingNativeBoundaryRebaseRequiresExactConnectedExit() {
+        var fixture = PresenceMapFixture()
+        fixture.map(0, width: 24, height: 20, edges: [(2, -3, 19)])
+        fixture.map(19, width: 24, height: 40, edges: [(1, 3, 0)])
+        let town = BoundPlayerMapConnections.Map(group: 3, number: 0)
+        XCTAssertEqual(BoundPlayerMapConnections.pendingBoundaryOffset(in: town,
+            tile: .init(x: 12, y: 40), previous: .init(x: 12, y: 39), camera: .init(x: 9, y: 0), rom: fixture.bytes), .init(x: -3, y: -40))
+        XCTAssertEqual(BoundPlayerMapConnections.pendingBoundaryOffset(in: .init(group: 3, number: 19),
+            tile: .init(x: 9, y: -1), previous: .init(x: 9, y: 0), camera: .init(x: 12, y: 39), rom: fixture.bytes), .init(x: 3, y: 40))
+        let invalidSteps: [(BoundPlayerState.Point, BoundPlayerState.Point, BoundPlayerState.Point)] = [
+            (BoundPlayerState.Point(x: 12, y: 41), .init(x: 12, y: 39), .init(x: 9, y: 1)),
+            (.init(x: 12, y: 39), .init(x: 12, y: 38), .init(x: 9, y: -1)),
+            (.init(x: 12, y: 40), .init(x: 12, y: 39), .init(x: 10, y: 0))]
+        for (tile, previous, camera) in invalidSteps {
+            XCTAssertNil(BoundPlayerMapConnections.pendingBoundaryOffset(in: town,
+                tile: tile, previous: previous, camera: camera, rom: fixture.bytes))
+        }
+        fixture.put(0, at: 0x08001000 + 12) // Unconnected rooms cannot rebase.
+        XCTAssertNil(BoundPlayerMapConnections.pendingBoundaryOffset(in: town,
+            tile: .init(x: 12, y: 40), previous: .init(x: 12, y: 39), camera: .init(x: 9, y: 0), rom: fixture.bytes))
+    }
+
     func testNativeCardinalConnectionOffsetsAndAmbiguousPathsAreBounded() {
         var fixture = PresenceMapFixture()
         fixture.map(0, width: 24, height: 20, edges: [(2, -3, 1), (1, 4, 2), (3, -5, 3), (4, 6, 4), (5, 0, 5)])

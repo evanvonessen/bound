@@ -361,3 +361,43 @@ outage, returned to the field, and reopened the received Pokémon from native
 server-state/battery captures. Those paired tests use a host-loopback relay, not
 the live service or physical phones. No additional battle/trade defect was
 reproduced in these cases.
+
+
+### Connected running regression (October 25, 2026)
+
+`PrototypeTools/live-presence-relay.py --boundaries` runs two separate VBA-M
+cores in disposable simulators through the production friend session, presence
+packets, profile loader, frame probe and native video compositor. It uses fresh
+native Debug New Game setup (including Infinite Repel) and a QA native warp to the Pallet/Route 1 entrance. A runs
+with shoes at 3× while B remains at 1×, then B runs while A stands still. Each case starts at the same entrance; between cases the first runner returns
+there through the native QA warp. No pause or warp occurs during measurement.
+Four north/south excursions and
+horizontal running exercise the connected seam; each observer records every
+composited frame, including unavailable poses. Input changes occur only on the
+emulator owner. The fixture ROM and seed hashes must remain unchanged.
+
+Assertions cover missing scene/peer frames, in-view sprite disappearance with
+native clipping and map-name UI accounted for, actual Route 1 traversal, and
+zero stationary-peer world-coordinate drift after projecting into a fixed map.
+The relay writes scalar reports only. It is a local test transport, not an
+authenticated Nakama or separate-network test, and does not establish physical
+phone playback parity. Cross-map-group and one-way geometry remain covered by
+focused connection tests; the native route exercised here is Pallet/Route 1.
+
+The repeated native run exposed a second boundary-frame ordering case: the save
+and map header have switched, but ObjectEvent coordinates are still in the old
+map basis. Presentation now accepts only a one-tile exit from a directly
+connected map that translates exactly onto the saved camera position. Ordinary
+interaction decoding remains strict. Arbitrary mismatches, interior positions,
+nonadjacent maps and larger jumps still fail admission.
+
+The final paired run passed both cases: 3,433 observed presentation frames,
+331 frames projecting across the seam, and 425 clear in-view road frames.
+There were zero missing scenes, missing projected peers, unexpected visible
+sprite disappearances or missing-pose samples. The stationary peer's position
+had zero world-coordinate spread from each running viewer. Five repeated native
+boundary runs also passed. The 107 focused scene/presence/battle/setup tests,
+four fast-forward preference tests, native Debug and ordinary cold starts for
+both roles, native menu/ACK checks, source/privacy checks and unsigned Release
+iPhone build passed. Local output is in ignored `.build/paired-boundary-verified/`
+and `.build/paired-regression-verified.xcresult`.

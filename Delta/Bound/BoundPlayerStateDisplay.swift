@@ -57,7 +57,13 @@ final class BoundPresenceFrameCompositor: @unchecked Sendable {
         lock.lock(); let profile = self.profile, pose = self.pose, expected = coreID; lock.unlock()
         guard expected == ObjectIdentifier(core), let profile, let pose,
               let memory = BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }) else {
-            downstream.processFrame(); return
+            downstream.processFrame()
+            #if DEBUG
+            // Frame-level QA must count a missing configured pose too; otherwise
+            // a brief disappearance could evade its presentation observer.
+            observeFrame?(.inactive(.waiting, "Presence frame unavailable"), nil, 0)
+            #endif
+            return
         }
         let reading = BoundPlayerStateDecoder.read(profile: profile, memory: memory, frame: 1, includeScene: true, presentationOnly: true)
         let rendered = reading.player.flatMap { pose.rendered(profile: profile, viewer: $0) }

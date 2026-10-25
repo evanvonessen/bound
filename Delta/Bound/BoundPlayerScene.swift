@@ -177,6 +177,33 @@ enum BoundPlayerMapConnections {
     static func offsets(from source: Map, rom: (Int, Int) -> [UInt8]?) -> [Map: BoundPlayerState.Point] {
         projection(from: source, rom: rom).offsets
     }
+    /// During native seam scrolling the save/header can switch one frame
+    /// before ObjectEvents are rebased. Accept only a one-tile exit from a
+    /// directly connected map that translates exactly onto the saved camera.
+    static func pendingBoundaryOffset(in current: Map, tile: BoundPlayerState.Point,
+                                      previous: BoundPlayerState.Point, camera: BoundPlayerState.Point,
+                                      rom: (Int, Int) -> [UInt8]?) -> BoundPlayerState.Point? {
+        guard abs(tile.x - previous.x) + abs(tile.y - previous.y) == 1,
+              let currentHeader = header(current, rom: rom) else { return nil }
+        var candidates = [BoundPlayerState.Point]()
+        for (direction, offset, neighbor) in currentHeader.edges {
+            guard let old = header(neighbor, rom: rom),
+                  (0..<old.width).contains(previous.x), (0..<old.height).contains(previous.y),
+                  !(0..<old.width).contains(tile.x) || !(0..<old.height).contains(tile.y) else { continue }
+            let delta: BoundPlayerState.Point
+            switch direction {
+            case 1: delta = .init(x: offset, y: currentHeader.height)
+            case 2: delta = .init(x: offset, y: -old.height)
+            case 3: delta = .init(x: -old.width, y: offset)
+            default: delta = .init(x: currentHeader.width, y: offset)
+            }
+            if tile.x + delta.x == camera.x, tile.y + delta.y == camera.y, !candidates.contains(delta) {
+                candidates.append(delta)
+            }
+        }
+        return candidates.count == 1 ? candidates.first : nil
+    }
+
     static func projection(from source: Map, rom: (Int, Int) -> [UInt8]?) -> Projection {
         var offsets: [Map: BoundPlayerState.Point] = [source: .init(x: 0, y: 0)]
         var depths = [source: 0], queue = [source], cursor = 0, ambiguous = Set<Map>()

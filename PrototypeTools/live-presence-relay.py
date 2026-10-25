@@ -142,8 +142,11 @@ def main():
     parser.add_argument("--sim-a", required=True)
     parser.add_argument("--sim-b", required=True)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--boundaries", action="store_true", help="Stationary peer / 3x native running across connected maps, then swap roles")
     parser.add_argument("--agora", action="store_true", help="Real authenticated Agora; requires one-use QA session fixtures. Loopback pose endpoints are disabled.")
     args = parser.parse_args()
+    if args.boundaries and args.agora:
+        parser.error("Boundary scenario currently uses the test-only presence relay")
     if args.sim_a == args.sim_b:
         parser.error("Two separate Simulators are required")
     args.output.mkdir(parents=True, exist_ok=False)
@@ -151,6 +154,8 @@ def main():
     server.daemon_threads = True
     state = server.state = State()
     state.agora = args.agora
+    if args.boundaries:
+        state.stage = "ready"
     threading.Thread(target=server.serve_forever, daemon=True).start()
     processes = []
     passed = False
@@ -162,9 +167,9 @@ def main():
             log = (args.output / (peer + ".log")).open("wb")
             command = ["xcodebuild", "test-without-building", "-xctestrun", str(run),
                        "-destination", "platform=iOS Simulator,id=" + simulator,
-                       "-parallel-testing-enabled", "NO", "-only-testing:BoundIntegrationTests/LivePresenceRuntimeTests",
+                       "-parallel-testing-enabled", "NO", "-only-testing:BoundIntegrationTests/LivePresenceRuntimeTests/" + ("testConnectedBoundaryRunning" if args.boundaries else "testTwoVBAMInstancesExchangeLivePoses"),
                        "-resultBundlePath", str(args.output / (peer + ".xcresult"))]
-            if args.agora:
+            if args.agora or args.boundaries:
                 # The native reports provide bounded connection evidence. Avoid
                 # an unrelated verbose simulator diagnose blocking finalization;
                 # native failures still produce a nonzero xcodebuild result.
@@ -185,25 +190,45 @@ def main():
                 time.sleep(0.2)
             raise TimeoutError("Timed out at " + stage + ": " + json.dumps(state.snapshot()))
 
-        wait("walk", lambda r: r["positions"] > 10 and r["visibleTicks"] > 40 and not r["hidden"], 120)
-        # Keep walking long enough for both optional one-second diagnostic
-        # samplers to observe native movement before testing interruptions.
-        time.sleep(1.1)
-        if args.agora:
-            # Observe beyond the initial 120-second lease, with real renewals and
-            # continuing visible native gameplay on both installations.
-            after_expiry = time.monotonic() + 125
-            wait("walk", lambda r: time.monotonic() >= after_expiry and not r["hidden"] and r["joined"] and r["tokenRenewals"] >= 2 and r["videoReceivedFrames"] > 30, 160)
-        state.change("pauseA")
-        wait("pauseA", lambda r: r["hidden"])
-        state.change("resumed")
-        wait("resumed", lambda r: not r["hidden"])
-        state.change("offline", online=False)
-        wait("offline", lambda r: r["hidden"])
-        state.change("recovered")
-        wait("recovered", lambda r: not r["hidden"] and (not args.agora or r["videoReceivedFrames"] > 30))
-        state.change("restore")
-        wait("restore", lambda r: not r["hidden"])
+        if args.boundaries:
+            wait("ready", lambda r: r["ready"], 120)
+            for mover in ("A", "B"):
+                if mover == "B":
+                    state.change("reset")
+                    wait("reset", lambda r: r["resetReady"], 30)
+                stage = "run" + mover
+                state.change(stage)
+                wait(stage, lambda r: r["finished"] and r["frames"] > 60, 90)
+                for report in state.snapshot()["reports"].values():
+                    assert report["missingScenes"] == 0, report
+                    assert report["missingProjectedPeers"] == 0, report
+                    assert report["missingVisibleSprites"] == 0, report
+                    assert report["missingPoseTicks"] == 0, report
+                    assert report["clearVisibleFrames"] > 10, report
+                    assert report["crossMapFrames"] > 10, report
+                    if report["moving"]:
+                        assert report["routeFrames"] > 10, report
+                        assert report["stationaryWorldSpread"] <= 0.01, report
+        else:
+            wait("walk", lambda r: r["positions"] > 10 and r["visibleTicks"] > 40 and not r["hidden"], 120)
+            # Keep walking long enough for both optional one-second diagnostic
+            # samplers to observe native movement before testing interruptions.
+            time.sleep(1.1)
+            if args.agora:
+                # Observe beyond the initial 120-second lease, with real renewals and
+                # continuing visible native gameplay on both installations.
+                after_expiry = time.monotonic() + 125
+                wait("walk", lambda r: time.monotonic() >= after_expiry and not r["hidden"] and r["joined"] and r["tokenRenewals"] >= 2 and r["videoReceivedFrames"] > 30, 160)
+            state.change("pauseA")
+            wait("pauseA", lambda r: r["hidden"])
+            state.change("resumed")
+            wait("resumed", lambda r: not r["hidden"])
+            state.change("offline", online=False)
+            wait("offline", lambda r: r["hidden"])
+            state.change("recovered")
+            wait("recovered", lambda r: not r["hidden"] and (not args.agora or r["videoReceivedFrames"] > 30))
+            state.change("restore")
+            wait("restore", lambda r: not r["hidden"])
         state.change("done")
         for process, _ in processes:
             # Real SDK runs can take longer to finalize XCTest attachments and
