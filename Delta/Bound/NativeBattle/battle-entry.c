@@ -7,7 +7,7 @@ typedef unsigned short u16;
 typedef unsigned int u32;
 typedef void (*Task)(u8);
 #define MAILBOX ((volatile struct Mailbox *)0x03004030)
-#define ROLE (*(volatile const u8 *)0x09FFFBF0)
+#define ROLE (*(volatile const u8 *)0x09FFFCF0)
 #define MAGIC 0x314D4642u
 struct Mailbox { u32 magic; u16 outRead,outWrite,inRead,inWrite,error,localRead,generation,peerGeneration,peerConsumed,peerAckGeneration; u16 out[32][8]; u16 in[32][8]; u16 outGeneration[32]; u16 inSequence[32]; };
 
@@ -18,9 +18,14 @@ __attribute__((section(".text.start"))) void BoundBattleStart(void)
     ((u8 (*)(Task,u8))0x0807741D)((Task)0x08081319,80);
     ((void (*)(void))0x08069B29)();
 }
-__attribute__((noinline)) void BoundBattleIdle(void) { ((void (*)(void))0x08077579)(); }
+__attribute__((naked)) void BoundBattleIdle(void) { __asm__ volatile("ldr r3,=0x08077579\nbx r3\n.ltorg"); }
 void BoundBattleReturn(void) { *(volatile u32 *)0x030030F4=(u32)BoundBattleIdle; }
 
+/* Each native sender has one block receive slot. A faster sender must not
+ * overwrite it while the other cartridge is in setup, text or animation. */
+static int BlockSlotReady(u16 command,unsigned player) {
+    return command!=0xBBBB || !((volatile u8 *)0x03003EBC)[player];
+}
 u32 BoundBattleLinkMain1(u8 *advance,u16 *send,u16 recv[5][8])
 {
     volatile struct Mailbox *m=MAILBOX;
@@ -28,14 +33,14 @@ u32 BoundBattleLinkMain1(u8 *advance,u16 *send,u16 recv[5][8])
     unsigned i,j,role=ROLE&1;
     if (link[0x7E]) { link[0x7E]=0; ((void (*)(void))0x080098B9)(); }
     if (m->magic!=MAGIC) {
-        m->outRead=m->outWrite=m->inRead=m->inWrite=m->error=m->localRead=m->generation=m->peerGeneration=m->peerConsumed=m->peerAckGeneration=0;
+        for(i=0;i<10;i++) ((volatile u16 *)m)[i+2]=0;
         m->magic=MAGIC;
     }
     /* Preserve VBlank/sound interrupts; physical serial and its Timer3 are idle. */
     *(volatile u16 *)0x04000200 &= (u16)~0xC0;
     *(volatile u16 *)0x0400010E=0;
     *(volatile u16 *)0x04000202=0xC0;
-    for (i=0;i<5;i++) for (j=0;j<8;j++) recv[i][j]=0;
+    for (i=0;i<40;i++) ((u16 *)recv)[i]=0;
     if (!link[1]) { *advance=0; return 0; }
     if (link[1]!=4 && m->peerGeneration!=m->generation) { *advance=0; return role; }
     link[0]=role ? 0:8; link[1]=4; link[2]=role; link[3]=2;
@@ -51,12 +56,15 @@ u32 BoundBattleLinkMain1(u8 *advance,u16 *send,u16 recv[5][8])
     }
     /* Loop back only commands acknowledged as consumed by the peer game.
      * Native CloseLink may run immediately after observing our close command. */
-    if (m->localRead!=m->outRead) {
+    if (m->localRead!=m->outRead && BlockSlotReady(m->out[m->localRead&31][0],role)) {
         u16 read=m->localRead;
         for (i=0;i<8;i++) recv[role][i]=m->out[read&31][i];
         m->localRead=read+1;
-    }
-    if (m->inRead!=m->inWrite) {
+    } else if (m->inRead!=m->inWrite && BlockSlotReady(m->in[m->inRead&31][0],role^1)) {
+        /* A fast peer can finish and ACK a controller command before its
+         * sender's native loopback has installed that command's execution
+         * bits. Drain acknowledged loopback first, in earlier guest frames,
+         * so an early remote ACK cannot be cleared and then re-armed. */
         u16 read=m->inRead;
         for (i=0;i<8;i++) recv[role^1][i]=m->in[read&31][i];
         m->peerConsumed=m->inSequence[read&31]; m->peerAckGeneration=m->generation;
@@ -70,13 +78,13 @@ u32 BoundBattleLinkMain1(u8 *advance,u16 *send,u16 recv[5][8])
     return 0x48u|role|(role ? 0:0x20u)|(link[12] ? 0x100u:0);
 }
 void BoundBattleLinkVSync(void) { }
-u8 BoundBattleMultiplayerId(void) { return ROLE&1; }
+u8 BoundBattleMultiplayerId(void) { return ROLE; } /* Bridge validates 0 or 1. */
 u8 BoundBattleRecvCount(void) { return (u8)(MAILBOX->inWrite-MAILBOX->inRead); }
 u8 BoundBattleSendCount(void) { return (u8)(MAILBOX->outWrite-MAILBOX->outRead); }
 
 /* Native close/reopen brackets setup and battle. Keep in-flight commands while
  * preserving the native logical-open flag owned by InitLink/CloseLink. */
-static void SetVirtualSerial(u8 state)
+static void __attribute__((noinline)) SetVirtualSerial(u8 state)
 {
     volatile u8 *link=(volatile u8 *)0x03003FB0;
     unsigned i;
@@ -88,6 +96,17 @@ static void SetVirtualSerial(u8 state)
 }
 void BoundBattleEnableSerial(void) { MAILBOX->generation++; MAILBOX->inRead=MAILBOX->inWrite; MAILBOX->localRead=MAILBOX->outRead=MAILBOX->outWrite; SetVirtualSerial(1); }
 void BoundBattleDisableSerial(void) { SetVirtualSerial(0); }
+
+/* Receive processing runs before this callback gate. Leave room for commands
+ * produced by the frame's native tasks, and resume the exact callback once
+ * peer-consumption ACKs drain the queue. Network time never advances here. */
+void __attribute__((naked)) BoundBattlePump(void)
+{
+    __asm__ volatile("ldr r2,=0x08009B05\nmov lr,r2\nldr r0,=0x03004030\nldrh r1,[r0,#4]\nldrh r0,[r0,#6]\n"
+        "sub r0,r0,r1\nlsl r0,r0,#16\nlsr r0,r0,#16\ncmp r0,#16\nbhs 1f\n"
+        "ldr r0,=0x03003F80\nldr r0,[r0]\ncmp r0,#0\nbeq 1f\n"
+        "bx r0\n1: bx lr\n.ltorg");
+}
 
 /* A walk-up trade exits to this local map, not a synchronized cable room.
  * Party, Dex and the native linked save are retained by these native routines. */

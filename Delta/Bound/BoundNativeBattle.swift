@@ -206,7 +206,7 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
     private var senderEnabled=false
     private var failed:(@Sendable ()->Void)?
     private var interrupted:(@Sendable ()->Void)?
-    private var transportSuspended=false,backpressureReported=false
+    private var transportSuspended=false
     private var lastSent:TimeInterval=0
     private var lastReceived=ProcessInfo.processInfo.systemUptime
     private var sentCommands=0,receivedCommands=0
@@ -214,7 +214,7 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         coreID=core.map(ObjectIdentifier.init); entryPlayer=nil; peerDisconnectPending=false; latest=nil; frame=0
         incoming.removeAll(); blockAdmission=BoundNativeBlockAdmission(); sender=nil; senderEnabled=false; failed=nil; lastSent=0
-        interrupted=nil;transportSuspended=false;backpressureReported=false
+        interrupted=nil;transportSuspended=false
         peerGeneration=0; receivedGeneration=0; announcedGeneration=0;lastAcceptedSequence=0
         pendingAcknowledgement.removeAll(); lastAcknowledgement.removeAll()
         sentHistory=Data(repeating:0,count:32);receivedHistory=Data(repeating:0,count:32)
@@ -227,7 +227,7 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
     func suspendTransport() { lock.lock(); transportSuspended=true; lock.unlock() }
     /// Called with the retained core paused, before resuming its frame owner.
     func resumeTransport() {
-        lock.lock(); transportSuspended=false;backpressureReported=false
+        lock.lock(); transportSuspended=false
         lastReceived=ProcessInfo.processInfo.systemUptime;lastSent=0;announcedGeneration=0;lastAcknowledgement=Data()
         lock.unlock()
     }
@@ -374,14 +374,11 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
         if didSend { lastSent=ProcessInfo.processInfo.systemUptime }
         sentCommands+=delivered; frame &+= 1
         latest = .init(frame:frame,values:values)
-        // Stop before the native 32-record queue can overflow, even when a
-        // socket silently drops packets without reporting its outage yet.
-        let stalled=(latest?.pendingCommands ?? 0)>=16 && !backpressureReported
-        if stalled { backpressureReported=true }
-        let interruption=interrupted
+        // The guest throttles its send callback at 16 records while continuing
+        // to consume remote commands. Congestion is not a disconnect; the
+        // session's monotonic-clock liveness check handles actual outages.
         lock.unlock()
         if bad { failure?() }
-        else if stalled { interruption?() }
     }
     func take()->BoundNativeBattleObservation? { lock.lock(); defer { lock.unlock() }; let value=latest; latest=nil; return value }
 }
@@ -479,7 +476,7 @@ final class BoundNativeBattleSession {
         interactions?.activityProgress(activity == .trade ? "Connecting trade…" : "Connecting battle…",playing:false)
         guard core.pause(),BoundVBABattleBridge.verifyBattleEntryReady() else { fail("Game is not ready for a link \(activity.rawValue)"); return }
         if activity == .battle { soulProbe?.setFriendlyBattleActive(true, for:core) }
-        core.rate=core.deltaCore.supportedRates.lowerBound
+        if activity == .trade { core.rate=core.deltaCore.supportedRates.lowerBound }
         do {
             let folder=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
                 .appendingPathComponent("Friend Battles",isDirectory:true)
@@ -570,7 +567,7 @@ final class BoundNativeBattleSession {
             continuationWriteBlocked=true
             let transport=try wire.freezeForContinuation()
             let value=BoundNativeContinuation(version:1,ticket:UUID(),context:context,gameID:gameID,
-                rom:BoundPlayerROMProfile.supportedSHA256,cartridge:Self.hash(try Data(contentsOf:core.game.fileURL,options:.mappedIfSafe)),id:id,activity:activity,initiator:initiator,rate:originalRate,
+                rom:BoundPlayerROMProfile.supportedSHA256,cartridge:Self.hash(try Data(contentsOf:core.game.fileURL,options:.mappedIfSafe)),id:id,activity:activity,initiator:initiator,rate:activity == .battle ? core.rate:originalRate,
                 localPrepared:localPrepared,peerPrepared:peerPrepared,localConnected:localConnected,peerConnected:peerConnected,
                 entryQueued:entryQueued,localFinished:localFinished,peerFinished:peerFinished,played:played,peerLinkClosed:peerLinkClosed,
                 observation:observation,state:BoundVBABattleBridge.captureServerState(),battery:BoundVBABattleBridge.captureServerBattery(),
@@ -623,7 +620,7 @@ final class BoundNativeBattleSession {
             entryQueued=value.entryQueued;localFinished=value.localFinished;peerFinished=value.peerFinished;played=value.played;peerLinkClosed=value.peerLinkClosed
             observation=value.observation;backupURL=backup;journalURL=journal;recoveryFailed=false
             activeContinuationContext=context;continuationTicket=value.ticket;continuationWriteBlocked=false
-            core.rate=core.deltaCore.supportedRates.lowerBound
+            core.rate=activity == .battle ? value.rate:core.deltaCore.supportedRates.lowerBound
             isTransportSuspended=true;pausedForTransport=true;resumeNonce=UUID();peerResumeNonce=nil;retiredResumeNonces=[]
             resumeAcknowledged=false;sentResumeReady=false;lastControl=0;lastChannelAttempt=0;lastPeerControl=ProcessInfo.processInfo.systemUptime
             probe.suspendTransport();core.deltaCore.emulatorBridge.resetInputs()
@@ -919,7 +916,7 @@ final class BoundNativeBattleSession {
         }
         recoveryFailed = !recovered
         if recovered, activity == .battle { soulProbe?.setFriendlyBattleActive(false, for:core) }
-        backupURL=nil; journalURL=nil; core.rate=originalRate
+        backupURL=nil; journalURL=nil; if activity == .trade { core.rate=originalRate }
         interactions?.activityEnded(recovered ? message : "Recovery snapshot kept. Reopen this game to restore it.")
         if didRestore {
             if activity == .battle {
@@ -937,7 +934,7 @@ final class BoundNativeBattleSession {
         let finished=localFinished && peerFinished && observation?.returned == true
         var success=finished
         if !finished { success=core.stop() && core.start() }
-        core.rate=originalRate
+        if activity == .trade { core.rate=originalRate }
         if success {
             if finished {
                 let count = observation?.tradeCount ?? 0

@@ -25,6 +25,8 @@ def main():
     parser.add_argument('--disconnect-seconds',type=float,default=0,help='Drop the actual active cable, wait, then replace both channels and finish; 0–120 seconds')
     parser.add_argument('--disconnect-stage',choices=['menu','exchange','saved'],default='menu',help='Native trade stage to interrupt; battles always interrupt after entry')
     parser.add_argument('--silent-disconnect',action='store_true',help='Blackhole packets without a transport error; native liveness detection must suspend automatically')
+    parser.add_argument('--rate-a',type=float,default=1);parser.add_argument('--rate-b',type=float,default=1)
+    parser.add_argument('--local-menus',action='store_true')
     parser.add_argument('--battle-run',action='store_true',help='Peer A chooses the native Run action; both peers must return and restore their parties')
     parser.add_argument('--battle-party',choices=['healthy','fainted','soul-denied'],default='healthy',help='Disposable party: healthy, ordinary 0HP, or a permanently denied lead plus a living damaged mon')
     parser.add_argument('--trade-cancel',action='store_true',help='Cancel from the native trade menu before offering; both original parties must persist')
@@ -40,6 +42,7 @@ def main():
     if args.silent_disconnect and not args.disconnect_seconds:parser.error('Silent disconnect requires a positive disconnect duration')
     if args.shared_world and args.disconnect_seconds:parser.error('Disconnect mode covers native battles and trades, not shared-world fixtures')
     if not args.relay:parser.error('The command transport harness requires --relay')
+    if not all(1<=x<=8 for x in (args.rate_a,args.rate_b)):parser.error('Rates must be 1–8')
     if args.sim_a==args.sim_b: parser.error('Two distinct disposable simulators are required')
     args.output.mkdir(parents=True,exist_ok=False)
     peers={}; lock=threading.Lock()
@@ -112,6 +115,7 @@ def main():
                 copy={k:visit(v) for k,v in value.items()}
                 if 'TestBundlePath' in copy:
                     copy.setdefault('EnvironmentVariables',{}).update(BOUND_NATIVE_BATTLE_PEER=peer,BOUND_NATIVE_BATTLE_PORT=str(server.server_port),BOUND_NATIVE_TRADE_CANCEL='1' if args.trade_cancel else '0',BOUND_SHARED_WORLD_PAIR='1' if args.shared_world else '0',BOUND_NATIVE_DISCONNECT_SECONDS=str(args.disconnect_seconds),BOUND_NATIVE_DISCONNECT_STAGE=args.disconnect_stage,BOUND_NATIVE_SILENT_DISCONNECT='1' if args.silent_disconnect else '0',BOUND_NATIVE_BATTLE_RUN='1' if args.battle_run else '0',BOUND_NATIVE_BATTLE_PARTY=str(['healthy','fainted','soul-denied'].index(args.battle_party)))
+                    copy['EnvironmentVariables'].update(BOUND_NATIVE_BATTLE_RATE=str(args.rate_a if peer=='A' else args.rate_b),BOUND_NATIVE_LOCAL_MENUS='1' if args.local_menus else '0')
                     if relay:copy['EnvironmentVariables'].update(BOUND_NATIVE_BATTLE_RELAY_PORT=str(relay.server_address[1]),BOUND_NATIVE_BATTLE_RELAY_ID=relay_id)
                 return copy
             if isinstance(value,list): return [visit(v) for v in value]
@@ -160,7 +164,7 @@ def main():
             log.close()
         with lock: result=dict(peers)
         (args.output/'summary.json').write_text(json.dumps(dict(passed=passed,error=error,relay=args.relay,latencyMs=args.latency_ms,entryOnly=args.session_entry,trade=args.trade,cancel=args.trade_cancel,sharedWorld=args.shared_world,battleRun=args.battle_run,battleParty=args.battle_party,disconnectSeconds=args.disconnect_seconds,disconnectStage=args.disconnect_stage,silentDisconnect=args.silent_disconnect,elapsed=time.monotonic()-started,peers=result,
-            limits='Native command transport on two owned simulators over host loopback; separate from real Agora and normal-app interaction acceptance.'),indent=2)+'\n')
+            rates=[args.rate_a,args.rate_b],localMenus=args.local_menus,limits='Native command transport on two owned simulators over host loopback; separate from authenticated internet transport and normal-app interaction acceptance.'),indent=2)+'\n')
         server.shutdown(); server.server_close()
         if relay:relay.shutdown(); relay.server_close()
     print(json.dumps(dict(passed=passed,error=error,elapsed=time.monotonic()-started)))

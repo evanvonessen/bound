@@ -19,6 +19,12 @@ private final class NativeBattleDriver:@unchecked Sendable {
     private var playing=false,moves=false,run=false,didBoot=false,didDamage=false
     private var firstMenuHP:[Int]?,firstMenuEnemyHP:[Int]?
     private var initialHP:[Int]?
+    private var menuCheckStage=0,menuCheckFrame=0
+    private var measuredMenuFrames:[Int]=[]
+    private var checkedMoveCursor=false
+    private let menuChecks=ProcessInfo.processInfo.environment["BOUND_NATIVE_LOCAL_MENUS"]=="1"
+    var menuFrames:[Int] { lock.lock();defer { lock.unlock() };return measuredMenuFrames }
+    var moveCursorResponded:Bool { lock.lock();defer { lock.unlock() };return checkedMoveCursor }
     let booted=XCTestExpectation(description:"Native overworld")
     let entered=XCTestExpectation(description:"Native battle")
     let damage=XCTestExpectation(description:"Native battle damage")
@@ -46,7 +52,7 @@ private final class NativeBattleDriver:@unchecked Sendable {
         let menu=BoundVBABattleBridge.qaBattleMenu()
         if menu["battler"] != nil {
             lock.lock()
-            if firstMenuHP==nil {
+            if firstMenuHP==nil,menu["kind"] as? String == "action" {
                 firstMenuHP=menu["playerHP"] as? [Int];firstMenuEnemyHP=menu["enemyHP"] as? [Int]
                 NSLog("Native first action menu HP=%@ enemyHP=%@",String(describing:firstMenuHP),String(describing:firstMenuEnemyHP))
             }
@@ -58,15 +64,43 @@ private final class NativeBattleDriver:@unchecked Sendable {
             lock.lock(); let first = !didDamage; didDamage=true; lock.unlock()
             if first { damage.fulfill() }
         }
+        if battle,menuChecks,menuCheckStage<6 {
+            let kind=menu["kind"] as? String
+            var mask=0
+            switch menuCheckStage {
+            case 0:
+                if kind=="action" {
+                    if lastMask==0 { menuCheckFrame=frame;menuCheckStage=1;mask=1 }
+                } else { mask=frame%12<2 ? 1:0 } // Dismiss native introduction text first.
+            case 1:
+                if kind=="move" { lock.lock();measuredMenuFrames.append(frame-menuCheckFrame);lock.unlock();menuCheckFrame=frame;menuCheckStage=2 }
+            case 2:
+                if frame-menuCheckFrame==4 { mask=16 } // Growl/second move, local cursor input.
+                if frame-menuCheckFrame==7 { lock.lock();checkedMoveCursor=menu["cursor"] as? Int == 1;lock.unlock() }
+                if frame-menuCheckFrame>=8 { menuCheckFrame=frame;menuCheckStage=3;mask=2 } // Back, without submitting.
+            case 3:
+                if kind=="action" { lock.lock();measuredMenuFrames.append(frame-menuCheckFrame);lock.unlock();menuCheckFrame=frame;menuCheckStage=4 }
+            case 4:
+                if frame-menuCheckFrame>=4 { menuCheckFrame=frame;menuCheckStage=5;mask=1 }
+            case 5:
+                if kind=="move" { lock.lock();measuredMenuFrames.append(frame-menuCheckFrame);lock.unlock();menuCheckStage=6 }
+            default:break
+            }
+            apply(mask,core:core);return
+        }
         if battle,run,let cursor=menu["cursor"] as? Int {
             let button=cursor&1==0 ? 16:cursor&2==0 ? 128:1
             apply(frame%12<2 ? button:0,core:core)
         }
-        else if battle,moves,let battleFrame,frame-battleFrame>120 { apply((frame-battleFrame)%12<2 ? 1:0,core:core) }
+        else if battle,moves,let battleFrame,frame-battleFrame>120 {
+            let cursor=menu["cursor"] as? Int ?? 0
+            let button=menu["kind"] as? String == "move" && cursor != 0 ? (cursor&1 != 0 ? 32:64):1
+            apply((frame-battleFrame)%12<2 ? button:0,core:core)
+        }
         else { apply(0,core:core) }
     }
     private func apply(_ mask:Int,core:EmulatorCore) {
-        for bit in [1,8,16,32,64,128] where mask&bit != lastMask&bit {
+        for bit in [1,2,8,16,32,64,128] where mask&bit != lastMask&bit {
             if mask&bit != 0 { core.deltaCore.emulatorBridge.activateInput(bit,value:1,playerIndex:0) }
             else { core.deltaCore.emulatorBridge.deactivateInput(bit,playerIndex:0) }
         }
@@ -1055,6 +1089,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         let partyMode=Int(env["BOUND_NATIVE_BATTLE_PARTY"] ?? "0") ?? 0
         let disconnectSeconds=Double(env["BOUND_NATIVE_DISCONNECT_SECONDS"] ?? "0") ?? 0
         let silentDisconnect=env["BOUND_NATIVE_SILENT_DISCONNECT"]=="1"
+        let battleRate=Double(env["BOUND_NATIVE_BATTLE_RATE"] ?? "1") ?? 1
         guard let peer=env["BOUND_NATIVE_BATTLE_PEER"],["A","B"].contains(peer),
               let raw=env["BOUND_NATIVE_BATTLE_PORT"],let port=Int(raw),(1024...65535).contains(port),
               let relayPort=env["BOUND_NATIVE_BATTLE_RELAY_PORT"].flatMap(UInt16.init),
@@ -1144,8 +1179,10 @@ final class NativeBattleRuntimeTests:XCTestCase {
             session.sendControl={ channel?.send($0)==true }
         }
         configureTransport(native)
+        core.rate=battleRate
         driver.play(moves:!entryOnly && !(runBattle && peer=="B"),run:runBattle && peer=="A"); _=core.resume()
         native.begin(activity:.battle,id:uuid,initiator:peer=="A")
+        XCTAssertEqual(core.rate,battleRate,"Friendly entry preserves local fast-forward")
         if partyMode != 1 { soulProbe.setNativeObservationAllowed(true) }
         var entered=false
         for tick in 0..<1200 {
@@ -1170,6 +1207,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
                 silent:silentDisconnect,disconnect:{ networkAvailable=false; if silentDisconnect { channel?.dropTraffic() } else { channel?.close() } },reconnect:{ networkAvailable=true })
             disconnectResumed=true
         }
+        XCTAssertEqual(core.rate,battleRate,"Continuation/reconnect preserves local fast-forward")
         if entryOnly { native.cancel() }
         else {
             var done=false,terminalCaptured=false
@@ -1208,6 +1246,11 @@ final class NativeBattleRuntimeTests:XCTestCase {
             }
             XCTAssertTrue(done,"Native battle failed: \(native.lastFailure), \(native.lastCableDiagnostic)")
             XCTAssertTrue(native.lastFailure.isEmpty)
+            if env["BOUND_NATIVE_LOCAL_MENUS"]=="1" {
+                XCTAssertEqual(driver.menuFrames.count,3)
+                XCTAssertTrue(driver.moveCursorResponded,"Growl cursor navigation must respond locally")
+                XCTAssertTrue(driver.menuFrames.allSatisfy { $0<=12 },"Fight/back/Fight must render within 12 local frames: \(driver.menuFrames)")
+            }
             if runBattle,peer=="A" { XCTAssertTrue(native.observation?.runRequested==true,"Only actual native Run input may trigger unilateral exit") }
             if !runBattle { XCTAssertTrue(driver.damaged,"A native move must change party HP") }
             XCTAssertEqual(driver.menuHP?.count,1,"Only the eligible mon enters this fixture battle")
@@ -1231,7 +1274,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         let report:[String:Any]=["stage":"done","entryOnly":entryOnly,"battle":entered,
             "damaged":driver.damaged,"restored":native.restoredBattles==1,"cable":native.lastCableDiagnostic,
             "outcome":native.observation?.outcome ?? 0,"soulLedgerUnchanged":soulProbe.read().ledger==soulBefore,
-            "ownerRestored":true,"ran":runBattle,"nativeRunIntent":native.observation?.runRequested==true,"partyMode":partyMode,"checkedSoulHistory":partyMode != 1,"startingHP":driver.menuHP ?? [],"startingEnemyHP":driver.menuEnemyHP ?? [],"partyUnchanged":BoundVBABattleBridge.qaTradeParty()==partyBefore,
+            "battleRate":battleRate,"menuFrames":driver.menuFrames,"ownerRestored":true,"ran":runBattle,"nativeRunIntent":native.observation?.runRequested==true,"partyMode":partyMode,"checkedSoulHistory":partyMode != 1,"startingHP":driver.menuHP ?? [],"startingEnemyHP":driver.menuEnemyHP ?? [],"partyUnchanged":BoundVBABattleBridge.qaTradeParty()==partyBefore,
             "disconnectResumed":disconnectResumed,"disconnectSeconds":disconnectSeconds,"disconnectPhase":4,"silentDisconnect":silentDisconnect]
         try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("report.json"))
         _=try await request(port:port,peer:peer,body:report)
@@ -1345,8 +1388,16 @@ final class NativeBattleRuntimeTests:XCTestCase {
             XCTFail("Both native peers did not reach reconnect phase \(phase)")
             throw NSError(domain:"NativeReconnectBarrier",code:phase)
         }
+        // A restored owner starts paused while its fresh peer handshake runs.
+        // Drop an established connection, not that still-pending handshake.
+        for _ in 0..<600 {
+            if !native.isTransportSuspended { break }
+            try await Task.sleep(for:.milliseconds(50))
+        }
+        XCTAssertFalse(native.isTransportSuspended,"Restore handshake must finish before injecting an outage")
         try await barrier(1)
         let activity=native.activity,consent=interactions.requestID
+        let disconnectedAt=ProcessInfo.processInfo.systemUptime
         disconnect()
         if silent {
             // No error callback and no explicit suspension: successful sends
@@ -1357,6 +1408,12 @@ final class NativeBattleRuntimeTests:XCTestCase {
                 try await Task.sleep(for:.milliseconds(50))
             }
         } else { native.suspendTransport() }
+        if silent {
+            let elapsed=ProcessInfo.processInfo.systemUptime-disconnectedAt
+            XCTAssertGreaterThan(elapsed,0.8,"Fast-forward must not accelerate the two-second wall-clock liveness timeout")
+            XCTAssertLessThan(elapsed,5,"Silent loss must be detected using real elapsed time")
+            NSLog("Native silent-loss detection %@: %.3f seconds",peer,elapsed)
+        }
         try await Task.sleep(for:.milliseconds(100))
         XCTAssertTrue(native.isTransportSuspended)
         XCTAssertEqual(core.state,.paused,"The native engine must not run link timeouts while transport is unavailable")

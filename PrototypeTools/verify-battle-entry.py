@@ -26,7 +26,7 @@ RESTORED = [UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R4,
 PRESERVED = [UC_ARM_REG_R8, UC_ARM_REG_R9, UC_ARM_REG_R10, UC_ARM_REG_R11]
 
 
-def verify(path, allowed, code, hook, choice_hook):
+def verify(path, allowed, code, hook, choice_hook, pump_hook, link_hook):
     image = path.read_bytes()
     digest = hashlib.sha256(image).hexdigest()
     assert digest in allowed and len(image) == 0x2000000, "Unsupported ROM profile"
@@ -137,7 +137,82 @@ def verify(path, allowed, code, hook, choice_hook):
         assert results[0][0]==results[1][0]==[[1,action,0x1234]],'Native choice dispatch changed'
         assert results[1][1]==bytes([0xA5,3 if action==3 else 0]),'Run intent was ambiguous or corrupted disconnect flag'
         selections.append({'action':action,'runIntent':action==3})
-    return {"romSHA256": digest, "entryBytes": len(code), "cases": cases, "runOutcomes":run_outcomes,"runSelectionCases":selections,"passed": True}
+    flow=[]
+    for read,pending in [(0,0),(0,15),(0,16),(0,31),(65530,15),(65530,16)]:
+        cpu=Uc(UC_ARCH_ARM,UC_MODE_THUMB)
+        for address,size in [(ROM_BASE,len(image)),(0x02000000,0x40000),(0x03000000,0x8000),(0x04000000,0x1000)]:cpu.mem_map(address,size)
+        cpu.mem_write(ROM_BASE,image);cpu.mem_write(ENTRY,code)
+        cpu.mem_write(0x08009AF8,bytes.fromhex('00480047')+struct.pack('<I',pump_hook))
+        cpu.mem_write(0x02022718,b'\x01');cpu.mem_write(0x03003F20,struct.pack('<I',0x40))
+        cpu.mem_write(0x03003F80,struct.pack('<I',0x08000121))
+        cpu.mem_write(0x03004034,struct.pack('<HH',read,(read+pending)&65535))
+        cpu.reg_write(UC_ARM_REG_R0,STACK);cpu.reg_write(UC_ARM_REG_SP,STACK);cpu.reg_write(UC_ARM_REG_LR,STOP|1)
+        events=[]
+        def observe_flow(machine,address,size,user):
+            if address==STOP:machine.emu_stop()
+            elif address in [0x08009B70,0x08000120,0x0800AC58]:
+                events.append(address);machine.reg_write(UC_ARM_REG_PC,machine.reg_read(UC_ARM_REG_LR))
+        cpu.hook_add(UC_HOOK_CODE,observe_flow);cpu.emu_start(0x08009AB1,STOP,count=1000)
+        assert cpu.reg_read(UC_ARM_REG_PC)==STOP and cpu.reg_read(UC_ARM_REG_SP)==STACK
+        assert events==[0x08009B70]+([0x08000120] if pending<16 else [])+[0x0800AC58], 'Receive processing must continue while producer is throttled'
+        flow.append({'pending':pending,'sequenceWrapped':read>0,'senderRuns':pending<16})
+    causal=[]
+    for role in [0,1]:
+        cpu=Uc(UC_ARCH_ARM,UC_MODE_THUMB)
+        for address,size in [(ROM_BASE,len(image)),(0x02000000,0x40000),(0x03000000,0x8000),(0x04000000,0x1000)]:cpu.mem_map(address,size)
+        cpu.mem_write(ROM_BASE,image);cpu.mem_write(ENTRY,code);cpu.mem_write(0x09FFFCF0,bytes([role]))
+        cpu.mem_write(0x03003FB1,b'\x04');mailbox=0x03004030
+        cpu.mem_write(mailbox,struct.pack('<I10H',0x314D4642,1,1,0,1,0,0,1,1,0,0))
+        cpu.mem_write(mailbox+24,struct.pack('<8H',0x1234,*([0]*7)))
+        cpu.mem_write(mailbox+536,struct.pack('<8H',0x5678,*([0]*7)))
+        for frame in [0,1]:
+            cpu.reg_write(UC_ARM_REG_R0,0x02008000);cpu.reg_write(UC_ARM_REG_R1,0x02008100);cpu.reg_write(UC_ARM_REG_R2,0x02008200)
+            cpu.reg_write(UC_ARM_REG_SP,STACK);cpu.reg_write(UC_ARM_REG_LR,STOP|1)
+            cpu.emu_start(link_hook,STOP,count=10000)
+            assert cpu.reg_read(UC_ARM_REG_PC)==STOP and cpu.reg_read(UC_ARM_REG_SP)==STACK
+            commands=struct.unpack('<40H',cpu.mem_read(0x02008200,80))
+            assert commands[role*8]==(0x1234 if frame==0 else 0)
+            assert commands[(role^1)*8]==(0 if frame==0 else 0x5678),'Remote ACK overtook earlier acknowledged local controller block'
+        # Native block flags belong to the ROM consumer, which may still be
+        # initializing sprites while a faster peer starts its next block.
+        cpu.mem_write(mailbox,struct.pack('<I10H',0x314D4642,1,1,0,1,0,0,1,1,0,0))
+        cpu.mem_write(mailbox+24,struct.pack('<8H',0xBBBB,16,*([0]*6)))
+        cpu.mem_write(mailbox+536,struct.pack('<8H',0xBBBB,16,*([0]*6)))
+        cpu.mem_write(0x03003EBC,b'\x01\x01')
+        for release in [None,role^1,role]:
+            if release is not None:cpu.mem_write(0x03003EBC+release,b'\x00')
+            cpu.reg_write(UC_ARM_REG_R0,0x02008000);cpu.reg_write(UC_ARM_REG_R1,0x02008100);cpu.reg_write(UC_ARM_REG_R2,0x02008200)
+            cpu.reg_write(UC_ARM_REG_SP,STACK);cpu.reg_write(UC_ARM_REG_LR,STOP|1)
+            cpu.emu_start(link_hook,STOP,count=10000)
+            commands=struct.unpack('<40H',cpu.mem_read(0x02008200,80))
+            assert commands[role*8]==(0xBBBB if release==role else 0)
+            assert commands[(role^1)*8]==(0xBBBB if release==role^1 else 0)
+            assert struct.unpack('<H',cpu.mem_read(mailbox+8,2))[0]==(0 if release is None else 1)
+        causal.append({'role':role,'localLoopbackBeforeRemoteResponse':True,'nativeBlockSlotProtected':True})
+    timers=[]
+    for connected in [0,1]:
+        cpu=Uc(UC_ARCH_ARM,UC_MODE_THUMB)
+        for address,size in [(ROM_BASE,len(image)),(0x02000000,0x40000),(0x03000000,0x8000)]:cpu.mem_map(address,size)
+        cpu.mem_write(ROM_BASE,image)
+        for source,target in [(0x08081A98,0x08081AC3),(0x0808103C,0x0808104D)]:
+            cpu.mem_write(source,bytes.fromhex('00480047')+struct.pack('<I',target))
+        cpu.mem_write(0x03003F64,bytes([connected]))
+        cpu.mem_write(0x03005090+3*40+8,struct.pack('<H',1000))
+        cpu.mem_write(0x03005090+3*40+16,struct.pack('<H',1000))
+        destroyed=[]
+        def observe_timer(machine,address,size,user):
+            if address==STOP:machine.emu_stop()
+            elif address==0x08077508:
+                destroyed.append(machine.reg_read(UC_ARM_REG_R0));machine.reg_write(UC_ARM_REG_PC,machine.reg_read(UC_ARM_REG_LR))
+            elif address in [0x080098B8,0x08000544]:raise AssertionError('Emulated frame count triggered network failure')
+        cpu.hook_add(UC_HOOK_CODE,observe_timer)
+        for entry in [0x08081A91,0x0808102D]:
+            cpu.reg_write(UC_ARM_REG_R0,3);cpu.reg_write(UC_ARM_REG_SP,STACK);cpu.reg_write(UC_ARM_REG_LR,STOP|1)
+            cpu.emu_start(entry,STOP,count=1000)
+            assert cpu.reg_read(UC_ARM_REG_PC)==STOP and cpu.reg_read(UC_ARM_REG_SP)==STACK
+        assert cpu.reg_read(UC_ARM_REG_R0)==0 and destroyed==([3] if connected else [])
+        timers.append({'connected':bool(connected),'nativeCleanup':bool(destroyed),'frameTimeoutSuppressed':True})
+    return {"romSHA256": digest, "entryBytes": len(code), "cases": cases, "runOutcomes":run_outcomes,"runSelectionCases":selections,"flowControl":flow,"connectionTimers":timers,"causalDelivery":causal,"passed": True}
 
 
 def main():
@@ -152,8 +227,10 @@ def main():
     code = bytes(int(value, 16) for value in re.findall(r"0x([0-9A-Fa-f]{2})", body))
     hook = int(re.search(r"BoundBattlePreserveLinkFlagsAddress = 0x([0-9A-Fa-f]+)", header)[1], 16)
     choice_hook = int(re.search(r"BoundBattleChoiceAddress = 0x([0-9A-Fa-f]+)", header)[1], 16)
-    assert len(code) <= 0x3F0, "Entry overlaps the role byte"
-    report = {"profiles": [verify(path, allowed, code, hook,choice_hook) for path in args.rom], "passed": True}
+    pump_hook = int(re.search(r"BoundBattlePumpAddress = 0x([0-9A-Fa-f]+)", header)[1], 16)
+    link_hook = int(re.search(r"BoundBattleLinkMain1Address = 0x([0-9A-Fa-f]+)", header)[1], 16)
+    assert len(code) <= 0x4F0, "Entry overlaps the role byte"
+    report = {"profiles": [verify(path, allowed, code, hook,choice_hook,pump_hook,link_hook) for path in args.rom], "passed": True}
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2) + "\n")

@@ -20,7 +20,7 @@ final class NativePlayerSceneSetup {
     var isReady: Bool { probe.read()?.permitsFieldInterruption == true && probe.read()?.settingsApplied == true }
 
     init(core: EmulatorCore) {
-        var options = BoundMultiplayerSetupOptions(); options.debug = true
+        let options = BoundMultiplayerSetupOptions()
         host.enabled = true; host.linked = true; host.setupCommitted = true
         host.externalSetup = true; host.status = .complete; host.run = UUID()
         host.localSeed = 0x12345678; host.partnerSeed = 0x87654321

@@ -1999,7 +1999,7 @@ extension GameViewController
 
     func performFastForwardAction(activate: Bool, remember: Bool = true, showToast: Bool = true)
     {
-        guard !boundCompanion.sharing.nativeBattle.isActive && !boundCompanion.sharing.cooperativeDoubles.isActive else { return }
+        guard !(boundCompanion.sharing.nativeBattle.isActive && boundCompanion.sharing.nativeBattle.activity == .trade) && !boundCompanion.sharing.cooperativeDoubles.isActive else { return }
         guard let emulatorCore = self.emulatorCore, !emulatorCore.isWirelessMultiplayerActive else { return }
 
         if remember {

@@ -25,7 +25,7 @@ syms={}
 for line in subprocess.check_output([tool+'nm','-n',str(out/'entry.elf')],text=True).splitlines():
  cols=line.split()
  if len(cols)==3 and cols[2].startswith('BoundBattle'):syms[cols[2]]=int(cols[0],16)|1
-code=(out/'entry.bin').read_bytes();assert 0<len(code)<=0x3F0
+code=(out/'entry.bin').read_bytes();assert 0<len(code)<=0x4F0
 header='// Generated from NativeBattle/battle-entry.c for ARM7TDMI Thumb.\n#pragma once\n#include <stdint.h>\n'
 for k,v in syms.items():header+=f'static const uint32_t {k}Address = 0x{v:08X};\n'
 header+='static const uint8_t BoundBattleEntryCode[] = {\n'+''.join('    '+', '.join(f'0x{v:02X}' for v in code[i:i+16])+',\n' for i in range(0,len(code),16))+'};\n'

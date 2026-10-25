@@ -185,6 +185,7 @@ struct BoundROMHostState: Equatable, Sendable {
     var chooser = false
     var setupCommitted = false
     var externalSetup = false
+    var debugPlayer: UInt8 = 0
     var playerProfile: BoundNakamaRunService.PlayerProfile?
     var restartSetup = false
     var recovery = false
@@ -240,6 +241,7 @@ struct BoundROMHostState: Equatable, Sendable {
         if let playerProfile, playerProfile.valid {
             data.replaceSubrange(1408..<1416, with: BoundMultiplayerSetupOptions.nativeName(playerProfile.name))
             data[1416] = UInt8(playerProfile.gender); data[1417] = 1
+            data[1418] = debugPlayer
         }
         return data
     }
@@ -2539,6 +2541,7 @@ extension BoundROMMultiplayerCoordinator {
         error = nil; pendingSnapshot = nil; didRestore = true; protectedStorage = true; workingStateAuthorized = true
         sharedServerCursor = .init(); journalReplayNeeded = true; soulExportCache.reset(); worldProjectionRun = nil
         serverStarting = package == nil && !continuedActivity; host.externalSetup = serverStarting; host.playerProfile = profile
+        host.debugPlayer = state.identity.owner == state.identity.settingsOwner ? 1 : 2
         nextAutomaticSave = now; serverCapturePending = package == nil; serverPollAt = 0
         host.setupCommitted = true; host.linked = true; host.run = state.identity.run
         host.settings = state.identity.settings; host.localSeed = state.identity.localSeed; host.partnerSeed = state.identity.partnerSeed

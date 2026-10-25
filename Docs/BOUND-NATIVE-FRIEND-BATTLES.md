@@ -9,8 +9,9 @@ backgrounding preserves an exact paused continuation. Run or deliberate
 cancellation ends the friendly battle and restores the local pre-battle world.
 A temporary network interruption keeps the same
 battle on screen, pauses native emulation and reconnects in the background.
-Quick saves and fast-forward are suppressed during
-battle; quick load ends the battle before loading the selected state.
+Quick saves are suppressed during battle; quick load ends the battle before
+loading the selected state. Each player keeps their own fast-forward setting,
+including after a paused continuation is reopened. Trades still use normal speed.
 
 Friendly battles are also available during Soul Link. A core-scoped observation
 fence excludes temporary faint events, party HP, team changes and victory history
@@ -34,9 +35,10 @@ the original party remains in the recovery snapshot. Trade uses its own persiste
 `BoundVBABattleBridge` is called only with the core paused or on its completed
 frame owner. It verifies the entire loaded 32 MiB ROM and an unused 2 KiB tail.
 It installs Bound's small, original ARM7TDMI Thumb entry there and temporarily
-branches eleven native entry points: battle-to-overworld and cable-room return,
+branches fourteen native entry points: battle-to-overworld and cable-room return,
 physical link exchange, serial VSync, multiplayer ID, send/receive queue counts,
-serial enable/disable, Radical Red's cleanup flag check and explicit Run selection. No on-disk ROM patch is applied. `NativeBattle/battle-entry.c` calls the existing native task,
+serial enable/disable, the outgoing callback gate, two setup timeout gates,
+Radical Red's cleanup flag check and explicit Run selection. No on-disk ROM patch is applied. `NativeBattle/battle-entry.c` calls the existing native task,
 including Radical Red's own battle-start hook. The generated header is checked
 with `PrototypeTools/build-battle-entry.py --check` using devkitARM.
 
@@ -64,6 +66,13 @@ commands and admits incoming commands. The original `LinkMain2`,
 active. Each command carries a sequence and is acknowledged only after the peer
 frame consumes it. Own commands loop back after that acknowledgment, preventing
 the local game from finishing before the remote game processes its final data.
+Acknowledged local commands are delivered in earlier guest frames than remote
+replies. Each native block receive slot also stays occupied until the ROM
+consumes it: a following block cannot overwrite setup data or a controller
+command while the slower peer initializes sprites or plays an animation.
+The integrated cartridge retains an early real controller ACK while its native
+pending-command bit is set, then applies it once when that command is armed.
+The ACK cannot carry into the next command.
 Virtual serial enable/disable preserves commands through the native close/reopen
 transition between setup and battle. Every command also carries its native
 connection generation. A new connection waits for the matching peer generation;
@@ -90,11 +99,52 @@ plus 2 KiB of connection/sequence tags. SDK receive
 callbacks copy bounded commands only; they never access emulated RAM. The frame
 owner alone installs hooks and reads/writes the mailbox. Channel closure fences
 SDK destruction. Temporary transport failure or heartbeat silence suspends the
-existing wire and cartridge without resetting either sequence. Backpressure
-pauses emulation before the native command queue fills. A fresh activity-bound
+existing wire and cartridge without resetting either sequence. At 16 unconsumed
+outgoing commands, backpressure pauses only the native send callback; incoming
+commands and consumption acknowledgements continue draining the 32-slot queue.
+Normal congestion therefore does not suspend the core or require reconnection.
+A fresh activity-bound
 challenge/response is required before replaying gameplay; a room/account change,
 explicit cancellation, corrupt packet or native link error remains a terminal
 boundary with the existing private-state recovery.
+
+## Independent speed and local menus — October 25, 2026
+
+The integrated cartridge builds its exact native move-menu payload alongside
+the action menu. Fight, move cursors and Back render locally without a round
+trip. After move confirmation, it submits the original Fight response, waits
+for the native ChooseMove request, verifies the offer is unchanged, and sends
+the stored native response. A changed offer reopens native selection instead
+of replaying a stale choice. Link Standby begins after submission while the
+required native exchange is pending. RNG, battle resolution, controller command
+ordering, acknowledgements and animation-completion boundaries remain native.
+The faster player cannot bypass the slower player's controller completion.
+
+The guest send gate and native receive-slot protection permit different emulation
+rates without overflowing the
+bounded command queue. Network retries, heartbeats and disconnect detection use
+`ProcessInfo.systemUptime`, independently of emulated frames. Native instruction
+checks also cover setup timers: their frame-count failure branches are
+bypassed while the temporary cable is installed, but connection-complete task
+cleanup is preserved. The host's two-second elapsed-time guard owns suspension.
+The local relay QA
+accepts `--rate-a 3 --rate-b 1 --local-menus --latency-ms 100`; its menu checks
+measure Fight, Back and Fight again in local frames, and full battles verify
+complementary native outcomes, party restoration and continuation recovery.
+
+The final 3×/1× paired run with zero added relay delay passed. Fight/Back/Fight
+took 6/6/6 local frames on the 3× peer and 5/6/5 on the 1× peer, including
+navigation to Growl. Both peers restored their original party and Soul Link
+history after complementary native results. The 53 focused Swift checks, native
+menu/ACK and queue/block-flow instruction checks, both Debug cold boots, normal
+startup and the Release iPhone build passed. These are simulator and local-relay
+results; physical phones and authenticated internet play remain unverified.
+
+The final 1×/3× run passed with 100 ms relay delay and a three-second silent
+outage. Detection took 1.992 seconds at 1× and 1.895 seconds at 3×. The same
+battle resumed, completed with complementary outcomes, and restored both original
+parties and Soul Link history. Both local menu sequences remained within six
+emulated frames per transition, and both speed settings survived continuation.
 
 ## Temporary connection loss — October 24, 2026
 

@@ -2,6 +2,20 @@ import XCTest
 @testable import Delta
 
 final class ROMMultiplayerContractTests: XCTestCase {
+    func testDebugStartupCarriesCreatorRoleIndependentlyOfSetupChooser() {
+        for player: UInt8 in [1, 2] {
+            for chooser in [false, true] {
+                var host = BoundROMHostState()
+                host.playerProfile = .init(name: "Red", gender: 0)
+                host.debugPlayer = player; host.chooser = chooser
+                let bytes = host.encoded(sequence: 2)
+                XCTAssertEqual(bytes[1417], 1)
+                XCTAssertEqual(bytes[1418], player)
+                XCTAssertEqual(bytes[1419], 0)
+            }
+        }
+    }
+
     func testQueuedActionsWaitForIdleFieldAndDoNotExpireDuringDisconnect() {
         func request(_ flags: UInt32) -> BoundROMRequest {
             .init(sequence: 2, command: .none, friendIndex: 0, argument: 0, identifier: UUID(),

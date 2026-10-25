@@ -90,7 +90,7 @@ bool installServerSaveFence() {
         &&install(@selector(loadSaveStateFromURL:),fencedStateLoad,fence.stateReader);
 }
 constexpr size_t RegionOffset=0x1FFF800,RegionSize=0x800;
-constexpr uint32_t ScriptAddress=0x09FFFC00,MailboxMagic=0x314D4642;
+constexpr uint32_t ScriptAddress=0x09FFFD00,MailboxMagic=0x314D4642;
 constexpr size_t Mailbox=0x4030;
 struct Hook { size_t offset; uint32_t target; uint8_t original[8],thunk[8]; bool preservesArguments; };
 Hook hooks[]={
@@ -109,13 +109,18 @@ Hook hooks[]={
     // Original RR and the integrated ROM share this native cleanup tail. The
     // latter's co-op wrapper is saved/restored with the other temporary hooks.
     {0x1090958,BoundBattlePreserveLinkFlagsAddress},
-    {0x10A9F10,BoundBattleChoiceAddress,{},{},true} // Explicit local action selection, before waiting for the peer's move.
+    {0x10A9F10,BoundBattleChoiceAddress,{},{},true}, // Explicit local action selection, before waiting for the peer's move.
+    {0x9AF8,BoundBattlePumpAddress}, // Receive commands before throttling only the native send callback.
+    // Host monotonic liveness owns network timeouts. Retain the native task's
+    // connection-complete cleanup and the linkup predicate's false epilogue.
+    {0x81A98,0x08081AC3},
+    {0x8103C,0x0808104D}
 };
 uint8_t *verifiedROM=nullptr,*patchedROM=nullptr;
 bool armed=false,installed=false,failed=false,syntheticHeld=false,cooperativeCable=false;
 unsigned role=0,preparationFrames=0,tradeCount=0;
 bool tradeMode=false,tradeOpened=false,tradeScene=false;
-bool usesHook(size_t index) { return cooperativeCable ? index>=2&&index<9 : tradeMode ? index>=2&&index<11 : index<9||index>=11; }
+bool usesHook(size_t index) { return index>=13 || (cooperativeCable ? index>=2&&index<9 : tradeMode ? index>=2&&index<11 : index<9||index>=11); }
 uint16_t networkRead=0;
 uint32_t word(const uint8_t *p) { return p[0]|uint32_t(p[1])<<8|uint32_t(p[2])<<16|uint32_t(p[3])<<24; }
 unsigned half(const uint8_t *p) { return p[0]|unsigned(p[1])<<8; }
@@ -200,7 +205,7 @@ bool writeNativeROM() {
         byte(0x23);ptr(BoundBattleStartAddress);byte(0x27);byte(0x02);
     }
     if(n>sizeof(script)) return false;
-    memcpy(rom+RegionOffset,BoundBattleEntryCode,sizeof(BoundBattleEntryCode));rom[0x1FFFBF0]=uint8_t(role);
+    memcpy(rom+RegionOffset,BoundBattleEntryCode,sizeof(BoundBattleEntryCode));rom[0x1FFFCF0]=uint8_t(role);
     if(!cooperativeCable) memcpy(rom+ScriptAddress-0x08000000,script,n);
     for(size_t index=0;index<sizeof(hooks)/sizeof(hooks[0]);index++) {
         if(!usesHook(index)) continue;
@@ -340,7 +345,7 @@ static uint8_t soulQAScriptBackup[128];
     if(player>1||armed||installed||![self installCooperativeDoubles]) return NO;
     for(size_t i=0;i<RegionSize;i++) if(rom[RegionOffset+i]!=0xFF) return NO;
     role=unsigned(player);cooperativeCable=true;tradeMode=false;failed=false;
-    memcpy(rom+RegionOffset,BoundBattleEntryCode,sizeof(BoundBattleEntryCode));rom[0x1FFFBF0]=uint8_t(role);
+    memcpy(rom+RegionOffset,BoundBattleEntryCode,sizeof(BoundBattleEntryCode));rom[0x1FFFCF0]=uint8_t(role);
     for(size_t i=2;i<9;i++) {
         auto &hook=hooks[i];memcpy(hook.original,rom+hook.offset,8);
         hook.thunk[0]=0;hook.thunk[1]=0x48;hook.thunk[2]=0;hook.thunk[3]=0x47;
@@ -970,8 +975,9 @@ static uint8_t soulQAScriptBackup[128];
     if(!workRAM||!internalRAM||!rom) return @{};
     for(unsigned i=0;i<4;i++) {
         const auto callback=word(internalRAM+0x4FE0+i*4);
-        if(callback==0x0802E439||callback==0x090A9EA1) {
-            return @{@"battler":@(i),@"cursor":@(workRAM[0x23FF8+i]),
+        if(callback==0x0802E439||callback==0x090A9EA1||callback==0x0802EA11) {
+            const bool move=callback==0x0802EA11;
+            return @{@"battler":@(i),@"kind":move?@"move":@"action",@"cursor":@(workRAM[(move?0x23FFC:0x23FF8)+i]),
                 @"playerHP":partyHP(0x24284,workRAM[0x24029]),@"enemyHP":partyHP(0x2402C,6)};
         }
     }
