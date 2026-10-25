@@ -37,7 +37,11 @@ changes, untracked personal files and app data.
 
 The tool verifies pinned sources and privacy manifests, archives Release through
 `Bound.xcodeproj` / `Bound`, validates the signature and archive privacy manifests,
-and rechecks remote main before uploading. Xcode manages a unique build number.
+and rechecks remote main before uploading. Every new TestFlight upload must
+automatically receive a build number higher than the previous upload. Keep
+`manageAppVersionAndBuildNumber: true` in the export options so Xcode manages
+upload numbering. The project's archive build number can remain unchanged;
+the assigned upload number is recorded as `uploaded_build` when Xcode reports it.
 Export is restricted to internal TestFlight testing. This does not resolve the
 separate public distribution dependency/SDK licensing review.
 

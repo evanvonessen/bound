@@ -42,7 +42,10 @@ archives a clean snapshot of the published commit, verifies pinned sources,
 privacy manifests and signing, then uploads for internal TestFlight testing.
 Uncommitted and untracked files are excluded. Xcode uses its existing signed-in
 Apple developer account and automatic distribution signing. No new API key,
-password file, or signing repository is required. Xcode manages build numbering.
+password file, or signing repository is required. Xcode automatically manages
+upload numbering with `manageAppVersionAndBuildNumber: true`; each new TestFlight
+upload must have a higher build number than the previous upload. The local
+project/archive number does not need a manual bump for each upload.
 
 To validate signing without uploading:
 

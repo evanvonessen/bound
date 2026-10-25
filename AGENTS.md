@@ -24,6 +24,13 @@ start `bundle exec fastlane beta` as a detached process. Do not wait for or poll
 the beta job; report only that it was started and where its log is saved. This
 is the user's standing delivery instruction. Preserve existing upload receipts.
 
+Every new TestFlight upload must automatically receive a build number higher
+than the previously uploaded build. Keep Xcode-managed upload numbering enabled
+with `manageAppVersionAndBuildNumber: true` in the Fastlane delivery workflow.
+Do not disable it, reuse an uploaded build number, or substitute the project's
+archive build number for the number assigned during upload. Preserve per-revision
+upload receipts so an already accepted revision is not uploaded again.
+
 The current feature set is the permanent Bound baseline. New features are non-experimental unless the user explicitly states otherwise. The experimental customization checkbox/options and Interface & Companion settings menu have been removed; their remaining settings live in Controls. Do not restore those entry points or erase saved customization choices. Keep unrelated upstream Delta controls under the existing `simplifiedSettings` and Debug/Release rules. Preserve saved preferences, and keep UI Version independent of companion appearance. See `Docs/BOUND-EXPERIMENTAL-FEATURES.md`.
 
 The multiplayer additions are explicitly experimental at the user's request.
