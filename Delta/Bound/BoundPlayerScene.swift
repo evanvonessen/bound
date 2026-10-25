@@ -68,7 +68,7 @@ struct BoundPlayerBackground: Equatable, Sendable {
 final class BoundPlayerSceneAssets: @unchecked Sendable {
     private let lock = NSLock()
     private var maps: [Int: Data] = [:]
-    private var connections: [BoundPlayerMapConnections.Map: [BoundPlayerMapConnections.Map: BoundPlayerState.Point]] = [:]
+    private var connections: [BoundPlayerMapConnections.Map: BoundPlayerMapConnections.Projection] = [:]
 
     func mapOffset(fromGroup: Int, number: Int, toGroup: Int, number targetNumber: Int,
                    rom: (Int, Int) -> [UInt8]?) -> BoundPlayerState.Point? {
@@ -78,9 +78,18 @@ final class BoundPlayerSceneAssets: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         if connections[source] == nil {
             if connections.count >= 16 { connections.removeAll() }
-            connections[source] = BoundPlayerMapConnections.offsets(from: source, rom: rom)
+            connections[source] = BoundPlayerMapConnections.projection(from: source, rom: rom)
         }
-        return connections[source]?[target]
+        if let offset = connections[source]?.offsets[target] { return offset }
+        if connections[source]?.ambiguous.contains(target) == true { return nil }
+        // Some native seams declare only one cardinal direction. Their geometry
+        // still locates the previous map when the viewer crosses that seam.
+        if connections[target] == nil {
+            if connections.count >= 16 { connections.removeAll() }
+            connections[target] = BoundPlayerMapConnections.projection(from: target, rom: rom)
+        }
+        guard let reverse = connections[target]?.offsets[source] else { return nil }
+        return .init(x: -reverse.x, y: -reverse.y)
     }
 
     func tiles(layout: Int, rom: (Int, Int) -> [UInt8]?) -> Data? {
@@ -140,6 +149,7 @@ final class BoundPlayerSceneAssets: @unchecked Sendable {
 /// connect unrelated rooms for presentation or interaction authority.
 enum BoundPlayerMapConnections {
     struct Map: Hashable { let group: Int; let number: Int }
+    struct Projection { let offsets: [Map: BoundPlayerState.Point]; let ambiguous: Set<Map> }
     private struct Header { let width: Int; let height: Int; let edges: [(Int, Int, Map)] }
 
     private static func header(_ map: Map, rom: (Int, Int) -> [UInt8]?) -> Header? {
@@ -165,6 +175,9 @@ enum BoundPlayerMapConnections {
     }
 
     static func offsets(from source: Map, rom: (Int, Int) -> [UInt8]?) -> [Map: BoundPlayerState.Point] {
+        projection(from: source, rom: rom).offsets
+    }
+    static func projection(from source: Map, rom: (Int, Int) -> [UInt8]?) -> Projection {
         var offsets: [Map: BoundPlayerState.Point] = [source: .init(x: 0, y: 0)]
         var depths = [source: 0], queue = [source], cursor = 0, ambiguous = Set<Map>()
         while cursor < queue.count, queue.count <= 512 {
@@ -190,7 +203,7 @@ enum BoundPlayerMapConnections {
             }
         }
         for key in ambiguous { offsets.removeValue(forKey: key) }
-        return offsets
+        return .init(offsets: offsets, ambiguous: ambiguous)
     }
 }
 
@@ -256,7 +269,7 @@ enum BoundPlayerSceneDecoder {
                                              y: Int(Int32(bitPattern: UInt32(BoundSceneBytes.word(cameraBytes, 4)))))
         guard abs(residual.x) < 16, abs(residual.y) < 16 else { return nil }
         let offset = BoundPlayerState.Point(x: BoundSceneBytes.signed(offsetBytes), y: BoundSceneBytes.signed(offsetBytes, 2))
-        let camera = camera(save: player.tile, residual: residual,
+        let camera = camera(save: player.cameraTile ?? player.tile, residual: residual,
                             total: .init(x: BoundSceneBytes.signed(cameraBytes, 12), y: BoundSceneBytes.signed(cameraBytes, 8)), offset: offset)
         let foot = BoundPlayerState.Point(x: BoundSceneBytes.wrap(BoundSceneBytes.signed(raw, 0x20) + offset.x) - camera.x,
                                          y: BoundSceneBytes.wrap(BoundSceneBytes.signed(raw, 0x22) + offset.y) + 16 - camera.y)

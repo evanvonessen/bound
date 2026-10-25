@@ -4,8 +4,8 @@ import SwiftUI
 /// Small presence-only wire format. No RAM banks, input, save, camera, image or
 /// progression payload. The receiver resolves the frame from its verified ROM.
 struct BoundPresencePose: Codable, Equatable, Sendable {
-    let mapGroup: Int
-    let mapNumber: Int
+    var mapGroup: Int
+    var mapNumber: Int
     let elevation: Int
     var x: Double
     var y: Double
@@ -133,6 +133,8 @@ final class BoundLivePresenceSession: ObservableObject {
     private var sequence: UInt64 = 0
     private var lastSent: TimeInterval?
     private var lastReceived: TimeInterval?
+    private var lastPoseReceived: TimeInterval?
+    private var peerPoseAvailable = false
     private var lastSequence: UInt64 = 0
     private var lastSenderTime: TimeInterval?
     private var clockOffset: TimeInterval?
@@ -141,6 +143,7 @@ final class BoundLivePresenceSession: ObservableObject {
     private var proposalAt: TimeInterval?
     private var localPose: BoundPresencePose?
     private var romVerified = false
+    private var sceneProfile: BoundPlayerROMProfile?
     private var localAt: TimeInterval?
     private var settledLocal: BoundFriendWorldPosition?
     private var settledLocalAt: TimeInterval?
@@ -184,7 +187,8 @@ final class BoundLivePresenceSession: ObservableObject {
     }
     private func clearPeer() {
         samples.removeAll(keepingCapacity: true); bufferedSamples = 0
-        lastReceived = nil; lastSequence = 0; lastSenderTime = nil; clockOffset = nil
+        lastReceived = nil; lastPoseReceived = nil; peerPoseAvailable = false
+        lastSequence = 0; lastSenderTime = nil; clockOffset = nil
     }
     private func restartHandshakeKeepingLocal() {
         let local = localPose, at = localAt
@@ -222,7 +226,8 @@ final class BoundLivePresenceSession: ObservableObject {
         } else { settledLocal = nil; settledLocalAt = nil }
         if localPose == nil { presentationChanged?() }
     }
-    func setROMVerified(_ value: Bool) {
+    func setROMVerified(_ value: Bool, profile: BoundPlayerROMProfile? = nil) {
+        sceneProfile = value ? profile : nil
         guard value != romVerified else { return }
         romVerified = value; invalidateLocal()
     }
@@ -288,16 +293,21 @@ final class BoundLivePresenceSession: ObservableObject {
         clockOffset = offset; lastSequence = packet.sequence; lastSenderTime = packet.time; lastReceived = now
         receivedPackets += 1
         if packet.withdrawn == true {
-            retainedPose = nil; retainedAt = nil
+            retainedPose = nil; retainedAt = nil; peerPoseAvailable = false; lastPoseReceived = nil
             samples.removeAll(keepingCapacity: true); bufferedSamples = 0
             peerWithdrew?(); presentationChanged?(); return
         }
         guard let pose = packet.pose else {
-            samples.removeAll(keepingCapacity: true); bufferedSamples = 0
+            // A transient reader gap must not throw away presentation history
+            // and snap the next sample ahead of its interpolation delay.
+            // It immediately revokes interaction authority and never renews
+            // the last valid pose's visibility deadline.
+            peerPoseAvailable = false
             setStatus("Friend sprite unavailable or paused"); presentationChanged?(); return
         }
-        retainedPose = pose; retainedAt = now
-        if let previous = samples.last, !Self.continuous(previous.pose, pose)
+        retainedPose = pose; retainedAt = now; lastPoseReceived = now; peerPoseAvailable = true
+        if let previous = samples.last,
+           comparable(previous.pose, to: pose).map({ Self.continuous($0, pose) }) != true
             || packet.time - previous.time > 0.2 { samples.removeAll(keepingCapacity: true) }
         samples.append(.init(time: packet.time, pose: pose))
         if samples.count > 8 { samples.removeFirst(samples.count - 8) }
@@ -310,7 +320,7 @@ final class BoundLivePresenceSession: ObservableObject {
         "reader=\(readerStatus) local=\(localPose != nil) samples=\(samples.count) localAge=\(localAt.map { now-$0 } ?? -1) peerAge=\(lastReceived.map { now-$0 } ?? -1) settledAge=\(settledLocalAt.map { now-$0 } ?? -1)"
     }
     func interactionContext(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundFriendInteractionSession.Context? {
-        guard needsReader, romVerified, let peerEpoch, let localPose,
+        guard needsReader, romVerified, peerPoseAvailable, let peerEpoch, let localPose,
               let settledLocalAt, now >= settledLocalAt, now - settledLocalAt >= 0.05,
               let localAt, now >= localAt, now - localAt <= 0.2,
               let lastReceived, now >= lastReceived, now - lastReceived <= 0.2,
@@ -323,7 +333,7 @@ final class BoundLivePresenceSession: ObservableObject {
     }
 
     func pose(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundPresencePose? {
-        guard needsReader, let lastReceived, now >= lastReceived, now - lastReceived <= Self.timeout,
+        guard needsReader, let lastPoseReceived, now >= lastPoseReceived, now - lastPoseReceived <= Self.timeout,
               let offset = clockOffset, let first = samples.first, let last = samples.last else {
             guard enabled, romVerified, let retainedAt, now >= retainedAt,
                   now - retainedAt < Self.visibilityGrace else { return nil }
@@ -335,8 +345,8 @@ final class BoundLivePresenceSession: ObservableObject {
             let a = samples[index - 1], b = samples[index]
             // Discontinuity changes smoothing only. A confirmed position must
             // never disappear because a movement step exceeds two tiles.
-            guard Self.continuous(a.pose, b.pose), b.time - a.time <= 0.2 else { return b.pose }
-            var pose = a.pose
+            guard var pose = comparable(a.pose, to: b.pose), Self.continuous(pose, b.pose),
+                  b.time - a.time <= 0.2 else { return b.pose }
             let fraction = (target - a.time) / (b.time - a.time)
             pose.x += (b.pose.x - pose.x) * fraction; pose.y += (b.pose.y - pose.y) * fraction
             return pose
@@ -350,6 +360,19 @@ final class BoundLivePresenceSession: ObservableObject {
         // avatar is presentation only, including while both peers are fresh:
         // occupying a doorway or a differently solved puzzle cannot block play.
         nil
+    }
+
+    /// Smooth through real cardinal seams in one coordinate basis. A map ID
+    /// change alone must not jump ahead of the normal interpolation delay.
+    private func comparable(_ pose: BoundPresencePose, to target: BoundPresencePose) -> BoundPresencePose? {
+        if pose.mapGroup == target.mapGroup && pose.mapNumber == target.mapNumber { return pose }
+        guard let profile = sceneProfile,
+              let offset = profile.sceneAssets.mapOffset(fromGroup: target.mapGroup, number: target.mapNumber,
+                toGroup: pose.mapGroup, number: pose.mapNumber, rom: profile.bytes) else { return nil }
+        var result = pose
+        result.mapGroup = target.mapGroup; result.mapNumber = target.mapNumber
+        result.x += Double(offset.x * 16); result.y += Double(offset.y * 16)
+        return result
     }
 
     /// Compares successive peer samples, never distance from the local player.

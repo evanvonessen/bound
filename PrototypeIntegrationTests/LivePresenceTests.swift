@@ -95,6 +95,20 @@ final class LivePresenceTests: XCTestCase {
         session.setEnabled(true); session.start { _ in true }; return session
     }
 
+    func testOneWayCardinalSeamProjectsBothViewpointsAcrossMapGroups() throws {
+        var fixture = PresenceMapFixture()
+        fixture.map(0, width: 24, height: 20, edges: [(2, -3, 19)])
+        fixture.map(19, width: 24, height: 40)
+        fixture.map(2, width: 12, height: 10)
+        // Different map bank/region, with only the town's north connection.
+        fixture.put(0x08000100, at: 0x083526A8 + 4 * 4)
+        fixture.put(4, at: 0x08008000 + 8 + 8, count: 1)
+        let assets = BoundPlayerSceneAssets()
+        XCTAssertEqual(assets.mapOffset(fromGroup: 3, number: 0, toGroup: 4, number: 19, rom: fixture.bytes), .init(x: -3, y: -40))
+        XCTAssertEqual(assets.mapOffset(fromGroup: 4, number: 19, toGroup: 3, number: 0, rom: fixture.bytes), .init(x: 3, y: 40))
+        XCTAssertNil(assets.mapOffset(fromGroup: 4, number: 19, toGroup: 3, number: 2, rom: fixture.bytes), "An unrelated room has no visible seam")
+    }
+
     func testInteractionAdmissionUsesFreshSettledSamplesAndInvalidatesOnRestore() throws {
         let session = session(), peer = UUID()
         session.consume(reading(x:104),at:20)
@@ -318,6 +332,23 @@ final class LivePresenceTests: XCTestCase {
         XCTAssertTrue(pose.isValid, "Native map borders include negative coordinates while a step crosses the seam")
         pose.x = -105; XCTAssertFalse(pose.isValid)
         pose.x = 8; pose.y = -97; XCTAssertFalse(pose.isValid)
+    }
+
+    func testTransientNilPosePreservesInterpolationWithoutExtendingVisibilityOrAuthority() throws {
+        let session = session(), peer = UUID()
+        session.consume(reading(x: 88), at: 20)
+        session.receive(try packet(session, peer: peer, sequence: 1, time: 10, reading: reading(x: 104)), at: 20)
+        session.receive(try packet(session, peer: peer, sequence: 2, time: 10.05, reading: reading(x: 108)), at: 20.05)
+        session.receive(try packet(session, peer: peer, sequence: 3, time: 10.1), at: 20.1)
+        XCTAssertEqual(session.bufferedSamples, 2)
+        XCTAssertNil(session.interactionContext(at: 20.1))
+        session.receive(try packet(session, peer: peer, sequence: 4, time: 10.15, reading: reading(x: 116)), at: 20.15)
+        XCTAssertEqual(try XCTUnwrap(session.pose(at: 20.15)).x, 108, accuracy: 0.001)
+        // Empty but authenticated heartbeat packets cannot keep an old sprite
+        // alive forever after the most recent actual pose expires.
+        session.receive(try packet(session, peer: peer, sequence: 5, time: 70.2), at: 80.2)
+        XCTAssertNil(session.pose(at: 80.2))
+        XCTAssertNil(session.interactionContext(at: 80.2))
     }
 
     func testPauseTimeoutRestoreAndReconnectRejectPreviousSession() throws {

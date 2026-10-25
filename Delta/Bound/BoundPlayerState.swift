@@ -15,6 +15,9 @@ struct BoundPlayerState: Equatable, Sendable {
     let runningState: Int
     let tileTransitionState: Int
     var scene: BoundPlayerScene? = nil
+    // Presentation can observe the next object step before CameraMove updates
+    // the save coordinate. This anchor never grants interaction authority.
+    var cameraTile: Point? = nil
 }
 
 struct BoundPlayerStateReading: Equatable, Sendable {
@@ -110,8 +113,8 @@ enum BoundPlayerStateDecoder {
     }
 
     static func read(profile: BoundPlayerROMProfile, memory: BoundGBAMemorySnapshot, frame: UInt64,
-                     includeScene: Bool = false) -> BoundPlayerStateReading {
-        let reading = decode(memory: memory, frame: frame, romBytes: profile.bytes)
+                     includeScene: Bool = false, presentationOnly: Bool = false) -> BoundPlayerStateReading {
+        let reading = decode(memory: memory, frame: frame, romBytes: profile.bytes, presentationOnly: presentationOnly)
         guard includeScene, var player = reading.player else { return reading }
         player.scene = BoundPlayerSceneDecoder.read(player: player, memory: memory, profile: profile)
         return .init(frame: frame, status: reading.status, detail: reading.detail, player: player)
@@ -120,7 +123,7 @@ enum BoundPlayerStateDecoder {
     /// Pure decoder seam for small metadata fixtures. Production admission always
     /// constructs the exact-hash profile above before this decoder can run.
     static func decode(memory: BoundGBAMemorySnapshot, frame: UInt64,
-                       romBytes: (Int, Int) -> [UInt8]?) -> BoundPlayerStateReading {
+                       romBytes: (Int, Int) -> [UInt8]?, presentationOnly: Bool = false) -> BoundPlayerStateReading {
         func invalid(_ detail: String) -> BoundPlayerStateReading { .inactive(.invalidMemory, detail, frame: frame) }
         guard let main = memory.bytes(at: 0x030030F0, count: 8),
               let battle = memory.bytes(at: 0x03003529, count: 1),
@@ -166,7 +169,11 @@ enum BoundPlayerStateDecoder {
         }
         let tile = BoundPlayerState.Point(x: coordinate(object, 0x10) - 7, y: coordinate(object, 0x12) - 7)
         let previous = BoundPlayerState.Point(x: coordinate(object, 0x14) - 7, y: coordinate(object, 0x16) - 7)
-        guard tile.x == coordinate(save, 0), tile.y == coordinate(save, 2),
+        let cameraTile = BoundPlayerState.Point(x: coordinate(save, 0), y: coordinate(save, 2))
+        let pendingCameraStep = presentationOnly && previous == cameraTile
+            && abs(tile.x - cameraTile.x) + abs(tile.y - cameraTile.y) == 1
+            && avatar[2] == 2 && avatar[3] == 2
+        guard (tile == cameraTile || pendingCameraStep),
               (-7..<width + 7).contains(tile.x), (-7..<height + 7).contains(tile.y),
               avatar[2] <= 2, avatar[3] <= 2 else { return invalid("Coordinate or movement disagreement") }
         let directions = [1: "South", 2: "North", 3: "West", 4: "East"]
@@ -176,7 +183,8 @@ enum BoundPlayerStateDecoder {
         return BoundPlayerStateReading(frame: frame, status: .live, detail: "RR 4.1 · local reader",
             player: BoundPlayerState(mapGroup: group, mapNumber: number, tile: tile, previousTile: previous,
                 facing: facing, elevation: Int(object[11] & 15), graphicsID: Int(object[5]),
-                runningState: Int(avatar[2]), tileTransitionState: Int(avatar[3])))
+                runningState: Int(avatar[2]), tileTransitionState: Int(avatar[3]),
+                cameraTile: pendingCameraStep ? cameraTile : nil))
     }
 }
 

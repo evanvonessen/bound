@@ -889,7 +889,7 @@ static uint8_t soulQAScriptBackup[128];
     // Use the cartridge's warp opcode, rather than replacing map/battle logic.
     // The disposable traversal fixture bypasses Oak's one-time stop at (12,1).
     // Native setvar changes only that story gate; map loading and movement stay native.
-    const uint8_t script[]={0x16,0x50,0x40,1,0,0x39,3,0,255,12,0,2,0,0x02};
+    const uint8_t script[]={0x16,0x50,0x40,1,0,0x29,0x2F,0x08,0x39,3,0,255,12,0,2,0,0x02};
     memcpy(internalRAM+0x4280,script,sizeof(script));
     memset(internalRAM+0xEB0,0,0x74);internalRAM[0xEB1]=1;put32(internalRAM+0xEB8,0x03004280);
     put32(internalRAM+0xF0C,0x0815F9B4);put32(internalRAM+0xF10,0x0815FD08);

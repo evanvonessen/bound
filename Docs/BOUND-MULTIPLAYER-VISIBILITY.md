@@ -51,7 +51,7 @@ origin. A sprite intersecting the original 240×160 viewport is rasterized with
 the existing background/object occlusion, flips and animation frame. It is not
 replaced with an arrow when a tree, NPC or native field window covers it.
 
-A fully offscreen sprite on the same or cardinally connected map and elevation becomes a small edge
+A fully offscreen sprite on the same or cardinally connected map becomes a small edge
 chevron with the selected friend's name and rounded straight-line distance in
 16-pixel tiles. Direction follows the camera center-to-player ray; distance is
 between the players' world feet. The whole label stays inset in the viewport.
@@ -60,9 +60,46 @@ and neither indicator layout nor networking runs inside the emulator frame
 callback. Camera movement alone restores an already received sprite without
 waiting for another peer packet. Native cardinal map connections translate a
 friend's map-local coordinates into the viewer's map before projection. Door,
-warp and dive destinations, disconnected maps and different elevations produce
+warp and dive destinations and disconnected maps produce
 neither a sprite nor an arrow, but their positions remain tracked. Presentation
 projection never grants cross-map interaction authority.
+
+## Frame-coherent sprites — October 25, 2026
+
+Live sprites are composed through an app-owned `VideoRendering` delegate before
+Delta copies each native presentation buffer. The scene, camera, foreground
+mask and peer pixels are therefore presented together. The UIKit timer still
+handles offscreen labels and networking, but no longer positions a second
+sprite layer over an independently rendered map. Composition restores every
+changed source pixel immediately after Delta makes its immutable output copy;
+no gameplay RAM, ROM, dependency pin or upstream core source is changed. Each
+presentation has its own autorelease pool and bounded sprite scratch storage.
+
+Running exposed a separate native one-frame transition: the object advances its
+destination before `CameraMove` advances the save coordinate. Presentation alone
+accepts that exact adjacent moving-step state and uses the actual camera anchor.
+Interaction and presence admission retain their strict coordinate checks. The
+renderer reads the frame's scene independently of the HUD's consecutive-frame
+admission, so a transient HUD status cannot despawn the sprite.
+
+Cardinal seams work in both directions even when the ROM declares only one
+edge, including across map groups. Reverse lookup never overrides an ambiguous
+forward path. Disconnected rooms and non-cardinal warps remain separate spaces;
+map or region identity alone is not a visibility rule.
+
+The same connection translations keep the normal interpolation delay continuous
+when a remote player crosses a seam. A brief empty reader sample retains that
+history while immediately revoking interaction authority; it does not renew
+the last valid sprite's visibility deadline.
+
+Validation: all 57 presence/reader/rasterizer checks passed, including real
+VBA-M running north/south across Pallet Town and Route 1 and horizontal running
+at 3× with a stationary peer. The actual video delegate presented every field
+frame without a scene gap. Tests also cover cross-group one-way seams, source
+pixel restoration, foreground occlusion and strict interaction admission.
+The Release iPhone build and 99 source/integration hash checks also passed.
+Physical-phone smoothness and authenticated internet validation remain pending;
+simulator tests do not establish upstream Delta performance parity.
 
 ## Disappearance diagnosis
 
@@ -102,13 +139,12 @@ The current map now comes from the save location and its matching verified map
 header. Unique player-object ownership, sprite ownership, coordinate agreement,
 fade/battle guards and consecutive completed-frame validation remain required.
 Signed border pixels are accepted during a step across a map seam. Cardinal
-connection geometry is read from the verified ROM and cached outside the frame
-owner. Nearest connection paths take precedence over longer paths; conflicting
+connection geometry is read from the verified ROM and kept in a bounded cache. Nearest connection paths take precedence over longer paths; conflicting
 equally short paths are withheld because some cartridge loops do not form one
 consistent global grid. Interior warps are never treated as geometric edges.
 
 Physical-device verification remains pending. Packet loss, a scene-reader
-failure or an unrelated map/elevation change can still produce distinct absence states.
+failure or an unrelated map change can still produce distinct absence states.
 Existing Connection Check diagnostics report peer-pose availability,
 map/elevation agreement, frame resolution and visible pixel count to distinguish
 them.

@@ -19,6 +19,11 @@ user instructions for all chats and supersede older delivery guidance in this
 repository. Normal local validation, commits, and pushes remain authorized.
 Keep the existing Cloud workflow manual-only; do not enable automatic triggers.
 
+For every Bound prompt, finish the requested work and required validation, then
+start `bundle exec fastlane beta` as a detached process. Do not wait for or poll
+the beta job; report only that it was started and where its log is saved. This
+is the user's standing delivery instruction. Preserve existing upload receipts.
+
 The current feature set is the permanent Bound baseline. New features are non-experimental unless the user explicitly states otherwise. The experimental customization checkbox/options and Interface & Companion settings menu have been removed; their remaining settings live in Controls. Do not restore those entry points or erase saved customization choices. Keep unrelated upstream Delta controls under the existing `simplifiedSettings` and Debug/Release rules. Preserve saved preferences, and keep UI Version independent of companion appearance. See `Docs/BOUND-EXPERIMENTAL-FEATURES.md`.
 
 The multiplayer additions are explicitly experimental at the user's request.
@@ -55,4 +60,4 @@ matching integrated ROM to multi_red's permanent first-README download link and
 refreshes the named main iPhone 17 simulator when booted. Preserve earlier ROMs
 and saves; report incompatible game/app commits or service failures accurately.
 See `../multi_red/docs/main-simulator.md`. This does not replace the existing
-Bound validation or the prohibition on TestFlight uploads and Cloud usage checks.
+Bound validation or the manual-only TestFlight workflow and prohibition on Cloud usage checks.

@@ -21,9 +21,99 @@ struct BoundPlayerStateSetting: View {
     }
 }
 
+/// Composite the peer in the same presentation buffer as the native map, before
+/// Delta copies that buffer. UIKit timers must never position a sprite over an
+/// independently presented emulator frame. Core RAM and the source pixels are
+/// unchanged after forwarding; only Delta's immutable output contains the peer.
+final class BoundPresenceFrameCompositor: @unchecked Sendable {
+    private let lock = NSLock()
+    private var profile: BoundPlayerROMProfile?
+    private var pose: BoundPresencePose?
+    private var coreID: ObjectIdentifier?
+    private var renderer: BoundPresenceVideoRenderer?
+    #if DEBUG
+    // QA installs this while the core is paused; callbacks stay on its owner.
+    var observeFrame: ((BoundPlayerStateReading, BoundRecordedPlayerPose?, Int) -> Void)?
+    #endif
+    func configure(profile: BoundPlayerROMProfile?, pose: BoundPresencePose?, coreID: ObjectIdentifier? = nil) {
+        lock.lock(); self.profile = profile; self.pose = pose; self.coreID = coreID; lock.unlock()
+    }
+    // Exclusively on the emulator owner, including after core restart replaces
+    // its renderer. Retain the wrapper because bridges may weakly own delegates.
+    func receive(_ core: EmulatorCore) {
+        lock.lock(); let enabled = profile != nil && coreID == ObjectIdentifier(core); lock.unlock()
+        let bridge = core.deltaCore.emulatorBridge
+        if enabled {
+            if let renderer, bridge.videoRenderer === renderer { return }
+            guard let downstream = bridge.videoRenderer else { return }
+            let wrapper = BoundPresenceVideoRenderer(core: core, downstream: downstream, compositor: self)
+            renderer = wrapper; bridge.videoRenderer = wrapper
+        } else if let renderer {
+            if bridge.videoRenderer === renderer { bridge.videoRenderer = renderer.downstream }
+            self.renderer = nil
+        }
+    }
+    fileprivate func process(_ core: EmulatorCore, downstream: VideoRendering) {
+        lock.lock(); let profile = self.profile, pose = self.pose, expected = coreID; lock.unlock()
+        guard expected == ObjectIdentifier(core), let profile, let pose,
+              let memory = BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }) else {
+            downstream.processFrame(); return
+        }
+        let reading = BoundPlayerStateDecoder.read(profile: profile, memory: memory, frame: 1, includeScene: true, presentationOnly: true)
+        let rendered = reading.player.flatMap { pose.rendered(profile: profile, viewer: $0) }
+        var pixels = 0
+        if let scene = reading.player?.scene, let rendered, let buffer = downstream.videoBuffer {
+            pixels = Self.composite(rendered, scene: scene, into: buffer) { downstream.processFrame() }
+        } else { downstream.processFrame() }
+        #if DEBUG
+        observeFrame?(reading, rendered, pixels)
+        #endif
+    }
+    @discardableResult
+    static func composite(_ pose: BoundRecordedPlayerPose, scene: BoundPlayerScene,
+                          into buffer: UnsafeMutablePointer<UInt8>, present: () -> Void) -> Int {
+        let (rgba, origin) = BoundRecordedPlayerRasterizer.rgba(pose: pose, scene: scene)
+        var saved: [(Int, UInt32)] = []
+        saved.reserveCapacity(pose.appearance.width * pose.appearance.height)
+        for y in 0..<pose.appearance.height {
+            for x in 0..<pose.appearance.width {
+                let src = (y * pose.appearance.width + x) * 4
+                guard rgba[src + 3] != 0 else { continue } // Rasterizer clips/masks.
+                let dst = ((origin.y + y) * 240 + origin.x + x) * 4
+                let old = UInt32(buffer[dst]) | UInt32(buffer[dst+1]) << 8 | UInt32(buffer[dst+2]) << 16 | UInt32(buffer[dst+3]) << 24
+                saved.append((dst, old))
+                buffer[dst] = rgba[src+2]; buffer[dst+1] = rgba[src+1]
+                buffer[dst+2] = rgba[src]; buffer[dst+3] = 255 // VBA-M BGRA8.
+            }
+        }
+        present()
+        for (dst, old) in saved { for byte in 0..<4 { buffer[dst+byte] = UInt8(truncatingIfNeeded: old >> (byte * 8)) } }
+        return saved.count
+    }
+}
+
+private final class BoundPresenceVideoRenderer: NSObject, VideoRendering {
+    weak var core: EmulatorCore?
+    let downstream: VideoRendering
+    weak var compositor: BoundPresenceFrameCompositor?
+    init(core: EmulatorCore, downstream: VideoRendering, compositor: BoundPresenceFrameCompositor) {
+        self.core = core; self.downstream = downstream; self.compositor = compositor
+    }
+    var videoBuffer: UnsafeMutablePointer<UInt8>? { downstream.videoBuffer }
+    var viewport: CGRect { get { downstream.viewport } set { downstream.viewport = newValue } }
+    func prepare() { downstream.prepare() }
+    func processFrame() {
+        autoreleasepool {
+            if let core, let compositor { compositor.process(core, downstream: downstream) }
+            else { downstream.processFrame() }
+        }
+    }
+}
+
 /// Configuration and latest-value mailbox are shared; decoder/tracker work is
 /// serialized separately. Main never waits on the memory-copy/decoding lock.
 final class BoundVBAPlayerStateProbe: @unchecked Sendable {
+    let compositor = BoundPresenceFrameCompositor()
     private let lock = NSLock()
     private let workerLock = NSLock()
     private var generation: UInt64 = 0
@@ -52,6 +142,7 @@ final class BoundVBAPlayerStateProbe: @unchecked Sendable {
 
     @discardableResult func receive(_ core: EmulatorCore) -> BoundPlayerStateReading? {
         guard core.deltaCore.identifier == "com.rileytestut.GBADeltaCore" else { return nil }
+        compositor.receive(core)
         return receive(coreID: ObjectIdentifier(core)) { address, count in
             core.deltaCore.emulatorBridge.readMemory?(at: address, size: count)
         }
@@ -187,7 +278,7 @@ final class BoundPlayerStateDisplay {
         presence?.demandChanged = nil; presence?.presentationChanged = nil
         presence = session
         self.friendName = friendName
-        session.setROMVerified(profile != nil && supportsCore)
+        session.setROMVerified(profile != nil && supportsCore, profile: profile)
         session.demandChanged = { [weak self] in self?.refreshPreference() }
         session.presentationChanged = { [weak self] in self?.renderLivePresence() }
         refreshPreference()
@@ -254,7 +345,7 @@ final class BoundPlayerStateDisplay {
     }
 
     private func refreshState() {
-        presence?.setROMVerified(profile != nil && supportsCore)
+        presence?.setROMVerified(profile != nil && supportsCore, profile: profile)
         let status: BoundPlayerStateReading.Status, detail: String
         var active = false
         if !enabled && !needsScene { status = .disabled; detail = "Player state display is off" }
@@ -310,11 +401,13 @@ final class BoundPlayerStateDisplay {
     }
 
     private func renderLivePresence() {
+        let enabled = presence?.needsReader == true && !suspended && core?.state == .running
+        probe.compositor.configure(profile: enabled ? profile : nil, pose: enabled ? presence?.pose() : nil, coreID: core.map(ObjectIdentifier.init))
         let now = ProcessInfo.processInfo.systemUptime
         if let presence, let reading = currentReading, reading.status == .live,
            let lastFrameAt, now - lastFrameAt < BoundLivePresenceSession.visibilityGrace, let profile, let viewer = reading.player {
             let pose = presence.pose(at: now), rendered = pose?.rendered(profile: profile, viewer: viewer)
-            livePlayerOverlay.show(pose: rendered, scene: viewer.scene, offscreenName: friendName())
+            livePlayerOverlay.show(pose: rendered, scene: viewer.scene, offscreenName: friendName(), drawsSprite: false)
             presence.observePresentation(pose: pose, viewer: viewer, frameResolved: rendered != nil,
                                          visiblePixels: livePlayerOverlay.visiblePixels, at: now)
         } else {
@@ -346,6 +439,7 @@ final class BoundPlayerStateDisplay {
     }
 
     func stop() {
+        probe.compositor.configure(profile: nil, pose: nil)
         timer?.invalidate(); timer = nil
         loadTask?.cancel(); loadTask = nil
         stateObservation = nil; core = nil; profile = nil

@@ -264,7 +264,8 @@ final class BoundRecordedPlayerOverlay: UIView {
         addSubview(imageView); addSubview(indicatorView); isHidden = true
     }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("Use init(frame:)") }
-    func show(pose: BoundRecordedPlayerPose?, scene: BoundPlayerScene?, offscreenName: String? = nil) {
+    func show(pose: BoundRecordedPlayerPose?, scene: BoundPlayerScene?, offscreenName: String? = nil, drawsSprite: Bool = true) {
+        imageView.isHidden = !drawsSprite
         offscreenIndicator = nil; offscreenText = nil; indicatorView.isHidden = true
         guard let pose, let scene else { isHidden = true; imageView.image = nil; visiblePixels = 0; return }
         if let offscreenName, let indicator = BoundPlayerViewport.indicator(pose: pose, scene: scene) {
@@ -281,6 +282,13 @@ final class BoundRecordedPlayerOverlay: UIView {
         }
         let (rgba, origin) = BoundRecordedPlayerRasterizer.rgba(pose: pose, scene: scene)
         let sprite = pose.appearance
+        if !drawsSprite {
+            // Live pixels are already in Delta's frame. Keep only offscreen UI
+            // and diagnostics here; do not allocate a second UIImage each tick.
+            visiblePixels = stride(from: 3, to: rgba.count, by: 4).filter { rgba[$0] != 0 }.count
+            imageView.image = nil; isHidden = visiblePixels == 0
+            return
+        }
         guard let provider = CGDataProvider(data: rgba as CFData),
               let image = CGImage(width: sprite.width, height: sprite.height, bitsPerComponent: 8, bitsPerPixel: 32,
                   bytesPerRow: sprite.width * 4, space: CGColorSpaceCreateDeviceRGB(),

@@ -33,11 +33,11 @@ private struct ReaderFixture {
         if address >= 0x03000000 { internalRAM.replaceSubrange(address - 0x03000000..<address - 0x03000000 + count, with: bytes) }
         else { work.replaceSubrange(address - 0x02000000..<address - 0x02000000 + count, with: bytes) }
     }
-    func decode(frame: UInt64 = 1) -> BoundPlayerStateReading {
+    func decode(frame: UInt64 = 1, presentationOnly: Bool = false) -> BoundPlayerStateReading {
         let snapshot = BoundGBAMemorySnapshot(copyingWorkRAM: work, internalRAM: internalRAM)!
-        return BoundPlayerStateDecoder.decode(memory: snapshot, frame: frame) { address, count in
+        return BoundPlayerStateDecoder.decode(memory: snapshot, frame: frame, romBytes: { address, count in
             guard let value = rom[address], value.count == count else { return nil }; return value
-        }
+        }, presentationOnly: presentationOnly)
     }
 }
 
@@ -65,6 +65,22 @@ final class PlayerStateTests: XCTestCase {
         XCTAssertEqual(player.tile, .init(x: 6, y: 6))
         XCTAssertEqual(player.previousTile, player.tile)
         XCTAssertEqual(player.facing, "South")
+    }
+
+    func testPendingRunningStepIsPresentationOnlyAndUsesActualCameraTile() throws {
+        var fixture = ReaderFixture()
+        fixture.put(12, at: 0x02036E38 + 0x12, count: 2) // Destination one tile north.
+        fixture.put(2, at: 0x02037078 + 2, count: 1)
+        fixture.put(2, at: 0x02037078 + 3, count: 1)
+        XCTAssertEqual(fixture.decode().status, .invalidMemory, "Interaction admission remains strict")
+        let player = try XCTUnwrap(fixture.decode(presentationOnly: true).player)
+        XCTAssertEqual(player.tile, .init(x: 6, y: 5))
+        XCTAssertEqual(player.cameraTile, .init(x: 6, y: 6))
+        fixture.put(11, at: 0x02036E38 + 0x12, count: 2)
+        XCTAssertNil(fixture.decode(presentationOnly: true).player, "Larger coordinate disagreements remain invalid")
+        fixture.put(12, at: 0x02036E38 + 0x12, count: 2)
+        fixture.put(0, at: 0x02037078 + 2, count: 1)
+        XCTAssertNil(fixture.decode(presentationOnly: true).player, "Stationary mismatches are not a running-camera transition")
     }
 
     func testBorrowedVBAViewsAreCopiedAndAddressTranslationIsBounded() throws {

@@ -349,6 +349,31 @@ final class RecordedPlayerTests: XCTestCase {
         XCTAssertEqual(track.pose(at: 4)?.x, 500)
     }
 
+    func testPresenceFrameCompositionTracksCameraAndRestoresSourcePixels() {
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 240 * 160 * 4)
+        defer { buffer.deallocate() }
+        buffer.initialize(repeating: 37, count: 240 * 160 * 4)
+        let original = Data(bytes: buffer, count: 240 * 160 * 4)
+        let peer = pose(x: 104)
+        // A stationary friend must move by exactly the local camera delta in
+        // every immutable presentation, including reversals and running steps.
+        for x in [16, 14, 12, 10, 12, 14, 16, 18] {
+            let local = scene(cameraX: x)
+            let origin = BoundPlayerViewport.origin(pose: peer, scene: local)
+            BoundPresenceFrameCompositor.composite(peer, scene: local, into: buffer) {
+                let pixel = (origin.y * 240 + origin.x) * 4
+                XCTAssertEqual(Array(UnsafeBufferPointer(start: buffer + pixel, count: 4)), [0, 0, 255, 255])
+                XCTAssertEqual(buffer[pixel - 4], 37)
+            }
+            XCTAssertEqual(Data(bytes: buffer, count: original.count), original, "Compositing must not alter the core's source pixels")
+        }
+        let covered = BoundPlayerBackground(tiles: Data(repeating: 0x11, count: 32768),
+            layers: [.init(priority: 0, scrollX: 0, scrollY: 0, map: Data(repeating: 0, count: 2048))])
+        BoundPresenceFrameCompositor.composite(peer, scene: scene(background: covered), into: buffer) {
+            XCTAssertEqual(Data(bytes: buffer, count: original.count), original, "Foreground terrain still occludes the friend")
+        }
+    }
+
     func testActualPalletRouteOneCrossingKeepsDecodedScene() async throws {
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MultiplayerValidation")
@@ -361,12 +386,13 @@ final class RecordedPlayerTests: XCTestCase {
         try Data(repeating: 0xFF, count: 0x20000).write(to: battery)
         let core = try XCTUnwrap(EmulatorCore(game: ReplayGame(fileURL: romURL, gameSaveURL: battery), options: [.metal: true]))
         let setup = NativePlayerSceneSetup(core: core)
-        let captured = ReplayReadings()
+        let captured = ReplayReadings(), presented = ReplayReadings()
+        let compositor = BoundPresenceFrameCompositor()
         let booted = expectation(description: "Admitted native field")
         var ready = false, frame: UInt64 = 0
         core.updateHandler = { core in
             autoreleasepool {
-                setup.receive(core); frame += 1
+                setup.receive(core); compositor.receive(core); frame += 1
                 guard let memory = BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }) else { return }
                 let reading = BoundPlayerStateDecoder.read(profile: profile, memory: memory, frame: frame, includeScene: true)
                 captured.append(reading)
@@ -385,9 +411,24 @@ final class RecordedPlayerTests: XCTestCase {
         }
         XCTAssertTrue(core.pause())
         let start = captured.snapshot().count
+        let waitingFriend = try XCTUnwrap(captured.snapshot().last.flatMap(BoundPresencePose.init(reading:)))
+        compositor.configure(profile: profile, pose: waitingFriend, coreID: ObjectIdentifier(core))
+        compositor.observeFrame = { reading, rendered, pixels in
+            presented.append(reading)
+            if let scene = reading.player?.scene, let rendered,
+               abs(rendered.y - Double(scene.worldFoot.y)) >= 32 {
+                let origin = BoundPlayerViewport.origin(pose: rendered, scene: scene)
+                if origin.x >= 0, origin.x + 16 <= 240, origin.y >= 32, origin.y + 32 <= 160 {
+                    XCTAssertGreaterThan(pixels, 0, "Stationary friend vanished from the actual native presentation")
+                }
+            }
+        }
         try core.videoManager.snapshot()?.pngData()?.write(to: output.appendingPathComponent("pallet.png"))
-        // Actual directional input crosses the seamless connection both ways.
-        for input in [64, 128] {
+        // Hold B and use native running shoes to reproduce a stationary peer
+        // viewed by a running player crossing the seam in both directions.
+        core.deltaCore.emulatorBridge.activateInput(2, value: 1, playerIndex: 0)
+        for (input, rate) in [(64, 1.0), (128, 1.0), (32, 3.0), (16, 3.0)] {
+            core.rate = rate
             core.deltaCore.emulatorBridge.activateInput(input, value: 1, playerIndex: 0)
             XCTAssertTrue(core.resume())
             try await Task.sleep(for: .milliseconds(1200))
@@ -400,12 +441,16 @@ final class RecordedPlayerTests: XCTestCase {
              "map": r.player.map { [$0.mapGroup, $0.mapNumber] } ?? [],
              "tile": r.player.map { [$0.tile.x, $0.tile.y, $0.elevation] } ?? [],
              "scene": r.player?.scene != nil,
-             "foot": r.player?.scene.map { [$0.worldFoot.x, $0.worldFoot.y] } ?? []]
+             "foot": r.player?.scene.map { [$0.worldFoot.x, $0.worldFoot.y] } ?? [],
+             "camera": r.player?.scene.map { [$0.camera.x, $0.camera.y] } ?? []]
         }
         try JSONSerialization.data(withJSONObject: diagnostic, options: [.prettyPrinted, .sortedKeys])
             .write(to: output.appendingPathComponent("frames.json"))
         NSLog("Native map crossing diagnostics: %@", output.path)
         let route = crossings.filter { $0.player?.mapNumber == 19 }
+        XCTAssertGreaterThan(presented.snapshot().count, 60, "Exercise the actual video-renderer delegate, not only a UIKit overlay")
+        let missing = presented.snapshot().filter { $0.status != .live || $0.player?.scene == nil }
+        XCTAssertTrue(missing.isEmpty, "No presentation gaps while running across the seamless boundary: \(missing.prefix(3))")
         XCTAssertGreaterThan(route.count, 10, "Must walk into Route 1, not just warp to it")
         XCTAssertGreaterThan(route.filter { $0.player?.scene != nil }.count, 10)
         XCTAssertEqual(crossings.last?.player?.mapNumber, 0, "Must walk back into Pallet Town")
@@ -414,7 +459,8 @@ final class RecordedPlayerTests: XCTestCase {
         let stationaryPose = try XCTUnwrap(BoundPresencePose(reading: stationary))
         let stationaryViewer = try XCTUnwrap(stationary.player)
         let receiver = BoundLivePresenceSession(), sender = UUID()
-        receiver.setROMVerified(true); receiver.setEnabled(true); receiver.start { _ in true }
+        receiver.setROMVerified(true, profile: profile); receiver.setEnabled(true); receiver.start { _ in true }
+        var previousSmoothed: BoundRecordedPlayerPose?
         var visibleAcrossBoundary = 0
         var clippedRoadFrames: [String] = []
         // Both viewpoints use actual RAM tilemaps/cameras and ROM connections:
@@ -425,6 +471,13 @@ final class RecordedPlayerTests: XCTestCase {
                 sender: sender, receiver: receiver.epoch, sequence: UInt64(index + 1), time: now - 10,
                 pose: BoundPresencePose(reading: reading))
             receiver.receive(try XCTUnwrap(packet.encoded()), at: now)
+            if let smoothed = receiver.pose(at: now + 0.05)?.rendered(profile: profile, viewer: stationaryViewer) {
+                if let previousSmoothed {
+                    XCTAssertLessThanOrEqual(abs(smoothed.x - previousSmoothed.x) + abs(smoothed.y - previousSmoothed.y), 4.01,
+                        "Crossing a connected map must not jump ahead of delayed interpolation")
+                }
+                previousSmoothed = smoothed
+            }
             guard reading.player?.scene != nil else { continue }
             let moving = try XCTUnwrap(reading.player), movingPose = try XCTUnwrap(receiver.pose(at: now + 0.101))
             XCTAssertEqual(movingPose.mapNumber, moving.mapNumber, "The receiving client must switch maps with the native sender")
