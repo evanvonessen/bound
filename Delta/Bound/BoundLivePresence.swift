@@ -44,7 +44,10 @@ struct BoundPresencePose: Codable, Equatable, Sendable {
 
     func rendered(viewer: BoundPlayerState, rom: (Int, Int) -> [UInt8]?,
                   assets: BoundPlayerSceneAssets) -> BoundRecordedPlayerPose? {
-        guard isValid, viewer.scene != nil, viewer.elevation == elevation,
+        // Elevation controls native collision and drawing priority, not whether
+        // two players occupy the same visible map. Stairs, bridges and map
+        // borders can put visible players on different elevations.
+        guard isValid, viewer.scene != nil,
               let offset = assets.mapOffset(fromGroup: viewer.mapGroup, number: viewer.mapNumber,
                   toGroup: mapGroup, number: mapNumber, rom: rom),
               let tiles = rom(frameAddress, 256) else { return nil }

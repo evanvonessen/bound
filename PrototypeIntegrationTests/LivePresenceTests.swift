@@ -279,6 +279,21 @@ final class LivePresenceTests: XCTestCase {
         XCTAssertFalse(routePose.isSpatiallyComparable(to: viewer), "Presentation projection must not grant cross-map interaction authority")
     }
 
+    func testDifferentElevationDoesNotHideVisibleFriendOrGrantInteraction() throws {
+        let fixture = PresenceMapFixture(), assets = BoundPlayerSceneAssets()
+        let viewer = try XCTUnwrap(reading(elevation: 3).player)
+        for elevation in 0...15 {
+            let pose = try XCTUnwrap(BoundPresencePose(reading: reading(x: 136, elevation: elevation)))
+            let rendered = try XCTUnwrap(pose.rendered(viewer: viewer, rom: fixture.bytes, assets: assets),
+                                        "Elevation \(elevation) must not hide a friend on the visible map")
+            XCTAssertEqual(rendered.elevation, elevation)
+            let rgba = BoundRecordedPlayerRasterizer.rgba(pose: rendered, scene: viewer.scene!).0
+            XCTAssertEqual(stride(from: 3, to: rgba.count, by: 4).filter { rgba[$0] != 0 }.count, 512)
+            XCTAssertEqual(pose.isSpatiallyComparable(to: viewer), elevation == viewer.elevation,
+                           "Rendering must not relax interaction elevation checks")
+        }
+    }
+
     func testNativeCardinalConnectionOffsetsAndAmbiguousPathsAreBounded() {
         var fixture = PresenceMapFixture()
         fixture.map(0, width: 24, height: 20, edges: [(2, -3, 1), (1, 4, 2), (3, -5, 3), (4, 6, 4), (5, 0, 5)])

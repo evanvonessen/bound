@@ -329,3 +329,35 @@ Settings version 5 adds a Debug-only “Game Over on Party Wipe” toggle, defau
 off. Off disables the whole automatic Game Over/delete flow. Normal mode and
 legacy settings keep the flow enabled. Byte 21 is the inverted Debug override;
 the app, cartridge and server validate the same contract.
+
+## Map visibility review — October 25, 2026
+
+Live sprite presentation no longer requires matching player elevations. The
+native sprite priority still controls scenery occlusion; collision and friend
+interaction admission retain their existing map/elevation checks. Unconnected
+rooms are still separate. Elevation mismatch previously returned no sprite even
+when both positions were inside the same visible map.
+
+`RecordedPlayerTests.testActualPalletRouteOneCrossingKeepsDecodedScene` cold-boots
+the current owned cartridge in VBA-M, uses a native warp to Pallet's entrance,
+then walks north into Route 1 and south back into Pallet with ordinary input.
+The disposable fixture skips Oak's initial stop using native `setvar 0x4050, 1`;
+it does not alter map connections or movement. Captured RAM scenes travel through
+the presence encoder/receiver and render from both the waiting and moving
+player's viewpoints. The test checks scene availability, map changes and pixel
+coverage, allowing the visible native area-name popup to cover sprite pixels.
+Frames and the initial native map image are saved only in the QA app container.
+
+The separate elevation regression exercises every native elevation value while
+preserving interaction checks. These are local simulator and protocol checks;
+they do not establish physical-phone or separate-network acceptance of the
+reported Pallet/Route 1 disappearance.
+
+This pass also ran 108 focused integration tests and the ordinary Release iPhone
+build. Two isolated simulators passed a friendly battle with an initially fainted
+party, a three-second silent packet outage, Run and restoration of the original
+party. They also completed a trade interrupted during exchange by the same silent
+outage, returned to the field, and reopened the received Pokémon from native
+server-state/battery captures. Those paired tests use a host-loopback relay, not
+the live service or physical phones. No additional battle/trade defect was
+reproduced in these cases.

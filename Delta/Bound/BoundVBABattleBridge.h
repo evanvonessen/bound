@@ -74,6 +74,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)qaStartSharedWorldSightlineWait;
 + (BOOL)qaPrepareNuggetBridgeFixture;
 + (BOOL)qaWarpNuggetBridge:(NSUInteger)y;
++ (BOOL)qaWarpPalletEntrance;
 + (NSDictionary<NSString *,id> *)qaNuggetBridgeStatus;
 + (BOOL)qaStartSoulCheck;
 + (BOOL)qaStartSoulCatch:(NSUInteger)mode;

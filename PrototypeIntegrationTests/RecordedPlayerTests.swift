@@ -349,6 +349,115 @@ final class RecordedPlayerTests: XCTestCase {
         XCTAssertEqual(track.pose(at: 4)?.x, 500)
     }
 
+    func testActualPalletRouteOneCrossingKeepsDecodedScene() async throws {
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MultiplayerValidation")
+        let romURL = root.appendingPathComponent("RadicalRed.gba")
+        guard FileManager.default.fileExists(atPath: romURL.path) else { throw XCTSkip("Requires owned ROM fixture") }
+        let profile = try BoundPlayerROMProfile(rom: Data(contentsOf: romURL))
+        let output = root.appendingPathComponent("map-crossing-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let battery = output.appendingPathComponent("work.sav")
+        try Data(repeating: 0xFF, count: 0x20000).write(to: battery)
+        let core = try XCTUnwrap(EmulatorCore(game: ReplayGame(fileURL: romURL, gameSaveURL: battery), options: [.metal: true]))
+        let setup = NativePlayerSceneSetup(core: core)
+        let captured = ReplayReadings()
+        let booted = expectation(description: "Admitted native field")
+        var ready = false, frame: UInt64 = 0
+        core.updateHandler = { core in
+            autoreleasepool {
+                setup.receive(core); frame += 1
+                guard let memory = BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }) else { return }
+                let reading = BoundPlayerStateDecoder.read(profile: profile, memory: memory, frame: frame, includeScene: true)
+                captured.append(reading)
+                if !ready, setup.isReady, reading.player?.scene != nil { ready = true; booted.fulfill() }
+            }
+        }
+        defer { _ = core.stop() }
+        core.rate = 8; XCTAssertTrue(core.start())
+        await fulfillment(of: [booted], timeout: 60)
+        XCTAssertTrue(core.pause()); core.rate = 1
+        XCTAssertTrue(BoundVBABattleBridge.qaWarpPalletEntrance())
+        XCTAssertTrue(core.resume())
+        for _ in 0..<300 {
+            if let p = captured.snapshot().last?.player, p.mapGroup == 3, p.mapNumber == 0, p.scene != nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(core.pause())
+        let start = captured.snapshot().count
+        try core.videoManager.snapshot()?.pngData()?.write(to: output.appendingPathComponent("pallet.png"))
+        // Actual directional input crosses the seamless connection both ways.
+        for input in [64, 128] {
+            core.deltaCore.emulatorBridge.activateInput(input, value: 1, playerIndex: 0)
+            XCTAssertTrue(core.resume())
+            try await Task.sleep(for: .milliseconds(1200))
+            XCTAssertTrue(core.pause())
+            core.deltaCore.emulatorBridge.deactivateInput(input, playerIndex: 0)
+        }
+        let crossings = Array(captured.snapshot().dropFirst(start))
+        let diagnostic = crossings.map { r -> [String: Any] in
+            ["frame": r.frame, "status": r.status.rawValue, "detail": r.detail,
+             "map": r.player.map { [$0.mapGroup, $0.mapNumber] } ?? [],
+             "tile": r.player.map { [$0.tile.x, $0.tile.y, $0.elevation] } ?? [],
+             "scene": r.player?.scene != nil,
+             "foot": r.player?.scene.map { [$0.worldFoot.x, $0.worldFoot.y] } ?? []]
+        }
+        try JSONSerialization.data(withJSONObject: diagnostic, options: [.prettyPrinted, .sortedKeys])
+            .write(to: output.appendingPathComponent("frames.json"))
+        NSLog("Native map crossing diagnostics: %@", output.path)
+        let route = crossings.filter { $0.player?.mapNumber == 19 }
+        XCTAssertGreaterThan(route.count, 10, "Must walk into Route 1, not just warp to it")
+        XCTAssertGreaterThan(route.filter { $0.player?.scene != nil }.count, 10)
+        XCTAssertEqual(crossings.last?.player?.mapNumber, 0, "Must walk back into Pallet Town")
+        XCTAssertNotNil(crossings.last?.player?.scene)
+        let stationary = try XCTUnwrap(crossings.first { $0.player?.mapNumber == 0 && $0.player?.scene != nil })
+        let stationaryPose = try XCTUnwrap(BoundPresencePose(reading: stationary))
+        let stationaryViewer = try XCTUnwrap(stationary.player)
+        let receiver = BoundLivePresenceSession(), sender = UUID()
+        receiver.setROMVerified(true); receiver.setEnabled(true); receiver.start { _ in true }
+        var visibleAcrossBoundary = 0
+        var clippedRoadFrames: [String] = []
+        // Both viewpoints use actual RAM tilemaps/cameras and ROM connections:
+        // one player waits in Pallet while the other walks into Route 1.
+        for (index, reading) in crossings.enumerated() {
+            let now = 20 + Double(index) / 60
+            let packet = BoundPresencePacket(version: 1, rom: BoundPlayerROMProfile.supportedSHA256,
+                sender: sender, receiver: receiver.epoch, sequence: UInt64(index + 1), time: now - 10,
+                pose: BoundPresencePose(reading: reading))
+            receiver.receive(try XCTUnwrap(packet.encoded()), at: now)
+            guard reading.player?.scene != nil else { continue }
+            let moving = try XCTUnwrap(reading.player), movingPose = try XCTUnwrap(receiver.pose(at: now + 0.101))
+            XCTAssertEqual(movingPose.mapNumber, moving.mapNumber, "The receiving client must switch maps with the native sender")
+            for (peer, viewer) in [(movingPose, stationaryViewer), (stationaryPose, moving)] {
+                let rendered = try XCTUnwrap(peer.rendered(profile: profile, viewer: viewer))
+                let scene = try XCTUnwrap(viewer.scene)
+                let origin = BoundPlayerViewport.origin(pose: rendered, scene: scene)
+                guard abs(rendered.y - Double(scene.worldFoot.y)) >= 32,
+                      origin.x >= 0, origin.x + 16 <= 240, origin.y >= 0, origin.y + 32 <= 160 else { continue }
+                let rgba = BoundRecordedPlayerRasterizer.rgba(pose: rendered, scene: scene).0
+                let visible = stride(from: 3, to: rgba.count, by: 4).filter { rgba[$0] != 0 }.count
+                XCTAssertGreaterThan(visible, 0, "Native road sprite disappeared: viewer \(viewer.mapNumber), peer \(peer.mapNumber), origin \(origin)")
+                let opaque = (0..<32).reduce(0) { count, y in
+                    count + (0..<16).filter { rendered.appearance.colorIndex(x: $0, y: y) != 0 }.count
+                }
+                // The real, visible Pallet/Route name popup legitimately
+                // covers pixels. Terrain on the entrance path must not.
+                let ui = BoundPlayerBackground(tiles: scene.background.tiles,
+                    layers: scene.background.layers.filter(\.masksWholeTiles))
+                let uiPixels = (0..<32).reduce(0) { count, y in count + (0..<16).filter {
+                    rendered.appearance.colorIndex(x: $0, y: y) != 0 && ui.covers(x: origin.x + $0, y: origin.y + y, priority: rendered.appearance.priority)
+                }.count }
+                if visible != opaque - uiPixels {
+                    clippedRoadFrames.append("\(viewer.mapNumber)/\(peer.mapNumber) \(origin) pixels=\(visible)/\(opaque - uiPixels)")
+                }
+                if peer.mapNumber != viewer.mapNumber { visibleAcrossBoundary += 1 }
+            }
+        }
+        XCTAssertGreaterThan(visibleAcrossBoundary, 10)
+        XCTAssertEqual(receiver.receivedPackets, crossings.count)
+        XCTAssertTrue(clippedRoadFrames.isEmpty, "The clear entrance path must not partially erase the friend: \(clippedRoadFrames.prefix(3))")
+    }
+
     func testActualVBAMRecordingAndReplayAgainstMovingCamera() async throws {
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MultiplayerValidation", isDirectory: true)
