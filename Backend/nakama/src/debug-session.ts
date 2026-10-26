@@ -119,7 +119,11 @@ namespace BoundDebug {
         if(r.action==="prepare"){
             const choices={expectedGeneration:r.expectedGeneration,kind:r.kind,source:r.source,compatibility:r.compatibility,settings:r.settings},hash=nk.sha256Hash(canonical(choices));
             if(op){if(op.requestDigest!==hash)fail("operation_conflict");return JSON.stringify(response(nk,auth,root,op));}
-            if(r.expectedGeneration!==root.currentGeneration||!integer(r.expectedGeneration)||["load","reload","custom","return"].indexOf(r.kind)<0||!equal(r.compatibility,profile)||!BoundIndependent.settingsValid(nk,r.settings)||!object(r.source))fail("prepare");
+            if(r.expectedGeneration!==root.currentGeneration||!integer(r.expectedGeneration)||["load","reload","custom","return"].indexOf(r.kind)<0||!BoundIndependent.settingsValid(nk,r.settings)||!object(r.source))fail("prepare");
+            // Return exits the installed generation; a newer admission profile
+            // must neither strand it nor reinterpret its immutable compatibility.
+            const returnSource=r.kind==="return"?read(nk,manifestKey(root.sessionID,root.currentGeneration)):null;
+            if(r.kind==="return"?!returnSource||!equal(r.compatibility,returnSource.value.compatibility):!equal(r.compatibility,profile))fail("prepare");
             const sourceFields:any={builtin:["fixtureVersion","kind","pointID"],current:["kind","sourceGeneration"],custom:["customID","kind","sourceGeneration"],previous:["kind"]};
             if(!sourceFields[r.source.kind]||Object.keys(r.source).sort().join(",")!==sourceFields[r.source.kind].join(",")||
                 r.source.sourceGeneration!==undefined&&(!integer(r.source.sourceGeneration)||r.source.sourceGeneration<1)||
@@ -137,7 +141,7 @@ namespace BoundDebug {
                 const sourceState=read(nk,prefix(root.sessionID,r.source.sourceGeneration)+source.value.runID,gameplay);if(!sourceState)fail("source");ownershipEpoch=sourceState.value.epoch;
                 runID=source.value.runID;identities=copy(previous.value.identities);if(r.source.kind==="custom")cut=source.value.cut;
             }else if(r.source.kind==="previous"&&r.kind==="return"){
-                const current=read(nk,manifestKey(root.sessionID,root.currentGeneration));if(!current||current.value.settings!==r.settings)fail("source");
+                const current=returnSource;if(!current||current.value.settings!==r.settings)fail("source");
                 root.owners.forEach(function(owner:string){identities[owner]=ordinaryReturn(nk,root,owner).bookmark.identity;});runID=current.value.runID;
             }else fail("source");
             const generation=++root.nextGeneration;root.activeOperationID=r.operationID;

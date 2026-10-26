@@ -7,7 +7,7 @@ namespace BoundDebug {
     export const gameplay = "bound_debug_gameplay_v2", events = "bound_debug_events_v2";
     export const system = "00000000-0000-0000-0000-000000000000";
     export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, digest = /^[0-9a-f]{64}$/;
-    export const profile = { romSHA256: "7e170ed0d868cc3353552523c0a417ae600c6c24b0f7c28ff2781925bf6b9ca8", gameID: "a08fc3e61882d725c15e848a44fb00ac2802db42",
+    export const profile = { romSHA256: "02f97ffa88f71015d2da5df114c0bf48d7c80f37f64d10075a81fef2dc6d8a79", gameID: "4b792d8f8b86e1a65b27965bb523fe0a48a20190",
         coreIdentifier: "com.rileytestut.GBADeltaCore", coreStateVersion: 10, saveStateLayout: 6,
         ruleset: "6fb29ba1401149ed8dc6fa12b85cd94f", protocolVersion: 1, saveVersion: 1 };
     export function fail(message: string, code: number = 9): never { throw { message: "debug_" + message, code: code }; }

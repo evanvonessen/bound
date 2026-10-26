@@ -181,10 +181,10 @@ test('new generation preserves exact custom payload and rejects a builtin as cus
   assert.equal(reload.runID,capture.runID);assert.deepEqual(reload.cut,capture.cut);assert.equal(h.rpc(owner,'download',{operationID:capture.operationID,generation:2,index:0}).chunk.data,a.base64);
   h.upload(reload,owner,a);h.upload(reload,peer,b);assert.equal(h.mutate(owner,'commit',{operationID:reload.operationID,generation:3}).session.currentGeneration,3);
 });
-function ordinaryFixture(h){
+function ordinaryFixture(h,profile={gameID:'synthetic-ordinary',romSHA256:'a'.repeat(64)}){
   function rpc(who,action,fields={}){const c={version:1,protocol:'bound-saves-v1',ownerID:who,issuedAt:1000,expiresAt:1090,...(action==='create'?{partnerID:peer,roomID}:{})},encoded=Buffer.from(JSON.stringify(c)).toString('base64url'),saveTicket=encoded+'.'+createHmac('sha256',secret).update(encoded).digest('hex');return JSON.parse(h.f.independent.rpc({...h.f.ctx,userId:who},h.f.logger,h.f.nk,JSON.stringify({action,saveTicket,...fields})));}
   const settings=Buffer.alloc(32);settings[0]=5;settings[12]=187;settings.fill(255,13,20);
-  const run=rpc(owner,'create',{request_id:operationID(8000),partnerID:peer,gameID:'synthetic-ordinary',romSHA256:'a'.repeat(64),settings:settings.toString('base64')});
+  const run=rpc(owner,'create',{request_id:operationID(8000),partnerID:peer,gameID:profile.gameID,romSHA256:profile.romSHA256,settings:settings.toString('base64')});
   const bookmarks={};for(const who of [owner,peer]){const current=rpc(who,'get',{save_id:run.save_id});bookmarks[who]={identity:current.identity,checkpoint:null,receipt:null,deviceID:who,ownershipEpoch:1,settled:true};}
   return {rpc,run,bookmarks};
 }
@@ -289,6 +289,62 @@ test('coordinated return requires both safe owner heads and retains ordinary byt
   assert.equal(h.rpc(owner,'return').returnTarget.unchanged,true);assert.throws(()=>h.rpc(owner,'returnVerify',{checkpoint:operationID(900),deviceID:owner,nativeVerified:true}));
   h.rpc(owner,'returnVerify',{checkpoint:null,deviceID:owner,nativeVerified:true});const both=h.rpc(peer,'returnVerify',{checkpoint:null,deviceID:peer,nativeVerified:true});assert.equal(both.operation.state,'ready');
   assert.deepEqual(h.snapshot().filter(r=>r.collection==='bound_independent_v2').map(r=>r.value),before.map(r=>r.value));
+});
+function retainedOldProfileSession(){
+  const h=debugFixture(),current=plain(h.f.debug.profile);
+  const old={...current,romSHA256:'7e170ed0d868cc3353552523c0a417ae600c6c24b0f7c28ff2781925bf6b9ca8',gameID:'a08fc3e61882d725c15e848a44fb00ac2802db42'};
+  assert.notDeepEqual(current,old,'This regression requires the accepted new current profile');
+  Object.assign(h.f.debug.profile,old);
+  const ordinary=ordinaryFixture(h,old),initial={};
+  for(const who of [owner,peer])initial[who]=ordinarySwiftReceipt(h,ordinary,who);
+  h.pair();const op=h.prepare().operation,bookmarks=plain(ordinary.bookmarks),payloads={};
+  for(const who of [owner,peer])payloads[who]=h.upload(op,who,h.payload(op,who,{bookmark:bookmarks[who]}));
+  const manifest=h.mutate(owner,'commit',{operationID:op.operationID,generation:1}).manifest;
+  for(const who of [owner,peer])verify(h,op,manifest,who,payloads[who]);
+  Object.assign(h.f.debug.profile,current);
+  const request={operationID:operationID(2),expectedGeneration:1,kind:'return',source:{kind:'previous'},compatibility:old,settings:op.settings};
+  return {h,current,old,ordinary,initial,op,bookmarks,payloads,request};
+}
+test('upgraded current profile permits exact installed-profile Return and preserves latest ordinary heads and historical bytes',()=>{
+  const {h,ordinary,initial,op,bookmarks,payloads,request}=retainedOldProfileSession(),latest={};
+  for(const who of [owner,peer])latest[who]=ordinarySwiftReceipt(h,ordinary,who,{checkpoint:operationID(who===owner?8501:8502),predecessor:initial[who].checkpoint});
+  const ordinaryBefore=h.snapshot().filter(r=>r.collection==='bound_independent_v2');
+  const retained=r=>r.collection.startsWith('bound_debug_')&&(r.collection!=='bound_debug_v1'||r.key===`${sid}/op/${op.operationID}`||r.key===`${sid}/generation/1`);
+  const historical=h.snapshot().filter(retained);
+  const returning=h.mutate(owner,'prepare',request).operation,fields={operationID:returning.operationID,generation:returning.generation};
+  assert.deepEqual(returning.compatibility,op.compatibility);assert.equal(returning.runID,op.runID);
+  for(const who of [owner,peer]){
+    const d=payloads[who].descriptor;
+    h.mutate(who,'returnReady',{...fields,deviceID:d.deviceID,ownershipEpoch:d.ownershipEpoch,sourceCheckpoint:d.receipt.checkpoint,safe:true});
+    if(who===owner)assert.throws(()=>h.mutate(owner,'commit',fields),e=>e.message==='debug_waiting_for_buddy');
+  }
+  assert.equal(h.mutate(owner,'commit',fields).session.status,'revoked');
+  for(const who of [owner,peer]){
+    const target=h.rpc(who,'return').returnTarget;
+    assert.deepEqual(target.bookmark,bookmarks[who]);assert.deepEqual(target.currentHead,latest[who].receipt);assert.equal(target.unchanged,false);
+    assert.throws(()=>h.rpc(who,'returnVerify',{checkpoint:initial[who].checkpoint,deviceID:who,nativeVerified:true}),e=>e.message==='debug_return_verification');
+    const verified=h.rpc(who,'returnVerify',{checkpoint:latest[who].checkpoint,deviceID:who,nativeVerified:true});assert.equal(verified.own.returnVerified,true);
+    assert.equal(h.rpc(who,'download',{operationID:op.operationID,generation:1,index:0}).chunk.data,payloads[who].base64);
+  }
+  assert.equal(h.rpc(owner,'status').operation.state,'ready');
+  assert.deepEqual(h.snapshot().filter(r=>r.collection==='bound_independent_v2'),ordinaryBefore);
+  assert.deepEqual(h.snapshot().filter(retained),historical);
+  assert.deepEqual(h.snapshot().find(r=>r.collection==='bound_debug_v1'&&r.key===sid).value.bookmarks,bookmarks);
+});
+test('upgraded Return rejects invented or current-mismatched profiles and stale generation before writes',()=>{
+  const {h,current,old,request}=retainedOldProfileSession();
+  const invalid=[{compatibility:current},{compatibility:{...old,gameID:'f'.repeat(40)}},{compatibility:{...old,romSHA256:'f'.repeat(64)}},
+    {compatibility:{...old,saveStateLayout:old.saveStateLayout+1}},{expectedGeneration:0},{expectedGeneration:2},{source:{kind:'builtin',pointID:'01',fixtureVersion:'multiplayer-isolation-v1'}}];
+  for(const changed of invalid){const before=h.snapshot();assert.throws(()=>h.mutate(owner,'prepare',{...request,...changed}));assert.deepEqual(h.snapshot(),before);}
+  assert.deepEqual(h.mutate(owner,'prepare',request).operation.compatibility,old);
+});
+test('upgraded Return exception cannot admit old-profile load reload or custom operations',()=>{
+  const {h,old,request}=retainedOldProfileSession();
+  for(const kind of ['load','reload','custom']){
+    const source=kind==='custom'?{kind:'current',sourceGeneration:1}:{kind:'builtin',pointID:'01',fixtureVersion:'multiplayer-isolation-v1'};
+    const before=h.snapshot();assert.throws(()=>h.mutate(owner,'prepare',{...request,kind,source}),e=>e.message==='debug_prepare');assert.deepEqual(h.snapshot(),before);
+  }
+  assert.deepEqual(h.mutate(owner,'prepare',request).operation.compatibility,old);
 });
 test('custom capture releases before upload, archives generation2 while1 progresses, then reload3 restores frozen cut',()=>{
   const h=debugFixture(),initial=committed(h);verify(h,initial.op,initial.manifest,owner,initial.a);verify(h,initial.op,initial.manifest,peer,initial.b);
