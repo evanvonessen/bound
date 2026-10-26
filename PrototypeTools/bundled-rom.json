@@ -1,6 +1,5 @@
 {
-  "sha256": "8bf5b9675e0e34e785b0a40eb2d8120a1d2d6874890c4f6d2f43b5d1d3ab90fb",
-  "url": "https://github.com/evanvonessen/multi_red/releases/download/cartridge-8bf5b9675e0e34e7/rrbin-integrated.gba",
-  "repository": "evanvonessen/multi_red",
-  "tag": "cartridge-8bf5b9675e0e34e7"
+  "sha256": "7e170ed0d868cc3353552523c0a417ae600c6c24b0f7c28ff2781925bf6b9ca8",
+  "local_only": true,
+  "compatibility": "Exact paired Bound multiplayer-isolation build; retained runtime services required."
 }

@@ -5,6 +5,7 @@ export DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}"
 logs="$(pwd)/.build/verification/latest"
 mkdir -p "$logs"
 PrototypeTools/prepare.sh > "$logs/prepare.log" 2>&1
+PrototypeTools/qa-python PrototypeTools/sync-model-support.py --check > "$logs/model-support.log" 2>&1
 PrototypeTools/validate-sfml-strings.sh > "$logs/sfml-strings.log" 2>&1
 swift test --package-path PrototypeTests > "$logs/models.log" 2>&1
 if [[ -z "${QA_SIMULATOR_ID:-}" ]]; then

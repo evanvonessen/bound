@@ -14,10 +14,11 @@ final class PiPTests: XCTestCase {
         for content in [BoundPiPContent.notes, .types, .dex] { preferences.setEnabled(false, for: content) }
 
         let restarted = BoundPiPPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
-        XCTAssertEqual(restarted.enabledContents(uiVersion: .option2), [.friend, .bosses])
-        XCTAssertEqual(restarted.enabledContents(uiVersion: .option1), [.friend, .bosses])
+        XCTAssertEqual(restarted.enabledContents(uiVersion: .option2), [.friend, .bosses, .connections])
+        XCTAssertEqual(restarted.enabledContents(uiVersion: .option1), [.friend, .bosses, .connections])
         restarted.setEnabled(false, for: .friend)
         restarted.setEnabled(false, for: .bosses)
+        restarted.setEnabled(false, for: .connections)
         XCTAssertTrue(restarted.enabledContents(uiVersion: .option2).isEmpty)
         XCTAssertTrue(restarted.enabledContents(uiVersion: .option1).isEmpty)
         restarted.setEnabled(true, for: .bosses)

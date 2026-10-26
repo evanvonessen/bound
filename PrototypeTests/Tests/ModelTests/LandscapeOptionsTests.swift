@@ -13,7 +13,7 @@ final class LandscapeOptionsTests: XCTestCase {
         let preferences = BoundLandscapePreferences(defaults: defaults)
         XCTAssertEqual(preferences.option, .option7)
         XCTAssertEqual(BoundLandscapeOption.option1.title, "Option 1")
-        XCTAssertEqual(preferences.referenceContents, [.notes, .types, .bosses, .dex])
+        XCTAssertEqual(preferences.referenceContents, [.notes, .types, .bosses, .dex, .connections])
         XCTAssertEqual(preferences.referenceContent, .notes)
         XCTAssertTrue(preferences.friendVisible)
         XCTAssertFalse(preferences.referenceVisible)

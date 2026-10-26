@@ -190,8 +190,8 @@ final class BossGuideTests: XCTestCase {
     }
 
     func testPermanentCompanionCycleIncludesReferencePanels() {
-        XCTAssertEqual(BoundPiPContent.cycleOrder, [.friend, .notes, .types, .bosses, .dex])
-        XCTAssertEqual(BoundPiPContent.cycleOrder, [.friend, .notes, .types, .bosses, .dex])
+        XCTAssertEqual(BoundPiPContent.cycleOrder, [.friend, .notes, .types, .bosses, .dex, .connections])
+        XCTAssertEqual(Set(BoundPiPContent.cycleOrder), Set(BoundPiPContent.allCases))
     }
 
     func testBossReferenceResolvesEveryDefaultSpeciesMoveAndDescriptionOffline() throws {

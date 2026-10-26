@@ -26,12 +26,12 @@ final class ExperimentalFeaturesTests: XCTestCase {
         for legacyValue in [false, true] {
             defaults.set(legacyValue, forKey: BoundLegacyPreferences.experimentalFeaturesKey)
             let upgradedInstall = try XCTUnwrap(UserDefaults(suiteName: suite))
-            assertBaseline(defaults: upgradedInstall, option1: [.friend, .types, .bosses, .dex],
-                           option2: [.dex, .friend, .types, .bosses])
+            assertBaseline(defaults: upgradedInstall, option1: [.friend, .types, .bosses, .dex, .connections],
+                           option2: [.dex, .friend, .types, .bosses, .connections])
             XCTAssertEqual(BoundUIVersionPreferences(defaults: upgradedInstall).version, .option2)
             XCTAssertEqual(BoundCompanionButtonPreferences(defaults: upgradedInstall).buttonType, .option3)
             XCTAssertEqual(BoundPiPPreferences(defaults: upgradedInstall).orderedContents,
-                           [.dex, .friend, .types, .notes, .bosses])
+                           [.dex, .friend, .types, .notes, .bosses, .connections])
             XCTAssertEqual(upgradedInstall.integer(forKey: BoundReferenceLayoutPreferences.dexKey), 4)
             XCTAssertEqual(upgradedInstall.integer(forKey: BoundReferenceLayoutPreferences.bossKey), 9)
         }
@@ -40,8 +40,8 @@ final class ExperimentalFeaturesTests: XCTestCase {
 
     @MainActor
     private func assertBaseline(defaults: UserDefaults,
-                                option1: [BoundPiPContent] = [.friend, .notes, .types, .bosses, .dex],
-                                option2: [BoundPiPContent] = [.friend, .notes, .types, .bosses, .dex],
+                                option1: [BoundPiPContent] = [.friend, .notes, .types, .bosses, .dex, .connections],
+                                option2: [BoundPiPContent] = [.friend, .notes, .types, .bosses, .dex, .connections],
                                 file: StaticString = #filePath, line: UInt = #line) {
         let uiVersion = BoundUIVersionPreferences(defaults: defaults)
         let button = BoundCompanionButtonPreferences(defaults: defaults)
@@ -49,7 +49,7 @@ final class ExperimentalFeaturesTests: XCTestCase {
 
         XCTAssertEqual(uiVersion.effectiveVersion, uiVersion.version, file: file, line: line)
         XCTAssertEqual(button.effectiveButtonType, button.buttonType, file: file, line: line)
-        XCTAssertEqual(BoundPiPContent.cycleOrder, [.friend, .notes, .types, .bosses, .dex], file: file, line: line)
+        XCTAssertEqual(BoundPiPContent.cycleOrder, [.friend, .notes, .types, .bosses, .dex, .connections], file: file, line: line)
         XCTAssertEqual(companion.enabledContents(uiVersion: .option1), option1, file: file, line: line)
         XCTAssertEqual(companion.enabledContents(uiVersion: .option2), option2, file: file, line: line)
     }
