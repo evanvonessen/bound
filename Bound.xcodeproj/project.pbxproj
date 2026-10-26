@@ -36,10 +36,12 @@
 		2E6FAD85815A2A993C5B21E2 /* BoundGameProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9F4C16930EFA91B4E882814 /* BoundGameProfiles.swift */; };
 		4F03CDCC9F397264DAE197BE /* MultiRedAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D612312CF0A79B9A8A5F163 /* MultiRedAdapter.swift */; };
 		00DBC18786AC882BD890367E /* SDKPhase4EventOracle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C5B370A2ADBBFCEE32D371 /* SDKPhase4EventOracle.swift */; };
+		FFFD447B4E289538B40450F1 /* SDKPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B33375746DEFBFF86B6076D /* SDKPersistenceTests.swift */; };
 		BE67330B59A799C863B605DD /* SDKEventTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F54C325F9E214EDF64EC641 /* SDKEventTests.swift */; };
 		085B8B9A27989DE5689C8A8B /* SDKLifecycleTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2AB0812B3F1D7F4A01CF05A /* SDKLifecycleTransportTests.swift */; };
 		E657F02BC1209299174F9260 /* SDKPhase5ALifecycleOracle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 448BC7B1C34C76E35D89331D /* SDKPhase5ALifecycleOracle.swift */; };
 		B5E5D7CCB8B8C253BC8C439A /* SDKActivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0A146917D4A2BBEBD8CEBE /* SDKActivityTests.swift */; };
+		5DBFEF40F269A3B480722A6F /* BoundSDKPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDEAF73889B68A5B3CDAAC16 /* BoundSDKPersistence.swift */; };
 		65E7E41A7CF6291BA07CFCBB /* BoundSDKEventJournalRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECCDC5CF923B2CFD4F1D5EF3 /* BoundSDKEventJournalRules.swift */; };
 		D354721E7DAA6257761D5821 /* BoundSDKEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DC29D14A85686EFA7BC5EE1 /* BoundSDKEvent.swift */; };
 		A08F00843FB3548348EB2264 /* BoundSDKLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4725ADD69BABEBFF0F15082C /* BoundSDKLifecycle.swift */; };
@@ -918,10 +920,12 @@
 		F9F4C16930EFA91B4E882814 /* BoundGameProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/Generated/BoundGameProfiles.swift; sourceTree = "<group>"; };
 		0D612312CF0A79B9A8A5F163 /* MultiRedAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiRedAdapter.swift; sourceTree = "<group>"; };
 		A6C5B370A2ADBBFCEE32D371 /* SDKPhase4EventOracle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKPhase4EventOracle.swift; sourceTree = "<group>"; };
+		6B33375746DEFBFF86B6076D /* SDKPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKPersistenceTests.swift; sourceTree = "<group>"; };
 		2F54C325F9E214EDF64EC641 /* SDKEventTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKEventTests.swift; sourceTree = "<group>"; };
 		A2AB0812B3F1D7F4A01CF05A /* SDKLifecycleTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKLifecycleTransportTests.swift; sourceTree = "<group>"; };
 		448BC7B1C34C76E35D89331D /* SDKPhase5ALifecycleOracle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKPhase5ALifecycleOracle.swift; sourceTree = "<group>"; };
 		FD0A146917D4A2BBEBD8CEBE /* SDKActivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKActivityTests.swift; sourceTree = "<group>"; };
+		DDEAF73889B68A5B3CDAAC16 /* BoundSDKPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/BoundSDKPersistence.swift; sourceTree = "<group>"; };
 		ECCDC5CF923B2CFD4F1D5EF3 /* BoundSDKEventJournalRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/BoundSDKEventJournalRules.swift; sourceTree = "<group>"; };
 		5DC29D14A85686EFA7BC5EE1 /* BoundSDKEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/BoundSDKEvent.swift; sourceTree = "<group>"; };
 		4725ADD69BABEBFF0F15082C /* BoundSDKLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/BoundSDKLifecycle.swift; sourceTree = "<group>"; };
@@ -1564,6 +1568,7 @@
 				6C1D4FE40217C5BB5982618C /* SDKCodecTests.swift */,
 				83A96265A167ACD9C7D4C7AE /* MultiRedAdapterTests.swift */,
 				A6C5B370A2ADBBFCEE32D371 /* SDKPhase4EventOracle.swift */,
+				6B33375746DEFBFF86B6076D /* SDKPersistenceTests.swift */,
 				2F54C325F9E214EDF64EC641 /* SDKEventTests.swift */,
 				A2AB0812B3F1D7F4A01CF05A /* SDKLifecycleTransportTests.swift */,
 				448BC7B1C34C76E35D89331D /* SDKPhase5ALifecycleOracle.swift */,
@@ -1728,6 +1733,7 @@
 				F45B97C1BEB3242A8EEE7F11 /* BoundSDKBytes.swift */,
 				F9F4C16930EFA91B4E882814 /* BoundGameProfiles.swift */,
 				0D612312CF0A79B9A8A5F163 /* MultiRedAdapter.swift */,
+				DDEAF73889B68A5B3CDAAC16 /* BoundSDKPersistence.swift */,
 				ECCDC5CF923B2CFD4F1D5EF3 /* BoundSDKEventJournalRules.swift */,
 				5DC29D14A85686EFA7BC5EE1 /* BoundSDKEvent.swift */,
 				4725ADD69BABEBFF0F15082C /* BoundSDKLifecycle.swift */,
@@ -3450,6 +3456,7 @@
 				E3535FCBB07DDD2E1DB35075 /* SDKCodecTests.swift in Sources */,
 				3F84EFCBAE0FCE9EE41C735D /* MultiRedAdapterTests.swift in Sources */,
 				00DBC18786AC882BD890367E /* SDKPhase4EventOracle.swift in Sources */,
+				FFFD447B4E289538B40450F1 /* SDKPersistenceTests.swift in Sources */,
 				BE67330B59A799C863B605DD /* SDKEventTests.swift in Sources */,
 				085B8B9A27989DE5689C8A8B /* SDKLifecycleTransportTests.swift in Sources */,
 				E657F02BC1209299174F9260 /* SDKPhase5ALifecycleOracle.swift in Sources */,
@@ -3810,6 +3817,7 @@
 				B63D7EDEDAFCB8D1D74BE7F3 /* BoundSDKBytes.swift in Sources */,
 				2E6FAD85815A2A993C5B21E2 /* BoundGameProfiles.swift in Sources */,
 				4F03CDCC9F397264DAE197BE /* MultiRedAdapter.swift in Sources */,
+				5DBFEF40F269A3B480722A6F /* BoundSDKPersistence.swift in Sources */,
 				65E7E41A7CF6291BA07CFCBB /* BoundSDKEventJournalRules.swift in Sources */,
 				D354721E7DAA6257761D5821 /* BoundSDKEvent.swift in Sources */,
 				A08F00843FB3548348EB2264 /* BoundSDKLifecycle.swift in Sources */,

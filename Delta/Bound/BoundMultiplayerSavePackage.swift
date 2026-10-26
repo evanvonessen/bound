@@ -106,7 +106,10 @@ struct BoundMultiplayerSavePackage: Codable, Equatable, Sendable {
 /// immutable snapshots upload in the background. Version 1 paired packages remain
 /// readable. The event journal lives outside checkpoint rollback and is merged
 /// before installing a restored battery.
-final class BoundMultiplayerSaveStore: @unchecked Sendable {
+final class BoundMultiplayerSaveStore: @unchecked Sendable, BoundSDKEventPersistenceStore, BoundSDKManagedCheckpointPersistenceStore {
+    typealias RunIdentity = BoundMultiplayerRunIdentity
+    typealias CheckpointPackage = BoundMultiplayerSavePackage
+    typealias RunManifest = BoundMultiplayerRunManifest
     enum Failure: LocalizedError, Equatable {
         case corrupt, incompatible, ownerMismatch, deviceOwned, activeGame, conflict, incomplete, missingSave
         var errorDescription: String? {
@@ -498,6 +501,13 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
         return BoundSDKEventJournalRules.eventsToSend(in: value, peerCursor: peerCursor, limit: limit) {
             !excludingAcquisitions || !$0.requiresNativeCheckpoint
         }
+    }
+    // The SDK describes a checkpoint dependency; the host keeps the game's
+    // acquisition policy and the existing locked journal implementation.
+    func eventsToSend(gameID: String, peerCursor: BoundSDKEventCursor?, limit: Int,
+                      identity: BoundMultiplayerRunIdentity?, excludingCheckpointDependentEvents: Bool) throws -> [BoundSDKEvent] {
+        try sharedEventsToSend(gameID: gameID, peerCursor: peerCursor, limit: limit,
+                               identity: identity, excludingAcquisitions: excludingCheckpointDependentEvents)
     }
     /// Commit the player's checkpoint and its synchronization cursor without a
     /// partner receipt. The caller flushes SRAM and supplies a paused snapshot;

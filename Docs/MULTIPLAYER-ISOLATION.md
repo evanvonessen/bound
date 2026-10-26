@@ -200,3 +200,26 @@ Paused continuation restore also admits the exact cartridge synchronously before
 mutating state, cancels an outstanding cooperative profile verifier, and reapplies
 the immutable profile after probe configuration. This avoids a bind/restore race;
 the final hosted gate includes these ordering checks.
+
+## Persistence boundary
+
+The coordinator uses `BoundSDKEventPersistence` and
+`BoundSDKManagedCheckpointPersistence` for event journals and managed checkpoint
+operations. Both facets retain the same existing `BoundMultiplayerSaveStore`;
+they add no cache, second writer, migration or new storage location. The SDK
+uses associated identity/package/manifest types, while the host owns their
+existing representations and the acquisition checkpoint policy.
+
+Legacy archives, device grants, file transactions and interrupted-activity
+recovery stay on the concrete store. Native capture, server authorization and
+upload timing remain with their existing callers. A managed in-memory receipt
+does not prove server persistence or advance a confirmed head.
+
+The final extraction gate passed 364 hosted tests (362 passed, the same two
+native-chooser/Mac-only skips), 108 backend regressions, all four generated
+contract/model checks, and an unsigned Release iPhone build. Four persistence
+tests verify unchanged existing files and idempotent journal bytes, shared
+managed RAM state, host acquisition policy before batching, and finite history
+targets that require native application. The Release bundle contains the exact
+`7e170ed0...` combined ROM. These gates establish the structural extraction;
+full paired gameplay, DEBUG fixtures and device/WAN acceptance follow separately.

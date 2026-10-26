@@ -421,6 +421,8 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     private let onboarding: FriendOnboarding
     private let account: BoundFriendAccount
     private let store: BoundMultiplayerSaveStore
+    private let eventPersistence: BoundSDKEventPersistence<BoundMultiplayerSaveStore>
+    private let checkpointPersistence: BoundSDKManagedCheckpointPersistence<BoundMultiplayerSaveStore>
     private let leaseClient = BoundRunLeaseClient()
     private var grant: BoundRunLeaseGrant?
     private var validatedFence: UInt64?
@@ -555,6 +557,8 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     init(sharing: FriendSharingSession, onboarding: FriendOnboarding, account: BoundFriendAccount,
          store: BoundMultiplayerSaveStore = .shared) {
         self.sharing = sharing; self.onboarding = onboarding; self.account = account; self.store = store
+        eventPersistence = .init(store: store)
+        checkpointPersistence = .init(store: store)
         accountObservation = NotificationCenter.default.publisher(for: BoundFriendAccount.sessionDidChangeNotification, object: account)
             .sink { [weak self] _ in
                 MainActor.assumeIsolated {
@@ -670,7 +674,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         if !serverOnly { server = .shared }
         serverSelection = UUID(); serverStarting = false; serverActivating = false; serverCapturePending = false; finalServerSaveQueued = false; serverProfile = nil
         needsServerMenu = serverOnly; serverMenuBusy = false; serverMenuError = nil; serverRuns = []
-        if serverOnly, let game { store.useServerStorage(gameID: game.identifier) }
+        if serverOnly, let game { checkpointPersistence.useServerStorage(gameID: game.identifier) }
         servicesActive = core != nil; transportWasConnected = false
         protectedStorage = game.map { store.hasRun(gameID:$0.identifier) } ?? false; lastInboxScanAt = -.infinity
         friendsRefresh.reset()
@@ -737,7 +741,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
             setupCancellationLoadError = nil
         } catch { setupCancellationLoadError = "Cancelled setups could not be read. Retry before starting another run." }
         do {
-            let savedManifest = try store.manifest(gameID:game.identifier)
+            let savedManifest = try checkpointPersistence.manifest(gameID:game.identifier)
             if let requested = try store.pendingNewGame(gameID:game.identifier) {
                 guard requested == savedManifest?.identity.run else { throw BoundMultiplayerSaveStore.Failure.conflict }
                 newGameAfterEnd = true
@@ -1342,7 +1346,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         core.deltaCore.emulatorBridge.saveGameSave(to:game.gameSaveURL)
         var additional = ["checkpoint.state":try Data(contentsOf:path)]
         if let setup { additional["setup.json"] = try BoundMultiplayerSaveStore.encode(setup) }
-        let history = try historyDigest() ?? BoundMultiplayerSaveStore.hash(BoundMultiplayerSaveStore.encode(store.sharedEventAcknowledgement(gameID:game.identifier).cursor))
+        let history = try historyDigest() ?? BoundMultiplayerSaveStore.hash(BoundMultiplayerSaveStore.encode(eventPersistence.sharedEventAcknowledgement(gameID:game.identifier).cursor))
         head = try store.saveLocal(gameID:game.identifier,sharedEventDigest:history,
             gameSaveURL:game.gameSaveURL,additionalFiles:additional)
         checkpoint = nil; localReceipt = nil; partnerReceipt = nil; peerCommitted = false
@@ -1356,20 +1360,20 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         let digest = BoundMultiplayerSaveStore.hash(payload)
         let key = manifest.identity.run.uuidString + ":" + digest
         guard key != lastWorldDigest else { return }
-        _ = try store.appendSharedEvent(gameID:game.identifier,kind:"world",payload:payload,idempotencyKey:"world:" + digest)
+        _ = try eventPersistence.appendSharedEvent(gameID:game.identifier,kind:"world",payload:payload,idempotencyKey:"world:" + digest)
         lastWorldDigest = key
     }
     private func journalSoulEvents() throws {
         guard let game, let identity, manifest != nil else { return }
         if manifest?.requiresInitialHistorySync != true {
             try soulExportCache.export(sharing.soulLink.probe.sharedEvents(),run:identity.run) { key, payload in
-                _ = try store.appendSharedEvent(gameID:game.identifier,kind:"soul",payload:payload,idempotencyKey:key)
+                _ = try eventPersistence.appendSharedEvent(gameID:game.identifier,kind:"soul",payload:payload,idempotencyKey:key)
             }
         }
         if worldProjectionRun != identity.run {
             journalReplayNeeded = true
             sharing.sharedWorld.resetSharedWorldRecords()
-            for event in try store.journal(gameID:game.identifier).events where event.id.origin == identity.partner && event.kind == "world" {
+            for event in try eventPersistence.journal(gameID:game.identifier).events where event.id.origin == identity.partner && event.kind == "world" {
                 if let state = try? JSONDecoder().decode(BoundWorldState.self,from:event.payload), state.valid {
                     sharing.sharedWorld.recordSharedWorldEvent(state:state,sequence:event.id.sequence)
                 }
@@ -1377,11 +1381,11 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
             worldProjectionRun = identity.run
         }
         guard journalReplayNeeded else { return }
-        for event in try store.pendingSharedEventsToApply(gameID:game.identifier) {
+        for event in try eventPersistence.pendingSharedEventsToApply(gameID:game.identifier) {
             if event.kind == "world", event.run == identity.run,
                let state = try? JSONDecoder().decode(BoundWorldState.self,from:event.payload), state.valid {
                 if event.id.origin == identity.partner { sharing.sharedWorld.recordSharedWorldEvent(state:state,sequence:event.id.sequence) }
-                try store.markSharedEventApplied(gameID:game.identifier,eventID:event.id)
+                try eventPersistence.markSharedEventApplied(gameID:game.identifier,eventID:event.id)
                 continue
             }
             guard event.run == identity.run, [identity.owner,identity.partner].contains(event.id.origin), event.kind == "soul",
@@ -1391,7 +1395,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                 continue
             }
             try sharing.soulLink.probe.receiveSharedEvent(event.payload,localOrigin:event.id.origin == identity.owner)
-            try store.markSharedEventApplied(gameID:game.identifier,eventID:event.id)
+            try eventPersistence.markSharedEventApplied(gameID:game.identifier,eventID:event.id)
         }
         journalReplayNeeded = false
     }
@@ -1457,7 +1461,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         do {
             try journalSoulEvents()
             if serverOnly, try BoundServerDisconnectSave.needsAcquisitionCheckpoint(
-                events: store.journal(gameID: identity.gameID).events, owner: identity.owner,
+                events: eventPersistence.journal(gameID: identity.gameID).events, owner: identity.owner,
                 verifiedCursor: sharedServerCursor, package: head) {
                 // A starter can go straight from a script into the rival fight
                 // without an idle field frame. Preserve that exact execution
@@ -1488,9 +1492,9 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                     self.serverRegisteredRun = identity.run
                     try self.journalSoulEvents()
                 }
-                let ack = try self.store.sharedEventAcknowledgement(gameID:identity.gameID)
-                var pending = self.manifest?.requiresInitialHistorySync == true ? [] : try self.store.sharedEventsToSend(
-                    gameID:identity.gameID,peerCursor:self.sharedServerCursor,limit:16,excludingAcquisitions:self.serverOnly)
+                let ack = try self.eventPersistence.sharedEventAcknowledgement(gameID:identity.gameID)
+                var pending = self.manifest?.requiresInitialHistorySync == true ? [] : try self.eventPersistence.eventsToSend(
+                    gameID:identity.gameID,peerCursor:self.sharedServerCursor,limit:16,excludingCheckpointDependentEvents:self.serverOnly)
                 if self.serverOnly {
                     pending.removeAll(where: \.requiresNativeCheckpoint)
                     if !pending.isEmpty { pending = try BoundServerDisconnectSave.eventBatch(pending) }
@@ -1517,25 +1521,25 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                    remoteSave?.receipt != head.receipt { throw BoundMultiplayerSaveStore.Failure.conflict }
                 for event in state.events {
                     self.journalReplayNeeded = true
-                    _ = try self.store.receiveAuthoritativeSharedEvent(gameID:identity.gameID,event:event)
+                    _ = try self.eventPersistence.receiveAuthoritativeSharedEvent(gameID:identity.gameID,event:event)
                     if self.serverOnly { self.sharedServerCursor.insert(event.id) }
                 }
                 if self.serverOnly {
                     for event in pending where state.serverCursor.contains(event.id) { self.sharedServerCursor.insert(event.id) }
                 } else { self.sharedServerCursor = state.serverCursor }
                 if self.manifest?.requiresInitialHistorySync == true {
-                    _ = try self.store.setInitialHistoryTarget(gameID:identity.gameID,target:state.serverCursor)
+                    _ = try self.checkpointPersistence.setInitialHistoryTarget(gameID:identity.gameID,target:state.serverCursor)
                 }
                 try self.journalSoulEvents()
                 if let manifest = self.manifest, manifest.requiresInitialHistorySync,
-                   let target = try self.store.manifest(gameID:identity.gameID)?.initialHistoryTarget {
-                    let journal = try self.store.journal(gameID:identity.gameID)
+                   let target = try self.checkpointPersistence.manifest(gameID:identity.gameID)?.initialHistoryTarget {
+                    let journal = try self.eventPersistence.journal(gameID:identity.gameID)
                     if journal.received.covers(target), journal.applied.covers(target) {
-                        self.manifest = try self.store.completeInitialHistorySync(gameID:identity.gameID)
+                        self.manifest = try self.checkpointPersistence.completeInitialHistorySync(gameID:identity.gameID)
                         try self.journalSoulEvents()
                     }
                 }
-                try self.store.acknowledgeSharedEvents(gameID:identity.gameID,acknowledgement:.init(run:identity.run,receiver:identity.partner,cursor:state.peerCursor(identity.partner)))
+                try self.eventPersistence.acknowledgeSharedEvents(gameID:identity.gameID,acknowledgement:.init(run:identity.run,receiver:identity.partner,cursor:state.peerCursor(identity.partner)))
                 // Select after the await: the request's old candidate may have
                 // been sealed and superseded by a newer local checkpoint.
                 if self.manifest?.requiresInitialHistorySync != true,
@@ -1632,7 +1636,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
               let game, let session = account.session else { return }
         do {
             let current = manifest?.identity.run
-            let pending = try store.pendingSharedRunIdentities(gameID:game.identifier).filter { $0.owner == session.owner && $0.run != current }
+            let pending = try eventPersistence.pendingSharedRunIdentities(gameID:game.identifier).filter { $0.owner == session.owner && $0.run != current }
             guard !pending.isEmpty else { return }
             let identity = pending[archivedEventIndex % pending.count]; archivedEventIndex += 1
             let operation = UUID(); archivedEventOperation = operation; archivedEventRetryAt = now + 3
@@ -1643,15 +1647,15 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                     let configuration = try await BoundNakamaAuthorization.fetch(room:identity.roomID,session:session)
                     guard !Task.isCancelled, self.archivedEventOperation == operation, self.account.session?.owner == identity.owner else { return }
                     await self.archivedEventServer.configure(configuration)
-                    let ack = try self.store.sharedEventAcknowledgement(gameID:identity.gameID,identity:identity)
-                    let pending = try self.store.sharedEventsToSend(gameID:identity.gameID,peerCursor:self.archivedServerCursors[identity.run] ?? .init(),limit:16,identity:identity)
+                    let ack = try self.eventPersistence.sharedEventAcknowledgement(gameID:identity.gameID,identity:identity)
+                    let pending = try self.eventPersistence.eventsToSend(gameID:identity.gameID,peerCursor:self.archivedServerCursors[identity.run] ?? .init(),limit:16,identity:identity)
                     let state = try await self.archivedEventServer.sharedEvents(identity:identity,events:pending,cursor:ack.cursor)
                     guard !Task.isCancelled, self.archivedEventOperation == operation else { return }
                     self.archivedServerCursors[identity.run] = state.serverCursor
                     for event in state.events {
-                        _ = try self.store.receiveAuthoritativeSharedEvent(gameID:identity.gameID,event:event,identity:identity)
+                        _ = try self.eventPersistence.receiveAuthoritativeSharedEvent(gameID:identity.gameID,event:event,identity:identity)
                     }
-                    try self.store.acknowledgeSharedEvents(gameID:identity.gameID,
+                    try self.eventPersistence.acknowledgeSharedEvents(gameID:identity.gameID,
                         acknowledgement:.init(run:identity.run,receiver:identity.partner,cursor:state.peerCursor(identity.partner)),identity:identity)
                 } catch {
                     guard self.archivedEventOperation == operation else { return }
@@ -1776,7 +1780,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                     if manifest == nil {
                         // Idempotent replay after completion, including a run ended
                         // with the legacy command before New Game was selected.
-                        guard let saved = try store.manifest(gameID:game.identifier), saved.ended,
+                        guard let saved = try checkpointPersistence.manifest(gameID:game.identifier), saved.ended,
                               saved.identity.run == request.identifier, saved.identity.owner == owner else {
                             throw BoundMultiplayerSaveStore.Failure.ownerMismatch
                         }
@@ -1929,7 +1933,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
             try store.restore(archiveURL:incoming.archiveURL,gameID:game.identifier,owner:grant.ownerID,
                 romSHA256:selectedROMHash,gameSaveURL:game.gameSaveURL,grant:grant)
         }
-        incoming = nil; manifest = try store.manifest(gameID:game.identifier)
+        incoming = nil; manifest = try checkpointPersistence.manifest(gameID:game.identifier)
         if let url = setupURL, FileManager.default.fileExists(atPath:url.path) {
             setup = try JSONDecoder().decode(Setup.self,from:Data(contentsOf:url))
             guard setup?.identity == manifest?.identity else { throw BoundMultiplayerSaveStore.Failure.corrupt }
@@ -2429,7 +2433,7 @@ extension BoundROMMultiplayerCoordinator {
         }
         try Self.prepareServerCoreForSelection(core)
         try BoundServerMemoryFiles.restore(memory, gameID: game.identifier)
-        try store.beginServerSession(identity: state.identity, package: package, target: state.serverCursor)
+        try checkpointPersistence.beginServerSession(identity: state.identity, package: package, target: state.serverCursor)
         if let package {
             guard let battery = package.payload.files["game.sav"]?.data, let snapshot = package.payload.files["checkpoint.state"]?.data,
                   BoundVBABattleBridge.restoreServerBattery(battery), MultiRedAdapter.restoreState(snapshot) else { throw BoundMultiplayerSaveStore.Failure.corrupt }
@@ -2447,7 +2451,7 @@ extension BoundROMMultiplayerCoordinator {
         let continuedCooperativeActivity = continuedNativeActivity ? false : try sharing.cooperativeDoubles.restoreContinuationIfAvailable(serverHead: upload?.receipt.checkpoint)
         let continuedActivity = continuedNativeActivity || continuedCooperativeActivity
         if continuedActivity { try sharing.soulLink.reloadContinuationMemory(for: core) }
-        manifest = try store.manifest(gameID: game.identifier); head = package; serverUploaded = package?.payload.checkpoint
+        manifest = try checkpointPersistence.manifest(gameID: game.identifier); head = package; serverUploaded = package?.payload.checkpoint
         independentServerHead = upload?.receipt.checkpoint; serverRegisteredRun = state.identity.run
         serverProfile = profile; selectedRoom = state.identity.roomID; peerOwner = state.identity.partner
         setup = .init(identity: state.identity, accepted: true, settingsCommitted: true, serverEpoch: state.epoch, serverCommitted: true)
@@ -2464,18 +2468,18 @@ extension BoundROMMultiplayerCoordinator {
         // Server history is reconciled before releasing restored gameplay.
         if manifest?.requiresInitialHistorySync == true {
             while manifest?.requiresInitialHistorySync == true {
-                let ack = try store.sharedEventAcknowledgement(gameID: game.identifier)
+                let ack = try eventPersistence.sharedEventAcknowledgement(gameID: game.identifier)
                 let history = try await server.sharedEvents(identity: state.identity, events: [], cursor: ack.cursor)
                 guard selection == serverSelection, session.isSameSession(as: account.session) else { throw CancellationError() }
                 if let gameOver = history.gameOver { try receiveGameOver(gameOver, identity: state.identity); return }
                 for event in history.events {
-                    _ = try store.receiveAuthoritativeSharedEvent(gameID: game.identifier, event: event)
+                    _ = try eventPersistence.receiveAuthoritativeSharedEvent(gameID: game.identifier, event: event)
                     sharedServerCursor.insert(event.id)
                 }
                 journalReplayNeeded = true; try journalSoulEvents()
-                let journal = try store.journal(gameID: game.identifier)
+                let journal = try eventPersistence.journal(gameID: game.identifier)
                 if journal.received.covers(state.serverCursor), journal.applied.covers(state.serverCursor) {
-                    manifest = try store.completeInitialHistorySync(gameID: game.identifier)
+                    manifest = try checkpointPersistence.completeInitialHistorySync(gameID: game.identifier)
                 } else if history.events.isEmpty { throw BoundMultiplayerSaveStore.Failure.incomplete }
             }
         }
@@ -2521,14 +2525,14 @@ extension BoundROMMultiplayerCoordinator {
             try journalSoulEvents()
             if let world = sharing.sharedWorld.probe.read() { try persistWorldSnapshot(world) }
             memory = BoundServerMemoryFiles.snapshot(gameID: game.identifier)
-            history = try historyDigest() ?? BoundMultiplayerSaveStore.hash(BoundMultiplayerSaveStore.encode(store.sharedEventAcknowledgement(gameID: game.identifier).cursor))
+            history = try historyDigest() ?? BoundMultiplayerSaveStore.hash(BoundMultiplayerSaveStore.encode(eventPersistence.sharedEventAcknowledgement(gameID: game.identifier).cursor))
         } catch {
             if wasRunning, UIApplication.shared.applicationState == .active { core.resume() }; throw error
         }
         if wasRunning, UIApplication.shared.applicationState == .active { core.resume() }
         guard !state.isEmpty, battery.count == 131072 else { throw BoundMultiplayerSaveStore.Failure.incomplete }
         let files = ["checkpoint.state": state, "game.sav": battery, "memory-files.json": try JSONEncoder().encode(memory)]
-        let package = try store.captureServerCheckpoint(gameID: game.identifier, files: files, history: history)
+        let package = try checkpointPersistence.captureServerCheckpoint(gameID: game.identifier, files: files, history: history)
         serverContinuationSettlements[package.payload.checkpoint] = captureContinuationSettlement(for: manifest.identity)
         if !final {
             head = package; serverCapturePending = false; nextAutomaticSave = now + 15
