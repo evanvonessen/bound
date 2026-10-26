@@ -301,6 +301,101 @@ final class MultiplayerSavePackageTests: XCTestCase {
         XCTAssertEqual(package.payload.files["recovery/" + id + ".state"]?.data, state)
         XCTAssertNotNil(package.payload.files["recovery/" + id + ".json"])
     }
+    func testImportedComplementaryHistoryNormalizesCursorsAndRetainsPermanentLosses() throws {
+        let (source, identity, sourceSave) = try fixture()
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("BoundComplementaryRestore-" + UUID().uuidString, isDirectory: true)
+        folders.append(folder)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let destinationSave = folder.appendingPathComponent("game.sav")
+        try Data(contentsOf: sourceSave).write(to: destinationSave)
+        let destination = BoundMultiplayerSaveStore(root: folder.appendingPathComponent("packages"), support: folder, deviceID: source.deviceID)
+        try destination.begin(identity, gameSaveURL: destinationSave)
+
+        // Same-device backup copies can retain complementary valid journals.
+        // Both original journals pass the store's existing validation.
+        var own: [BoundMultiplayerSharedEvent] = []
+        for value: UInt8 in [1, 2] {
+            let event = try source.appendSharedEvent(gameID: identity.gameID, kind: "fixture", payload: Data([value]), idempotencyKey: "local-\(value)")
+            XCTAssertEqual(try destination.appendSharedEvent(gameID: identity.gameID, kind: "fixture", payload: Data([value]), idempotencyKey: "local-\(value)"), event)
+            own.append(event)
+        }
+        func death(_ sequence: UInt64, slot: String) throws -> BoundMultiplayerSharedEvent {
+            .init(run: identity.run, id: .init(origin: identity.partner, sequence: sequence), kind: "soul",
+                  payload: try XCTUnwrap(BoundSoulSharedEvent(run: identity.run, kind: .death, slot: slot).payload))
+        }
+        let peer1 = try death(1, slot: "area:1"), peer2 = try death(2, slot: "area:2"), peer4 = try death(4, slot: "area:4")
+        try source.receiveSharedEvent(gameID: identity.gameID, event: peer2)
+        try source.markSharedEventApplied(gameID: identity.gameID, eventID: peer2.id)
+        try source.receiveSharedEvent(gameID: identity.gameID, event: peer4)
+        try destination.receiveSharedEvent(gameID: identity.gameID, event: peer1)
+        try destination.markSharedEventApplied(gameID: identity.gameID, eventID: peer1.id)
+        var sourceAck = BoundMultiplayerSharedCursor(); sourceAck.insert(own[1].id)
+        var destinationAck = BoundMultiplayerSharedCursor(); destinationAck.insert(own[0].id)
+        try source.acknowledgeSharedEvents(gameID: identity.gameID,
+            acknowledgement: .init(run: identity.run, receiver: identity.partner, cursor: sourceAck))
+        try destination.acknowledgeSharedEvents(gameID: identity.gameID,
+            acknowledgement: .init(run: identity.run, receiver: identity.partner, cursor: destinationAck))
+
+        let stem = BoundMultiplayerSaveStore.hash(Data(identity.gameID.utf8))
+        func soulURL(_ store: BoundMultiplayerSaveStore) -> URL {
+            store.support.appendingPathComponent("Soul Link/" + stem + ".json")
+        }
+        var sourceSoul = BoundSoulLedger(run: identity.run, binding: String(repeating: "b", count: 64))
+        sourceSoul.dead = ["area:2"]; sourceSoul.nextEgg = 3
+        var destinationSoul = BoundSoulLedger(run: identity.run, binding: sourceSoul.binding)
+        destinationSoul.dead = ["area:1"]; destinationSoul.nextEgg = 5
+        for (store, ledger) in [(source, sourceSoul), (destination, destinationSoul)] {
+            try FileManager.default.createDirectory(at: soulURL(store).deletingLastPathComponent(), withIntermediateDirectories: true)
+            try BoundMultiplayerSaveStore.encode(ledger).write(to: soulURL(store))
+        }
+        XCTAssertEqual(try source.journal(gameID: identity.gameID).received.origins[identity.partner.uuidString], BoundMultiplayerSharedCursor.Position(sparse: [2, 4]))
+        XCTAssertEqual(try destination.journal(gameID: identity.gameID).received.origins[identity.partner.uuidString], BoundMultiplayerSharedCursor.Position(contiguous: 1))
+        XCTAssertNil(try destination.latestComplete(gameID: identity.gameID))
+        let originalJournal = try BoundMultiplayerSaveStore.encode(destination.journal(gameID: identity.gameID))
+        let originalSoul = try Data(contentsOf: soulURL(destination))
+        let originalBattery = try Data(contentsOf: destinationSave)
+
+        // Synthetic state markers exercise storage/recovery, not native playback.
+        let package = try source.saveLocal(gameID: identity.gameID, sharedEventDigest: String(repeating: "c", count: 64),
+            gameSaveURL: sourceSave, additionalFiles: ["checkpoint.state": Data(repeating: 9, count: 2048)])
+        let archive = source.cloudURL(gameID: identity.gameID)
+        let archiveBytes = try Data(contentsOf: archive)
+        try destination.restore(archiveURL: archive, gameID: identity.gameID, owner: identity.owner,
+            romSHA256: identity.romSHA256, gameSaveURL: destinationSave)
+
+        XCTAssertFalse(destination.hasInterruptedRestore(gameID: identity.gameID))
+        XCTAssertEqual(try destination.latestComplete(gameID: identity.gameID), package)
+        XCTAssertNotNil(try destination.validateForResume(gameID: identity.gameID, owner: identity.owner, romSHA256: identity.romSHA256))
+        let journal = try destination.journal(gameID: identity.gameID)
+        XCTAssertEqual(Set(journal.events.map(\.id)), Set((own + [peer1, peer2, peer4]).map(\.id)))
+        for event in own + [peer1, peer2, peer4] { XCTAssertEqual(journal.events.first { $0.id == event.id }, event) }
+        XCTAssertEqual(journal.events.count, 5)
+        XCTAssertEqual(journal.nextSequence, 3)
+        XCTAssertEqual(journal.received.origins[identity.partner.uuidString], BoundMultiplayerSharedCursor.Position(contiguous: 2, sparse: [4]))
+        XCTAssertEqual(journal.applied.origins[identity.partner.uuidString], BoundMultiplayerSharedCursor.Position(contiguous: 2))
+        XCTAssertEqual(journal.acknowledged.origins[identity.owner.uuidString], BoundMultiplayerSharedCursor.Position(contiguous: 2))
+        XCTAssertFalse(journal.received.contains(.init(origin: identity.partner, sequence: 3)))
+        XCTAssertEqual(try destination.pendingSharedEventsToApply(gameID: identity.gameID), [peer4])
+        let mergedSoul = try JSONDecoder().decode(BoundSoulLedger.self, from: Data(contentsOf: soulURL(destination)))
+        XCTAssertEqual(mergedSoul.dead, ["area:1", "area:2"])
+        XCTAssertEqual(mergedSoul.nextEgg, 5)
+        XCTAssertEqual(try Data(contentsOf: archive), archiveBytes)
+        let originals = try FileManager.default.contentsOfDirectory(at: destination.directory(gameID: identity.gameID)
+            .appendingPathComponent("Restored Originals"), includingPropertiesForKeys: nil)
+        XCTAssertEqual(originals.count, 1)
+        let retained = try XCTUnwrap(originals.first).appendingPathComponent("originals")
+        XCTAssertEqual(try Data(contentsOf: retained.appendingPathComponent("shared-events.json")), originalJournal)
+        XCTAssertEqual(try Data(contentsOf: retained.appendingPathComponent("soul.json")), originalSoul)
+        XCTAssertEqual(try Data(contentsOf: retained.appendingPathComponent("game.sav")), originalBattery)
+
+        let reopened = BoundMultiplayerSaveStore(root: destination.root, support: destination.support, deviceID: destination.deviceID)
+        XCTAssertEqual(try reopened.journal(gameID: identity.gameID), journal)
+        try reopened.restore(archiveURL: archive, gameID: identity.gameID, owner: identity.owner,
+            romSHA256: identity.romSHA256, gameSaveURL: destinationSave)
+        XCTAssertEqual(try reopened.journal(gameID: identity.gameID), journal)
+        XCTAssertEqual(try reopened.checkpoint(gameID: identity.gameID, id: package.payload.checkpoint), package)
+        XCTAssertEqual(try Data(contentsOf: archive), archiveBytes)
+    }
     func testCompatibleRestoreKeepsOriginalsAndCorruptHeadFailsClosed() throws {
         let (store, identity, save) = try fixture()
         _ = try writeSoul(store, identity, dead: ["area:2"])

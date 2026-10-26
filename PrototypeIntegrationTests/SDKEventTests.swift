@@ -89,6 +89,11 @@ final class SDKEventTests: XCTestCase {
             }
             XCTAssertEqual(current.origins[owner.uuidString]?.valid, frozen.origins[owner.uuidString]?.valid)
         }
+        // The insertion checks above include an invalid max sentinel. Keep the
+        // merge equivalence inputs valid; rejection after normalization is tested
+        // separately from the frozen implementation's invalid representation.
+        current.origins[owner.uuidString]?.sparse.remove(UInt64.max)
+        frozen.origins[owner.uuidString]?.sparse.remove(UInt64.max)
         for contiguous: UInt64 in [0, 1, 2, 6, UInt64.max - 1, UInt64.max] {
             for sparse: Set<UInt64> in [[], [3], [2, 7]] {
                 let incoming = BoundSDKEventCursor(origins: [owner.uuidString: .init(contiguous: contiguous, sparse: sparse)])
@@ -102,6 +107,57 @@ final class SDKEventTests: XCTestCase {
         var gap = BoundSDKEventCursor(); gap.insert(.init(origin: owner, sequence: 3))
         XCTAssertFalse(gap.contains(.init(origin: owner, sequence: 2)))
         XCTAssertFalse(gap.covers(.init(origins: [owner.uuidString: .init(contiguous: 2)])))
+    }
+
+    func testCursorMergeNormalizesEverySmallReceiptUnion() {
+        func members(_ mask: Int) -> Set<UInt64> {
+            Set((1...6).compactMap { mask & (1 << ($0 - 1)) == 0 ? nil : UInt64($0) })
+        }
+        func canonical(_ members: Set<UInt64>) -> BoundSDKEventCursor {
+            var prefix: UInt64 = 0
+            while members.contains(prefix + 1) { prefix += 1 }
+            return .init(origins: [owner.uuidString: .init(contiguous: prefix, sparse: members.filter { $0 > prefix })])
+        }
+        for leftMask in 0..<64 {
+            let leftMembers = members(leftMask), left = canonical(leftMembers)
+            for rightMask in 0..<64 {
+                let rightMembers = members(rightMask), right = canonical(rightMembers)
+                let expected = canonical(leftMembers.union(rightMembers))
+                var merged = left; merged.merge(right)
+                XCTAssertEqual(merged, expected)
+                XCTAssertTrue(merged.covers(left)); XCTAssertTrue(merged.covers(right))
+                var reverse = right; reverse.merge(left)
+                XCTAssertEqual(reverse, merged)
+                merged.merge(right); merged.merge(left)
+                XCTAssertEqual(merged, expected)
+                XCTAssertTrue(merged.origins[owner.uuidString]?.valid == true)
+            }
+        }
+    }
+
+    func testCursorNormalizationKeepsRealGapsOriginsAndOverflowRejection() {
+        var gap = BoundSDKEventCursor(origins: [owner.uuidString: .init(sparse: [2, 3, 5]), partner.uuidString: .init(sparse: [2])])
+        gap.merge(.init(origins: [owner.uuidString: .init(contiguous: 1)]))
+        XCTAssertEqual(gap.origins[owner.uuidString], BoundSDKEventCursor.Position(contiguous: 3, sparse: [5]))
+        XCTAssertEqual(gap.origins[partner.uuidString], BoundSDKEventCursor.Position(sparse: [2]))
+        XCTAssertFalse(gap.contains(.init(origin: owner, sequence: 4)))
+        XCTAssertFalse(gap.covers(.init(origins: [owner.uuidString: .init(contiguous: 4)])))
+
+        var boundary = BoundSDKEventCursor(origins: [owner.uuidString: .init(contiguous: UInt64.max - 3, sparse: [UInt64.max - 1])])
+        boundary.merge(.init(origins: [owner.uuidString: .init(contiguous: UInt64.max - 2)]))
+        XCTAssertEqual(boundary.origins[owner.uuidString], BoundSDKEventCursor.Position(contiguous: UInt64.max - 1))
+        XCTAssertTrue(boundary.origins[owner.uuidString]?.valid == true)
+        XCTAssertFalse(boundary.contains(.init(origin: owner, sequence: UInt64.max)))
+
+        var invalid = BoundSDKEventCursor(origins: [owner.uuidString: .init(contiguous: UInt64.max - 1, sparse: [UInt64.max])])
+        XCTAssertFalse(invalid.origins[owner.uuidString]?.valid == true)
+        invalid.merge(.init(origins: [owner.uuidString: .init(contiguous: UInt64.max - 1)]))
+        XCTAssertEqual(invalid.origins[owner.uuidString]?.contiguous, UInt64.max)
+        XCTAssertFalse(invalid.origins[owner.uuidString]?.valid == true)
+        invalid.merge(.init(origins: [owner.uuidString: .init()]))
+        XCTAssertEqual(invalid.origins[owner.uuidString]?.contiguous, UInt64.max)
+        XCTAssertFalse(invalid.origins[owner.uuidString]?.valid == true)
+        XCTAssertFalse(invalid.contains(.init(origin: owner, sequence: 0)))
     }
 
     func testAppendRetriesConflictAndOverflowMatchFrozenOracle() throws {
@@ -251,16 +307,19 @@ final class SDKEventTests: XCTestCase {
                        failure { try Phase4EventOracle.mergeRetained(oldRetained, into: &oldConflict) })
         try equivalent(conflict, oldConflict)
 
-        // The original merge does not collapse an existing sparse receipt when
-        // only the merged contiguous position fills its predecessor. Preserve
-        // the resulting validator rejection during structural extraction.
+        // Intentional behavior correction after structural extraction: the old
+        // merge rejects complementary valid history. Keep that frozen evidence;
+        // only the new merged cursor normalizes its already-received adjacency.
         var adjacent = journal
         _ = try BoundSDKEventJournalRules.receive(event(2, origin: owner), authoritative: true, into: &adjacent)
         var oldAdjacent = try old(adjacent, as: Phase4EventJournal.self)
         try BoundSDKEventJournalRules.mergeRetained(retained, into: &adjacent)
         try Phase4EventOracle.mergeRetained(oldRetained, into: &oldAdjacent)
-        try equivalent(adjacent, oldAdjacent)
-        XCTAssertEqual(failure { try BoundSDKEventJournalRules.validate(adjacent, scope: scope) }, "corrupt")
+        try BoundSDKEventJournalRules.validate(adjacent, scope: scope)
+        XCTAssertEqual(adjacent.received.origins[owner.uuidString], BoundSDKEventCursor.Position(contiguous: 2))
+        XCTAssertEqual(adjacent.nextSequence, 3)
+        XCTAssertEqual(adjacent.events, try old(oldAdjacent.events, as: [BoundSDKEvent].self))
+        XCTAssertFalse(adjacent.applied.contains(event(2, origin: owner).id))
         XCTAssertEqual(failure { try Phase4EventOracle.validate(oldAdjacent, scope: oldScope) }, "corrupt")
     }
 

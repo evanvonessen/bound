@@ -32,6 +32,8 @@ struct BoundSDKEventCursor: Codable, Equatable, Sendable {
             position.contiguous = max(position.contiguous, received.contiguous)
             position.sparse = position.sparse.filter { $0 > position.contiguous }
             for sequence in received.sparse { position.insert(sequence) }
+            // The new prefix can also reach receipts already in our sparse set.
+            while position.contiguous < UInt64.max, position.sparse.remove(position.contiguous + 1) != nil { position.contiguous += 1 }
             origins[origin] = position
         }
     }
