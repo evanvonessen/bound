@@ -149,6 +149,7 @@ final class BoundPiPPreferences {
         self.defaults = defaults; self.namespace = namespace
     }
     private func key(_ suffix: String) -> String { namespace + "." + suffix }
+    var developerFeaturesEnabled: Bool { defaults.bool(forKey: BoundDeveloperFeatures.key) }
     func isEnabled(_ content: BoundPiPContent) -> Bool {
         defaults.object(forKey: key(content.rawValue + ".enabled")) as? Bool ?? true
     }

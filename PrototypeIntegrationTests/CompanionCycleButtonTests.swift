@@ -789,6 +789,62 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(preferences.buttonType, .option1, "Unknown stored values safely fall back to Option 1.")
     }
 
+    func testDebugGameAddsConnectionsAsFourthReachableViewWithoutSavingAssignments() throws {
+        let suite = "BoundDebugFeed." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        let state = BoundCompanionState(preferences: preferences)
+        let original = state.configuration
+        let stored = defaults.persistentDomain(forName: suite) ?? [:]
+        state.settings.setDebugGame(true)
+        XCTAssertEqual(state.availableContents, [.friend, .types, .bosses, .connections, .dex])
+        XCTAssertEqual(state.configuration.assignments, [[.friend], [.types, .bosses, .connections, .dex]])
+        for _ in 0..<3 { state.advanceButton(1) }
+        XCTAssertEqual(state.content, .connections, "The normal iPhone companion button must reach the live feed")
+        state.settings.setDebugGame(false)
+        XCTAssertEqual(state.configuration, original)
+        XCTAssertEqual((defaults.persistentDomain(forName: suite) ?? [:]) as NSDictionary, stored as NSDictionary)
+    }
+
+    func testDeveloperFeaturesAddsFourthFeedForBothSplitButtonStyles() throws {
+        let suite = "BoundDeveloperFeed." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        let settings = BoundCompanionSettingsModel(preferences: preferences)
+        defaults.set(true, forKey: BoundDeveloperFeatures.key)
+        for style in [BoundCompanionButtonType.option3, .option4] {
+            settings.setButtonType(style)
+            XCTAssertEqual(settings.availableContents[3], .connections)
+            XCTAssertTrue(settings.configuration.assignments.last!.contains(.connections))
+            XCTAssertFalse(preferences.assignedContents(for: style.splitButtonCount - 1).contains(.connections))
+        }
+        defaults.set(false, forKey: BoundDeveloperFeatures.key)
+        settings.refresh()
+        XCTAssertEqual(settings.availableContents, [.friend, .types, .bosses, .dex])
+    }
+
+    func testDebugFeedPreservesCustomOrderAssignmentsAndSelectedView() throws {
+        let suite = "BoundCustomDebugFeed." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        preferences.setContentOrder([.dex, .notes, .friend, .types, .bosses, .connections])
+        preferences.setAssignedContents([.friend, .notes, .dex], for: 0)
+        preferences.setAssignedContents([], for: 1)
+        let state = BoundCompanionState(preferences: preferences)
+        state.selected = 1
+        let selected = state.content, original = state.configuration
+        state.settings.setDebugGame(true)
+        XCTAssertEqual(state.availableContents, [.dex, .notes, .friend, .connections])
+        XCTAssertEqual(state.content, selected)
+        XCTAssertEqual(preferences.assignedContents(for: 1), [])
+        state.settings.setDebugGame(false)
+        XCTAssertEqual(state.configuration, original)
+        XCTAssertEqual(state.content, selected)
+    }
+
     func testFreshInstallUsesRequestedPresetWithoutWritingUntilEdited() throws {
         let suite = "BoundFreshPreset." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

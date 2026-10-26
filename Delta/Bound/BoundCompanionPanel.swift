@@ -19,6 +19,7 @@ final class BoundCompanionSettingsModel: ObservableObject {
     let preferences: BoundPiPPreferences
     @Published private(set) var configuration: Configuration
     private var observations = Set<AnyCancellable>()
+    private var debugGame = false
     var uiVersion: BoundUIVersion { configuration.uiVersion }
     var buttonType: BoundCompanionButtonType { configuration.buttonType }
     var availableContents: [BoundPiPContent] { configuration.availableContents }
@@ -27,28 +28,42 @@ final class BoundCompanionSettingsModel: ObservableObject {
         self.preferences = preferences ?? BoundPiPPreferences()
         self.configuration = Self.read(self.preferences)
         for name in [BoundPiPPreferences.didChangeNotification, BoundUIVersionPreferences.didChangeNotification,
-                     BoundCompanionButtonPreferences.didChangeNotification] {
+                     BoundCompanionButtonPreferences.didChangeNotification, BoundDeveloperFeatures.didChange] {
             NotificationCenter.default.publisher(for: name).receive(on: DispatchQueue.main)
                 .sink { [weak self] _ in self?.refresh() }.store(in: &observations)
         }
     }
-    private static func read(_ preferences: BoundPiPPreferences) -> Configuration {
+    private static func read(_ preferences: BoundPiPPreferences, debugGame: Bool = false) -> Configuration {
         let buttonType = preferences.buttonType
-        let assignments = (0..<buttonType.splitButtonCount).map {
+        var assignments = (0..<buttonType.splitButtonCount).map {
             preferences.assignedContents(for: $0, buttonType: buttonType)
         }
         let assigned = Set(assignments.flatMap { $0 })
-        let available = buttonType.splitButtonCount > 0
+        var available = buttonType.splitButtonCount > 0
             ? preferences.orderedContents.filter(assigned.contains)
             : preferences.enabledContents(uiVersion: preferences.uiVersion)
+        if debugGame || preferences.developerFeaturesEnabled {
+            available.removeAll { $0 == .connections }
+            available.insert(.connections, at: min(3, available.count))
+            if !assignments.isEmpty {
+                if !assignments.contains(where: { $0.contains(.connections) }) {
+                    assignments[assignments.count - 1].append(.connections)
+                }
+                assignments = assignments.map { choices in available.filter(choices.contains) }
+            }
+        }
         return Configuration(uiVersion: preferences.uiVersion, buttonType: buttonType,
             availableContents: available, orderedContents: preferences.orderedContents,
             assignments: assignments, enabled: BoundPiPContent.allCases.map(preferences.isEnabled),
             opacities: BoundPiPContent.allCases.map(preferences.opacity))
     }
     func refresh() {
-        let next = Self.read(preferences)
+        let next = Self.read(preferences, debugGame: debugGame)
         if configuration != next { configuration = next }
+    }
+    func setDebugGame(_ enabled: Bool) {
+        guard debugGame != enabled else { return }
+        debugGame = enabled; refresh()
     }
     func setButtonType(_ type: BoundCompanionButtonType) { preferences.buttonType = type; refresh() }
     func setAssigned(_ enabled: Bool, content: BoundPiPContent, for button: Int) {
@@ -755,6 +770,8 @@ final class BoundCompanionCoordinator {
         sharing.nativeBattle.bind(core: core, gameID: gameID, interactions: sharing.interactions)
         sharing.soulLink.bind(core: core, gameID: gameID)
         sharing.cooperativeDoubles.bind(core:core,gameID:gameID,soul:sharing.soulLink.probe)
+        state.settings.setDebugGame(core != nil && romMultiplayer.probe.read()?.debugSetup == true)
+        romMultiplayer.debugModeChanged = { [weak self] enabled in self?.state.settings.setDebugGame(enabled) }
         romMultiplayer.bind(core: core, game: owner?.game as? Game)
         romMultiplayer.watch = { [weak self, weak owner] in
             guard let self, let owner, owner.presentedViewController == nil else { return }
