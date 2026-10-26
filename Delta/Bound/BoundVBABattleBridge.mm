@@ -131,6 +131,20 @@ bool overworld() {
         &&word(internalRAM+0x30F4)==0x080565B5&&!(internalRAM[0x3529]&2)
         &&internalRAM[0xF9C]==0&&internalRAM[0xEA8]==2;
 }
+#if DEBUG && TARGET_OS_SIMULATOR
+bool qaLegacyFieldTextAdmission=false;
+#endif
+bool fieldTextIdle() {
+#if DEBUG && TARGET_OS_SIMULATOR
+    if(qaLegacyFieldTextAdmission) return true;
+#endif
+    // Script locks can already be released while window 0 still owns native
+    // text, including a pending RESUME_MUSIC control. A new field message
+    // replaces that printer and can permanently discard the resume command.
+    // Check both the message task's mode and IsTextPrinterActive(0)'s byte.
+    return workRAM&&workRAM[0x3709C]==0&&workRAM[0x20034+0x1B]==0;
+}
+bool fieldInterruptionReady() { return overworld()&&fieldTextIdle(); }
 bool mailboxReady() { return installed&&internalRAM&&word(internalRAM+Mailbox)==MailboxMagic; }
 NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
     NSMutableArray<NSNumber *> *values=[NSMutableArray array];
@@ -144,6 +158,7 @@ NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
 namespace {
 uint8_t *romUIOwner=nullptr,*cooperativeROM=nullptr;
 bool romFieldRDown=false;
+bool romFieldTextWasIdle=false;
 bool ownsROMUI() { return romUIOwner==rom && gameDescriptorPresent(rom); }
 bool nativeProfileVerified() {
     const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
@@ -381,7 +396,7 @@ static uint8_t soulQAScriptBackup[128];
     if(memcmp(digest,expected,32)) return NO;
     if(GameUIRequestAddress<0x02000000||GameUIRequestAddress+GameUIRequestSize>0x02040000
        ||GameUIHostOffset+GameUIHostSize>0x2000000) return NO;
-    romUIOwner=rom;romFieldRDown=false; return YES;
+    romUIOwner=rom;romFieldRDown=romFieldTextWasIdle=false; return YES;
 }
 + (void)advanceROMFieldRecovery {
     if(!ownsROMUI()||!workRAM||!internalRAM) return;
@@ -391,6 +406,10 @@ static uint8_t soulQAScriptBackup[128];
     const bool rDown=(half(internalRAM+0x311C)&0x100)!=0;
     const bool rPressed=rDown&&!romFieldRDown;
     romFieldRDown=rDown;
+    // Native R handling can close text before this completed-frame sample.
+    // A message owned on the preceding frame must still veto this press.
+    const bool previousTextIdle=romFieldTextWasIdle;
+    romFieldTextWasIdle=fieldTextIdle();
     if(armed||inviteActive) return;
     if(word(internalRAM+0x30F0)!=0x08056535||word(internalRAM+0x30F4)!=0x080565B5
        ||(internalRAM[0x3529]&2)) return;
@@ -411,7 +430,7 @@ static uint8_t soulQAScriptBackup[128];
     // Published field/settings/checkpoint bits must all be set; setup/modal
     // bits must be clear. Pending host invitations, recovery, saves, transfers,
     // run endings and setup changes also veto a warp before their UI appears.
-    if(!rPressed||!overworld()
+    if(!rPressed||!previousTextIdle||!fieldInterruptionReady()
        ||word(guest)!=0x31525552||word(guest+160)!=1||word(guest+12)||word(guest+76)
        ||(flags&(1|2|4|32|64))!=(1|32|64)
        ||word(host)!=0x31495552||!(hostFlags&1)||(hostFlags&(32|64|256|512|1024|2048|4096))
@@ -432,8 +451,15 @@ static uint8_t soulQAScriptBackup[128];
     const auto *p=workRAM+GameUIRequestAddress-0x02000000;
     const uint32_t sequence=word(p+8);
     if(word(p)!=0x31525552||half(p+4)!=1||half(p+6)!=0||!sequence||(sequence&1)) return [NSData data];
-    NSData *copy=[NSData dataWithBytes:p length:GameUIRequestSize];
+    NSMutableData *copy=[NSMutableData dataWithBytes:p length:GameUIRequestSize];
     if(word(p+8)!=sequence) return [NSData data];
+    // Earlier cartridges advertised idle scripts as checkpoint-safe without
+    // checking their asynchronous native message owner. Withhold that claim
+    // in the host snapshot until the message and printer have both finished.
+    if(!fieldTextIdle()) {
+        auto *bytes=static_cast<uint8_t *>(copy.mutableBytes);
+        put32(bytes+80,word(bytes+80)&~64u);
+    }
     return copy;
 }
 + (void)setROMMultiplayerHost:(NSData *)data {
@@ -500,7 +526,12 @@ static uint8_t soulQAScriptBackup[128];
     inviteROM=nullptr; inviteActive=inviteBHeld=inviteCancelling=false; inviteResult=-1;
 }
 + (BOOL)friendDialogueReady {
-    return !armed&&!inviteActive&&overworld();
+    if(armed||inviteActive||!fieldInterruptionReady()) return NO;
+    if(ownsROMUI()) {
+        const auto *state=workRAM+GameUIRequestAddress-0x02000000;
+        if(word(state)==0x31525552&&(word(state+76)||(word(state+80)&(2|4)))) return NO;
+    }
+    return YES;
 }
 + (BOOL)beginFriendDialogue:(NSUInteger)mode text:(NSString *)text {
     if(mode>2||![self friendDialogueReady]) return NO;
@@ -574,7 +605,7 @@ static uint8_t soulQAScriptBackup[128];
 }
 + (BOOL)verifyBattleReady {
     verifiedROM=nullptr;
-    if(armed||!overworld()||workRAM[0x24029]==0||workRAM[0x24029]>6) return NO;
+    if(armed||!fieldInterruptionReady()||workRAM[0x24029]==0||workRAM[0x24029]>6) return NO;
     const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
         0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
     uint8_t digest[CC_SHA256_DIGEST_LENGTH]; soulOriginalHash(digest);
@@ -596,7 +627,7 @@ static uint8_t soulQAScriptBackup[128];
     return YES;
 }
 + (BOOL)prepareBattleForPlayer:(NSUInteger)player {
-    if(armed||verifiedROM!=rom||!overworld()||player>1) return NO;
+    if(armed||verifiedROM!=rom||!fieldInterruptionReady()||player>1) return NO;
     role=unsigned(player); tradeMode=false; armed=true; return YES;
 }
 + (BOOL)prepareTradeForPlayer:(NSUInteger)player {
@@ -605,7 +636,7 @@ static uint8_t soulQAScriptBackup[128];
     return YES;
 }
 + (BOOL)installBattleForPlayer:(NSUInteger)player {
-    if(!armed||installed||verifiedROM!=rom||!overworld()||player!=role) { failed=true; return NO; }
+    if(!armed||installed||verifiedROM!=rom||!fieldInterruptionReady()||player!=role) { failed=true; return NO; }
     if(!tradeMode&&!prepareFriendlyParty()) { failed=true; return NO; }
     if(!writeNativeROM()) { failed=true; return NO; }
     // Exact bindings verified against the profile's ScriptContext_SetupScript.
@@ -959,6 +990,41 @@ static uint8_t soulQAScriptBackup[128];
     put32(internalRAM+0x7304,status|0x80000000u);
     return YES;
 }
++ (BOOL)qaStartMusicPauseText {
+    if(!ownsROMUI()||!overworld()) return NO;
+    // A native asynchronous field message: PAUSE_MUSIC, wait for A,
+    // a visible character, RESUME_MUSIC, end. No audio status is fabricated.
+    const uint8_t text[]={0xFC,0x17,0xFC,0x09,0xBB,0xFC,0x18,0xFF};
+    const uint8_t script[]={0x67,0xB0,0x42,0,3,0x02};
+    memcpy(internalRAM+0x42B0,text,sizeof(text));
+    memcpy(internalRAM+0x4280,script,sizeof(script));
+    memset(internalRAM+0xEB0,0,0x74);internalRAM[0xEB1]=1;put32(internalRAM+0xEB8,0x03004280);
+    put32(internalRAM+0xF0C,0x0815F9B4);put32(internalRAM+0xF10,0x0815FD08);
+    internalRAM[0xEA8]=0;internalRAM[0xF9C]=1;
+    return YES;
+}
++ (BOOL)qaHideMusicPauseText {
+    if(!ownsROMUI()||!overworld()) return NO;
+    // Keep a native asynchronous text owner advancing across the hide. This
+    // isolates replacement of its printer from destruction of the draw task.
+    // ARMv4T CreateTask(RunTextPrinters_CheckPrinter0Active, 80), then return.
+    const uint8_t owner[]={0,0xB5,4,0x48,0x50,0x21,4,0x4B,0,0xF0,2,0xF8,
+        1,0xBC,0,0x47,0x18,0x47,0xC0,0x46,0xBD,0x6C,0x0F,8,0x1D,0x74,7,8};
+    memcpy(internalRAM+0x42D0,owner,sizeof(owner));
+    const uint8_t script[]={0x23,0xF5,0x94,6,8,0x23,0xD1,0x42,0,3,0x02};
+    memcpy(internalRAM+0x4280,script,sizeof(script));
+    memset(internalRAM+0xEB0,0,0x74);internalRAM[0xEB1]=1;put32(internalRAM+0xEB8,0x03004280);
+    put32(internalRAM+0xF0C,0x0815F9B4);put32(internalRAM+0xF10,0x0815FD08);
+    internalRAM[0xEA8]=0;internalRAM[0xF9C]=1;
+    return YES;
+}
++ (NSDictionary<NSString *,id> *)qaFieldMusicStatus {
+    if(!workRAM||!internalRAM) return @{};
+    return @{@"status":@(word(internalRAM+0x7304)),@"musicState":@(internalRAM[0xFC4]),
+             @"printerActive":@(workRAM[0x2004F]),@"messageMode":@(workRAM[0x3709C]),
+             @"field":@(overworld())};
+}
++ (void)qaSetLegacyFieldTextAdmission:(BOOL)enabled { qaLegacyFieldTextAdmission=enabled; }
 + (NSDictionary<NSString *,id> *)qaNuggetBridgeStatus {
     if(!workRAM||!internalRAM) return @{};
     const uint32_t save=word(internalRAM+0x5008);

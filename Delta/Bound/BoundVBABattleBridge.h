@@ -78,6 +78,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)qaWarpPalletEntrance;
 + (BOOL)qaWarpViridianMartEntrance;
 + (BOOL)qaStopMapMusicRetainingTracks;
++ (BOOL)qaStartMusicPauseText;
++ (BOOL)qaHideMusicPauseText;
++ (NSDictionary<NSString *,id> *)qaFieldMusicStatus;
++ (void)qaSetLegacyFieldTextAdmission:(BOOL)enabled;
 + (NSDictionary<NSString *,id> *)qaNuggetBridgeStatus;
 + (BOOL)qaStartSoulCheck;
 + (BOOL)qaStartSoulCatch:(NSUInteger)mode;

@@ -1,5 +1,71 @@
 # Full-app multiplayer gameplay acceptance
 
+## Music ownership prevention — October 25, 2026
+
+The follow-up causal trace found an unsafe multiplayer interruption, beyond the
+door's stuck-state recovery. `friendDialogueReady` previously checked native
+field callbacks and script/control locks, but not the field-message mode at
+`0x0203709C` or native window-0 `IsTextPrinterActive` byte at `0x0202004F`.
+An unlocked field can still have an asynchronous text printer, including after
+its visible message is hidden. Replacing window 0 discards that printer's
+remaining text controls.
+
+Native `RenderText`'s PAUSE_MUSIC branch at `0x08005A96` calls
+`m4aMPlayStop` at `0x081DD93C`. Its write at `0x081DD954` deliberately sets the
+paused bit while retaining track bits. The corresponding RESUME_MUSIC branch
+at `0x08005AA4` reaches `m4aMPlayContinue`, whose write at `0x081DD008` clears
+that bit. These are valid native operations. An interrupted printer can lose
+the second operation, leaving a later native map fade waiting forever.
+The text pause/resume branches, text-printer implementation, message-hide
+routine, MP2K stop/continue functions and map fade/stop predicate were verified
+byte-for-byte against the original reconstruction (`68929966…`). Multiplayer
+did not change those audio routines; its additional caller omitted their text
+ownership precondition.
+
+The native causal tests create the pause through actual message controls,
+not by writing audio status. A disposable native printer task keeps the
+asynchronous owner advancing after its window is hidden, isolating replacement
+from destruction of the draw task. The same scenario is run with a simulator-only
+seam restoring the old admission rule and with the production guard. Old
+admission allows the friend prompt to replace the printer and leaves the song
+paused. Correct admission queues the prompt, lets A finish the original text,
+and observes the original native music resume before opening the prompt and
+entering the Mart. This comparison runs in music state 2, where the prior
+door-recovery workaround (states 5–7) cannot run.
+
+The prevention now covers native friend prompts, battle/trade preparation and
+installation, and Debug R. The host withholds the cartridge's checkpoint-safe
+claim while a native message or printer is active, so old cartridges receive
+the stronger ownership check too. Pending multiplayer prompts retain ordinary
+native A/B input until the underlying owner finishes; opening multiplayer
+text still keeps its first-button protection. No ROM identity or save format
+changes are needed.
+
+The affected checkpoint's last printer text was the multiplayer friend prompt,
+consistent with this reproduced loss of ownership. A checkpoint cannot recover
+the original overwritten message or its full historical timing, so that exact
+past input sequence remains unrecorded. The test establishes a causal fault in
+our multiplayer admission, not proof of which NPC message preceded that save.
+
+Validation: all 117 focused tests passed without failures or skips in
+`.build/music-owner-verified.xcresult` (log:
+`/private/tmp/bound-music-owner-verified.log`). Both causal cases start with
+normally playing native music (`0x1FF`); only the real native text command
+pauses it. The fixed case finishes its native resume, admits the queued prompt
+and enters the Mart. The legacy-admission control loses the resume before any
+door fade. Input tests also verify that queued entry preserves A/B while a
+newly opening multiplayer window retains its existing first-button protection.
+Debug R checks text ownership on the preceding frame too, because native key
+handling can close a printer before the completed-frame callback observes it.
+
+The traversal harness now allows up to three native 2px running steps per host
+sample during its 3× fast-forward phase; the normal-speed seam crossings keep
+the tighter bound. No production map-rendering behavior changed in this pass.
+The Release iPhone build, 17,061 pinned-source checks and 99 source/integration
+hashes plus two SDK privacy manifests passed. The legacy-admission test seam and
+native text fixture helpers are absent from Release. Fixed-build Mac UI,
+physical devices and live two-device network checks remain pending.
+
 ## Mart transition and Debug return — October 25, 2026
 
 The reported build 201 Mac checkpoint reproduced a native door transition

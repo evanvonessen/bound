@@ -376,6 +376,95 @@ final class RecordedPlayerTests: XCTestCase {
         }
     }
 
+    func testFriendPromptWaitsForNativeMusicResume() async throws {
+        try await runNativeMusicOwnerScenario(protect: true)
+    }
+    func testLegacyFriendPromptDropsNativeMusicResume() async throws {
+        try await runNativeMusicOwnerScenario(protect: false)
+    }
+    private func runNativeMusicOwnerScenario(protect: Bool) async throws {
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("MultiplayerValidation")
+        let rom = root.appendingPathComponent("RadicalRed.gba")
+        guard FileManager.default.fileExists(atPath: rom.path) else { throw XCTSkip("Requires owned ROM fixture") }
+        let output = root.appendingPathComponent("music-owner-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let battery = output.appendingPathComponent("work.sav")
+        try Data(repeating: 0xFF, count: 0x20000).write(to: battery)
+        let core = try XCTUnwrap(EmulatorCore(game: ReplayGame(fileURL: rom, gameSaveURL: battery), options: [.metal: true]))
+        let setup = NativePlayerSceneSetup(core: core, debugPlayer: 1)
+        let dialogue = BoundFriendDialogueProbe()
+        dialogue.configure(core: core)
+        BoundVBABattleBridge.qaSetLegacyFieldTextAdmission(!protect)
+        let booted = expectation(description: "Native field ready")
+        var ready = false
+        core.updateHandler = { core in
+            autoreleasepool {
+                setup.receive(core); dialogue.receive(core)
+                if !ready, setup.isReady { ready = true; booted.fulfill() }
+            }
+        }
+        defer { _ = core.stop(); BoundVBABattleBridge.qaSetLegacyFieldTextAdmission(false) }
+        core.rate = 8; XCTAssertTrue(core.start())
+        await fulfillment(of: [booted], timeout: 60)
+        XCTAssertTrue(core.pause()); core.rate = 1
+        XCTAssertTrue(BoundVBABattleBridge.qaWarpViridianMartEntrance())
+        XCTAssertTrue(core.resume()); try await Task.sleep(for: .seconds(3)); XCTAssertTrue(core.pause())
+        let fieldMemory = try XCTUnwrap(BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }))
+        try Data(fieldMemory.workRAM).write(to: output.appendingPathComponent("field.ewram"))
+        try Data(fieldMemory.internalRAM).write(to: output.appendingPathComponent("field.iwram"))
+        NSLog("Native music owner fixture: %@", output.path)
+        let initialMusic = BoundVBABattleBridge.qaFieldMusicStatus()["status"] as? UInt32 ?? 0
+        XCTAssertNotEqual(initialMusic & 0xFFFF, 0)
+        XCTAssertEqual(initialMusic & 0x80000000, 0, "Both causal cases start with normally playing music")
+        XCTAssertTrue(BoundVBABattleBridge.qaStartMusicPauseText())
+        XCTAssertTrue(core.resume()); try await Task.sleep(for: .milliseconds(500)); XCTAssertTrue(core.pause())
+        var audio = BoundVBABattleBridge.qaFieldMusicStatus()
+        NSLog("Native music pause text: %@", audio)
+        XCTAssertEqual((audio["status"] as? UInt32 ?? 0) & 0x80000000, 0x80000000)
+        XCTAssertEqual(audio["printerActive"] as? Int, 1)
+        XCTAssertTrue(BoundVBABattleBridge.qaHideMusicPauseText())
+        XCTAssertTrue(core.resume()); try await Task.sleep(for: .milliseconds(250)); XCTAssertTrue(core.pause())
+        audio = BoundVBABattleBridge.qaFieldMusicStatus()
+        XCTAssertEqual(audio["messageMode"] as? Int, 0)
+        XCTAssertEqual(audio["printerActive"] as? Int, 1)
+        XCTAssertEqual(audio["field"] as? Bool, true, "An unlocked field can still have an active native printer")
+        XCTAssertEqual(BoundVBABattleBridge.friendDialogueReady(), !protect, "Native text ownership must gate a replacement prompt")
+        XCTAssertEqual(setup.isReady, !protect, "An unfinished native message cannot be advertised as a safe field checkpoint")
+        let request = BoundFriendDialogueProbe.Request(id: UUID(), mode: 2, text: "Waiting for your friend.\nA or B: Cancel.")
+        dialogue.show(request)
+        XCTAssertTrue(core.resume()); try await Task.sleep(for: .milliseconds(350)); XCTAssertTrue(core.pause())
+        XCTAssertEqual(dialogue.read().active, !protect, "The queued invitation must wait for its text owner")
+        core.deltaCore.emulatorBridge.activateInput(1, value: 1, playerIndex: 0)
+        XCTAssertTrue(core.resume()); try await Task.sleep(for: .milliseconds(100)); XCTAssertTrue(core.pause())
+        core.deltaCore.emulatorBridge.deactivateInput(1, playerIndex: 0)
+        XCTAssertTrue(core.resume()); try await Task.sleep(for: .seconds(1)); XCTAssertTrue(core.pause())
+        audio = BoundVBABattleBridge.qaFieldMusicStatus()
+        XCTAssertEqual(audio["musicState"] as? Int, 2, "Door-state recovery cannot affect this causal check")
+        if !protect {
+            XCTAssertEqual((audio["status"] as? UInt32 ?? 0) & 0x80000000, 0x80000000,
+                           "Legacy admission destroys the native resume command before any door transition")
+            dialogue.show(nil)
+            XCTAssertTrue(core.resume()); try await Task.sleep(for: .seconds(1)); XCTAssertTrue(core.pause())
+            return
+        }
+        XCTAssertTrue(dialogue.read().active, "The queued prompt opens after the native text finishes")
+        XCTAssertTrue(dialogue.read().menuReady)
+        XCTAssertEqual((audio["status"] as? UInt32 ?? 0) & 0x80000000, 0, "The original native RESUME_MUSIC must run before the prompt replaces its window")
+        dialogue.show(nil)
+        XCTAssertTrue(core.resume()); try await Task.sleep(for: .seconds(1)); XCTAssertTrue(core.pause())
+        XCTAssertFalse(dialogue.read().active)
+        XCTAssertTrue(BoundVBABattleBridge.friendDialogueReady())
+        core.deltaCore.emulatorBridge.activateInput(64, value: 1, playerIndex: 0)
+        XCTAssertTrue(core.resume()); try await Task.sleep(for: .seconds(1)); XCTAssertTrue(core.pause())
+        core.deltaCore.emulatorBridge.deactivateInput(64, playerIndex: 0)
+        XCTAssertTrue(core.resume()); try await Task.sleep(for: .seconds(3)); XCTAssertTrue(core.pause())
+        let memory = try XCTUnwrap(BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }))
+        let profile = try BoundPlayerROMProfile(rom: Data(contentsOf: rom))
+        let interior = try XCTUnwrap(BoundPlayerStateDecoder.read(profile: profile, memory: memory, frame: 1, includeScene: true).player)
+        XCTAssertEqual(interior.mapGroup, 5); XCTAssertEqual(interior.mapNumber, 3)
+        XCTAssertNotNil(interior.scene)
+    }
+
     func testActualViridianMartDoorEntry() async throws {
         try await runViridianMartDoorEntry(stoppedMusic: false, debugPlayer: 1)
     }
@@ -577,9 +666,11 @@ final class RecordedPlayerTests: XCTestCase {
         // Hold B and use native running shoes to reproduce a stationary peer
         // viewed by a running player crossing the seam in both directions.
         core.deltaCore.emulatorBridge.activateInput(2, value: 1, playerIndex: 0)
+        var fastForwardFrame: UInt64?
         // Cross the seam and turn back on the clear road before the grass;
         // a wild battle would intentionally remove the overworld presentation.
         for (input, rate, milliseconds) in [(64, 1.0, 650), (128, 1.0, 650), (32, 3.0, 1200), (16, 3.0, 1200)] {
+            if rate > 1, fastForwardFrame == nil { fastForwardFrame = captured.snapshot().last?.frame }
             core.rate = rate
             core.deltaCore.emulatorBridge.activateInput(input, value: 1, playerIndex: 0)
             XCTAssertTrue(core.resume())
@@ -625,7 +716,11 @@ final class RecordedPlayerTests: XCTestCase {
             receiver.receive(try XCTUnwrap(packet.encoded()), at: now)
             if let smoothed = receiver.pose(at: now + 0.05)?.rendered(profile: profile, viewer: stationaryViewer) {
                 if let previousSmoothed {
-                    XCTAssertLessThanOrEqual(abs(smoothed.x - previousSmoothed.x) + abs(smoothed.y - previousSmoothed.y), 4.01,
+                    // Fast-forward can batch three native 2px running steps
+                    // between host samples. Keep the tighter normal-speed
+                    // bound for both actual town/route seam crossings.
+                    let maximumStep = reading.frame >= (fastForwardFrame ?? .max) ? 6.01 : 4.01
+                    XCTAssertLessThanOrEqual(abs(smoothed.x - previousSmoothed.x) + abs(smoothed.y - previousSmoothed.y), maximumStep,
                         "Crossing a connected map must not jump ahead of delayed interpolation")
                 }
                 previousSmoothed = smoothed

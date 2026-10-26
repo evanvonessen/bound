@@ -124,6 +124,24 @@ final class FriendInteractionTests: XCTestCase {
         XCTAssertEqual(p.a.inputGate.filter(GBAGameInput.a).type,.game(.gba), "Stopping must release the gate even while idle")
         XCTAssertFalse(p.a.canInteract)
     }
+    func testQueuedPromptLeavesUnderlyingNativeDialogueInputAvailable() {
+        let p = peers()
+        XCTAssertTrue(p.a.open(at: 10))
+        p.a.nativeDialogueManaged = true; p.a.nativeDialogueBusy = true
+        var reading = BoundFriendDialogueProbe.Reading()
+        p.a.nativeDialogueInput = reading.permitsNativeInput(pending: true, acknowledgingEnd: false)
+        p.a.refreshInputGate()
+        XCTAssertEqual(p.a.inputGate.filter(GBAGameInput.a).type, .game(.gba), "A must finish the original dialogue while multiplayer entry waits")
+        XCTAssertEqual(p.a.inputGate.filter(GBAGameInput.b).type, .game(.gba))
+        reading.active = true
+        p.a.nativeDialogueInput = reading.permitsNativeInput(pending: true, acknowledgingEnd: false)
+        p.a.refreshInputGate()
+        XCTAssertEqual(BoundFriendWorldInput(input: p.a.inputGate.filter(GBAGameInput.a)), .blockedA, "A newly opening multiplayer prompt keeps its normal first-button protection")
+        reading.menuReady = true
+        p.a.nativeDialogueInput = reading.permitsNativeInput(pending: true, acknowledgingEnd: false)
+        p.a.refreshInputGate()
+        XCTAssertEqual(p.a.inputGate.filter(GBAGameInput.a).type, .game(.gba))
+    }
     func testRepeatedJoinPreservesActiveTradeConsentAndControls() {
         let p=peers()
         p.a.open(at:10); p.a.request(.trade,at:10)

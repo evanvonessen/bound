@@ -5,7 +5,15 @@ import DeltaCore
 /// guest memory; replacing a request first lets native B dismiss the old window.
 final class BoundFriendDialogueProbe: @unchecked Sendable {
     struct Request: Equatable { let id: UUID; let mode: Int; let text: String }
-    struct Reading { var id: UUID?; var activeID: UUID?; var result: Int?; var ready=false; var active=false; var menuReady=false; var mode = -1; var cursor = -1 }
+    struct Reading {
+        var id: UUID?; var activeID: UUID?; var result: Int?
+        var ready=false; var active=false; var menuReady=false; var mode = -1; var cursor = -1
+        func permitsNativeInput(pending: Bool, acknowledgingEnd: Bool) -> Bool {
+            // While entry waits on native dialogue, its own A/B handling must
+            // remain available so that dialogue can finish and release entry.
+            active ? menuReady : !ready && (pending || acknowledgingEnd)
+        }
+    }
     private let lock=NSLock()
     private var coreID: ObjectIdentifier?
     private var desired: Request?, current: Request?
@@ -145,7 +153,7 @@ final class BoundFriendInteractionPanel: UIView {
         let value=probe.read()
         session.nativeDialogueReady=value.ready
         session.nativeDialogueBusy=value.active || request != nil || closeCompletion != nil
-        session.nativeDialogueInput=value.active && value.menuReady || session.phase == .ended && !value.active && !value.ready
+        session.nativeDialogueInput=value.permitsNativeInput(pending: request != nil, acknowledgingEnd: session.phase == .ended)
         session.refreshInputGate()
         if let closeCompletion,!value.active,value.ready {
             self.closeCompletion=nil; closeCompletion(); return
