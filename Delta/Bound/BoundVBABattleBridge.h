@@ -69,6 +69,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)enforceSoulLink;
 + (void)closeSoulLink;
 #if DEBUG && TARGET_OS_SIMULATOR
++ (NSDictionary<NSString *,id> *)qaUncachedSoulLinkSnapshot;
++ (NSDictionary<NSString *,id> *)qaSoulBoxCacheChecks;
 + (BOOL)qaStartNativePartyFixture;
 + (BOOL)qaConfigureBattleParty:(NSUInteger)mode;
 + (NSDictionary<NSString *,id> *)qaBattleMenu;

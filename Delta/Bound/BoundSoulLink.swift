@@ -507,7 +507,10 @@ final class BoundSoulProbe: @unchecked Sendable {
     private var coreID: ObjectIdentifier?
     private var url: URL?
     private var gameID = ""
-    private var ledger: BoundSoulLedger?
+    // Mutations publish this value only after persistence succeeds. Configure
+    // and continuation reload also invalidate the derived native policy.
+    private var ledger: BoundSoulLedger? { didSet { deniedPolicy = nil } }
+    private var deniedPolicy: Data?
     private var installed = false
     private var reachedField = false
     private var frame = 0
@@ -515,6 +518,12 @@ final class BoundSoulProbe: @unchecked Sendable {
     private var lastPolicy = Data()
     private var lastBoxes = Data()
     private var cachedBoxes: [BoundSoulMon] = []
+    private func policyBytes(for value: BoundSoulLedger) -> Data {
+        if let deniedPolicy { return deniedPolicy }
+        let bytes = value.denied.sorted().reduce(into: Data()) { $0.append($1.bytes) }
+        deniedPolicy = bytes
+        return bytes
+    }
     func configure(core: EmulatorCore?, url: URL?, gameID: String = "") {
         lock.lock(); defer { lock.unlock() }
         self.coreID = core.map(ObjectIdentifier.init); self.url = url; self.gameID = gameID
@@ -704,7 +713,7 @@ final class BoundSoulProbe: @unchecked Sendable {
             throw BoundSoulLedger.Error.corrupt
         }
         installed = true
-        let policy = ledger.denied.sorted().reduce(into: Data()) { $0.append($1.bytes) }
+        let policy = policyBytes(for: ledger)
         guard BoundVBABattleBridge.setSoulLinkDenied(policy) else {
             snapshot.error = "Soul Link restore rules are unavailable. Retry recovery."
             throw BoundSoulLedger.Error.corrupt
@@ -743,10 +752,11 @@ final class BoundSoulProbe: @unchecked Sendable {
         let boxBytes = native["boxes"] as? Data ?? Data()
         let boxesChanged = ready && boxBytes != lastBoxes
         if boxesChanged { lastBoxes = boxBytes; cachedBoxes = BoundSoulMon.decode(boxBytes, stride: 58) }
-        timeline.observe(mons: party + cachedBoxes, ready: ready, battle: native["battle"] as? Bool == true,
+        let mons = party + cachedBoxes
+        timeline.observe(mons: mons, ready: ready, battle: native["battle"] as? Bool == true,
                          outcome: native["outcome"] as? Int ?? 0, flags: native["battleFlags"] as? UInt32 ?? 0)
         snapshot.ready = ready
-        if ready { snapshot.mons = party + cachedBoxes }
+        if ready { snapshot.mons = mons }
         guard reachedField, var value = ledger, !value.ended else { return }
         do {
             guard native["overflow"] as? Bool != true else { throw BoundSoulLedger.Error.capacity }
@@ -758,7 +768,7 @@ final class BoundSoulProbe: @unchecked Sendable {
                 }
             }
             let previous = value
-            try value.observe(ready && boxesChanged ? party + cachedBoxes : party, registering: ready, fainted: fainted)
+            try value.observe(ready && boxesChanged ? mons : party, registering: ready, fainted: fainted)
             if value != previous { try persist(value); ledger = value; snapshot.ledger = value }
             snapshot.partyWipedOut = snapshot.partyWipedOut || BoundSoulWipeout.occurred(party: party, ledger: value)
             if ready && (snapshot.team == nil || frame % 15 == 0 || boxesChanged || value != previous) {
@@ -766,7 +776,7 @@ final class BoundSoulProbe: @unchecked Sendable {
                 snapshot.teamCapturedAt = ProcessInfo.processInfo.systemUptime
             }
             BoundVBABattleBridge.acknowledgeSoulLinkFaints()
-            let policy = value.denied.sorted().reduce(into: Data()) { $0.append($1.bytes) }
+            let policy = policyBytes(for: value)
             if safePolicyBoundary && (policy != lastPolicy || !installed) {
                 guard BoundVBABattleBridge.setSoulLinkDenied(policy) else { throw BoundSoulLedger.Error.corrupt }
                 lastPolicy = policy

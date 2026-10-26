@@ -227,6 +227,16 @@ private final class BridgePairDriver: @unchecked Sendable {
     }
 }
 
+private final class NativeFixtureCompletion: @unchecked Sendable {
+    private let lock=NSLock()
+    private var completed=false
+    func claim()->Bool {
+        lock.lock();defer { lock.unlock() }
+        guard !completed else { return false }
+        completed=true;return true
+    }
+}
+
 @MainActor
 final class NativeBattleRuntimeTests:XCTestCase {
     private var previousExperimentalFeature: Any?
@@ -239,6 +249,137 @@ final class NativeBattleRuntimeTests:XCTestCase {
         UserDefaults.standard.set(previousExperimentalFeature, forKey: BoundMultiplayerFeatures.key)
         NotificationCenter.default.post(name: BoundMultiplayerFeatures.didChange, object: nil)
         super.tearDown()
+    }
+
+    func testCreateSoulObservationFixture() async throws {
+        continueAfterFailure=false
+        let root=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("Phase6SoulQA")
+        let rom=root.appendingPathComponent("current.gba"),state=root.appendingPathComponent("field.state")
+        guard FileManager.default.fileExists(atPath:state.path) else { throw XCTSkip("Requires owned field-state fixture") }
+        guard !FileManager.default.fileExists(atPath:root.appendingPathComponent("observer.state").path) else {
+            throw XCTSkip("Preserving the previously generated frozen observer state")
+        }
+        let battery=root.appendingPathComponent("fixture.sav")
+        try Data(repeating:0xFF,count:131072).write(to:battery)
+        let core=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
+        defer { _=core.pause();_=core.stop() }
+        try BoundROMMultiplayerCoordinator.prepareServerCoreForSelection(core)
+        XCTAssertTrue(MultiRedAdapter.restoreState(try Data(contentsOf:state)))
+        XCTAssertTrue(BoundVBABattleBridge.installROMMultiplayer())
+        XCTAssertTrue(BoundVBABattleBridge.qaStartNativePartyFixture())
+        let completed=expectation(description:"Native givemon completed"),once=NativeFixtureCompletion()
+        core.updateHandler={ _ in
+            let value=BoundVBABattleBridge.soulLinkSnapshot()
+            if value["ready"] as? Bool == true,(value["party"] as? Data)?.count == 100,once.claim() { completed.fulfill() }
+        }
+        core.audioManager.isEnabled=false;core.rate=8
+        XCTAssertTrue(core.resume());core.deltaCore.emulatorBridge.audioRenderer=nil
+        await fulfillment(of:[completed],timeout:30);_=core.pause()
+        XCTAssertEqual(BoundSoulMon.decode(BoundVBABattleBridge.soulLinkSnapshot()["party"] as? Data ?? Data(),stride:100).count,1)
+        let captured=MultiRedAdapter.captureState()
+        XCTAssertFalse(captured.isEmpty)
+        try captured.write(to:root.appendingPathComponent("observer.state"))
+    }
+
+    func testActualSoulObservationPerformance() async throws {
+        let root=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("Phase6SoulQA")
+        let rom=root.appendingPathComponent("current.gba"),stateURL=root.appendingPathComponent("observer.state")
+        guard FileManager.default.fileExists(atPath:rom.path),FileManager.default.fileExists(atPath:stateURL.path) else {
+            throw XCTSkip("Requires exact owned ROM and frozen actual VBA field state in Phase6SoulQA")
+        }
+        let romBytes=try Data(contentsOf:rom),state=try Data(contentsOf:stateURL)
+        let profile=try MultiRedAdapter(rom:romBytes).profile
+        XCTAssertEqual(profile,BoundGameProfiles.current)
+        let label=(try? String(contentsOf:root.appendingPathComponent("label.txt"),encoding:.utf8))?.trimmingCharacters(in:.whitespacesAndNewlines) ?? "measurement"
+        let output=root.appendingPathComponent(label+"-"+UUID().uuidString)
+        try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+        let battery=output.appendingPathComponent("work.sav")
+        try Data(repeating:0xFF,count:131072).write(to:battery)
+        let core=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
+        let gameID="phase6-soul-observer",probe=BoundSoulProbe()
+        BoundServerMemoryFiles.setEnabled(true,for:gameID)
+        try BoundServerMemoryFiles.restore([:],gameID:gameID)
+        defer {
+            BoundVBABattleBridge.closeSoulLink();_=core.stop()
+            try? BoundServerMemoryFiles.restore([:],gameID:gameID)
+            BoundServerMemoryFiles.setEnabled(false,for:gameID)
+        }
+        try BoundROMMultiplayerCoordinator.prepareServerCoreForSelection(core)
+        XCTAssertTrue(MultiRedAdapter.restoreState(state))
+        XCTAssertEqual(BoundVBABattleBridge.soulLinkSnapshot() as NSDictionary,
+                       BoundVBABattleBridge.qaUncachedSoulLinkSnapshot() as NSDictionary)
+        probe.configure(core:core,url:output.appendingPathComponent("Soul Link/run.json"),gameID:gameID)
+        probe.setVerified(true)
+        try probe.startPreparedRun(run:UUID(uuidString:"00000000-0000-0000-0000-000000000006")!,binding:String(repeating:"6",count:64))
+        let result:[String:Any]=await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos:.userInitiated).async {
+                func resident()->Int {
+                    var info=mach_task_basic_info(),count=mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size/MemoryLayout<integer_t>.size)
+                    let status=withUnsafeMutablePointer(to:&info) { p in p.withMemoryRebound(to:integer_t.self,capacity:Int(count)) {
+                        task_info(mach_task_self_,task_flavor_t(MACH_TASK_BASIC_INFO),$0,&count)
+                    } }
+                    return status==KERN_SUCCESS ? Int(info.resident_size):-1
+                }
+                func summary(_ samples:[UInt64])->[String:Double] {
+                    let s=samples.sorted();let n=s.count
+                    return ["samples":Double(n),"p50_ns":Double(s[n/2]),"p95_ns":Double(s[n*95/100]),
+                        "p99_ns":Double(s[n*99/100]),"max_ns":Double(s[n-1]),"mean_ns":Double(s.reduce(0,+))/Double(n)]
+                }
+                for _ in 0..<128 { BoundFrameMemory.perform { probe.receive(core) } }
+                let before=resident();var peak=before,invalid=0,native=[UInt64](),full=[UInt64]()
+                native.reserveCapacity(4096);full.reserveCapacity(4096)
+                var initialPayload=Data(),finalPayload=Data()
+                func payload(_ value:[String:Any])->Data {
+                    (value["party"] as? Data ?? Data())+(value["boxes"] as? Data ?? Data())
+                }
+                BoundFrameMemory.perform { initialPayload=payload(BoundVBABattleBridge.soulLinkSnapshot()) }
+                for index in 0..<4096 {
+                    let start=DispatchTime.now().uptimeNanoseconds
+                    BoundFrameMemory.perform {
+                        let value=BoundVBABattleBridge.soulLinkSnapshot()
+                        if (value["boxes"] as? Data)?.count != 43500 || value["ready"] as? Bool != true { invalid+=1 }
+                    }
+                    native.append(DispatchTime.now().uptimeNanoseconds-start)
+                    if index%256==255 { peak=max(peak,resident()) }
+                }
+                for index in 0..<4096 {
+                    let start=DispatchTime.now().uptimeNanoseconds
+                    BoundFrameMemory.perform { probe.receive(core) }
+                    full.append(DispatchTime.now().uptimeNanoseconds-start)
+                    if index%256==255 { peak=max(peak,resident()) }
+                }
+                BoundFrameMemory.perform { finalPayload=payload(BoundVBABattleBridge.soulLinkSnapshot()) }
+                continuation.resume(returning:["native":summary(native),"fullObserver":summary(full),"residentStart":before,
+                    "residentPeakGrowth":peak-before,"invalidSnapshots":invalid,"payloadUnchanged":initialPayload==finalPayload,
+                    "payloadSHA256":SHA256.hash(data:initialPayload).map { String(format:"%02x",$0) }.joined(),
+                    "partyCount":probe.read().mons.filter { $0.hp != nil }.count,"observedMonCount":probe.read().mons.count])
+            }
+        }
+        var report=result
+        report["romSHA256"]=profile.romSHA256
+        report["stateSHA256"]=SHA256.hash(data:state).map { String(format:"%02x",$0) }.joined()
+        report["warmupCallbacks"]=128;report["label"]=label
+        let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
+        report["ledgerSHA256"]=SHA256.hash(data:try encoder.encode(probe.read().ledger)).map { String(format:"%02x",$0) }.joined()
+        try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("measurements.json"))
+        NSLog("Soul observation performance %@",String(describing:report))
+        XCTAssertEqual(result["invalidSnapshots"] as? Int,0)
+        XCTAssertEqual(result["partyCount"] as? Int,1)
+        XCTAssertGreaterThanOrEqual(result["observedMonCount"] as? Int ?? 0,1)
+        XCTAssertEqual(result["payloadUnchanged"] as? Bool,true)
+        XCTAssertNil(probe.read().error)
+        XCTAssertEqual(BoundVBABattleBridge.soulLinkSnapshot() as NSDictionary,
+                       BoundVBABattleBridge.qaUncachedSoulLinkSnapshot() as NSDictionary)
+        XCTAssertEqual(try Data(contentsOf:stateURL),state)
+        XCTAssertEqual(try Data(contentsOf:rom),romBytes)
+    }
+
+    func testSoulBoxCachePreservesBytesValidationAndRetainedSnapshots() {
+        let checks=BoundVBABattleBridge.qaSoulBoxCacheChecks()
+        XCTAssertEqual(checks["equal"] as? Bool,true)
+        XCTAssertEqual(checks["reused"] as? Bool,true)
+        XCTAssertEqual(checks["retained"] as? Bool,true)
+        XCTAssertEqual(checks["transitions"] as? Int,56)
     }
 
     func testActualFrameSnapshotsReleaseTemporaryMemory() async throws {
@@ -284,16 +425,16 @@ final class NativeBattleRuntimeTests:XCTestCase {
                     return result == KERN_SUCCESS ? Int(info.resident_size) : -1
                 }
                 var observedBytes = 0, invalidSnapshots = 0
-                func observe() {
-                    let snapshot = BoundVBABattleBridge.soulLinkSnapshot()
+                func record(_ snapshot: [String:Any]) {
                     let count = (snapshot["boxes"] as? Data)?.count ?? 0
                     observedBytes += count
                     if count != 25 * 30 * 58 || snapshot["ready"] as? Bool != true { invalidSnapshots += 1 }
                 }
+                func observe() { record(BoundVBABattleBridge.soulLinkSnapshot()) }
                 for _ in 0..<128 { BoundFrameMemory.perform(observe) }
                 let unpooledGrowth = autoreleasepool { () -> Int in
                     let before = resident()
-                    for _ in 0..<1024 { observe() }
+                    for _ in 0..<1024 { record(BoundVBABattleBridge.qaUncachedSoulLinkSnapshot()) }
                     return resident() - before
                 }
                 for _ in 0..<128 { BoundFrameMemory.perform(observe) }
@@ -819,7 +960,9 @@ final class NativeBattleRuntimeTests:XCTestCase {
 
     func testActualSoulLinkNativeHPAndStateRecovery() async throws {
         continueAfterFailure = false
-        guard ProcessInfo.processInfo.environment["BOUND_SOUL_RUNTIME"] == "1" else {
+        let documents=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0]
+        let frozenState=try? Data(contentsOf:documents.appendingPathComponent("Phase6SoulQA/observer.state"))
+        guard ProcessInfo.processInfo.environment["BOUND_SOUL_RUNTIME"] == "1" || frozenState != nil else {
             throw XCTSkip("Requires the explicit owned-simulator Soul Link fixture")
         }
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
@@ -835,18 +978,31 @@ final class NativeBattleRuntimeTests:XCTestCase {
         window.rootViewController = owner; window.makeKeyAndVisible(); owner.view.addSubview(view)
         view.frame = CGRect(x: 0, y: 150, width: window.bounds.width, height: window.bounds.width * 2/3); core.add(view)
         let driver = NativeBattleDriver(core: core, profile: profile), probe = BoundSoulProbe()
+        let fixtureHost=BoundROMMultiplayerProbe()
+        if frozenState != nil {
+            fixtureHost.configure(core:core);fixtureHost.setVerified(true)
+            var host=BoundROMHostState();host.enabled=true;host.ended=true;host.status = .complete
+            fixtureHost.publish(host)
+        }
         let journal = output.appendingPathComponent("run.json")
         probe.configure(core: core, url: journal); probe.setVerified(true); probe.setPreviewEnabled(true)
         core.audioManager.pausesOtherAudio = false; core.audioManager.mixesWithOtherAudio = true; core.audioManager.isEnabled = false
         core.updateHandler = { core in
             if core.audioManager.isEnabled { core.audioManager.isEnabled = false }
+            if frozenState != nil { fixtureHost.receive(core) }
             driver.receive(core); probe.receive(core)
         }
         defer {
             _ = core.pause(); BoundVBABattleBridge.closeSoulLink(); _ = core.stop()
             window.isHidden = true; previous?.makeKeyAndVisible()
         }
-        core.rate = 8; XCTAssertTrue(core.start()); core.deltaCore.emulatorBridge.audioRenderer = nil; await fulfillment(of: [driver.booted], timeout: 90)
+        core.rate = 8
+        if let frozenState {
+            try BoundROMMultiplayerCoordinator.prepareServerCoreForSelection(core)
+            XCTAssertTrue(MultiRedAdapter.restoreState(frozenState))
+            fixtureHost.receive(core);probe.receive(core);XCTAssertTrue(core.resume())
+        } else { XCTAssertTrue(core.start()) }
+        core.deltaCore.emulatorBridge.audioRenderer = nil; await fulfillment(of: [driver.booted], timeout: 90)
         for _ in 0..<20 {
             if probe.read().ready { break }
             try await Task.sleep(for: .milliseconds(100))

@@ -149,6 +149,31 @@ uint32_t word(const uint8_t *p) { return p[0]|uint32_t(p[1])<<8|uint32_t(p[2])<<
 unsigned half(const uint8_t *p) { return p[0]|unsigned(p[1])<<8; }
 void put16(uint8_t *p,unsigned v) { p[0]=v; p[1]=v>>8; }
 void put32(uint8_t *p,uint32_t v) { for(int i=0;i<4;i++) p[i]=uint8_t(v>>(i*8)); }
+// Used only by the completed-frame owner or while its core is paused. Returned
+// data owns immutable bytes; a retained Swift snapshot never aliases live RAM.
+struct SoulBoxSnapshotCache {
+    static constexpr unsigned Count=25,Stride=30*58,Size=Count*Stride;
+    NSData *bytes=nil;
+    NSData *read(const uint8_t *table,const uint8_t *ram) {
+        const uint8_t *blocks[Count];
+        for(unsigned i=0;i<Count;i++) {
+            const uint32_t address=word(table+i*4);
+            if(address<0x02000000||address>0x02040000-Stride) return nil;
+            blocks[i]=ram+address-0x02000000;
+        }
+        // Full equality also covers ROM reloads and older state restores; no
+        // pointer identity or checksum can hide changed storage contents.
+        bool same=bytes.length==Size;
+        const auto *previous=static_cast<const uint8_t *>(bytes.bytes);
+        for(unsigned i=0;same&&i<Count;i++) same=memcmp(previous+i*Stride,blocks[i],Stride)==0;
+        if(same) return bytes;
+        NSMutableData *copy=[NSMutableData dataWithLength:Size];
+        for(unsigned i=0;i<Count;i++) memcpy(static_cast<uint8_t *>(copy.mutableBytes)+i*Stride,blocks[i],Stride);
+        bytes=[copy copy];
+        return bytes;
+    }
+};
+SoulBoxSnapshotCache soulBoxCache;
 bool overworld() {
     return rom&&workRAM&&internalRAM&&word(internalRAM+0x30F0)==0x08056535
         &&word(internalRAM+0x30F4)==0x080565B5&&!(internalRAM[0x3529]&2)
@@ -959,15 +984,12 @@ static uint8_t soulQAScriptBackup[128];
 }
 + (NSDictionary<NSString *,id> *)soulLinkSnapshot {
     if(!rom||!workRAM||!internalRAM || workRAM[0x24029]>6) return @{};
-    NSMutableData *boxes=[NSMutableData data];
+    NSData *boxes=[NSData data];
     const bool ready=overworld();
     if(ready) {
         // Exact RR 4.1 table: 25 boxes, 30 slots, 58-byte compressed Pokemon.
-        for(unsigned i=0;i<25;i++) {
-            uint32_t address=word(rom+0x1148930+i*4);
-            if(address<0x02000000 || address>0x02040000-30*58) return @{};
-            [boxes appendBytes:workRAM+address-0x02000000 length:30*58];
-        }
+        boxes=soulBoxCache.read(rom+0x1148930,workRAM);
+        if(!boxes) return @{};
     }
     const unsigned n=workRAM[0x24029];
     NSMutableData *faints=[NSMutableData data];
@@ -1026,6 +1048,7 @@ static uint8_t soulQAScriptBackup[128];
     }
 }
 + (void)closeSoulLink {
+    soulBoxCache.bytes=nil;
     if(soulHooked()) {
         memcpy(rom+0x3FBE8,soulOriginalGet,8); memcpy(rom+0x4037C,soulOriginalSet,8);
         // A paused CPU can still have a shim return address on its stack.
@@ -1036,6 +1059,81 @@ static uint8_t soulQAScriptBackup[128];
 }
 
 #if DEBUG && TARGET_OS_SIMULATOR
+// Frozen phase-5E pure observer used only as a byte/validation oracle in QA.
++ (NSDictionary<NSString *,id> *)qaSoulBoxCacheChecks {
+    NSMutableData *table=[NSMutableData dataWithLength:25*4],*ram=[NSMutableData dataWithLength:0x40000];
+    auto *t=static_cast<uint8_t *>(table.mutableBytes),*r=static_cast<uint8_t *>(ram.mutableBytes);
+    for(unsigned i=0;i<25;i++) put32(t+i*4,0x02000000+i*30*58);
+    for(unsigned i=0;i<ram.length;i++) r[i]=uint8_t(i*17+i/1740);
+    // Original append/copy behavior, including every address bound.
+    auto oracle=[&]()->NSData * {
+        NSMutableData *value=[NSMutableData data];
+        for(unsigned i=0;i<25;i++) {
+            uint32_t address=word(t+i*4);
+            if(address<0x02000000||address>0x02040000-30*58) return nil;
+            [value appendBytes:r+address-0x02000000 length:30*58];
+        }
+        return value;
+    };
+    SoulBoxSnapshotCache cache;
+    NSData *first=cache.read(t,r),*frozen=[first copy];
+    bool reuse=first==cache.read(t,r),equal=[first isEqualToData:oracle()],retained=true;
+    unsigned transitions=0;
+    for(unsigned box=0;box<25;box++) for(unsigned offset:{0u,30u*58u-1u}) {
+        NSData *old=cache.bytes,*oldCopy=[old copy];
+        r[box*30*58+offset]^=0xFF;
+        equal=equal&&[cache.read(t,r) isEqualToData:oracle()];
+        retained=retained&&[old isEqualToData:oldCopy];transitions++;
+    }
+    // Valid relocation/alias, exact upper bound, invalid low/high pointers, and
+    // restoring an older RAM image all retain the original acceptance rules.
+    for(uint32_t address:{0x02000100u,0x02000000u,0x02040000u-30u*58u,0x01FFFFFFu,0x02040000u-30u*58u+1u}) {
+        put32(t+24*4,address);
+        NSData *actual=cache.read(t,r),*expected=oracle();
+        equal=equal&&((!actual&&!expected)||[actual isEqualToData:expected]);transitions++;
+    }
+    put32(t+24*4,0x02000000+24*30*58);
+    for(unsigned i=0;i<ram.length;i++) r[i]=uint8_t(i*17+i/1740);
+    equal=equal&&[cache.read(t,r) isEqualToData:frozen];
+    retained=retained&&[first isEqualToData:frozen];
+    return @{@"equal":@(equal),@"reused":@(reuse),@"retained":@(retained),@"transitions":@(transitions+1)};
+}
+
++ (NSDictionary<NSString *,id> *)qaUncachedSoulLinkSnapshot {
+    if(!rom||!workRAM||!internalRAM || workRAM[0x24029]>6) return @{};
+    NSMutableData *boxes=[NSMutableData data];
+    const bool ready=overworld();
+    if(ready) {
+        // Exact RR 4.1 table: 25 boxes, 30 slots, 58-byte compressed Pokemon.
+        for(unsigned i=0;i<25;i++) {
+            uint32_t address=word(rom+0x1148930+i*4);
+            if(address<0x02000000 || address>0x02040000-30*58) return @{};
+            [boxes appendBytes:workRAM+address-0x02000000 length:30*58];
+        }
+    }
+    const unsigned n=workRAM[0x24029];
+    NSMutableData *faints=[NSMutableData data];
+    bool overflow=false;
+    if(soulHooked() && word(internalRAM+0x4500)==0x314C5342) {
+        unsigned count=word(internalRAM+0x4504);
+        overflow=count>32 || word(internalRAM+0x4508)!=0;
+        if(count<=32) [faints appendBytes:internalRAM+0x450C length:count*8];
+    }
+    NSMutableData *active=[NSMutableData data];
+    if(internalRAM[0x3529]&2) {
+        unsigned count=workRAM[0x23BCC];
+        if(count<=4) for(unsigned i=0;i<count;i++) {
+            const auto *b=workRAM+0x23BE4+i*88;
+            // Match identity, not side/index: partner and raid teams may reorder.
+            if(half(b+0x2C)>0 && half(b+0x28)==0) {
+                [active appendBytes:b+0x48 length:4]; [active appendBytes:b+0x54 length:4];
+            }
+        }
+    }
+    return @{@"ready":@(ready),@"battle":@((internalRAM[0x3529]&2)!=0),@"party":[NSData dataWithBytes:workRAM+0x24284 length:n*100],
+             @"outcome":@(workRAM[0x23E8A]),@"battleFlags":@(word(workRAM+0x22B4C)),
+             @"boxes":boxes,@"faints":faints,@"battleFaints":active,@"overflow":@(overflow)};
+}
 + (BOOL)qaCooperativeGameSaveBlocked:(NSURL *)url {
     auto &fence=gameSaveFence();std::lock_guard<std::mutex> lock(fence.lock);
     return fence.cooperativeBlockedPaths.count(canonicalSavePath(url))!=0;
