@@ -6,14 +6,14 @@ import UIKit
 @MainActor
 final class BoundNakamaSharingTransport: FriendSharingTransport {
     private let media: any FriendSharingTransport
-    private let client: BoundNakamaClient
+    private let client: any BoundSDKRoomTransport<BoundNakamaConfiguration>
     private var battleInbox = BoundNakamaBattleInbox()
     private var gameplay: BoundNakamaConfiguration?
     private var event: (@MainActor (FriendSharingEvent) -> Void)?
     private var remoteView: UIView?
     private var spectatorView: UIView?
     private var mediaConfiguration: FriendSharingConfiguration?
-    private var generation = UUID()
+    private var generation = BoundSDKGeneration()
     private var connected = false
     private var videoRequested = false
     private var videoStarted = false
@@ -22,7 +22,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     private var videoDeadline: Task<Void, Never>?
     private var videoRetry: Task<Void, Never>?
     private var videoRecoveryDeadline: Task<Void, Never>?
-    private var videoGeneration = UUID()
+    private var videoGeneration = BoundSDKGeneration()
     private var videoRetryAttempts = 0
     private var presenceReceiver: (@MainActor (Data) -> Void)?
     private var retainedPresenceReceiver: (@MainActor (Data, TimeInterval) -> Void)?
@@ -37,7 +37,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     var videoStateChanged: (() -> Void)?
     var videoAuthorization: (@MainActor () async throws -> FriendSharingTokenLease)?
 
-    init(media: (any FriendSharingTransport)? = nil, client: BoundNakamaClient = BoundNakamaClient()) {
+    init(media: (any FriendSharingTransport)? = nil, client: any BoundSDKRoomTransport<BoundNakamaConfiguration> = BoundNakamaClient()) {
         self.media = media ?? AgoraSharingTransport()
         self.client = client
     }
@@ -81,11 +81,11 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
 
     func start(configuration: FriendSharingConfiguration, remoteView: UIView,
                event: @escaping @MainActor (FriendSharingEvent) -> Void) {
-        generation = UUID(); client.stop(); battleInbox.close(); battleInbox = BoundNakamaBattleInbox()
+        generation.invalidate(); client.stop(); battleInbox.close(); battleInbox = BoundNakamaBattleInbox()
         connected = false; pendingPresence = nil; pendingRetainedPresence = nil; pendingInteractions.removeAll(); pendingInteractionBytes = 0
         stopVideo()
         self.event = event; self.remoteView = remoteView; mediaConfiguration = configuration
-        let run = generation
+        let run = generation.token
         acceptedSends = 0; receivedMessages = 0; peerOnline = false
         if let gameplay {
             let inbox = battleInbox, expectedOwner = gameplay.peerOwnerID
@@ -106,8 +106,8 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         ensureVideo()
     }
 
-    private func receive(_ value: BoundNakamaClient.Event, run: UUID) {
-        guard generation == run, let gameplay, event != nil else { return }
+    private func receive(_ value: BoundSDKRoomEvent, run: BoundSDKGeneration.Token) {
+        guard generation.admits(run), let gameplay, event != nil else { return }
         switch value {
         case .joined:
             connected = true; event?(.joined)
@@ -179,7 +179,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     private func ensureVideo() {
         guard event != nil, (videoRequested || spectatorView != nil), !videoStarted, videoTask == nil, videoRetry == nil,
               let remoteView else { return }
-        let run = generation, attempt = UUID(); videoGeneration = attempt
+        let run = generation.token, attempt = BoundSDKGeneration.Token(); videoGeneration.replace(with: attempt)
         if gameplay == nil, let mediaConfiguration {
             // The ordinary video session owns its existing lease/renewal loop.
             beginVideo(mediaConfiguration, view: remoteView, run: run)
@@ -190,12 +190,12 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
                 do {
                     let lease = try await videoAuthorization()
                     try Task.checkCancellation()
-                    guard let self, self.generation == run, self.videoGeneration == attempt, self.event != nil,
+                    guard let self, self.generation.admits(run), self.videoGeneration.admits(attempt), self.event != nil,
                           self.videoRequested || self.spectatorView != nil else { return }
                     self.videoTask = nil; self.beginVideo(lease.configuration, view: remoteView, run: run)
                     self.scheduleVideoRenewal(lease, run: run)
                 } catch {
-                    guard !Task.isCancelled, let self, self.generation == run, self.videoGeneration == attempt else { return }
+                    guard !Task.isCancelled, let self, self.generation.admits(run), self.videoGeneration.admits(attempt) else { return }
                     self.videoTask = nil
                     if self.gameplay == nil { self.event?(.failed(.init(.tokenRequired))) }
                     else { self.scheduleVideoRetry() }
@@ -204,12 +204,12 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         } else if let mediaConfiguration { beginVideo(mediaConfiguration, view: remoteView, run: run) }
     }
 
-    private func beginVideo(_ configuration: FriendSharingConfiguration, view: UIView, run: UUID) {
-        let attempt = UUID(); videoGeneration = attempt
+    private func beginVideo(_ configuration: FriendSharingConfiguration, view: UIView, run: BoundSDKGeneration.Token) {
+        let attempt = BoundSDKGeneration.Token(); videoGeneration.replace(with: attempt)
         mediaConfiguration = configuration; videoStarted = true; videoStateChanged?()
         scheduleVideoRecoveryDeadline(run: run, attempt: attempt)
         media.start(configuration: configuration, remoteView: view) { [weak self] value in
-            guard let self, self.generation == run, self.videoGeneration == attempt, self.videoStarted else { return }
+            guard let self, self.generation.admits(run), self.videoGeneration.admits(attempt), self.videoStarted else { return }
             switch value {
             case .joined, .rejoined:
                 self.videoConnected = true; self.videoRetryAttempts = 0
@@ -237,24 +237,24 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         media.setSpectatorView(spectatorView)
     }
 
-    private func scheduleVideoRenewal(_ lease: FriendSharingTokenLease, run: UUID) {
+    private func scheduleVideoRenewal(_ lease: FriendSharingTokenLease, run: BoundSDKGeneration.Token) {
         guard videoStarted else { return }
-        let attempt = videoGeneration
+        let attempt = videoGeneration.token
         videoDeadline?.cancel()
         videoDeadline = Task { [weak self] in
             let delay = max(1, lease.expiresAt - Date().timeIntervalSince1970 - 30)
             try? await Task.sleep(for: .seconds(delay))
-            guard !Task.isCancelled, let self, self.generation == run, self.videoGeneration == attempt, self.videoStarted,
+            guard !Task.isCancelled, let self, self.generation.admits(run), self.videoGeneration.admits(attempt), self.videoStarted,
                   let authorize = self.videoAuthorization else { return }
             do {
                 let next = try await authorize()
-                guard !Task.isCancelled, self.generation == run, self.videoGeneration == attempt, self.videoStarted else { return }
+                guard !Task.isCancelled, self.generation.admits(run), self.videoGeneration.admits(attempt), self.videoStarted else { return }
                 guard let previous = self.mediaConfiguration, previous.channel == next.channel,
                       previous.uid == next.uid, previous.remoteUID == next.remoteUID,
                       self.media.renewToken(next.token) else { self.retryVideoAfterFailure(); return }
                 self.mediaConfiguration = next.configuration; self.scheduleVideoRenewal(next, run: run)
             } catch {
-                guard !Task.isCancelled, self.generation == run, self.videoGeneration == attempt else { return }
+                guard !Task.isCancelled, self.generation.admits(run), self.videoGeneration.admits(attempt) else { return }
                 self.retryVideoAfterFailure()
             }
         }
@@ -267,28 +267,28 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     private func scheduleVideoRetry() {
         guard gameplay != nil, connected, event != nil, videoRequested || spectatorView != nil, videoRetry == nil else { return }
         videoRetryAttempts += 1
-        let delay = min(30.0, pow(2.0, Double(min(videoRetryAttempts - 1, 5))))
-        let run = generation, attempt = videoGeneration
+        let delay = BoundSDKRetryDelay.seconds(attempt: videoRetryAttempts)
+        let run = generation.token, attempt = videoGeneration.token
         videoRetry = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
-            guard !Task.isCancelled, let self, self.generation == run, self.videoGeneration == attempt else { return }
+            guard !Task.isCancelled, let self, self.generation.admits(run), self.videoGeneration.admits(attempt) else { return }
             self.videoRetry = nil
             guard self.connected else { return }
             self.ensureVideo()
         }
     }
-    private func scheduleVideoRecoveryDeadline(run: UUID, attempt: UUID) {
+    private func scheduleVideoRecoveryDeadline(run: BoundSDKGeneration.Token, attempt: BoundSDKGeneration.Token) {
         guard gameplay != nil, videoRecoveryDeadline == nil else { return }
         videoRecoveryDeadline = Task { [weak self] in
             try? await Task.sleep(for: .seconds(30))
-            guard !Task.isCancelled, let self, self.generation == run, self.videoGeneration == attempt,
+            guard !Task.isCancelled, let self, self.generation.admits(run), self.videoGeneration.admits(attempt),
                   self.videoStarted, !self.videoConnected else { return }
             self.videoRecoveryDeadline = nil
             self.retryVideoAfterFailure()
         }
     }
     private func stopVideo(resetRetry: Bool = true) {
-        videoGeneration = UUID()
+        videoGeneration.invalidate()
         videoRetry?.cancel(); videoRetry = nil; videoRecoveryDeadline?.cancel(); videoRecoveryDeadline = nil
         if resetRetry { videoRetryAttempts = 0 }
         videoTask?.cancel(); videoTask = nil; videoDeadline?.cancel(); videoDeadline = nil
@@ -307,7 +307,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         return media.send(frame) { result in completion(gameplayOnlyFailure ? .success(()) : result) }
     }
     func stop() {
-        generation = UUID(); event = nil; connected = false; client.stop(); battleInbox.close()
+        generation.invalidate(); event = nil; connected = false; client.stop(); battleInbox.close()
         stopVideo(); gameplay = nil; mediaConfiguration = nil; remoteView = nil; spectatorView = nil
         pendingPresence = nil; pendingRetainedPresence = nil; pendingInteractions.removeAll(); pendingInteractionBytes = 0; peerOnline = false
     }
@@ -345,7 +345,7 @@ private final class BoundNakamaRoutedBattleChannel: BoundBattleChannel, @uncheck
     private let channel: BoundNakamaBattleChannel
     private let inbox: BoundNakamaBattleInbox
     private let id: UUID
-    init(client: BoundNakamaClient, peer: UUID, inbox: BoundNakamaBattleInbox, id: UUID) {
+    init(client: any BoundSDKRoomTransport<BoundNakamaConfiguration>, peer: UUID, inbox: BoundNakamaBattleInbox, id: UUID) {
         channel = BoundNakamaBattleChannel(client: client, targetOwnerID: peer); self.inbox = inbox; self.id = id
     }
     func send(_ data: Data) -> Bool { inbox.send(data, through: channel, expected: id) }

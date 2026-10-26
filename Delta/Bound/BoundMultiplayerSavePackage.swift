@@ -67,77 +67,19 @@ struct BoundMultiplayerRunManifest: Codable, Equatable, Sendable {
     }
 }
 
-/// A sequence belongs to its originating account, not to a checkpoint or a
-/// connection. Keeping sparse receipts prevents event 12 from hiding event 11.
-struct BoundMultiplayerSharedCursor: Codable, Equatable, Sendable {
-    struct Position: Codable, Equatable, Sendable {
-        var contiguous: UInt64 = 0
-        var sparse: Set<UInt64> = []
-        func contains(_ sequence: UInt64) -> Bool { sequence > 0 && (sequence <= contiguous || sparse.contains(sequence)) }
-        mutating func insert(_ sequence: UInt64) {
-            guard sequence > contiguous else { return }
-            sparse.insert(sequence)
-            while contiguous < UInt64.max, sparse.remove(contiguous + 1) != nil { contiguous += 1 }
-        }
-        var valid: Bool { contiguous < UInt64.max && sparse.count <= 100_000 && sparse.allSatisfy { $0 > contiguous && $0 < UInt64.max } }
-    }
-    var origins: [String: Position] = [:]
-    func contains(_ id: BoundMultiplayerSharedEvent.ID) -> Bool { origins[id.origin.uuidString]?.contains(id.sequence) == true }
-    func covers(_ other: Self) -> Bool {
-        other.origins.allSatisfy { origin, target in
-            let current = origins[origin] ?? Position()
-            return current.contiguous >= target.contiguous && target.sparse.allSatisfy(current.contains)
-        }
-    }
-    mutating func insert(_ id: BoundMultiplayerSharedEvent.ID) {
-        var position = origins[id.origin.uuidString] ?? Position()
-        position.insert(id.sequence); origins[id.origin.uuidString] = position
-    }
-    mutating func merge(_ other: Self) {
-        for (origin, received) in other.origins {
-            var position = origins[origin] ?? Position()
-            position.contiguous = max(position.contiguous, received.contiguous)
-            position.sparse = position.sparse.filter { $0 > position.contiguous }
-            for sequence in received.sparse { position.insert(sequence) }
-            origins[origin] = position
-        }
-    }
-}
+// Keep existing source names and Codable representations while sharing the mechanics.
+typealias BoundMultiplayerSharedCursor = BoundSDKEventCursor
+typealias BoundMultiplayerSharedEvent = BoundSDKEvent
+typealias BoundMultiplayerSharedAcknowledgement = BoundSDKEventAcknowledgement
+typealias BoundMultiplayerSharedJournal = BoundSDKEventJournal
 
-struct BoundMultiplayerSharedEvent: Codable, Equatable, Sendable, Identifiable {
-    struct ID: Codable, Equatable, Hashable, Sendable {
-        var origin: UUID
-        var sequence: UInt64
-    }
-    var run: UUID
-    var id: ID
-    var kind: String
-    var payload: Data
-    var idempotencyKey: String?
+extension BoundMultiplayerSharedEvent {
     /// A catch must not become permanent shared history before the native
     /// execution that acquired it is recoverable. Deaths still travel promptly.
     var requiresNativeCheckpoint: Bool {
         guard kind == "soul", let fact = try? JSONDecoder().decode(BoundSoulSharedEvent.self, from: payload) else { return false }
         return fact.valid && fact.run == run && fact.kind == .acquired
     }
-}
-
-struct BoundMultiplayerSharedAcknowledgement: Codable, Equatable, Sendable {
-    var run: UUID
-    var receiver: UUID
-    var cursor: BoundMultiplayerSharedCursor
-}
-
-struct BoundMultiplayerSharedJournal: Codable, Equatable, Sendable {
-    var version = 1
-    var run: UUID
-    var owner: UUID
-    var partner: UUID
-    var nextSequence: UInt64 = 1
-    var events: [BoundMultiplayerSharedEvent] = []
-    var received = BoundMultiplayerSharedCursor()
-    var acknowledged = BoundMultiplayerSharedCursor()
-    var applied = BoundMultiplayerSharedCursor()
 }
 
 struct BoundMultiplayerSavePackage: Codable, Equatable, Sendable {
@@ -393,46 +335,24 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
         guard identityAvailable, result.deviceOwner == deviceID, !result.releasedForTransfer else { throw Failure.deviceOwned }
         return result
     }
+    private func eventTransition<T>(_ operation: () throws -> T) throws -> T {
+        do { return try operation() }
+        catch let failure as BoundSDKEventJournalRules.Failure {
+            switch failure {
+            case .corrupt: throw Failure.corrupt
+            case .conflict: throw Failure.conflict
+            case .ownerMismatch: throw Failure.ownerMismatch
+            }
+        }
+    }
     private func validateJournal(_ value: BoundMultiplayerSharedJournal, identity: BoundMultiplayerRunIdentity) throws {
-        guard value.version == 1, value.run == identity.run, value.owner == identity.owner, value.partner == identity.partner,
-              value.nextSequence > 0, value.nextSequence < UInt64.max, value.events.count <= 100_000,
-              Set(value.events.map(\.id)).count == value.events.count else { throw Failure.corrupt }
-        let participants = Set([identity.owner.uuidString, identity.partner.uuidString])
-        for cursor in [value.received, value.acknowledged, value.applied] {
-            guard Set(cursor.origins.keys).isSubset(of: participants), cursor.origins.values.allSatisfy(\.valid) else { throw Failure.corrupt }
-        }
-        var received = BoundMultiplayerSharedCursor()
-        var keys = Set<String>()
-        for event in value.events {
-            try validateEvent(event, identity: identity)
-            if event.id.origin == identity.owner {
-                guard event.id.sequence < value.nextSequence else { throw Failure.corrupt }
-                if let key = event.idempotencyKey, !keys.insert(key).inserted { throw Failure.corrupt }
-            }
-            received.insert(event.id)
-        }
-        let maximumLocal = value.events.filter { $0.id.origin == identity.owner }.map { $0.id.sequence }.max() ?? 0
-        guard received == value.received, maximumLocal == value.nextSequence - 1 else { throw Failure.corrupt }
-        for event in value.events where value.applied.contains(event.id) || value.acknowledged.contains(event.id) {
-            guard value.received.contains(event.id) else { throw Failure.corrupt }
-        }
-        // Neither acknowledgement nor an apply marker may invent a missing ID.
-        for cursor in [value.acknowledged, value.applied] {
-            for (origin, position) in cursor.origins {
-                let stored = received.origins[origin] ?? .init()
-                guard position.contiguous <= stored.contiguous,
-                      position.sparse.allSatisfy(stored.contains) else { throw Failure.corrupt }
-            }
+        try eventTransition {
+            try BoundSDKEventJournalRules.validate(value, scope: .init(run: identity.run, owner: identity.owner, partner: identity.partner))
         }
     }
-    private func validateEvent(_ event: BoundMultiplayerSharedEvent, identity: BoundMultiplayerRunIdentity) throws {
-        guard event.run == identity.run, [identity.owner, identity.partner].contains(event.id.origin),
-              event.id.sequence > 0, event.id.sequence < UInt64.max,
-              !event.kind.isEmpty, event.kind.utf8.count <= 128, event.payload.count <= 65_536,
-              event.idempotencyKey.map({ !$0.isEmpty && $0.utf8.count <= 512 }) ?? true else { throw Failure.corrupt }
-    }
-    /// Durable receipt and native application are separate. A process may die
-    /// after storing an event; pendingSharedEventsToApply replays it on reopen.
+    /// Receipt and native application are separate. Local journals persist to
+    /// disk; managed journals remain in memory and rely on verified server
+    /// history/checkpoints for durability. Unapplied events remain replayable.
     func journal(gameID: String, identity: BoundMultiplayerRunIdentity? = nil) throws -> BoundMultiplayerSharedJournal {
         lock.lock(); defer { lock.unlock() }
         if serverGames.contains(gameID) {
@@ -465,8 +385,9 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
         try create(url.deletingLastPathComponent()); try writeData(data, to: url)
         try write(manifest, to: sharedJournalManifestURL(identity: manifest.identity))
     }
-    /// Includes ended/archived runs whose local outbox is still waiting for the
-    /// partner's durable receipt. Starting another game never deletes this queue.
+    /// Includes ended/archived local runs whose outbox still awaits the partner's
+    /// receipt. The local queue persists across new games; managed runs use the
+    /// separate server synchronization path.
     func pendingSharedRunIdentities(gameID: String) throws -> [BoundMultiplayerRunIdentity] {
         lock.lock(); defer { lock.unlock() }
         if serverGames.contains(gameID) { return [] }
@@ -523,19 +444,12 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
         guard let manifest = try manifest(gameID: gameID) else { throw Failure.incompatible }
         try checkDevice(manifest)
         var value = try journal(gameID: gameID)
-        if let key = idempotencyKey, let prior = value.events.first(where: { $0.id.origin == value.owner && $0.idempotencyKey == key }) {
-            guard prior.kind == kind, prior.payload == payload else { throw Failure.conflict }
-            return prior
+        let appended = try eventTransition {
+            try BoundSDKEventJournalRules.append(kind: kind, payload: payload, idempotencyKey: idempotencyKey, to: &value)
         }
-        let event = BoundMultiplayerSharedEvent(run: value.run, id: .init(origin: value.owner, sequence: value.nextSequence),
-            kind: kind, payload: payload, idempotencyKey: idempotencyKey)
-        guard value.nextSequence < UInt64.max - 1 else { throw Failure.corrupt }
-        value.nextSequence += 1; value.events.append(event); value.received.insert(event.id)
-        // Local effects were committed by the native ledger before this outbox
-        // entry. Only incoming effects require replay.
-        value.applied.insert(event.id)
+        guard appended.inserted else { return appended.event }
         try persistJournal(value, gameID: gameID)
-        return event
+        return appended.event
     }
     @discardableResult
     func receiveSharedEvent(gameID: String, event: BoundMultiplayerSharedEvent, identity: BoundMultiplayerRunIdentity? = nil) throws -> Bool {
@@ -551,54 +465,39 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
     private func receiveSharedEvent(gameID: String, event: BoundMultiplayerSharedEvent, identity: BoundMultiplayerRunIdentity?, authoritative: Bool) throws -> Bool {
         lock.lock(); defer { lock.unlock() }
         var value = try journal(gameID: gameID, identity: identity)
-        guard event.id.origin == value.partner || authoritative && event.id.origin == value.owner else { throw Failure.ownerMismatch }
-        if let prior = value.events.first(where: { $0.id == event.id }) {
-            guard prior == event else { throw Failure.conflict }
-            return false
+        let inserted = try eventTransition {
+            try BoundSDKEventJournalRules.receive(event, authoritative: authoritative, into: &value)
         }
-        if event.id.origin == value.owner {
-            guard event.id.sequence < UInt64.max - 1 else { throw Failure.corrupt }
-            value.nextSequence = max(value.nextSequence, event.id.sequence + 1)
-        }
-        value.events.append(event); value.received.insert(event.id)
+        guard inserted else { return false }
         try persistJournal(value, gameID: gameID, identity: identity)
         return true
     }
     func pendingSharedEventsToApply(gameID: String, identity: BoundMultiplayerRunIdentity? = nil) throws -> [BoundMultiplayerSharedEvent] {
         let value = try journal(gameID: gameID, identity: identity)
-        return value.events.filter { !value.applied.contains($0.id) }.sorted { lhs, rhs in
-            lhs.id.origin == rhs.id.origin ? lhs.id.sequence < rhs.id.sequence : lhs.id.origin.uuidString < rhs.id.origin.uuidString
-        }
+        return BoundSDKEventJournalRules.pendingApplication(in: value)
     }
     func markSharedEventApplied(gameID: String, eventID: BoundMultiplayerSharedEvent.ID, identity: BoundMultiplayerRunIdentity? = nil) throws {
         lock.lock(); defer { lock.unlock() }
         var value = try journal(gameID: gameID, identity: identity)
-        guard value.received.contains(eventID) else { throw Failure.conflict }
-        value.applied.insert(eventID); try persistJournal(value, gameID: gameID, identity: identity)
+        try eventTransition { try BoundSDKEventJournalRules.markApplied(eventID, in: &value) }
+        try persistJournal(value, gameID: gameID, identity: identity)
     }
     func sharedEventAcknowledgement(gameID: String, identity: BoundMultiplayerRunIdentity? = nil) throws -> BoundMultiplayerSharedAcknowledgement {
         let value = try journal(gameID: gameID, identity: identity)
-        return .init(run: value.run, receiver: value.owner, cursor: value.received)
+        return BoundSDKEventJournalRules.acknowledgement(for: value)
     }
     func acknowledgeSharedEvents(gameID: String, acknowledgement: BoundMultiplayerSharedAcknowledgement, identity: BoundMultiplayerRunIdentity? = nil) throws {
         lock.lock(); defer { lock.unlock() }
         var value = try journal(gameID: gameID, identity: identity)
-        guard acknowledgement.run == value.run, acknowledgement.receiver == value.partner else { throw Failure.ownerMismatch }
-        // A peer can acknowledge only our origin. Its own receipt cursor may
-        // contain events we have not received yet and cannot authorize pruning.
-        let position = acknowledgement.cursor.origins[value.owner.uuidString] ?? .init()
-        guard position.valid, position.contiguous < value.nextSequence,
-              position.sparse.allSatisfy({ $0 < value.nextSequence }) else { throw Failure.conflict }
-        value.acknowledged.merge(.init(origins: [value.owner.uuidString: position]))
+        try eventTransition { try BoundSDKEventJournalRules.acknowledge(acknowledgement, in: &value) }
         try persistJournal(value, gameID: gameID, identity: identity)
     }
     func sharedEventsToSend(gameID: String, peerCursor: BoundMultiplayerSharedCursor? = nil, limit: Int = 64,
                            identity: BoundMultiplayerRunIdentity? = nil, excludingAcquisitions: Bool = false) throws -> [BoundMultiplayerSharedEvent] {
         let value = try journal(gameID: gameID, identity: identity)
-        let cursor = peerCursor ?? value.acknowledged
-        return Array(value.events.filter { $0.id.origin == value.owner && !cursor.contains($0.id)
-            && (!excludingAcquisitions || !$0.requiresNativeCheckpoint) }
-            .sorted { $0.id.sequence < $1.id.sequence }.prefix(max(0, min(limit, 256))))
+        return BoundSDKEventJournalRules.eventsToSend(in: value, peerCursor: peerCursor, limit: limit) {
+            !excludingAcquisitions || !$0.requiresNativeCheckpoint
+        }
     }
     /// Commit the player's checkpoint and its synchronization cursor without a
     /// partner receipt. The caller flushes SRAM and supplies a paused snapshot;
@@ -1446,18 +1345,7 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable {
         if fm.fileExists(atPath: url.path) {
             let current: BoundMultiplayerSharedJournal = try read(url, maximum: 33_554_432)
             try validateJournal(current, identity: identity)
-            var known = Dictionary(uniqueKeysWithValues: current.events.map { ($0.id, $0) })
-            for event in result.events {
-                if let old = known[event.id], old != event { throw Failure.conflict }
-                known[event.id] = event
-            }
-            result.events = known.values.sorted {
-                $0.id.origin == $1.id.origin ? $0.id.sequence < $1.id.sequence : $0.id.origin.uuidString < $1.id.origin.uuidString
-            }
-            result.nextSequence = max(result.nextSequence, current.nextSequence)
-            result.received.merge(current.received)
-            result.applied.merge(current.applied)
-            result.acknowledged.merge(current.acknowledged)
+            try eventTransition { try BoundSDKEventJournalRules.mergeRetained(current, into: &result) }
         }
         try validateJournal(result, identity: identity)
         try create(url.deletingLastPathComponent())

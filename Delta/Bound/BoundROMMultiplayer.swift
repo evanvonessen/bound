@@ -60,21 +60,10 @@ enum BoundROMStatus: UInt32 { case idle, waiting, accepted, declined, complete, 
 /// Optional actions expire after idle connected time inside a native script.
 /// A transport outage does not consume the user's pending request; room/game
 /// changes and explicit cancellation still clear it before reconnect dispatch.
-struct BoundROMActionQueue {
-    private(set) var command: BoundROMCommand?
-    private var observedAt: TimeInterval = 0
-    private var connectedElapsed: TimeInterval = 0
-    private var wasConnected = false
-    mutating func enqueue(_ command: BoundROMCommand, at now: TimeInterval) {
-        self.command = command; observedAt = now; connectedElapsed = 0; wasConnected = false
-    }
-    mutating func clear() { command = nil; connectedElapsed = 0; wasConnected = false }
+typealias BoundROMActionQueue = BoundSDKDeferredAction<BoundROMCommand>
+extension BoundSDKDeferredAction where Action == BoundROMCommand {
     mutating func ready(request: BoundROMRequest?, connected: Bool, at now: TimeInterval) -> BoundROMCommand? {
-        if connected && wasConnected { connectedElapsed += max(0, now - observedAt) }
-        observedAt = now; wasConnected = connected
-        if connectedElapsed >= 15 { clear() }
-        guard connected, request?.permitsFieldInterruption == true else { return nil }
-        return command
+        ready(permitted: request?.permitsFieldInterruption == true, connected: connected, at: now)
     }
 }
 
@@ -315,37 +304,22 @@ struct BoundROMPacket: Equatable, Sendable {
 }
 
 struct BoundROMChannel {
-    private(set) var epoch = UUID()
-    private(set) var peerEpoch: UUID?
-    private(set) var proposedEpoch: UUID?
-    private var sequence: UInt64 = 0
-    private var receivedSequence: UInt64 = 0
-    private var retiredEpochs: Set<UUID> = []
-    private(set) var receivedAt: TimeInterval?
+    private var session = BoundSDKReliableSession()
+    var epoch: UUID { session.epoch }
+    var peerEpoch: UUID? { session.peerEpoch }
+    var proposedEpoch: UUID? { session.proposedEpoch }
+    var receivedAt: TimeInterval? { session.receivedAt }
     mutating func reset() { self = Self() }
     mutating func packet<T: Encodable>(_ kind: BoundROMPacket.Kind, owner: UUID, body: T) -> Data? {
-        guard sequence < UInt64.max, let bytes = try? BoundMultiplayerSaveStore.encode(body) else { return nil }
-        sequence += 1
-        return BoundROMPacket(kind:kind,owner:owner,epoch:epoch,receiver:proposedEpoch ?? peerEpoch,sequence:sequence,body:bytes).encoded()
+        guard session.canSend, let bytes = try? BoundMultiplayerSaveStore.encode(body),
+              let sequence = session.nextSequence() else { return nil }
+        return BoundROMPacket(kind:kind,owner:owner,epoch:epoch,receiver:session.receiver,sequence:sequence,body:bytes).encoded()
     }
     mutating func admit(_ packet: BoundROMPacket, at now: TimeInterval) -> Bool {
-        guard packet.epoch != epoch, !retiredEpochs.contains(packet.epoch) else { return false }
-        guard packet.receiver == epoch else {
-            if packet.kind == .hello { proposedEpoch = packet.epoch }
-            return false
-        }
-        if peerEpoch != packet.epoch {
-            if let peerEpoch { retiredEpochs.insert(peerEpoch) }
-            guard retiredEpochs.count <= 64 else { return false }
-            peerEpoch = packet.epoch; receivedSequence = 0
-        }
-        proposedEpoch = nil
-        guard packet.sequence > receivedSequence else { return false }
-        receivedSequence = packet.sequence; receivedAt = now; return true
+        session.admit(epoch: packet.epoch, receiver: packet.receiver, sequence: packet.sequence,
+                      hello: packet.kind == .hello, at: now)
     }
-    func fresh(at now: TimeInterval) -> Bool {
-        receivedAt.map { now >= $0 && now - $0 < 3 } ?? false
-    }
+    func fresh(at now: TimeInterval) -> Bool { session.fresh(at: now) }
 }
 
 enum BoundROMCheckpointStage: Equatable { case wait, capture, commit, finish }
@@ -392,31 +366,11 @@ enum BoundROMCheckpointReadiness {
 /// Cancellation is a two-party promise that neither player has prepared bytes.
 /// Once either durable receipt exists, only the existing recovery/commit path is
 /// allowed. A missing acknowledgement is never interpreted as permission to run.
-struct BoundROMCheckpointCancellation {
-    enum Action: Equatable { case wait, request, acknowledge, finish, recover }
-    static let timeout: TimeInterval = 8
+typealias BoundROMCheckpointCancellation = BoundSDKCheckpointCancellation
+extension BoundSDKCheckpointCancellation {
     static func persistedRecordMayExist(store: BoundMultiplayerSaveStore, gameID: String, checkpoint: UUID) -> Bool {
         do { return try store.checkpoint(gameID:gameID,id:checkpoint) != nil }
         catch { return true }
-    }
-    private(set) var requestedAt: TimeInterval?
-    mutating func request(at now: TimeInterval, durable: Bool) -> Action {
-        guard !durable else { return .recover }
-        if requestedAt == nil { requestedAt = now }
-        return .request
-    }
-    func receive(acknowledgement: Bool, durable: Bool) -> Action {
-        guard !durable else { return .recover }
-        if acknowledgement { return requestedAt == nil ? .wait : .finish }
-        return .acknowledge
-    }
-    func action(at now: TimeInterval, startedAt: TimeInterval, localSafe: Bool,
-                peerSafe: Bool?, durable: Bool) -> Action {
-        if let requestedAt {
-            return durable || now - requestedAt >= Self.timeout ? .recover : .wait
-        }
-        if durable { return now - startedAt >= 30 ? .recover : .wait }
-        return !localSafe || peerSafe == false || now - startedAt >= Self.timeout ? .request : .wait
     }
 }
 

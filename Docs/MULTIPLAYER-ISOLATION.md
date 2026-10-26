@@ -132,3 +132,27 @@ scalar vectors and 589,905 sequence comparisons. All five kinds of stale
 generated import are rejected. Game tests cover 23 codec/build/cache cases and
 33 compiled-validator cases, including four torn-input cases. There is one
 live implementation for writes, sends and native effects.
+
+## Event and lifecycle extraction
+
+`SDK/BoundSDKEvent.swift` and `BoundSDKEventJournalRules.swift` own the existing
+event values and pure journal transitions. Existing names remain aliases;
+SaveStore still owns authentication, locks, filesystem transactions and the
+managed in-memory store. Soul Link payload meaning and acquisition checkpoint
+policy remain outside the SDK. Receipt, application, peer acknowledgement and
+verified server persistence are distinct; a managed journal receipt alone is
+not durable.
+
+`BoundSDKReliableSession`, deferred actions, checkpoint cancellation, generation
+tokens and retry delays serve the existing host wrappers. The sharing bridge
+uses `BoundSDKRoomTransport` with Nakama as its provider. Wire formats, queue
+bounds, timer values, native dispatch and independent video/session generations
+remain unchanged. A transport accepting a packet does not establish persistence.
+
+The focused hosted gate passed 152 tests, including 16 new oracle/interface
+tests and existing save/recovery, Nakama, ROM and foreground reconnect checks.
+The initial compiler attempt lacked an import in a test-only oracle; its log
+is retained. A frozen cursor-merge comparison also exposed an existing adjacent
+sparse-gap restoration rejection. This structural commit deliberately retains
+that decision; correcting it requires a separate behavior change and regression.
+The full extraction Release/save gate follows adapter and persistence work.

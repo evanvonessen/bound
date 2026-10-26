@@ -1014,7 +1014,7 @@ final class FriendSharingSession: ObservableObject {
         guard !backgrounded, foregroundReconnectIntent != nil, hasValidForegroundReconnectIntent,
               foregroundReconnectRetry == nil else { return }
         foregroundReconnectAttempts += 1
-        let delay = min(30.0, pow(2.0, Double(min(foregroundReconnectAttempts - 1, 5))))
+        let delay = BoundSDKRetryDelay.seconds(attempt: foregroundReconnectAttempts)
         let retryGeneration = generation
         foregroundReconnectRetry = scheduler.schedule(at: scheduler.now + delay) { [weak self] in
             guard let self, self.generation == retryGeneration,
