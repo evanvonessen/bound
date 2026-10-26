@@ -48,7 +48,7 @@ namespace BoundDebug {
         const record=read(nk,b.identity.run.toLowerCase(),"bound_independent_v2"),state=record&&record.value;
         if(!state||state.deleted||!state.members||state.members.indexOf(owner)<0||!equal(normalizedIdentity(BoundSaveLibrary.metadata(state,owner).identity),normalizedIdentity(b.identity)))fail("ordinary_owner",7);
         const head=state.saves[owner]&&state.saves[owner].receipt||null;
-        return {bookmark:b,currentHead:head,unchanged:equal(head,b.receipt),record:record};
+        return {bookmark:b,currentHead:head,unchanged:sameReceipt(head,b.receipt),record:record};
     }
     export const rpc:nkruntime.RpcFunction=function(ctx,logger,nk,payload){
         if(!payload||payload.length>70000)fail("request",3);

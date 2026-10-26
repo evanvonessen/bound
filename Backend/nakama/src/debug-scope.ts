@@ -1,8 +1,18 @@
 namespace BoundDebug {
     export function manifestKey(session:string,generation:number):string { return session+"/generation/"+generation; }
-    export function scopedRuntime(nk:nkruntime.Nakama,auth:any,sessionRecord:nkruntime.StorageObject,generation:number):nkruntime.Nakama {
-        const root=sessionRecord.value,base=prefix(root.sessionID,generation),view:any=Object.create(nk);
-        const activeOperation=root.activeOperationID?read(nk,opKey(root.sessionID,root.activeOperationID)):null;
+    export function scopedKey(nk:nkruntime.Nakama,session:string,generation:number,key:string):string {
+        const base=prefix(session,generation),original=base+key;
+        // Nakama storage keys are varchar(128). Preserve existing short keys;
+        // valid engine keys start with a run UUID, so ~ is a disjoint marker.
+        // Even the largest safe integer generation yields only 119 characters.
+        return original.length<=128?original:base+"~"+nk.sha256Hash(key);
+    }
+    function captureFence(auth:any,active:nkruntime.StorageObject|null,body:any):void {
+        if(active&&["custom","return"].indexOf(active.value.kind)>=0&&active.value.rendezvous[auth.owner]&&(active.value.capturedOwners||[]).indexOf(auth.owner)<0&&["waiting_cut","preparing","prepared"].indexOf(active.value.state)>=0&&
+            !(body.action==="get"||body.action==="saveDownload"||body.action==="gameOverStatus"||body.action==="events"&&Array.isArray(body.events)&&body.events.length===0))fail("capture_fenced");
+    }
+    export function scopedRuntime(nk:nkruntime.Nakama,auth:any,sessionRecord:nkruntime.StorageObject,generation:number,request?:any):nkruntime.Nakama {
+        const root=sessionRecord.value,view:any=Object.create(nk);
         function bucket(collection:string):string {
             if(collection==="bound_independent_v2")return gameplay;
             if(collection==="bound_events_v2")return events;
@@ -23,7 +33,7 @@ namespace BoundDebug {
                 const event=read(nk,opKey(root.sessionID,m.operationID)+"/event/"+parts[1]+"/"+parts[2],payloads);if(event)return event.value;
                 if(m.cut) {const c=m.cut.cursor.origins[parts[1]],sequence=Number(parts[2]);
                     if(c&&(sequence<=c.contiguous||c.sparse.indexOf(sequence)>=0)) {
-                        const source=read(nk,prefix(root.sessionID,m.cut.sourceGeneration)+key,events);
+                        const source=read(nk,scopedKey(nk,root.sessionID,m.cut.sourceGeneration,key),events);
                         return source?source.value:seeded(key,collection,m.cut.sourceGeneration,depth+1);
                     }
                 }
@@ -33,7 +43,7 @@ namespace BoundDebug {
         view.storageRead=function(requests:nkruntime.StorageReadRequest[]):nkruntime.StorageObject[] {
             const answer:nkruntime.StorageObject[]=[];
             for(const r of requests){if(r.userId!==system)fail("scope",7);
-                const mapped=read(nk,base+r.key,bucket(r.collection));
+                const mapped=read(nk,scopedKey(nk,root.sessionID,generation,r.key),bucket(r.collection));
                 if(mapped){const result=copy(mapped);result.key=r.key;result.collection=r.collection;answer.push(result);continue;}
                 const value=seeded(r.key,r.collection,generation,0);
                 if(value!==null)answer.push({key:r.key,collection:r.collection,userId:system,value:value,version:"debug-seed",permissionRead:0,permissionWrite:0} as nkruntime.StorageObject);
@@ -41,10 +51,19 @@ namespace BoundDebug {
             return answer;
         };
         view.storageWrite=function(requests:nkruntime.StorageWriteRequest[]):nkruntime.StorageWriteAck[] {
-            const mapped=requests.map(function(r){if(r.userId!==system)fail("scope",7);return write(base+r.key,r.value,r.version||"*",bucket(r.collection));});
-            // Revocation, generation and auth logout race every child write on
-            // the same CAS guards. No public request chooses these namespaces.
-            const guards=[unchanged(auth.auth),unchanged(sessionRecord)];if(activeOperation)guards.push(unchanged(activeOperation));
+            const mapped=requests.map(function(r){if(r.userId!==system)fail("scope",7);return write(scopedKey(nk,root.sessionID,generation,r.key),r.value,r.version||"*",bucket(r.collection));});
+            if(!auth||!request)fail("scope",7);
+            // The real engine retries child/root CAS writes. Re-admit each
+            // attempt so a buddy's readiness update does not pin every retry
+            // to an obsolete guard, while logout/commit/our own cut still fence.
+            const liveAuth=read(nk,auth.session,"bound_auth_sessions_v1",auth.owner),live=read(nk,root.sessionID);
+            if(!liveAuth||liveAuth.version!==auth.auth.version||liveAuth.value.revoked||liveAuth.value.expiresAt<=now())fail("unauthorized",16);
+            if(!live||live.value.sessionID!==root.sessionID||live.value.roomID!==root.roomID||!equal(live.value.owners,root.owners)||
+                live.value.currentGeneration!==generation||live.value.currentManifestDigest!==root.currentManifestDigest)fail("stale_generation");
+            admit(nk,auth,live.value,request);
+            const active=live.value.activeOperationID?read(nk,opKey(root.sessionID,live.value.activeOperationID)):null;
+            captureFence(auth,active,request.request);
+            const guards=[unchanged(liveAuth),unchanged(live)];if(active)guards.push(unchanged(active));
             return nk.storageWrite(guards.concat(mapped));
         };
         view.storageDelete=function(){fail("scope",7);};
@@ -63,14 +82,12 @@ namespace BoundDebug {
         const allowed=["get","events","save","saveChunk","saveSeal","saveDownload","gameOver","gameOverReturn","gameOverMenu","gameOverStatus"],body=copy(request.request);
         if(allowed.indexOf(body.action)<0||body.save_id!==undefined||body.runID!==undefined||body.saveTicket!==undefined||body.ticket!==undefined||body.ownerID!==undefined)fail("gameplay_request",7);
         const manifest=read(nk,manifestKey(root.sessionID,generation));if(!manifest)fail("manifest");
-        if(root.activeOperationID){const active=read(nk,opKey(root.sessionID,root.activeOperationID));
-            if(active&&["custom","return"].indexOf(active.value.kind)>=0&&active.value.rendezvous[auth.owner]&&(active.value.capturedOwners||[]).indexOf(auth.owner)<0&&["waiting_cut","preparing","prepared"].indexOf(active.value.state)>=0&&
-                !(body.action==="get"||body.action==="saveDownload"||body.action==="gameOverStatus"||body.action==="events"&&Array.isArray(body.events)&&body.events.length===0))fail("capture_fenced");}
+        captureFence(auth,root.activeOperationID?read(nk,opKey(root.sessionID,root.activeOperationID)):null,body);
         body.save_id=manifest.value.runID;
         const ticket={version:1,protocol:"bound-saves-v1",ownerID:auth.owner,issuedAt:now(),expiresAt:now()+90};
         const encoded=nk.base64UrlEncode(JSON.stringify(ticket),false);
         body.saveTicket=encoded+"."+nk.base16Encode(nk.hmacSha256Hash(encoded,ctx.env.BOUND_NAKAMA_BRIDGE_SECRET));
         const context:any={};Object.keys(ctx).forEach(function(k){context[k]=(ctx as any)[k];});context.userId=auth.owner;
-        return JSON.parse(BoundIndependent.rpc(context,logger,scopedRuntime(nk,auth,sessionRecord,generation),JSON.stringify(body)) as string);
+        return JSON.parse(BoundIndependent.rpc(context,logger,scopedRuntime(nk,auth,sessionRecord,generation,request),JSON.stringify(body)) as string);
     }
 }

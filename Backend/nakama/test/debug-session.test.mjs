@@ -144,6 +144,97 @@ function ordinaryFixture(h){
   const bookmarks={};for(const who of [owner,peer]){const current=rpc(who,'get',{save_id:run.save_id});bookmarks[who]={identity:current.identity,checkpoint:null,receipt:null,deviceID:who,ownershipEpoch:1,settled:true};}
   return {rpc,run,bookmarks};
 }
+function ordinarySwiftReceipt(h,ordinary,who,options={}){
+  const identity=plain(ordinary.bookmarks[who].identity);
+  for(const key of ['run','owner','partner','settingsOwner','roomID'])identity[key]=identity[key].toUpperCase();
+  const checkpoint=(options.checkpoint||operationID(who===owner?8101:8102)).toUpperCase(),history=hash('ordinary-history');
+  const file=Buffer.from('synthetic native fixture bytes'),blob={data:file.toString('base64'),sha256:hash(file)};
+  const payload={version:2,manifest:{identity,deviceOwner:(options.device||who).toUpperCase(),...(options.released?{releasedForTransfer:true}:{})},checkpoint,predecessor:options.predecessor||null,sharedEventDigest:history,
+    files:{'game.sav':blob,'checkpoint.state':blob}};
+  const bytes=Buffer.from(JSON.stringify(payload)),base64=bytes.toString('base64');
+  const receipt={run:ordinary.run.save_id.toUpperCase(),owner:who.toUpperCase(),checkpoint,payloadSHA256:hash(bytes),sharedEventDigest:history};
+  const fields={save_id:ordinary.run.save_id,checkpoint:checkpoint.toLowerCase(),receipt,count:Math.ceil(base64.length/12000),bytes:bytes.length,expectedHead:options.predecessor||null};
+  ordinary.rpc(who,'save',fields);
+  for(let i=0;i<fields.count;i++)ordinary.rpc(who,'saveChunk',{...fields,index:i,data:base64.slice(i*12000,(i+1)*12000)});
+  ordinary.rpc(who,'saveSeal',fields);
+  // Swift's DEBUG metadata codec lowercases UUID strings; the ordinary
+  // checkpoint and receipt deliberately retain the original encoded bytes.
+  const wire=plain(receipt);for(const key of ['run','owner','checkpoint'])wire[key]=wire[key].toLowerCase();
+  ordinary.bookmarks[who]={...ordinary.bookmarks[who],checkpoint:fields.checkpoint,receipt:wire};
+  return {receipt,base64,checkpoint:fields.checkpoint};
+}
+test('receipt UUID metadata accepts real ordinary Swift receipts without rewriting ordinary bytes',()=>{
+  const h=debugFixture(),ordinary=ordinaryFixture(h),saved={};
+  for(const who of [owner,peer])saved[who]=ordinarySwiftReceipt(h,ordinary,who);
+  const before=h.snapshot().filter(r=>r.collection==='bound_independent_v2');
+  h.pair();const op=h.prepare().operation;
+  for(const who of [owner,peer])h.upload(op,who,h.payload(op,who,{bookmark:ordinary.bookmarks[who]}));
+  h.mutate(owner,'commit',{operationID:op.operationID,generation:op.generation});
+  for(const who of [owner,peer]){
+    const target=h.rpc(who,'return').returnTarget;
+    assert.equal(target.unchanged,true);assert.deepEqual(target.currentHead,saved[who].receipt);
+    assert.equal(ordinary.rpc(who,'saveDownload',{save_id:ordinary.run.save_id,checkpoint:saved[who].checkpoint,index:0}).data,saved[who].base64);
+  }
+  assert.deepEqual(h.snapshot().filter(r=>r.collection==='bound_independent_v2'),before);
+});
+test('receipt UUID metadata still rejects different owner, run, checkpoint, hashes, and extra content',()=>{
+  const h=debugFixture(),ordinary=ordinaryFixture(h);ordinarySwiftReceipt(h,ordinary,owner);h.pair();const op=h.prepare().operation;
+  const reject=descriptor=>assert.throws(()=>h.mutate(owner,'ownerPrepare',{operationID:op.operationID,generation:op.generation,descriptor}),e=>e.message==='debug_ordinary_head_changed');
+  for(const [key,value]of Object.entries({owner:peer,run:operationID(999),checkpoint:operationID(998),payloadSHA256:'a'.repeat(64),sharedEventDigest:'b'.repeat(64),unexpected:true})){
+    const p=h.payload(op,owner,{bookmark:plain(ordinary.bookmarks[owner])});p.descriptor.bookmark.receipt[key]=value;reject(p.descriptor);
+  }
+  const epoch=h.payload(op,owner,{bookmark:plain(ordinary.bookmarks[owner])});epoch.descriptor.bookmark.ownershipEpoch++;reject(epoch.descriptor);
+  const advanced=ordinary.rpc(owner,'get',{save_id:ordinary.run.save_id});
+  const row=h.snapshot().find(r=>r.collection==='bound_independent_v2'&&r.key===ordinary.run.save_id);
+  row.value.saves[owner].receipt.checkpoint=operationID(997).toUpperCase();h.f.nk.storageWrite([row]);
+  reject(h.payload(op,owner,{bookmark:ordinary.bookmarks[owner]}).descriptor);
+  assert.notEqual(advanced.saves[owner].receipt.checkpoint,ordinary.rpc(owner,'get',{save_id:ordinary.run.save_id}).saves[owner].receipt.checkpoint);
+});
+test('receipt UUID metadata normalization is comparison-only and leaves hashes and malformed values strict',()=>{
+  const h=debugFixture(),receipt={run:operationID(1),owner,checkpoint:operationID(2),payloadSHA256:'a'.repeat(64),sharedEventDigest:'b'.repeat(64)};
+  const upper=plain(receipt);for(const key of ['run','owner','checkpoint'])upper[key]=upper[key].toUpperCase();
+  const before=plain(upper);assert.equal(h.f.debug.sameReceipt(receipt,upper),true);assert.deepEqual(upper,before);
+  assert.equal(h.f.debug.sameReceipt(null,null),true);assert.equal(h.f.debug.sameReceipt(null,receipt),false);
+  assert.equal(h.f.debug.sameReceipt(receipt,{...upper,payloadSHA256:upper.payloadSHA256.toUpperCase()}),false);
+  assert.equal(h.f.debug.sameReceipt({...receipt,owner:'invalid'},{...upper,owner:'invalid'}),false);
+  assert.equal(h.f.debug.sameReceipt(receipt,{...upper,checkpoint:operationID(3)}),false);
+});
+test('established DEBUG bookmarks permit same-device ordinary progress without replacing the retained return target',()=>{
+  const h=debugFixture(),ordinary=ordinaryFixture(h),initial={};
+  for(const who of [owner,peer])initial[who]=ordinarySwiftReceipt(h,ordinary,who);
+  h.pair();const first=h.prepare().operation,bookmarks=plain(ordinary.bookmarks);
+  for(const who of [owner,peer])h.upload(first,who,h.payload(first,who,{bookmark:bookmarks[who]}));
+  h.mutate(owner,'commit',{operationID:first.operationID,generation:1});
+  const latest=ordinarySwiftReceipt(h,ordinary,owner,{checkpoint:operationID(8201),predecessor:initial[owner].checkpoint});
+  const before=h.snapshot().filter(r=>r.collection==='bound_independent_v2');
+  let custom=h.prepare(2,'custom',{kind:'current',sourceGeneration:1},1).operation;
+  for(const who of [owner,peer])h.mutate(who,'captureReady',{operationID:custom.operationID,generation:2,sourceCheckpoint:operationID(who===owner?101:201),received:{origins:{}},applied:{origins:{}},durable:{origins:{}}});
+  custom=h.rpc(owner,'status').operation;const ps={};
+  for(const who of [owner,peer]){ps[who]=h.payload(custom,who,{bookmark:bookmarks[who]});h.upload(custom,who,ps[who]);}
+  captureComplete(h,custom);h.mutate(owner,'commit',{operationID:custom.operationID,generation:2});
+  const restarted=debugFixture(h.snapshot());restarted.rpc(owner,'resume');restarted.rpc(peer,'resume');
+  const reload=restarted.prepare(3,'reload',{kind:'custom',customID:custom.operationID,sourceGeneration:2},1).operation;
+  for(const who of [owner,peer])restarted.upload(reload,who,ps[who]);restarted.mutate(owner,'commit',{operationID:reload.operationID,generation:3});
+  const target=restarted.rpc(owner,'return').returnTarget;assert.deepEqual(target.bookmark,bookmarks[owner]);assert.equal(target.unchanged,false);assert.deepEqual(target.currentHead,latest.receipt);
+  assert.equal(ordinary.rpc(owner,'saveDownload',{save_id:ordinary.run.save_id,checkpoint:latest.checkpoint,index:0}).data,latest.base64);
+  assert.deepEqual(restarted.snapshot().filter(r=>r.collection==='bound_independent_v2'),before);
+});
+test('established bookmarks reject replacement, missing history, transfer, deletion, epoch or identity changes',()=>{
+  for(const corruption of ['bookmark','device','historical','deleted','epoch','identity','transferred','released']){
+    const h=debugFixture(),ordinary=ordinaryFixture(h),saved=ordinarySwiftReceipt(h,ordinary,owner),b=plain(ordinary.bookmarks[owner]);
+    h.pair();const first=h.prepare().operation;h.upload(first,owner,h.payload(first,owner,{bookmark:b}));h.upload(first,peer);h.mutate(owner,'commit',{operationID:first.operationID,generation:1});
+    const next=h.prepare(2,'reload',{kind:'builtin',pointID:'02',fixtureVersion:'multiplayer-isolation-v1'},1).operation,p=h.payload(next,owner,{bookmark:plain(b)});
+    const row=h.snapshot().find(r=>r.collection==='bound_independent_v2'&&r.key===ordinary.run.save_id);
+    if(corruption==='bookmark')p.descriptor.bookmark.checkpoint=operationID(999);
+    if(corruption==='device')p.descriptor.bookmark.deviceID=peer;
+    if(corruption==='historical'){const old=h.snapshot().find(r=>r.collection==='bound_independent_v2'&&r.key===ordinary.run.save_id+'/save/'+owner+'/'+b.checkpoint);old.value.receipt.payloadSHA256='f'.repeat(64);h.f.nk.storageWrite([old]);}
+    if(corruption==='deleted'){row.value.deleted=true;h.f.nk.storageWrite([row]);}
+    if(corruption==='epoch'){row.value.epoch++;h.f.nk.storageWrite([row]);}
+    if(corruption==='identity'){row.value.identity.romSHA256='b'.repeat(64);h.f.nk.storageWrite([row]);}
+    if(corruption==='transferred'||corruption==='released')ordinarySwiftReceipt(h,ordinary,owner,{checkpoint:operationID(8301),predecessor:saved.checkpoint,device:corruption==='transferred'?peer:owner,released:corruption==='released'});
+    assert.throws(()=>h.mutate(owner,'ownerPrepare',{operationID:next.operationID,generation:2,descriptor:p.descriptor}),undefined,corruption);
+  }
+});
 test('coordinated return requires both safe owner heads and retains ordinary bytes across revocation and retry',()=>{
   const h=debugFixture(),ordinary=ordinaryFixture(h),before=h.snapshot().filter(r=>r.collection==='bound_independent_v2');h.pair();const op=h.prepare().operation;
   for(const who of [owner,peer])h.upload(op,who,h.payload(op,who,{bookmark:ordinary.bookmarks[who]}));h.mutate(owner,'commit',{operationID:op.operationID,generation:1});

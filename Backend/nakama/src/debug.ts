@@ -22,6 +22,20 @@ namespace BoundDebug {
     }
     export function copy(v: any): any { return JSON.parse(JSON.stringify(v)); }
     export function equal(a: any, b: any): boolean { return canonical(a) === canonical(b); }
+    export function sameReceipt(a:any,b:any):boolean {
+        if(a===null||b===null)return a===null&&b===null;
+        if(!object(a)||!object(b))return false;
+        // Ordinary Swift receipts retain uppercase UUIDs in their immutable
+        // payload metadata. DEBUG wire metadata uses lowercase UUIDs. Compare
+        // those identifiers semantically without rewriting either record or
+        // relaxing any hash, extra field, or other receipt content.
+        const left=copy(a),right=copy(b);
+        for(const key of ["run","owner","checkpoint"]){
+            const x=lowerUUID(left[key]),y=lowerUUID(right[key]);if(!x||!y)return false;
+            left[key]=x;right[key]=y;
+        }
+        return equal(left,right);
+    }
     export function normalizedIdentity(value:any):any {
         if(!object(value))fail("identity");const result=copy(value);
         for(const key of ["run","owner","partner","settingsOwner","roomID"]){if(typeof result[key]!=="string"||!uuid.test(result[key].toLowerCase()))fail("identity");result[key]=result[key].toLowerCase();}
@@ -112,14 +126,44 @@ namespace BoundDebug {
         if (prior && !equal(prior.value, value)) fail("immutable_conflict");
         return prior ? [] : [write(key, value, "*", bucket)];
     }
-    export function bookmark(nk: nkruntime.Nakama, value: any, owner: string): any {
+    function ordinaryCheckpoint(nk:nkruntime.Nakama,b:any,d:any):void {
+        const r=d&&d.receipt;
+        if(!object(r)||lowerUUID(r.owner)!==b.identity.owner||lowerUUID(r.run)!==b.identity.run||!lowerUUID(r.checkpoint)||
+            !digest.test(r.payloadSHA256)||!digest.test(r.sharedEventDigest)||!integer(d.bytes)||d.bytes<1||d.bytes>16777216||
+            d.count!==Math.ceil(Math.ceil(d.bytes/3)*4/12000))fail("ordinary_checkpoint");
+        const key=b.identity.run+"/save/"+b.identity.owner+"/"+r.checkpoint.toLowerCase(),parts:string[]=[];
+        for(let i=0;i<d.count;i++){const part=read(nk,key+"/"+i,"bound_independent_v2");
+            if(!part||typeof part.value.data!=="string"||part.value.data.length!==Math.min(12000,Math.ceil(d.bytes/3)*4-i*12000))fail("ordinary_checkpoint");parts.push(part.value.data);}
+        const bytes=nk.base64Decode(parts.join("")),text=nk.binaryToString(bytes);
+        if(bytes.byteLength!==d.bytes||nk.sha256Hash(text)!==r.payloadSHA256)fail("ordinary_checkpoint");
+        let p:any;try{p=JSON.parse(text);}catch(_){fail("ordinary_checkpoint");}
+        if(!object(p)||p.version!==2||!object(p.manifest)||!equal(normalizedIdentity(p.manifest.identity),normalizedIdentity(b.identity))||
+            lowerUUID(p.manifest.deviceOwner)!==b.deviceID||p.manifest.releasedForTransfer===true||p.manifest.ended===true||
+            lowerUUID(p.checkpoint)!==r.checkpoint.toLowerCase()||p.sharedEventDigest!==r.sharedEventDigest)fail("ordinary_owner",7);
+    }
+    export function bookmark(nk: nkruntime.Nakama, value: any, owner: string, retained?:any): any {
+        if(retained&&!equal(value,retained))fail("bookmark_changed");
         if (value === null) return null;
         if (!object(value) || !object(value.identity) || lowerUUID(value.identity.owner) !== owner || !lowerUUID(value.identity.run) ||
             !uuid.test(value.deviceID) || !integer(value.ownershipEpoch) || value.ownershipEpoch < 1 || value.settled !== true) fail("bookmark");
         const state = read(nk, value.identity.run.toLowerCase(), "bound_independent_v2");
         if (!state || state.value.deleted || !state.value.members || state.value.members.indexOf(owner) < 0) fail("ordinary_owner", 7);
         const identity = BoundSaveLibrary.metadata(state.value, owner).identity, receipt = state.value.saves[owner] && state.value.saves[owner].receipt;
-        if (!equal(normalizedIdentity(identity), normalizedIdentity(value.identity)) || state.value.epoch!==value.ownershipEpoch || (receipt ? receipt.checkpoint.toLowerCase() : null) !== value.checkpoint || !equal(receipt || null, value.receipt)) fail("ordinary_head_changed");
+        if (!equal(normalizedIdentity(identity), normalizedIdentity(value.identity)) || state.value.epoch!==value.ownershipEpoch) fail("ordinary_head_changed");
+        if(retained){
+            // A session's return bookmark is immutable. Later DEBUG captures
+            // may follow ordinary saves made after initial admission; those
+            // newer heads do not replace the original return identity.
+            if(value.checkpoint===null){if(value.receipt!==null)fail("ordinary_checkpoint");}
+            else{
+                if(!uuid.test(value.checkpoint))fail("ordinary_checkpoint");
+                const historical=read(nk,value.identity.run.toLowerCase()+"/save/"+owner+"/"+value.checkpoint,"bound_independent_v2");
+                if(!historical||!sameReceipt(historical.value.receipt,value.receipt))fail("ordinary_checkpoint");
+                ordinaryCheckpoint(nk,value,historical.value);
+            }
+            if(receipt)ordinaryCheckpoint(nk,value,state.value.saves[owner]);
+            else if(value.checkpoint!==null)fail("ordinary_head_changed");
+        }else if((receipt ? receipt.checkpoint.toLowerCase() : null) !== value.checkpoint || !sameReceipt(receipt || null, value.receipt)) fail("ordinary_head_changed");
         return copy(value);
     }
     export function verifyDescriptor(nk: nkruntime.Nakama, root: any, op: any, owner: string, d: any): void {
@@ -136,7 +180,7 @@ namespace BoundDebug {
         Object.keys(d.files).forEach(function (key) { const f=d.files[key]; if (!object(f) || !digest.test(f.sha256) || !integer(f.bytes)) fail("files"); });
         if (op.cut && (d.cutDigest !== op.cut.digest || !equal(d.applied,op.cut.cursor) || !covers(d.received,op.cut.cursor) || !covers(d.durable,op.cut.cursor))) fail("history_cut");
         if (!op.cut && d.cutDigest != null) fail("history_cut");
-        bookmark(nk, d.bookmark, owner);
+        bookmark(nk, d.bookmark, owner,root.bookmarks&&root.bookmarks[owner]);
     }
     export function bytesFor(nk: nkruntime.Nakama, key: string, descriptor: any): {text:string,payload:any} {
         const chunks: string[] = [];

@@ -16,6 +16,8 @@ export function debugFixture(saved = []) {
   f.nk.accountGetId=id=>({user:{userId:id,metadata:{bound_email_confirmed_at:'fixture'}},email:'fixture@bound-debug.invalid'});
   f.nk.storageRead=reads=>reads.flatMap(r=>stored.has(key(r))?[plain(stored.get(key(r)))]:[]);
   f.nk.storageWrite=writes=>{
+    // Nakama's real PostgreSQL schema limits both identifiers to 128 characters.
+    for(const w of writes)if(w.key.length>128||w.collection.length>128)throw Error('value too long for type character varying(128)');
     const keys=writes.map(key);if(new Set(keys).size!==keys.length)throw Error('duplicate transaction key');
     for(const w of writes){const old=stored.get(key(w));if(w.version==='*'&&old||w.version&&w.version!=='*'&&old?.version!==w.version)throw Error('CAS conflict');}
     // Nakama versions are value digests: an unchanged CAS guard retains its
