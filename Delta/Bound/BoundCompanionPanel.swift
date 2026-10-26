@@ -61,8 +61,9 @@ final class BoundCompanionSettingsModel: ObservableObject {
         let next = Self.read(preferences, debugGame: debugGame)
         if configuration != next { configuration = next }
     }
-    func setDebugGame(_ enabled: Bool) {
-        guard debugGame != enabled else { return }
+    func setDebugGame(_ enabled: Bool?) {
+        // An unavailable native reading is not a change to the game's setting.
+        guard let enabled, debugGame != enabled else { return }
         debugGame = enabled; refresh()
     }
     func setButtonType(_ type: BoundCompanionButtonType) { preferences.buttonType = type; refresh() }
@@ -770,9 +771,9 @@ final class BoundCompanionCoordinator {
         sharing.nativeBattle.bind(core: core, gameID: gameID, interactions: sharing.interactions)
         sharing.soulLink.bind(core: core, gameID: gameID)
         sharing.cooperativeDoubles.bind(core:core,gameID:gameID,soul:sharing.soulLink.probe)
-        state.settings.setDebugGame(core != nil && romMultiplayer.probe.read()?.debugSetup == true)
         romMultiplayer.debugModeChanged = { [weak self] enabled in self?.state.settings.setDebugGame(enabled) }
         romMultiplayer.bind(core: core, game: owner?.game as? Game)
+        state.settings.setDebugGame(core == nil ? nil : romMultiplayer.probe.read()?.debugSetup)
         romMultiplayer.watch = { [weak self, weak owner] in
             guard let self, let owner, owner.presentedViewController == nil else { return }
             self.sharing.watchPartner()

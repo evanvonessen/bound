@@ -825,6 +825,39 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(settings.availableContents, [.friend, .types, .bosses, .dex])
     }
 
+    func testDebugConnectionsRemainSelectedThroughUnavailableReadingsAndDisconnectedFeed() throws {
+        let suite = "BoundOfflineDebugFeed." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        let state = BoundCompanionState(preferences: preferences)
+        let feed = BoundConnectionFeed()
+        let stored = defaults.persistentDomain(forName: suite) ?? [:]
+        state.settings.setDebugGame(true)
+        for _ in 0..<3 { state.advanceButton(1) }
+        XCTAssertEqual(state.content, .connections)
+        let configuration = state.configuration
+        let transitions: [() -> Void] = [
+            {}, // No connection has been established.
+            { feed.beginConnection() },
+            { feed.connected() },
+            { feed.recovering() },
+            { feed.disconnect(.manual) }
+        ]
+        for transition in transitions {
+            transition()
+            state.settings.setDebugGame(nil)
+            state.settings.refresh()
+            XCTAssertEqual(state.configuration, configuration)
+            XCTAssertEqual(state.content, .connections, "A dropped connection cannot hide its own diagnostic screen")
+        }
+        XCTAssertEqual(feed.entries.first?.kind, .manuallyDisconnected)
+        XCTAssertTrue(feed.entries.contains { $0.kind == .connectionLost })
+        XCTAssertEqual((defaults.persistentDomain(forName: suite) ?? [:]) as NSDictionary, stored as NSDictionary)
+        state.settings.setDebugGame(false)
+        XCTAssertFalse(state.availableContents.contains(.connections), "A confirmed Debug setting change still applies")
+    }
+
     func testDebugFeedPreservesCustomOrderAssignmentsAndSelectedView() throws {
         let suite = "BoundCustomDebugFeed." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

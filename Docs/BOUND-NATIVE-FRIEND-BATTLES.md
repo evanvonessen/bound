@@ -96,6 +96,42 @@ pause and freeze execution before capturing it. Idle heartbeats stop during an
 outage rather than filling the reliable queue. Already-ready setup/trade records
 are batched up to 13 per packet without a batching timer.
 
+### Friendly battle message sequence
+
+1. The accepted invitation establishes one activity ID. Both phones prepare
+   private recovery snapshots, agree on protocol 2, exchange native parties and
+   establish the link. Their deterministic battle seed comes from that ID.
+2. Opening Fight, browsing moves, backing out and moving the cursor are local.
+   A confirmed move, switch or committed automatic action becomes a bounded
+   decision containing its ordinal, battler, native response and state fingerprint.
+3. The completed-frame owner puts the decision into the retained reliable wire.
+   The Nakama client queues a targeted opcode-3 message asynchronously. Returning
+   from that queue does not wait for a socket response or the other screen.
+4. Nakama checks the admitted session and room membership, sender, target,
+   envelope, payload size and traffic budgets, then forwards the opaque payload
+   to the joined target. It does not calculate damage or approve an animation.
+5. The other phone checks the expected sender/activity and reliable sequence,
+   stages the decision, then verifies the native offer, ordinal and fingerprint
+   when its own game reaches that choice. Early decisions wait in the queue;
+   duplicates cannot execute twice.
+6. Both players may choose in either order. A game with only its own confirmed
+   choice waits for the missing opponent choice. Once it has both, it resolves
+   the turn locally with the shared battle RNG. Text, damage presentation and
+   animations do not wait for peer playback completion or packet ACKs.
+7. Delivery ACKs, retries, liveness and ticket renewal run separately. A transport
+   outage retains submitted decisions; fresh resume handshakes fence admission
+   before replay. Menus and known presentation continue locally. App background
+   or Menu may pause the core while preserving its exact continuation.
+8. Subsequent turns repeat the decision exchange. At normal completion, the
+   phones exchange their final result fingerprints and require agreement before
+   successful cleanup. Each restores its own original party/world and stores a
+   terminal receipt. Run uses a deliberate end message and can exit without
+   waiting for the other player's next selection or introduction.
+
+Server-side authentication and relay admission are distinct from the phones'
+native move/state validation. Neither the relay nor the save service receives
+an RPC for each text box, animation frame or HP-bar step.
+
 ### Native cable setup and retained trade/cooperative transport
 
 Bound replaces physical serial timing with a bounded mailbox in the native

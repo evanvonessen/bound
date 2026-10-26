@@ -752,7 +752,9 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     }
     func bind(core: EmulatorCore?, game: Game?) {
         guard self.core !== core || self.game?.identifier != game?.identifier else { return }
-        reportedDebugMode = false; debugModeChanged?(false)
+        if self.game?.identifier != game?.identifier {
+            reportedDebugMode = false; debugModeChanged?(false)
+        }
         onboarding.setMultiplayerPartner(roomID: nil)
         if let old = self.game { store.setActive(false,gameID:old.identifier) }
         verification?.cancel(); leaseTask?.cancel(); serverTask?.cancel(); leaseTask = nil; grant = nil; validatedFence = nil
@@ -2038,8 +2040,9 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         validatedFence = nil; channel.reset(); core.resume()
     }
     func tick() {
-        let debug = probe.read()?.debugSetup == true
-        if debug != reportedDebugMode { reportedDebugMode = debug; debugModeChanged?(debug) }
+        if let debug = probe.read()?.debugSetup, debug != reportedDebugMode {
+            reportedDebugMode = debug; debugModeChanged?(debug)
+        }
         if serverOnly { tickServerSession(); return }
         synchronizeSetupCancellations()
         synchronizeArchivedEvents()
