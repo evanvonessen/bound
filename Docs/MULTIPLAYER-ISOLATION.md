@@ -1,0 +1,109 @@
+# Local multiplayer isolation candidate
+
+This coordinated task is local only. No push, deployment, ROM publication,
+shared-simulator refresh, TestFlight, or Xcode Cloud action is authorized.
+The two repositories remain independent. The parent workspace instructions and
+the user's ordered task override standing delivery instructions.
+
+## Starting pair
+
+| Component | Recorded baseline |
+| --- | --- |
+| Bound commit | `00bb9324a28d473867d4d5be2c891bf7cefa298a` |
+| multi_red commit | `8d8a12d3f8e81fac70dfc8498bc88814078722bc` |
+| Combined gameplay input SHA-256 | `689299664a954c12dad66e03c2d18446b348cb31bd98b395c87b9b514b288066` |
+| Existing integrated ROM SHA-256 | `8bf5b9675e0e34e785b0a40eb2d8120a1d2d6874890c4f6d2f43b5d1d3ab90fb` |
+| Existing ABI / wire | 1.0 / 2 |
+| Existing checkpoint / battery / raw-state layout | 1 / 1 / 5 |
+| Existing setup settings | 5 |
+| ABI header SHA-256 | `b8fcef0e0c265f6cedc074cf7f24747bbdd84d67c82e0c3ad7e4296c9e996ed1` |
+| Contract SHA-256 | `9dc546452bb7932ee124911f81f11e4e7c6ccf605b84642425d3c77ecb0018e8` |
+
+Both remote main refs were fetched before creating
+`codex/multiplayer-isolation`. Bound local main matched remote main. multi_red
+local main (`8741e216580667da5cc6e26d3944a16f49984695`) was 19 commits behind;
+the isolated game branch starts at remote main. The primary game's dirty
+`4person` checkout and other branches are excluded and preserved.
+
+Core pins remain DeltaCore `633dfa86967816315fe19b482511dab1ce517f28`,
+GBADeltaCore `869c34aeca9dd2b3fbd329092bb2743b0ae80c98`, and VBA-M
+`453fa0decf179360926fb417725a794aa496d6e3`. The GBA core identifies as
+`com.rileytestut.GBADeltaCore`, version 1.0/build 1, with native serialization
+`SAVE_GAME_VERSION_10`. Battery compatibility and raw-state compatibility are
+separate; ABI equality never authorizes cross-ROM restore.
+
+## Baseline behavior and gates
+
+The initial pair has independent progression, owner-specific server checkpoints,
+durable gap-aware event history, and native friendly battles. Its contract does
+not enable cooperative doubles. Enabling the existing cooperative builder exposes
+two competing claims on native ROM offset `0x2E33C`; this must be composed with
+both completion responsibilities retained and overlap detection intact.
+
+Stabilization must reproduce the old pair, build the combined cooperative ROM
+deterministically, record every hook/reserved region, pass focused native checks,
+and pass an unsigned Release iPhone build before structural SDK changes.
+
+The current host selects one compiled exact-ROM profile. Replacing its generated
+hash would reject old runs. Supporting both requires the original exact-ROM
+descriptor/adapter/layout route; an ABI-only or hash-only allowlist is not enough.
+No save conversion, event-origin reset, cursor reset, ownership reassignment,
+namespace change, or core replacement is permitted.
+
+## Validation isolation
+
+Use the paired worktrees beneath the parent workspace and explicit
+`BOUND_GAME_SOURCE`. Use the approved QA launchers. The game worktree's ignored
+`.venv` link reads the preserved repaired runtime; no runtime reinstall was needed.
+Build caches, logs, fixtures, temporary files, package caches, and DerivedData
+belong to the task. Never run simulator-selection defaults in `verify.sh`.
+
+Local untracked evidence is under `artifacts/multiplayer-isolation` in the parent
+workspace. Relocation evidence records matching file metadata and selected
+content hashes, preserved heads/status/refs, repaired worktree links, and disabled
+publisher/simulator LaunchAgents. Raw ROMs, saves, states, and build output are
+excluded from commits.
+
+## Acceptance evidence still required
+
+- Save package formats, per-owner checkpoint heads, journal gaps/replay,
+  receipt/application acknowledgements, permanent losses, activity recovery,
+  ownership conflicts, and preservation of legacy local files.
+- Ordinary single-player saving, accounts, settings/customization, and video.
+- Byte-identical old/extracted codecs and malformed-input decisions.
+- Measured invitation/frame/checkpoint improvements and bounded queues.
+- Scoped DEBUG authorization, durable paired restore, custom coordinated capture,
+  return to original runs, and all 15 individual native progression statepoints.
+- A second source-owned sample ROM and a deterministic patch round trip.
+
+Existing unit/instruction fixtures are synthetic and do not certify native
+encounters. The expected current `build/gameplay_validation/battle.state` is
+absent. An archived state exists but its compatibility/provenance is unverified.
+Physical devices, WAN behavior, long sessions, and live backend activation are
+not yet tested. A failing mandatory local gate blocks the corresponding claim.
+
+## Stabilization evidence
+
+The standard ROM reproduced the original `8bf5b967...` hash before and after
+the completion-hook repair. The combined candidate is
+`7e170ed0d868cc3353552523c0a417ae600c6c24b0f7c28ff2781925bf6b9ca8`;
+its ABI header is
+`533b8035e4a12d9b0ca1fdbd0b704195efb279275b4a8c6a8e6a33886a85ec0e`
+and contract is
+`a7db98d2d0f15b3b5114fbd41b9f82b1386147070e29fd953aff3bc1f7e4673e`.
+The cooperative state layout is 6; other format versions remain unchanged.
+
+Passed locally: 16 composition/reproducibility checks, 11 compiled cooperative
+XP tests, 14 heap-retention cases, 14 standard and 17 combined native menu/
+completion groups, paired host contract/native instruction checks, 108 Nakama
+VM tests (including 9 frozen synthetic persistence regressions), 122 Swift model
+tests, and an unsigned Release iPhone build using the exact combined candidate.
+The model harness needed missing platform-neutral declarations and updated
+expectations for the already-shipping Connections panel; production behavior
+was not changed by those test repairs.
+
+Every native hook and reserved region is in the untracked task artifact
+`phase4/game/stabilization-report.json`. The original host profile is retained
+in `phase4/host/original-profile`. This gate establishes a reproducible pair,
+not full gameplay or old-run compatibility: the new profile still requires the
+multi-profile adapter route described above before old-run acceptance.

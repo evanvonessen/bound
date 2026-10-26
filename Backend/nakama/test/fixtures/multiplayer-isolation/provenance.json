@@ -1,0 +1,52 @@
+{
+  "fixtureVersion": 1,
+  "sourceCommit": "00bb9324a28d473867d4d5be2c891bf7cefa298a",
+  "source": "Compiled Backend/nakama runtime through existing in-memory fixture adapter",
+  "synthetic": true,
+  "nativeGameplayFixture": false,
+  "playerData": false,
+  "description": "Static protocol/storage regression records, not playable saves or proof of progression. All blob content is invented marker text; native recovery is opaque at this server boundary.",
+  "normalizations": [
+    "Provider CAS version tokens excluded",
+    "Managed run timestamps fixed to 2000-01-01T00:00:00.000Z"
+  ],
+  "compatibility": {
+    "romSHA256": "8bf5b9675e0e34e785b0a40eb2d8120a1d2d6874890c4f6d2f43b5d1d3ab90fb",
+    "abiMajor": 1,
+    "abiMinor": 0,
+    "wireVersion": 2,
+    "checkpointFormat": 1,
+    "batteryFormat": 1,
+    "stateLayout": 5,
+    "settingsVersion": 5,
+    "coreID": "com.rileytestut.GBADeltaCore",
+    "nativeStateVersion": 10
+  },
+  "files": [
+    {
+      "file": "owner-payload-v2.json",
+      "bytes": 2863,
+      "sha256": "b32d053052324bcedba0844a66bee01a7233400521172c3c3cdba6ca704a6dd0"
+    },
+    {
+      "file": "peer-payload-v2.json",
+      "bytes": 3251,
+      "sha256": "8d87aaadf598dd57a9b8c912a1c216ea57cb9f4d4852fa7556fdcc9d40a0de7e"
+    },
+    {
+      "file": "storage-v2.json",
+      "bytes": 15151,
+      "sha256": "e4dceb80c5e6831647b5c5f3edfc227f4843196d707678fe25c47e6841c2f512"
+    },
+    {
+      "file": "owner-payload-v1.json",
+      "bytes": 1049,
+      "sha256": "4ec7f4ebc59ac705d2af10812c64a7ba01371083e794e406f354d4ac75ab5ca6"
+    },
+    {
+      "file": "storage-v1-partial.json",
+      "bytes": 8315,
+      "sha256": "198e65e153cadf0d2ae41ff236c1c813f209f2ee8ec0270ee42d28021cdb3f6b"
+    }
+  ]
+}
