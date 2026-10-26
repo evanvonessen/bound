@@ -25,6 +25,11 @@ final class BoundROMUpdateTests: XCTestCase {
         let data = Data(repeating: byte, count: 64)
         return (try .init(data: data, expectedSHA256: BoundROMUpdateContent.hash(data), expectedByteCount: data.count), data)
     }
+    private func profileContent(_ profile: BoundGameProfile) throws -> BoundROMUpdateContent {
+        try JSONDecoder().decode(BoundROMUpdateContent.self, from: JSONSerialization.data(withJSONObject: [
+            "gameID": profile.gameID, "sha256": profile.romSHA256
+        ]))
+    }
     private func finish(_ storage: BoundROMUpdateStorage, _ value: BoundROMUpdateStorage.Transaction) throws {
         var transaction = value
         try storage.makeBackup(&transaction)
@@ -268,6 +273,99 @@ final class BoundROMUpdateTests: XCTestCase {
             resetGameIDs: [old.gameID, next.gameID]))
         XCTAssertEqual(try f.storage.state().current, next)
         XCTAssertNil(try f.storage.pending())
+    }
+
+    func testOriginalAndCurrentProfilesStaySeparateWithoutChangingOrdinaryResetPolicy() throws {
+        let original = try profileContent(BoundGameProfiles.original), current = try profileContent(BoundGameProfiles.current)
+        XCTAssertTrue(BoundROMUpdateContent.preservesPrevious(original, incoming: current))
+        XCTAssertEqual(try BoundROMUpdateContent.resetGameIDs(previous: original, incoming: current), [])
+        let (ordinary, _) = try content(1), (updated, _) = try content(2)
+        XCTAssertEqual(try BoundROMUpdateContent.resetGameIDs(previous: ordinary, incoming: updated), [ordinary.gameID, updated.gameID])
+        XCTAssertThrowsError(try BoundROMUpdateContent.resetGameIDs(previous: original, incoming: updated))
+        for mismatched in [
+            ["gameID": original.gameID, "sha256": current.sha256],
+            ["gameID": ordinary.gameID, "sha256": original.sha256],
+            ["gameID": current.gameID, "sha256": ordinary.sha256]
+        ] {
+            let wrong = try JSONDecoder().decode(BoundROMUpdateContent.self, from: JSONSerialization.data(withJSONObject: mismatched))
+            XCTAssertThrowsError(try BoundROMUpdateContent.resetGameIDs(previous: wrong, incoming: current))
+            XCTAssertThrowsError(try BoundROMUpdateContent.resetGameIDs(previous: ordinary, incoming: wrong))
+        }
+        let bundle = Bundle(for: Game.self)
+        let data = try Data(contentsOf: XCTUnwrap(bundle.url(forResource: "rrbin-integrated", withExtension: "gba")))
+        XCTAssertEqual(try BoundROMUpdateContent.enrollment(data: data, gameID: current.gameID), current)
+        XCTAssertThrowsError(try BoundROMUpdateContent.enrollment(data: data, gameID: original.gameID))
+        XCTAssertThrowsError(try BoundROMUpdateContent(data: data, expectedSHA256: original.sha256))
+    }
+
+    func testSideBySideUpdatePreservesOriginalFilesAndExistingGenerationFenceAcrossRestart() throws {
+        let f = try fixture(), original = try profileContent(BoundGameProfiles.original)
+        let data = try Data(contentsOf: XCTUnwrap(Bundle(for: Game.self).url(forResource: "rrbin-integrated", withExtension: "gba")))
+        let current = try BoundROMUpdateContent(data: data, expectedSHA256: BoundGameProfiles.current.romSHA256)
+        let oldState = BoundROMUpdateStorage.State(current: original, requiresGeneration: true)
+        try FileManager.default.createDirectory(at: f.storage.root, withIntermediateDirectories: true)
+        try JSONEncoder().encode(oldState).write(to: f.storage.stateURL)
+        let originalReceiptBytes = try Data(contentsOf: f.storage.stateURL)
+        let battery = try f.file("Database/Games/" + original.gameID + ".sav", Data([1, 2, 3]))
+        let snapshot = try f.file("Database/Save States/" + original.gameID + "/manual.state", Data([4, 5]))
+        let sources = try [battery, snapshot].map { try f.storage.source(for: $0, remove: false) }
+        let value = try f.storage.begin(content: current, data: data, sources: sources, metadata: Data(),
+            resetGameIDs: BoundROMUpdateContent.resetGameIDs(previous: original, incoming: current))
+        XCTAssertTrue(value.resetGameIDs.isEmpty)
+        XCTAssertFalse(value.nextState.retiredGameIDs.contains(original.gameID))
+        XCTAssertEqual(try Data(contentsOf: f.storage.backupDirectory(value).appendingPathComponent("previous-updater-state.json")), originalReceiptBytes)
+        try finish(f.storage, value)
+        let reopened = BoundROMUpdateStorage(root: f.storage.root, documents: f.storage.documents, support: f.storage.support)
+        XCTAssertEqual(try Data(contentsOf: battery), Data([1, 2, 3]))
+        XCTAssertEqual(try Data(contentsOf: snapshot), Data([4, 5]))
+        XCTAssertEqual(try reopened.state().current, current)
+        XCTAssertEqual(BoundROMUpdateRegistry.generation(for: original.gameID, storage: reopened), original.sha256)
+        XCTAssertNil(BoundROMUpdateRegistry.generation(for: current.gameID, storage: reopened))
+        XCTAssertNoThrow(try BoundROMUpdateRegistry.validateUpload(gameID: original.gameID, storage: reopened))
+        XCTAssertThrowsError(try BoundROMUpdateRegistry.validateDownload(gameID: original.gameID, generation: nil, isSave: true, storage: reopened))
+        XCTAssertNoThrow(try BoundROMUpdateRegistry.validateDownload(gameID: original.gameID, generation: original.sha256, isSave: true, storage: reopened))
+        XCTAssertThrowsError(try BoundROMUpdateRegistry.validateRestore(gameID: original.gameID, generation: original.sha256,
+            version: "old", currentVersion: "head", isLocked: false, storage: reopened))
+        XCTAssertNoThrow(try BoundROMUpdateRegistry.validateRestore(gameID: original.gameID, generation: original.sha256,
+            version: "head", currentVersion: "head", isLocked: false, storage: reopened))
+    }
+
+    func testOldDestructivePendingUpdateCannotResetOrNewlyRetireTheOriginalProfile() throws {
+        let f = try fixture(), original = try profileContent(BoundGameProfiles.original), current = try profileContent(BoundGameProfiles.current)
+        let battery = try f.file("Database/Games/" + original.gameID + ".sav", Data([7, 8]))
+        var transaction = BoundROMUpdateStorage.Transaction(id: UUID(), content: current,
+            nextState: .init(current: current, retiredGameIDs: [original.gameID], requiresGeneration: true),
+            resetGameIDs: [original.gameID, current.gameID], sources: [try f.storage.source(for: battery, remove: true)], metadata: Data())
+        try f.storage.save(transaction)
+        XCTAssertThrowsError(try f.storage.makeBackup(&transaction))
+        transaction.backupComplete = true
+        XCTAssertThrowsError(try f.storage.resetFiles(&transaction))
+        XCTAssertThrowsError(try f.storage.installROM(transaction, destination: battery))
+        transaction.filesReset = true
+        XCTAssertThrowsError(try f.storage.complete(transaction))
+        XCTAssertEqual(try Data(contentsOf: battery), Data([7, 8]))
+        XCTAssertNotNil(try f.storage.pending())
+        // Historical retirement is not silently cleared just because its gameID
+        // appears in the new adapter registry.
+        try FileManager.default.removeItem(at: f.storage.journalURL)
+        try JSONEncoder().encode(transaction.nextState).write(to: f.storage.stateURL)
+        XCTAssertThrowsError(try BoundROMUpdateRegistry.validateDownload(gameID: original.gameID, generation: original.sha256, isSave: false, storage: f.storage))
+        XCTAssertThrowsError(try BoundROMUpdateRegistry.validateUpload(gameID: original.gameID, storage: f.storage))
+    }
+
+    func testOlderUpdaterReceiptsDecodeWithoutAddingGenerationMetadata() throws {
+        let (current, _) = try content(1)
+        let bytes = try JSONSerialization.data(withJSONObject: [
+            "current": ["gameID": current.gameID, "sha256": current.sha256],
+            "retiredGameIDs": [], "requiresGeneration": false
+        ])
+        let state = try JSONDecoder().decode(BoundROMUpdateStorage.State.self, from: bytes)
+        XCTAssertNil(state.preservedGenerations)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as? [String: Any])
+        XCTAssertNil(object["preservedGenerations"])
+        var empty = state; empty.preservedGenerations = [:]
+        let emptyObject = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(empty)) as? [String: Any])
+        XCTAssertNil(emptyObject["preservedGenerations"])
     }
 
     func testPathsCannotEscapeSandboxOrBackUpUpdaterJournalItself() throws {

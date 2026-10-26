@@ -65,7 +65,7 @@ final class BoundPresenceFrameCompositor: @unchecked Sendable {
             #endif
             return
         }
-        let reading = BoundPlayerStateDecoder.read(profile: profile, memory: memory, frame: 1, includeScene: true, presentationOnly: true)
+        let reading = profile.adapter.readPlayer(profile, memory: memory, frame: 1, includeScene: true, presentationOnly: true)
         let rendered = reading.player.flatMap { pose.rendered(profile: profile, viewer: $0) }
         var pixels = 0
         if let scene = reading.player?.scene, let rendered, let buffer = downstream.videoBuffer {
@@ -170,7 +170,7 @@ final class BoundVBAPlayerStateProbe: @unchecked Sendable {
         frame &+= 1
         let reading: BoundPlayerStateReading
         if let memory = BoundGBAMemorySnapshot.capture(readMemory: readMemory) {
-            reading = tracker.update(BoundPlayerStateDecoder.read(profile: currentProfile, memory: memory, frame: frame, includeScene: includeScene))
+            reading = tracker.update(currentProfile.adapter.readPlayer(currentProfile, memory: memory, frame: frame, includeScene: includeScene))
         } else {
             reading = tracker.update(.inactive(.invalidMemory, "RAM capture unavailable", frame: frame))
         }

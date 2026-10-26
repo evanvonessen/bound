@@ -195,9 +195,10 @@ static_assert(GameCooperativeHostSize==BOUND_SDK_COOPERATIVE_HOST_BYTE_SIZE
 #include "NativeBattle/invitation.inc"
 namespace {
 uint8_t *romUIOwner=nullptr,*cooperativeROM=nullptr;
+const MultiRedNativeProfile *romUIProfile=nullptr;
 bool romFieldRDown=false;
 bool romFieldTextWasIdle=false;
-bool ownsROMUI() { return romUIOwner==rom && gameDescriptorPresent(rom); }
+bool ownsROMUI() { return romUIOwner==rom && romUIProfile && romUIProfile==multiRedProfile(rom); }
 bool nativeProfileVerified() {
     const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
         0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
@@ -350,6 +351,15 @@ static uint8_t soulQAScriptBackup[128];
     if(result!=Z_STREAM_END||remaining!=0||length<700000||length>decoded.length) return NO;
     const auto *raw=static_cast<const uint8_t *>(decoded.bytes);
     if(word(raw)!=10||memcmp(raw+4,rom+0xA0,16)) return NO;
+    // Pinned VBA-M v10: version/title/BIOS, 45 registers, 267 bytes of
+    // saveGameStruct, stop/IRQ, IWRAM and palette precede EWRAM. The profile
+    // verifier checks this offset against the pinned source. Managed snapshots
+    // must carry their own committed ruleset/layout before any core mutation.
+    if(const auto *profile=multiRedProfile(rom)) {
+        constexpr size_t stateWorkRAMOffset=34271;
+        if(length<stateWorkRAMOffset+0x40000
+           ||!profile->admitsStateRAM(raw+stateWorkRAMOffset,0x40000)) return NO;
+    }
     NSMutableData *owned=[data mutableCopy];
     // Delta's ordinary load reapplies the current cheat configuration. Keep
     // that configuration here too; only the server snapshot supplies battery.
@@ -376,8 +386,8 @@ static uint8_t soulQAScriptBackup[128];
 // All new cooperative gameplay access is through the generated cartridge ABI.
 + (BOOL)installCooperativeDoubles {
 #ifdef BOUND_GAME_COOPERATIVE_DOUBLES
-    if(cooperativeROM==rom&&rom&&gameDescriptorPresent(rom)) return YES;
-    if(!rom||!workRAM||!internalRAM||!gameDescriptorPresent(rom)
+    if(cooperativeROM==rom&&rom&&multiRedProfile(rom)==&MultiRedCurrentProfile) return YES;
+    if(!rom||!workRAM||!internalRAM||multiRedProfile(rom)!=&MultiRedCurrentProfile
        ||GameCooperativeSnapshotAddress<0x02000000
        ||GameCooperativeSnapshotAddress+GameCooperativeSnapshotSize>0x02040000
        ||GameCooperativeHostOffset+GameCooperativeHostSize>0x2000000) return NO;
@@ -392,7 +402,7 @@ static uint8_t soulQAScriptBackup[128];
 }
 + (NSData *)cooperativeSnapshot {
 #ifdef BOUND_GAME_COOPERATIVE_DOUBLES
-    if(cooperativeROM!=rom||!rom||!workRAM||!gameDescriptorPresent(rom)) return [NSData data];
+    if(cooperativeROM!=rom||!rom||!workRAM||multiRedProfile(rom)!=&MultiRedCurrentProfile) return [NSData data];
     const auto *p=workRAM+GameCooperativeSnapshotAddress-0x02000000;
     const uint32_t sequence=word(p+8);
     if(word(p)!=BOUND_SDK_COOPERATIVE_SNAPSHOT_MAGIC||half(p+4)!=BOUND_SDK_COOPERATIVE_SNAPSHOT_MAJOR
@@ -405,7 +415,7 @@ static uint8_t soulQAScriptBackup[128];
 }
 + (void)setCooperativeHost:(NSData *)data {
 #ifdef BOUND_GAME_COOPERATIVE_DOUBLES
-    if(cooperativeROM!=rom||!rom||data.length!=GameCooperativeHostSize) return;
+    if(cooperativeROM!=rom||!rom||multiRedProfile(rom)!=&MultiRedCurrentProfile||data.length!=GameCooperativeHostSize) return;
     const auto *p=static_cast<const uint8_t *>(data.bytes);const uint32_t sequence=word(p+8);
     if(word(p)!=BOUND_SDK_COOPERATIVE_HOST_MAGIC||half(p+4)!=BOUND_SDK_COOPERATIVE_HOST_MAJOR
        ||half(p+6)!=BOUND_SDK_COOPERATIVE_HOST_MINOR||BOUND_SDK_UNCOMMITTED_SEQUENCE(sequence)
@@ -447,14 +457,15 @@ static uint8_t soulQAScriptBackup[128];
 }
 + (BOOL)installROMMultiplayer {
     if(ownsROMUI()) return YES;
-    if(!rom||!workRAM||!internalRAM||!gameDescriptorPresent(rom)) return NO;
+    const auto *profile=multiRedProfile(rom);
+    if(!rom||!workRAM||!internalRAM||armed||inviteActive||!profile) return NO;
     uint8_t digest[32]; soulOriginalHash(digest);
     const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
         0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
     if(memcmp(digest,expected,32)) return NO;
-    if(GameUIRequestAddress<0x02000000||GameUIRequestAddress+GameUIRequestSize>0x02040000
-       ||GameUIHostOffset+GameUIHostSize>0x2000000) return NO;
-    romUIOwner=rom;romFieldRDown=romFieldTextWasIdle=false; return YES;
+    if(profile->uiRequestAddress<0x02000000||profile->uiRequestAddress+profile->uiRequestSize>0x02040000
+       ||profile->uiHostOffset+profile->uiHostSize>0x2000000) return NO;
+    romUIOwner=rom;romUIProfile=multiRedProfile(rom);romFieldRDown=romFieldTextWasIdle=false; return YES;
 }
 + (void)advanceROMFieldRecovery {
     if(!ownsROMUI()||!workRAM||!internalRAM) return;
@@ -482,8 +493,8 @@ static uint8_t soulQAScriptBackup[128];
     if(musicState>=5&&musicState<=7&&(musicStatus&0x80000000u)&&(musicStatus&0xFFFF))
         put32(internalRAM+0x7304,musicStatus&0xFFFF0000u);
 
-    const auto *guest=workRAM+GameUIRequestAddress-0x02000000;
-    const auto *host=rom+GameUIHostOffset;
+    const auto *guest=workRAM+romUIProfile->uiRequestAddress-0x02000000;
+    const auto *host=rom+romUIProfile->uiHostOffset;
     const auto flags=word(guest+80),hostFlags=word(host+12);
     // Published field/settings/checkpoint bits must all be set; setup/modal
     // bits must be clear. Pending host invitations, recovery, saves, transfers,
@@ -506,11 +517,11 @@ static uint8_t soulQAScriptBackup[128];
 }
 + (NSData *)romMultiplayerSnapshot {
     if(!ownsROMUI()||!workRAM) return [NSData data];
-    const auto *p=workRAM+GameUIRequestAddress-0x02000000;
+    const auto *p=workRAM+romUIProfile->uiRequestAddress-0x02000000;
     const uint32_t sequence=word(p+8);
     if(word(p)!=BOUND_SDK_UIREQUEST_MAGIC||half(p+4)!=BOUND_SDK_UIREQUEST_MAJOR
        ||half(p+6)!=BOUND_SDK_UIREQUEST_MINOR||BOUND_SDK_UNCOMMITTED_SEQUENCE(sequence)) return [NSData data];
-    NSMutableData *copy=[NSMutableData dataWithBytes:p length:GameUIRequestSize];
+    NSMutableData *copy=[NSMutableData dataWithBytes:p length:romUIProfile->uiRequestSize];
     if(!bound_sdk_same_committed_sequence(sequence,word(p+8))) return [NSData data];
     // Earlier cartridges advertised idle scripts as checkpoint-safe without
     // checking their asynchronous native message owner. Withhold that claim
@@ -522,44 +533,45 @@ static uint8_t soulQAScriptBackup[128];
     return copy;
 }
 + (void)setROMMultiplayerHost:(NSData *)data {
-    if(!ownsROMUI()||data.length!=GameUIHostSize) return;
+    if(!ownsROMUI()||data.length!=romUIProfile->uiHostSize) return;
     const auto *source=static_cast<const uint8_t *>(data.bytes);
     const uint32_t sequence=word(source+8);
     if(word(source)!=BOUND_SDK_UIHOST_MAGIC||half(source+4)!=BOUND_SDK_UIHOST_MAJOR
        ||half(source+6)!=BOUND_SDK_UIHOST_MINOR||BOUND_SDK_UNCOMMITTED_SEQUENCE(sequence)
        ||word(source+24)>20||word(source+312)>180) return;
-    auto *destination=rom+GameUIHostOffset;
+    auto *destination=rom+romUIProfile->uiHostOffset;
     bound_sdk_store_le32(destination+8,sequence-1);
-    memcpy(destination,source,8);memcpy(destination+12,source+12,GameUIHostSize-12);
+    memcpy(destination,source,8);memcpy(destination+12,source+12,romUIProfile->uiHostSize-12);
     bound_sdk_store_le32(destination+8,sequence);
 }
 // Attaches to the game's ABI; never installs/restores gameplay instructions.
 + (BOOL)installSharedWorld {
     if(worldOwnsROM()) return YES;
-    if(!rom||!workRAM||!internalRAM||armed||inviteActive||!gameDescriptorPresent(rom)) return NO;
+    const auto *profile=multiRedProfile(rom);
+    if(!rom||!workRAM||!internalRAM||armed||inviteActive||!profile) return NO;
     uint8_t digest[32];soulOriginalHash(digest);
     const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
         0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
     if(memcmp(digest,expected,32)) return NO;
-    if(GameSnapshotAddress<0x02000000||GameSnapshotAddress+GameSnapshotRegionSize>0x02040000) return NO;
-    const auto *p=workRAM+GameSnapshotAddress-0x02000000;
-    if(word(p)!=0x31434D52||half(p+4)!=GameABIMajor||half(p+6)>GameABIMinor||word(p+8)!=GameSnapshotRegionSize) return NO;
-    worldROM=rom;
+    if(profile->snapshotAddress<0x02000000||profile->snapshotAddress+profile->snapshotRegionSize>0x02040000) return NO;
+    const auto *p=workRAM+profile->snapshotAddress-0x02000000;
+    if(word(p)!=0x31434D52||half(p+4)!=profile->major||half(p+6)>profile->minor||word(p+8)!=profile->snapshotRegionSize) return NO;
+    worldROM=rom;worldProfile=multiRedProfile(rom);
     if(![self sharedWorldSnapshot][@"checkpoints"]) { worldROM=nullptr; return NO; }worldSequence=0;[[NSUUID UUID] getUUIDBytes:worldSession];
     worldWritePolicy(false,[NSData data],0,0,[NSData data],false);
     return YES;
 }
 + (NSDictionary<NSString *,id> *)sharedWorldSnapshot {
     if(!worldOwnsROM()||!workRAM) return @{};
-    const auto *control=workRAM+GameSnapshotAddress-0x02000000;
-    if(word(control)!=0x31434D52||half(control+4)!=GameABIMajor||half(control+6)>GameABIMinor
-       ||word(control+8)!=GameSnapshotRegionSize||word(control+16)!=GameSnapshotSize||word(control+12)>1) return @{};
+    const auto *control=workRAM+worldProfile->snapshotAddress-0x02000000;
+    if(word(control)!=0x31434D52||half(control+4)!=worldProfile->major||half(control+6)>worldProfile->minor
+       ||word(control+8)!=worldProfile->snapshotRegionSize||word(control+16)!=worldProfile->snapshotSize||word(control+12)>1) return @{};
     const uint32_t index=word(control+12);
-    const auto *p=control+64+index*GameSnapshotSize;
+    const auto *p=control+64+index*worldProfile->snapshotSize;
     const uint32_t sequence=word(p+12);
-    if(!sequence||(sequence&1)||word(p)!=0x31534D52||half(p+4)!=GameABIMajor||half(p+6)>GameABIMinor
-       ||word(p+8)!=GameSnapshotSize||word(p+20)!=1||p[24]>=43||p[26]>16
-       ||memcmp(p+32,GameRulesetID,16)||word(p+48)!=1||word(p+52)!=1||word(p+56)!=GameSaveStateLayout) return @{};
+    if(!sequence||(sequence&1)||word(p)!=0x31534D52||half(p+4)!=worldProfile->major||half(p+6)>worldProfile->minor
+       ||word(p+8)!=worldProfile->snapshotSize||word(p+20)!=1||p[24]>=43||p[26]>16
+       ||memcmp(p+32,worldProfile->ruleset,16)||word(p+48)!=1||word(p+52)!=1||word(p+56)!=worldProfile->layout) return @{};
     NSData *checkpoints=[NSData dataWithBytes:p+64 length:800];NSData *boulders=[NSData dataWithBytes:p+864 length:p[26]*6];
     if(!bound_sdk_same_committed_sequence(sequence,word(p+12))||word(control+12)!=index) return @{};
     return @{@"checkpoints":checkpoints,@"group":@(p[24]),@"number":@(p[25]),@"boulders":boulders,@"sequence":@(sequence),@"frame":@(word(p+16))};
@@ -568,7 +580,7 @@ static uint8_t soulQAScriptBackup[128];
     worldWritePolicy(true,checkpoints,unsigned(group),unsigned(number),boulders,fresh);
 }
 + (void)advanceSharedWorld {
-    if(worldOwnsROM()) { auto *p=rom+GameHostOffset+64;uint32_t lease=word(p+8);if(lease) put32(p+8,lease-1); }
+    if(worldOwnsROM()) { auto *p=rom+worldProfile->hostOffset+64;uint32_t lease=word(p+8);if(lease) put32(p+8,lease-1); }
 }
 + (void)closeSharedWorld {
     // The permanent game module and serialized guest return addresses stay valid.

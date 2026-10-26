@@ -143,6 +143,7 @@ final class BoundLivePresenceSession: ObservableObject {
     private var proposalAt: TimeInterval?
     private var localPose: BoundPresencePose?
     private var romVerified = false
+    private var admittedProfile: BoundGameProfile?
     private var sceneProfile: BoundPlayerROMProfile?
     private var localAt: TimeInterval?
     private var settledLocal: BoundFriendWorldPosition?
@@ -199,7 +200,7 @@ final class BoundLivePresenceSession: ObservableObject {
     /// interaction freshness, or the authenticated peer handshake.
     func restorePresentation(_ data: Data, age: TimeInterval, at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         guard enabled, romVerified, age.isFinite, age >= 0, age < Self.visibilityGrace,
-              let packet = BoundPresencePacket.decode(data), packet.rom == BoundPlayerROMProfile.supportedSHA256,
+              let packet = BoundPresencePacket.decode(data), packet.rom == admittedProfile?.romSHA256,
               packet.withdrawn != true, let pose = packet.pose, retainedAt.map({ now - age >= $0 }) ?? true else { return }
         retainedPose = pose; retainedAt = now - age; presentationChanged?()
     }
@@ -227,8 +228,10 @@ final class BoundLivePresenceSession: ObservableObject {
         if localPose == nil { presentationChanged?() }
     }
     func setROMVerified(_ value: Bool, profile: BoundPlayerROMProfile? = nil) {
-        sceneProfile = value ? profile : nil
-        guard value != romVerified else { return }
+        let next = value ? (profile?.gameProfile ?? BoundGameProfiles.current) : nil
+        let changed = next != admittedProfile
+        admittedProfile = next; sceneProfile = value ? profile : nil
+        guard value != romVerified || changed else { return }
         romVerified = value; invalidateLocal()
     }
 
@@ -248,7 +251,7 @@ final class BoundLivePresenceSession: ObservableObject {
         lastSent = now; sequence &+= 1
         let fresh = enabled && localAt.map { now - $0 <= 0.5 } ?? false
         var packet = BoundPresencePacket(version: 1,
-            rom: romVerified ? BoundPlayerROMProfile.supportedSHA256 : String(repeating: "0", count: 64),
+            rom: romVerified ? (admittedProfile?.romSHA256 ?? String(repeating: "0", count: 64)) : String(repeating: "0", count: 64),
             sender: epoch, receiver: proposedPeer ?? peerEpoch, sequence: sequence, time: now, pose: fresh ? localPose : nil)
         if withdrawn || !enabled { packet.withdrawn = true }
         guard let data = packet.encoded() else { return }
@@ -261,7 +264,7 @@ final class BoundLivePresenceSession: ObservableObject {
               let packet = BoundPresencePacket.decode(data) else { rejectedPackets += 1; return }
         guard packet.sender != epoch, packet.receiver == nil || packet.receiver == epoch,
               !retired.contains(packet.sender) else { rejectedPackets += 1; return }
-        guard packet.rom == BoundPlayerROMProfile.supportedSHA256 else {
+        guard packet.rom == admittedProfile?.romSHA256 else {
             if packet.receiver == nil, peerEpoch != nil, packet.sender != peerEpoch {
                 rejectedPackets += 1; return
             }

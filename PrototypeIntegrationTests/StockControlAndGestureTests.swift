@@ -863,7 +863,7 @@ final class StockControlAndGestureTests: XCTestCase {
             }
         }
 
-        // Previous/next tab bindings wrap across the three fixed multiview tabs,
+        // Previous/next tab bindings include the existing Connections panel,
         // even while the retired preference is stored as false.
         modePreferences.isEnabled = true
         landscapePreferences.option = .option7
@@ -872,13 +872,15 @@ final class StockControlAndGestureTests: XCTestCase {
         let companion = gameController.boundCompanionForTesting
         XCTAssertEqual(companion.controllerReferenceContent, .dex)
         press(.boundPreviousView)
-        XCTAssertEqual(companion.controllerReferenceContent, .types, "Previous from the first tab must wrap to the last")
+        XCTAssertEqual(companion.controllerReferenceContent, .connections, "Previous from the first tab must wrap to the last")
         press(.boundNextView)
         XCTAssertEqual(companion.controllerReferenceContent, .dex, "Next from the last tab must wrap to the first")
         press(.boundNextView)
         XCTAssertEqual(companion.controllerReferenceContent, .bosses)
         press(.boundNextView)
         XCTAssertEqual(companion.controllerReferenceContent, .types)
+        press(.boundNextView)
+        XCTAssertEqual(companion.controllerReferenceContent, .connections)
         press(.boundNextView)
         XCTAssertEqual(companion.controllerReferenceContent, .dex, "Next must continue cycling rather than stop at the last tab")
 

@@ -54,13 +54,13 @@ struct BoundPlayerStateReading: Equatable, Sendable {
 final class BoundPlayerROMProfile: Sendable {
     static let supportedSHA256 = BoundWorldContract.romSHA256
     enum ProfileError: Error { case unsupportedROM }
+    let adapter: MultiRedAdapter
+    var gameProfile: BoundGameProfile { adapter.profile }
     private let rom: Data
     let sceneAssets = BoundPlayerSceneAssets()
 
     init(rom: Data) throws {
-        guard SHA256.hash(data: rom).map({ String(format: "%02x", $0) }).joined() == Self.supportedSHA256 else {
-            throw ProfileError.unsupportedROM
-        }
+        adapter = try MultiRedAdapter(rom: rom)
         // This profile is constructed from an owned file mapping, not core RAM.
         self.rom = rom
     }

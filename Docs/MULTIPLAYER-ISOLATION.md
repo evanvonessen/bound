@@ -156,3 +156,47 @@ is retained. A frozen cursor-merge comparison also exposed an existing adjacent
 sparse-gap restoration rejection. This structural commit deliberately retains
 that decision; correcting it requires a separate behavior change and regression.
 The full extraction Release/save gate follows adapter and persistence work.
+
+## Original and combined ROM routes
+
+`MultiRedAdapter` admits complete owned files by exact SHA-256. Immutable
+generated profiles bind their content-addressed game IDs, rulesets, layouts and
+cooperative capability. Native profiles retain separate descriptors, dynamic
+ranges and complete base-hook restoration tables. The original profile is
+frozen from `00bb9324`; it is not regenerated from the newer game source.
+
+| Profile | Game ID | State layout | Cooperative doubles |
+| --- | --- | --- | --- |
+| Original `8bf5b967...` | `5e572144dc845a8b3576b38672447c6507d9f47d` | 5 | No |
+| Combined `7e170ed0...` | `a08fc3e61882d725c15e848a44fb00ac2802db42` | 6 | Yes |
+
+Player/scene interpretation, cartridge UI/world access, native activity entry
+and state capture/restore delegate through the adapter boundary to the existing
+implementations. Active host services carry the admitted profile rather than
+assuming the newly bundled ROM. Native VBA-state restore also checks the saved
+world ruleset/layout before mutating a managed core; unrelated diagnostic ROMs
+retain their existing core/title validation.
+
+The updater installs the combined ROM separately, retaining the original
+library records, files and reset-generation restriction. Its optional
+`preservedGenerations` receipt field is absent for ordinary updates; old receipts
+still decode. Exact pre-update receipt bytes are retained in the transaction
+backup. This is not a run or save conversion. Older hosts do not understand this
+extra updater fence, so downgrade requires coordinated recovery of the original
+ROM, library/files and retained receipt. Previously retired data is not silently
+revived, and interrupted destructive transactions targeting the original fail
+closed with their backups intact.
+
+Passed: 26 native full-ROM/profile checks and the focused hosted gate (231
+tests, 229 passed, two explicitly skipped native-chooser/Mac-only cases). The
+four adapter tests include actual original and combined VBA-M cold boots,
+same-profile state round trips and cross-profile state rejection without core
+mutation. The first hosted attempt exposed a synthetic cooperative test missing
+its admitted profile and stale controller-test expectations predating the
+Connections panel; both test fixtures were corrected. No production workaround
+was added. Full extraction Release and broader acceptance remain later gates.
+
+Paused continuation restore also admits the exact cartridge synchronously before
+mutating state, cancels an outstanding cooperative profile verifier, and reapplies
+the immutable profile after probe configuration. This avoids a bind/restore race;
+the final hosted gate includes these ordering checks.

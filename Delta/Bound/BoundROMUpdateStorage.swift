@@ -17,6 +17,11 @@ struct BoundROMUpdateContent: Equatable, Codable {
     /// A user may explicitly replace an older integrated ROM in the same family.
     /// This is enrollment only; incoming updates still require the current exact hash.
     static func enrollment(data: Data, gameID: String) throws -> Self {
+        if let profile = MultiRedAdapter.profile(gameID: gameID) {
+            let content = try Self(data: data, expectedSHA256: profile.romSHA256)
+            guard content.gameID == profile.gameID else { throw BoundROMUpdateError.invalidROM }
+            return content
+        }
         let descriptor = 33_513_216
         guard data.count == byteCount,
               data.subdata(in: 0xAC..<0xB0) == Data("BPRE".utf8),
@@ -27,6 +32,32 @@ struct BoundROMUpdateContent: Equatable, Codable {
         return content
     }
     static func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+
+    /// Metadata lookup does not admit ROM bytes. It only prevents the updater
+    /// from merging two separately supported exact-ROM storage identities.
+    private var isOriginalProfile: Bool {
+        gameID == BoundGameProfiles.original.gameID && sha256 == BoundGameProfiles.original.romSHA256
+    }
+    func validateKnownProfileIdentity() throws {
+        if let profile = MultiRedAdapter.profile(gameID: gameID), profile.romSHA256 != sha256 {
+            throw BoundROMUpdateError.incompatibleROM
+        }
+        if let profile = MultiRedAdapter.profile(romSHA256: sha256), profile.gameID != gameID {
+            throw BoundROMUpdateError.incompatibleROM
+        }
+    }
+    static func preservesPrevious(_ previous: Self?, incoming: Self) -> Bool {
+        previous?.isOriginalProfile == true && incoming.gameID == BoundGameProfiles.current.gameID &&
+        incoming.sha256 == BoundGameProfiles.current.romSHA256
+    }
+    static func resetGameIDs(previous: Self?, incoming: Self) throws -> Set<String> {
+        try previous?.validateKnownProfileIdentity(); try incoming.validateKnownProfileIdentity()
+        guard let previous, previous != incoming else { return [] }
+        if preservesPrevious(previous, incoming: incoming) { return [] }
+        // A recognized original cannot be retired by an unrelated cartridge.
+        guard !previous.isOriginalProfile else { throw BoundROMUpdateError.incompatibleROM }
+        return [previous.gameID, incoming.gameID]
+    }
 }
 
 enum BoundROMUpdateError: LocalizedError {
@@ -57,6 +88,23 @@ final class BoundROMUpdateStorage {
         var current: BoundROMUpdateContent?
         var retiredGameIDs: Set<String> = []
         var requiresGeneration = false
+        // Omitted in ordinary/older receipts. A separately retained cartridge
+        // must keep any reset fence it already had before current advances.
+        var preservedGenerations: [String: String]?
+        private enum CodingKeys: String, CodingKey { case current, retiredGameIDs, requiresGeneration, preservedGenerations }
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encodeIfPresent(current, forKey: .current)
+            try values.encode(retiredGameIDs, forKey: .retiredGameIDs)
+            try values.encode(requiresGeneration, forKey: .requiresGeneration)
+            if let preservedGenerations, !preservedGenerations.isEmpty {
+                try values.encode(preservedGenerations, forKey: .preservedGenerations)
+            }
+        }
+        func requiredGeneration(for gameID: String) -> String? {
+            if current?.gameID == gameID, requiresGeneration { return current?.sha256 }
+            return preservedGenerations?[gameID]
+        }
     }
     struct Source: Codable, Equatable {
         let path: String // Documents/... or Support/..., relative to the current sandbox
@@ -237,26 +285,51 @@ final class BoundROMUpdateStorage {
     @discardableResult func begin(content: BoundROMUpdateContent, data: Data, sources: [Source], metadata: Data,
                                  resetGameIDs: Set<String>, enrollment: BoundROMUpdateContent? = nil, preservedIncoming: PreservedIncoming = .init()) throws -> Transaction {
         guard try pending() == nil, BoundROMUpdateContent.hash(data) == content.sha256 else { throw BoundROMUpdateError.storage }
-        var previous = try state()
+        let previousStateBytes = fm.fileExists(atPath: stateURL.path) ? try Data(contentsOf: stateURL) : nil
+        var previous = try previousStateBytes.map { try JSONDecoder().decode(State.self, from: $0) } ?? .init()
         if previous.current == nil { previous.current = enrollment }
+        try previous.current?.validateKnownProfileIdentity(); try content.validateKnownProfileIdentity()
         guard !previous.retiredGameIDs.contains(content.gameID) else { throw BoundROMUpdateError.olderROM }
         if let old = previous.current, old.gameID == content.gameID, old.sha256 != content.sha256 { throw BoundROMUpdateError.invalidROM }
+        let preservesPrevious = BoundROMUpdateContent.preservesPrevious(previous.current, incoming: content)
+        if preservesPrevious {
+            guard resetGameIDs.isEmpty, sources.allSatisfy({ !$0.remove }) else { throw BoundROMUpdateError.incompatibleROM }
+        }
         var next = previous
-        if let old = previous.current, old != content { next.retiredGameIDs.insert(old.gameID) }
+        if preservesPrevious, previous.requiresGeneration, let old = previous.current {
+            var generations = next.preservedGenerations ?? [:]
+            generations[old.gameID] = old.sha256; next.preservedGenerations = generations
+        }
+        if let old = previous.current, old != content, !preservesPrevious { next.retiredGameIDs.insert(old.gameID) }
         next.retiredGameIDs.remove(content.gameID)
         next.current = content
         next.requiresGeneration = previous.current == content ? previous.requiresGeneration : !resetGameIDs.isEmpty
         let transaction = Transaction(id: UUID(), content: content, nextState: next, resetGameIDs: resetGameIDs,
             sources: sources, metadata: metadata, preservedIncoming: preservedIncoming)
+        try validateOriginalPreservation(transaction)
         let folder = backupDirectory(transaction)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        if let previousStateBytes {
+            try write(previousStateBytes, to: folder.appendingPathComponent("previous-updater-state.json"))
+        }
         try write(data, to: incomingURL(transaction))
         try write(metadata, to: folder.appendingPathComponent("library-metadata.json"))
         try save(transaction)
         return transaction
     }
     func save(_ transaction: Transaction) throws { try write(JSONEncoder().encode(transaction), to: journalURL) }
+    /// Older pending journals may already describe a destructive reset. Keep
+    /// them and their backups for recovery instead of replaying that reset.
+    private func validateOriginalPreservation(_ transaction: Transaction) throws {
+        try transaction.content.validateKnownProfileIdentity()
+        let originalID = BoundGameProfiles.original.gameID
+        guard !transaction.resetGameIDs.contains(originalID) else { throw BoundROMUpdateError.incompatibleROM }
+        if transaction.nextState.retiredGameIDs.contains(originalID), !(try state()).retiredGameIDs.contains(originalID) {
+            throw BoundROMUpdateError.incompatibleROM
+        }
+    }
     func makeBackup(_ transaction: inout Transaction) throws {
+        try validateOriginalPreservation(transaction)
         if transaction.backupComplete { try verifyBackup(transaction); return }
         let folder = backupDirectory(transaction).appendingPathComponent("Originals", isDirectory: true)
         // No source has been removed yet. Rebuilding a partial copy is safe.
@@ -281,6 +354,7 @@ final class BoundROMUpdateStorage {
         try write(JSONEncoder().encode(transaction), to: backupDirectory(transaction).appendingPathComponent("backup.json"))
     }
     func resetFiles(_ transaction: inout Transaction) throws {
+        try validateOriginalPreservation(transaction)
         guard transaction.backupComplete else { throw BoundROMUpdateError.storage }
         try verifyBackup(transaction)
         if transaction.filesReset { return }
@@ -296,6 +370,7 @@ final class BoundROMUpdateStorage {
         transaction.filesReset = true; try save(transaction)
     }
     func installROM(_ transaction: Transaction, destination: URL) throws {
+        try validateOriginalPreservation(transaction)
         let source = incomingURL(transaction)
         let data = try Data(contentsOf: source)
         guard BoundROMUpdateContent.hash(data) == transaction.content.sha256 else { throw BoundROMUpdateError.storage }
@@ -303,6 +378,7 @@ final class BoundROMUpdateStorage {
         try write(data, to: destination)
     }
     func complete(_ transaction: Transaction) throws {
+        try validateOriginalPreservation(transaction)
         guard transaction.backupComplete, transaction.filesReset else { throw BoundROMUpdateError.storage }
         try write(JSONEncoder().encode(transaction.nextState), to: stateURL)
         try write(JSONEncoder().encode(transaction), to: backupDirectory(transaction).appendingPathComponent("completed.json"))
@@ -411,9 +487,8 @@ enum BoundROMUpdateResetPolicy {
 /// background contexts, before a settings screen or manager need be instantiated.
 enum BoundROMUpdateRegistry {
     static func generation(for gameID: String, storage: BoundROMUpdateStorage = .live) -> String? {
-        guard let state = try? storage.effectiveState(), state.requiresGeneration,
-              state.current?.gameID == gameID else { return nil }
-        return state.current?.sha256
+        guard let state = try? storage.effectiveState() else { return nil }
+        return state.requiredGeneration(for: gameID)
     }
     static func validateDownload(gameID: String, generation: String?, isSave: Bool, storage: BoundROMUpdateStorage = .live, remoteLocked: Bool = false) throws {
         if isSave, storage.hasPendingSaveClear(gameID: gameID) { throw BoundROMUpdateError.clearingSaves }
@@ -421,14 +496,14 @@ enum BoundROMUpdateRegistry {
         let state = try storage.effectiveState()
         if state.retiredGameIDs.contains(gameID) { throw BoundROMUpdateError.retired }
         if isSave, let pending = try storage.pending(), pending.resetGameIDs.contains(gameID) { throw BoundROMUpdateError.staleSave }
-        if isSave, state.requiresGeneration, state.current?.gameID == gameID, generation != state.current?.sha256 { throw BoundROMUpdateError.staleSave }
+        if isSave, let required = state.requiredGeneration(for: gameID), generation != required { throw BoundROMUpdateError.staleSave }
     }
     static func validateRestore(gameID: String, generation: String?, version: String, currentVersion: String?, isLocked: Bool, storage: BoundROMUpdateStorage = .live) throws {
         if storage.hasPendingSaveClear(gameID: gameID) { throw BoundROMUpdateError.clearingSaves }
         let state = try storage.effectiveState()
         if state.retiredGameIDs.contains(gameID) { throw BoundROMUpdateError.retired }
-        guard state.requiresGeneration, state.current?.gameID == gameID else { return }
-        guard generation == state.current?.sha256, version == currentVersion, !isLocked else { throw BoundROMUpdateError.staleSave }
+        guard let required = state.requiredGeneration(for: gameID) else { return }
+        guard generation == required, version == currentVersion, !isLocked else { throw BoundROMUpdateError.staleSave }
         if let pending = try storage.pending(), pending.resetGameIDs.contains(gameID) { throw BoundROMUpdateError.syncPending }
     }
     static func validateUpload(gameID: String, storage: BoundROMUpdateStorage = .live) throws {

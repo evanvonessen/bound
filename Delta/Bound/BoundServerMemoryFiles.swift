@@ -112,7 +112,7 @@ enum BoundServerMemoryFiles {
     /// Call with the paused core or from its completed-frame callback.
     static func saveState(core: EmulatorCore, to url: URL, gameID: String) throws {
         guard isEnabled(for: gameID) else { core.saveSaveState(to: url); return }
-        let data = BoundVBABattleBridge.captureServerState()
+        let data = MultiRedAdapter.captureState()
         guard !data.isEmpty else { throw CocoaError(.fileWriteUnknown) }
         try write(data, to: url, gameID: gameID)
     }
@@ -120,7 +120,7 @@ enum BoundServerMemoryFiles {
         guard isEnabled(for: gameID) else {
             try core.load(DeltaCore.SaveState(fileURL: url, gameType: core.game.type)); return
         }
-        guard core.state == .paused, BoundVBABattleBridge.restoreServerState(try read(url, gameID: gameID)) else {
+        guard core.state == .paused, MultiRedAdapter.restoreState(try read(url, gameID: gameID)) else {
             throw CocoaError(.fileReadCorruptFile)
         }
     }

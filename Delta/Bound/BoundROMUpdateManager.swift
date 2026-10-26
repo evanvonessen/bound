@@ -417,7 +417,7 @@ final class BoundROMUpdateManager: ObservableObject {
             guard let game = try games(matching: [selected]).first else { throw BoundROMUpdateError.storage }
             old = try BoundROMUpdateContent.enrollment(data: Data(contentsOf: game.fileURL), gameID: selected)
         }
-        let resetIDs: Set<String> = old == nil || old == candidate.content ? [] : Set([old!.gameID, candidate.content.gameID])
+        let resetIDs = try BoundROMUpdateContent.resetGameIDs(previous: old, incoming: candidate.content)
         let relevant = Set([candidate.content.gameID] + (old.map { [$0.gameID] } ?? []))
         let records = try games(matching: relevant)
         var preservedIncoming = BoundROMUpdateStorage.PreservedIncoming()

@@ -131,7 +131,7 @@ struct BoundNativeContinuation:BoundActivityContinuation {
     var activityID:UUID { id }
     var valid:Bool {
         version==1 && context.valid && (context.runID==nil || heads != nil) && !gameID.isEmpty && gameID.utf8.count<=512
-            && rom==BoundPlayerROMProfile.supportedSHA256 && cartridge.count==64 && cartridge.allSatisfy({ $0.isHexDigit }) && rate.isFinite && rate>0 && rate<=32
+            && MultiRedAdapter.profile(romSHA256:rom) != nil && cartridge.count==64 && cartridge.allSatisfy({ $0.isHexDigit }) && rate.isFinite && rate>0 && rate<=32
             && state.count>1024 && state.count<=16_777_216 && battery.count==131072
             && !bridge.isEmpty && bridge.count<=8192 && probe.count<=32768 && wire.count<=400_000
             && backup.count>1024 && backup.count<=16_777_216 && journal.count<=4096
@@ -538,6 +538,19 @@ final class BoundNativeBattleSession {
     var blocksCoreResume:Bool { pausedForTransport || continuationTicket != nil || continuationWriteBlocked || recoveryFailed }
     var blocksAutoSave:Bool { protectsTemporaryState || interactions?.nativeDialogueBusy == true }
 
+    private func contractSHA256(for core: EmulatorCore) throws -> String {
+        let hash = Self.hash(try Data(contentsOf: core.game.fileURL, options: .mappedIfSafe))
+        return try contractSHA256(cartridge: hash)
+    }
+    private func contractSHA256(cartridge: String) throws -> String {
+        if let profile=MultiRedAdapter.profile(romSHA256:cartridge) { return profile.romSHA256 }
+        // Preserve the ordinary unmarked base-ROM native path and its existing
+        // continuation marker. Unknown files must never inherit that marker.
+        guard cartridge=="689299664a954c12dad66e03c2d18446b348cb31bd98b395c87b9b514b288066" else {
+            throw MultiRedAdapter.Failure.unsupportedROM
+        }
+        return BoundWorldContract.romSHA256
+    }
     func bind(core:EmulatorCore?,gameID:String,interactions:BoundFriendInteractionSession) {
         if self.core !== core || self.gameID != gameID {
             if recovery != nil { timer?.invalidate(); timer=nil; recovery=nil; probe.configure(core:nil) }
@@ -580,7 +593,7 @@ final class BoundNativeBattleSession {
             guard bytes.count>1024 else { throw CocoaError(.fileReadCorruptFile) }
             backupURL=backup
             let journal=folder.appendingPathComponent(id.uuidString+".json")
-            let value:[String:Any]=["gameID":gameID,"rom":BoundPlayerROMProfile.supportedSHA256,
+            let value:[String:Any]=["gameID":gameID,"rom":try contractSHA256(for:core),
                 "state":backup.lastPathComponent,"sha256":Self.hash(bytes),"activity":activity.rawValue]
             try BoundServerMemoryFiles.write(JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]),to:journal,gameID:gameID)
             journalURL=journal
@@ -591,8 +604,8 @@ final class BoundNativeBattleSession {
         } catch { fail("Couldn’t prepare a recovery snapshot"); return }
         probe.configure(core:core,decisions:activity == .battle)
         configureWire(id:id)
-        let prepared = activity == .trade ? BoundVBABattleBridge.prepareTrade(forPlayer:initiator ? 0:1)
-            : BoundVBABattleBridge.prepareBattle(forPlayer:initiator ? 0:1)
+        let prepared = activity == .trade ? MultiRedAdapter.prepareTrade(player:initiator ? 0:1)
+            : MultiRedAdapter.prepareBattle(player:initiator ? 0:1)
         guard prepared else {
             fail("Couldn’t prepare the native \(activity.rawValue) link"); return
         }
@@ -676,11 +689,12 @@ final class BoundNativeBattleSession {
         do {
             continuationWriteBlocked=true
             let transport=try wire.freezeForContinuation()
+            let cartridge=Self.hash(try Data(contentsOf:core.game.fileURL,options:.mappedIfSafe))
             let value=BoundNativeContinuation(version:1,ticket:UUID(),context:context,gameID:gameID,
-                rom:BoundPlayerROMProfile.supportedSHA256,cartridge:Self.hash(try Data(contentsOf:core.game.fileURL,options:.mappedIfSafe)),id:id,activity:activity,initiator:initiator,rate:activity == .battle ? core.rate:originalRate,
+                rom:try contractSHA256(cartridge:cartridge),cartridge:cartridge,id:id,activity:activity,initiator:initiator,rate:activity == .battle ? core.rate:originalRate,
                 localPrepared:localPrepared,peerPrepared:peerPrepared,localConnected:localConnected,peerConnected:peerConnected,
                 entryQueued:entryQueued,localFinished:localFinished,peerFinished:peerFinished,played:played,peerLinkClosed:peerLinkClosed,
-                observation:observation,state:BoundVBABattleBridge.captureServerState(),battery:BoundVBABattleBridge.captureServerBattery(),
+                observation:observation,state:MultiRedAdapter.captureState(),battery:BoundVBABattleBridge.captureServerBattery(),
                 bridge:BoundVBABattleBridge.captureNativeSession(),probe:probe.recoveryData(),wire:transport,
                 backup:try BoundServerMemoryFiles.read(backupURL,gameID:gameID),journal:try BoundServerMemoryFiles.read(journalURL,gameID:gameID),
                 memoryFiles:BoundServerMemoryFiles.snapshot(gameID:gameID),heads:continuationHeadsProvider?(context),peerBattleResult:peerBattleResult)
@@ -703,11 +717,12 @@ final class BoundNativeBattleSession {
         guard let core,core.state == .paused,let context=continuationContext else { return false }
         guard let value=try continuationStore.load(context:context,gameID:gameID) else { return false }
         guard context.runID==nil || value.heads?.permits(serverHead)==true else { throw BoundContinuationError.serverChanged }
-        guard value.cartridge==Self.hash(try Data(contentsOf:core.game.fileURL,options:.mappedIfSafe)) else { throw CocoaError(.fileReadCorruptFile) }
+        let cartridge=Self.hash(try Data(contentsOf:core.game.fileURL,options:.mappedIfSafe))
+        guard value.rom == (try contractSHA256(cartridge:cartridge)), value.cartridge==cartridge else { throw CocoaError(.fileReadCorruptFile) }
         timer?.invalidate();timer=nil;recovery=nil;probe.configure(core:nil)
         BoundVBABattleBridge.close()
         do {
-            guard BoundVBABattleBridge.restoreServerState(value.state),
+            guard MultiRedAdapter.restoreState(value.state),
                   BoundVBABattleBridge.restoreServerBattery(value.battery),
                   BoundVBABattleBridge.restoreNativeSession(value.bridge) else { throw CocoaError(.fileReadCorruptFile) }
             if value.activity == .battle { BoundVBABattleBridge.configureDecisions(withSeed:Self.decisionSeed(value.id)) }
@@ -1120,6 +1135,7 @@ final class BoundNativeBattleSession {
     private func findRecovery() {
         guard let core else { return }
         do {
+            let selectedContract=try contractSHA256(for:core)
             let folder=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
                 .appendingPathComponent("Friend Battles",isDirectory:true)
             guard let files=try? BoundServerMemoryFiles.contents(folder,gameID:gameID) else { return }
@@ -1130,7 +1146,7 @@ final class BoundNativeBattleSession {
             for journal in candidates.prefix(64) {
                 guard let bytes=try? BoundServerMemoryFiles.read(journal,gameID:gameID),bytes.count<=4096,
                       let value=try? JSONSerialization.jsonObject(with:bytes) as? [String:String],
-                      value["gameID"]==gameID,value["rom"]==BoundPlayerROMProfile.supportedSHA256,
+                      value["gameID"]==gameID,value["rom"]==selectedContract,
                       let name=value["state"],name==URL(fileURLWithPath:name).lastPathComponent,
                       UUID(uuidString:URL(fileURLWithPath:name).deletingPathExtension().lastPathComponent) != nil,
                       let digest=value["sha256"],digest.count==64 else { continue }

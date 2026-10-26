@@ -27,16 +27,16 @@ struct BoundWorldPacket: Equatable, Sendable {
     let receiver: UUID?
     let sequence: UInt64
     let state: BoundWorldState
-    func encoded() -> Data? {
+    func encoded(compatibility: Data = BoundWorldContract.compatibility) -> Data? {
         guard state.valid else { return nil }
         var body = Data([state.group, state.number]) + state.checkpoints
         body.append(UInt8(state.boulders.count / BoundSDKProtocol.WorldEnvelope.boulderStride)); body.append(state.boulders)
         return BoundSDKWorldEnvelope(sender: sender, receiver: receiver, sequence: sequence,
-                                     body: body).encoded(compatibility: BoundWorldContract.compatibility)
+                                     body: body).encoded(compatibility: compatibility)
     }
-    static func decode(_ data: Data) -> Self? {
+    static func decode(_ data: Data, compatibility: Data = BoundWorldContract.compatibility) -> Self? {
         typealias Layout = BoundSDKProtocol.WorldEnvelope
-        guard let frame = BoundSDKWorldEnvelope.decode(data, compatibility: BoundWorldContract.compatibility) else { return nil }
+        guard let frame = BoundSDKWorldEnvelope.decode(data, compatibility: compatibility) else { return nil }
         let state = BoundWorldState(group: data[Layout.groupOffset], number: data[Layout.numberOffset],
             checkpoints: data.subdata(in: Layout.checkpointsOffset..<Layout.checkpointsOffset + Layout.checkpointsSize),
             boulders: data.subdata(in: Layout.bouldersOffset..<data.count))
@@ -135,20 +135,17 @@ final class BoundWorldProbe: @unchecked Sendable {
         }
         frame += 1
         if reachedField {
-            let value = BoundVBABattleBridge.sharedWorldSnapshot()
-            if let checkpoints = value["checkpoints"] as? Data, let group = value["group"] as? UInt8,
-               let number = value["number"] as? UInt8, let sequence = value["sequence"] as? UInt32 {
+            if let (state, sequence) = MultiRedAdapter.captureWorld() {
                 let generation = sourceClock.generation
                 let current = sourceClock.admit(sequence)
                 if generation != sourceClock.generation { peer = nil; fresh = false; policyDirty = true }
-                let state = BoundWorldState(group: group, number: number, checkpoints: checkpoints, boulders: value["boulders"] as? Data ?? Data())
                 local = state.valid && current ? state : nil
             } else { local = nil }
         }
         BoundVBABattleBridge.advanceSharedWorld()
         // Refresh the frame lease only when a new host tick has supplied policy.
         if policyDirty {
-            BoundVBABattleBridge.setSharedWorldPeer(peer?.checkpoints ?? Data(), group: UInt(peer?.group ?? 0), number: UInt(peer?.number ?? 0), boulders: peer?.boulders ?? Data(), fresh: fresh)
+            MultiRedAdapter.applyWorld(peer, fresh: fresh)
             policyDirty = false
         }
     }
@@ -177,22 +174,28 @@ final class BoundSharedProgression {
     private var lastSent: TimeInterval = -.infinity
     private var coreID: ObjectIdentifier?
     private var verification: Task<Void, Never>?
+    private var gameProfile: BoundGameProfile?
     private var observedGameGeneration: UInt64 = 0
-    init(snapshotReader: (() -> BoundWorldState?)? = nil) { self.snapshotReader = snapshotReader }
+    init(snapshotReader: (() -> BoundWorldState?)? = nil) {
+        self.snapshotReader = snapshotReader
+        // A supplied reader is a model-test fixture; real cores require file admission.
+        gameProfile = snapshotReader == nil ? nil : BoundGameProfiles.current
+    }
     func bind(core: EmulatorCore?) {
         guard core.map(ObjectIdentifier.init) != coreID else { return }
         latestSharedWorldState = nil; latestSharedWorldSequence = 0
         sharedWorldRecords = [:]; sharedWorldSequences = [:]
+        gameProfile = nil
         coreID = core.map(ObjectIdentifier.init); verification?.cancel(); probe.configure(core: core); observedGameGeneration = 0; peerGone()
         guard let core, core.deltaCore.identifier == "com.rileytestut.GBADeltaCore" else { return }
         let id = ObjectIdentifier(core), url = core.game.fileURL
         verification = Task { [weak self] in
-            let valid = await Task.detached(priority: .utility) {
-                guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return false }
-                return (try? BoundPlayerROMProfile(rom: data)) != nil
+            let profile = await Task.detached(priority: .utility) {
+                guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return Optional<BoundGameProfile>.none }
+                return try? MultiRedAdapter(rom: data).profile
             }.value
             guard !Task.isCancelled, let self, self.coreID == id else { return }
-            self.probe.setVerified(valid)
+            self.gameProfile = profile; self.probe.setVerified(profile != nil)
         }
     }
     func peerGone() {
@@ -201,7 +204,7 @@ final class BoundSharedProgression {
     }
     func stop() { enabled = false; peerGone() }
     func receive(_ data: Data) {
-        guard enabled, let packet = BoundWorldPacket.decode(data) else { return }
+        guard enabled, let gameProfile, let packet = BoundWorldPacket.decode(data, compatibility: gameProfile.compatibility) else { return }
         timeline.receive(packet, at: ProcessInfo.processInfo.systemUptime)
     }
     /// A durable event projects the partner's recorded world for presentation.
@@ -230,7 +233,7 @@ final class BoundSharedProgression {
         probe.publishPolicy(enabled: enabled, peer: timeline.state, fresh: connected && timeline.fresh(at: now))
         guard enabled, now - lastSent >= 0.5, let state = snapshotReader?() ?? probe.read(), sequence < UInt64.max else { return }
         let packet = BoundWorldPacket(sender: timeline.epoch, receiver: timeline.peer, sequence: sequence + 1, state: state)
-        guard let data = packet.encoded() else { return }
+        guard let gameProfile, let data = packet.encoded(compatibility: gameProfile.compatibility) else { return }
         lastSent = now
         do { try beforeSendSnapshot?(state) } catch { return }
         // Offline snapshots still enter the outbox. Acknowledgements and live

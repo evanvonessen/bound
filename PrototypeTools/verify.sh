@@ -7,6 +7,7 @@ mkdir -p "$logs"
 PrototypeTools/prepare.sh > "$logs/prepare.log" 2>&1
 PrototypeTools/qa-python PrototypeTools/sync-model-support.py --check > "$logs/model-support.log" 2>&1
 PrototypeTools/qa-python PrototypeTools/sync-bound-sdk.py --check > "$logs/sdk-contract.log" 2>&1
+PrototypeTools/qa-python PrototypeTools/generate-bound-game-profiles.py --check > "$logs/game-profiles.log" 2>&1
 PrototypeTools/validate-sfml-strings.sh > "$logs/sfml-strings.log" 2>&1
 swift test --package-path PrototypeTests > "$logs/models.log" 2>&1
 if [[ -z "${QA_SIMULATOR_ID:-}" ]]; then

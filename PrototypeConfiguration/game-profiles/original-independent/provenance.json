@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "bound_revision": "00bb9324a28d473867d4d5be2c891bf7cefa298a",
+  "source_manifest": "PrototypeConfiguration/integrated-game.json",
+  "source_header": "Delta/Bound/SharedWorld/BoundGameABI.h",
+  "manifest_sha256": "96ca7c44fb56745dc9c41b220d0a6ee035d4f16df77348d4d31e1369f6240ad3",
+  "header_sha256": "b8fcef0e0c265f6cedc074cf7f24747bbdd84d67c82e0c3ad7e4296c9e996ed1",
+  "rom_sha256": "8bf5b9675e0e34e785b0a40eb2d8120a1d2d6874890c4f6d2f43b5d1d3ab90fb",
+  "rom_sha1": "5e572144dc845a8b3576b38672447c6507d9f47d",
+  "policy": "Frozen metadata copied from the original committed host profile; never regenerated from current game source. ROM bytes are owned local fixtures and are not included."
+}
