@@ -57,8 +57,8 @@ final class BoundFriendDialogueProbe: @unchecked Sendable {
     }
 }
 
-/// Retains the existing coordinator attachment point, but never draws an app
-/// overlay. Every menu, invitation and acknowledgement is a cartridge window.
+/// Pending invitations use a compact notification. Opening it is an explicit
+/// request for a native menu; only native cleanup releases that menu's ownership.
 @MainActor
 final class BoundFriendInteractionPanel: UIView {
     let probe=BoundFriendDialogueProbe()
@@ -73,21 +73,48 @@ final class BoundFriendInteractionPanel: UIView {
     private var configured=false
     private var shownMessage=""
     private var waitingForConnection=false
+    private var menuPresented=false
+    private let invitationButton=UIButton(type:.system)
+    private let cancelButton=UIButton(type:.system)
+    private let pendingBar=UIStackView()
     init(session: BoundFriendInteractionSession) {
         self.session=session
         super.init(frame:.zero)
-        isHidden=true; isUserInteractionEnabled=false
+        isHidden=true; isUserInteractionEnabled=true
+        autoresizingMask=[.flexibleWidth,.flexibleHeight]
         accessibilityIdentifier="bound.friend-interaction"
+        invitationButton.configuration = .tinted()
+        invitationButton.accessibilityIdentifier="bound.friend-invitation-open"
+        invitationButton.addAction(UIAction { [weak self] _ in _ = self?.session?.open() }, for:.touchUpInside)
+        cancelButton.configuration = .tinted()
+        cancelButton.setImage(UIImage(systemName:"xmark"),for:.normal)
+        cancelButton.accessibilityLabel="Cancel invitation"
+        cancelButton.accessibilityIdentifier="bound.friend-invitation-cancel"
+        cancelButton.addAction(UIAction { [weak self] _ in self?.session?.cancel() }, for:.touchUpInside)
+        pendingBar.axis = .horizontal; pendingBar.spacing=4
+        pendingBar.addArrangedSubview(invitationButton); pendingBar.addArrangedSubview(cancelButton)
+        addSubview(pendingBar); pendingBar.translatesAutoresizingMaskIntoConstraints=false
+        NSLayoutConstraint.activate([
+            pendingBar.topAnchor.constraint(equalTo:safeAreaLayoutGuide.topAnchor,constant:8),
+            pendingBar.trailingAnchor.constraint(equalTo:safeAreaLayoutGuide.trailingAnchor,constant:-8),
+            pendingBar.leadingAnchor.constraint(greaterThanOrEqualTo:safeAreaLayoutGuide.leadingAnchor,constant:8),
+            pendingBar.widthAnchor.constraint(lessThanOrEqualToConstant:240),
+            cancelButton.widthAnchor.constraint(equalToConstant:36)
+        ])
         session.beforeAgreement={ [weak self] completion in
             guard let self else { return }
             self.closeCompletion=completion; self.probe.show(nil)
         }
     }
     @available(*,unavailable) required init?(coder:NSCoder) { fatalError("Use init(session:)") }
+    override func hitTest(_ point:CGPoint,with event:UIEvent?)->UIView? {
+        guard !isHidden else { return nil }
+        return pendingBar.hitTest(convert(point,to:pendingBar),with:event)
+    }
     func bind(core: EmulatorCore?) {
         let id=core.map(ObjectIdentifier.init)
         guard !configured || boundCore != id else { return }
-        configured=true; boundCore=id; closeCompletion=nil; request=nil; phase = .idle; waitingForConnection=false
+        configured=true; boundCore=id; closeCompletion=nil; request=nil; phase = .idle; waitingForConnection=false;menuPresented=false
         let supported=core?.deltaCore.identifier == "com.rileytestut.GBADeltaCore"
         probe.configure(core:supported ? core:nil)
         session?.nativeDialogueManaged=supported
@@ -109,12 +136,25 @@ final class BoundFriendInteractionPanel: UIView {
     func render() {
         isHidden=true
         guard let session, configured else { return }
+        let pending = [.incoming,.outgoing,.confirming].contains(session.phase) && !session.menuPresented
+        if pending {
+            let title = session.phase == .confirming ? "Confirming…" : (session.activity?.title ?? "Friend") + (session.phase == .incoming ? " invitation":" pending")
+            invitationButton.setTitle(title,for:.normal)
+            invitationButton.isEnabled=session.canInteract
+            invitationButton.accessibilityHint="Open invitation menu"
+            isHidden=false
+        } else if session.phase == .ended && !session.requiresResultAcknowledgement && !session.message.isEmpty {
+            invitationButton.setTitle(session.message,for:.normal)
+            invitationButton.isEnabled=false
+            isHidden=false
+        }
         let waiting = session.phase == .agreed && session.waitingForConnection
-        if phase != session.phase || phase == .ended && shownMessage != session.message || waiting != waitingForConnection {
+        if phase != session.phase || phase == .ended && shownMessage != session.message || waiting != waitingForConnection || menuPresented != session.menuPresented {
             waitingForConnection=waiting
-            phase=session.phase; shownMessage=session.message
+            phase=session.phase; shownMessage=session.message;menuPresented=session.menuPresented
             request=nil
             if phase != .agreed { closeCompletion=nil }
+            guard menuPresented || phase == .ended && session.requiresResultAcknowledgement || phase == .agreed && waiting else { probe.show(nil); return }
             let mode:Int, text:String
             switch phase {
             case .choosing: mode=0; text="What would you like to do\nwith your friend?"

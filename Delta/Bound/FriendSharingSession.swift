@@ -431,6 +431,11 @@ final class FriendSharingSession: ObservableObject {
         }
         interactions.cancelActivity = { [weak nativeBattle] in nativeBattle?.cancel() }
         interactions.context = { [weak livePresence] in livePresence?.interactionContext() }
+        interactions.admissionIdentity = { [weak self] in
+            guard let self,let owner=self.tokenOwner,let room=self.authRoom else { return nil }
+            let context=self.nativeBattle.continuationContext ?? self.nativeBattle.continuationContextProvider?()
+            return owner.uuidString + ":" + room.lowercased() + ":" + (context?.runID?.uuidString ?? "")
+        }
         livePresence.peerWithdrew = { [weak self] in
             self?.connectionFeed.friendDisconnected(epoch: self?.livePresence.peerEpoch)
             self?.cooperativeDoubles.suspend()
@@ -439,8 +444,7 @@ final class FriendSharingSession: ObservableObject {
         }
         livePresence.retainsNativeDialoguePose = { [weak interactions] in
             guard let interactions,interactions.nativeDialogueManaged else { return false }
-            return [.choosing,.incoming,.outgoing,.confirming,.agreed,.ended].contains(interactions.phase)
-                || interactions.nativeDialogueBusy
+            return interactions.menuPresented || interactions.phase == .agreed || interactions.nativeDialogueBusy
         }
         interactions.contextDiagnostic = { [weak livePresence] in livePresence?.interactionDiagnostic() ?? "presence unavailable" }
         livePresence.connectionCheck.snapshot = { [weak self] in self?.presenceConnectionSample() }

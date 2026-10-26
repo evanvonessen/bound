@@ -90,6 +90,9 @@ final class BoundFriendInteractionSession {
     private(set) var activity: Packet.Activity?
     private(set) var message = ""
     private(set) var requiresResultAcknowledgement = false
+    private(set) var menuPresented = false
+    static let invitationLifetime: TimeInterval = 30
+    static let maximumRetiredRequests = 256
     private(set) var requestID: UUID?
     var changed: (() -> Void)?
     var context: (() -> Context?)?
@@ -98,6 +101,8 @@ final class BoundFriendInteractionSession {
     /// battle result is changed by the invitation layer itself.
     var agreed: ((Packet.Activity, UUID, Bool) -> Void)?
     var canPresent: (() -> Bool)?
+    /// Opaque authenticated owner/room/run identity, captured with consent.
+    var admissionIdentity: (() -> String?)?
     let inputGate = BoundFriendWorldInputGate()
     var beforeAgreement: ((@escaping () -> Void) -> Void)?
     var nativeDialogueManaged=false, nativeDialogueReady=false, nativeDialogueBusy=false, nativeDialogueInput=false
@@ -114,11 +119,13 @@ final class BoundFriendInteractionSession {
     private var agreementScheduled = false
     private var agreementGeneration = UUID()
     private var needsFreshAnchor = false
+    private var invitationDeadline: TimeInterval?
+    private var anchorIdentity: String?
     private var retired: [UUID] = []
     private var terminalReplies: [UUID: Packet.Action] = [:]
     private(set) var connected = false
     var waitingForConnection: Bool { !connected || needsFreshAnchor }
-    var blocksGameplay: Bool { phase != .idle && phase != .playing && phase != .ended }
+    var blocksGameplay: Bool { menuPresented || phase == .agreed || phase == .connecting }
     var cancelActivity: (() -> Void)?
     /// Reattach a locally persisted, already consented native activity. The
     /// transport still has to authenticate the same room and complete its fresh handshake.
@@ -126,15 +133,20 @@ final class BoundFriendInteractionSession {
         self.activity=activity;requestID=id;self.initiator=initiator
         phase = .connecting;message="Waiting for your friend…";requiresResultAcknowledgement=false
         agreementAcknowledged=true;agreementScheduled=false;agreementGeneration=UUID()
+        menuPresented=false;invitationDeadline=nil
         needsFreshAnchor=true;lastTransmission=nil;notify()
     }
     func activityProgress(_ message: String, playing: Bool) {
         guard activity != nil else { return }
         phase = playing ? .playing : .connecting; self.message = message; notify()
     }
-    func activityEnded(_ message: String) { requiresResultAcknowledgement = true; end(message) }
+    func activityEnded(_ message: String) { end(message, acknowledgement: true) }
     var canInteract: Bool {
-        guard BoundMultiplayerFeatures.isEnabled, connected, (phase == .idle || phase == .ended && !requiresResultAcknowledgement), (!nativeDialogueManaged || nativeDialogueReady && !nativeDialogueBusy), canPresent?() ?? true, let value = context?() else { return false }
+        let pending = [.incoming, .outgoing, .confirming].contains(phase) && !menuPresented
+        guard BoundMultiplayerFeatures.isEnabled, connected,
+              (pending || retired.count < Self.maximumRetiredRequests && (phase == .idle || phase == .ended && !requiresResultAcknowledgement)),
+              (!nativeDialogueManaged || nativeDialogueReady && !nativeDialogueBusy), canPresent?() ?? true,
+              admissionIdentity == nil || admissionIdentity?() != nil, let value = context?() else { return false }
         return value.local.isFacing(value.peer)
     }
 
@@ -160,9 +172,15 @@ final class BoundFriendInteractionSession {
         refreshInputGate()
     }
     @discardableResult func open(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        expireInvitation(at: now)
         guard canInteract, let value = context?() else { return false }
+        if [.incoming, .outgoing, .confirming].contains(phase) {
+            guard anchorValidity() == true else { return false }
+            menuPresented = true; notify(); return true
+        }
         requiresResultAcknowledgement = false
-        anchor = value; initiator = true; lastTransmission = nil
+        anchor = value; anchorIdentity = admissionIdentity?(); initiator = true; lastTransmission = nil
+        menuPresented = true
         phase = .choosing; message = "Choose an interaction"
         notify(); return true
     }
@@ -170,14 +188,17 @@ final class BoundFriendInteractionSession {
         guard phase == .choosing else { return }
         guard anchorValidity() != false else { end("Your friend is no longer next to you"); return }
         self.activity = activity; requestID = UUID(); initiator = true
+        menuPresented = false; invitationDeadline = now + Self.invitationLifetime
         agreementAcknowledged = false
         phase = .outgoing; lastTransmission = nil; message = "Waiting for your friend…"
         retry(at: now)
         notify()
     }
     func accept(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        expireInvitation(at: now)
         guard phase == .incoming else { return }
         guard anchorValidity() != false else { end("Your friend is no longer next to you"); return }
+        menuPresented = false
         phase = .confirming; lastTransmission = nil; message = "Confirming with your friend…"
         retry(at: now)
         notify()
@@ -199,6 +220,7 @@ final class BoundFriendInteractionSession {
         end("Interaction ended")
     }
     func tick(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        expireInvitation(at: now)
         refreshInputGate()
         guard ![.idle, .ended].contains(phase) else { return }
         if [.choosing, .outgoing, .incoming, .confirming].contains(phase), anchorValidity() == false {
@@ -209,6 +231,7 @@ final class BoundFriendInteractionSession {
         }
     }
     func receive(_ data: Data, at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        expireInvitation(at: now)
         guard BoundMultiplayerFeatures.isEnabled, connected, let packet = Packet.decode(data),
               let current = context?() ?? (packet.action == .request ? nil:anchor),
               packet.sender == current.peerSession, packet.receiver == current.localSession else { return }
@@ -230,7 +253,10 @@ final class BoundFriendInteractionSession {
                       packet.target.occupiesSameTile(as: anchor.local) else { return }
                 retry(at: now, force: true); return
             }
-            guard (phase == .idle || phase == .choosing), (!nativeDialogueManaged || nativeDialogueReady || phase == .choosing), canPresent?() ?? true else {
+            guard retired.count < Self.maximumRetiredRequests,
+                  (phase == .idle || phase == .choosing || phase == .ended && !requiresResultAcknowledgement),
+                  (!nativeDialogueManaged || nativeDialogueReady || phase == .choosing), canPresent?() ?? true,
+                  admissionIdentity == nil || admissionIdentity?() != nil else {
                 // One pending invitation at a time, including crossed requests.
                 let reply = Packet(sender: current.localSession, receiver: current.peerSession, id: packet.id,
                     activity: packet.activity, action: .decline, origin: packet.origin, target: packet.target)
@@ -239,7 +265,8 @@ final class BoundFriendInteractionSession {
             }
             guard current.peer.isFacing(current.local), packet.origin.occupiesSameTile(as: current.peer),
                   packet.target.occupiesSameTile(as: current.local) else { return }
-            anchor = current; activity = packet.activity; requestID = packet.id; initiator = false
+            anchor = current; anchorIdentity = admissionIdentity?(); activity = packet.activity; requestID = packet.id; initiator = false
+            invitationDeadline = now + Self.invitationLifetime
             agreementAcknowledged = false; lastTransmission = nil
             phase = .incoming; message = "Your friend wants to \(packet.activity.rawValue)"
             notify(); return
@@ -251,6 +278,7 @@ final class BoundFriendInteractionSession {
         case .accept:
             guard initiator else { return }
             if phase == .outgoing {
+                invitationDeadline = nil; menuPresented = false
                 phase = .agreed; message = "\(packet.activity.title) invitation accepted"
                 lastTransmission = nil; notify()
             }
@@ -259,12 +287,15 @@ final class BoundFriendInteractionSession {
             // Both peers already consented at verified adjacent anchors. The
             // initiator can now pause for its snapshot, withholding live pose.
             guard phase == .confirming, !initiator else { return }
+            invitationDeadline = nil; menuPresented = false
             phase = .agreed; message = "\(packet.activity.title) invitation accepted"
             notify(); finishAgreement()
         case .decline:
             guard phase == .outgoing else { return }
             end("Your friend declined the request")
-        case .cancel: end("Your friend cancelled the interaction")
+        case .cancel:
+            if phase == .connecting || phase == .playing { cancelActivity?() }
+            else { end("Your friend cancelled the interaction") }
         case .request: break
         }
     }
@@ -299,6 +330,10 @@ final class BoundFriendInteractionSession {
         let completion={ [weak self] in
             guard let self, self.connected, self.agreementGeneration == generation,
                   self.phase == .agreed, self.requestID == requestID else { return }
+            guard self.canPresent?() ?? true, self.anchorValidity() != false else {
+                if let anchor = self.anchor { _ = self.emit(.cancel, anchor: anchor) }
+                self.end("Interaction is no longer available"); return
+            }
             self.agreed?(activity,requestID,self.initiator)
         }
         if let beforeAgreement { beforeAgreement(completion) } else { completion() }
@@ -307,6 +342,7 @@ final class BoundFriendInteractionSession {
     /// either player moved. Admission still requires fresh verified positions.
     private func anchorValidity() -> Bool? {
         guard BoundMultiplayerFeatures.isEnabled, let anchor else { anchorFailure="disabled/no anchor"; return false }
+        guard admissionIdentity == nil || admissionIdentity?() == anchorIdentity else { anchorFailure="owner/room/run changed"; return false }
         guard connected, let current=context?() else { anchorFailure=contextDiagnostic?() ?? "waiting for connection"; return nil }
         guard current.local.occupiesSameTile(as:anchor.local),current.peer.occupiesSameTile(as:anchor.peer),current.local.isNextTo(current.peer) else { anchorFailure="tile/map changed"; return false }
         let valid=(initiator || phase == .choosing) ? current.local.isFacing(current.peer):current.peer.isFacing(current.local)
@@ -331,16 +367,26 @@ final class BoundFriendInteractionSession {
         if let requestID, !retired.contains(requestID) {
             retired.append(requestID)
             if terminalReplies[requestID] == nil { terminalReplies[requestID] = .cancel }
-            if retired.count > 32 { terminalReplies.removeValue(forKey: retired.removeFirst()) }
+            // Never evict a cancellation while this session can still receive
+            // its delayed packets. Refuse new requests at the bounded capacity.
         }
     }
-    private func end(_ message: String) {
-        requiresResultAcknowledgement = true
+    private func expireInvitation(at now: TimeInterval) {
+        guard [.outgoing, .incoming, .confirming].contains(phase),
+              let invitationDeadline, now >= invitationDeadline else { return }
+        if let anchor { _ = emit(.cancel, anchor: anchor) }
+        menuPresented = false
+        end("Invitation expired")
+    }
+    private func end(_ message: String, acknowledgement: Bool = false) {
+        requiresResultAcknowledgement = acknowledgement || menuPresented
+        menuPresented = false; invitationDeadline = nil
         agreementGeneration = UUID(); agreementScheduled = false
         retireRequest(); phase = .ended; self.message = message; notify()
     }
     private func reset() {
         retireRequest(); phase = .idle; anchor = nil; activity = nil; requestID = nil; lastTransmission = nil; message = ""
+        menuPresented = false; invitationDeadline = nil; anchorIdentity = nil
         agreementGeneration = UUID(); agreementScheduled = false; agreementAcknowledged = false
         needsFreshAnchor = false
         requiresResultAcknowledgement = false

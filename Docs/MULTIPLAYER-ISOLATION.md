@@ -223,3 +223,35 @@ managed RAM state, host acquisition policy before batching, and finite history
 targets that require native application. The Release bundle contains the exact
 `7e170ed0...` combined ROM. These gates establish the structural extraction;
 full paired gameplay, DEBUG fixtures and device/WAN acceptance follow separately.
+
+## Measured responsiveness work
+
+The first behavior commit repairs cursor union normalization: an imported
+contiguous prefix now consumes already received adjacent sparse events. The
+public two-store restore test failed before the change and passed unchanged
+afterward; 65 hosted save/event tests and 11 standalone event tests passed.
+No journal format, event identity, owner check or acknowledgement meaning changed.
+
+The PC observer validates every pointer and compares all 43,500 bytes each
+field callback, retaining immutable bytes when unchanged. It caches denied
+policy until ledger assignment. On the same paused, populated actual VBA state,
+fresh-process simulator runs (128 warmup, 4,096 measured samples) reduced native
+snapshot median from 12.833 to 2.500 microseconds and complete observer median
+from 31.625 to 16.625 microseconds. Peak RSS growth was 81.49 versus 25.70 MiB;
+payload and ledger hashes matched. Three native tests and 56 Soul Link tests
+passed. These are isolated observer costs, not physical-phone playback parity
+or a comparison with the complete upstream Delta application.
+
+Friendly invitations use a nonmodal pending notification. Explicit A/tap opens
+the native menu; submitting closes it through the native cleanup path. Pending
+requests expire after 30 seconds, including disconnected time; admitted activity
+recovery is retained. Admission checks authenticated owner/room/run, eligibility
+and verified positions again after native cleanup. Cancellation IDs are never
+evicted while the session can receive them: its 256-request capacity rejects new
+invitations rather than reviving retired ones or growing memory without bound.
+
+Native menu readiness now includes the actual Yes/No startup timer and
+multichoice fade/delay gates, so the first accepted A/B edge is handled. All 28
+invitation tests passed, including actual VBA pending-frame progress, explicit
+menu opening, cancellation/expiry cleanup and notification hit testing. Exact
+native instruction probes and 23 compiled readiness checks also passed.

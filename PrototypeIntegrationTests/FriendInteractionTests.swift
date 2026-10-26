@@ -10,6 +10,13 @@ private struct FriendDialogueGame: GameProtocol {
     var type: GameType { .gba }
 }
 
+private final class NativeInvitationFrameCounter: @unchecked Sendable {
+    private let lock=NSLock()
+    private var value: UInt32?
+    func observe(_ frame: UInt32?) { lock.lock(); value=frame; lock.unlock() }
+    func read() -> UInt32? { lock.lock(); defer { lock.unlock() }; return value }
+}
+
 @MainActor
 final class FriendInteractionTests: XCTestCase {
     private var previousExperimentalFeature: Any?
@@ -104,7 +111,7 @@ final class FriendInteractionTests: XCTestCase {
         p.a.cancel(); p.a.open(at:20); p.a.request(.battle,at:20); p.deliver(at:20)
         p.a.cancel(); p.deliver(at:20); XCTAssertEqual(p.b.phase,.ended)
         p.b.cancel(); p.a.open(at:30); p.a.request(.trade,at:30); p.a.tick(at:61)
-        XCTAssertEqual(p.a.phase,.outgoing, "Waiting is not a cancellation"); p.a.cancel()
+        XCTAssertEqual(p.a.phase,.ended, "Unadmitted requests expire"); XCTAssertEqual(p.a.message,"Invitation expired"); p.a.cancel()
         p.aPackets.removeAll(); p.bPackets.removeAll()
         p.a.open(at:70); p.b.open(at:70); p.a.request(.battle,at:70); p.b.request(.trade,at:70)
         p.deliver(at:70); p.deliver(at:70)
@@ -241,17 +248,17 @@ final class FriendInteractionTests: XCTestCase {
         XCTAssertEqual(AnyInput(try XCTUnwrap(coreMapping.input(forControllerInput:MFiGameController.Input.a))),AnyInput(GBAGameInput.a))
     }
 
-    func testInvitationAttachmentNeverCreatesAnAppPopup() {
+    func testInvitationAttachmentDoesNotInterceptGameplayWithoutAPendingNotification() {
         let p=peers(), panel=BoundFriendInteractionPanel(session:peers().a)
         XCTAssertTrue(panel.isHidden)
         let active=BoundFriendInteractionPanel(session:p.a)
         p.a.changed={ active.render() }
         p.a.open(at:10)
         XCTAssertTrue(active.isHidden)
-        XCTAssertTrue(active.subviews.isEmpty)
+        XCTAssertNil(active.hitTest(CGPoint(x: 10, y: 100), with: nil))
         p.a.request(.trade,at:10); p.deliver()
         XCTAssertTrue(active.isHidden)
-        XCTAssertTrue(active.subviews.isEmpty)
+        XCTAssertNil(active.hitTest(CGPoint(x: 10, y: 100), with: nil))
     }
     func testAgreementWaitsForNativeWindowCleanupAndRejectsCancelledCompletion() {
         for cancel in [false,true] {
@@ -286,26 +293,58 @@ final class FriendInteractionTests: XCTestCase {
         XCTAssertTrue(p.a.canInteract)
     }
 
-    func testDeclinedRequestsRemainAcknowledgableAndWaitingCanAlwaysBeCancelled() {
-        for decline in [false, true] {
-            let p = peers()
-            p.a.open(at: 10); p.a.request(.battle, at: 10); p.deliver()
-            if decline { p.b.decline(); p.deliver(at: 11) }
-            else {
-                p.a.tick(at: 3600)
-                XCTAssertEqual(p.a.phase, .outgoing)
-                XCTAssertTrue(p.a.blocksGameplay)
-                p.a.cancel()
-                XCTAssertEqual(p.a.phase, .idle)
-                XCTAssertFalse(p.a.blocksGameplay)
-                continue
-            }
-            XCTAssertEqual(p.a.phase, .ended)
-            XCTAssertFalse(p.a.blocksGameplay)
-            XCTAssertTrue(p.a.requiresResultAcknowledgement)
-            XCTAssertFalse(p.a.canInteract)
-            XCTAssertEqual(AnyInput(p.a.inputGate.filter(GBAGameInput.up)), AnyInput(GBAGameInput.up))
+    func testPendingInvitationsReleaseGameplayAndExpireWithoutOpeningAMenu() throws {
+        let p = peers()
+        p.a.open(at: 10); p.a.request(.battle, at: 10)
+        let original = try XCTUnwrap(p.aPackets.first)
+        p.deliver()
+        for session in [p.a, p.b] {
+            XCTAssertFalse(session.blocksGameplay)
+            XCTAssertFalse(session.menuPresented)
+            XCTAssertEqual(AnyInput(session.inputGate.filter(GBAGameInput.up)), AnyInput(GBAGameInput.up))
         }
+        XCTAssertTrue(p.b.open(at: 11)); XCTAssertTrue(p.b.blocksGameplay)
+        p.b.decline(); p.deliver(at: 12)
+        XCTAssertEqual(p.a.phase, .ended)
+        XCTAssertFalse(p.a.requiresResultAcknowledgement)
+        XCTAssertTrue(p.a.canInteract)
+        p.a.cancel(); p.a.open(at: 20); p.a.request(.trade, at: 20); p.deliver(at: 20)
+        p.a.suspend(); p.b.suspend(); p.online = false
+        p.a.tick(at: 50); p.b.tick(at: 50)
+        XCTAssertEqual(p.a.message, "Invitation expired"); XCTAssertEqual(p.b.message, "Invitation expired")
+        XCTAssertFalse(p.a.blocksGameplay); XCTAssertFalse(p.b.blocksGameplay)
+        p.online = true; p.a.start { p.aPackets.append($0); return true }; p.b.start { p.bPackets.append($0); return true }
+        p.b.receive(original, at: 51)
+        XCTAssertEqual(p.b.phase, .ended, "A retired request cannot revive after expiry/reconnect")
+    }
+
+    func testAdmissionRechecksOwnerRunAndEligibilityAfterNativeCleanup() {
+        for changedScope in [false, true] {
+            let p = peers(); var scope = "owner:room:run1", allowed = true
+            var cleanup: (() -> Void)?, launched = false
+            p.a.admissionIdentity = { scope }; p.a.canPresent = { allowed }
+            p.a.beforeAgreement = { cleanup = $0 }; p.a.agreed = { _, _, _ in launched = true }
+            p.a.open(at: 10); p.a.request(.trade, at: 10); p.deliver()
+            p.b.accept(at: 11); p.deliver(at: 11)
+            XCTAssertEqual(p.a.phase, .agreed)
+            if changedScope { scope = "owner:room:run2" } else { allowed = false }
+            cleanup?()
+            XCTAssertFalse(launched); XCTAssertEqual(p.a.phase, .ended)
+        }
+    }
+
+    func testRetiredRequestCapacityNeverEvictsACancellationOrDropsIntoUnboundedStorage() throws {
+        let p = peers(); var original: Data?
+        for index in 0..<Session.maximumRetiredRequests {
+            XCTAssertTrue(p.a.open(at: Double(index)))
+            p.a.request(.trade, at: Double(index))
+            if index == 0 { original = p.aPackets.first }
+            p.deliver(at: Double(index)); p.b.decline(); p.deliver(at: Double(index)); p.a.cancel()
+        }
+        XCTAssertFalse(p.a.open(at: 1000), "At capacity new requests fail closed")
+        XCTAssertFalse(p.b.canInteract)
+        p.b.receive(try XCTUnwrap(original), at: 1001)
+        XCTAssertEqual(p.b.phase, .idle, "The first retired ID survives pressure")
     }
 
     func testChoosingMenuAndSelectedActivitySurviveMissingCoordinatesAndLongWait() {
@@ -361,11 +400,11 @@ final class FriendInteractionTests: XCTestCase {
             let id = p.a.requestID
             p.a.suspend(); p.b.suspend(); p.online = false
             p.b.accept(at: 11)
-            p.a.tick(at: 3600); p.b.tick(at: 3600)
+            p.a.tick(at: 20); p.b.tick(at: 20)
             XCTAssertEqual(p.a.phase, .outgoing); XCTAssertEqual(p.b.phase, .confirming)
             p.aID = UUID(); p.bID = UUID(); p.online = true
             p.a.start { p.aPackets.append($0); return true }; p.b.start { p.bPackets.append($0); return true }
-            p.a.tick(at: 3601); p.b.tick(at: 3601); p.deliver(at: 3601); p.deliver(at: 3601)
+            p.a.tick(at: 21); p.b.tick(at: 21); p.deliver(at: 21); p.deliver(at: 21)
             XCTAssertEqual(p.a.requestID, id); XCTAssertEqual(p.b.requestID, id)
             XCTAssertEqual(launches, 2)
             p.a.send = nil; p.b.send = nil
@@ -386,7 +425,7 @@ final class FriendInteractionTests: XCTestCase {
         }
     }
 
-    func testNativeChooserAndTradeInvitationStayOpenAcrossDisconnects() async throws {
+    func testNativeInvitationWaitsReleaseAllMenuOwnershipAndKeepFramesRunning() async throws {
         continueAfterFailure = false
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MultiplayerValidation")
@@ -411,12 +450,15 @@ final class FriendInteractionTests: XCTestCase {
         view.frame = CGRect(x: 0, y: 150, width: window.bounds.width, height: window.bounds.width * 2 / 3)
         core.add(view)
         let p = peers(), panel = BoundFriendInteractionPanel(session: p.a)
+        panel.frame=owner.view.bounds; owner.view.addSubview(panel)
         panel.bind(core: core); p.a.changed = { panel.render() }
         let setup = NativePlayerSceneSetup(core: core), probe = panel.probe
+        let frames = NativeInvitationFrameCounter()
         let booted = expectation(description: "Current cartridge New Game ready")
         var ready = false
         core.updateHandler = { core in
             setup.receive(core); probe.receive(core)
+            frames.observe(BoundROMRequest.decode(BoundVBABattleBridge.romMultiplayerSnapshot())?.frame)
             if setup.isReady, !ready { ready = true; booted.fulfill() }
         }
         defer {
@@ -453,32 +495,39 @@ final class FriendInteractionTests: XCTestCase {
         XCTAssertEqual(probe.read().activeID, chooserID)
         XCTAssertEqual(p.a.phase, .choosing)
         try await press(1)
-        try await wait { p.a.phase == .outgoing && probe.read().menuReady && probe.read().mode == 2 }
+        try await wait { p.a.phase == .outgoing && !probe.read().active && probe.read().ready }
         XCTAssertEqual(p.a.activity, .trade)
-        let id = p.a.requestID
-        let waitingID = try XCTUnwrap(probe.read().activeID)
-        p.a.tick(at: ProcessInfo.processInfo.systemUptime + 3600)
-        try await Task.sleep(for: .milliseconds(700))
-        XCTAssertTrue(probe.read().active); XCTAssertEqual(p.a.requestID, id)
-        XCTAssertEqual(probe.read().activeID, waitingID)
-        p.online = true
+        XCTAssertFalse(p.a.blocksGameplay)
+        XCTAssertFalse(p.a.menuPresented)
+        XCTAssertFalse(panel.isHidden)
+        XCTAssertNil(panel.hitTest(CGPoint(x:100,y:250),with:nil), "The notification must not intercept gameplay outside its buttons")
+        let before = try XCTUnwrap(frames.read())
+        try await Task.sleep(for: .milliseconds(250))
+        let after = try XCTUnwrap(frames.read())
+        XCTAssertNotEqual(before, after, "Unanswered invitation must allow native frames")
+        p.a.tick(at: ProcessInfo.processInfo.systemUptime + Session.invitationLifetime)
+        try await wait { p.a.phase == .ended && !probe.read().active && probe.read().ready }
+        XCTAssertFalse(p.a.requiresResultAcknowledgement)
+        p.a.cancel(); p.online = true
         p.a.start { p.aPackets.append($0); return true }
-        p.a.tick(); p.deliver()
-        XCTAssertEqual(p.b.phase, .incoming)
-        p.b.cancel(); p.deliver()
-        try await wait { p.a.phase == .ended && probe.read().activeID != waitingID && probe.read().menuReady && probe.read().mode == 2 }
+        p.aPackets.removeAll()
+        XCTAssertTrue(p.b.open()); p.b.request(.trade); p.deliver(at: ProcessInfo.processInfo.systemUptime)
+        try await wait { p.a.phase == .incoming && p.a.canInteract }
+        XCTAssertFalse(probe.read().active, "Receiving an invitation cannot open a native window")
+        XCTAssertFalse(panel.isHidden)
+        XCTAssertTrue(p.a.open())
+        XCTAssertTrue(panel.isHidden)
+        try await wait { probe.read().menuReady && probe.read().mode == 1 }
         try await press(2)
         try await wait { p.a.phase == .idle && !probe.read().active && probe.read().ready }
-        // The receiving side keeps its Yes/No invitation and can consent offline.
-        XCTAssertTrue(p.b.open()); p.b.request(.trade); p.deliver()
-        try await wait { p.a.phase == .incoming && probe.read().menuReady && probe.read().mode == 1 }
-        p.online = false; p.a.suspend(); p.a.tick(at: ProcessInfo.processInfo.systemUptime + 3600)
-        try await Task.sleep(for: .milliseconds(700))
-        XCTAssertTrue(probe.read().active); XCTAssertEqual(probe.read().mode, 1)
-        try await press(1)
-        try await wait { p.a.phase == .confirming && probe.read().menuReady && probe.read().mode == 2 }
-        try await press(2)
-        try await wait { p.a.phase == .idle && !probe.read().active && probe.read().ready }
+        p.deliver(at: ProcessInfo.processInfo.systemUptime)
+        p.b.cancel(); XCTAssertTrue(p.b.open()); p.b.request(.trade); p.deliver(at: ProcessInfo.processInfo.systemUptime)
+        try await wait { p.a.phase == .incoming && p.a.canInteract }
+        XCTAssertTrue(p.a.open())
+        try await wait { probe.read().menuReady && probe.read().mode == 1 }
+        p.a.tick(at: ProcessInfo.processInfo.systemUptime + Session.invitationLifetime)
+        try await wait { p.a.phase == .ended && !probe.read().active && probe.read().ready }
+        XCTAssertFalse(p.a.blocksGameplay)
         XCTAssertTrue(core.pause())
         // A fresh bedroom save has no Pokémon yet; battle admission also tests
         // party size. This check specifically verifies native field/UI cleanup.

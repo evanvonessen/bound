@@ -18,10 +18,16 @@ void restoreInvite() {
     inviteActive=inviteBHeld=false;
 }
 bool inviteMenuReady() {
-    if(!inviteOwnsROM()||!internalRAM) return false;
+    if(!inviteOwnsROM()||!internalRAM||!workRAM) return false;
     for(unsigned i=0;i<16;i++) {
         auto *task=internalRAM+0x5090+i*40;
-        if(task[4]&&word(task)==(inviteMode==0?0x0809CC99:0x0809CE55)) return true;
+        if(!task[4]) continue;
+        // Native tasks exist before they accept button edges. Mirror their
+        // input gates so a first A/B press is not consumed during startup.
+        if(inviteMode==0&&word(task)==0x0809CC99)
+            return !(workRAM[0x37ABF]&0x80)&&workRAM[0x39988]==0;
+        if(inviteMode==1&&word(task)==0x0809CE55)
+            return static_cast<int16_t>(half(task+0x0C))>=5;
     }
     // Both waitmessage and waitbuttonpress use native-script mode. Only the
     // latter has advanced past byte 7; reporting readiness while text is still
