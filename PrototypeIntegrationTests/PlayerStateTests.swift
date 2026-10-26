@@ -83,6 +83,29 @@ final class PlayerStateTests: XCTestCase {
         XCTAssertNil(fixture.decode(presentationOnly: true).player, "Stationary mismatches are not a running-camera transition")
     }
 
+    func testPendingBoundaryRebaseUsesDestinationCameraOrigin() throws {
+        var fixture = ReaderFixture()
+        fixture.put(0x08001000, at: 0x02036DFC + 12)
+        fixture.rom[0x08350D6C] = Array(fixture.work[0x36DFC..<0x36DFC + 28])
+        fixture.rom[0x08001000] = ReaderFixture.bytes(1) + ReaderFixture.bytes(0x08002000)
+        fixture.rom[0x08002000] = ReaderFixture.bytes(2) + ReaderFixture.bytes(0) + [4, 2, 0, 0]
+        fixture.rom[0x08352404] = ReaderFixture.bytes(0x08003000)
+        fixture.rom[0x08003000] = ReaderFixture.bytes(0x08004000) + Array(repeating: 0, count: 24)
+        fixture.rom[0x08004000] = ReaderFixture.bytes(12) + ReaderFixture.bytes(40)
+        fixture.put(-1, at: 0x0202552E, count: 2)
+        fixture.put(47, at: 0x02036E38 + 0x12, count: 2)
+        fixture.put(46, at: 0x02036E38 + 0x16, count: 2)
+        fixture.put(2, at: 0x02037078 + 2, count: 1)
+        fixture.put(2, at: 0x02037078 + 3, count: 1)
+        XCTAssertEqual(fixture.decode().status, .invalidMemory)
+        let player = try XCTUnwrap(fixture.decode(presentationOnly: true).player)
+        XCTAssertEqual(player.tile, .init(x: 6, y: 0))
+        XCTAssertEqual(player.previousTile, .init(x: 6, y: -1))
+        XCTAssertNil(player.cameraTile, "Native residuals use the rebased destination tile")
+        fixture.put(-2, at: 0x0202552E, count: 2)
+        XCTAssertNil(fixture.decode(presentationOnly: true).player)
+    }
+
     func testBorrowedVBAViewsAreCopiedAndAddressTranslationIsBounded() throws {
         let work = UnsafeMutableRawPointer.allocate(byteCount: 0x40000, alignment: 4)
         let internalRAM = UnsafeMutableRawPointer.allocate(byteCount: 0x8000, alignment: 4)

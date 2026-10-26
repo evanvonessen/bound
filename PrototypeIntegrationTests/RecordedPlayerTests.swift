@@ -376,6 +376,148 @@ final class RecordedPlayerTests: XCTestCase {
         }
     }
 
+    func testActualViridianMartDoorEntry() async throws {
+        try await runViridianMartDoorEntry(stoppedMusic: false, debugPlayer: 1)
+    }
+    func testStoppedMusicMartEntryAndDebugReturn() async throws {
+        try await runViridianMartDoorEntry(stoppedMusic: true, debugPlayer: 1)
+    }
+    func testNormalModeRightTriggerDoesNotWarp() async throws {
+        try await runViridianMartDoorEntry(stoppedMusic: true, debugPlayer: 0)
+    }
+    private func runViridianMartDoorEntry(stoppedMusic: Bool, debugPlayer: UInt8) async throws {
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("MultiplayerValidation")
+        let romURL = root.appendingPathComponent("RadicalRed.gba")
+        guard FileManager.default.fileExists(atPath: romURL.path) else { throw XCTSkip("Requires owned ROM fixture") }
+        let profile = try BoundPlayerROMProfile(rom: Data(contentsOf: romURL))
+        let output = root.appendingPathComponent("mart-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let battery = output.appendingPathComponent("work.sav")
+        try Data(repeating: 0xFF, count: 0x20000).write(to: battery)
+        let core = try XCTUnwrap(EmulatorCore(game: ReplayGame(fileURL: romURL, gameSaveURL: battery), options: [.metal: true]))
+        let setup = NativePlayerSceneSetup(core: core, debugPlayer: debugPlayer)
+        let captured = ReplayReadings()
+        let booted = expectation(description: "Admitted native field")
+        var ready = false, frame: UInt64 = 0
+        core.updateHandler = { core in
+            autoreleasepool {
+                setup.receive(core); frame += 1
+                BoundVBABattleBridge.enforceSoulLink()
+                BoundVBABattleBridge.advanceSharedWorld()
+                guard let memory = BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }) else { return }
+                let reading = BoundPlayerStateDecoder.read(profile: profile, memory: memory, frame: frame, includeScene: true)
+                captured.append(reading)
+                if !ready, setup.isReady, reading.player?.scene != nil { ready = true; booted.fulfill() }
+            }
+        }
+        defer { _ = core.stop() }
+        core.rate = 8; XCTAssertTrue(core.start())
+        await fulfillment(of: [booted], timeout: 60)
+        XCTAssertTrue(core.pause()); core.rate = 1
+        XCTAssertTrue(BoundVBABattleBridge.installSoulLink())
+        XCTAssertTrue(BoundVBABattleBridge.installSharedWorld())
+        XCTAssertTrue(BoundVBABattleBridge.qaWarpViridianMartEntrance())
+        XCTAssertTrue(core.resume())
+        try await Task.sleep(for: .seconds(3))
+        XCTAssertTrue(core.pause())
+        if debugPlayer == 0 {
+            core.deltaCore.emulatorBridge.activateInput(256, value: 1, playerIndex: 0)
+            XCTAssertTrue(core.resume()); try await Task.sleep(for: .milliseconds(150)); XCTAssertTrue(core.pause())
+            core.deltaCore.emulatorBridge.deactivateInput(256, playerIndex: 0)
+            XCTAssertEqual(captured.snapshot().last?.player?.mapNumber, 1, "R does not warp a normal run")
+        }
+        if stoppedMusic { XCTAssertTrue(BoundVBABattleBridge.qaStopMapMusicRetainingTracks()) }
+        let saved = BoundVBABattleBridge.captureServerState()
+        XCTAssertFalse(saved.isEmpty)
+        XCTAssertTrue(BoundVBABattleBridge.restoreServerState(saved))
+        let exterior = try XCTUnwrap(captured.snapshot().last?.player)
+        XCTAssertEqual(exterior.mapGroup, 3); XCTAssertEqual(exterior.mapNumber, 1)
+        try core.videoManager.snapshot()?.pngData()?.write(to: output.appendingPathComponent("outside.png"))
+        core.deltaCore.emulatorBridge.activateInput(64, value: 1, playerIndex: 0)
+        XCTAssertTrue(core.resume())
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertTrue(core.pause())
+        core.deltaCore.emulatorBridge.deactivateInput(64, playerIndex: 0)
+        let doorway = BoundVBABattleBridge.captureServerState()
+        XCTAssertTrue(BoundVBABattleBridge.restoreServerState(doorway))
+        XCTAssertTrue(core.resume())
+        try await Task.sleep(for: .seconds(4))
+        XCTAssertTrue(core.pause())
+        try core.videoManager.snapshot()?.pngData()?.write(to: output.appendingPathComponent("entered.png"))
+        NSLog("Mart diagnostics: %@ native=%@ reading=%@", output.path, BoundVBABattleBridge.qaNuggetBridgeStatus(), String(describing: captured.snapshot().last))
+        let interior = try XCTUnwrap(captured.snapshot().last?.player)
+        XCTAssertEqual(interior.mapGroup, 5); XCTAssertEqual(interior.mapNumber, 3)
+        XCTAssertNotNil(interior.scene)
+        if debugPlayer != 0 {
+            // First entry runs the parcel cutscene. R must not replace its
+            // script; finish the ordinary dialogue before testing the warp.
+            XCTAssertFalse(setup.isReady)
+            core.deltaCore.emulatorBridge.activateInput(256, value: 1, playerIndex: 0)
+            XCTAssertTrue(core.resume()); try await Task.sleep(for: .milliseconds(150)); XCTAssertTrue(core.pause())
+            core.deltaCore.emulatorBridge.deactivateInput(256, playerIndex: 0)
+            XCTAssertEqual(captured.snapshot().last?.player?.mapGroup, 5)
+            for _ in 0..<60 {
+                if setup.isReady { break }
+                core.deltaCore.emulatorBridge.activateInput(1, value: 1, playerIndex: 0)
+                XCTAssertTrue(core.resume()); try await Task.sleep(for: .milliseconds(100)); XCTAssertTrue(core.pause())
+                core.deltaCore.emulatorBridge.deactivateInput(1, playerIndex: 0)
+                XCTAssertTrue(core.resume()); try await Task.sleep(for: .milliseconds(150)); XCTAssertTrue(core.pause())
+            }
+            XCTAssertTrue(setup.isReady, "Parcel dialogue must finish without replacing the native script")
+            core.deltaCore.emulatorBridge.activateInput(256, value: 1, playerIndex: 0)
+            // Hold through the whole warp: it must act once, then unlock.
+            XCTAssertTrue(core.resume()); try await Task.sleep(for: .seconds(3)); XCTAssertTrue(core.pause())
+            XCTAssertTrue(setup.isReady, "Holding R must not repeat the return warp")
+            core.deltaCore.emulatorBridge.deactivateInput(256, playerIndex: 0)
+            XCTAssertTrue(core.resume()); try await Task.sleep(for: .seconds(3)); XCTAssertTrue(core.pause())
+            let pallet = try XCTUnwrap(captured.snapshot().last?.player)
+            XCTAssertEqual(pallet.mapGroup, 3); XCTAssertEqual(pallet.mapNumber, 0)
+            XCTAssertEqual(pallet.tile, .init(x: 16, y: 14)); XCTAssertNotNil(pallet.scene)
+            XCTAssertTrue(setup.isReady, "The return warp must release native field controls")
+        }
+    }
+
+    func testInterruptedViridianMartDoorEntry() async throws {
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("MultiplayerValidation")
+        let romURL = root.appendingPathComponent("RadicalRed.gba")
+        guard FileManager.default.fileExists(atPath: romURL.path) else { throw XCTSkip("Requires owned ROM fixture") }
+        let profile = try BoundPlayerROMProfile(rom: Data(contentsOf: romURL))
+        let output = root.appendingPathComponent("mart-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let battery = output.appendingPathComponent("work.sav")
+        try Data(repeating: 0xFF, count: 0x20000).write(to: battery)
+        let core = try XCTUnwrap(EmulatorCore(game: ReplayGame(fileURL: romURL, gameSaveURL: battery), options: [.metal: true]))
+        let setup = NativePlayerSceneSetup(core: core, debugPlayer: 1)
+        let captured = ReplayReadings()
+        let booted = expectation(description: "Admitted native field")
+        var ready = false, frame: UInt64 = 0
+        core.updateHandler = { core in
+            autoreleasepool {
+                setup.receive(core); frame += 1
+                BoundVBABattleBridge.enforceSoulLink()
+                BoundVBABattleBridge.advanceSharedWorld()
+                guard let memory = BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }) else { return }
+                let reading = BoundPlayerStateDecoder.read(profile: profile, memory: memory, frame: frame, includeScene: true)
+                captured.append(reading)
+                if !ready, setup.isReady, reading.player?.scene != nil { ready = true; booted.fulfill() }
+            }
+        }
+        defer { _ = core.stop() }
+        core.rate = 8; XCTAssertTrue(core.start())
+        await fulfillment(of: [booted], timeout: 60)
+        XCTAssertTrue(core.pause()); core.rate = 1
+        XCTAssertTrue(BoundVBABattleBridge.installSoulLink())
+        XCTAssertTrue(BoundVBABattleBridge.installSharedWorld())
+        let checkpoint = root.appendingPathComponent("mart-stuck.state")
+        guard FileManager.default.fileExists(atPath: checkpoint.path) else { throw XCTSkip("Optional private interrupted Mac checkpoint") }
+        XCTAssertTrue(BoundVBABattleBridge.restoreServerState(try Data(contentsOf: checkpoint)))
+        XCTAssertTrue(core.resume()); try await Task.sleep(for: .seconds(4)); XCTAssertTrue(core.pause())
+        NSLog("Mart diagnostics: %@ native=%@ reading=%@", output.path, BoundVBABattleBridge.qaNuggetBridgeStatus(), String(describing: captured.snapshot().last))
+        let interior = try XCTUnwrap(captured.snapshot().last?.player)
+        XCTAssertEqual(interior.mapGroup, 5); XCTAssertEqual(interior.mapNumber, 3)
+        XCTAssertNotNil(interior.scene)
+    }
+
     func testActualPalletRouteOneCrossingKeepsDecodedScene() async throws {
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MultiplayerValidation")
@@ -405,13 +547,19 @@ final class RecordedPlayerTests: XCTestCase {
         core.rate = 8; XCTAssertTrue(core.start())
         await fulfillment(of: [booted], timeout: 60)
         XCTAssertTrue(core.pause()); core.rate = 1
+        let warpFrame = captured.snapshot().last?.frame ?? 0
         XCTAssertTrue(BoundVBABattleBridge.qaWarpPalletEntrance())
         XCTAssertTrue(core.resume())
         for _ in 0..<300 {
-            if let p = captured.snapshot().last?.player, p.mapGroup == 3, p.mapNumber == 0, p.scene != nil { break }
+            // The last pre-warp frame is already in Pallet. Wait for new,
+            // settled frames before measuring walking/rendering behavior.
+            if let reading = captured.snapshot().last, reading.frame >= warpFrame + 120,
+               let p = reading.player, p.mapGroup == 3, p.mapNumber == 0, p.scene != nil,
+               setup.isReady { break }
             try await Task.sleep(for: .milliseconds(20))
         }
         XCTAssertTrue(core.pause())
+        XCTAssertTrue(setup.isReady, "Setup warp must finish before the crossing begins")
         let start = captured.snapshot().count
         let waitingFriend = try XCTUnwrap(captured.snapshot().last.flatMap(BoundPresencePose.init(reading:)))
         compositor.configure(profile: profile, pose: waitingFriend, coreID: ObjectIdentifier(core))
@@ -429,11 +577,13 @@ final class RecordedPlayerTests: XCTestCase {
         // Hold B and use native running shoes to reproduce a stationary peer
         // viewed by a running player crossing the seam in both directions.
         core.deltaCore.emulatorBridge.activateInput(2, value: 1, playerIndex: 0)
-        for (input, rate) in [(64, 1.0), (128, 1.0), (32, 3.0), (16, 3.0)] {
+        // Cross the seam and turn back on the clear road before the grass;
+        // a wild battle would intentionally remove the overworld presentation.
+        for (input, rate, milliseconds) in [(64, 1.0, 650), (128, 1.0, 650), (32, 3.0, 1200), (16, 3.0, 1200)] {
             core.rate = rate
             core.deltaCore.emulatorBridge.activateInput(input, value: 1, playerIndex: 0)
             XCTAssertTrue(core.resume())
-            try await Task.sleep(for: .milliseconds(1200))
+            try await Task.sleep(for: .milliseconds(milliseconds))
             XCTAssertTrue(core.pause())
             core.deltaCore.emulatorBridge.deactivateInput(input, playerIndex: 0)
         }

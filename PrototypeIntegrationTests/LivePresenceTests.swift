@@ -317,7 +317,14 @@ final class LivePresenceTests: XCTestCase {
             tile: .init(x: 12, y: 40), previous: .init(x: 12, y: 39), camera: .init(x: 9, y: 0), rom: fixture.bytes), .init(x: -3, y: -40))
         XCTAssertEqual(BoundPlayerMapConnections.pendingBoundaryOffset(in: .init(group: 3, number: 19),
             tile: .init(x: 9, y: -1), previous: .init(x: 9, y: 0), camera: .init(x: 12, y: 39), rom: fixture.bytes), .init(x: 3, y: 40))
+        // A native presentation can observe both the unre-based ObjectEvent
+        // and the one-step-late camera during the same seam crossing.
+        XCTAssertEqual(BoundPlayerMapConnections.pendingBoundaryOffset(in: town,
+            tile: .init(x: 12, y: 40), previous: .init(x: 12, y: 39), camera: .init(x: 9, y: -1), rom: fixture.bytes), .init(x: -3, y: -40))
+        XCTAssertEqual(BoundPlayerMapConnections.pendingBoundaryOffset(in: .init(group: 3, number: 19),
+            tile: .init(x: 9, y: -1), previous: .init(x: 9, y: 0), camera: .init(x: 12, y: 40), rom: fixture.bytes), .init(x: 3, y: 40))
         let invalidSteps: [(BoundPlayerState.Point, BoundPlayerState.Point, BoundPlayerState.Point)] = [
+            (BoundPlayerState.Point(x: 12, y: 40), .init(x: 12, y: 39), .init(x: 9, y: -2)),
             (BoundPlayerState.Point(x: 12, y: 41), .init(x: 12, y: 39), .init(x: 9, y: 1)),
             (.init(x: 12, y: 39), .init(x: 12, y: 38), .init(x: 9, y: -1)),
             (.init(x: 12, y: 40), .init(x: 12, y: 39), .init(x: 10, y: 0))]

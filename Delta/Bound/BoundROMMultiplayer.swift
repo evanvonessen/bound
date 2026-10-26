@@ -337,6 +337,7 @@ final class BoundROMMultiplayerProbe: @unchecked Sendable {
         if !installed { installed = BoundVBABattleBridge.installROMMultiplayer() }
         guard installed else { return }
         if let desired { BoundVBABattleBridge.setROMMultiplayerHost(desired); self.desired = nil }
+        BoundVBABattleBridge.advanceROMFieldRecovery()
         request = BoundROMRequest.decode(BoundVBABattleBridge.romMultiplayerSnapshot())
     }
 }

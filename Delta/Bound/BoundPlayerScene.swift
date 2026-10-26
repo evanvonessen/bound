@@ -179,7 +179,8 @@ enum BoundPlayerMapConnections {
     }
     /// During native seam scrolling the save/header can switch one frame
     /// before ObjectEvents are rebased. Accept only a one-tile exit from a
-    /// directly connected map that translates exactly onto the saved camera.
+    /// directly connected map whose destination or previous tile translates
+    /// exactly onto the saved camera (which can itself still be one step late).
     static func pendingBoundaryOffset(in current: Map, tile: BoundPlayerState.Point,
                                       previous: BoundPlayerState.Point, camera: BoundPlayerState.Point,
                                       rom: (Int, Int) -> [UInt8]?) -> BoundPlayerState.Point? {
@@ -197,7 +198,9 @@ enum BoundPlayerMapConnections {
             case 3: delta = .init(x: -old.width, y: offset)
             default: delta = .init(x: currentHeader.width, y: offset)
             }
-            if tile.x + delta.x == camera.x, tile.y + delta.y == camera.y, !candidates.contains(delta) {
+            let destinationMatches = tile.x + delta.x == camera.x && tile.y + delta.y == camera.y
+            let previousMatches = previous.x + delta.x == camera.x && previous.y + delta.y == camera.y
+            if (destinationMatches || previousMatches), !candidates.contains(delta) {
                 candidates.append(delta)
             }
         }

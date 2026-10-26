@@ -143,6 +143,7 @@ NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
 #include "NativeBattle/invitation.inc"
 namespace {
 uint8_t *romUIOwner=nullptr,*cooperativeROM=nullptr;
+bool romFieldRDown=false;
 bool ownsROMUI() { return romUIOwner==rom && gameDescriptorPresent(rom); }
 bool nativeProfileVerified() {
     const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
@@ -380,7 +381,51 @@ static uint8_t soulQAScriptBackup[128];
     if(memcmp(digest,expected,32)) return NO;
     if(GameUIRequestAddress<0x02000000||GameUIRequestAddress+GameUIRequestSize>0x02040000
        ||GameUIHostOffset+GameUIHostSize>0x2000000) return NO;
-    romUIOwner=rom; return YES;
+    romUIOwner=rom;romFieldRDown=false; return YES;
+}
++ (void)advanceROMFieldRecovery {
+    if(!ownsROMUI()||!workRAM||!internalRAM) return;
+    // Guest scripts can consume newKeys before the emulator frame callback.
+    // Observe the held-key edge instead, including while an action is blocked,
+    // so a held R never queues a warp after a dialogue or link operation ends.
+    const bool rDown=(half(internalRAM+0x311C)&0x100)!=0;
+    const bool rPressed=rDown&&!romFieldRDown;
+    romFieldRDown=rDown;
+    if(armed||inviteActive) return;
+    if(word(internalRAM+0x30F0)!=0x08056535||word(internalRAM+0x30F4)!=0x080565B5
+       ||(internalRAM[0x3529]&2)) return;
+    // MP2K may stop a song while retaining its low active-track bits. A fade
+    // cannot advance a stopped player, but the stock IsBGMStopped checks only
+    // those track bits. Normalize this already-stopped status during an actual
+    // native stop request; the ordinary music/warp tasks then finish themselves.
+    // This repairs interrupted checkpoints too, without changing the cartridge
+    // or forcing its map, palette, script, task, or player visibility state.
+    const unsigned musicState=internalRAM[0xFC4];
+    const uint32_t musicStatus=word(internalRAM+0x7304);
+    if(musicState>=5&&musicState<=7&&(musicStatus&0x80000000u)&&(musicStatus&0xFFFF))
+        put32(internalRAM+0x7304,musicStatus&0xFFFF0000u);
+
+    const auto *guest=workRAM+GameUIRequestAddress-0x02000000;
+    const auto *host=rom+GameUIHostOffset;
+    const auto flags=word(guest+80),hostFlags=word(host+12);
+    // Published field/settings/checkpoint bits must all be set; setup/modal
+    // bits must be clear. Pending host invitations, recovery, saves, transfers,
+    // run endings and setup changes also veto a warp before their UI appears.
+    if(!rPressed||!overworld()
+       ||word(guest)!=0x31525552||word(guest+160)!=1||word(guest+12)||word(guest+76)
+       ||(flags&(1|2|4|32|64))!=(1|32|64)
+       ||word(host)!=0x31495552||!(hostFlags&1)||(hostFlags&(32|64|256|512|1024|2048|4096))
+       ||workRAM[0x3707B]||(workRAM[0x37ABF]&0x80)
+       ||((half(workRAM+0x37ABC)>>6)&31)>=16) return;
+    // Native warp script in idle link scratch, also serialized by core saves.
+    // Battle/trade/dialogue owners above exclude reuse of this region. Using
+    // the native script preserves ordinary fade, map loading and field unlock.
+    const uint8_t script[]={0x39,3,0,255,16,0,14,0,0x27,0x6C,0x02};
+    memcpy(internalRAM+0x4280,script,sizeof(script));
+    memset(internalRAM+0xEB0,0,0x74);internalRAM[0xEB1]=1;put32(internalRAM+0xEB8,0x03004280);
+    put32(internalRAM+0xF0C,0x0815F9B4);put32(internalRAM+0xF10,0x0815FD08);
+    internalRAM[0xEA8]=0;internalRAM[0xF9C]=1;
+    internalRAM[0x311F]&=~1;
 }
 + (NSData *)romMultiplayerSnapshot {
     if(!ownsROMUI()||!workRAM) return [NSData data];
@@ -894,6 +939,24 @@ static uint8_t soulQAScriptBackup[128];
     memset(internalRAM+0xEB0,0,0x74);internalRAM[0xEB1]=1;put32(internalRAM+0xEB8,0x03004280);
     put32(internalRAM+0xF0C,0x0815F9B4);put32(internalRAM+0xF10,0x0815FD08);
     internalRAM[0xEA8]=0;internalRAM[0xF9C]=1;
+    return YES;
+}
++ (BOOL)qaWarpViridianMartEntrance {
+    if(!ownsROMUI()||!overworld()) return NO;
+    const uint8_t script[]={0x39,3,1,255,36,0,20,0,0x02};
+    memcpy(internalRAM+0x4280,script,sizeof(script));
+    memset(internalRAM+0xEB0,0,0x74);internalRAM[0xEB1]=1;put32(internalRAM+0xEB8,0x03004280);
+    put32(internalRAM+0xF0C,0x0815F9B4);put32(internalRAM+0xF10,0x0815FD08);
+    internalRAM[0xEA8]=0;internalRAM[0xF9C]=1;
+    return YES;
+}
++ (BOOL)qaStopMapMusicRetainingTracks {
+    if(!ownsROMUI()||!overworld()) return NO;
+    // Reproduce the MP2K state observed in the affected Mac checkpoint.
+    // The native door must handle stopped music without discarding track bits.
+    const auto status=word(internalRAM+0x7304);
+    if(!(status&0xFFFF)) return NO;
+    put32(internalRAM+0x7304,status|0x80000000u);
     return YES;
 }
 + (NSDictionary<NSString *,id> *)qaNuggetBridgeStatus {

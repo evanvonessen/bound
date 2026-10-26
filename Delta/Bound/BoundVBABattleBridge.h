@@ -27,6 +27,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSData *)captureCooperativeSession;
 + (BOOL)restoreCooperativeSession:(NSData *)data;
 + (BOOL)installROMMultiplayer;
++ (void)advanceROMFieldRecovery;
 + (NSData *)romMultiplayerSnapshot;
 + (void)setROMMultiplayerHost:(NSData *)data;
 + (BOOL)installSharedWorld;
@@ -75,6 +76,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)qaPrepareNuggetBridgeFixture;
 + (BOOL)qaWarpNuggetBridge:(NSUInteger)y;
 + (BOOL)qaWarpPalletEntrance;
++ (BOOL)qaWarpViridianMartEntrance;
++ (BOOL)qaStopMapMusicRetainingTracks;
 + (NSDictionary<NSString *,id> *)qaNuggetBridgeStatus;
 + (BOOL)qaStartSoulCheck;
 + (BOOL)qaStartSoulCatch:(NSUInteger)mode;

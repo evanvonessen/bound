@@ -1,5 +1,62 @@
 # Full-app multiplayer gameplay acceptance
 
+## Mart transition and Debug return — October 25, 2026
+
+The reported build 201 Mac checkpoint reproduced a native door transition
+stalled after its fade to black, with the player hidden. The door task at
+`0x0807E719` was waiting for map music to stop. MP2K's BGM status at
+`0x03007304` was `0x8000003F`: its stopped bit was set while the low active-track
+bits remained set. Native `IsBGMStopped` checked only those low bits, but the
+stopped audio player could no longer advance the fade that would clear them.
+
+`BoundVBABattleBridge.advanceROMFieldRecovery` runs on the completed-frame
+callback for the verified integrated cartridge. In native field callbacks,
+outside active link operations/invitations, it clears stale low track bits
+only when the music state is awaiting a stop (5–7) and MP2K is already stopped.
+The native music and door tasks then finish normally. It never forces a map,
+palette, script, task or visibility state forward. Live songs and ordinary
+fades retain their native timing. This applies to other native field transitions
+using the same music-stop path, not only the Viridian door.
+
+The same bridge consumes a new R press in an admitted Debug game with an idle,
+visible field and applied settings. It starts an ordinary native warp script to
+Pallet Town (`3:0`, tile `16,14`, outside Oak’s lab). Native dialogue, battle,
+trade, invitations, save/recovery/transfer/end states and fades exclude the
+shortcut; it never replaces an active story script. Normal games ignore the
+shortcut. The script lives in idle link scratch and survives native checkpoint
+serialization. A held-key edge is tracked on the emulator owner because native
+scripts can consume the one-frame `newKeys` value before Bound's callback.
+Holding R does not trigger repeated warps or queue a warp after a blocked action.
+
+The connected-map regression also exposed a combined presentation phase: on
+Route 1 → Pallet, the ObjectEvent still held tile `(12,40)` / previous `(12,39)`
+while the newly rebased camera was `(12,-1)`. The renderer now accepts the exact
+connected-map offset when either the destination or previous tile matches the
+camera. Existing one-tile, running-state and map-identity checks still apply;
+the boundary's native pixel residuals use the rebased destination tile rather
+than the lagging saved camera tile. Interaction admission remains strict.
+The regression avoids grass encounters
+and waits for its setup warp to finish before measuring boundary rendering.
+
+Both fixes preserve the build 201 integrated ROM hash
+`8bf5b9675e0e34e785b0a40eb2d8120a1d2d6874890c4f6d2f43b5d1d3ab90fb`
+and existing server-state format. An app update is sufficient; the affected
+checkpoint does not require a new cartridge or a reset. No user checkpoint or
+app data is included in source control.
+
+Validation: 93 focused simulator tests passed with zero failures or skips,
+including fresh Mart entry, a stopped-music fault injected before the door,
+the previously stuck Mac checkpoint, Debug-off R behavior, parcel-dialogue
+protection, holding R through the return warp and restored field controls.
+The connected-map presentation, player-reader, live-presence and ROM-contract
+suites passed together. Receipt: `.build/mart-field-recovery-acceptance.xcresult`;
+log: `/private/tmp/bound-mart-field-recovery-acceptance.log`.
+The unsigned Release iPhone build, 17,061 pinned-source checks and 99
+source/integration hashes plus two SDK privacy manifests passed. The private
+checkpoint is optional QA input; the injected fault regression requires only
+the owned cartridge and creates a disposable battery. Fixed-build Mac UI,
+physical iPhones and live two-device network validation remain pending.
+
 ## Checkpoint recovery regressions — October 24, 2026
 
 The updated Nakama client, save-package, disconnect-save and Soul Link suites

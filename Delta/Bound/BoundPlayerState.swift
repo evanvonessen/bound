@@ -170,11 +170,13 @@ enum BoundPlayerStateDecoder {
         var tile = BoundPlayerState.Point(x: coordinate(object, 0x10) - 7, y: coordinate(object, 0x12) - 7)
         var previous = BoundPlayerState.Point(x: coordinate(object, 0x14) - 7, y: coordinate(object, 0x16) - 7)
         let cameraTile = BoundPlayerState.Point(x: coordinate(save, 0), y: coordinate(save, 2))
+        var rebasedAtBoundary = false
         if presentationOnly, tile != cameraTile, avatar[2] == 2, avatar[3] == 2,
            let delta = BoundPlayerMapConnections.pendingBoundaryOffset(in: .init(group: group, number: number),
                tile: tile, previous: previous, camera: cameraTile, rom: romBytes) {
             tile = .init(x: tile.x + delta.x, y: tile.y + delta.y)
             previous = .init(x: previous.x + delta.x, y: previous.y + delta.y)
+            rebasedAtBoundary = true
         }
         let pendingCameraStep = presentationOnly && previous == cameraTile
             && abs(tile.x - cameraTile.x) + abs(tile.y - cameraTile.y) == 1
@@ -190,7 +192,9 @@ enum BoundPlayerStateDecoder {
             player: BoundPlayerState(mapGroup: group, mapNumber: number, tile: tile, previousTile: previous,
                 facing: facing, elevation: Int(object[11] & 15), graphicsID: Int(object[5]),
                 runningState: Int(avatar[2]), tileTransitionState: Int(avatar[3]),
-                cameraTile: pendingCameraStep ? cameraTile : nil))
+                // Boundary camera residuals already belong to the new map's
+                // destination tile, even while the saved tile is still behind.
+                cameraTile: pendingCameraStep && !rebasedAtBoundary ? cameraTile : nil))
     }
 }
 
