@@ -252,7 +252,7 @@ namespace BoundDebug {
                 if(descriptors[root.owners[0]].trainer.id===descriptors[root.owners[1]].trainer.id)fail("distinct_trainers");
                 const m:any={sessionID:root.sessionID,membershipEpoch:root.membershipEpoch,operationID:op.operationID,generation:op.generation,runID:op.runID,source:op.source,
                     compatibility:op.compatibility,settings:op.settings,owners:descriptors,cut:op.cut,committedAt:now()};m.digest=nk.sha256Hash(canonical(m));
-                const state={version:2,save_id:op.runID,game_id:profile.gameID,roomID:root.roomID,members:root.owners,identity:op.identities[root.owners[0]],committed:true,cancelled:false,epoch:op.ownershipEpoch,revision:1,chooserSeen:now(),
+                const state={version:2,save_id:op.runID,game_id:op.compatibility.gameID,roomID:root.roomID,members:root.owners,identity:op.identities[root.owners[0]],committed:true,cancelled:false,epoch:op.ownershipEpoch,revision:1,chooserSeen:now(),
                     cursors:cursors,saves:saves,deliveries:{},profiles:profiles,created_at:new Date().toISOString(),updated_at:new Date().toISOString()};
                 writes.push(write(manifestKey(root.sessionID,op.generation),m));writes.push(write(prefix(root.sessionID,op.generation)+op.runID,state,"*",gameplay));
                 op.state="committed";

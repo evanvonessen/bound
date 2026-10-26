@@ -43,6 +43,50 @@ test('binary state hashes, owner identities and files validate before commit; on
   const own=h.rpc(owner,'download',{operationID:op.operationID,generation:1,index:0});assert.equal(own.chunk.data,a.base64);assert.notEqual(own.chunk.data,b.base64);
   assert.deepEqual(h.mutate(owner,'commit',{operationID:op.operationID,generation:1}).manifest,manifest);
 });
+for(const switchBefore of ['ownerPrepare','seal','commit'])test(`admitted DEBUG profile survives current-profile change before ${switchBefore} without crossing game namespaces`,()=>{
+  const h=debugFixture();h.pair();const op=h.prepare().operation,admitted=plain(op.compatibility);
+  const replacement={...admitted,romSHA256:'2'.repeat(64),gameID:'3'.repeat(40)};
+  const candidates=new Map([owner,peer].map(who=>[who,h.payload(op,who)]));
+  const fields={operationID:op.operationID,generation:op.generation};
+  const prepareOwners=()=>{for(const [who,p]of candidates){
+    h.mutate(who,'ownerPrepare',{...fields,descriptor:p.descriptor});
+    for(let index=0;index<p.descriptor.count;index++)h.mutate(who,'chunk',{...fields,index,data:p.base64.slice(index*12000,(index+1)*12000)});
+  }};
+  const sealOwners=()=>{for(const who of candidates.keys())h.mutate(who,'seal',fields);};
+  if(switchBefore!=='ownerPrepare')prepareOwners();
+  if(switchBefore==='commit')sealOwners();
+  // Simulate a runtime replacing its current admission profile after the old
+  // operation was durably admitted. Stored operation/payload bytes stay intact.
+  Object.assign(h.f.debug.profile,replacement);
+  if(switchBefore==='ownerPrepare')prepareOwners();
+  if(switchBefore!=='commit')sealOwners();
+  const committed=h.mutate(owner,'commit',fields);
+  assert.deepEqual(committed.operation.compatibility,admitted);
+  assert.deepEqual(committed.manifest.compatibility,admitted);
+  const gameKey=`${sid}/${op.generation}/${op.runID}`;
+  const original=h.snapshot().find(r=>r.collection==='bound_debug_gameplay_v2'&&r.key===gameKey);
+  assert.equal(original.value.game_id,admitted.gameID);
+  assert.equal(original.value.identity.gameID,admitted.gameID);
+  assert.equal(original.value.identity.romSHA256,admitted.romSHA256);
+  const source={kind:'builtin',pointID:'01',fixtureVersion:'multiplayer-isolation-v1'};
+  assert.throws(()=>h.mutate(owner,'prepare',{operationID:operationID(2),expectedGeneration:1,kind:'load',source,
+    compatibility:admitted,settings:op.settings}),e=>e.message==='debug_prepare');
+  const next=h.prepare(2,'load',source,1).operation;
+  assert.deepEqual(next.compatibility,replacement);
+  assert.equal(next.identities[owner].gameID,replacement.gameID);
+  assert.equal(next.identities[owner].romSHA256,replacement.romSHA256);
+  h.upload(next,owner);h.upload(next,peer);
+  h.mutate(owner,'commit',{operationID:next.operationID,generation:next.generation});
+  const games=h.snapshot().filter(r=>r.collection==='bound_debug_gameplay_v2');
+  assert.equal(games.length,2);
+  assert.deepEqual(games.find(r=>r.key===gameKey),original);
+  assert.equal(games.find(r=>r.key===`${sid}/${next.generation}/${next.runID}`).value.game_id,replacement.gameID);
+  for(const [who,p]of candidates){
+    const memory=JSON.parse(Buffer.from(p.body.files['memory-files.json'].data,'base64'));
+    assert.deepEqual(Object.keys(memory),[`Soul Link/${hash(admitted.gameID)}.json`]);
+    assert.equal(h.rpc(who,'download',{...fields,index:0}).chunk.data,p.base64);
+  }
+});
 test('generation scoped real independent engine reads exact owner payloads and never touches ordinary namespaces',()=>{
   const h=debugFixture(),{op,a,b}=committed(h),before=h.snapshot().filter(r=>['bound_independent_v2','bound_events_v2'].includes(r.collection));
   for(const [who,p]of[[owner,a],[peer,b]]){

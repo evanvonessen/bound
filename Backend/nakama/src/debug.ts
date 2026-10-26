@@ -167,7 +167,9 @@ namespace BoundDebug {
         return copy(value);
     }
     export function verifyDescriptor(nk: nkruntime.Nakama, root: any, op: any, owner: string, d: any): void {
-        if (!object(d) || !uuid.test(d.deviceID) || !integer(d.ownershipEpoch) || d.ownershipEpoch !== op.ownershipEpoch || !equal(d.compatibility, profile) ||
+        // The server admitted and stored this exact profile at prepare. A later
+        // current-profile update must not reinterpret its immutable operation.
+        if (!object(d) || !uuid.test(d.deviceID) || !integer(d.ownershipEpoch) || d.ownershipEpoch !== op.ownershipEpoch || !equal(d.compatibility, op.compatibility) ||
             !object(d.trainer) || !integer(d.trainer.id) || d.trainer.id > 4294967295 || !BoundSaveLibrary.profile({name:d.trainer.name,gender:d.trainer.gender}) ||
             d.safe !== true || !object(d.receipt) || lowerUUID(d.receipt.owner) !== owner || lowerUUID(d.receipt.run) !== op.runID ||
             !lowerUUID(d.receipt.checkpoint) || !digest.test(d.receipt.payloadSHA256) || !digest.test(d.receipt.sharedEventDigest) ||
@@ -205,7 +207,7 @@ namespace BoundDebug {
             if(!object(f)||typeof f.data!=="string"||f.sha256!==expected.sha256)fail("file_hash");
             const b=nk.base64Decode(f.data);if(b.byteLength!==expected.bytes||nk.base64Encode(b)!==f.data||binaryHash(nk,f.data)!==f.sha256)fail("file_hash");});
         const memory=JSON.parse(nk.binaryToString(nk.base64Decode(value.files["memory-files.json"].data)));
-        const soul=memory["Soul Link/"+nk.sha256Hash(profile.gameID)+".json"];
+        const soul=memory["Soul Link/"+nk.sha256Hash(op.compatibility.gameID)+".json"];
         if(typeof soul!=="string"||binaryHash(nk,soul)!==d.soulDigest)fail("soul_metadata");
         const journal=JSON.parse(nk.binaryToString(nk.base64Decode(value.files["shared-events.json"].data)));
         if(!object(journal)||journal.version!==1||lowerUUID(journal.run)!==op.runID||lowerUUID(journal.owner)!==owner||lowerUUID(journal.partner)!==op.identities[owner].partner||!Array.isArray(journal.events)||journal.events.length>100000)fail("journal");
