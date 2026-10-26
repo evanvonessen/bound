@@ -28,30 +28,20 @@ struct BoundWorldPacket: Equatable, Sendable {
     let sequence: UInt64
     let state: BoundWorldState
     func encoded() -> Data? {
-        guard state.valid, sequence > 0 else { return nil }
-        var data = Self.prefix + BoundWorldContract.compatibility
-        var senderBytes = sender.uuid, receiverBytes = (receiver ?? Self.zero).uuid
-        withUnsafeBytes(of: &senderBytes) { data.append(contentsOf: $0) }
-        withUnsafeBytes(of: &receiverBytes) { data.append(contentsOf: $0) }
-        for shift in stride(from: 0, to: 64, by: 8) { data.append(UInt8(truncatingIfNeeded: sequence >> shift)) }
-        data.append(state.group); data.append(state.number); data.append(state.checkpoints)
-        data.append(UInt8(state.boulders.count / 6)); data.append(state.boulders)
-        return data.count <= 1024 ? data : nil
-    }
-    private static let zero = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
-    static func decode(_ data: Data) -> Self? {
-        guard (871...967).contains(data.count), data.starts(with: prefix),
-              data.subdata(in: 4..<28) == BoundWorldContract.compatibility else { return nil }
-        func uuid(_ offset: Int) -> UUID {
-            let b = Array(data[offset..<offset + 16])
-            return UUID(uuid: (b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],b[11],b[12],b[13],b[14],b[15]))
-        }
-        let sender = uuid(28), receiver = uuid(44)
-        let sequence = (0..<8).reduce(UInt64(0)) { $0 | UInt64(data[60 + $1]) << ($1 * 8) }
-        guard sender != zero, sequence > 0, data.count == 871 + Int(data[870]) * 6 else { return nil }
-        let state = BoundWorldState(group: data[68], number: data[69], checkpoints: data.subdata(in: 70..<870), boulders: data.subdata(in: 871..<data.count))
         guard state.valid else { return nil }
-        return .init(sender: sender, receiver: receiver == zero ? nil : receiver, sequence: sequence, state: state)
+        var body = Data([state.group, state.number]) + state.checkpoints
+        body.append(UInt8(state.boulders.count / BoundSDKProtocol.WorldEnvelope.boulderStride)); body.append(state.boulders)
+        return BoundSDKWorldEnvelope(sender: sender, receiver: receiver, sequence: sequence,
+                                     body: body).encoded(compatibility: BoundWorldContract.compatibility)
+    }
+    static func decode(_ data: Data) -> Self? {
+        typealias Layout = BoundSDKProtocol.WorldEnvelope
+        guard let frame = BoundSDKWorldEnvelope.decode(data, compatibility: BoundWorldContract.compatibility) else { return nil }
+        let state = BoundWorldState(group: data[Layout.groupOffset], number: data[Layout.numberOffset],
+            checkpoints: data.subdata(in: Layout.checkpointsOffset..<Layout.checkpointsOffset + Layout.checkpointsSize),
+            boulders: data.subdata(in: Layout.bouldersOffset..<data.count))
+        guard state.valid else { return nil }
+        return .init(sender: frame.sender, receiver: frame.receiver, sequence: frame.sequence, state: state)
     }
 }
 

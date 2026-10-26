@@ -12,6 +12,8 @@
 #include <zlib.h>
 #include "NativeBattle/BoundBattleEntryCode.h"
 #include "NativeBattle/BoundBattleDecisionCode.h"
+#include "SDK/bound_sdk.h"
+#include "SDK/Generated/BoundSDKProtocol.h"
 
 extern uint8_t *rom,*workRAM,*internalRAM,*ioMem;
 extern uint8_t flashSaveMemory[0x20000];
@@ -179,6 +181,16 @@ NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
 }
 }
 #include "SharedWorld/bridge.inc"
+static_assert(GameUIHostSize==BOUND_SDK_UIHOST_BYTE_SIZE && GameUIRequestSize==BOUND_SDK_UIREQUEST_BYTE_SIZE,
+              "SDK UI schema differs from cartridge ABI");
+static_assert(GameHostSize==BOUND_SDK_GAME_HOST_BYTE_SIZE && GameSnapshotSize==BOUND_SDK_GAME_SNAPSHOT_BYTE_SIZE
+              && GameSnapshotRegionSize==BOUND_SDK_SNAPSHOT_CONTROL_BYTE_SIZE,
+              "SDK world schema differs from cartridge ABI");
+#ifdef BOUND_GAME_COOPERATIVE_DOUBLES
+static_assert(GameCooperativeHostSize==BOUND_SDK_COOPERATIVE_HOST_BYTE_SIZE
+              && GameCooperativeSnapshotSize==BOUND_SDK_COOPERATIVE_SNAPSHOT_BYTE_SIZE,
+              "SDK cooperative schema differs from cartridge ABI");
+#endif
 #include "SoulLink/bridge.inc"
 #include "NativeBattle/invitation.inc"
 namespace {
@@ -383,9 +395,10 @@ static uint8_t soulQAScriptBackup[128];
     if(cooperativeROM!=rom||!rom||!workRAM||!gameDescriptorPresent(rom)) return [NSData data];
     const auto *p=workRAM+GameCooperativeSnapshotAddress-0x02000000;
     const uint32_t sequence=word(p+8);
-    if(word(p)!=0x31474443||half(p+4)!=1||half(p+6)!=0||!sequence||(sequence&1)) return [NSData data];
+    if(word(p)!=BOUND_SDK_COOPERATIVE_SNAPSHOT_MAGIC||half(p+4)!=BOUND_SDK_COOPERATIVE_SNAPSHOT_MAJOR
+       ||half(p+6)!=BOUND_SDK_COOPERATIVE_SNAPSHOT_MINOR||BOUND_SDK_UNCOMMITTED_SEQUENCE(sequence)) return [NSData data];
     NSData *copy=[NSData dataWithBytes:p length:GameCooperativeSnapshotSize];
-    return word(p+8)==sequence ? copy:[NSData data];
+    return bound_sdk_same_committed_sequence(sequence,word(p+8)) ? copy:[NSData data];
 #else
     return [NSData data];
 #endif
@@ -394,10 +407,11 @@ static uint8_t soulQAScriptBackup[128];
 #ifdef BOUND_GAME_COOPERATIVE_DOUBLES
     if(cooperativeROM!=rom||!rom||data.length!=GameCooperativeHostSize) return;
     const auto *p=static_cast<const uint8_t *>(data.bytes);const uint32_t sequence=word(p+8);
-    if(word(p)!=0x31484443||half(p+4)!=1||half(p+6)!=0||!sequence||(sequence&1)
+    if(word(p)!=BOUND_SDK_COOPERATIVE_HOST_MAGIC||half(p+4)!=BOUND_SDK_COOPERATIVE_HOST_MAJOR
+       ||half(p+6)!=BOUND_SDK_COOPERATIVE_HOST_MINOR||BOUND_SDK_UNCOMMITTED_SEQUENCE(sequence)
        ||(word(p+12)&~15u)||word(p+16)>180||word(p+20)>1) return;
-    auto *out=rom+GameCooperativeHostOffset;put32(out+8,sequence-1);
-    memcpy(out,p,8);memcpy(out+12,p+12,GameCooperativeHostSize-12);put32(out+8,sequence);
+    auto *out=rom+GameCooperativeHostOffset;bound_sdk_store_le32(out+8,sequence-1);
+    memcpy(out,p,8);memcpy(out+12,p+12,GameCooperativeHostSize-12);bound_sdk_store_le32(out+8,sequence);
 #endif
 }
 + (BOOL)prepareCooperativeCableForPlayer:(NSUInteger)player {
@@ -494,9 +508,10 @@ static uint8_t soulQAScriptBackup[128];
     if(!ownsROMUI()||!workRAM) return [NSData data];
     const auto *p=workRAM+GameUIRequestAddress-0x02000000;
     const uint32_t sequence=word(p+8);
-    if(word(p)!=0x31525552||half(p+4)!=1||half(p+6)!=0||!sequence||(sequence&1)) return [NSData data];
+    if(word(p)!=BOUND_SDK_UIREQUEST_MAGIC||half(p+4)!=BOUND_SDK_UIREQUEST_MAJOR
+       ||half(p+6)!=BOUND_SDK_UIREQUEST_MINOR||BOUND_SDK_UNCOMMITTED_SEQUENCE(sequence)) return [NSData data];
     NSMutableData *copy=[NSMutableData dataWithBytes:p length:GameUIRequestSize];
-    if(word(p+8)!=sequence) return [NSData data];
+    if(!bound_sdk_same_committed_sequence(sequence,word(p+8))) return [NSData data];
     // Earlier cartridges advertised idle scripts as checkpoint-safe without
     // checking their asynchronous native message owner. Withhold that claim
     // in the host snapshot until the message and printer have both finished.
@@ -510,12 +525,13 @@ static uint8_t soulQAScriptBackup[128];
     if(!ownsROMUI()||data.length!=GameUIHostSize) return;
     const auto *source=static_cast<const uint8_t *>(data.bytes);
     const uint32_t sequence=word(source+8);
-    if(word(source)!=0x31495552||half(source+4)!=1||half(source+6)!=0||!sequence||(sequence&1)
+    if(word(source)!=BOUND_SDK_UIHOST_MAGIC||half(source+4)!=BOUND_SDK_UIHOST_MAJOR
+       ||half(source+6)!=BOUND_SDK_UIHOST_MINOR||BOUND_SDK_UNCOMMITTED_SEQUENCE(sequence)
        ||word(source+24)>20||word(source+312)>180) return;
     auto *destination=rom+GameUIHostOffset;
-    put32(destination+8,sequence-1);
+    bound_sdk_store_le32(destination+8,sequence-1);
     memcpy(destination,source,8);memcpy(destination+12,source+12,GameUIHostSize-12);
-    put32(destination+8,sequence);
+    bound_sdk_store_le32(destination+8,sequence);
 }
 // Attaches to the game's ABI; never installs/restores gameplay instructions.
 + (BOOL)installSharedWorld {
@@ -545,7 +561,7 @@ static uint8_t soulQAScriptBackup[128];
        ||word(p+8)!=GameSnapshotSize||word(p+20)!=1||p[24]>=43||p[26]>16
        ||memcmp(p+32,GameRulesetID,16)||word(p+48)!=1||word(p+52)!=1||word(p+56)!=GameSaveStateLayout) return @{};
     NSData *checkpoints=[NSData dataWithBytes:p+64 length:800];NSData *boulders=[NSData dataWithBytes:p+864 length:p[26]*6];
-    if(word(p+12)!=sequence||word(control+12)!=index) return @{};
+    if(!bound_sdk_same_committed_sequence(sequence,word(p+12))||word(control+12)!=index) return @{};
     return @{@"checkpoints":checkpoints,@"group":@(p[24]),@"number":@(p[25]),@"boulders":boulders,@"sequence":@(sequence),@"frame":@(word(p+16))};
 }
 + (void)setSharedWorldPeer:(NSData *)checkpoints group:(NSUInteger)group number:(NSUInteger)number boulders:(NSData *)boulders fresh:(BOOL)fresh {

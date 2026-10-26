@@ -117,31 +117,7 @@ struct BoundROMSetupCancellationQueue: Codable, Equatable, Sendable {
     }
 }
 
-private enum BoundROMBytes {
-    static let zero = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
-    static func word(_ data: Data, _ offset: Int) -> UInt32 {
-        (0..<4).reduce(0) { $0 | UInt32(data[offset + $1]) << ($1 * 8) }
-    }
-    static func put(_ value: UInt32, into data: inout Data, at offset: Int) {
-        for n in 0..<4 { data[offset + n] = UInt8(truncatingIfNeeded: value >> (n * 8)) }
-    }
-    static func uuid(_ data: Data, _ offset: Int) -> UUID {
-        let b = Array(data[offset..<offset + 16])
-        return UUID(uuid: (b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],b[11],b[12],b[13],b[14],b[15]))
-    }
-    static func put(_ uuid: UUID?, into data: inout Data, at offset: Int) {
-        var bytes = (uuid ?? zero).uuid
-        withUnsafeBytes(of: &bytes) { data.replaceSubrange(offset..<offset + 16, with: $0) }
-    }
-    static func text(_ string: String, into data: inout Data, at offset: Int, size: Int) {
-        let clean = string.folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
-        let bytes = clean.unicodeScalars.map { scalar -> UInt8 in
-            if scalar.value == 10 { return 10 }
-            return (32...126).contains(scalar.value) ? UInt8(scalar.value) : 63
-        }.prefix(size - 1)
-        data.replaceSubrange(offset..<offset + bytes.count, with: bytes)
-    }
-}
+private typealias BoundROMBytes = BoundSDKBytes
 
 struct BoundROMRequest: Equatable, Sendable {
     let sequence: UInt32
@@ -165,15 +141,12 @@ struct BoundROMRequest: Equatable, Sendable {
     var requestsPregameSetupRestart: Bool { command == .setupRetry && newGame && !settingsApplied && setupError == 1 }
     var requestsNewMultiplayerRun: Bool { newGame && (command == .pair || command == .startSoulLink) }
     static func decode(_ data: Data) -> Self? {
-        guard data.count == 256, data.prefix(8) == Data([82,85,82,49,1,0,0,0]),
-              let command = BoundROMCommand(rawValue: BoundROMBytes.word(data,12)) else { return nil }
-        let sequence = BoundROMBytes.word(data,8)
-        guard sequence > 0, sequence & 1 == 0 else { return nil }
-        return .init(sequence: sequence, command: command, friendIndex: BoundROMBytes.word(data,16),
-            argument: BoundROMBytes.word(data,20), identifier: BoundROMBytes.uuid(data,24),
-            settings: data.subdata(in:40..<72), flags: BoundROMBytes.word(data,80),
-            frame: BoundROMBytes.word(data,84), requestID: BoundROMBytes.word(data,88), debugSetup: BoundROMBytes.word(data,160) == 1,
-            setupError: BoundROMBytes.word(data,164))
+        guard let frame = BoundSDKUIRequestFrame.decode(data),
+              let command = BoundROMCommand(rawValue: frame.command) else { return nil }
+        return .init(sequence: frame.sequence, command: command, friendIndex: frame.friendIndex,
+                     argument: frame.argument, identifier: frame.identifier, settings: frame.settings,
+                     flags: frame.flags, frame: frame.frame, requestID: frame.requestID,
+                     debugSetup: frame.debugSetup, setupError: frame.setupError)
     }
 }
 
@@ -204,46 +177,22 @@ struct BoundROMHostState: Equatable, Sendable {
     var peerCollision: BoundPresenceCollision?
     var page: UInt32 = 0
     func encoded(sequence: UInt32) -> Data {
-        var data = Data(repeating: 0, count: 2048)
-        data.replaceSubrange(0..<8, with: [82,85,73,49,1,0,0,0])
-        BoundROMBytes.put(sequence, into: &data, at: 8)
         let flags: UInt32 = (enabled ? 1:0) | (linked ? 2:0) | (connected ? 4:0) | (chooser ? 8:0)
             | (setupCommitted ? 16:0) | (recovery ? 32:0) | (saving ? 256:0) | (transferRequired ? 512:0) | (ended ? 1024:0)
             | (restartSetup ? 2048:0) | (externalSetup ? 4096:0)
-        BoundROMBytes.put(flags, into: &data, at:12)
-        BoundROMBytes.put(acknowledgedRequest, into: &data, at:16)
-        BoundROMBytes.put(status.rawValue, into: &data, at:20)
-        BoundROMBytes.put(UInt32(min(friends.count,20)), into: &data, at:24)
-        BoundROMBytes.put(run, into: &data, at:32)
-        BoundROMBytes.put(localSeed, into: &data, at:48)
-        BoundROMBytes.put(partnerSeed, into: &data, at:52)
-        if settings.count == 32 { data.replaceSubrange(56..<88, with: settings) }
-        BoundROMBytes.text(partnerName, into: &data, at:88, size:32)
-        BoundROMBytes.text(message, into: &data, at:120, size:192)
-        BoundROMBytes.put(180, into: &data, at:312)
-        BoundROMBytes.put(page, into: &data, at:316)
-        for (index, friend) in friends.prefix(20).enumerated() {
-            let offset = 320 + index * 52
-            BoundROMBytes.put(friend.room, into: &data, at:offset)
-            BoundROMBytes.text(friend.name, into: &data, at:offset + 16, size:32)
-            BoundROMBytes.put(friend.status, into: &data, at:offset + 48)
+        let location: BoundSDKUIHostFrame.PeerLocation? = enabled ? peerCollision.map {
+            .init(group: $0.mapGroup, number: $0.mapNumber, elevation: $0.elevation,
+                  x: $0.current.x, y: $0.current.y, previousX: $0.previous.x, previousY: $0.previous.y)
+        } : nil
+        let identity: BoundSDKUIHostFrame.PlayerIdentity? = playerProfile.flatMap {
+            guard $0.valid else { return nil }
+            return .init(name: BoundMultiplayerSetupOptions.nativeName($0.name),
+                         gender: UInt8($0.gender), debugPlayer: debugPlayer)
         }
-        if enabled, let peerCollision {
-            BoundROMBytes.put(1, into: &data, at:1360)
-            data[1364] = UInt8(peerCollision.mapGroup); data[1365] = UInt8(peerCollision.mapNumber)
-            data[1366] = UInt8(peerCollision.elevation)
-            for (offset, value) in [(1368, peerCollision.current.x), (1370, peerCollision.current.y),
-                                    (1372, peerCollision.previous.x), (1374, peerCollision.previous.y)] {
-                let bits = UInt16(bitPattern: Int16(value))
-                data[offset] = UInt8(truncatingIfNeeded: bits); data[offset + 1] = UInt8(bits >> 8)
-            }
-        }
-        if let playerProfile, playerProfile.valid {
-            data.replaceSubrange(1408..<1416, with: BoundMultiplayerSetupOptions.nativeName(playerProfile.name))
-            data[1416] = UInt8(playerProfile.gender); data[1417] = 1
-            data[1418] = debugPlayer
-        }
-        return data
+        return BoundSDKUIHostFrame(flags: flags, acknowledgedRequest: acknowledgedRequest, status: status.rawValue,
+            run: run, localSeed: localSeed, partnerSeed: partnerSeed, settings: settings, partnerName: partnerName,
+            message: message, entries: friends.prefix(BoundSDKProtocol.UIHost.friendCapacity).map { .init(identifier: $0.room, name: $0.name, status: $0.status) },
+            peerLocation: location, playerIdentity: identity, page: page).encoded(sequence: sequence)
     }
 }
 
@@ -355,22 +304,13 @@ struct BoundROMPacket: Equatable, Sendable {
     let sequence: UInt64
     let body: Data
     func encoded() -> Data? {
-        guard sequence > 0, body.count <= 960 else { return nil }
-        var data = Data(repeating:0,count:64)
-        data.replaceSubrange(0..<4,with:Self.prefix); data[4] = 1; data[5] = kind.rawValue
-        BoundROMBytes.put(owner,into:&data,at:8); BoundROMBytes.put(epoch,into:&data,at:24)
-        BoundROMBytes.put(receiver,into:&data,at:40)
-        for i in 0..<8 { data[56+i] = UInt8(truncatingIfNeeded:sequence >> (i*8)) }
-        data.append(body); return data
+        BoundSDKReliableEnvelope(kind: kind.rawValue, owner: owner, epoch: epoch,
+                                 receiver: receiver, sequence: sequence, body: body).encoded()
     }
     static func decode(_ data: Data) -> Self? {
-        guard (64...1024).contains(data.count), data.starts(with:prefix), data[4] == 1,
-              data[6] == 0, data[7] == 0, let kind = Kind(rawValue:data[5]) else { return nil }
-        let owner = BoundROMBytes.uuid(data,8), epoch = BoundROMBytes.uuid(data,24), receiver = BoundROMBytes.uuid(data,40)
-        let sequence = (0..<8).reduce(UInt64(0)) { $0 | UInt64(data[56+$1]) << ($1*8) }
-        guard owner != BoundROMBytes.zero, epoch != BoundROMBytes.zero, sequence > 0 else { return nil }
-        return .init(kind:kind,owner:owner,epoch:epoch,receiver:receiver == BoundROMBytes.zero ? nil:receiver,
-                     sequence:sequence,body:data.subdata(in:64..<data.count))
+        guard let frame = BoundSDKReliableEnvelope.decode(data), let kind = Kind(rawValue: frame.kind) else { return nil }
+        return .init(kind: kind, owner: frame.owner, epoch: frame.epoch, receiver: frame.receiver,
+                     sequence: frame.sequence, body: frame.body)
     }
 }
 

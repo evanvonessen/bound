@@ -107,3 +107,28 @@ Every native hook and reserved region is in the untracked task artifact
 in `phase4/host/original-profile`. This gate establishes a reproducible pair,
 not full gameplay or old-run compatibility: the new profile still requires the
 multi-profile adapter route described above before old-run acceptance.
+
+## SDK codec extraction
+
+The schema owner is `multi_red/source/multiplayer/sdk/protocol-v1.json`.
+`PrototypeTools/sync-bound-sdk.py` imports or checks the generated C/Swift
+definitions and their schema, generator, library and profile digests. It requires
+an explicit `BOUND_GAME_SOURCE` and checks the selected cartridge contract.
+The schema digest is
+`3314fbe6797a8b5d05f3f6267b6eaf01489b7e743c246ae57595e9781400a148`;
+the generator digest is
+`582c4115c0aa53ced7e349a76578a0b3c38139018656ffaa2b78d626ff493b19`.
+
+SDK bytes, UI frames and reliable/world envelopes now serve the existing host
+wrappers. Native committed-mailbox helpers are shared with the ROM. Pokémon
+validation, maps, settings and native boundaries remain in their existing
+owners. No journal, save, wire or ROM identity changed. Both standard and
+combined ROMs and their legacy ABI headers match the phase-4 bytes exactly.
+
+Frozen old implementations are test-only oracles. The host comparisons cover
+malformed lengths, every request/envelope byte, reserved commands, sequence
+boundaries, text and 2,048 host-flag combinations. Native checks cover 65,545
+scalar vectors and 589,905 sequence comparisons. All five kinds of stale
+generated import are rejected. Game tests cover 23 codec/build/cache cases and
+33 compiled-validator cases, including four torn-input cases. There is one
+live implementation for writes, sends and native effects.

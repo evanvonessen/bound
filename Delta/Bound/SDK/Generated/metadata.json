@@ -1,0 +1,18 @@
+{
+  "generatorSHA256": "582c4115c0aa53ced7e349a76578a0b3c38139018656ffaa2b78d626ff493b19",
+  "generatorVersion": 1,
+  "library": {
+    "bound_sdk.h": "160d307d1b76a9be5eef6f018995594f5051e8e217b7875a0d4b5bc4961582ef"
+  },
+  "outputs": {
+    "BoundSDKProtocol.h": "4c8da36ba3e3456172637138ba2349efb54ab6cd8aeea8673cc57fe4fc8c95dd",
+    "BoundSDKProtocol.swift": "498b7d5717545afee5db43233e6b64878eb03b25f88d92201b6f6652523abf24"
+  },
+  "profiles": {
+    "contract.json": "9dc546452bb7932ee124911f81f11e4e7c6ccf605b84642425d3c77ecb0018e8",
+    "doubles-contract.json": "a7db98d2d0f15b3b5114fbd41b9f82b1386147070e29fd953aff3bc1f7e4673e"
+  },
+  "schemaOwner": "multi_red/source/multiplayer/sdk/protocol-v1.json",
+  "schemaSHA256": "3314fbe6797a8b5d05f3f6267b6eaf01489b7e743c246ae57595e9781400a148",
+  "schemaVersion": 1
+}

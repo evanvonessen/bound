@@ -32,6 +32,12 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		F810DFDC54A64E0A8CC8BA5D /* SDKPhase4CodecOracle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 784F953E399AA70918F4D1D0 /* SDKPhase4CodecOracle.swift */; };
+		E3535FCBB07DDD2E1DB35075 /* SDKCodecTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C1D4FE40217C5BB5982618C /* SDKCodecTests.swift */; };
+		AFEFF9BF94CBC6FC52FDCAD1 /* BoundSDKProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4158BCA6C21D91937C1D1578 /* BoundSDKProtocol.swift */; };
+		5B1F5DD353BB6820F491C827 /* BoundSDKEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AA269BA84795F7CBE1E1D91 /* BoundSDKEnvelope.swift */; };
+		41F4229E724E4B4C73B4D098 /* BoundSDKUIFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EC51B5D4DA13DA64E497DD7 /* BoundSDKUIFrame.swift */; };
+		B63D7EDEDAFCB8D1D74BE7F3 /* BoundSDKBytes.swift in Sources */ = {isa = PBXBuildFile; fileRef = F45B97C1BEB3242A8EEE7F11 /* BoundSDKBytes.swift */; };
 		D24100000000000000000002 /* BoundServerMemoryFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = D24000000000000000000002; };
 		D24100000000000000000003 /* BoundServerDisconnectSave.swift in Sources */ = {isa = PBXBuildFile; fileRef = D24000000000000000000003; };
 		D24100000000000000000001 /* BoundMultiplayerSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = D24000000000000000000001; };
@@ -894,6 +900,12 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		784F953E399AA70918F4D1D0 /* SDKPhase4CodecOracle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKPhase4CodecOracle.swift; sourceTree = "<group>"; };
+		6C1D4FE40217C5BB5982618C /* SDKCodecTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKCodecTests.swift; sourceTree = "<group>"; };
+		4158BCA6C21D91937C1D1578 /* BoundSDKProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/Generated/BoundSDKProtocol.swift; sourceTree = "<group>"; };
+		1AA269BA84795F7CBE1E1D91 /* BoundSDKEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/BoundSDKEnvelope.swift; sourceTree = "<group>"; };
+		6EC51B5D4DA13DA64E497DD7 /* BoundSDKUIFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/BoundSDKUIFrame.swift; sourceTree = "<group>"; };
+		F45B97C1BEB3242A8EEE7F11 /* BoundSDKBytes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/BoundSDKBytes.swift; sourceTree = "<group>"; };
 		D24000000000000000000002 /* BoundServerMemoryFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundServerMemoryFiles.swift; sourceTree = "<group>"; };
 		D24000000000000000000003 /* BoundServerDisconnectSave.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundServerDisconnectSave.swift; sourceTree = "<group>"; };
 		D24000000000000000000001 /* BoundMultiplayerSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundMultiplayerSetup.swift; sourceTree = "<group>"; };
@@ -1520,6 +1532,8 @@
 				BCD012340000000000000003 /* CooperativeDoublesContractTests.swift */,
 				501100000000000000000004 /* SoulLinkTests.swift */,
 				50300000000000000000000A /* ROMMultiplayerContractTests.swift */,
+				784F953E399AA70918F4D1D0 /* SDKPhase4CodecOracle.swift */,
+				6C1D4FE40217C5BB5982618C /* SDKCodecTests.swift */,
 				503000000000000000000008 /* MultiplayerSavePackageTests.swift */,
 				D24000000000000000000004 /* ServerDisconnectSaveTests.swift */,
                 501200000000000000000004 /* SharedWorldTests.swift */,
@@ -1674,6 +1688,10 @@
 				A9231483D777DADAFDDAE6D0 /* BoundROMUpdateStorage.swift */,
 				5C0E4F6CC6BABCBBDC9229AD /* BoundGitHubAccount.swift */,
 				503000000000000000000002 /* BoundROMMultiplayer.swift */,
+				4158BCA6C21D91937C1D1578 /* BoundSDKProtocol.swift */,
+				1AA269BA84795F7CBE1E1D91 /* BoundSDKEnvelope.swift */,
+				6EC51B5D4DA13DA64E497DD7 /* BoundSDKUIFrame.swift */,
+				F45B97C1BEB3242A8EEE7F11 /* BoundSDKBytes.swift */,
 				503000000000000000000012 /* BoundROMRecoveryPolicy.swift */,
                 501200000000000000000002 /* BoundSharedProgression.swift */,
 				B47710000000000000000004 /* BoundBattleCable.swift */,
@@ -3386,6 +3404,8 @@
 				BCD012340000000000000004 /* CooperativeDoublesContractTests.swift in Sources */,
 				501100000000000000000003 /* SoulLinkTests.swift in Sources */,
 				503000000000000000000009 /* ROMMultiplayerContractTests.swift in Sources */,
+				F810DFDC54A64E0A8CC8BA5D /* SDKPhase4CodecOracle.swift in Sources */,
+				E3535FCBB07DDD2E1DB35075 /* SDKCodecTests.swift in Sources */,
 				503000000000000000000007 /* MultiplayerSavePackageTests.swift in Sources */,
 				D24100000000000000000004 /* ServerDisconnectSaveTests.swift in Sources */,
                 501200000000000000000003 /* SharedWorldTests.swift in Sources */,
@@ -3736,6 +3756,10 @@
 				0FC606D95C2C74C3A1BA8474 /* BoundROMUpdateStorage.swift in Sources */,
 				9AF18DFBD985AD5D4468DAD9 /* BoundGitHubAccount.swift in Sources */,
 				503000000000000000000001 /* BoundROMMultiplayer.swift in Sources */,
+				AFEFF9BF94CBC6FC52FDCAD1 /* BoundSDKProtocol.swift in Sources */,
+				5B1F5DD353BB6820F491C827 /* BoundSDKEnvelope.swift in Sources */,
+				41F4229E724E4B4C73B4D098 /* BoundSDKUIFrame.swift in Sources */,
+				B63D7EDEDAFCB8D1D74BE7F3 /* BoundSDKBytes.swift in Sources */,
 				503000000000000000000011 /* BoundROMRecoveryPolicy.swift in Sources */,
                 501200000000000000000001 /* BoundSharedProgression.swift in Sources */,
 				B47710000000000000000005 /* BoundBattleCable.swift in Sources */,

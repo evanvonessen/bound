@@ -137,6 +137,7 @@
     "battleNativeReceived": 167707929,
     "battleNativeTransfer": 167709765,
     "battleReceiveAck": 167719793,
+    "bound_sdk_store_le32": 167706653,
     "coopAck": 167577565,
     "coopCopy": 167575553,
     "coopCopy.constprop.0": 167576463,
@@ -167,7 +168,6 @@
     "coopSessionValid": 167575793,
     "coopZero": 167575577,
     "reserved": 167706669,
-    "store32": 167706653,
     "uiApplySettings": 167711069,
     "uiAttribute": 167707125,
     "uiCheckpointSafe": 167706997,
@@ -210,11 +210,13 @@
     "xpZero.constprop.0": 167583297
   },
   "source_sha256": {
-    "game/game_runtime.c": "bad3b275a95e45c7547e07d8adbeae42fe655dd7da874b90065f6c3c70fa1e2e",
+    "game/game_runtime.c": "0a4103e7499bfb912fd5d6dbff7ade722480dcf07df7d57af0f39e799e594c92",
     "game/game_ui.c": "beed41cb3cee1eb4a7fa15fdc8de75ce575cd91af5c2d14d34eee103f447fac4",
     "game/game_nickname.c": "75d50c62e175904164cd348e83e440eef5087e5518510caa8717a4118319e711",
     "game/game_battle_menu.c": "42189b953e8d8cbe9b3c8e30c224ae8ec1f25f34ce920ee9536cd813642f1b55",
     "shared_world/shared_world.c": "fc009fe8f9c453b6788ffb3731a18d5ec2737b985c4b3195a5673243e4831ca3",
+    "sdk/bound_sdk.h": "160d307d1b76a9be5eef6f018995594f5051e8e217b7875a0d4b5bc4961582ef",
+    "sdk/generated/BoundSDKProtocol.h": "4c8da36ba3e3456172637138ba2349efb54ab6cd8aeea8673cc57fe4fc8c95dd",
     "game/game_doubles.c": "8fdf7fbabf7c52a9110045af4bf9a9f817066f32b26cf46d8c2683a13a00ce09",
     "game/game_doubles.h": "7365c5f5fa383ee1f454a79afd3b3d693d6d3d6b825fc89ef97d13f1ca13c02f",
     "game/game_doubles_xp.c": "66e81d038694361a80115b375c8e125b9f074f941127d410ede4f4e07f76cea0",
@@ -607,7 +609,7 @@
       "sha256": "01dcc520d19f7771fb4d62801fd7d391a7eca8aa0b6434d04cbde9da1b1eb56e"
     }
   ],
-  "cache_key": "df4471de648f43a8e831486199fa036bca3ddcffdd1b6770a02b7fbadd15da16",
+  "cache_key": "3c39fdaf819c0bc03798e1aab5fa5957ec7a3b6c1318d477eb1c461cdcc341b4",
   "cache_hit": false,
   "native_binding_scope": "Exact RR4.1 adapter in the game build. Bound uses the exported data ABI only.",
   "save_compatibility": "Battery-save format unchanged. Legacy emulator save states require cold boot; the native allocator rejects the old RAM layout without overwriting it.",
@@ -615,5 +617,23 @@
   "cooperative_code_bytes": 10448,
   "cooperative_code_sha256": "e23488fb3801bb26e1937a84f37681fef398755da46e98805b7733dc656cfb29",
   "bound_abi_header_sha256": "533b8035e4a12d9b0ca1fdbd0b704195efb279275b4a8c6a8e6a33886a85ec0e",
-  "contract_sha256": "a7db98d2d0f15b3b5114fbd41b9f82b1386147070e29fd953aff3bc1f7e4673e"
+  "contract_sha256": "a7db98d2d0f15b3b5114fbd41b9f82b1386147070e29fd953aff3bc1f7e4673e",
+  "sdk": {
+    "generatorSHA256": "582c4115c0aa53ced7e349a76578a0b3c38139018656ffaa2b78d626ff493b19",
+    "generatorVersion": 1,
+    "library": {
+      "bound_sdk.h": "160d307d1b76a9be5eef6f018995594f5051e8e217b7875a0d4b5bc4961582ef"
+    },
+    "outputs": {
+      "BoundSDKProtocol.h": "4c8da36ba3e3456172637138ba2349efb54ab6cd8aeea8673cc57fe4fc8c95dd",
+      "BoundSDKProtocol.swift": "498b7d5717545afee5db43233e6b64878eb03b25f88d92201b6f6652523abf24"
+    },
+    "profiles": {
+      "contract.json": "9dc546452bb7932ee124911f81f11e4e7c6ccf605b84642425d3c77ecb0018e8",
+      "doubles-contract.json": "a7db98d2d0f15b3b5114fbd41b9f82b1386147070e29fd953aff3bc1f7e4673e"
+    },
+    "schemaOwner": "multi_red/source/multiplayer/sdk/protocol-v1.json",
+    "schemaSHA256": "3314fbe6797a8b5d05f3f6267b6eaf01489b7e743c246ae57595e9781400a148",
+    "schemaVersion": 1
+  }
 }
