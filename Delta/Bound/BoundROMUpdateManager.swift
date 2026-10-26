@@ -39,7 +39,7 @@ final class BoundROMUpdateManager: ObservableObject {
     private static let enabledKey = "bound.rom-updates.enabled.v1"
     private static let nameKey = "bound.rom-updates.folder-name.v1"
     private static let enrollmentKey = "bound.rom-updates.enrollment-game.v1"
-    private init(defaults: UserDefaults = .standard, storage: BoundROMUpdateStorage = .live) {
+    init(defaults: UserDefaults = .standard, storage: BoundROMUpdateStorage = .live) {
         self.defaults = defaults; self.storage = storage
         folderName = defaults.string(forKey: Self.nameKey)
         if let selected = defaults.string(forKey: Self.enrollmentKey) {
@@ -129,41 +129,64 @@ final class BoundROMUpdateManager: ObservableObject {
     private func installBundledROMIfNeeded() {
         guard !bundledImportStarted, !isApplying, !isChecking, DatabaseManager.shared.isStarted,
               UIApplication.shared.applicationState == .active,
-              let url = Bundle.main.url(forResource: "rrbin-integrated", withExtension: "gba") else { return }
+              let url = Bundle.main.url(forResource: "multiplayer", withExtension: "gba") else { return }
         bundledImportStarted = true
         bundledImportInProgress = true
         Task { @MainActor in
-            defer { bundledImportInProgress = false; if isEnabled { checkNow() } }
+            var installed = false
+            defer { bundledImportInProgress = false; if installed, isEnabled { checkNow() } }
             do {
-                let data = try await Task.detached(priority: .utility) {
-                    let data = try Data(contentsOf: url)
-                    _ = try BoundROMUpdateContent(data: data, expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
-                    _ = try BoundPlayerROMProfile(rom: data)
-                    return data
-                }.value
-                let content = try BoundROMUpdateContent(data: data, expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
                 // Read the installed bundle at runtime: App Store export can renumber the archive.
                 let name = Self.bundledROMName(buildNumber: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
-                if try !games(matching: [content.gameID]).isEmpty {
-                    try refreshBundledROMName(content, name: name)
-                    return
-                }
-                let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                let copy = folder.appendingPathComponent(name + ".gba")
-                try data.write(to: copy, options: .atomic)
-                let succeeded = await withCheckedContinuation { continuation in
-                    DatabaseManager.shared.importGames(at: [copy]) { _, errors in
-                        try? FileManager.default.removeItem(at: folder)
-                        continuation.resume(returning: errors.isEmpty)
-                    }
-                }
-                if !succeeded { status = "Couldn’t install the included ROM. Reopen Bound to retry." }
-
+                try await installBundledROM(from: url, name: name)
+                installed = true
             } catch {
+                // A transient library/foreground condition retries through the
+                // existing timer, without entering the reset-on-update flow.
+                bundledImportStarted = false
                 status = error.localizedDescription
             }
         }
+    }
+
+    /// Install the exact bundled cartridge without retiring another identity,
+    /// migrating its saves, or changing a user-assigned library name.
+    func installBundledROM(from url: URL, name: String) async throws {
+        let data = try await Task.detached(priority: .utility) {
+            let data = try Data(contentsOf: url)
+            _ = try BoundROMUpdateContent(data: data, expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
+            _ = try BoundPlayerROMProfile(rom: data)
+            return data
+        }.value
+        let content = try BoundROMUpdateContent(data: data, expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
+        let existing = try games(matching: [content.gameID])
+        guard existing.count <= 1 else { throw BoundROMUpdateError.storage }
+        if let game = existing.first {
+            let file = game.fileURL
+            if FileManager.default.fileExists(atPath: file.path) {
+                // A corrupt file with this identity is not an older save to
+                // convert. Retain it and fail closed for explicit recovery.
+                _ = try await Task.detached(priority: .utility) {
+                    try BoundROMUpdateContent(data: Data(contentsOf: file), expectedSHA256: content.sha256)
+                }.value
+            } else {
+                guard canApply(), !hasPendingSaveClear(for: content.gameID) else { throw BoundROMUpdateError.busy }
+                try data.write(to: file, options: .atomic)
+            }
+            try refreshBundledROMName(content, name: name)
+            return
+        }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let copy = folder.appendingPathComponent(name + ".gba")
+        try data.write(to: copy, options: .atomic)
+        let succeeded = await withCheckedContinuation { continuation in
+            DatabaseManager.shared.importGames(at: [copy]) { games, errors in
+                continuation.resume(returning: errors.isEmpty && games.contains { $0.identifier == content.gameID })
+            }
+        }
+        guard succeeded else { throw BoundROMUpdateError.storage }
     }
 
     func hasPendingSaveClear(for gameID: String) -> Bool {
@@ -292,6 +315,14 @@ final class BoundROMUpdateManager: ObservableObject {
                     needsGameSelection = true; status = "Choose the game to update."; return
                 }
                 guard isEnabled else { status = "Automatic updates are off."; return }
+                if try await alreadyInstalledBundledROM(candidate.content) {
+                    guard configuration == operation else { return }
+                    // Bundled releases install alongside older cartridges.
+                    // A legacy folder enrollment must not turn that successful
+                    // installation into a fresh reset/retirement transaction.
+                    status = "Included ROM is up to date."; return
+                }
+                guard configuration == operation else { return }
                 if try storage.state().current == candidate.content {
                     status = "ROM is up to date."; return
                 }
@@ -310,7 +341,23 @@ final class BoundROMUpdateManager: ObservableObject {
             }
         }
     }
+    private func alreadyInstalledBundledROM(_ content: BoundROMUpdateContent) async throws -> Bool {
+        guard let bundle = Bundle.main.url(forResource: "multiplayer", withExtension: "gba"),
+              let game = try games(matching: [content.gameID]).first else { return false }
+        let installed = game.fileURL
+        return try await Task.detached(priority: .utility) {
+            let bundled = try BoundROMUpdateContent(data: Data(contentsOf: bundle), expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
+            guard bundled == content else { return false }
+            // A database row alone is not proof that the matching cartridge is
+            // installed. Missing/corrupt bytes fail closed without resetting it.
+            return try BoundROMUpdateContent(data: Data(contentsOf: installed), expectedSHA256: bundled.sha256) == content
+        }.value
+    }
     private struct Candidate { let content: BoundROMUpdateContent; let data: Data }
+    static func candidateFile(in folder: URL) -> URL {
+        let current = folder.appendingPathComponent("multiplayer.gba")
+        return FileManager.default.fileExists(atPath: current.path) ? current : folder.appendingPathComponent("rrbin-integrated.gba")
+    }
     private func readCandidate() async throws -> Candidate {
         guard let bookmark = stagedBookmark ?? defaults.data(forKey: Self.bookmarkKey) else { throw BoundROMUpdateError.unsafePath }
         var stale = false
@@ -321,7 +368,7 @@ final class BoundROMUpdateManager: ObservableObject {
             let refreshed = try folder.bookmarkData(options: [.minimalBookmark], includingResourceValuesForKeys: nil, relativeTo: nil)
             if stagedBookmark != nil { stagedBookmark = refreshed } else { defaults.set(refreshed, forKey: Self.bookmarkKey) }
         }
-        let file = folder.appendingPathComponent("rrbin-integrated.gba")
+        let file = Self.candidateFile(in: folder)
         let values = try file.resourceValues(forKeys: [.isUbiquitousItemKey, .ubiquitousItemDownloadingStatusKey])
         if values.isUbiquitousItem == true, values.ubiquitousItemDownloadingStatus != .current {
             try FileManager.default.startDownloadingUbiquitousItem(at: file)

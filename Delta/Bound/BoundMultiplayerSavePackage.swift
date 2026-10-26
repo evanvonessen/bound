@@ -181,6 +181,15 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable, BoundSDKEventPersist
         serverJournals[identity.gameID] = journal; serverHeads[identity.gameID] = package
     }
     func captureServerCheckpoint(gameID: String, files: [String: Data], history: String) throws -> BoundMultiplayerSavePackage {
+        try makeServerCheckpoint(gameID: gameID, files: files, history: history, advancingHead: true)
+    }
+    /// An archive-only capture is not a predecessor of active gameplay saves.
+    /// Its immutable journal is a copy; later live facts retain their owner.
+    func captureDetachedServerCheckpoint(gameID: String, files: [String: Data], history: String) throws -> BoundMultiplayerSavePackage {
+        try makeServerCheckpoint(gameID: gameID, files: files, history: history, advancingHead: false)
+    }
+    private func makeServerCheckpoint(gameID: String, files: [String: Data], history: String,
+                                      advancingHead: Bool) throws -> BoundMultiplayerSavePackage {
         lock.lock(); defer { lock.unlock() }
         guard let manifest = serverManifests[gameID], files["game.sav"]?.count == 131072,
               files["checkpoint.state"]?.isEmpty == false, Self.isDigest(history) else { throw Failure.incomplete }
@@ -192,8 +201,31 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable, BoundSDKEventPersist
             owner: manifest.identity.owner, payloadSHA256: Self.hash(try Self.encode(payload)), sharedEventDigest: history)
         let package = BoundMultiplayerSavePackage(payload: payload, receipt: receipt)
         try validate(package, complete: true)
-        serverHeads[gameID] = package
+        if advancingHead { serverHeads[gameID] = package }
         return package
+    }
+
+    /// Adopt only the ancestry/receipt of this exact frozen capture. Facts may
+    /// have arrived while it uploaded; their live journal and manifest remain
+    /// independently owned and must never be replaced by the captured copies.
+    func acknowledgeServerCheckpoint(_ package: BoundMultiplayerSavePackage,
+                                     replacing original: BoundMultiplayerSavePackage) throws {
+        lock.lock(); defer { lock.unlock() }
+        let identity = original.payload.manifest.identity, gameID = original.payload.manifest.identity.gameID
+        guard serverGames.contains(gameID), serverManifests[gameID]?.identity == identity,
+              serverHeads[gameID] == original, original.payload.version == 2, package.payload.version == 2 else {
+            throw Failure.conflict
+        }
+        try validate(original, complete: true)
+        try validate(package, complete: true)
+        guard package.payload.manifest == original.payload.manifest,
+              package.payload.files == original.payload.files,
+              package.payload.sharedEventDigest == original.payload.sharedEventDigest,
+              package.partnerReceipt == original.partnerReceipt,
+              package.payload.predecessor == original.payload.predecessor || package.payload.checkpoint != original.payload.checkpoint else {
+            throw Failure.conflict
+        }
+        serverHeads[gameID] = package
     }
 
     init(root: URL? = nil, support: URL? = nil, deviceID: UUID? = nil) {

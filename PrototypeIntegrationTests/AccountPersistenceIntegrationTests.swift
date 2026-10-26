@@ -24,6 +24,49 @@ enum BoundAccountTestFixture {
 /// Synthetic credentials exercise the native Keychain and account lifecycle; no backend is contacted.
 @MainActor
 final class AccountPersistenceIntegrationTests: XCTestCase {
+    #if DEBUG && targetEnvironment(simulator)
+    func testLocalQAAuthorityRequiresExplicitLoopbackHTTPSAndKeepsProductionPortRules() throws {
+        let info = ["BoundBackendKind": "selfhost", "BoundBackendURL": "https://bound.example"]
+        let endpoint = "https://127.0.0.1:58552"
+        let qa = try BoundBackendConfiguration.resolveBuild(info: info, environment: [
+            "BOUND_QA_LOCAL_BACKEND": "1", "BOUND_QA_BACKEND_URL": endpoint])
+        XCTAssertEqual(qa.kind, .selfhost); XCTAssertEqual(qa.origin, endpoint)
+        XCTAssertEqual(try qa.url(path: "/auth/v1/user").absoluteString, endpoint + "/auth/v1/user")
+        XCTAssertThrowsError(try BoundBackendConfiguration.resolveBuild(info: info, environment: ["BOUND_QA_BACKEND_URL": endpoint]))
+        for invalid in ["http://127.0.0.1:58552", "https://localhost:58552", "https://bound.example:58552",
+                        "https://127.0.0.1:443", "https://127.0.0.1:58552/path", "https://user@127.0.0.1:58552",
+                        "https://127.0.0.1:58552?token=x", "https://127.0.0.1:58552#fragment"] {
+            XCTAssertThrowsError(try BoundBackendConfiguration.resolveBuild(info: info, environment: [
+                "BOUND_QA_LOCAL_BACKEND": "1", "BOUND_QA_BACKEND_URL": invalid]), invalid)
+        }
+        XCTAssertThrowsError(try BoundBackendConfiguration.resolve(info: ["BoundBackendKind": "selfhost", "BoundBackendURL": endpoint]))
+        XCTAssertEqual(try BoundBackendConfiguration.resolveBuild(info: info, environment: [:]).origin, "https://bound.example")
+    }
+    #endif
+
+    func testDebugRequestUsesOnlyCurrentSelfhostCredentialsAndBoundedJSON() throws {
+        let owner = UUID()
+        func session(_ kind: BoundBackendConfiguration.Kind) throws -> AppCloudSession {
+            let claims: [String: Any] = [kind == .selfhost ? "uid" : "sub": owner.uuidString.lowercased(),
+                                        "exp": Date().timeIntervalSince1970 + 600]
+            let payload = try JSONSerialization.data(withJSONObject: claims).base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+            return try .init(owner: owner, key: "must-not-leak", token: "fixture." + payload + ".signature",
+                backend: .init(kind: kind, origin: kind == .selfhost ? "https://bound.example" : BoundBackendConfiguration.legacyOrigin))
+        }
+        let identity = try session(.selfhost), body = Data("{\"action\":\"list\"}".utf8)
+        let request = try identity.debugRequest(body: body)
+        XCTAssertEqual(request.url?.absoluteString, "https://bound.example/functions/v1/bound-debug")
+        XCTAssertEqual(request.httpMethod, "POST"); XCTAssertEqual(request.httpBody, body)
+        XCTAssertEqual(request.timeoutInterval, 10)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        XCTAssertTrue(request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("Bearer ") == true)
+        XCTAssertNil(request.value(forHTTPHeaderField: "apikey"))
+        XCTAssertThrowsError(try session(.legacy).debugRequest(body: body))
+        XCTAssertThrowsError(try identity.debugRequest(body: Data("[]".utf8)))
+        XCTAssertThrowsError(try identity.debugRequest(body: Data(repeating: 32, count: 65_537)))
+    }
+
     func testBackendSelectionFailsClosedAndDefaultsToCurrentService() throws {
         let legacy = try BoundBackendConfiguration.resolve(info: [:])
         XCTAssertEqual(legacy.kind, .legacy)

@@ -104,4 +104,17 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSDictionary<NSString *, id> *)qaTradeMenu;
 #endif
 @end
+#if DEBUG && TARGET_OS_SIMULATOR
+@interface BoundVBABattleBridge (DebugFixtureOperations)
+/// Test-owned paused core/frame owner only. Fixed pre-Brock native recipes:
+/// 1=Mankey8 on Route1; 2=21 Rare Candy on Route1; 3=Pikachu8 on Route2.
+/// Native Bag/learning UI must consume the candies; no stat/EXP/move writes.
++ (NSDictionary<NSString *,id> *)qaDebugFixturePreflight;
++ (BOOL)qaResetDebugFixtureOperations;
+/// Restore only host bookkeeping for the exact audited Route1 gift basis.
++ (BOOL)qaAdmitRoute1FixtureContinuation;
++ (BOOL)qaBeginDebugFixtureOperation:(NSUInteger)operation;
++ (NSDictionary<NSString *,id> *)qaAdvanceDebugFixtureOperation;
+@end
+#endif
 NS_ASSUME_NONNULL_END

@@ -7,3 +7,4 @@
 #import "GameSetting.h"
 
 #import "../Bound/BoundVBABattleBridge.h"
+#import "../Bound/Samples/SDKDots/BoundSDKDotsNative.h"

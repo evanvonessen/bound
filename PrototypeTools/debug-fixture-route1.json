@@ -1,0 +1,383 @@
+{
+  "version": 1,
+  "stage": "route1-gifts",
+  "romSHA256": "02f97ffa88f71015d2da5df114c0bf48d7c80f37f64d10075a81fef2dc6d8a79",
+  "provenance": {
+    "kind": "Preliminary ordinary-button route on mGBA; VBA endpoints must be checked live before advancing",
+    "ledgerSHA256": "c9c3de42e3e4c636a3aeda56f3b0eb8414e8bce0ece7497a10ed7109934e5b88",
+    "sourceStateSHA256": "a66b2daa0912e9bd29685342c246f2ee9744cc8e857c78beb1db665e2670f254",
+    "stateConversion": false
+  },
+  "steps": [
+    {
+      "id": "route1-probe-01",
+      "frames": 400,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 32,
+          "frames": 96
+        },
+        {
+          "mask": 0,
+          "frames": 44
+        },
+        {
+          "mask": 64,
+          "frames": 160
+        },
+        {
+          "mask": 0,
+          "frames": 80
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 0,
+      "x": 10,
+      "y": 4
+    },
+    {
+      "id": "route1-probe-02",
+      "frames": 450,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 64,
+          "frames": 400
+        },
+        {
+          "mask": 0,
+          "frames": 30
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 0,
+      "x": 10,
+      "y": 2
+    },
+    {
+      "id": "route1-probe-03",
+      "frames": 420,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 16,
+          "frames": 32
+        },
+        {
+          "mask": 0,
+          "frames": 38
+        },
+        {
+          "mask": 64,
+          "frames": 300
+        },
+        {
+          "mask": 0,
+          "frames": 30
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 0,
+      "x": 11,
+      "y": 2
+    },
+    {
+      "id": "route1-probe-04",
+      "frames": 450,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 16,
+          "frames": 64
+        },
+        {
+          "mask": 0,
+          "frames": 36
+        },
+        {
+          "mask": 64,
+          "frames": 300
+        },
+        {
+          "mask": 0,
+          "frames": 30
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 0,
+      "x": 11,
+      "y": 2
+    },
+    {
+      "id": "route1-probe-05",
+      "frames": 560,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 128,
+          "frames": 16
+        },
+        {
+          "mask": 0,
+          "frames": 34
+        },
+        {
+          "mask": 16,
+          "frames": 32
+        },
+        {
+          "mask": 0,
+          "frames": 48
+        },
+        {
+          "mask": 64,
+          "frames": 370
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 0,
+      "x": 13,
+      "y": 2
+    },
+    {
+      "id": "route1-probe-06",
+      "frames": 320,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 32,
+          "frames": 16
+        },
+        {
+          "mask": 0,
+          "frames": 44
+        },
+        {
+          "mask": 64,
+          "frames": 200
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 0,
+      "x": 13,
+      "y": 2
+    },
+    {
+      "id": "route1-probe-07",
+      "frames": 1000,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 72
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 92
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 92
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 92
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 92
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 92
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 92
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 92
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 92
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 92
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 0,
+      "x": 13,
+      "y": 2
+    },
+    {
+      "id": "route1-probe-08",
+      "frames": 600,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 64,
+          "frames": 540
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 0,
+      "x": 13,
+      "y": 2
+    },
+    {
+      "id": "route1-probe-09",
+      "frames": 900,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 72
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 92
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 92
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 92
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 92
+        },
+        {
+          "mask": 64,
+          "frames": 350
+        },
+        {
+          "mask": 0,
+          "frames": 50
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 19,
+      "x": 13,
+      "y": 32
+    }
+  ],
+  "nativeOperations": [
+    1,
+    2
+  ],
+  "pending": [
+    "Normal Bag Rare Candy UI levels the original starter to8",
+    "Native parcel and Oak delivery",
+    "Route2 native Pikachu8 gift",
+    "Brendan native battle and actual outcome continuation",
+    "Falkner native battle and actual outcome continuation",
+    "Brock remains undefeated; no certificate from this route attempt"
+  ]
+}

@@ -4,6 +4,10 @@ import UIKit
 /// Owns the last in-memory checkpoint after the game coordinator has detached.
 /// No save bytes or upload journal are written to disk.
 enum BoundServerDisconnectSave {
+    struct Confirmation: Sendable {
+        let package: BoundMultiplayerSavePackage
+        let state: BoundNakamaRunService.IndependentState
+    }
     static let didFinish = Notification.Name("BoundServerDisconnectSaveDidFinish")
 
     private struct Outcome {
@@ -53,13 +57,13 @@ enum BoundServerDisconnectSave {
             do {
                 if let previous { await previous.value }
                 try Task.checkCancellation()
-                let checkpoint = try await drain(package: package, expectedHead: expectedHead,
+                let confirmation = try await settle(package: package, expectedHead: expectedHead,
                     pendingHead: pendingHead, session: session, verifiedCursor: verifiedCursor, service: service)
                 try Task.checkCancellation()
                 // Includes server-confirmed retries of a previously sealed
                 // package. The caller settles only the matching activity claim.
-                try onConfirmed?(checkpoint)
-                lifetime.finish(status: "saved", message: "Saved to server.", checkpoint: checkpoint)
+                try onConfirmed?(confirmation.package.payload.checkpoint)
+                lifetime.finish(status: "saved", message: "Saved to server.", checkpoint: confirmation.package.payload.checkpoint)
             } catch {
                 let message: String
                 if error is CancellationError {
@@ -77,9 +81,12 @@ enum BoundServerDisconnectSave {
         return task
     }
 
-    private static func drain(package original: BoundMultiplayerSavePackage, expectedHead: UUID?, pendingHead: UUID?,
+    /// Returns the exact immutable candidate confirmed by the server, including
+    /// an ancestry rebase or a successful seal whose response was lost. This
+    /// does not replace the caller's current native state or event journal.
+    static func settle(package original: BoundMultiplayerSavePackage, expectedHead: UUID?, pendingHead: UUID?,
                               session: AppCloudSession, verifiedCursor: BoundMultiplayerSharedCursor,
-                              service: BoundNakamaRunService) async throws -> UUID {
+                              service: BoundNakamaRunService) async throws -> Confirmation {
         let identity = original.payload.manifest.identity
         guard session.owner == identity.owner else { throw BoundNakamaRunService.Failure.conflict }
         let pending = try pendingEvents(in: original, verifiedCursor: verifiedCursor)
@@ -87,11 +94,12 @@ enum BoundServerDisconnectSave {
         let acquisitions = pending.filter(\.requiresNativeCheckpoint)
         var offset = 0
         var candidate = original
-        var candidates = [original.payload.checkpoint: original.receipt]
+        var candidates = [original.payload.checkpoint: original]
         for attempt in 0..<3 {
             do {
                 try Task.checkCancellation(); try session.credentials()
-                _ = try await service.configureSaves(session: session)
+                if await service.isDebug { try await service.revalidateDebugScope() }
+                else { _ = try await service.configureSaves(session: session) }
                 var state = try await service.getSave(identity.run)
                 try validate(state, identity: identity, expectedHead: expectedHead, pendingHead: pendingHead, candidates: candidates)
                 while offset < ownEvents.count {
@@ -107,19 +115,19 @@ enum BoundServerDisconnectSave {
                 try Task.checkCancellation()
                 state = try await service.getSave(identity.run)
                 let actual = try validate(state, identity: identity, expectedHead: expectedHead, pendingHead: pendingHead, candidates: candidates)
-                if let actual, candidates[actual] != nil {
+                if let actual, let confirmed = candidates[actual] {
                     guard acquisitions.allSatisfy({ state.serverCursor.contains($0.id) }) else { throw BoundNakamaRunService.Failure.unavailable }
-                    return actual
+                    return .init(package: confirmed, state: state)
                 }
                 if candidate.payload.predecessor != actual {
                     candidate = try rebased(original, predecessor: actual)
-                    candidates[candidate.payload.checkpoint] = candidate.receipt
+                    candidates[candidate.payload.checkpoint] = candidate
                 }
                 let confirmed = try await service.uploadIndependent(candidate, expectedHead: actual, session: session)
                 let sealed = try validate(confirmed, identity: identity, expectedHead: expectedHead, pendingHead: pendingHead, candidates: candidates)
                 guard sealed == candidate.payload.checkpoint else { throw BoundNakamaRunService.Failure.conflict }
                 guard acquisitions.allSatisfy({ confirmed.serverCursor.contains($0.id) }) else { throw BoundNakamaRunService.Failure.unavailable }
-                return candidate.payload.checkpoint
+                return .init(package: candidate, state: confirmed)
             } catch {
                 guard attempt < 2, retryable(error), !Task.isCancelled else { throw error }
                 try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 500_000_000)
@@ -130,7 +138,7 @@ enum BoundServerDisconnectSave {
 
     @discardableResult
     private static func validate(_ state: BoundNakamaRunService.IndependentState, identity: BoundMultiplayerRunIdentity,
-                                 expectedHead: UUID?, pendingHead: UUID?, candidates: [UUID: BoundMultiplayerCheckpointReceipt]) throws -> UUID? {
+                                 expectedHead: UUID?, pendingHead: UUID?, candidates: [UUID: BoundMultiplayerSavePackage]) throws -> UUID? {
         guard state.version == 2, state.save_id == identity.run, state.committed, !state.cancelled,
               state.identity == identity else { throw BoundNakamaRunService.Failure.conflict }
         let saved = state.saves[identity.owner.uuidString.lowercased()]
@@ -138,7 +146,7 @@ enum BoundServerDisconnectSave {
         guard permits(head: head, expectedHead: expectedHead, pendingHead: pendingHead, checkpoints: Set(candidates.keys)) else {
             throw BoundNakamaRunService.Failure.conflict
         }
-        if let head, let candidate = candidates[head], saved?.receipt != candidate { throw BoundNakamaRunService.Failure.conflict }
+        if let head, let candidate = candidates[head], saved?.receipt != candidate.receipt { throw BoundNakamaRunService.Failure.conflict }
         return head
     }
 
@@ -207,6 +215,10 @@ enum BoundServerDisconnectSave {
         return false
     }
     private static func retryable(_ error: Error) -> Bool {
+        // Scoped DEBUG writes can race the other owner's guarded metadata
+        // update. Retry through settle's fresh GET and exact known-head checks;
+        // never treat a conflict response as confirmation of uploaded bytes.
+        if let error = error as? BoundDebugFailure { return error == .busy || error == .timedOut }
         if case BoundNakamaRunService.Failure.unavailable = error { return true }
         if let error = error as? FriendSharingTokenError { return error.retryable }
         guard let url = error as? URLError else { return false }

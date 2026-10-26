@@ -1,0 +1,214 @@
+{
+  "version": 1,
+  "stage": "pallet-peer-loss",
+  "romSHA256": "02f97ffa88f71015d2da5df114c0bf48d7c80f37f64d10075a81fef2dc6d8a79",
+  "nativeOperations": [],
+  "steps": [
+    {
+      "id": "route1-gift-return-south",
+      "frames": 0,
+      "inputs": [],
+      "mapGroup": 3,
+      "mapNumber": 19,
+      "x": 12,
+      "y": 39,
+      "walk": [
+        {
+          "x": 13,
+          "y": 32,
+          "behavior": 0,
+          "block": 12508
+        },
+        {
+          "x": 13,
+          "y": 33,
+          "behavior": 0,
+          "block": 12508
+        },
+        {
+          "x": 13,
+          "y": 34,
+          "behavior": 0,
+          "block": 12516
+        },
+        {
+          "x": 13,
+          "y": 35,
+          "behavior": 2,
+          "block": 12301
+        },
+        {
+          "x": 13,
+          "y": 36,
+          "behavior": 2,
+          "block": 12301
+        },
+        {
+          "x": 13,
+          "y": 37,
+          "behavior": 2,
+          "block": 12301
+        },
+        {
+          "x": 13,
+          "y": 38,
+          "behavior": 2,
+          "block": 12301
+        },
+        {
+          "x": 13,
+          "y": 39,
+          "behavior": 2,
+          "block": 12301
+        },
+        {
+          "x": 12,
+          "y": 39,
+          "behavior": 2,
+          "block": 12301
+        }
+      ]
+    },
+    {
+      "id": "route1-pallet-connection",
+      "frames": 0,
+      "inputs": [],
+      "mapGroup": 3,
+      "mapNumber": 0,
+      "x": 12,
+      "y": 0,
+      "connection": true
+    },
+    {
+      "id": "pallet-peer-loss-staging",
+      "frames": 0,
+      "inputs": [],
+      "mapGroup": 3,
+      "mapNumber": 0,
+      "x": 16,
+      "y": 14,
+      "walk": [
+        {
+          "x": 12,
+          "y": 0,
+          "block": 12966,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 1,
+          "block": 12974,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 2,
+          "block": 12933,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 3,
+          "block": 12950,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 4,
+          "block": 12999,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 5,
+          "block": 12951,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 6,
+          "block": 12951,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 7,
+          "block": 12951,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 8,
+          "block": 12991,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 9,
+          "block": 12950,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 10,
+          "block": 12999,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 11,
+          "block": 12951,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 12,
+          "block": 12951,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 13,
+          "block": 12951,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 14,
+          "block": 12991,
+          "behavior": 0
+        },
+        {
+          "x": 13,
+          "y": 14,
+          "block": 12942,
+          "behavior": 0
+        },
+        {
+          "x": 14,
+          "y": 14,
+          "block": 12942,
+          "behavior": 0
+        },
+        {
+          "x": 15,
+          "y": 14,
+          "block": 12990,
+          "behavior": 0
+        },
+        {
+          "x": 16,
+          "y": 14,
+          "block": 12950,
+          "behavior": 0
+        }
+      ]
+    }
+  ],
+  "pending": [
+    "Separate test-only two-party candidate, not a certified catalog point",
+    "Authenticated owner-specific acquisition/Soul history admission",
+    "Genuine native faint with a surviving own Pokemon and matching history cut",
+    "Managed checkpoint and cold app-process relaunch; all-FF battery is not native SRAM Save"
+  ]
+}

@@ -97,6 +97,7 @@ final class BoundLandscapeCompanionModel: ObservableObject {
     var beginArrangement: (() -> Bool)?
     var endArrangement: ((_ resume: Bool) -> Void)?
     private var observation: AnyCancellable?
+    private var debugAvailable = false
     private var friendDragStart: CGRect?
     private var referenceDragStart: CGRect?
     private var liveReferenceCenter: CGPoint?
@@ -116,16 +117,22 @@ final class BoundLandscapeCompanionModel: ObservableObject {
         friendVisible = preferences.friendVisible
         referenceVisible = preferences.referenceVisible
         referenceContent = preferences.referenceContent
-        referenceContents = preferences.referenceContents
+        referenceContents = preferences.referenceContents.filter { $0 != .debug }
+        if referenceContent == .debug { referenceContent = referenceContents.first ?? .notes }
         observation = NotificationCenter.default.publisher(for: BoundLandscapePreferences.didChangeNotification)
             .receive(on: DispatchQueue.main).sink { [weak self] _ in self?.reload() }
     }
     func reload() {
         if !editing { draft = preferences.friendPlacement; friendVisible = preferences.friendVisible }
         referenceVisible = preferences.referenceVisible
-        referenceContent = preferences.referenceContent
-        referenceContents = preferences.referenceContents
+        referenceContents = preferences.referenceContents.filter { $0 != .debug }
+        if debugAvailable { referenceContents.append(.debug) }
+        referenceContent = referenceContents.contains(preferences.referenceContent) ? preferences.referenceContent : referenceContents.first ?? .notes
         refreshLayout()
+    }
+    func setDebugAvailable(_ value: Bool) {
+        guard debugAvailable != value else { return }
+        debugAvailable = value; reload()
     }
     func setActive(_ value: Bool) {
         guard active != value else { return }
@@ -408,6 +415,8 @@ struct BoundCompanionPresentation: View {
     @ObservedObject var landscape: BoundLandscapeCompanionModel
     @ObservedObject var arrangement: BoundLandscapeArrangementModel
     let layers: BoundLandscapePanelLayers
+    var debug: BoundDebugSession? = nil
+    var debugSettings: () -> Data? = { nil }
     var gameID: String
     let editingChanged: (Bool) -> Void
     var textEditingChanged: (Bool) -> Void = { _ in }
@@ -474,7 +483,8 @@ struct BoundCompanionPresentation: View {
                         editingChanged: editingChanged, textEditingChanged: textEditingChanged, currentSave: currentSave,
                         contentOverride: arrangement.active ? arrangement.referenceContent : landscape.active ? landscape.referenceContent : nil,
                         presentationEnabled: arrangement.active ? showsArrangementReference : !landscape.active || showsReference,
-                        rendersFriend: false, inlineDexSearch: arrangement.active && arrangement.multiview)
+                        rendersFriend: false, inlineDexSearch: arrangement.active && arrangement.multiview,
+                        debug: debug, debugSettings: debugSettings)
                         .frame(width: max(0, reference.width), height: max(0, reference.height - headerHeight))
                         .allowsHitTesting(arrangement.active ? showsArrangementReference && !arrangement.editing : landscape.active ? showsReference && !landscape.editing : !legacyFriend)
                         .accessibilityElement(children: .contain)
@@ -523,6 +533,7 @@ struct BoundCompanionPresentation: View {
             multiviewTab("DOCS", content: .bosses)
             multiviewTab("TYPES", content: .types)
             multiviewTab("LOG", content: .connections)
+            if arrangement.contents.contains(.debug) { multiviewTab("DEBUG", content: .debug) }
         }
         .background(Color(uiColor: .systemBackground))
         .clipShape(UnevenRoundedRectangle(topLeadingRadius: 8, topTrailingRadius: 8))

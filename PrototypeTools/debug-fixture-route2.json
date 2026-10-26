@@ -1,0 +1,1998 @@
+{
+  "version": 4,
+  "stage": "route2-setup",
+  "romSHA256": "02f97ffa88f71015d2da5df114c0bf48d7c80f37f64d10075a81fef2dc6d8a79",
+  "provenance": {
+    "kind": "Actual VBA candidate02f native Mart entry; later ordinary-button route from mGBA remains subject to live VBA endpoint checks",
+    "ledgerSHA256": "c9c3de42e3e4c636a3aeda56f3b0eb8414e8bce0ece7497a10ed7109934e5b88",
+    "stateConversion": false,
+    "priorRecipeSHA256": "c7bcc77ba32c6e7d82d17684f40a45fe5727659254538dc412c8b7e5dc857dc0",
+    "liveMartEntryAuditSHA256": {
+      "controller": "9874bcf6d32f20f6a409b50c3cc93d5b683fae1c3188bdfbc524f65c63491241",
+      "buddy": "a428c97b07d615b950b2ad7ceb61c2d32ac5de3dbdd9afeb8f8028f959155f9a"
+    },
+    "nativeParcelCompletionStateSHA256": "bdad2cc3f9411aa40543b4f8166eb0155eb2b7c5ee714fd5f850e3d98274fb26",
+    "nativeRoute1GeometrySHA256": "cce0727935a0befaafa5ef15a5aa3b2fe5ad5bf9fa4a60ad746c8ce2a73af896",
+    "nativeRoute1PathSHA256": "728c3161351b75dce8c2e2a4c6db436502c640a5ccf6390d50222edcdfbc1c3c"
+  },
+  "steps": [
+    {
+      "id": "route1-probe-10",
+      "frames": 500,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 16,
+          "frames": 80
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 64,
+          "frames": 310
+        },
+        {
+          "mask": 0,
+          "frames": 50
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 19,
+      "x": 18,
+      "y": 32
+    },
+    {
+      "id": "route1-probe-11",
+      "frames": 800,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 32,
+          "frames": 160
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 64,
+          "frames": 530
+        },
+        {
+          "mask": 0,
+          "frames": 50
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 19,
+      "x": 8,
+      "y": 27
+    },
+    {
+      "id": "route1-probe-12",
+      "frames": 460,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 16,
+          "frames": 64
+        },
+        {
+          "mask": 0,
+          "frames": 36
+        },
+        {
+          "mask": 64,
+          "frames": 80
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 32,
+          "frames": 48
+        },
+        {
+          "mask": 0,
+          "frames": 42
+        },
+        {
+          "mask": 64,
+          "frames": 80
+        },
+        {
+          "mask": 0,
+          "frames": 50
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 19,
+      "x": 9,
+      "y": 17
+    },
+    {
+      "id": "route1-probe-13",
+      "frames": 650,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 16,
+          "frames": 112
+        },
+        {
+          "mask": 0,
+          "frames": 38
+        },
+        {
+          "mask": 64,
+          "frames": 240
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 32,
+          "frames": 64
+        },
+        {
+          "mask": 0,
+          "frames": 36
+        },
+        {
+          "mask": 64,
+          "frames": 70
+        },
+        {
+          "mask": 0,
+          "frames": 30
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 1,
+      "x": 24,
+      "y": 38
+    },
+    {
+      "id": "viridian-mart-approach",
+      "frames": 884,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 64,
+          "frames": 112
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 32,
+          "frames": 32
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 64,
+          "frames": 176
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 16,
+          "frames": 224
+        },
+        {
+          "mask": 0,
+          "frames": 200
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 1,
+      "x": 36,
+      "y": 20
+    },
+    {
+      "id": "mart-native-entry",
+      "frames": 46,
+      "inputs": [
+        {
+          "mask": 64,
+          "frames": 16
+        },
+        {
+          "mask": 0,
+          "frames": 30
+        }
+      ],
+      "mapGroup": 5,
+      "mapNumber": 3,
+      "x": 4,
+      "y": 7
+    },
+    {
+      "id": "mart-parcel-complete",
+      "frames": 1200,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 1,
+          "frames": 4
+        },
+        {
+          "mask": 0,
+          "frames": 176
+        },
+        {
+          "mask": 1,
+          "frames": 4
+        },
+        {
+          "mask": 0,
+          "frames": 196
+        },
+        {
+          "mask": 1,
+          "frames": 4
+        },
+        {
+          "mask": 0,
+          "frames": 196
+        },
+        {
+          "mask": 1,
+          "frames": 4
+        },
+        {
+          "mask": 0,
+          "frames": 196
+        },
+        {
+          "mask": 1,
+          "frames": 4
+        },
+        {
+          "mask": 0,
+          "frames": 196
+        },
+        {
+          "mask": 2,
+          "frames": 4
+        },
+        {
+          "mask": 0,
+          "frames": 196
+        }
+      ],
+      "mapGroup": 5,
+      "mapNumber": 3,
+      "x": 4,
+      "y": 3
+    },
+    {
+      "id": "viridian-parcel-exit",
+      "frames": 284,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 128,
+          "frames": 64
+        },
+        {
+          "mask": 0,
+          "frames": 200
+        }
+      ],
+      "mapGroup": 5,
+      "mapNumber": 3,
+      "x": 4,
+      "y": 7
+    },
+    {
+      "id": "viridian-mart-door-out",
+      "frames": 400,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 128,
+          "frames": 32
+        },
+        {
+          "mask": 0,
+          "frames": 348
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 1,
+      "x": 36,
+      "y": 20
+    },
+    {
+      "id": "viridian-return-south",
+      "frames": 900,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 32,
+          "frames": 224
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 128,
+          "frames": 176
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 16,
+          "frames": 32
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 128,
+          "frames": 128
+        },
+        {
+          "mask": 0,
+          "frames": 200
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 1,
+      "x": 24,
+      "y": 39
+    },
+    {
+      "id": "route1-return-entry",
+      "frames": 250,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 128,
+          "frames": 64
+        },
+        {
+          "mask": 0,
+          "frames": 166
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 19,
+      "x": 12,
+      "y": 3
+    },
+    {
+      "id": "route1-return-south",
+      "frames": 0,
+      "inputs": [],
+      "mapGroup": 3,
+      "mapNumber": 19,
+      "x": 12,
+      "y": 39,
+      "walk": [
+        {
+          "x": 12,
+          "y": 3,
+          "block": 12508,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 4,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 13,
+          "y": 4,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 14,
+          "y": 4,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 15,
+          "y": 4,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 16,
+          "y": 4,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 16,
+          "y": 5,
+          "block": 12304,
+          "behavior": 0
+        },
+        {
+          "x": 16,
+          "y": 6,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 7,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 8,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 9,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 10,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 11,
+          "block": 12500,
+          "behavior": 0
+        },
+        {
+          "x": 16,
+          "y": 12,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 16,
+          "y": 13,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 14,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 15,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 16,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 17,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 18,
+          "block": 12305,
+          "behavior": 0
+        },
+        {
+          "x": 16,
+          "y": 19,
+          "block": 12296,
+          "behavior": 0
+        },
+        {
+          "x": 15,
+          "y": 19,
+          "block": 12517,
+          "behavior": 0
+        },
+        {
+          "x": 14,
+          "y": 19,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 13,
+          "y": 19,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 19,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 11,
+          "y": 19,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 10,
+          "y": 19,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 10,
+          "y": 20,
+          "block": 12305,
+          "behavior": 0
+        },
+        {
+          "x": 10,
+          "y": 21,
+          "block": 12500,
+          "behavior": 0
+        },
+        {
+          "x": 10,
+          "y": 22,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 10,
+          "y": 23,
+          "block": 12304,
+          "behavior": 0
+        },
+        {
+          "x": 10,
+          "y": 24,
+          "block": 12302,
+          "behavior": 0
+        },
+        {
+          "x": 11,
+          "y": 24,
+          "block": 12303,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 24,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 12,
+          "y": 25,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 12,
+          "y": 26,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 12,
+          "y": 27,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 12,
+          "y": 28,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 12,
+          "y": 29,
+          "block": 12500,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 30,
+          "block": 12508,
+          "behavior": 0
+        },
+        {
+          "x": 11,
+          "y": 30,
+          "block": 12548,
+          "behavior": 0
+        },
+        {
+          "x": 10,
+          "y": 30,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 9,
+          "y": 30,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 8,
+          "y": 30,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 8,
+          "y": 31,
+          "block": 12296,
+          "behavior": 0
+        },
+        {
+          "x": 8,
+          "y": 32,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 8,
+          "y": 33,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 8,
+          "y": 34,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 8,
+          "y": 35,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 9,
+          "y": 35,
+          "block": 12292,
+          "behavior": 0
+        },
+        {
+          "x": 10,
+          "y": 35,
+          "block": 12296,
+          "behavior": 0
+        },
+        {
+          "x": 11,
+          "y": 35,
+          "block": 12297,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 35,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 12,
+          "y": 36,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 12,
+          "y": 37,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 12,
+          "y": 38,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 12,
+          "y": 39,
+          "block": 12301,
+          "behavior": 2
+        }
+      ]
+    },
+    {
+      "id": "pallet-return-entry",
+      "frames": 260,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 128,
+          "frames": 64
+        },
+        {
+          "mask": 0,
+          "frames": 176
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 0,
+      "x": 12,
+      "y": 3
+    },
+    {
+      "id": "oak-parcel-approach",
+      "frames": 500,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 128,
+          "frames": 176
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 16,
+          "frames": 64
+        },
+        {
+          "mask": 0,
+          "frames": 200
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 0,
+      "x": 16,
+      "y": 14
+    },
+    {
+      "id": "oak-lab-enter",
+      "frames": 350,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 64,
+          "frames": 48
+        },
+        {
+          "mask": 0,
+          "frames": 282
+        }
+      ],
+      "mapGroup": 4,
+      "mapNumber": 3,
+      "x": 6,
+      "y": 12
+    },
+    {
+      "id": "oak-parcel-position",
+      "frames": 348,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 64,
+          "frames": 128
+        },
+        {
+          "mask": 0,
+          "frames": 200
+        }
+      ],
+      "mapGroup": 4,
+      "mapNumber": 3,
+      "x": 6,
+      "y": 4
+    },
+    {
+      "id": "oak-deliver-parcel",
+      "frames": 2400,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 192
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 192
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 192
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 192
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 192
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 192
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 192
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 192
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 192
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 192
+        },
+        {
+          "mask": 1,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 192
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 172
+        }
+      ],
+      "mapGroup": 4,
+      "mapNumber": 3,
+      "x": 6,
+      "y": 4
+    },
+    {
+      "id": "oak-deliver-parcel-02",
+      "frames": 4000,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 112
+        },
+        {
+          "mask": 2,
+          "frames": 8
+        },
+        {
+          "mask": 0,
+          "frames": 132
+        }
+      ],
+      "mapGroup": 4,
+      "mapNumber": 3,
+      "x": 6,
+      "y": 4
+    },
+    {
+      "id": "oak-lab-exit-position",
+      "frames": 348,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 128,
+          "frames": 128
+        },
+        {
+          "mask": 0,
+          "frames": 200
+        }
+      ],
+      "mapGroup": 4,
+      "mapNumber": 3,
+      "x": 6,
+      "y": 12
+    },
+    {
+      "id": "oak-lab-exit",
+      "frames": 320,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 128,
+          "frames": 48
+        },
+        {
+          "mask": 0,
+          "frames": 252
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 0,
+      "x": 16,
+      "y": 14
+    },
+    {
+      "id": "pallet-return-north",
+      "frames": 604,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 32,
+          "frames": 64
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 64,
+          "frames": 224
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 16,
+          "frames": 16
+        },
+        {
+          "mask": 0,
+          "frames": 200
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 0,
+      "x": 13,
+      "y": 0
+    },
+    {
+      "id": "route1-second-entry",
+      "frames": 260,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 64,
+          "frames": 64
+        },
+        {
+          "mask": 0,
+          "frames": 176
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 19,
+      "x": 13,
+      "y": 36
+    },
+    {
+      "id": "route1-second-north",
+      "frames": 0,
+      "inputs": [],
+      "mapGroup": 3,
+      "mapNumber": 19,
+      "x": 12,
+      "y": 0,
+      "walk": [
+        {
+          "x": 13,
+          "y": 36,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 13,
+          "y": 35,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 13,
+          "y": 34,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 13,
+          "y": 33,
+          "block": 12508,
+          "behavior": 0
+        },
+        {
+          "x": 13,
+          "y": 32,
+          "block": 12508,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 32,
+          "block": 12508,
+          "behavior": 0
+        },
+        {
+          "x": 11,
+          "y": 32,
+          "block": 12507,
+          "behavior": 0
+        },
+        {
+          "x": 10,
+          "y": 32,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 9,
+          "y": 32,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 8,
+          "y": 32,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 8,
+          "y": 31,
+          "block": 12296,
+          "behavior": 0
+        },
+        {
+          "x": 8,
+          "y": 30,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 8,
+          "y": 29,
+          "block": 12500,
+          "behavior": 0
+        },
+        {
+          "x": 8,
+          "y": 28,
+          "block": 12304,
+          "behavior": 0
+        },
+        {
+          "x": 8,
+          "y": 27,
+          "block": 12296,
+          "behavior": 0
+        },
+        {
+          "x": 9,
+          "y": 27,
+          "block": 12297,
+          "behavior": 0
+        },
+        {
+          "x": 10,
+          "y": 27,
+          "block": 12296,
+          "behavior": 0
+        },
+        {
+          "x": 11,
+          "y": 27,
+          "block": 12297,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 27,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 12,
+          "y": 26,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 12,
+          "y": 25,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 12,
+          "y": 24,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 12,
+          "y": 23,
+          "block": 12304,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 22,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 21,
+          "block": 12500,
+          "behavior": 0
+        },
+        {
+          "x": 11,
+          "y": 21,
+          "block": 12500,
+          "behavior": 0
+        },
+        {
+          "x": 10,
+          "y": 21,
+          "block": 12500,
+          "behavior": 0
+        },
+        {
+          "x": 10,
+          "y": 20,
+          "block": 12305,
+          "behavior": 0
+        },
+        {
+          "x": 10,
+          "y": 19,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 10,
+          "y": 18,
+          "block": 12500,
+          "behavior": 0
+        },
+        {
+          "x": 10,
+          "y": 17,
+          "block": 12305,
+          "behavior": 0
+        },
+        {
+          "x": 11,
+          "y": 17,
+          "block": 12296,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 17,
+          "block": 12305,
+          "behavior": 0
+        },
+        {
+          "x": 13,
+          "y": 17,
+          "block": 12499,
+          "behavior": 0
+        },
+        {
+          "x": 14,
+          "y": 17,
+          "block": 12500,
+          "behavior": 0
+        },
+        {
+          "x": 15,
+          "y": 17,
+          "block": 12501,
+          "behavior": 0
+        },
+        {
+          "x": 16,
+          "y": 17,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 16,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 15,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 14,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 13,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 12,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 16,
+          "y": 11,
+          "block": 12500,
+          "behavior": 0
+        },
+        {
+          "x": 16,
+          "y": 10,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 9,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 8,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 7,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 6,
+          "block": 12301,
+          "behavior": 2
+        },
+        {
+          "x": 16,
+          "y": 5,
+          "block": 12304,
+          "behavior": 0
+        },
+        {
+          "x": 16,
+          "y": 4,
+          "block": 12516,
+          "behavior": 0
+        },
+        {
+          "x": 16,
+          "y": 3,
+          "block": 12500,
+          "behavior": 0
+        },
+        {
+          "x": 16,
+          "y": 2,
+          "block": 12297,
+          "behavior": 0
+        },
+        {
+          "x": 15,
+          "y": 2,
+          "block": 12296,
+          "behavior": 0
+        },
+        {
+          "x": 14,
+          "y": 2,
+          "block": 12297,
+          "behavior": 0
+        },
+        {
+          "x": 13,
+          "y": 2,
+          "block": 12509,
+          "behavior": 0
+        },
+        {
+          "x": 13,
+          "y": 1,
+          "block": 12509,
+          "behavior": 0
+        },
+        {
+          "x": 13,
+          "y": 0,
+          "block": 12509,
+          "behavior": 0
+        },
+        {
+          "x": 12,
+          "y": 0,
+          "block": 12508,
+          "behavior": 0
+        }
+      ]
+    },
+    {
+      "id": "viridian-second-entry",
+      "frames": 260,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 64,
+          "frames": 64
+        },
+        {
+          "mask": 0,
+          "frames": 176
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 1,
+      "x": 24,
+      "y": 36
+    },
+    {
+      "id": "viridian-old-man-trigger",
+      "frames": 780,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 64,
+          "frames": 80
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 32,
+          "frames": 32
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 64,
+          "frames": 368
+        },
+        {
+          "mask": 0,
+          "frames": 200
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 1,
+      "x": 22,
+      "y": 8
+    },
+    {
+      "id": "viridian-old-man-complete",
+      "frames": 2400,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 110
+        },
+        {
+          "mask": 2,
+          "frames": 10
+        },
+        {
+          "mask": 0,
+          "frames": 210
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 1,
+      "x": 22,
+      "y": 8
+    },
+    {
+      "id": "viridian-north-after-old-man",
+      "frames": 420,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 64,
+          "frames": 128
+        },
+        {
+          "mask": 0,
+          "frames": 40
+        },
+        {
+          "mask": 32,
+          "frames": 32
+        },
+        {
+          "mask": 0,
+          "frames": 200
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 1,
+      "x": 20,
+      "y": 0
+    },
+    {
+      "id": "route2-entry",
+      "frames": 260,
+      "inputs": [
+        {
+          "mask": 0,
+          "frames": 20
+        },
+        {
+          "mask": 64,
+          "frames": 64
+        },
+        {
+          "mask": 0,
+          "frames": 176
+        }
+      ],
+      "mapGroup": 3,
+      "mapNumber": 20,
+      "x": 8,
+      "y": 76
+    }
+  ],
+  "nativeOperations": [
+    3
+  ],
+  "pending": [
+    "Route2 aide/DexNav",
+    "Brendan actual native battle and outcome",
+    "Falkner actual native battle and outcome",
+    "Brock stage appropriate team and undefeated target",
+    "No certificate from this route attempt"
+  ]
+}

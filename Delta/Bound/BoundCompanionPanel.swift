@@ -15,6 +15,7 @@ final class BoundCompanionSettingsModel: ObservableObject {
         let assignments: [[BoundPiPContent]]
         let enabled: [Bool]
         let opacities: [Double]
+        let debugAvailable: Bool
     }
     let preferences: BoundPiPPreferences
     @Published private(set) var configuration: Configuration
@@ -42,20 +43,30 @@ final class BoundCompanionSettingsModel: ObservableObject {
         var available = buttonType.splitButtonCount > 0
             ? preferences.orderedContents.filter(assigned.contains)
             : preferences.enabledContents(uiVersion: preferences.uiVersion)
-        if debugGame || preferences.developerFeaturesEnabled {
+        let debugAvailable = debugGame || preferences.developerFeaturesEnabled
+        available.removeAll { $0 == .debug }
+        if debugAvailable {
             available.removeAll { $0 == .connections }
             available.insert(.connections, at: min(3, available.count))
             if !assignments.isEmpty {
                 if !assignments.contains(where: { $0.contains(.connections) }) {
                     assignments[assignments.count - 1].append(.connections)
                 }
-                assignments = assignments.map { choices in available.filter(choices.contains) }
+                assignments = assignments.map { choices in
+                    available.filter(choices.contains) + (choices.contains(.debug) ? [.debug] : [])
+                }
             }
+            available.insert(.debug, at: (available.firstIndex(of: .connections) ?? available.count - 1) + 1)
+            if !assignments.isEmpty, !assignments.contains(where: { $0.contains(.debug) }) {
+                assignments[assignments.count - 1].append(.debug)
+            }
+        } else {
+            assignments = assignments.map { $0.filter { $0 != .debug } }
         }
         return Configuration(uiVersion: preferences.uiVersion, buttonType: buttonType,
             availableContents: available, orderedContents: preferences.orderedContents,
             assignments: assignments, enabled: BoundPiPContent.allCases.map(preferences.isEnabled),
-            opacities: BoundPiPContent.allCases.map(preferences.opacity))
+            opacities: BoundPiPContent.allCases.map(preferences.opacity), debugAvailable: debugAvailable)
     }
     func refresh() {
         let next = Self.read(preferences, debugGame: debugGame)
@@ -109,7 +120,7 @@ final class BoundCompanionState: ObservableObject {
     @Published var macReference: BoundPiPContent = .dex {
         didSet {
             if macReference == .dex || macReference == .bosses { macMidReference = macReference }
-            if [.notes, .types, .connections].contains(macReference) { macBottomReference = macReference }
+            if [.notes, .types, .connections, .debug].contains(macReference) { macBottomReference = macReference }
             if oldValue != macReference { changed?() }
         }
     }
@@ -162,6 +173,8 @@ final class BoundCompanionState: ObservableObject {
                 nextContent = remembered
             }
             self.reconcileSelection(previousContent: nextContent)
+            if !configuration.debugAvailable, self.macReference == .debug { self.macReference = .connections; self.macControllerFocused = false }
+            if !configuration.debugAvailable, self.macBottomReference == .debug { self.macBottomReference = .connections }
             self.refresh()
         }
     }
@@ -274,6 +287,9 @@ final class BoundOverlayView: UIView {
 @MainActor
 enum BoundMacControllerActionRouting {
     static let referenceContents: [BoundPiPContent] = [.dex, .bosses, .notes, .types, .connections]
+    static func referenceContents(for state: BoundCompanionState) -> [BoundPiPContent] {
+        referenceContents + (state.configuration.debugAvailable ? [.debug] : [])
+    }
 
     static func inputMapping(_ mapping: BoundControllerInputMapping) -> BoundControllerInputMapping {
         var mapping = mapping
@@ -325,6 +341,7 @@ enum BoundMacControllerActionRouting {
     }
 
     private static func advanceReference(direction: Int, in state: BoundCompanionState) {
+        let referenceContents = referenceContents(for: state)
         guard let index = referenceContents.firstIndex(of: state.macReference), !referenceContents.isEmpty else { return }
         let next = (index + (direction > 0 ? 1 : -1) + referenceContents.count) % referenceContents.count
         show(referenceContents[next], in: state)
@@ -618,7 +635,7 @@ final class BoundCompanionCoordinator {
             arrangementOpacityGesture = BoundLandscapeOpacityGesture(view: owner.view, model: landscapeArrangement)
             arrangementLayers.owner = owner
             arrangementLayers.controller = owner.controllerView
-            let panel = BoundCompanionPresentation(sharing: sharing, state: state, landscape: landscapeCompanion, arrangement: landscapeArrangement, layers: arrangementLayers, gameID: (owner.game as? Game)?.identifier ?? "", editingChanged: { [weak self] in
+            let panel = BoundCompanionPresentation(sharing: sharing, state: state, landscape: landscapeCompanion, arrangement: landscapeArrangement, layers: arrangementLayers, debug: romMultiplayer.debugSession, debugSettings: { [weak self] in self?.romMultiplayer.debugSettings }, gameID: (owner.game as? Game)?.identifier ?? "", editingChanged: { [weak self] in
                 guard let self, !self.landscapeCompanion.editing, !self.landscapeArrangement.editing else { return }
                 self.notesEditing($0)
             }, textEditingChanged: { [weak self] in self?.textEditing($0) }, currentSave: { [weak self] gameID in
@@ -714,7 +731,7 @@ final class BoundCompanionCoordinator {
         #endif
     }
     private func installMacWorkspace(in owner: GameViewController) {
-        let workspace = BoundMacWorkspaceView(sharing: sharing, onboarding: onboarding, state: state,
+        let workspace = BoundMacWorkspaceView(sharing: sharing, onboarding: onboarding, state: state, debug: romMultiplayer.debugSession, debugSettings: { [weak self] in self?.romMultiplayer.debugSettings },
             geometry: BoundMacWorkspaceGeometry(bounds: owner.view.bounds),
             gameID: (owner.game as? Game)?.identifier ?? "", gameTitle: (owner.game as? Game)?.name ?? "Bound",
             editingChanged: { [weak self] in self?.notesEditing($0) },
@@ -803,6 +820,7 @@ final class BoundCompanionCoordinator {
                 core.resume()
             }
         }
+        romMultiplayer.resumeAfterDebugSwitch = romMultiplayer.resumeAfterObservationRecovery
         sharing.nativeBattle.tradeCompleted = { [weak soul = sharing.soulLink] id, count in
             soul?.probe.timeline.append(id: "trade:" + id.uuidString, kind: .trade,
                                         title: count == 1 ? "Trade completed" : "\(count) trades completed")
@@ -920,6 +938,7 @@ final class BoundCompanionCoordinator {
                 controllerModeLayout: controllerModeLayout)
         }
         landscapeArrangement.setActive(usesLandscapeArrangement)
+        landscapeCompanion.setDebugAvailable(state.configuration.debugAvailable)
         if usesLandscapeArrangement { landscapeArrangement.setContents(state.availableContents) }
         gestures?.setEnabled(!landscapeCompanion.active && !landscapeArrangement.active)
         let referenceTopInset = screenLayout == .bound && !landscape ? safeArea.top : 0
@@ -1424,7 +1443,7 @@ final class BoundCompanionCoordinator {
                 else if landscapeCompanion.active { landscapeCompanion.hideReference() }
                 return
             }
-            guard [.dex, .bosses, .connections].contains(content) else { return }
+            guard [.dex, .bosses, .connections, .debug].contains(content) else { return }
             BoundControllerNavigationEvent.post(command: command, gameID: gameID, content: content)
             return
         }
@@ -1462,7 +1481,7 @@ final class BoundCompanionCoordinator {
             if !landscapeArrangement.referenceVisible { landscapeArrangement.toggleReference() }
         } else if landscapeCompanion.active { landscapeCompanion.selectReference(content) }
     }
-    private var macControllerTabContents: [BoundPiPContent] { BoundMacControllerActionRouting.referenceContents }
+    private var macControllerTabContents: [BoundPiPContent] { BoundMacControllerActionRouting.referenceContents(for: state) }
     var allowsOpacityGesture: Bool { !state.availableContents.isEmpty && state.landscape && state.content != .types && !isEditingNotes }
     private func companionBaseSize(width: CGFloat, content: BoundPiPContent? = nil) -> CGSize {
         let content = content ?? state.content
@@ -1725,6 +1744,8 @@ struct BoundCompanionPanel: View {
     var presentationEnabled = true
     var rendersFriend = true
     var inlineDexSearch = false
+    var debug: BoundDebugSession? = nil
+    var debugSettings: () -> Data? = { nil }
     private var displayedContent: BoundPiPContent { contentOverride ?? state.content }
     private func shows(_ content: BoundPiPContent) -> Bool {
         presentationEnabled && (contentOverride != nil || !state.availableContents.isEmpty) && displayedContent == content
@@ -1748,6 +1769,8 @@ struct BoundCompanionPanel: View {
                     }).id(gameID)
                 } else if shows(.connections) {
                     BoundConnectionsView(feed: sharing.connectionFeed, gameID: gameID)
+                } else if shows(.debug), let debug {
+                    BoundDebugView(session: debug, gameID: gameID, isActive: shows(.debug), settings: debugSettings)
                 } else if shows(.types) {
                     if state.landscape {
                         Image("PokemonTypeChart").resizable().scaledToFit()

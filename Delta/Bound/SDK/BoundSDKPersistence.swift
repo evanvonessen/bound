@@ -83,6 +83,8 @@ protocol BoundSDKManagedCheckpointPersistenceStore: AnyObject {
     func useServerStorage(gameID: String)
     func beginServerSession(identity: RunIdentity, package: CheckpointPackage?, target: BoundSDKEventCursor) throws
     func captureServerCheckpoint(gameID: String, files: [String: Data], history: String) throws -> CheckpointPackage
+    func captureDetachedServerCheckpoint(gameID: String, files: [String: Data], history: String) throws -> CheckpointPackage
+    func acknowledgeServerCheckpoint(_ package: CheckpointPackage, replacing original: CheckpointPackage) throws
     func manifest(gameID: String) throws -> RunManifest?
     func setInitialHistoryTarget(gameID: String, target: BoundSDKEventCursor) throws -> BoundSDKEventCursor
     func completeInitialHistorySync(gameID: String) throws -> RunManifest
@@ -103,6 +105,14 @@ struct BoundSDKManagedCheckpointPersistence<Store: BoundSDKManagedCheckpointPers
 
     func captureServerCheckpoint(gameID: String, files: [String: Data], history: String) throws -> Store.CheckpointPackage {
         try store.captureServerCheckpoint(gameID: gameID, files: files, history: history)
+    }
+
+    func captureDetachedServerCheckpoint(gameID: String, files: [String: Data], history: String) throws -> Store.CheckpointPackage {
+        try store.captureDetachedServerCheckpoint(gameID: gameID, files: files, history: history)
+    }
+
+    func acknowledgeServerCheckpoint(_ package: Store.CheckpointPackage, replacing original: Store.CheckpointPackage) throws {
+        try store.acknowledgeServerCheckpoint(package, replacing: original)
     }
 
     func manifest(gameID: String) throws -> Store.RunManifest? {

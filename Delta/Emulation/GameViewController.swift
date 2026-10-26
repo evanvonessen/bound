@@ -304,6 +304,7 @@ class GameViewController: DeltaCore.GameViewController
         refreshBoundMultiviewInputRouting()
     }
     private(set) var boundRRDexSaveCache = BoundRRDexSaveCache()
+    private var boundServerSaveRequestGate: BoundServerSaveRequestGate?
     func boundRRDexDidLoadSaveState(core: EmulatorCore) {
         guard core === emulatorCore, core.game.type == .gba else { return }
         boundCompanion.sharing.interactions.invalidate()
@@ -390,6 +391,7 @@ class GameViewController: DeltaCore.GameViewController
             } else if let next = newValue as? Game, next.type == .gba {
                 _ = BoundVBABattleBridge.setServerOnlyGameSave(false, for: next.gameSaveURL)
             }
+            boundServerSaveRequestGate?.invalidate(); boundServerSaveRequestGate = nil
             super.game = newValue
             BoundROMUpdateActivity.bindingChanged(self)
             self.emulatorCore?.addObserver(self, forKeyPath: #keyPath(EmulatorCore.state), options: [.old], context: &kvoContext)
@@ -403,9 +405,16 @@ class GameViewController: DeltaCore.GameViewController
             let serverOnly = game?.boundUsesServerMultiplayer == true
             let dexSaveCache = BoundRRDexSaveCache()
             self.boundRRDexSaveCache = dexSaveCache
-            self.emulatorCore?.saveHandler = { [weak self, gameIdentifier, gameSaveURL, dexSaveCache, serverOnly] _ in
+            let saveGate = serverOnly ? self.emulatorCore.map { BoundServerSaveRequestGate.bind(core: $0) } : nil
+            boundServerSaveRequestGate = saveGate
+            self.emulatorCore?.saveHandler = { [weak self, gameIdentifier, gameSaveURL, dexSaveCache, serverOnly, saveGate] source in
                 if serverOnly {
-                    Task { @MainActor [weak self] in self?.boundCompanion.romMultiplayer.nativeServerSaveRequested() }
+                    guard let saveGate, saveGate.acceptsCallback(from: source) else { return }
+                    Task { @MainActor [weak self, weak source] in
+                        guard let self, let source, saveGate.isCurrent(core: source),
+                              self.emulatorCore === source, (self.game as? Game)?.identifier == gameIdentifier else { return }
+                        self.boundCompanion.romMultiplayer.nativeServerSaveRequested(core: source)
+                    }
                     return
                 }
                 self?.updateGameSave()
@@ -2258,6 +2267,8 @@ extension GameViewController: GameViewControllerDelegate
             // Menu presentation arrives asynchronously. Keep the cartridge
             // paused from the request itself, including Game Over's return.
             guard self.game != nil, self.boundCompanion.romMultiplayer.gameOverID == nil,
+                  !self.boundCompanion.romMultiplayer.debugBlocksCoreResume,
+                  !self.boundCompanion.romMultiplayer.finalSaveBlocksCoreResume,
                   !self.boundCompanion.romMultiplayer.needsServerMenu else { return }
             if !resumingNativeActivity,self.boundCompanion.sharing.nativeBattle.blocksCoreResume || self.boundCompanion.sharing.cooperativeDoubles.blocksCoreResume { return }
             if let gameID = (self.game as? Game)?.identifier,

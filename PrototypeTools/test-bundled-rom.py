@@ -24,10 +24,11 @@ class BundledROMTests(unittest.TestCase):
         self.digest = hashlib.sha256(self.data).hexdigest()
         for name in ('PrototypeTools', 'Delta/Bound'):
             (self.root / name).mkdir(parents=True)
-        (self.root / 'PrototypeTools/bundled-rom.json').write_text(json.dumps({'sha256': self.digest}))
+        (self.root / 'PrototypeTools/bundled-rom.json').write_text(json.dumps({'sha256': self.digest,
+            'repository': 'evanvonessen/multi_red', 'tag': 'multiplayer-' + self.digest[:12], 'asset': 'multiplayer.gba'}))
         (self.root / 'private-source.gba').write_bytes(self.data)
         (self.root / 'Delta/Bound/BoundSharedProgression.swift').write_text('romSHA256 = "' + self.digest + '"')
-        self.output = self.root / 'output/Bound.app/rrbin-integrated.gba'
+        self.output = self.root / 'output/Bound.app/multiplayer.gba'
 
     def run_build(self):
         with patch.object(bundler, 'ROOT', self.root), patch.dict(os.environ, {'BOUND_DEVELOPMENT_ROM': str(self.root / 'private-source.gba'), 'TARGET_BUILD_DIR': str(self.root / 'output'), 'UNLOCALIZED_RESOURCES_FOLDER_PATH': 'Bound.app'}):
@@ -45,6 +46,33 @@ class BundledROMTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.run_build()
         self.assertFalse(self.output.exists())
+
+    def test_corrupt_cache_is_replaced_and_old_bundle_resource_is_removed(self):
+        cache = self.root / '.build/bundled-rom' / (self.digest + '.gba')
+        cache.parent.mkdir(parents=True)
+        cache.write_bytes(b'corrupt')
+        self.output.parent.mkdir(parents=True)
+        legacy = self.output.parent / 'rrbin-integrated.gba'
+        legacy.write_bytes(b'obsolete generated resource')
+        self.run_build()
+        self.assertEqual(cache.read_bytes(), self.data)
+        self.assertEqual(self.output.read_bytes(), self.data)
+        self.assertFalse(legacy.exists())
+
+    def test_wrong_full_size_rom_is_rejected(self):
+        (self.root / 'private-source.gba').write_bytes(b'\x01' * len(self.data))
+        with self.assertRaises(SystemExit):
+            self.run_build()
+        self.assertFalse(self.output.exists())
+
+    def test_private_download_uses_exact_manifest_tag_and_asset(self):
+        manifest = json.loads((self.root / 'PrototypeTools/bundled-rom.json').read_text())
+        destination = self.root / 'download.gba'
+        with patch.dict(os.environ, {}, clear=True), patch.object(bundler.shutil, 'which', return_value='/test/gh'), \
+             patch.object(bundler.subprocess, 'run') as run:
+            bundler.download_private_release(manifest, destination)
+        run.assert_called_once_with(['gh', 'release', 'download', manifest['tag'], '--repo', manifest['repository'],
+                                     '--pattern', 'multiplayer.gba', '--output', str(destination)], check=True)
 
     def test_private_token_is_not_forwarded_to_asset_storage(self):
         request = bundler.urllib.request.Request('https://api.github.com/asset', headers={'Authorization': 'Bearer test-only'})

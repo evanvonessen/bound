@@ -518,6 +518,7 @@ final class BoundSoulProbe: @unchecked Sendable {
     }
     private struct Owner {
         var generation=UUID(),coreID:ObjectIdentifier?
+        var gameURL:URL?
         var preview=false,verified=false,nativeAllowed=true,installed=false,blocked=false,criticalGate=false
         var friendly:ObjectIdentifier?,cooperative:ObjectIdentifier?
         var frame=0,nativeGeneration:UInt=0
@@ -629,6 +630,10 @@ final class BoundSoulProbe: @unchecked Sendable {
         catch { requestPause("Soul Link couldn’t save its rules. Retry while the game is paused.");throw error }
     }
     @discardableResult func configure(core:EmulatorCore?,url:URL?,gameID:String="")->Bool {
+        // Game may be a main-queue Core Data object. Resolve its immutable
+        // cartridge location at the owner boundary, never under the probe lock
+        // or from a completed-frame callback that the main queue can await.
+        let gameURL=core?.game.fileURL
         do { try pipeline.flush() }
         catch { requestPause("Soul Link still has unsaved rules. Retry before changing games.");return false }
         let next=UUID()
@@ -638,7 +643,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         }
         _=BoundVBABattleBridge.setSoulFrameBlocked(false,owner:owner.generation.uuidString,generation:owner.nativeGeneration)
         let oldID=owner.coreID,friendly=owner.friendly,cooperative=owner.cooperative
-        owner=Owner();owner.generation=next;owner.coreID=core.map(ObjectIdentifier.init)
+        owner=Owner();owner.generation=next;owner.coreID=core.map(ObjectIdentifier.init);owner.gameURL=gameURL
         if oldID==owner.coreID { owner.friendly=friendly;owner.cooperative=cooperative }
         self.core=core;published=Snapshot();receipt=nil;lock.unlock()
         pipeline.perform {
@@ -670,6 +675,10 @@ final class BoundSoulProbe: @unchecked Sendable {
     func setPreviewEnabled(_ value:Bool) { lock.lock();owner.preview=value;lock.unlock() }
     func setVerified(_ value:Bool) { lock.lock();owner.verified=value;lock.unlock() }
     func setNativeObservationAllowed(_ value:Bool) { lock.lock();owner.nativeAllowed=value;lock.unlock() }
+    private func claimNativeFrameOwnerUnlocked()->UInt {
+        guard let gameURL=owner.gameURL else { return 0 }
+        return BoundVBABattleBridge.claimSoulFrameOwner(owner.generation.uuidString,gameURL:gameURL)
+    }
     func setFriendlyBattleActive(_ active:Bool,for core:EmulatorCore) {
         lock.lock();defer { lock.unlock() };let id=ObjectIdentifier(core)
         if active { owner.friendly=id } else if owner.friendly==id { owner.friendly=nil }
@@ -686,7 +695,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         guard owner.cooperative==ObjectIdentifier(core),party.count==600,force || !owner.blocked else { return (false,false) }
         if published.ledger?.ended != false { return (true,true) }
         if owner.nativeGeneration==0 {
-            owner.nativeGeneration=BoundVBABattleBridge.claimSoulFrameOwner(owner.generation.uuidString,gameURL:core.game.fileURL)
+            owner.nativeGeneration=claimNativeFrameOwnerUnlocked()
             guard owner.nativeGeneration != 0 else {
                 lock.unlock();requestPause("Soul Link frame ownership is unavailable. Keep the game paused.");lock.lock();return (false,false)
             }
@@ -832,7 +841,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         owner.frame+=1
         if !force,!active,owner.frame%30 != 1 { return true }
         if owner.nativeGeneration==0 {
-            owner.nativeGeneration=BoundVBABattleBridge.claimSoulFrameOwner(owner.generation.uuidString,gameURL:core.game.fileURL)
+            owner.nativeGeneration=claimNativeFrameOwnerUnlocked()
             guard owner.nativeGeneration != 0 else {
                 lock.unlock();requestPause("Soul Link frame ownership is unavailable. Keep the game paused.");lock.lock();return false
             }
@@ -915,14 +924,14 @@ final class BoundSoulProbe: @unchecked Sendable {
     func prepareCheckpoint(core:EmulatorCore,timeout:TimeInterval=5) throws {
         guard core.state == .paused else { throw BoundSoulLedger.Error.corrupt }
         lock.lock();let id=owner.coreID,inactive=published.ledger==nil && !owner.installed,token=owner.generation
-        let verify=published.ledger?.ended==false && !owner.verified,allowed=owner.nativeAllowed;lock.unlock()
+        let verify=published.ledger?.ended==false && !owner.verified,allowed=owner.nativeAllowed,gameURL=owner.gameURL;lock.unlock()
         if id==nil && inactive { return }
         guard id==ObjectIdentifier(core) else { throw BoundSoulLedger.Error.corrupt }
         if verify {
             // The paused capture boundary admits the exact owned file rather
             // than waiting for an unrelated asynchronous verifier callback.
-            guard allowed,core.deltaCore.identifier=="com.rileytestut.GBADeltaCore",
-                  (try? BoundPlayerROMProfile(rom:Data(contentsOf:core.game.fileURL,options:.mappedIfSafe))) != nil else { throw BoundSoulLedger.Error.corrupt }
+            guard allowed,let gameURL,core.deltaCore.identifier=="com.rileytestut.GBADeltaCore",
+                  (try? BoundPlayerROMProfile(rom:Data(contentsOf:gameURL,options:.mappedIfSafe))) != nil else { throw BoundSoulLedger.Error.corrupt }
             lock.lock();guard owner.generation==token else { lock.unlock();throw BoundSoulLedger.Error.corrupt }
             owner.verified=true;lock.unlock()
         }
@@ -980,11 +989,11 @@ final class BoundSoulProbe: @unchecked Sendable {
         guard core.state == .paused else { throw BoundSoulLedger.Error.corrupt }
         try drainBeforeMemoryReplacement(core:core)
         lock.lock();let matches=owner.coreID==ObjectIdentifier(core),active=published.ledger?.ended==false
-        let allowed=owner.nativeAllowed,token=owner.generation;lock.unlock()
+        let allowed=owner.nativeAllowed,token=owner.generation,gameURL=owner.gameURL;lock.unlock()
         guard matches else { return }
         if active {
-            guard allowed,core.deltaCore.identifier=="com.rileytestut.GBADeltaCore",
-                  (try? BoundPlayerROMProfile(rom:Data(contentsOf:core.game.fileURL,options:.mappedIfSafe))) != nil else {
+            guard allowed,let gameURL,core.deltaCore.identifier=="com.rileytestut.GBADeltaCore",
+                  (try? BoundPlayerROMProfile(rom:Data(contentsOf:gameURL,options:.mappedIfSafe))) != nil else {
                 requestPause("Soul Link couldn’t restore its native rules. Keep the game paused.");throw BoundSoulLedger.Error.corrupt
             }
         }
@@ -994,7 +1003,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         owner.nativeGeneration=0;owner.verified=active || owner.replacementVerification==true
         owner.replacementVerification=nil
         if active {
-            owner.nativeGeneration=BoundVBABattleBridge.claimSoulFrameOwner(token.uuidString,gameURL:core.game.fileURL)
+            owner.nativeGeneration=claimNativeFrameOwnerUnlocked()
             guard owner.nativeGeneration != 0 else {
                 lock.unlock();requestPause("Soul Link frame ownership is unavailable. Keep the game paused.");lock.lock();throw BoundSoulLedger.Error.corrupt
             }
@@ -1025,7 +1034,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         let policy=value.denied.sorted().reduce(into:Data()) { $0.append($1.bytes) }
         guard BoundVBABattleBridge.setSoulLinkDenied(policy) else { throw BoundSoulLedger.Error.corrupt }
         owner.installed=true;owner.lastPolicy=policy;owner.verified=true
-        owner.nativeGeneration=BoundVBABattleBridge.claimSoulFrameOwner(owner.generation.uuidString,gameURL:core.game.fileURL)
+        owner.nativeGeneration=claimNativeFrameOwnerUnlocked()
         guard owner.nativeGeneration != 0 else { throw BoundSoulLedger.Error.corrupt }
         BoundVBABattleBridge.enforceSoulLink()
     }

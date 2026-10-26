@@ -62,21 +62,21 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(version.version, .option2)
         let original = BoundPiPContent.cycleOrder
         preferences.setContentOrder([.dex, .bosses, .dex])
-        XCTAssertEqual(preferences.orderedContents, [.dex, .bosses, .friend, .notes, .types, .connections])
+        XCTAssertEqual(preferences.orderedContents, [.dex, .bosses, .friend, .notes, .types, .connections, .debug])
         XCTAssertEqual(preferences.enabledContents(uiVersion: .option1), original)
         version.version = .option2
         XCTAssertEqual(version.effectiveVersion, .option2)
         preferences.setEnabled(false, for: .bosses)
         let restarted = BoundPiPPreferences(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)))
         XCTAssertEqual(restarted.uiVersion, .option2)
-        XCTAssertEqual(restarted.enabledContents(uiVersion: restarted.uiVersion), [.dex, .friend, .notes, .types, .connections])
-        XCTAssertEqual(restarted.enabledContents(uiVersion: .option1), [.friend, .notes, .types, .dex, .connections])
+        XCTAssertEqual(restarted.enabledContents(uiVersion: restarted.uiVersion), [.dex, .friend, .notes, .types, .connections, .debug])
+        XCTAssertEqual(restarted.enabledContents(uiVersion: .option1), [.friend, .notes, .types, .dex, .connections, .debug])
         XCTAssertEqual(version.effectiveVersion, .option2)
         XCTAssertEqual(version.version, .option2)
         defaults.set(99, forKey: BoundUIVersionPreferences.key)
         XCTAssertEqual(version.version, .option2)
         defaults.set(["unknown", "notes", "notes"], forKey: "bound.delta.pip.v1.view-order")
-        XCTAssertEqual(restarted.orderedContents, [.notes, .friend, .types, .bosses, .dex, .connections])
+        XCTAssertEqual(restarted.orderedContents, [.notes, .friend, .types, .bosses, .dex, .connections, .debug])
     }
 
     func testConnectionsAppendsToExistingChoicesWithoutResettingAssignmentsOrEnablingMultiplayer() throws {
@@ -89,7 +89,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         defaults.set([], forKey: "bound.delta.pip.v1.button.option4.2.views")
         defaults.set(false, forKey: BoundMultiplayerFeatures.key)
         let preferences = BoundPiPPreferences(defaults: defaults)
-        XCTAssertEqual(preferences.orderedContents.map(\.rawValue), order + ["connections"])
+        XCTAssertEqual(preferences.orderedContents.map(\.rawValue), order + ["connections", "debug"])
         XCTAssertEqual(defaults.stringArray(forKey: "bound.delta.pip.v1.view-order"), order)
         XCTAssertTrue(preferences.isEnabled(.connections))
         XCTAssertEqual(preferences.assignedContents(for: 0, buttonType: .option4), [.friend, .notes])
@@ -139,7 +139,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(state.content, .friend)
         state.setContentOrder([.types, .friend])
         XCTAssertEqual(state.content, .friend, "Changing cycle order preserves the selected panel")
-        XCTAssertEqual(preferences.orderedContents, [.dex, .bosses, .friend, .types, .notes, .connections])
+        XCTAssertEqual(preferences.orderedContents, [.dex, .bosses, .friend, .types, .notes, .connections, .debug])
     }
 
     func testSplitButtonsRememberTheirOwnViewWhenAssignmentsOverlap() throws {
@@ -789,7 +789,7 @@ final class CompanionCycleButtonTests: XCTestCase {
         XCTAssertEqual(preferences.buttonType, .option1, "Unknown stored values safely fall back to Option 1.")
     }
 
-    func testDebugGameAddsConnectionsAsFourthReachableViewWithoutSavingAssignments() throws {
+    func testDebugGameAddsConnectionsAndDebugWithoutSavingAssignments() throws {
         let suite = "BoundDebugFeed." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -798,10 +798,12 @@ final class CompanionCycleButtonTests: XCTestCase {
         let original = state.configuration
         let stored = defaults.persistentDomain(forName: suite) ?? [:]
         state.settings.setDebugGame(true)
-        XCTAssertEqual(state.availableContents, [.friend, .types, .bosses, .connections, .dex])
-        XCTAssertEqual(state.configuration.assignments, [[.friend], [.types, .bosses, .connections, .dex]])
+        XCTAssertEqual(state.availableContents, [.friend, .types, .bosses, .connections, .debug, .dex])
+        XCTAssertEqual(state.configuration.assignments, [[.friend], [.types, .bosses, .connections, .dex, .debug]])
         for _ in 0..<3 { state.advanceButton(1) }
         XCTAssertEqual(state.content, .connections, "The normal iPhone companion button must reach the live feed")
+        state.advanceButton(1); state.advanceButton(1)
+        XCTAssertEqual(state.content, .debug)
         state.settings.setDebugGame(false)
         XCTAssertEqual(state.configuration, original)
         XCTAssertEqual((defaults.persistentDomain(forName: suite) ?? [:]) as NSDictionary, stored as NSDictionary)
@@ -818,6 +820,8 @@ final class CompanionCycleButtonTests: XCTestCase {
             settings.setButtonType(style)
             XCTAssertEqual(settings.availableContents[3], .connections)
             XCTAssertTrue(settings.configuration.assignments.last!.contains(.connections))
+            XCTAssertTrue(settings.configuration.debugAvailable)
+            XCTAssertTrue(settings.configuration.assignments.last!.contains(.debug))
             XCTAssertFalse(preferences.assignedContents(for: style.splitButtonCount - 1).contains(.connections))
         }
         defaults.set(false, forKey: BoundDeveloperFeatures.key)
@@ -870,12 +874,55 @@ final class CompanionCycleButtonTests: XCTestCase {
         state.selected = 1
         let selected = state.content, original = state.configuration
         state.settings.setDebugGame(true)
-        XCTAssertEqual(state.availableContents, [.dex, .notes, .friend, .connections])
+        XCTAssertEqual(state.availableContents, [.dex, .notes, .friend, .connections, .debug])
         XCTAssertEqual(state.content, selected)
         XCTAssertEqual(preferences.assignedContents(for: 1), [])
         state.settings.setDebugGame(false)
         XCTAssertEqual(state.configuration, original)
         XCTAssertEqual(state.content, selected)
+    }
+
+    func testDebugAvailabilityPreservesAssignmentsAndClearsUnavailableMacFocus() throws {
+        let suite = "BoundDebugAvailability." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BoundPiPPreferences(defaults: defaults)
+        preferences.setAssignedContents([.debug], for: 0)
+        preferences.setAssignedContents([.types, .dex], for: 1)
+        let saved = defaults.persistentDomain(forName: suite) ?? [:]
+        let state = BoundCompanionState(preferences: preferences)
+        XCTAssertFalse(state.availableContents.contains(.debug))
+        state.settings.setDebugGame(true)
+        XCTAssertEqual(state.configuration.assignments[0], [.debug])
+        state.macReference = .debug; state.macControllerFocused = true
+        XCTAssertEqual(state.macBottomReference, .debug)
+        state.settings.setDebugGame(false)
+        XCTAssertEqual(state.macReference, .connections)
+        XCTAssertEqual(state.macBottomReference, .connections)
+        XCTAssertFalse(state.macControllerFocused)
+        XCTAssertEqual(preferences.assignedContents(for: 0), [.debug])
+        XCTAssertEqual((defaults.persistentDomain(forName: suite) ?? [:]) as NSDictionary, saved as NSDictionary)
+        state.settings.setDebugGame(true)
+        XCTAssertEqual(state.configuration.assignments[0], [.debug])
+    }
+
+    func testDebugIsFifthMultiviewTabAndUnavailableSelectionIsRestoredWithoutPreferenceLoss() throws {
+        let suite = "BoundDebugMultiview." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = BoundLandscapeArrangementModel(defaults: defaults)
+        model.useOption(.option7)
+        model.setContents([.dex, .bosses, .types, .connections, .debug])
+        XCTAssertEqual(model.contents, [.dex, .bosses, .types, .connections, .debug])
+        model.select(.debug)
+        let saved = defaults.persistentDomain(forName: suite) ?? [:]
+        model.setContents([.dex, .bosses, .types, .connections])
+        XCTAssertEqual(model.referenceContent, .dex)
+        XCTAssertEqual((defaults.persistentDomain(forName: suite) ?? [:]) as NSDictionary, saved as NSDictionary)
+        model.setContents([.dex, .bosses, .types, .connections, .debug])
+        XCTAssertEqual(model.referenceContent, .debug)
+        model.cycleReference()
+        XCTAssertEqual(model.referenceContent, .dex)
     }
 
     func testFreshInstallUsesRequestedPresetWithoutWritingUntilEdited() throws {

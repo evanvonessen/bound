@@ -14,6 +14,10 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     private var spectatorView: UIView?
     private var mediaConfiguration: FriendSharingConfiguration?
     private var generation = BoundSDKGeneration()
+    private var gameplayGeneration = BoundSDKGeneration()
+    private var gameplayIsDebug = false
+    private var gameplayFenced = false
+    private var gameplayRejoining = false
     private var connected = false
     private var videoRequested = false
     private var videoStarted = false
@@ -42,13 +46,13 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         self.client = client
     }
 
-    func configureGameplay(_ configuration: BoundNakamaConfiguration) {
-        gameplay = configuration
-        Task { await BoundNakamaRunService.shared.configure(configuration) }
+    func configureGameplay(_ configuration: BoundNakamaConfiguration, debug: Bool = false) {
+        gameplay = configuration; gameplayIsDebug = debug; gameplayFenced = false
+        if !debug { Task { await BoundNakamaRunService.shared.configure(configuration) } }
     }
 
-    func renewGameplay(_ configuration: BoundNakamaConfiguration) -> Bool {
-        guard let previous = gameplay, connected,
+    func renewGameplay(_ configuration: BoundNakamaConfiguration, debug: Bool = false) -> Bool {
+        guard gameplayIsDebug == debug, let previous = gameplay, connected,
               configuration.roomID == previous.roomID, configuration.ownerID == previous.ownerID,
               configuration.nakamaUserID == previous.nakamaUserID,
               configuration.peerOwnerID == previous.peerOwnerID,
@@ -56,7 +60,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
               configuration.endpoint == previous.endpoint,
               client.renewTicket(configuration.joinTicket, expiresAt: configuration.expiresAt) else { return false }
         gameplay = configuration
-        Task { await BoundNakamaRunService.shared.configure(configuration) }
+        if !debug { Task { await BoundNakamaRunService.shared.configure(configuration) } }
         return true
     }
 
@@ -85,32 +89,46 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         connected = false; pendingPresence = nil; pendingRetainedPresence = nil; pendingInteractions.removeAll(); pendingInteractionBytes = 0
         stopVideo()
         self.event = event; self.remoteView = remoteView; mediaConfiguration = configuration
-        let run = generation.token
         acceptedSends = 0; receivedMessages = 0; peerOnline = false
-        if let gameplay {
-            let inbox = battleInbox, expectedOwner = gameplay.peerOwnerID
-            do {
-                try client.start(configuration: gameplay) { [weak self] value in
-                    if case .message(let opcode, let data, let sender) = value, opcode == 3 {
-                        if sender == expectedOwner { inbox.receive(data) }
-                        return
-                    }
-                    if case .failed = value { inbox.fail() }
-                    DispatchQueue.main.async { [weak self] in self?.receive(value, run: run) }
-                }
-            } catch { event(.failed(.init(.joinRejected))) }
-        } else {
+        if gameplay != nil { _ = startConfiguredGameplay() }
+        else if !gameplayFenced {
             // Ordinary friend video remains available with multiplayer disabled.
             videoRequested = true
         }
         ensureVideo()
     }
 
+    /// Drops only the gameplay lane. Existing ordinary media and native recovery
+    /// ownership survive DEBUG admission loss and generation replacement.
+    func suspendGameplay(fenced: Bool = true) {
+        gameplayGeneration.invalidate(); client.stop(); battleInbox.close()
+        battleInbox = BoundNakamaBattleInbox(); gameplay = nil; gameplayFenced = fenced
+        connected = false; peerOnline = false; pendingPresence = nil; pendingRetainedPresence = nil
+        pendingInteractions.removeAll(); pendingInteractionBytes = 0
+    }
+
+    @discardableResult func startConfiguredGameplay(rejoining: Bool = false) -> Bool {
+        guard let gameplay, event != nil, remoteView != nil else { return false }
+        gameplayGeneration.invalidate(); client.stop(); battleInbox.close(); battleInbox = BoundNakamaBattleInbox()
+        let run = gameplayGeneration.token, inbox = battleInbox, expectedOwner = gameplay.peerOwnerID
+        gameplayRejoining = rejoining; connected = false; peerOnline = false
+        do {
+            try client.start(configuration: gameplay) { [weak self] value in
+                if case .message(let opcode, let data, let sender) = value, opcode == 3 {
+                    if sender == expectedOwner { inbox.receive(data) }; return
+                }
+                if case .failed = value { inbox.fail() }
+                DispatchQueue.main.async { [weak self] in self?.receive(value, run: run) }
+            }
+            return true
+        } catch { event?(.failed(.init(.joinRejected))); return true }
+    }
+
     private func receive(_ value: BoundSDKRoomEvent, run: BoundSDKGeneration.Token) {
-        guard generation.admits(run), let gameplay, event != nil else { return }
+        guard gameplayGeneration.admits(run), let gameplay, event != nil else { return }
         switch value {
         case .joined:
-            connected = true; event?(.joined)
+            connected = true; event?(gameplayRejoining ? .rejoined : .joined); gameplayRejoining = false
             if peerOnline { event?(.remoteJoined) }
             ensureVideo()
         case .roster(let members):
@@ -180,7 +198,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         guard event != nil, (videoRequested || spectatorView != nil), !videoStarted, videoTask == nil, videoRetry == nil,
               let remoteView else { return }
         let run = generation.token, attempt = BoundSDKGeneration.Token(); videoGeneration.replace(with: attempt)
-        if gameplay == nil, let mediaConfiguration {
+        if gameplay == nil, !gameplayFenced, let mediaConfiguration {
             // The ordinary video session owns its existing lease/renewal loop.
             beginVideo(mediaConfiguration, view: remoteView, run: run)
             return
@@ -197,7 +215,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
                 } catch {
                     guard !Task.isCancelled, let self, self.generation.admits(run), self.videoGeneration.admits(attempt) else { return }
                     self.videoTask = nil
-                    if self.gameplay == nil { self.event?(.failed(.init(.tokenRequired))) }
+                    if self.gameplay == nil, !self.gameplayFenced { self.event?(.failed(.init(.tokenRequired))) }
                     else { self.scheduleVideoRetry() }
                 }
             }
@@ -218,7 +236,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
             case .failed, .reconnecting: self.videoConnected = false; self.videoStateChanged?()
             default: break
             }
-            if self.gameplay == nil { self.event?(value) }
+            if self.gameplay == nil, !self.gameplayFenced { self.event?(value) }
             else {
                 switch value {
                 case .remoteFrame: self.event?(value)
@@ -307,8 +325,8 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         return media.send(frame) { result in completion(gameplayOnlyFailure ? .success(()) : result) }
     }
     func stop() {
-        generation.invalidate(); event = nil; connected = false; client.stop(); battleInbox.close()
-        stopVideo(); gameplay = nil; mediaConfiguration = nil; remoteView = nil; spectatorView = nil
+        generation.invalidate(); gameplayGeneration.invalidate(); event = nil; connected = false; client.stop(); battleInbox.close()
+        stopVideo(); gameplay = nil; gameplayFenced = false; gameplayIsDebug = false; mediaConfiguration = nil; remoteView = nil; spectatorView = nil
         pendingPresence = nil; pendingRetainedPresence = nil; pendingInteractions.removeAll(); pendingInteractionBytes = 0; peerOnline = false
     }
 }

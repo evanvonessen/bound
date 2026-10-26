@@ -40,6 +40,10 @@ bundle exec fastlane beta
 `beta` reuses `PrototypeTools/deliver-testflight.py`: it checks the remote,
 archives a clean snapshot of the published commit, verifies pinned sources,
 privacy manifests and signing, then uploads for internal TestFlight testing.
+The archive must also contain the exact `multiplayer.gba` pinned by the source
+revision. Builds download the immutable private game release when a verified
+local cartridge is not supplied. Startup installs that matching cartridge under
+its own content identity, preserving previous cartridges, names and saves.
 Uncommitted and untracked files are excluded. Xcode uses its existing signed-in
 Apple developer account and automatic distribution signing. No new API key,
 password file, or signing repository is required. Xcode automatically manages

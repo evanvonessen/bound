@@ -132,6 +132,74 @@ test('scoped terminal actions retain DEBUG evidence without deleting ordinary st
   assert.ok(h.snapshot().some(r=>r.collection==='bound_debug_payloads_v1'));
   assert.equal(h.rpc(owner,'download',{operationID:op.operationID,generation:1,index:0}).chunk.index,0);
 });
+function terminalReturnFixture(){
+  const h=debugFixture(),ordinary=ordinaryFixture(h),ordinaryBefore=h.snapshot().filter(r=>r.collection==='bound_independent_v2');h.pair();
+  const op=h.prepare().operation,ps={};for(const who of [owner,peer])ps[who]=h.upload(op,who,h.payload(op,who,{bookmark:ordinary.bookmarks[who]}));
+  h.mutate(owner,'commit',{operationID:op.operationID,generation:1});
+  const eventID=operationID(9200),action=(who,action)=>h.mutate(who,'gameplay',{generation:1,request:{action,eventID}}).gameplay;
+  const prepare=()=>{const operation=h.prepare(2,'return',{kind:'previous'},1).operation;return {operationID:operation.operationID,generation:operation.generation};};
+  const proof=who=>h.mutate(who,'terminal',{generation:1}).terminal;
+  const ready=(who,fields,terminalProof=proof(who))=>h.mutate(who,'returnReady',{...fields,deviceID:ps[who].descriptor.deviceID,ownershipEpoch:1,sourceCheckpoint:null,terminalProof,safe:true});
+  return {h,ordinaryBefore,op,ps,eventID,action,prepare,proof,ready};
+}
+test('terminal proof is issued only for an authenticated current terminal source and never for a client loss assertion',()=>{
+  const {h,prepare,ready}=terminalReturnFixture();assert.equal(h.mutate(owner,'terminal',{generation:1}).terminal,null);
+  const fields=prepare(),before=h.snapshot();
+  assert.throws(()=>ready(owner,fields,{eventID:operationID(9200)}),e=>e.message==='debug_terminal_proof');
+  assert.deepEqual(h.snapshot(),before);
+  assert.throws(()=>h.mutate(third,'terminal',{generation:1}));assert.throws(()=>h.mutate(owner,'terminal',{generation:2}));
+  assert.throws(()=>h.mutate(owner,'terminal',{generation:1,nativeVerified:true}));
+});
+test('terminal Return survives restart and dual-menu tombstone without altering ordinary or immutable DEBUG payloads',()=>{
+  const {h,ordinaryBefore,op,action,prepare,proof,ready}=terminalReturnFixture();action(owner,'gameOver');action(owner,'gameOverReturn');action(owner,'gameOverMenu');
+  const fields=prepare(),a=proof(owner);ready(owner,fields,a);
+  assert.equal(action(peer,'gameOverMenu').deleted,true);assert.deepEqual(proof(owner),a);
+  ready(peer,fields);const retained=h.snapshot().filter(r=>r.collection==='bound_debug_payloads_v1');
+  const restarted=debugFixture(h.snapshot());restarted.rpc(owner,'resume');restarted.rpc(peer,'resume');
+  const completed=restarted.mutate(owner,'commit',fields);assert.equal(completed.session.status,'revoked');
+  assert.deepEqual(restarted.snapshot().filter(r=>r.collection==='bound_independent_v2'),ordinaryBefore);
+  assert.deepEqual(restarted.snapshot().filter(r=>r.collection==='bound_debug_payloads_v1'),retained);
+  assert.equal(restarted.rpc(owner,'download',{operationID:op.operationID,generation:1,index:0}).chunk.index,0);
+  for(const who of [owner,peer]){assert.ok(restarted.rpc(who,'return').returnTarget.bookmark);restarted.rpc(who,'returnVerify',{checkpoint:null,deviceID:who,nativeVerified:true});}
+  assert.equal(restarted.rpc(owner,'status').operation.state,'ready');
+});
+test('terminal readiness rejects every foreign owner event device epoch generation and manifest before writes',()=>{
+  const {h,action,prepare,proof,ready}=terminalReturnFixture();action(owner,'gameOver');const fields=prepare(),valid=proof(owner);
+  for(const [key,value] of Object.entries({sessionID:operationID(9201),membershipEpoch:2,generation:2,manifestDigest:'f'.repeat(64),runID:operationID(9202),eventID:operationID(9203),ownerID:peer,deviceID:peer,ownershipEpoch:2})){
+    const before=h.snapshot();assert.throws(()=>ready(owner,fields,{...valid,[key]:value}),e=>e.message==='debug_terminal_proof');assert.deepEqual(h.snapshot(),before,key);
+  }
+});
+test('terminal readiness CAS rejects an intervening real tombstone transition and accepts a freshly checked retry',()=>{
+  const {h,action,prepare,proof,ready}=terminalReturnFixture();action(owner,'gameOver');action(owner,'gameOverReturn');action(owner,'gameOverMenu');
+  const fields=prepare(),terminalProof=proof(owner),write=h.f.nk.storageWrite;let raced=false;
+  h.f.nk.storageWrite=writes=>{
+    if(!raced&&writes.some(w=>w.collection==='bound_debug_v1'&&w.value?.rendezvous?.[owner]?.terminalProof)){
+      raced=true;assert.equal(action(peer,'gameOverMenu').deleted,true);
+    }
+    return write(writes);
+  };
+  assert.throws(()=>ready(owner,fields,terminalProof));assert.ok(raced);
+  assert.deepEqual(h.rpc(owner,'status').operation.preparedOwners,[]);assert.deepEqual(proof(owner),terminalProof);
+  ready(owner,fields,terminalProof);ready(peer,fields);assert.equal(h.mutate(owner,'commit',fields).session.status,'revoked');
+});
+test('head readiness cannot turn into terminal readiness implicitly; explicit abort and a new terminal operation succeed',()=>{
+  const {h,ps,action,prepare,ready}=terminalReturnFixture(),fields=prepare();
+  h.mutate(owner,'returnReady',{...fields,deviceID:ps[owner].descriptor.deviceID,ownershipEpoch:1,sourceCheckpoint:ps[owner].body.checkpoint,safe:true});
+  action(peer,'gameOver');ready(peer,fields);const before=h.snapshot();
+  assert.throws(()=>h.mutate(owner,'commit',fields),e=>e.message==='debug_source_head');assert.deepEqual(h.snapshot(),before);
+  h.mutate(owner,'abort',fields);const next=h.prepare(3,'return',{kind:'previous'},1).operation,newFields={operationID:next.operationID,generation:next.generation};
+  for(const who of [owner,peer])ready(who,newFields);assert.equal(h.mutate(owner,'commit',newFields).session.status,'revoked');
+});
+test('terminal built-in Reload creates a fresh generation without resurrecting the old loss or changing ordinary data',()=>{
+  const {h,ordinaryBefore,op,action}=terminalReturnFixture();action(owner,'gameOver');action(owner,'gameOverReturn');action(owner,'gameOverMenu');action(peer,'gameOverMenu');
+  const terminal=h.snapshot().find(r=>r.collection==='bound_debug_gameplay_v2'&&r.key===`${sid}/1/${op.runID}`);
+  const next=h.prepare(2,'reload',op.source,1).operation;assert.notEqual(next.runID,op.runID);
+  for(const who of [owner,peer])h.upload(next,who,h.payload(next,who,{bookmark:h.rpc(who,'status').own.bookmark}));
+  const loaded=h.mutate(owner,'commit',{operationID:next.operationID,generation:next.generation});assert.equal(loaded.session.currentGeneration,2);
+  assert.equal(h.mutate(owner,'terminal',{generation:2}).terminal,null);
+  assert.deepEqual(h.snapshot().find(r=>r.collection===terminal.collection&&r.key===terminal.key),terminal);
+  assert.deepEqual(h.snapshot().filter(r=>r.collection==='bound_independent_v2'),ordinaryBefore);
+});
 test('DEBUG realtime requires both live native verifications and rejects ordinary tickets',()=>{
   const h=debugFixture(),{op,manifest,a,b}=committed(h);
   assert.throws(()=>h.mutate(owner,'realtime',{generation:1}));verify(h,op,manifest,owner,a);assert.throws(()=>h.mutate(owner,'realtime',{generation:1}));verify(h,op,manifest,peer,b);

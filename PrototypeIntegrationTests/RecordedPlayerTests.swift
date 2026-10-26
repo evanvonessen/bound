@@ -17,16 +17,23 @@ final class NativePlayerSceneSetup {
     private let probe = BoundROMMultiplayerProbe()
     private var host = BoundROMHostState()
     private var frames = 0
-    var isReady: Bool { probe.read()?.permitsFieldInterruption == true && probe.read()?.settingsApplied == true }
+    var request: BoundROMRequest? { probe.read() }
+    var isReady: Bool {
+        guard let request else { return false }
+        return request.permitsFieldInterruption && request.settingsApplied
+    }
 
-    init(core: EmulatorCore, debugPlayer: UInt8 = 0) {
+    init(core: EmulatorCore, debugPlayer: UInt8 = 0, run: UUID = UUID(),
+         localSeed: UInt32 = 0x12345678, partnerSeed: UInt32 = 0x87654321,
+         settings: Data? = nil, playerProfile: BoundNakamaRunService.PlayerProfile? = nil,
+         chooser: Bool = false) {
         var options = BoundMultiplayerSetupOptions()
         options.debug = debugPlayer != 0
         host.debugPlayer = debugPlayer
         host.enabled = true; host.linked = true; host.setupCommitted = true
-        host.externalSetup = true; host.status = .complete; host.run = UUID()
-        host.localSeed = 0x12345678; host.partnerSeed = 0x87654321
-        host.settings = options.settings; host.playerProfile = options.profile
+        host.externalSetup = true; host.status = .complete; host.run = run; host.chooser = chooser
+        host.localSeed = localSeed; host.partnerSeed = partnerSeed
+        host.settings = settings ?? options.settings; host.playerProfile = playerProfile ?? options.profile
         probe.configure(core: core); probe.setVerified(true)
     }
 
@@ -34,7 +41,11 @@ final class NativePlayerSceneSetup {
     func receive(_ core: EmulatorCore) {
         if frames % 60 == 0 { probe.publish(host) }
         frames += 1; probe.receive(core)
-        if probe.read()?.safeField == true { host.externalSetup = false }
+        // The bedroom can report field callbacks before the native first-options
+        // continuation. Keep admission until settings and that continuation end.
+        if let request = probe.read(), request.settingsApplied, request.permitsFieldInterruption {
+            host.externalSetup = false
+        }
     }
 }
 
@@ -761,11 +772,16 @@ final class RecordedPlayerTests: XCTestCase {
     func testActualVBAMRecordingAndReplayAgainstMovingCamera() async throws {
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MultiplayerValidation", isDirectory: true)
-        let rom = root.appendingPathComponent("RadicalRed.gba"), seed = root.appendingPathComponent("seed.sav")
+        let rom = root.appendingPathComponent("RadicalRed.gba")
         guard FileManager.default.fileExists(atPath: rom.path) else { throw XCTSkip("Install private fixtures per Docs/BOUND-MULTIPLAYER.md") }
-        let originalROM = SHA256.hash(data: try Data(contentsOf: rom)), originalSeed = SHA256.hash(data: try Data(contentsOf: seed))
-        let battery = root.appendingPathComponent("vbam-replay-test.sav")
-        try Data(contentsOf: seed).write(to: battery, options: .atomic)
+        let originalROM = SHA256.hash(data: try Data(contentsOf: rom))
+        let battery = root.appendingPathComponent("vbam-replay-test-\(UUID().uuidString).sav")
+        let blankInput = Data(repeating: 0xFF, count: 131_072)
+        let originalInput = SHA256.hash(data: blankInput)
+        try blankInput.write(to: battery, options: .atomic)
+        // This tests a native cold start and camera replay, not SRAM restore.
+        // The blank input is fenced; the cartridge initializes its own state.
+        XCTAssertTrue(BoundVBABattleBridge.setServerOnlyGameSave(true, for: battery))
         let core = try XCTUnwrap(EmulatorCore(game: ReplayGame(fileURL: rom, gameSaveURL: battery), options: [.metal: true]))
         let windowScene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let oldWindow = windowScene.windows.first(where: \.isKeyWindow)
@@ -781,13 +797,15 @@ final class RecordedPlayerTests: XCTestCase {
         UserDefaults.standard.set(true, forKey: BoundPlayerStatePreferences.key)
         display.install(in: owner); display.bind(core: core); display.layout(in: owner, gameView: gameView)
         defer {
+            BoundVBABattleBridge.resetFriendDialogueOwner()
             display.stop(); _ = core.stop(); window.isHidden = true; oldWindow?.makeKeyAndVisible()
             if let oldPreference { UserDefaults.standard.set(oldPreference, forKey: BoundPlayerStatePreferences.key) }
             else { UserDefaults.standard.removeObject(forKey: BoundPlayerStatePreferences.key) }
             UserDefaults.standard.set(oldDeveloperPreference, forKey: BoundDeveloperFeatures.key)
         }
         let probe = display.probe, booted = expectation(description: "VBA-M overworld")
-        let setup = NativePlayerSceneSetup(core: core)
+        let setup = NativePlayerSceneSetup(core: core, debugPlayer: 1,
+            playerProfile: .init(name: "RED", gender: 0))
         var bootFinished = false
         core.updateHandler = { core in
             setup.receive(core)
@@ -797,6 +815,40 @@ final class RecordedPlayerTests: XCTestCase {
         }
         core.rate = 8; XCTAssertTrue(core.start()); await fulfillment(of: [booted], timeout: 60)
         XCTAssertTrue(core.pause()); core.rate = 1
+        let nativeTrainer = try MultiRedAdapter.debugTrainer(core: core)
+        XCTAssertEqual(nativeTrainer.id, 0x12345678); XCTAssertEqual(nativeTrainer.name, "RED")
+        XCTAssertEqual(nativeTrainer.gender, 0); XCTAssertTrue(setup.isReady)
+        let nativeRAM = try XCTUnwrap(BoundGBAMemorySnapshot.capture(readMemory: {
+            core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1)
+        }))
+        XCTAssertEqual(nativeRAM.bytes(at: 0x02024029, count: 1), [1])
+        let nativeParty = BoundSoulMon.decode(Data(try XCTUnwrap(nativeRAM.bytes(at: 0x02024284, count: 100))), stride: 100)
+        XCTAssertEqual(nativeParty.count, 1)
+        XCTAssertEqual(nativeParty.first?.identity.trainer, 0x12345678)
+        XCTAssertEqual(nativeParty.first?.species, 4); XCTAssertEqual(nativeParty.first?.level, 5)
+        // Exercise the same real native message window whose palette-only
+        // clear exposed the clipping regression. The new cold start must not
+        // depend on a historical seed having happened to open that window.
+        XCTAssertTrue(BoundVBABattleBridge.beginFriendDialogue(2, text: "Camera replay check."))
+        let dialogueClosed = expectation(description: "Native message closes before camera recording")
+        var dialogueInput = 0, finishedDialogue = false
+        core.updateHandler = { core in
+            setup.receive(core)
+            let status = BoundVBABattleBridge.advanceFriendDialogue()
+            if dialogueInput == 0, status["menuReady"] as? Bool == true {
+                core.deltaCore.emulatorBridge.activateInput(1, value: 1, playerIndex: 0)
+                dialogueInput = 1
+            } else if dialogueInput == 1 {
+                core.deltaCore.emulatorBridge.deactivateInput(1, playerIndex: 0)
+                dialogueInput = 2
+            }
+            if dialogueInput == 2, status["active"] as? Bool == false,
+               status["ready"] as? Bool == true, !finishedDialogue {
+                finishedDialogue = true; dialogueClosed.fulfill()
+            }
+        }
+        XCTAssertTrue(core.resume()); await fulfillment(of: [dialogueClosed], timeout: 10)
+        XCTAssertTrue(core.pause()); XCTAssertTrue(finishedDialogue)
         gameView.frame = CGRect(x: 0, y: 180, width: owner.view.bounds.width, height: owner.view.bounds.width * 2 / 3)
         gameView.layoutIfNeeded()
 
@@ -911,11 +963,16 @@ final class RecordedPlayerTests: XCTestCase {
         XCTAssertTrue(display.recordedPlayerOverlay.isHidden)
         display.didLoadSaveState(); XCTAssertEqual(display.recordingSession.mode, .idle)
         XCTAssertEqual(SHA256.hash(data: try Data(contentsOf: rom)), originalROM)
-        XCTAssertEqual(SHA256.hash(data: try Data(contentsOf: seed)), originalSeed)
+        XCTAssertEqual(SHA256.hash(data: try Data(contentsOf: battery)), originalInput)
         let report: [String: Any] = ["engine": "VBA-M", "sceneFrames": scenes.count, "recordedSamples": display.recordingSession.track.samples.count,
             "visibleReplayTicks": visible, "distinctReplayPositions": positions.count, "cameraPixelPositions": Set(scenes.map { $0.camera.x }).count,
             "worldPixelPositions": Set(scenes.map { $0.worldFoot.x }).count, "spriteFrames": Set(scenes.map(\.appearance)).count,
-            "recordedWithDiagnosticCardOff": true, "romAndSeedUnchanged": true]
+            "recordedWithDiagnosticCardOff": true, "romAndBlankInputUnchanged": true,
+            "nativeInitialization": "Admitted Debug New Game; original starter created by ROM; no historical save or SRAM restoration claim",
+            "nativeTrainerID": nativeTrainer.id, "nativeTrainerName": nativeTrainer.name,
+            "nativeDialogueOpenedAndClosed": finishedDialogue,
+            "nativeStarterSpecies": nativeParty.first?.species ?? 0,
+            "blankInputSHA256": originalInput.map { String(format: "%02x", $0) }.joined()]
         try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
             .write(to: root.appendingPathComponent("vbam-recorded-player-report.json"), options: .atomic)
     }

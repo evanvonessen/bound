@@ -6,6 +6,8 @@ struct BoundMacWorkspaceView: View {
     @ObservedObject var sharing: FriendSharingSession
     @ObservedObject var onboarding: FriendOnboarding
     @ObservedObject var state: BoundCompanionState
+    var debug: BoundDebugSession? = nil
+    var debugSettings: () -> Data? = { nil }
     var geometry: BoundMacWorkspaceGeometry
     var gameID: String
     var gameTitle: String
@@ -263,6 +265,9 @@ struct BoundMacWorkspaceView: View {
                 referenceButton(.notes, icon: "note.text", label: "Notes", id: "bound.mac-notes")
                 referenceButton(.types, icon: "circle.hexagongrid", label: "Types", id: "bound.mac-types")
                 referenceButton(.connections, icon: "network", label: "Log", id: "bound.mac-connections")
+                if state.configuration.debugAvailable {
+                    referenceButton(.debug, icon: "ladybug", label: "DEBUG", id: "bound.mac-debug")
+                }
             }.padding(3).background(panel)
             ZStack {
                 BoundNotesEditor(gameID: gameID, floating: false, editingChanged: { editing in
@@ -280,6 +285,13 @@ struct BoundMacWorkspaceView: View {
                     .opacity(state.macBottomReference == .connections ? 1 : 0)
                     .allowsHitTesting(referenceIsVisible && state.macBottomReference == .connections)
                     .accessibilityHidden(!referenceIsVisible || state.macBottomReference != .connections)
+                if state.configuration.debugAvailable, let debug {
+                    BoundDebugView(session: debug, gameID: gameID,
+                                   isActive: referenceIsVisible && state.macBottomReference == .debug, settings: debugSettings)
+                        .opacity(state.macBottomReference == .debug ? 1 : 0)
+                        .allowsHitTesting(referenceIsVisible && state.macBottomReference == .debug)
+                        .accessibilityHidden(!referenceIsVisible || state.macBottomReference != .debug)
+                }
             }.id(gameID).frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(.black).clipShape(RoundedRectangle(cornerRadius: 8))

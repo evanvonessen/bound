@@ -64,7 +64,7 @@ enum BoundROMUpdateError: LocalizedError {
     case invalidROM, incompatibleROM, unsafePath, changedBackup, storage, retired, staleSave, busy, olderROM, syncPending, multiplayerPending, clearingSaves
     var errorDescription: String? {
         switch self {
-        case .invalidROM: return "Choose a folder containing the complete rrbin-integrated.gba file."
+        case .invalidROM: return "Choose a folder containing the complete multiplayer.gba file (or rrbin-integrated.gba)."
         case .incompatibleROM: return "This ROM needs a matching Bound update."
         case .unsafePath: return "The update contains an unsupported file path."
         case .changedBackup: return "Save files changed during backup. Close the game and retry."

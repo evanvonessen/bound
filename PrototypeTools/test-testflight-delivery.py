@@ -1,7 +1,10 @@
 """Offline safeguards for publication snapshots and internal upload scope."""
 
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
+import plistlib
 import subprocess
 import tempfile
 import unittest
@@ -63,6 +66,50 @@ class DeliveryTests(unittest.TestCase):
         self.assertTrue(options["manageAppVersionAndBuildNumber"])
         self.assertEqual(options["destination"], "upload")
         self.assertEqual(options["teamID"], "3N83BX5M9G")
+
+    def archive_fixture(self):
+        archive = self.base / 'Bound.xcarchive'
+        app = archive / 'Products/Applications/Bound.app'
+        app.mkdir(parents=True)
+        (app / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': delivery.BUNDLE_ID,
+            'CFBundleShortVersionString': '1.0', 'CFBundleVersion': '99'}))
+        (archive / 'Info.plist').write_bytes(plistlib.dumps({'ApplicationProperties': {'Team': delivery.TEAM_ID}}))
+        source = self.base / 'published-source'
+        (source / 'PrototypeTools').mkdir(parents=True)
+        (source / 'Delta/Bound').mkdir(parents=True)
+        data = bytes(32 * 1024 * 1024)
+        digest = hashlib.sha256(data).hexdigest()
+        (source / 'PrototypeTools/bundled-rom.json').write_text(json.dumps({'sha256': digest, 'tag': 'immutable-test-tag'}))
+        (source / 'Delta/Bound/BoundSharedProgression.swift').write_text('romSHA256 = "' + digest + '"')
+        return archive, app, source, data, digest
+
+    def test_archive_records_exact_rom_from_snapshot_pin(self):
+        archive, app, source, data, digest = self.archive_fixture()
+        (app / 'multiplayer.gba').write_bytes(data)
+        info = delivery.archive_info(archive, source)
+        self.assertEqual(info['rom_resource'], 'multiplayer.gba')
+        self.assertEqual(info['rom_sha256'], digest)
+        self.assertEqual(info['rom_bytes'], len(data))
+        self.assertEqual(info['rom_release_tag'], 'immutable-test-tag')
+
+    def test_archive_refuses_missing_partial_and_wrong_rom(self):
+        archive, app, source, data, _ = self.archive_fixture()
+        (app / 'rrbin-integrated.gba').write_bytes(data)
+        with self.assertRaisesRegex(ValueError, 'missing the complete'):
+            delivery.archive_info(archive, source)
+        (app / 'multiplayer.gba').write_bytes(b'partial')
+        with self.assertRaisesRegex(ValueError, 'missing the complete'):
+            delivery.archive_info(archive, source)
+        (app / 'multiplayer.gba').write_bytes(b'\x01' * len(data))
+        with self.assertRaisesRegex(ValueError, 'does not match'):
+            delivery.archive_info(archive, source)
+
+    def test_archive_refuses_source_contract_pin_drift(self):
+        archive, app, source, data, _ = self.archive_fixture()
+        (app / 'multiplayer.gba').write_bytes(data)
+        (source / 'Delta/Bound/BoundSharedProgression.swift').write_text('romSHA256 = "' + 'f' * 64 + '"')
+        with self.assertRaisesRegex(ValueError, 'source contract'):
+            delivery.archive_info(archive, source)
 
 
 if __name__ == "__main__":

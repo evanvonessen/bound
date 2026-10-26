@@ -156,7 +156,7 @@ final class BoundROMUpdateTests: XCTestCase {
 
     func testBundledCartridgeMatchesCommittedContract() throws {
         let bundle = Bundle(for: Game.self)
-        let url = try XCTUnwrap(bundle.url(forResource: "rrbin-integrated", withExtension: "gba"))
+        let url = try XCTUnwrap(bundle.url(forResource: "multiplayer", withExtension: "gba"))
         let data = try Data(contentsOf: url)
         _ = try BoundROMUpdateContent(data: data, expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
         _ = try BoundPlayerROMProfile(rom: data)
@@ -292,7 +292,7 @@ final class BoundROMUpdateTests: XCTestCase {
             XCTAssertThrowsError(try BoundROMUpdateContent.resetGameIDs(previous: ordinary, incoming: wrong))
         }
         let bundle = Bundle(for: Game.self)
-        let data = try Data(contentsOf: XCTUnwrap(bundle.url(forResource: "rrbin-integrated", withExtension: "gba")))
+        let data = try Data(contentsOf: XCTUnwrap(bundle.url(forResource: "multiplayer", withExtension: "gba")))
         XCTAssertEqual(try BoundROMUpdateContent.enrollment(data: data, gameID: current.gameID), current)
         XCTAssertThrowsError(try BoundROMUpdateContent.enrollment(data: data, gameID: original.gameID))
         XCTAssertThrowsError(try BoundROMUpdateContent(data: data, expectedSHA256: original.sha256))
@@ -300,7 +300,7 @@ final class BoundROMUpdateTests: XCTestCase {
 
     func testSideBySideUpdatePreservesOriginalFilesAndExistingGenerationFenceAcrossRestart() throws {
         let f = try fixture(), original = try profileContent(BoundGameProfiles.original)
-        let data = try Data(contentsOf: XCTUnwrap(Bundle(for: Game.self).url(forResource: "rrbin-integrated", withExtension: "gba")))
+        let data = try Data(contentsOf: XCTUnwrap(Bundle(for: Game.self).url(forResource: "multiplayer", withExtension: "gba")))
         let current = try BoundROMUpdateContent(data: data, expectedSHA256: BoundGameProfiles.current.romSHA256)
         let oldState = BoundROMUpdateStorage.State(current: original, requiresGeneration: true)
         try FileManager.default.createDirectory(at: f.storage.root, withIntermediateDirectories: true)

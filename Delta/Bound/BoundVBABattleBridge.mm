@@ -1441,3 +1441,4 @@ static uint8_t soulQAScriptBackup[128];
 }
 #endif
 @end
+#include "Debug/BoundDebugFixtureOperations.inc"

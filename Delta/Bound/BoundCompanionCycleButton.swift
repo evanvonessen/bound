@@ -32,6 +32,7 @@ final class BoundCompanionCycleButton: UIButton {
             case .notes: "note.text"
             case .dex: "book.closed.fill"
             case .connections: "network"
+            case .debug: "ladybug.fill"
             }
             images[content] = UIImage(systemName: name, withConfiguration: symbolConfiguration)
         }

@@ -220,6 +220,12 @@ checks that the recorded player remains visible and moves while the camera
 changes. Screenshots and JSON diagnostics stay in the private fixture directory
 and ignored `.build/recorded-player-validation/` output.
 
+The camera recording test now creates a unique blank battery input and uses the
+current host ABI to request a native Debug New Game. It checks the actual
+trainer, starter and completed setup before walking. The blank input is only
+cold initialization data; this test does not establish battery-save restoration
+or replace the older reader test's explicit seed-fixture requirement below.
+
 The actual-ROM test reads only private copies installed in the dedicated QA
 app's Documents/MultiplayerValidation directory:
 

@@ -2,7 +2,8 @@ namespace BoundDebug {
     const fields:{[action:string]:string[]}={create:["sessionID","roomID"],list:[],join:["sessionID","membershipEpoch"],resume:["sessionID"],status:["sessionID","operationID?"],
         prepare:["sessionID","membershipEpoch","capability","operationID","expectedGeneration","kind","source","compatibility","settings"],
         captures:["sessionID"],captureComplete:["sessionID","membershipEpoch","capability","operationID","generation","payloadSHA256","cutDigest"],
-        returnReady:["sessionID","membershipEpoch","capability","operationID","generation","deviceID","ownershipEpoch","sourceCheckpoint","safe"],
+        terminal:["sessionID","membershipEpoch","capability","generation"],
+        returnReady:["sessionID","membershipEpoch","capability","operationID","generation","deviceID","ownershipEpoch","sourceCheckpoint","safe","terminalProof?"],
         captureReady:["sessionID","membershipEpoch","capability","operationID","generation","sourceCheckpoint","received","applied","durable"],
         ownerPrepare:["sessionID","membershipEpoch","capability","operationID","generation","descriptor"],chunk:["sessionID","membershipEpoch","capability","operationID","generation","index","data"],
         seal:["sessionID","membershipEpoch","capability","operationID","generation"],commit:["sessionID","membershipEpoch","capability","operationID","generation"],
@@ -49,6 +50,23 @@ namespace BoundDebug {
         if(!state||state.deleted||!state.members||state.members.indexOf(owner)<0||!equal(normalizedIdentity(BoundSaveLibrary.metadata(state,owner).identity),normalizedIdentity(b.identity)))fail("ordinary_owner",7);
         const head=state.saves[owner]&&state.saves[owner].receipt||null;
         return {bookmark:b,currentHead:head,unchanged:sameReceipt(head,b.receipt),record:record};
+    }
+    // The terminal event is absorbing, and survives the engine's compact
+    // tombstone. A native/client assertion is never evidence of a lost run.
+    function terminalSource(nk:nkruntime.Nakama,root:any,owner:string,generation:number):any {
+        if(generation!==root.currentGeneration||!integer(generation)||generation<1)fail("stale_generation");
+        const manifest=read(nk,manifestKey(root.sessionID,generation));
+        if(!manifest||manifest.value.digest!==root.currentManifestDigest)fail("manifest");
+        const source=read(nk,prefix(root.sessionID,generation)+manifest.value.runID,gameplay),state=source&&source.value;
+        if(!state||state.save_id!==manifest.value.runID||!equal((state.members||[]).slice().sort(),root.owners.slice().sort()))fail("terminal_source");
+        if(!state.gameOver){if(state.deleted)fail("terminal_source");return {proof:null,record:source};}
+        const terminal=state.gameOver,device=root.devices[owner],descriptor=manifest.value.owners[owner];
+        if(!uuid.test(terminal.id)||!Array.isArray(terminal.returned)||terminal.returned.some(function(o:string){return root.owners.indexOf(o)<0;})||
+            terminal.returned.some(function(o:string,i:number){return terminal.returned.indexOf(o)!==i;})||state.deleted&&(!terminal.returnRequested||terminal.returned.length!==2)||
+            !device||!descriptor||device.deviceID!==descriptor.deviceID||device.ownershipEpoch!==descriptor.ownershipEpoch||
+            !state.deleted&&state.epoch!==device.ownershipEpoch)fail("terminal_source");
+        return {proof:{sessionID:root.sessionID,membershipEpoch:root.membershipEpoch,generation:generation,manifestDigest:root.currentManifestDigest,
+            runID:manifest.value.runID,eventID:terminal.id,ownerID:owner,deviceID:device.deviceID,ownershipEpoch:device.ownershipEpoch},record:source};
     }
     export const rpc:nkruntime.RpcFunction=function(ctx,logger,nk,payload){
         if(!payload||payload.length>70000)fail("request",3);
@@ -109,6 +127,7 @@ namespace BoundDebug {
         // new capability and cannot write or resurrect a generation.
         if(r.action==="commit"&&op&&op.generation===r.generation&&["committed","ready"].indexOf(op.state)>=0&&root.controllerID===auth.owner)return JSON.stringify(response(nk,auth,root,op));
         admit(nk,auth,root,r,["prepare","commit","revoke"].indexOf(r.action)>=0);
+        if(r.action==="terminal")return JSON.stringify(response(nk,auth,root,op,{terminal:terminalSource(nk,root,auth.owner,r.generation).proof}));
         if(r.action==="realtime")return JSON.stringify(response(nk,auth,root,op,{realtime:realtime(ctx,nk,auth,rootRecord!,r.generation)}));
         if(r.action==="gameplay")return JSON.stringify(response(nk,auth,root,op,{gameplay:gameplayRequest(ctx,logger,nk,auth,rootRecord!,r)}));
         if(r.action==="leave"||r.action==="revoke"){
@@ -191,10 +210,19 @@ namespace BoundDebug {
             if(op.kind!=="return"||r.safe!==true)fail("return_ready");
             const device=root.devices[auth.owner],current=read(nk,manifestKey(root.sessionID,root.currentGeneration));
             const source=current&&read(nk,prefix(root.sessionID,root.currentGeneration)+current.value.runID,gameplay);
-            const head=source&&source.value.saves[auth.owner];
-            if(!device||device.deviceID!==r.deviceID||device.ownershipEpoch!==r.ownershipEpoch||!source||source.value.epoch!==r.ownershipEpoch||
-                (head?head.receipt.checkpoint.toLowerCase():null)!==r.sourceCheckpoint)fail("return_ready");
-            const ready={sourceCheckpoint:r.sourceCheckpoint};if(op.rendezvous[auth.owner]&&!equal(op.rendezvous[auth.owner],ready))fail("immutable_conflict");
+            if(!device||device.deviceID!==r.deviceID||device.ownershipEpoch!==r.ownershipEpoch||!source)fail("return_ready");
+            let ready:any;
+            if(r.terminalProof!==undefined){
+                const terminal=terminalSource(nk,root,auth.owner,root.currentGeneration);
+                if(!terminal.proof||r.sourceCheckpoint!==null||!equal(r.terminalProof,terminal.proof))fail("terminal_proof");
+                ready={terminalProof:terminal.proof};
+            }else{
+                const head=source.value.saves&&source.value.saves[auth.owner];
+                if(source.value.gameOver||source.value.deleted||source.value.epoch!==r.ownershipEpoch||
+                    (head?head.receipt.checkpoint.toLowerCase():null)!==r.sourceCheckpoint)fail("return_ready");
+                ready={sourceCheckpoint:r.sourceCheckpoint};
+            }
+            if(op.rendezvous[auth.owner]&&!equal(op.rendezvous[auth.owner],ready))fail("immutable_conflict");
             op.rendezvous[auth.owner]=ready;if(op.preparedOwners.indexOf(auth.owner)<0)op.preparedOwners.push(auth.owner);op.preparedOwners.sort();if(op.preparedOwners.length===2)op.state="prepared";writes.push(unchanged(source));
         }else if(r.action==="captureReady"){
             if(op.kind!=="custom"||["waiting_cut","preparing"].indexOf(op.state)<0||!cursor(r.received,root.owners)||!cursor(r.applied,root.owners)||!cursor(r.durable,root.owners)||!covers(r.received,r.applied)||!covers(r.received,r.durable))fail("rendezvous");
@@ -241,7 +269,10 @@ namespace BoundDebug {
             if(op.kind==="return"){
                 if(op.preparedOwners.length!==2)fail("waiting_for_buddy");
                 const current=read(nk,manifestKey(root.sessionID,root.currentGeneration)),source=current&&read(nk,prefix(root.sessionID,root.currentGeneration)+current.value.runID,gameplay);if(!source)fail("source");
-                root.owners.forEach(function(o:string){const head=source.value.saves[o];if(!op.rendezvous[o]||(head?head.receipt.checkpoint.toLowerCase():null)!==op.rendezvous[o].sourceCheckpoint)fail("source_head");ordinaryReturn(nk,root,o);
+                root.owners.forEach(function(o:string){const ready=op.rendezvous[o];if(!ready)fail("source_head");
+                    if(ready.terminalProof){const terminal=terminalSource(nk,root,o,root.currentGeneration);if(!terminal.proof||!equal(ready.terminalProof,terminal.proof))fail("terminal_proof");}
+                    else{const head=source.value.saves&&source.value.saves[o];if(source.value.gameOver||source.value.deleted||(head?head.receipt.checkpoint.toLowerCase():null)!==ready.sourceCheckpoint)fail("source_head");}
+                    ordinaryReturn(nk,root,o);
                     const ordinary=read(nk,root.bookmarks[o].identity.run.toLowerCase(),"bound_independent_v2")!;if(!writes.some(function(w){return w.collection===ordinary.collection&&w.key===ordinary.key;}))writes.push(unchanged(ordinary));});
                 writes.push(unchanged(source));op.state="committed";root.status="revoked";root.membershipEpoch++;root.verifications={};
             }else{

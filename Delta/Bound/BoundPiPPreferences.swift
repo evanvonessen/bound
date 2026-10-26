@@ -6,9 +6,9 @@ enum BoundPiPCorner: String, CaseIterable, Sendable {
     case topLeft, topRight, bottomLeft, bottomRight
 }
 enum BoundPiPContent: String, CaseIterable, Sendable {
-    case friend, types, notes, bosses, dex, connections
-    var title: String { self == .dex ? "RR Dex" : rawValue.capitalized }
-    static let cycleOrder: [Self] = [.friend, .notes, .types, .bosses, .dex, .connections]
+    case friend, types, notes, bosses, dex, connections, debug
+    var title: String { self == .dex ? "RR Dex" : self == .debug ? "DEBUG" : rawValue.capitalized }
+    static let cycleOrder: [Self] = [.friend, .notes, .types, .bosses, .dex, .connections, .debug]
 }
 enum BoundPiPHiddenSide: String, Sendable { case left, right }
 

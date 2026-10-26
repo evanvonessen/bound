@@ -412,6 +412,22 @@ actor BoundNakamaRunService {
     private var configuration: BoundNakamaConfiguration?
     private var saveConfiguration: BoundNakamaAuthorization.SaveConfiguration?
     private var saveSession: AppCloudSession?
+    private struct DebugRoute:Sendable {
+        let identity:BoundMultiplayerRunIdentity,sessionID:UUID,generation:Int
+        let perform:@Sendable ([String:BoundDebugJSON]) async throws -> Data
+        let revalidate:@Sendable () async throws -> Void
+    }
+    private let debugRoute:DebugRoute?
+    var isDebug:Bool { debugRoute != nil }
+    init(debugIdentity:BoundMultiplayerRunIdentity,sessionID:UUID,generation:Int,
+         performDebug:@escaping @Sendable ([String:BoundDebugJSON]) async throws -> Data,
+         revalidateDebug:@escaping @Sendable () async throws -> Void) {
+        debugRoute = .init(identity:debugIdentity,sessionID:sessionID,generation:generation,perform:performDebug,revalidate:revalidateDebug)
+        perform={ _ in throw Failure.unavailable };authorizeSaves={ _,_ in throw Failure.unavailable }
+    }
+    func revalidateDebugScope() async throws {
+        guard let debugRoute else { throw Failure.unavailable };try await debugRoute.revalidate()
+    }
     private static let memorySession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
@@ -428,14 +444,19 @@ actor BoundNakamaRunService {
         if [400, 403, 404, 409].contains(response.statusCode) { throw Failure.conflict }
         guard response.statusCode == 200 else { throw Failure.unavailable }
         return data
-    }) { self.perform = perform; self.authorizeSaves = authorizeSaves }
+    }) { self.perform = perform; self.authorizeSaves = authorizeSaves;debugRoute=nil }
     func configure(_ configuration: BoundNakamaConfiguration) {
+        guard debugRoute==nil else { return }
         guard configuration.isValid() else { return }
         if let old = self.configuration, old.ownerID == configuration.ownerID, old.roomID == configuration.roomID,
            old.expiresAt > configuration.expiresAt { return }
         self.configuration = configuration
     }
     private func request(_ action: String, identity: BoundMultiplayerRunIdentity, fields: [String: Any] = [:], rpc: String = "bound_run_v1") async throws -> Data {
+        if let debugRoute {
+            guard rpc=="bound_independent_v2",identity==debugRoute.identity else { throw Failure.conflict }
+            return try await debugRequest(action,fields:fields)
+        }
         if rpc == "bound_independent_v2", let saveSession {
             guard saveSession.owner == identity.owner else { throw Failure.conflict }
             try saveSession.credentials()
@@ -478,6 +499,7 @@ actor BoundNakamaRunService {
         var id: UUID { save_id }
     }
     func configureSaves(session: AppCloudSession, room: String? = nil) async throws -> BoundNakamaAuthorization.SaveConfiguration {
+        guard debugRoute==nil else { throw Failure.conflict }
         let value = try await authorizeSaves(session, room)
         saveSession = session; saveConfiguration = value
         return value
@@ -490,6 +512,13 @@ actor BoundNakamaRunService {
         saveConfiguration = try await authorizeSaves(session, preserveCreationScope ? saveConfiguration?.roomID?.uuidString : nil)
     }
     private func saveRequest(_ action: String, fields: [String: Any] = [:]) async throws -> Data {
+        if let debugRoute {
+            var scoped=fields
+            if let run=scoped.removeValue(forKey:"save_id") as? String {
+                guard UUID(uuidString:run)==debugRoute.identity.run else { throw Failure.conflict }
+            }
+            return try await debugRequest(action,fields:scoped)
+        }
         try await refreshSaveAuthorization(preserveCreationScope: action == "create")
         guard let value = saveConfiguration, value.valid else { throw Failure.unavailable }
         var body = fields; body["action"] = action; body["saveTicket"] = value.saveTicket
@@ -656,6 +685,10 @@ actor BoundNakamaRunService {
         return try JSONDecoder().decode(IndependentState.self,from:data)
     }
     private func refreshUploadAuthorization(identity: BoundMultiplayerRunIdentity, session: AppCloudSession?) async throws {
+        if let debugRoute {
+            guard identity==debugRoute.identity,session==nil || session?.owner==identity.owner else { throw Failure.conflict }
+            try await debugRoute.revalidate();return
+        }
         if saveSession != nil { try await refreshSaveAuthorization(); return }
         guard let session else { return }
         guard session.owner == identity.owner else { throw Failure.conflict }
@@ -664,6 +697,14 @@ actor BoundNakamaRunService {
            configuration.expiresAt > Date().timeIntervalSince1970 + 25 { return }
         let value = try await BoundNakamaAuthorization.fetch(room:identity.roomID,session:session)
         configure(value)
+    }
+    private func debugRequest(_ action:String,fields:[String:Any]) async throws -> Data {
+        guard let debugRoute,debugRoute.identity.valid,debugRoute.generation>0,
+              ["get","events","save","saveChunk","saveSeal","saveDownload","gameOver","gameOverReturn","gameOverMenu","gameOverStatus"].contains(action),
+              Set(fields.keys).isDisjoint(with:["owner","ownerID","runID","save_id","identity","namespace","collection","key","ticket","saveTicket","capability"]) else { throw Failure.conflict }
+        var value=try BoundDebugJSON(data:JSONSerialization.data(withJSONObject:fields)).object ?? [:]
+        value["action"] = .string(action)
+        return try await debugRoute.perform(value)
     }
     func begin(identity: BoundMultiplayerRunIdentity, history: String, predecessor: UUID?) async throws -> State {
         let data = try await request("begin", identity: identity, fields: ["history": history,

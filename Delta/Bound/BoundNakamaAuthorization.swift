@@ -37,3 +37,32 @@ enum BoundNakamaAuthorization {
         return configuration
     }
 }
+
+/// Immutable server-selected DEBUG room scope. The logical friend room remains
+/// the account/continuation identity; it is never used as the DEBUG socket room.
+struct BoundDebugRealtimeScope: Equatable, Sendable {
+    var sessionID: UUID
+    var membershipEpoch: Int
+    var generation: Int
+    var manifestDigest: String
+}
+
+extension BoundNakamaAuthorization {
+    static func debugConfiguration(_ value: BoundDebugJSON, scope: BoundDebugRealtimeScope,
+                                   session: AppCloudSession, logicalRoom: UUID,
+                                   now: TimeInterval = Date().timeIntervalSince1970) throws -> BoundNakamaConfiguration {
+        guard value["protocol"]?.string == "bound-debug-room-v1",
+              value["sessionID"]?.string.flatMap(UUID.init(uuidString:)) == scope.sessionID,
+              value["membershipEpoch"]?.integer == scope.membershipEpoch,
+              value["generation"]?.integer == scope.generation,
+              value["activitiesAllowed"]?.boolean != nil,
+              let endpoint = try session.debugRequest(body: Data("{}".utf8)).url else { throw BoundDebugFailure.invalidResponse }
+        let result = try value.decode(BoundNakamaConfiguration.self)
+        guard result.isValid(now: now), result.ownerID == session.owner,
+              result.members.count == 2, result.roomID != logicalRoom,
+              result.expiresAt > now + 1, result.expiresAt <= now + 35,
+              result.endpoint.host?.lowercased() == endpoint.host?.lowercased(),
+              (result.endpoint.port ?? 443) == (endpoint.port ?? 443) else { throw BoundDebugFailure.invalidResponse }
+        return result
+    }
+}

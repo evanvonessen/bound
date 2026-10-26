@@ -191,11 +191,14 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     var accessibilityPrefix: String { "bound.landscape\(option.rawValue)" }
 
     private static let multiviewContents: [BoundPiPContent] = [.dex, .bosses, .types, .connections]
+    private var availableMultiviewContents: [BoundPiPContent] {
+        Self.multiviewContents + (configuredContents.contains(.debug) ? [.debug] : [])
+    }
 
     init(defaults: UserDefaults? = nil, namespace: String = "bound.landscape") {
         self.defaults = defaults ?? .standard
         self.namespace = namespace
-        let contents = Self.nonFriend(BoundPiPContent.cycleOrder)
+        let contents = Self.nonFriend(BoundPiPContent.cycleOrder.filter { $0 != .debug })
         self.configuredContents = contents
         self.contents = contents
         self.selected = contents.first ?? .notes
@@ -248,7 +251,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
             }
         }
         option = value
-        contents = value == .option6 || value == .option7 ? Self.multiviewContents : configuredContents
+        contents = value == .option6 || value == .option7 ? availableMultiviewContents : configuredContents
         editorAtTop = false
         friendVisible = defaults.object(forKey: key("friend-visible")) as? Bool ?? true
         referenceVisible = defaults.object(forKey: key("reference-visible")) as? Bool ?? true
@@ -382,14 +385,18 @@ final class BoundLandscapeArrangementModel: ObservableObject {
 
     func setContents(_ values: [BoundPiPContent]) {
         configuredContents = Self.nonFriend(values)
-        let normalized = multiview ? Self.multiviewContents : configuredContents
+        let normalized = multiview ? availableMultiviewContents : configuredContents
         guard contents != normalized else { return }
         let referenceWasRemoved = !normalized.contains(referenceContent)
         if referenceWasRemoved && active { beforeSwitch?() }
         contents = normalized
         if !normalized.contains(selected) { selected = normalized.first ?? .notes }
+        let unavailableDebug = referenceContent == .debug && !normalized.contains(.debug)
         if !normalized.contains(referenceContent) { referenceContent = normalized.first ?? .notes }
-        defaults.set(referenceContent.rawValue, forKey: key("reference-content"))
+        if normalized.contains(.debug), defaults.string(forKey: key("reference-content")) == BoundPiPContent.debug.rawValue {
+            referenceContent = .debug; selected = .debug
+        }
+        if !unavailableDebug { defaults.set(referenceContent.rawValue, forKey: key("reference-content")) }
         needsLayout?()
     }
 
@@ -1155,7 +1162,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
         case .friend: BoundLandscapeViewPlacement(center: CGPoint(x: 0.75, y: 0.3), widthFraction: 0.28, heightFraction: 0.187, opacity: 1)
         case .dex: BoundLandscapeViewPlacement(center: CGPoint(x: 0.5, y: 0.34), widthFraction: 0.36, heightFraction: 0.72)
         case .bosses: BoundLandscapeViewPlacement(center: CGPoint(x: 0.5, y: 0.34), widthFraction: 0.36, heightFraction: 0.68)
-        case .notes, .types, .connections: BoundLandscapeViewPlacement(center: CGPoint(x: 0.5, y: 0.34), widthFraction: 0.36, heightFraction: 0.65)
+        case .notes, .types, .connections, .debug: BoundLandscapeViewPlacement(center: CGPoint(x: 0.5, y: 0.34), widthFraction: 0.36, heightFraction: 0.65)
         }
     }
     private func defaultSize(for content: BoundPiPContent, canvas: CGRect) -> CGSize {

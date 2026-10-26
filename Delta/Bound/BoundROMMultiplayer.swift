@@ -3,6 +3,7 @@ import CryptoKit
 import DeltaCore
 import UIKit
 import Combine
+import Darwin
 
 /// Only termination intent is stored here, never a gameplay snapshot. Returning
 /// to the menu must survive process loss before either participant acknowledges it.
@@ -388,7 +389,8 @@ struct BoundObservationRecoveryAuthority: Equatable {
         guard session.owner == identity.owner else { throw BoundMultiplayerSaveStore.Failure.ownerMismatch }
         try session.credentials()
         guard stillCurrent() else { throw CancellationError() }
-        _ = try await service.configureSaves(session: session)
+        if await service.isDebug { try await service.revalidateDebugScope() }
+        else { _ = try await service.configureSaves(session: session) }
         guard stillCurrent() else { throw CancellationError() }
         let state = try await service.getSave(identity.run)
         guard stillCurrent() else { throw CancellationError() }
@@ -407,6 +409,25 @@ struct BoundObservationRecoveryAuthority: Equatable {
         // existing authority or make independent offline gameplay require GET.
         if workingStateAuthorized, current == self, originalSession?.isSameSession(as: session) == true { return nil }
         return try await revalidate(session: session, service: service, stillCurrent: stillCurrent)
+    }
+
+    /// Final preparation may renew its authorization, never its retained run,
+    /// device or known ancestry. Terminal recovery has a separate proof path.
+    @MainActor func revalidateFinalSave(session: AppCloudSession, originalSession: AppCloudSession,
+                                       workingStateAuthorized: Bool, current: Self,
+                                       retainedDevice: UUID, currentDevice: UUID,
+                                       service: BoundNakamaRunService, stillCurrent: () -> Bool) async throws -> BoundNakamaRunService.IndependentState? {
+        guard retainedDevice == currentDevice, current.identity == identity,
+              epoch != nil, current.epoch == epoch else { throw BoundNakamaRunService.Failure.conflict }
+        let state = try await revalidateIfRequired(session: session, originalSession: originalSession,
+            workingStateAuthorized: workingStateAuthorized, current: current, service: service, stillCurrent: stillCurrent)
+        if let state {
+            try current.validate(state)
+            guard state.gameOver == nil else { throw BoundNakamaRunService.Failure.conflict }
+        }
+        try Task.checkCancellation()
+        guard stillCurrent() else { throw CancellationError() }
+        return state
     }
 }
 
@@ -473,6 +494,50 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     }
     let probe = BoundROMMultiplayerProbe()
     var debugModeChanged: ((Bool) -> Void)?
+    private var debugAuthorityGeneration = UUID()
+    private var debugInstalledManifest: BoundDebugManifest?
+    private var debugInstalledIdentity: BoundMultiplayerRunIdentity?
+    private var debugInstallationProof: BoundDebugVerification?
+    private var debugAdmission: BoundDebugAdmission?
+    private var debugCaptureOperation: UUID?
+    private var debugCaptureWasRunning = false
+    private var debugSwitchInProgress = false
+    private var debugRestoreHoldsCore = false
+    var debugBlocksCoreResume: Bool { debugCaptureOperation != nil || debugRestoreHoldsCore }
+    private var debugReturning = false
+    private var debugOrdinaryBookmark: BoundDebugBookmark?
+    private struct DebugTerminalTransitionRecord: Codable, Equatable {
+        let proof: BoundDebugTerminalProof
+        let identity: BoundMultiplayerRunIdentity
+        let bookmark: BoundDebugBookmark
+    }
+    private var debugTerminalTransition: DebugTerminalTransitionRecord?
+    private struct DebugReturnInstallation {
+        let bookmark: BoundDebugBookmark
+        let context: BoundDebugHostContext
+        let core: ObjectIdentifier
+        let selection: UUID
+        var receipt: BoundMultiplayerCheckpointReceipt
+        var proof: BoundDebugReturnVerification
+    }
+    private var debugReturnInstallation: DebugReturnInstallation?
+    private var debugFinalCheckpoint: UUID?
+    private var debugAvailabilityObservation: AnyCancellable?
+    var resumeAfterDebugSwitch: (() -> Void)?
+    lazy var debugSession = BoundDebugSession(host: self,
+        storage: BoundDebugDiskStore(directory: store.support.appendingPathComponent("DEBUG Recovery", isDirectory: true)),
+        enabled: { [weak self] in self?.debugAvailable == true && BoundMultiplayerFeatures.isEnabled })
+    private var debugAvailable: Bool { reportedDebugMode || BoundPiPPreferences().developerFeaturesEnabled }
+    private var debugPairAdmitted: Bool {
+        guard let installed = debugInstalledManifest else { return true }
+        guard let admission = debugAdmission else { return false }
+        return admission.sessionID == installed.sessionID && admission.generation == installed.generation
+            && admission.manifestDigest == installed.digest && admission.expiresAt > Date().timeIntervalSince1970
+    }
+    var debugSettings: Data? {
+        var options = BoundMultiplayerSetupOptions(); options.debug = true
+        return options.settings
+    }
     private var reportedDebugMode = false
     private weak var core: EmulatorCore?
     private let sharing: FriendSharingSession
@@ -605,8 +670,13 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     private var serverProfile: BoundNakamaRunService.PlayerProfile?
     private var serverCapturePending = false
     private var finalServerSaveQueued = false
+    private let finalSaveBoundary = BoundServerFinalSaveBoundary()
+    private var finalServerReactivationTask: Task<Void, Never>?
+    private var finalServerReactivationOperation = UUID()
+    var finalSaveBlocksCoreResume: Bool { finalSaveBoundary.ownsSource || finalServerSaveQueued }
     private var finalServerSaveTask: Task<Void, Never>?
     private var finalServerSaveRetry: (@MainActor (AppCloudSession) -> Task<Void, Never>)?
+    private var finalServerSaveReauthorize: (@MainActor (AppCloudSession) async throws -> Void)?
     private var finalServerSaveRun: UUID?
     private var finalServerSaveOwner: UUID?
     private struct ServerContinuationSettlement {
@@ -625,10 +695,20 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         self.sharing = sharing; self.onboarding = onboarding; self.account = account; self.store = store
         eventPersistence = .init(store: store)
         checkpointPersistence = .init(store: store)
+        debugAvailabilityObservation = NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .merge(with: NotificationCenter.default.publisher(for: BoundMultiplayerFeatures.didChange))
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, !self.debugAvailable || !BoundMultiplayerFeatures.isEnabled else { return }
+                    self.debugSession.availabilityChanged()
+                }
+            }
         accountObservation = NotificationCenter.default.publisher(for: BoundFriendAccount.sessionDidChangeNotification, object: account)
             .sink { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, self.serverOnly else { return }
+                    self.debugAuthorityGeneration = UUID(); self.debugReturnInstallation = nil; self.debugSession.availabilityChanged()
                     _ = self.holdForObservationRecoveryIfNeeded()
                     // Account replacement is a presentation/authority boundary,
                     // even while a Game Over is pending. Keep the durable owner-
@@ -662,7 +742,24 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         gameOverTask?.cancel()
     }
     private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
-    private var gameOverStore: BoundSoulGameOverStore { .init(root: store.root.appendingPathComponent("Game Over", isDirectory: true)) }
+    private var gameOverStore: BoundSoulGameOverStore {
+        let folder: String
+        if let debug = debugInstalledManifest { folder = "DEBUG Game Over/\(debug.sessionID.uuidString)/\(debug.generation)" }
+        else { folder = "Game Over" }
+        return .init(root: store.root.appendingPathComponent(folder, isDirectory: true))
+    }
+    private func runService(for identity: BoundMultiplayerRunIdentity) throws -> BoundNakamaRunService {
+        if let debug = debugInstalledManifest {
+            guard identity.run == debug.runID else { throw BoundDebugFailure.stale }
+            return try debugSession.makeRunService(identity: identity)
+        }
+        return BoundNakamaRunService()
+    }
+    private static func authorizeRunService(_ service: BoundNakamaRunService, session: AppCloudSession) async throws {
+        try session.credentials()
+        if await service.isDebug { try await service.revalidateDebugScope() }
+        else { _ = try await service.configureSaves(session: session) }
+    }
     private var identity: BoundMultiplayerRunIdentity? { manifest?.identity ?? setup?.identity ?? incoming?.manifest.identity }
     private func continuationHeads(for context: BoundNativeContinuationContext) -> BoundContinuationHeads? {
         guard serverOnly, let identity, identity.owner == context.owner, identity.run == context.runID,
@@ -719,7 +816,19 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     }
     func bind(core: EmulatorCore?, game: Game?) {
         guard self.core !== core || self.game?.identifier != game?.identifier else { return }
+        guard !finalSaveBoundary.ownsSource || finalSaveBoundary.captured else { self.core?.pause(); return }
         guard !holdForObservationRecoveryIfNeeded(), sharing.soulLink.probe.read().error == nil else { return }
+        if debugInstalledManifest != nil, workingStateAuthorized {
+            guard finalServerSaveQueued, debugFinalCheckpoint != nil else { self.core?.pause(); return }
+        }
+        finalSaveBoundary.release()
+        finalServerSaveReauthorize = nil
+        finalServerReactivationTask?.cancel(); finalServerReactivationTask = nil; finalServerReactivationOperation = UUID()
+        debugAuthorityGeneration = UUID(); debugReturnInstallation = nil; debugSession.availabilityChanged()
+        debugAdmission = nil; debugInstallationProof = nil; debugInstalledManifest = nil; debugInstalledIdentity = nil
+        debugOrdinaryBookmark = nil; debugTerminalTransition = nil; debugFinalCheckpoint = nil; debugCaptureOperation = nil; debugSwitchInProgress = false; debugRestoreHoldsCore = false
+        sharing.setDebugRealtimeProvider(scope: nil, provider: nil)
+        sharing.setDebugSwitchPending(false)
         if self.game?.identifier != game?.identifier {
             reportedDebugMode = false; debugModeChanged?(false)
         }
@@ -915,6 +1024,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     /// Preserve the exact working game separately from the last two-party
     /// checkpoint. This snapshot never becomes a cloud backup on its own.
     @discardableResult func suspend() -> Bool {
+        guard !debugBlocksCoreResume else { return false }
         if let run = identity?.run, pendingGameOvers[run] != nil { return true }
         if sharing.nativeBattle.isActive {
             return sharing.nativeBattle.checkpointForContinuation()
@@ -923,26 +1033,110 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
             return sharing.cooperativeDoubles.checkpointForContinuation()
         }
         if serverOnly {
-            guard workingStateAuthorized else { return false }
-            if finalServerSaveQueued { return true }
-            do {
-                let pending = head?.payload.checkpoint, expected = independentServerHead, previous = snapshotTask
-                guard let session = account.session, let package = try captureServerCheckpoint(final: true) else { return false }
-                let verifiedCursor = sharedServerCursor
-                let settlement = serverContinuationSettlements[package.payload.checkpoint]
-                let account = account, native = sharing.nativeBattle, cooperative = sharing.cooperativeDoubles
-                finalServerSaveRetry = { session in
-                    BoundServerDisconnectSave.enqueue(package: package, previous: previous, expectedHead: expected,
-                        pendingHead: pending, session: session, verifiedCursor: verifiedCursor, onConfirmed: { _ in
-                            guard session.isSameSession(as: account.session) else { throw CancellationError() }
-                            try Self.settle(settlement, native: native, cooperative: cooperative)
-                        })
+            if finalSaveBoundary.ownsSource { return finalSaveBoundary.captured && finalServerSaveQueued }
+            guard workingStateAuthorized, let identity, let core, let session = account.session,
+                  core.state == .paused || core.pause() else { return false }
+            let selection = serverSelection
+            var captureSelection = selection, captureSession = session
+            var captureService: BoundNakamaRunService?
+            let authority = BoundObservationRecoveryAuthority(identity: identity, epoch: setup?.serverEpoch,
+                confirmedHead: independentServerHead, pendingReceipt: head?.receipt)
+            let device = store.deviceID, debugScope = debugInstalledManifest
+            finalServerSaveRun = identity.run; finalServerSaveOwner = session.owner
+            finalServerSaveReauthorize = { [weak self, core] renewed in
+                guard let self else { throw CancellationError() }
+                let retrySelection = self.serverSelection
+                let stillCurrent = { [weak self] in
+                    guard let self else { return false }
+                    return !Task.isCancelled && self.finalSaveBoundary.phase == .failed &&
+                        self.finalServerSaveRun == identity.run && self.finalServerSaveOwner == identity.owner &&
+                        self.core === core && core.state == .paused && self.identity == identity &&
+                        self.manifest?.deviceOwner == device && self.store.deviceID == device &&
+                        self.setup?.serverEpoch == authority.epoch && self.serverSelection == retrySelection &&
+                        renewed.isSameSession(as: self.account.session) && self.debugInstalledManifest == debugScope &&
+                        self.pendingGameOvers[identity.run] == nil && !self.debugBlocksCoreResume &&
+                        !self.sharing.nativeBattle.protectsTemporaryState && !self.sharing.cooperativeDoubles.blocksAutoSave
                 }
-                finalServerSaveRun = package.payload.manifest.identity.run; finalServerSaveOwner = session.owner
-                finalServerSaveTask = finalServerSaveRetry?(session)
-                finalServerSaveQueued = true
-                return true
-            } catch { serverMenuError = error.localizedDescription; return false }
+                guard stillCurrent() else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+                let client = try self.runService(for: identity)
+                let current = BoundObservationRecoveryAuthority(identity: identity, epoch: self.setup?.serverEpoch,
+                    confirmedHead: self.independentServerHead, pendingReceipt: self.head?.receipt)
+                let state = try await authority.revalidateFinalSave(session: renewed, originalSession: captureSession,
+                    workingStateAuthorized: self.workingStateAuthorized && captureSelection == retrySelection,
+                    current: current, retainedDevice: device, currentDevice: self.store.deviceID,
+                    service: client, stillCurrent: stillCurrent)
+                // Apply authenticated history to the same paused source before
+                // capture; never restore server memory over its unsaved facts.
+                if let target = state?.serverCursor {
+                    for _ in 0..<32 {
+                        let before = try self.eventPersistence.journal(gameID: identity.gameID)
+                        if before.applied.covers(target) { break }
+                        let history = try await client.sharedEvents(identity: identity, events: [], cursor: before.received)
+                        guard stillCurrent(), history.gameOver == nil else { throw BoundNakamaRunService.Failure.conflict }
+                        try authority.validate(history); try current.validate(history)
+                        for event in history.events {
+                            _ = try self.eventPersistence.receiveAuthoritativeSharedEvent(gameID: identity.gameID, event: event)
+                            self.sharedServerCursor.insert(event.id)
+                        }
+                        self.journalReplayNeeded = true; try self.journalSoulEvents()
+                        try self.sharing.soulLink.probe.prepareCheckpoint(core: core)
+                        let after = try self.eventPersistence.journal(gameID: identity.gameID)
+                        guard after.applied.covers(target) || after.received != before.received || after.applied != before.applied else {
+                            throw BoundMultiplayerSaveStore.Failure.incomplete
+                        }
+                    }
+                    guard try self.eventPersistence.journal(gameID: identity.gameID).applied.covers(target) else {
+                        throw BoundMultiplayerSaveStore.Failure.incomplete
+                    }
+                }
+                guard stillCurrent() else { throw CancellationError() }
+                captureSession = renewed; captureSelection = retrySelection; captureService = client
+                self.workingStateAuthorized = true
+            }
+            // Close admission before awaiting any producer. In-flight history
+            // still applies its accepted events, but cannot spawn another save.
+            // Capture ancestry only after its existing upload has completed.
+            return finalSaveBoundary.begin(drainRequired: serverTask != nil || gameOverTask != nil || snapshotTask != nil,
+                drain: { [weak self, core] in
+                    guard let self else { throw CancellationError() }
+                    await self.serverTask?.value
+                    await self.gameOverTask?.value
+                    await self.snapshotTask?.value
+                    try Task.checkCancellation()
+                    guard self.core === core, captureSelection == self.serverSelection,
+                          self.serverTask == nil, self.gameOverTask == nil, self.snapshotTask == nil else {
+                        throw BoundMultiplayerSaveStore.Failure.incomplete
+                    }
+                }, capture: { [weak self, core] in
+                    guard let self, self.core === core, core.state == .paused,
+                          self.identity == identity, self.serverSelection == captureSelection,
+                          captureSession.isSameSession(as: self.account.session), self.workingStateAuthorized,
+                          self.pendingGameOvers[identity.run] == nil else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+                    let pending = self.head?.payload.checkpoint, expected = self.independentServerHead
+                    let scopedService = try captureService ?? self.runService(for: identity)
+                    guard let package = try self.captureServerCheckpoint(final: true) else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+                    let verifiedCursor = self.sharedServerCursor
+                    let settlement = self.serverContinuationSettlements[package.payload.checkpoint]
+                    let account = self.account, native = self.sharing.nativeBattle, cooperative = self.sharing.cooperativeDoubles
+                    let debugScope = self.debugInstalledManifest
+                    if debugScope != nil { self.debugFinalCheckpoint = nil }
+                    self.finalServerSaveRetry = { [weak self] session in
+                        BoundServerDisconnectSave.enqueue(package: package, previous: nil, expectedHead: expected,
+                            pendingHead: pending, session: session, verifiedCursor: verifiedCursor, service: scopedService,
+                            onConfirmed: { [weak self] checkpoint in
+                                guard session.isSameSession(as: account.session) else { throw CancellationError() }
+                                try Self.settle(settlement, native: native, cooperative: cooperative)
+                                if let debugScope, self?.debugInstalledManifest == debugScope { self?.debugFinalCheckpoint = checkpoint }
+                            })
+                    }
+                    self.finalServerSaveQueued = true
+                    self.finalServerSaveTask = self.finalServerSaveRetry?(captureSession)
+                    self.finalServerSaveReauthorize = nil
+                }, failed: { [weak self] failure in
+                    guard let self, self.core === core, self.identity == identity else { return }
+                    self.core?.pause(); self.hasUnconfirmedServerSave = true
+                    self.needsServerMenu = true; self.serverMenuError = failure.localizedDescription
+                })
         }
         guard verified, saveFenceReady, workingStateAuthorized, let manifest, manifest.deviceOwner == store.deviceID,
               manifest.identity.owner == account.session?.owner,
@@ -964,24 +1158,46 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         } catch { self.error = error.localizedDescription; return false }
     }
     func setServiceActive(_ value: Bool, temporary: Bool = false) {
-        if value, serverOnly, finalServerSaveQueued, let run = identity?.run {
-            finalServerSaveQueued = false
-            let pending = finalServerSaveTask, selection = serverSelection
-            core?.pause(); workingStateAuthorized = false; needsServerMenu = true
-            Task { [weak self] in
-                await pending?.value
-                guard let self, self.serverSelection == selection, self.servicesActive, BoundMultiplayerFeatures.isEnabled else { return }
+        if value, serverOnly, finalSaveBlocksCoreResume, finalServerReactivationTask == nil, let run = identity?.run {
+            let selection = serverSelection, operation = UUID(); finalServerReactivationOperation = operation
+            core?.pause(); needsServerMenu = true
+            // Do not revoke capture authority while its admitted drain is still
+            // preparing the immutable package. UI/native resume remains fenced.
+            finalServerReactivationTask = Task { [weak self] in
+                guard let self else { return }
+                defer { if self.finalServerReactivationOperation == operation { self.finalServerReactivationTask = nil } }
+                await self.finalSaveBoundary.task?.value
+                await self.finalServerSaveTask?.value
+                guard !Task.isCancelled, self.finalServerReactivationOperation == operation,
+                      !self.debugSwitchInProgress, self.serverSelection == selection,
+                      self.servicesActive, BoundMultiplayerFeatures.isEnabled else { return }
+                if let failure = self.finalSaveBoundary.failure {
+                    self.hasUnconfirmedServerSave = true; self.serverMenuError = failure.localizedDescription
+                    return
+                }
                 if let message = BoundServerDisconnectSave.failureMessage(run: run) {
                     self.hasUnconfirmedServerSave = true; self.serverMenuError = message
                     return
                 }
-                _ = await self.selectServerRun(run)
+                guard self.finalSaveBoundary.captured, self.finalServerSaveQueued else { return }
+                self.workingStateAuthorized = false
+                // The server has confirmed the immutable cut. A subsequent
+                // foreground operation revalidates/restores that exact scope.
+                self.finalSaveBoundary.release(); self.finalServerSaveQueued = false
+                self.finalServerSaveReauthorize = nil
+                if self.debugInstalledManifest != nil { await self.debugSession.reconcileNativeInstallation() }
+                else { _ = await self.selectServerRun(run) }
             }
         }
         if !value {
             friendsRefresh.cancel()
             captureSetupDraft()
-            if temporary {
+            if debugBlocksCoreResume {
+                // Retain a custom cut or incomplete installation verbatim.
+                // Backgrounding cannot package partially replaced RAM or move
+                // a source head after its server rendezvous fence.
+                core?.pause()
+            } else if temporary {
                 // Backgrounding retains this exact execution. A final disconnect
                 // save would force a server reload on foreground and discard a
                 // still-live native battle/trade, even without process death.
@@ -1145,6 +1361,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         do { try finishRun() } catch { self.error = error.localizedDescription }
     }
     private func send<T: Encodable>(_ kind: BoundROMPacket.Kind, _ body: T) {
+        guard debugPairAdmitted else { return }
         guard let owner = account.session?.owner, let data = channel.packet(kind,owner:owner,body:body) else { return }
         _ = sharing.sendMultiplayerPacket(data)
     }
@@ -1309,6 +1526,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
             && !(data[6] == 1 && data[7] == 1)
     }
     private func receive(_ bytes: Data) {
+        guard debugPairAdmitted else { return }
         guard verified, BoundMultiplayerFeatures.isEnabled, let selectedRoom,
               sharing.connectedRoomID == selectedRoom, let owner = account.session?.owner,
               let packet = BoundROMPacket.decode(bytes), packet.owner != owner,
@@ -1434,7 +1652,10 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         host.saving = false; host.status = .complete; host.message = "Saved."
         didCompleteCheckpoint?()
     }
-    private func persistWorldSnapshot(_ state: BoundWorldState) throws {
+    private func persistWorldSnapshot(_ state: BoundWorldState, finalCapture: Bool = false) throws {
+        // Realtime callbacks can outlive the timer's admission fence. Only the
+        // owned final cut may append a world event while closing this source.
+        guard !finalSaveBlocksCoreResume || finalCapture else { return }
         guard let manifest, manifest.requiresInitialHistorySync == false, let game,
               manifest.identity.owner == account.session?.owner, workingStateAuthorized, state.valid else { return }
         let payload = try BoundMultiplayerSaveStore.encode(state)
@@ -1444,9 +1665,14 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         _ = try eventPersistence.appendSharedEvent(gameID:game.identifier,kind:"world",payload:payload,idempotencyKey:"world:" + digest)
         lastWorldDigest = key
     }
-    private func journalSoulEvents() throws {
-        guard let game, let identity, manifest != nil else { return }
-        if manifest?.requiresInitialHistorySync != true {
+    private func journalSoulEvents(exportLocal: Bool = true, retainedIdentity: BoundMultiplayerRunIdentity? = nil) throws {
+        guard let game, let identity = retainedIdentity ?? self.identity, manifest != nil || retainedIdentity != nil else { return }
+        if retainedIdentity != nil {
+            guard try checkpointPersistence.manifest(gameID: game.identifier)?.identity == identity else {
+                throw BoundMultiplayerSaveStore.Failure.ownerMismatch
+            }
+        }
+        if exportLocal, manifest?.requiresInitialHistorySync != true {
             try soulExportCache.export(sharing.soulLink.probe.sharedEvents(),run:identity.run) { key, payload in
                 _ = try eventPersistence.appendSharedEvent(gameID:game.identifier,kind:"soul",payload:payload,idempotencyKey:key)
             }
@@ -1537,6 +1763,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         }
     }
     private func synchronizeIndependentHistory() {
+        guard !finalSaveBlocksCoreResume else { return }
         guard serverTask == nil, now >= serverPollAt, let identity = manifest?.identity,
               account.session?.owner == identity.owner else { return }
         do {
@@ -1643,6 +1870,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         }
     }
     private func uploadSnapshotInBackground(_ package: BoundMultiplayerSavePackage) {
+        guard !finalSaveBlocksCoreResume else { return }
         guard snapshotTask == nil, now >= snapshotRetryAt, let session = account.session,
               session.owner == package.payload.manifest.identity.owner else { return }
         if serverOnly {
@@ -1654,15 +1882,15 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         let operation = UUID(); snapshotOperation = operation
         let expected = independentServerHead, serverManaged = serverOnly
         let settlement = serverManaged ? serverContinuationSettlements[package.payload.checkpoint] : nil
-        let uploader = serverManaged ? BoundNakamaRunService() : snapshotServer
         snapshotTask = Task { [weak self] in
             guard let self else { return }
             defer { if self.snapshotOperation == operation { self.snapshotTask = nil } }
             do {
+                let uploader = try serverManaged ? self.runService(for: package.payload.manifest.identity) : self.snapshotServer
                 var committedAcquisitions: [BoundMultiplayerSharedEvent.ID] = []
                 if self.independentServerHead != package.payload.checkpoint {
                     if serverManaged {
-                        _ = try await uploader.configureSaves(session: session)
+                        try await Self.authorizeRunService(uploader, session: session)
                         let confirmed = try await uploader.uploadIndependent(package, expectedHead: expected, session: session)
                         guard confirmed.identity == package.payload.manifest.identity,
                               confirmed.save_id == package.payload.manifest.identity.run,
@@ -1698,6 +1926,19 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                 for id in committedAcquisitions { self.sharedServerCursor.insert(id) }
                 self.serverUploaded = package.payload.checkpoint
                 self.independentServerHead = package.payload.checkpoint
+                if var returned = self.debugReturnInstallation, let core = self.core,
+                   returned.core == ObjectIdentifier(core), returned.selection == self.serverSelection,
+                   package.payload.manifest.identity == returned.bookmark.identity,
+                   package.payload.manifest.deviceOwner == self.store.deviceID,
+                   self.setup?.serverEpoch == UInt64(returned.bookmark.ownershipEpoch),
+                   self.workingStateAuthorized, self.debugInstalledManifest == nil,
+                   let context = try? self.debugContext(), returned.context.sameAuthority(as: context) {
+                    // Keep the exact confirmed receipt even if a subsequent
+                    // capture replaces head before Return acknowledgement.
+                    // The proof already sent to the client remains unchanged.
+                    returned.receipt = package.receipt
+                    self.debugReturnInstallation = returned
+                }
                 if self.serverOnly { self.host.status = .complete; self.host.message = "Saved to server." }
             } catch {
                 guard self.snapshotOperation == operation else { return }
@@ -2261,9 +2502,9 @@ extension BoundROMMultiplayerCoordinator {
     }
     private func discoverGameOver(for identity: BoundMultiplayerRunIdentity) async -> Bool {
         guard serverOnly, let session = account.session, session.owner == identity.owner else { return false }
-        let client = BoundNakamaRunService()
         do {
-            _ = try await client.configureSaves(session: session)
+            let client = try runService(for: identity)
+            try await Self.authorizeRunService(client, session: session)
             let state = try await client.getSave(identity.run)
             guard session.isSameSession(as: account.session), self.identity?.run == identity.run,
                   let gameOver = state.gameOver else { return false }
@@ -2300,12 +2541,17 @@ extension BoundROMMultiplayerCoordinator {
         let active = identity
         guard pending != nil || active != nil && !needsServerMenu && !serverActivating else { return }
         let operation = UUID(); gameOverOperation = operation; gameOverRetryAt = now + 1
-        let client = BoundNakamaRunService()
         gameOverTask = Task { [weak self] in
             guard let self else { return }
             defer { if self.gameOverOperation == operation { self.gameOverTask = nil } }
             do {
-                _ = try await client.configureSaves(session: session)
+                let client: BoundNakamaRunService
+                if let debug = self.debugInstalledManifest {
+                    guard (pending?.run ?? active?.run) == debug.runID,
+                          let scoped = self.debugInstalledIdentity, scoped.run == debug.runID else { throw BoundDebugFailure.stale }
+                    client = try self.runService(for: scoped)
+                } else { client = BoundNakamaRunService() }
+                try await Self.authorizeRunService(client, session: session)
                 guard !Task.isCancelled, self.gameOverOperation == operation, session.isSameSession(as: self.account.session) else { return }
                 if var record = pending {
                     // A lost start response is harmless: the first accepted ID
@@ -2367,6 +2613,8 @@ extension BoundROMMultiplayerCoordinator {
     /// ordinary games remain closable; an existing execution must first retain
     /// its accepted observations and its usual suspension/checkpoint.
     @discardableResult func prepareForCoreReplacement() -> Bool {
+        guard !debugBlocksCoreResume else { return false }
+        if finalSaveBoundary.ownsSource && !finalSaveBoundary.captured { return false }
         guard !holdForObservationRecoveryIfNeeded() else { return false }
         guard sharing.soulLink.probe.read().error == nil else { return false }
         if core?.state == .running, core?.pause() != true { return false }
@@ -2380,6 +2628,10 @@ extension BoundROMMultiplayerCoordinator {
         // a final save. The second check must not capture a stopped core.
         guard !workingStateAuthorized || finalServerSaveQueued || suspend() else {
             _ = holdForObservationRecoveryIfNeeded()
+            return false
+        }
+        if debugInstalledManifest != nil, workingStateAuthorized, debugFinalCheckpoint == nil {
+            serverMenuError = "Saving DEBUG progress…"
             return false
         }
         return true
@@ -2398,7 +2650,7 @@ extension BoundROMMultiplayerCoordinator {
             serverMenuError = "Sign in to the account that owns this paused run."
             return
         }
-        let selection = serverSelection, client = BoundNakamaRunService()
+        let selection = serverSelection
         serverMenuBusy = true
         defer { if selection == serverSelection { serverMenuBusy = false } }
         let stillCurrent = { [weak self] in
@@ -2409,6 +2661,7 @@ extension BoundROMMultiplayerCoordinator {
                 core.state == .paused && BoundMultiplayerFeatures.isEnabled
         }
         do {
+            let client = try runService(for: identity)
             if pendingGameOvers[identity.run] != nil {
                 // This durable owner-scoped terminal intent already controls
                 // the run. Recover its local facts and presentation; the
@@ -2535,6 +2788,7 @@ extension BoundROMMultiplayerCoordinator {
         serverFriends = onboarding.rooms
     }
     func refreshServerRuns() async {
+        guard debugInstalledManifest == nil else { serverRuns = []; serverMenuError = "Return through DEBUG to open ordinary runs."; return }
         guard serverOnly, let game, let session = account.session else { serverMenuError = "Sign in to view server saves."; return }
         guard !serverMenuBusy, !observationRecoveryRequired else { return }
         let selection = serverSelection, client = BoundNakamaRunService()
@@ -2561,8 +2815,25 @@ extension BoundROMMultiplayerCoordinator {
         }
     }
     private func prepareServerSelection(_ selection: UUID) async throws {
+        guard debugInstalledManifest == nil || debugReturning else { throw BoundDebugFailure.busy }
         guard !holdForObservationRecoveryIfNeeded() else { throw BoundMultiplayerSaveStore.Failure.incomplete }
-        if workingStateAuthorized, !suspend() { throw BoundMultiplayerSaveStore.Failure.incomplete }
+        if workingStateAuthorized, !suspend() {
+            guard finalSaveBoundary.ownsSource else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+            await finalSaveBoundary.task?.value
+            try Task.checkCancellation()
+            guard selection == serverSelection else { throw CancellationError() }
+            guard finalSaveBoundary.captured, finalServerSaveQueued else {
+                throw finalSaveBoundary.failure ?? BoundMultiplayerSaveStore.Failure.incomplete
+            }
+        }
+        if finalSaveBoundary.ownsSource, !finalSaveBoundary.captured {
+            await finalSaveBoundary.task?.value
+            try Task.checkCancellation()
+            guard selection == serverSelection else { throw CancellationError() }
+            guard finalSaveBoundary.captured, finalServerSaveQueued else {
+                throw finalSaveBoundary.failure ?? BoundMultiplayerSaveStore.Failure.incomplete
+            }
+        }
         core?.pause(); workingStateAuthorized = false
         serverTask?.cancel(); serverTask = nil; serverOperation = UUID()
         await finalServerSaveTask?.value
@@ -2572,17 +2843,40 @@ extension BoundROMMultiplayerCoordinator {
             throw BoundNakamaRunService.Failure.unavailable
         }
         finalServerSaveTask = nil; finalServerSaveRetry = nil; finalServerSaveRun = nil; finalServerSaveOwner = nil; finalServerSaveQueued = false
+        finalSaveBoundary.release()
+        finalServerSaveReauthorize = nil
         hasUnconfirmedServerSave = false
         snapshotTask?.cancel(); snapshotTask = nil; snapshotOperation = UUID(); snapshotRetryAt = 0
         pendingAction.clear(); channel.reset(); peerHello = nil
     }
     func retryFinalServerSave() async {
-        guard !serverMenuBusy, let retry = finalServerSaveRetry, let run = finalServerSaveRun else { return }
+        guard !serverMenuBusy, let run = finalServerSaveRun else { return }
         guard let session = account.session, session.owner == finalServerSaveOwner else {
             serverMenuError = "Sign in to the account that owns the unsaved progress."; return
         }
         let selection = serverSelection
-        serverMenuBusy = true; finalServerSaveTask = retry(session)
+        serverMenuBusy = true
+        if finalSaveBoundary.phase == .failed {
+            do {
+                guard let reauthorize = finalServerSaveReauthorize else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+                try await reauthorize(session)
+                guard selection == serverSelection, session.isSameSession(as: account.session) else { throw CancellationError() }
+            } catch {
+                guard selection == serverSelection else { return }
+                serverMenuBusy = false; hasUnconfirmedServerSave = true; serverMenuError = error.localizedDescription
+                return
+            }
+            _ = finalSaveBoundary.retry()
+            await finalSaveBoundary.task?.value
+            guard selection == serverSelection else { return }
+            if let failure = finalSaveBoundary.failure {
+                serverMenuBusy = false; hasUnconfirmedServerSave = true; serverMenuError = failure.localizedDescription
+                return
+            }
+        } else if let retry = finalServerSaveRetry { finalServerSaveTask = retry(session) }
+        guard finalSaveBoundary.captured, finalServerSaveQueued else {
+            serverMenuBusy = false; return
+        }
         await finalServerSaveTask?.value
         guard selection == serverSelection else { return }
         serverMenuBusy = false
@@ -2592,16 +2886,30 @@ extension BoundROMMultiplayerCoordinator {
     }
     func discardUnconfirmedServerSave() {
         guard !serverMenuBusy, !holdForObservationRecoveryIfNeeded() else { return }
+        guard serverTask == nil, gameOverTask == nil, snapshotTask == nil else {
+            serverMenuError = "Final save preparation is still settling accepted work. Retry when it finishes."
+            return
+        }
+        finalSaveBoundary.release()
+        finalServerSaveReauthorize = nil
         if let run = finalServerSaveRun { BoundServerDisconnectSave.acknowledgeFailure(run: run) }
         finalServerSaveTask = nil; finalServerSaveRetry = nil; finalServerSaveRun = nil; finalServerSaveOwner = nil; finalServerSaveQueued = false
         hasUnconfirmedServerSave = false; workingStateAuthorized = false; serverMenuError = nil
     }
     func createServerRun(room: FriendRoom, options: BoundMultiplayerSetupOptions, requestID: UUID) async {
+        guard debugInstalledManifest == nil else { serverMenuError = "Return through DEBUG to open ordinary runs."; return }
         guard serverOnly, verified, !serverMenuBusy, !holdForObservationRecoveryIfNeeded(), options.valid, let game, let session = account.session else { return }
         serverMenuBusy = true; serverMenuError = nil
-        let selection = UUID(), client = BoundNakamaRunService(); serverSelection = selection
+        var selection = serverSelection
+        let sourceSelection = selection
+        let client = BoundNakamaRunService()
         do {
-            try await prepareServerSelection(selection)
+            let destination = try await BoundServerFinalSaveBoundary.nextSelection(after: selection,
+                current: { self.serverSelection }, settle: { try await self.prepareServerSelection($0) })
+            try Task.checkCancellation()
+            guard serverSelection == sourceSelection, session.isSameSession(as: account.session) else { throw CancellationError() }
+            selection = destination
+            serverSelection = selection
             _ = try await client.configureSaves(session: session, room: room.roomID)
             guard serverSelection == selection, session.isSameSession(as: account.session) else { return }
             let state = try await client.createSave(gameID: game.identifier, romSHA256: selectedROMHash,
@@ -2610,17 +2918,31 @@ extension BoundROMMultiplayerCoordinator {
             try await activateServerRun(state, profile: options.profile, selection: selection, client: client, session: session)
         } catch {
             guard serverSelection == selection, session.isSameSession(as: account.session) else { return }
-            core?.pause(); if !holdForObservationRecoveryIfNeeded() { workingStateAuthorized = false }; serverMenuBusy = false
+            core?.pause()
+            // Failed preparation still needs the source's existing authority
+            // for Retry. Never regrant authority revoked by an account change.
+            if !holdForObservationRecoveryIfNeeded(), !finalSaveBoundary.ownsSource || finalSaveBoundary.captured {
+                workingStateAuthorized = false
+            }
+            serverMenuBusy = false
             if !hasUnconfirmedServerSave { serverMenuError = error.localizedDescription }
         }
     }
     /// false means this participant has never chosen their own character.
     @discardableResult func selectServerRun(_ saveID: UUID, profile: BoundNakamaRunService.PlayerProfile? = nil) async -> Bool {
+        guard debugInstalledManifest == nil else { serverMenuError = "Return through DEBUG to open ordinary runs."; return false }
         guard serverOnly, verified, !serverMenuBusy, !holdForObservationRecoveryIfNeeded(), let session = account.session else { return true }
         serverMenuBusy = true; serverMenuError = nil
-        let selection = UUID(), client = BoundNakamaRunService(); serverSelection = selection
+        var selection = serverSelection
+        let sourceSelection = selection
+        let client = BoundNakamaRunService()
         do {
-            try await prepareServerSelection(selection)
+            let destination = try await BoundServerFinalSaveBoundary.nextSelection(after: selection,
+                current: { self.serverSelection }, settle: { try await self.prepareServerSelection($0) })
+            try Task.checkCancellation()
+            guard serverSelection == sourceSelection, session.isSameSession(as: account.session) else { throw CancellationError() }
+            selection = destination
+            serverSelection = selection
             _ = try await client.configureSaves(session: session)
             var state = try await client.getSave(saveID)
             guard serverSelection == selection, session.isSameSession(as: account.session) else { return true }
@@ -2640,12 +2962,17 @@ extension BoundROMMultiplayerCoordinator {
             try await activateServerRun(state, profile: selectedProfile, selection: selection, client: client, session: session)
         } catch {
             guard serverSelection == selection, session.isSameSession(as: account.session) else { return true }
-            core?.pause(); if !holdForObservationRecoveryIfNeeded() { workingStateAuthorized = false }; serverMenuBusy = false
+            core?.pause()
+            if !holdForObservationRecoveryIfNeeded(), !finalSaveBoundary.ownsSource || finalSaveBoundary.captured {
+                workingStateAuthorized = false
+            }
+            serverMenuBusy = false
             if !hasUnconfirmedServerSave { serverMenuError = error.localizedDescription }
         }
         return true
     }
     func clearServerRuns() async {
+        guard debugInstalledManifest == nil else { serverMenuError = "Return through DEBUG to manage ordinary runs."; return }
         guard serverOnly, !serverMenuBusy, !holdForObservationRecoveryIfNeeded(), let session = account.session else { return }
         serverMenuBusy = true; serverMenuError = nil
         // Only delete the rows/revisions explicitly covered by confirmation.
@@ -2667,7 +2994,9 @@ extension BoundROMMultiplayerCoordinator {
     }
     private func activateServerRun(_ state: BoundNakamaRunService.IndependentState,
                                    profile: BoundNakamaRunService.PlayerProfile, selection: UUID,
-                                   client: BoundNakamaRunService, session: AppCloudSession) async throws {
+                                   client: BoundNakamaRunService, session: AppCloudSession,
+                                   debugRestore: Bool = false,
+                                   validateRestoredBaseline: ((BoundMultiplayerSavePackage) throws -> Void)? = nil) async throws {
         guard let game, let core, state.save_id == state.identity.run, state.committed, !state.cancelled,
               state.identity.owner == account.session?.owner, state.identity.gameID == game.identifier,
               state.identity.romSHA256 == selectedROMHash, profile.valid else { throw BoundMultiplayerSaveStore.Failure.incompatible }
@@ -2712,6 +3041,10 @@ extension BoundROMMultiplayerCoordinator {
         if let package {
             guard let battery = package.payload.files["game.sav"]?.data, let snapshot = package.payload.files["checkpoint.state"]?.data,
                   BoundVBABattleBridge.restoreServerBattery(battery), MultiRedAdapter.restoreState(snapshot) else { throw BoundMultiplayerSaveStore.Failure.corrupt }
+            // A committed DEBUG fixture proves this exact baseline. Newer
+            // shared facts must still replay before gameplay resumes, but may
+            // legitimately change its ledger and native permanent-loss state.
+            try validateRestoredBaseline?(package)
             didRestoreAuthorizedSnapshot(); didRestoreSnapshot?()
         }
         sharing.soulLink.bind(core: nil, gameID: game.identifier)
@@ -2731,6 +3064,7 @@ extension BoundROMMultiplayerCoordinator {
         serverProfile = profile; selectedRoom = state.identity.roomID; peerOwner = state.identity.partner
         setup = .init(identity: state.identity, accepted: true, settingsCommitted: true, serverEpoch: state.epoch, serverCommitted: true)
         error = nil; pendingSnapshot = nil; didRestore = true; protectedStorage = true; workingStateAuthorized = true
+        finishedRun = nil; host.ended = false
         sharedServerCursor = .init(); journalReplayNeeded = true; soulExportCache.reset(); worldProjectionRun = nil
         serverStarting = package == nil && !continuedActivity; host.externalSetup = serverStarting; host.playerProfile = profile
         host.debugPlayer = state.identity.owner == state.identity.settingsOwner ? 1 : 2
@@ -2739,7 +3073,9 @@ extension BoundROMMultiplayerCoordinator {
         host.settings = state.identity.settings; host.localSeed = state.identity.localSeed; host.partnerSeed = state.identity.partnerSeed
         host.enabled = BoundMultiplayerFeatures.isEnabled; host.recovery = manifest?.requiresInitialHistorySync == true
         host.status = .complete; host.message = ""; probe.publish(host)
-        _ = onboarding.selectMultiplayerPartner(roomID: state.identity.roomID, sharing: sharing, existing: { [weak self] in self?.account.session })
+        if !debugRestore {
+            _ = onboarding.selectMultiplayerPartner(roomID: state.identity.roomID, sharing: sharing, existing: { [weak self] in self?.account.session })
+        }
         // Server history is reconciled before releasing restored gameplay.
         if manifest?.requiresInitialHistorySync == true {
             while manifest?.requiresInitialHistorySync == true {
@@ -2760,11 +3096,12 @@ extension BoundROMMultiplayerCoordinator {
         }
         if package != nil && !continuedActivity { try sharing.soulLink.probe.prepareRestoredState(core) }
         host.recovery = false; probe.publish(host)
-        if !continuedActivity, servicesActive, UIApplication.shared.applicationState == .active { core.resume() }
+        if !debugRestore, !continuedActivity, servicesActive, UIApplication.shared.applicationState == .active { core.resume() }
         if !serverStarting { serverMenuBusy = false; needsServerMenu = false }
     }
     @discardableResult
-    private func captureServerCheckpoint(final: Bool = false, criticalAcquisition: Bool = false) throws -> BoundMultiplayerSavePackage? {
+    private func captureServerCheckpoint(final: Bool = false, criticalAcquisition: Bool = false, debugCut: BoundDebugCursor? = nil) throws -> BoundMultiplayerSavePackage? {
+        if !final, finalSaveBlocksCoreResume { return nil }
         guard serverOnly, let manifest, let game, let core, workingStateAuthorized, !serverStarting,
               !manifest.requiresInitialHistorySync, core.state == .paused || core.state == .running else { throw BoundMultiplayerSaveStore.Failure.incomplete }
         // Native activities preserve their exact execution separately. Making a
@@ -2781,7 +3118,9 @@ extension BoundROMMultiplayerCoordinator {
             return nil
         }
         let wasRunning = core.state == .running
-        guard core.state == .paused || core.pause() else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+        guard core.state == .paused || BoundServerSaveRequestGate.withCapturePause(core: core, { core.pause() }) else {
+            throw BoundMultiplayerSaveStore.Failure.incomplete
+        }
         let state: Data, battery: Data, memory: [String: Data], historyCut: Data?, cursorCut: BoundMultiplayerSharedCursor?
         // Recheck the cartridge's completed frame after stopping the core: a
         // dialogue can begin between the timer's observation and this pause.
@@ -2796,8 +3135,8 @@ extension BoundROMMultiplayerCoordinator {
         // resume path until all observations through this stopped frame are
         // durable; otherwise a checkpoint could omit a catch or permanent loss.
         try sharing.soulLink.probe.prepareCheckpoint(core: core)
-        try journalSoulEvents()
-        if let world = sharing.sharedWorld.probe.read() { try persistWorldSnapshot(world) }
+        try journalSoulEvents(exportLocal: debugCut == nil)
+        if debugCut == nil, let world = sharing.sharedWorld.probe.read() { try persistWorldSnapshot(world, finalCapture: final) }
         // Journal replay can add partner losses after the first observation
         // cut. Drain that ordered work before copying native and memory state.
         try sharing.soulLink.probe.prepareCheckpoint(core: core)
@@ -2819,8 +3158,19 @@ extension BoundROMMultiplayerCoordinator {
         else if let cursorCut { history = BoundMultiplayerSaveStore.hash(try BoundMultiplayerSaveStore.encode(cursorCut)) }
         else { throw BoundMultiplayerSaveStore.Failure.incomplete }
         let files = ["checkpoint.state": state, "game.sav": battery, "memory-files.json": try JSONEncoder().encode(memory)]
-        let package = try checkpointPersistence.captureServerCheckpoint(gameID: game.identifier, files: files, history: history)
-        serverContinuationSettlements[package.payload.checkpoint] = captureContinuationSettlement(for: manifest.identity)
+        let package: BoundMultiplayerSavePackage
+        if let debugCut {
+            let journal = try eventPersistence.journal(gameID: game.identifier)
+            guard debugCaptureOperation != nil, BoundDebugCursor(journal.applied) == debugCut,
+                  BoundDebugCursor(journal.received) == debugCut else { throw BoundDebugFailure.stale }
+            // A custom archive does not become the active generation's head.
+            // The next normal save must retain its confirmed ancestry even if
+            // upload of this independent archive is interrupted or retried.
+            package = try checkpointPersistence.captureDetachedServerCheckpoint(gameID: game.identifier, files: files, history: history)
+        } else {
+            package = try checkpointPersistence.captureServerCheckpoint(gameID: game.identifier, files: files, history: history)
+            serverContinuationSettlements[package.payload.checkpoint] = captureContinuationSettlement(for: manifest.identity)
+        }
         if !final {
             head = package; serverCapturePending = false; nextAutomaticSave = now + 15
             host.status = .waiting; host.message = "Saving to server..."
@@ -2828,8 +3178,8 @@ extension BoundROMMultiplayerCoordinator {
         }
         return package
     }
-    func nativeServerSaveRequested() {
-        guard serverOnly else { return }
+    func nativeServerSaveRequested(core source: EmulatorCore) {
+        guard serverOnly, source === core else { return }
         serverCapturePending = true
     }
     private func isServerConflict(_ error: Error) -> Bool {
@@ -2848,8 +3198,10 @@ extension BoundROMMultiplayerCoordinator {
         probe.publish(host)
     }
     private func tickServerSession() {
+        guard !finalSaveBlocksCoreResume else { return }
         guard verified, saveFenceReady, let core, let game else { return }
         guard !holdForObservationRecoveryIfNeeded() else { return }
+        guard !debugSwitchInProgress, debugCaptureOperation == nil else { return }
         tickGameOver()
         if gameOverID != nil || identity.map({ pendingGameOvers[$0.run] != nil }) == true { return }
         host.enabled = BoundMultiplayerFeatures.isEnabled; host.linked = manifest != nil
@@ -2859,7 +3211,7 @@ extension BoundROMMultiplayerCoordinator {
             if !host.enabled { core.pause(); needsServerMenu = true }
             return
         }
-        guard !serverActivating else { return }
+        guard !serverActivating, !debugSwitchInProgress, debugCaptureOperation == nil else { return }
         guard let identity, let manifest else { host.externalSetup = false; host.setupCommitted = false; return }
         guard account.session?.owner == identity.owner else { failServerSession("Sign in to the account that owns this run."); return }
         let request = probe.read()
@@ -2870,7 +3222,7 @@ extension BoundROMMultiplayerCoordinator {
             serverStarting = false; host.externalSetup = false; serverMenuBusy = false; needsServerMenu = false
             serverCapturePending = true
         }
-        let connected = sharing.connectedRoomID == selectedRoom && !sharing.reconnecting
+        let connected = debugPairAdmitted && sharing.connectedRoomID == selectedRoom && !sharing.reconnecting
         if transportWasConnected && !connected { serverCapturePending = true; channel.reset(); peerHello = nil }
         transportWasConnected = connected
         host.connected = connected && channel.fresh(at: now) && peerHello?.run == identity.run
@@ -2912,5 +3264,615 @@ extension BoundROMMultiplayerCoordinator {
                 ready: workingStateAuthorized, device: store.deviceID, fence: 0))
         }
         _ = game
+    }
+}
+
+// The native execution and each remote operation remain owner scoped across a
+// switch. The DEBUG manifest is a namespace capability, never a save conversion.
+extension BoundROMMultiplayerCoordinator: BoundDebugHost {
+    func setDebugSwitchPending(_ pending: Bool) { sharing.setDebugSwitchPending(pending) }
+    func preflightDebugSwitch() throws {
+        _ = try debugContext()
+        guard !debugSwitchInProgress, debugCaptureOperation == nil else { throw BoundDebugFailure.busy }
+        try requireDebugBoundary()
+    }
+    func debugContext() throws -> BoundDebugHostContext {
+        guard debugAvailable, serverOnly, verified, let profile = admittedProfile,
+              let session = account.session, let room = selectedRoom ?? onboarding.selected?.roomID,
+              let roomID = UUID(uuidString: room), game?.identifier == profile.gameID else { throw BoundDebugFailure.unavailable }
+        try session.credentials()
+        return .init(session: session, roomID: roomID, deviceID: store.deviceID,
+            authorityGeneration: debugAuthorityGeneration, compatibility: .init(profile: profile))
+    }
+    private func requireDebugBoundary() throws {
+        guard !finalSaveBlocksCoreResume else { throw BoundDebugFailure.busy }
+        guard let core, workingStateAuthorized, !serverStarting, !serverActivating,
+              !observationRecoveryRequired, !sharing.nativeBattle.protectsTemporaryState,
+              !sharing.cooperativeDoubles.blocksAutoSave, gameOverID == nil,
+              core.state == .running || core.state == .paused,
+              MultiRedAdapter.readSetupRequest()?.permitsFieldInterruption == true else { throw BoundDebugFailure.busy }
+    }
+    /// Preflight upload leaves gameplay running. A caller already holding the
+    /// final switch pause keeps it through the server receipt.
+    private func drainDebugSourceTasks() async throws {
+        // History completion can start a checkpoint upload. Waiting for the
+        // upload first misses that child and races the final capture against
+        // it. New timer work is fenced by debugSwitchInProgress throughout.
+        await serverTask?.value
+        await gameOverTask?.value
+        await snapshotTask?.value
+        guard serverTask == nil, gameOverTask == nil, snapshotTask == nil else { throw BoundDebugFailure.busy }
+    }
+    private func settleDebugSource() async throws -> BoundNakamaRunService.IndependentState {
+        let context = try debugContext()
+        guard let identity, identity.owner == context.session.owner else { throw BoundDebugFailure.unavailable }
+        try requireDebugBoundary()
+        let selection = serverSelection
+        debugSwitchInProgress = true
+        defer { debugSwitchInProgress = false }
+        try await drainDebugSourceTasks()
+        guard selection == serverSelection, self.identity == identity,
+              context.sameAuthority(as: try debugContext()) else { throw BoundDebugFailure.stale }
+        try requireDebugBoundary()
+        let expectedHead = independentServerHead, pendingHead = head?.payload.checkpoint
+        guard let package = try captureServerCheckpoint(final: true) else { throw BoundDebugFailure.busy }
+        // The store has already retained this new immutable capture. Keep the
+        // coordinator's pending head aligned if transport fails before seal;
+        // continued play must not build on an untracked local predecessor.
+        head = package; serverCapturePending = true
+        let client = try runService(for: identity)
+        let result = try await BoundServerDisconnectSave.settle(package: package, expectedHead: expectedHead,
+            pendingHead: pendingHead, session: context.session, verifiedCursor: sharedServerCursor, service: client)
+        let confirmed = result.state, sealed = result.package
+        guard selection == serverSelection, context.sameAuthority(as: try debugContext()),
+              confirmed.identity == identity, confirmed.committed, !confirmed.cancelled,
+              confirmed.saves[identity.owner.uuidString.lowercased()]?.receipt == sealed.receipt else { throw BoundDebugFailure.stale }
+        try checkpointPersistence.acknowledgeServerCheckpoint(sealed, replacing: package)
+        try Self.settle(serverContinuationSettlements[package.payload.checkpoint], native: sharing.nativeBattle, cooperative: sharing.cooperativeDoubles)
+        serverContinuationSettlements.removeValue(forKey: package.payload.checkpoint)
+        head = sealed; independentServerHead = sealed.payload.checkpoint; serverUploaded = sealed.payload.checkpoint
+        sharedServerCursor = confirmed.serverCursor; serverCapturePending = false
+        return confirmed
+    }
+    func settleForDebugSwitch() async throws -> BoundDebugBookmark {
+        let state = try await settleDebugSource()
+        if debugInstalledManifest != nil {
+            guard let bookmark = debugOrdinaryBookmark ?? debugSession.bookmark else { throw BoundDebugFailure.storage }
+            return bookmark
+        }
+        guard let receipt = state.saves[state.identity.owner.uuidString.lowercased()]?.receipt,
+              state.epoch > 0, state.epoch <= UInt64(Int.max) else { throw BoundDebugFailure.invalidResponse }
+        let bookmark = BoundDebugBookmark(identity: state.identity, checkpoint: receipt.checkpoint, receipt: receipt,
+            deviceID: store.deviceID, ownershipEpoch: Int(state.epoch), settled: true)
+        debugOrdinaryBookmark = bookmark
+        return bookmark
+    }
+    /// An authenticated absorbing terminal event permits leaving this exact
+    /// source, but grants no native restore proof or gameplay/save authority.
+    func prepareDebugTerminalTransition(proof: BoundDebugTerminalProof, manifest source: BoundDebugManifest,
+                                        identity sourceIdentity: BoundMultiplayerRunIdentity) async throws -> BoundDebugBookmark {
+        let context = try debugContext()
+        let owner = context.session.owner
+        guard sourceIdentity.valid, sourceIdentity.owner == owner,
+              sourceIdentity.run == source.runID, sourceIdentity.roomID.lowercased() == context.roomID.uuidString.lowercased(),
+              source.compatibility == context.compatibility, source.settings.count == 32,
+              sourceIdentity.gameID == source.compatibility.gameID, sourceIdentity.romSHA256 == source.compatibility.romSHA256,
+              sourceIdentity.settings == source.settings, BoundDebugJSON.validDigest(source.digest),
+              Set(source.owners.keys) == Set([owner, sourceIdentity.partner].map { $0.uuidString.lowercased() }),
+              let local = source.owners[owner.uuidString.lowercased()], local.trainer.valid,
+              let partner = source.owners[sourceIdentity.partner.uuidString.lowercased()], partner.trainer.valid,
+              local.compatibility == source.compatibility, partner.compatibility == source.compatibility,
+              local.trainer.id == sourceIdentity.localSeed, partner.trainer.id == sourceIdentity.partnerSeed,
+              local.receipt.run == source.runID, local.receipt.owner == owner,
+              partner.receipt.run == source.runID, partner.receipt.owner == sourceIdentity.partner,
+              proof.valid(manifest: source, owner: owner, device: store.deviceID),
+              let bookmark = debugOrdinaryBookmark ?? debugSession.bookmark,
+              bookmark.valid(owner: owner), bookmark.deviceID == store.deviceID,
+              bookmark.identity.gameID == sourceIdentity.gameID, bookmark.identity.romSHA256 == sourceIdentity.romSHA256,
+              bookmark.identity.run != source.runID,
+              debugOrdinaryBookmark == nil || debugOrdinaryBookmark == bookmark,
+              debugSession.bookmark == nil || debugSession.bookmark == bookmark,
+              let core, !serverStarting, !serverActivating,
+              !sharing.nativeBattle.protectsTemporaryState, !sharing.nativeBattle.blocksCoreResume,
+              !sharing.cooperativeDoubles.blocksAutoSave, !sharing.cooperativeDoubles.blocksCoreResume else {
+            throw BoundDebugFailure.stale
+        }
+        // A fresh process may admit terminal metadata only into an empty core.
+        // An unrelated ordinary execution is protected even if currently paused.
+        if let installed = debugInstalledManifest {
+            guard installed == source, debugInstalledIdentity == sourceIdentity else { throw BoundDebugFailure.stale }
+        } else {
+            guard self.identity == nil, !workingStateAuthorized, debugInstalledIdentity == nil else { throw BoundDebugFailure.stale }
+        }
+        guard self.identity == nil || self.identity == sourceIdentity,
+              sharing.soulLink.probe.read().ledger.map({ $0.run == sourceIdentity.run }) ?? true,
+              observationRecoveryAuthority.map({ $0.identity == sourceIdentity }) ?? true,
+              debugCaptureOperation == nil else { throw BoundDebugFailure.busy }
+        if finalSaveBoundary.ownsSource || finalServerSaveQueued || finalServerSaveTask != nil || hasUnconfirmedServerSave {
+            guard debugInstalledManifest == source, finalServerSaveRun == sourceIdentity.run,
+                  finalServerSaveOwner == owner else { throw BoundDebugFailure.busy }
+        }
+        let selection = serverSelection
+        guard core.state == .stopped || core.state == .paused || core.pause() else { throw BoundDebugFailure.busy }
+        finalServerReactivationTask?.cancel(); finalServerReactivationTask = nil; finalServerReactivationOperation = UUID()
+        debugRestoreHoldsCore = true; debugSwitchInProgress = true
+        setDebugAdmission(nil)
+        // Do not cancel accepted work or let a late final-save receipt address
+        // replacement metadata. In-flight history may still reveal this loss.
+        await serverTask?.value
+        await gameOverTask?.value
+        await snapshotTask?.value
+        await finalSaveBoundary.task?.value
+        await finalServerSaveTask?.value
+        try Task.checkCancellation()
+        guard core === self.core, selection == serverSelection,
+              context.sameAuthority(as: try debugContext()),
+              self.identity == nil || self.identity == sourceIdentity,
+              debugInstalledManifest == nil || debugInstalledManifest == source,
+              core.state == .stopped || core.state == .paused,
+              serverTask == nil, gameOverTask == nil, snapshotTask == nil,
+              !sharing.nativeBattle.protectsTemporaryState, !sharing.nativeBattle.blocksCoreResume,
+              !sharing.cooperativeDoubles.blocksAutoSave, !sharing.cooperativeDoubles.blocksCoreResume else {
+            throw BoundDebugFailure.stale
+        }
+        try sharing.soulLink.probe.drainBeforeMemoryReplacement(core: core)
+        if sharing.soulLink.probe.read().ledger != nil {
+            try journalSoulEvents(retainedIdentity: sourceIdentity)
+            try sharing.soulLink.probe.drainBeforeMemoryReplacement(core: core)
+        }
+        guard sharing.soulLink.probe.read().error == nil else { throw BoundDebugFailure.storage }
+        let record = DebugTerminalTransitionRecord(proof: proof, identity: sourceIdentity, bookmark: bookmark)
+        let directory = store.root.appendingPathComponent("DEBUG Terminal", isDirectory: true)
+            .appendingPathComponent(source.sessionID.uuidString, isDirectory: true)
+            .appendingPathComponent(String(source.generation), isDirectory: true)
+        let path = directory.appendingPathComponent(owner.uuidString + "-" + source.runID.uuidString + ".json")
+        if FileManager.default.fileExists(atPath: path.path) {
+            let properties = try path.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            guard properties.isRegularFile == true, properties.isSymbolicLink != true,
+                  let size = properties.fileSize, size <= 65_536 else { throw BoundDebugFailure.storage }
+            let bytes = try Data(contentsOf: path)
+            guard bytes.count <= 65_536, try JSONDecoder().decode(DebugTerminalTransitionRecord.self, from: bytes) == record else {
+                throw BoundDebugFailure.stale
+            }
+        } else {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try JSONEncoder().encode(record).write(to: path, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+        // The immutable record may already exist after an interrupted fsync.
+        // Reconfirm both file and rename durability before absorbing a failed
+        // final-save owner, including on that retry path.
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
+        let terminalFile = try FileHandle(forWritingTo: path)
+        defer { try? terminalFile.close() }
+        try terminalFile.synchronize()
+        let terminalDirectory = Darwin.open(directory.path, O_RDONLY)
+        guard terminalDirectory >= 0 else { throw BoundDebugFailure.storage }
+        defer { Darwin.close(terminalDirectory) }
+        guard Darwin.fsync(terminalDirectory) == 0 else { throw BoundDebugFailure.storage }
+        // Only this authenticated terminal source may absorb its now-finished
+        // final candidate. An ordinary failure never reaches this branch.
+        BoundServerDisconnectSave.acknowledgeFailure(run: sourceIdentity.run)
+        if finalServerSaveRun == sourceIdentity.run {
+            finalSaveBoundary.release()
+            finalServerSaveReauthorize = nil
+            finalServerSaveTask = nil; finalServerSaveRetry = nil; finalServerSaveRun = nil; finalServerSaveOwner = nil
+            finalServerSaveQueued = false; hasUnconfirmedServerSave = false
+        }
+        debugTerminalTransition = record; debugInstalledManifest = source; debugInstalledIdentity = sourceIdentity
+        debugOrdinaryBookmark = bookmark; debugInstallationProof = nil; debugFinalCheckpoint = nil
+        debugReturnInstallation = nil; setDebugContinuation(nil)
+        workingStateAuthorized = false; finishedRun = sourceIdentity.run
+        clearObservationRecovery()
+        // Keep the journaled terminal evidence without sending gameOver/start,
+        // Return/Menu acknowledgements or replaying a dead native snapshot.
+        gameOverID = nil; gameOverMenuRun = nil; pendingGameOvers.removeValue(forKey: sourceIdentity.run)
+        serverCapturePending = false; serverMenuBusy = false; needsServerMenu = false; serverMenuError = nil
+        pendingAction.clear(); channel.reset(); peerHello = nil
+        host.ended = true; host.linked = false; host.connected = false; host.recovery = false; host.saving = false
+        host.run = sourceIdentity.run; host.message = "DEBUG run ended."; probe.publish(host)
+        return bookmark
+    }
+    func debugTerminalReturnReady(operation: BoundDebugOperation, proof: BoundDebugTerminalProof,
+                                  manifest source: BoundDebugManifest, identity sourceIdentity: BoundMultiplayerRunIdentity) async throws -> BoundDebugReturnReady {
+        let context = try debugContext()
+        guard operation.kind == .return, operation.source.kind == .previous, operation.source.valid,
+              operation.sessionID == source.sessionID, operation.membershipEpoch == source.membershipEpoch,
+              operation.generation > source.generation, operation.runID == source.runID,
+              operation.compatibility == source.compatibility, operation.settings == source.settings,
+              operation.state == .preparing || operation.state == .prepared,
+              Set(operation.identities.keys) == Set(source.owners.keys),
+              operation.identities.values.allSatisfy({ $0.valid }) else { throw BoundDebugFailure.stale }
+        let bookmark = try await prepareDebugTerminalTransition(proof: proof, manifest: source, identity: sourceIdentity)
+        guard context.sameAuthority(as: try debugContext()),
+              operation.identities[context.session.owner.uuidString.lowercased()] == bookmark.identity,
+              debugTerminalTransition?.proof == proof else { throw BoundDebugFailure.stale }
+        debugCaptureOperation = operation.operationID; debugCaptureWasRunning = false
+        return .init(deviceID: store.deviceID, ownershipEpoch: proof.ownershipEpoch,
+                     sourceCheckpoint: nil, safe: true, terminalProof: proof)
+    }
+    func rendezvousDebugCapture(operation: BoundDebugOperation) async throws -> BoundDebugCaptureReady {
+        let context = try debugContext()
+        try requireDebugBoundary()
+        guard let core, let identity, let current = debugInstalledManifest,
+              current.runID == identity.run, operation.runID == identity.run,
+              operation.identities[identity.owner.uuidString.lowercased()] == identity,
+              operation.source.sourceGeneration == current.generation, debugCaptureOperation == nil else { throw BoundDebugFailure.stale }
+        // Finish already admitted writes while gameplay is still running. The
+        // actual stopped-frame rendezvous never uploads a checkpoint.
+        debugSwitchInProgress = true
+        do { try await drainDebugSourceTasks() }
+        catch { debugSwitchInProgress = false; throw error }
+        debugSwitchInProgress = false
+        guard context.sameAuthority(as: try debugContext()), self.identity == identity, core === self.core else { throw BoundDebugFailure.stale }
+        try requireDebugBoundary()
+        let wasRunning = core.state == .running
+        guard core.state == .paused || core.pause() else { throw BoundDebugFailure.busy }
+        debugCaptureOperation = operation.operationID; debugCaptureWasRunning = wasRunning
+        do {
+            try sharing.soulLink.probe.prepareCheckpoint(core: core)
+            try journalSoulEvents()
+            if let world = sharing.sharedWorld.probe.read() { try persistWorldSnapshot(world) }
+            try sharing.soulLink.probe.prepareCheckpoint(core: core)
+            let journal = try eventPersistence.journal(gameID: identity.gameID)
+            // A new unsent fact retries after normal gameplay/upload resumes.
+            // Unseen peer facts join the common cut and replay below.
+            guard journal.received == journal.applied, sharedServerCursor.covers(journal.applied) else { throw BoundDebugFailure.busy }
+            return .init(sourceCheckpoint: independentServerHead, received: .init(journal.received),
+                         applied: .init(journal.applied), durable: .init(journal.applied))
+        } catch {
+            debugCaptureOperation = nil; debugCaptureWasRunning = false
+            resumeDebugBoundaryIfSafe(wasRunning: wasRunning, core: core, identity: identity, context: context)
+            throw error
+        }
+    }
+    func prepareDebugPayload(operation: BoundDebugOperation, cut: BoundDebugHistoryCut?, bookmark: BoundDebugBookmark) async throws -> BoundDebugPreparedPayload {
+        let context = try debugContext()
+        guard operation.compatibility == context.compatibility, operation.settings.count == 32 else { throw BoundDebugFailure.incompatible }
+        if operation.source.kind == .builtin {
+            let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("DEBUGFixtures", isDirectory: true)
+            return try BoundDebugFixtureStore.prepare(operation: operation, owner: context.session.owner,
+                device: store.deviceID, bookmark: bookmark, root: directory)
+        }
+        guard operation.kind == .custom, debugCaptureOperation == operation.operationID,
+              let core, core.state == .paused, let cut, cut == operation.cut,
+              let identity, identity.run == cut.sourceRunID,
+              let epoch = setup?.serverEpoch, epoch <= UInt64(Int.max) else { throw BoundDebugFailure.stale }
+        try await replayDebugCaptureHistory(cut.cursor, sourceGeneration: cut.sourceGeneration, operation: operation)
+        let journal = try eventPersistence.journal(gameID: identity.gameID)
+        guard BoundDebugCursor(journal.applied) == cut.cursor, sharedServerCursor.covers(cut.cursor.sdk),
+              (cut.heads[identity.owner.uuidString.lowercased()] ?? nil) == independentServerHead,
+              let package = try captureServerCheckpoint(final: true, debugCut: cut.cursor) else { throw BoundDebugFailure.stale }
+        return try BoundDebugNativePayload.prepare(package: package, trainer: MultiRedAdapter.debugTrainer(core: core),
+            operation: operation, device: store.deviceID, epoch: Int(epoch), bookmark: bookmark, durable: .init(sharedServerCursor))
+    }
+    private func replayDebugCaptureHistory(_ target: BoundDebugCursor, sourceGeneration: Int, operation: BoundDebugOperation) async throws {
+        let context = try debugContext()
+        guard let identity, let core, core.state == .paused,
+              debugCaptureOperation == operation.operationID,
+              debugInstalledManifest?.generation == sourceGeneration else { throw BoundDebugFailure.stale }
+        let client = try debugSession.makeRunService(identity: identity, requestTimeout: 1)
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        // Before rendezvous this catches up to our settled source cursor. After
+        // both owners are fenced it reaches the final agreed cut. Later history
+        // must never enter either immutable boundary.
+        for _ in 0..<32 {
+            try Task.checkCancellation()
+            let before = try eventPersistence.journal(gameID: identity.gameID)
+            guard target.sdk.covers(before.received), target.sdk.covers(before.applied) else { throw BoundDebugFailure.stale }
+            if before.applied.covers(target.sdk) { return }
+            guard ProcessInfo.processInfo.systemUptime < deadline else { throw BoundDebugFailure.timedOut }
+            let history = try await client.sharedEvents(identity: identity, events: [], cursor: before.received)
+            guard context.sameAuthority(as: try debugContext()), self.identity == identity, core === self.core,
+                  core.state == .paused, debugCaptureOperation == operation.operationID,
+                  history.identity == identity, history.epoch == setup?.serverEpoch,
+                  history.gameOver == nil, !history.cancelled,
+                  history.saves[identity.owner.uuidString.lowercased()]?.receipt.checkpoint == independentServerHead,
+                  history.serverCursor.covers(target.sdk) else { throw BoundDebugFailure.stale }
+            let events = history.events.filter { target.sdk.contains($0.id) }
+            guard !events.isEmpty else { throw BoundDebugFailure.invalidResponse }
+            for event in events {
+                _ = try eventPersistence.receiveAuthoritativeSharedEvent(gameID: identity.gameID, event: event)
+                sharedServerCursor.insert(event.id)
+            }
+            journalReplayNeeded = true; try journalSoulEvents(exportLocal: false)
+            try sharing.soulLink.probe.prepareCheckpoint(core: core)
+            let after = try eventPersistence.journal(gameID: identity.gameID)
+            guard after.received != before.received || after.applied != before.applied else { throw BoundDebugFailure.invalidResponse }
+        }
+        throw BoundDebugFailure.timedOut
+    }
+    private func resumeDebugBoundaryIfSafe(wasRunning: Bool, core: EmulatorCore,
+                                          identity: BoundMultiplayerRunIdentity, context: BoundDebugHostContext) {
+        guard wasRunning, core === self.core, self.identity == identity,
+              let current = try? debugContext(), context.sameAuthority(as: current),
+              workingStateAuthorized, !holdForObservationRecoveryIfNeeded(),
+              sharing.soulLink.probe.read().error == nil else { return }
+        resumeAfterDebugSwitch?()
+    }
+    func finishDebugCapture(operation: BoundDebugOperation, captured: Bool) async throws {
+        guard debugCaptureOperation == operation.operationID else { return }
+        guard captured || debugSession.operation?.operationID == operation.operationID && debugSession.operation?.state == .aborted else { throw BoundDebugFailure.stale }
+        let resume = debugCaptureWasRunning
+        debugCaptureOperation = nil; debugCaptureWasRunning = false
+        if resume, workingStateAuthorized, !holdForObservationRecoveryIfNeeded(),
+           sharing.soulLink.probe.read().error == nil,
+           account.session?.owner == identity?.owner { resumeAfterDebugSwitch?() }
+    }
+    func restoreDebugPayload(_ payload: Data, manifest target: BoundDebugManifest) async throws {
+        let context = try debugContext()
+        let package = try BoundDebugNativePayload.decode(payload, manifest: target, owner: context.session.owner)
+        guard let core, let descriptor = target.owners[context.session.owner.uuidString.lowercased()],
+              descriptor.deviceID == store.deviceID, target.compatibility == context.compatibility else { throw BoundDebugFailure.stale }
+        if workingStateAuthorized {
+            if debugInstalledManifest == nil {
+                guard identity == (debugOrdinaryBookmark ?? debugSession.bookmark)?.identity else { throw BoundDebugFailure.stale }
+            }
+            try requireDebugBoundary()
+            let wasRunning = core.state == .running
+            let sourceIdentity = identity, sourceSelection = serverSelection, sourceEpoch = setup?.serverEpoch
+            guard core.state == .paused || core.pause() else { throw BoundDebugFailure.busy }
+            // A native frame can cross UI publication or enter a dialogue
+            // between the running preflight and this pause. Reject it before
+            // acquiring a restore hold or starting any outgoing settlement.
+            do { try requireDebugBoundary() }
+            catch BoundDebugFailure.busy {
+                if let sourceIdentity, wasRunning, !debugRestoreHoldsCore, debugCaptureOperation == nil,
+                   serverSelection == sourceSelection, setup?.serverEpoch == sourceEpoch,
+                   !finalSaveBlocksCoreResume, !observationRecoveryRequired,
+                   !sharing.nativeBattle.protectsTemporaryState, !sharing.cooperativeDoubles.blocksAutoSave {
+                    resumeDebugBoundaryIfSafe(wasRunning: true, core: core, identity: sourceIdentity, context: context)
+                }
+                throw BoundDebugFailure.busy
+            }
+            debugRestoreHoldsCore = true
+            // Preserve ordinary progress made while the template uploaded.
+            if debugInstalledManifest == nil { _ = try await settleDebugSource() }
+        }
+        guard context.sameAuthority(as: try debugContext()) else { throw BoundDebugFailure.stale }
+        debugRestoreHoldsCore = true
+        debugSwitchInProgress = true; debugInstallationProof = nil; setDebugAdmission(nil)
+        debugInstalledManifest = target; debugInstalledIdentity = package.payload.manifest.identity
+        debugTerminalTransition = nil
+        debugOrdinaryBookmark = descriptor.bookmark ?? debugOrdinaryBookmark
+        setDebugContinuation(nil)
+        snapshotTask?.cancel(); snapshotTask = nil; snapshotOperation = UUID()
+        serverTask?.cancel(); serverTask = nil; serverOperation = UUID()
+        gameOverTask?.cancel(); gameOverTask = nil; gameOverOperation = UUID()
+        pendingGameOvers = [:]; gameOverLoadedOwner = nil
+        let client = try debugSession.makeRunService(identity: package.payload.manifest.identity)
+        let state = try await client.getSave(target.runID)
+        guard context.sameAuthority(as: try debugContext()), state.identity == package.payload.manifest.identity,
+              state.epoch == UInt64(descriptor.ownershipEpoch),
+              state.saves[context.session.owner.uuidString.lowercased()]?.receipt == package.receipt else { throw BoundDebugFailure.stale }
+        let selection = UUID(); serverSelection = selection
+        workingStateAuthorized = false
+        var installed = false, baselineVerified = false
+        defer { if !installed { workingStateAuthorized = false } }
+        try await activateServerRun(state, profile: .init(name: descriptor.trainer.name, gender: descriptor.trainer.gender),
+            selection: selection, client: client, session: context.session, debugRestore: true,
+            validateRestoredBaseline: { restored in
+                guard core === self.core, core.state == .paused, restored.receipt == package.receipt,
+                      context.sameAuthority(as: try self.debugContext()),
+                      try MultiRedAdapter.debugTrainer(core: core) == descriptor.trainer,
+                      let memoryBlob = package.payload.files["memory-files.json"],
+                      let battery = package.payload.files["game.sav"]?.data,
+                      BoundVBABattleBridge.captureServerBattery() == battery else { throw BoundDebugFailure.nativeVerification }
+                let identity = package.payload.manifest.identity
+                let memory = BoundServerMemoryFiles.snapshot(gameID: identity.gameID)
+                let sealedMemory = try JSONDecoder().decode([String: Data].self, from: memoryBlob.data)
+                let ledger = try BoundDebugNativePayload.ledger(in: memory, identity: identity)
+                let sealedLedger = try BoundDebugNativePayload.ledger(in: sealedMemory, identity: identity)
+                let journal = try self.eventPersistence.journal(gameID: identity.gameID)
+                guard BoundMultiplayerSaveStore.hash(try BoundDebugNativePayload.ledgerBytes(in: sealedMemory, identity: identity)) == descriptor.soulDigest,
+                      ledger == sealedLedger, BoundDebugCursor(journal.received) == descriptor.received,
+                      BoundDebugCursor(journal.applied) == descriptor.applied else { throw BoundDebugFailure.nativeVerification }
+                baselineVerified = true
+            })
+        guard baselineVerified, core === self.core, core.state == .paused, context.sameAuthority(as: try debugContext()),
+              try MultiRedAdapter.debugTrainer(core: core) == descriptor.trainer,
+              let identity, identity == package.payload.manifest.identity,
+              self.manifest?.requiresInitialHistorySync == false, gameOverID == nil,
+              !observationRecoveryRequired else { throw BoundDebugFailure.nativeVerification }
+        _ = try BoundDebugNativePayload.ledger(in: BoundServerMemoryFiles.snapshot(gameID: identity.gameID), identity: identity)
+        let journal = try eventPersistence.journal(gameID: identity.gameID)
+        guard journal.received.covers(state.serverCursor), journal.applied.covers(state.serverCursor),
+              journal.received.covers(descriptor.received.sdk), journal.applied.covers(descriptor.applied.sdk) else { throw BoundDebugFailure.nativeVerification }
+        debugInstallationProof = .init(deviceID: store.deviceID, ownershipEpoch: descriptor.ownershipEpoch,
+            payloadSHA256: descriptor.receipt.payloadSHA256, checkpoint: descriptor.receipt.checkpoint,
+            trainerID: descriptor.trainer.id, soulDigest: descriptor.soulDigest, applied: descriptor.applied, nativeVerified: true)
+        installed = true
+    }
+    func verifyDebugRestore(manifest: BoundDebugManifest) async throws -> BoundDebugVerification {
+        let context = try debugContext()
+        guard let proof = debugInstallationProof, debugInstalledManifest?.digest == manifest.digest,
+              identity?.run == manifest.runID, identity?.owner == context.session.owner,
+              let descriptor = manifest.owners[context.session.owner.uuidString.lowercased()], proof.valid(descriptor: descriptor),
+              setup?.serverEpoch == UInt64(descriptor.ownershipEpoch), !observationRecoveryRequired else { throw BoundDebugFailure.nativeVerification }
+        return proof
+    }
+    func recoverDebugInstallation(manifest target: BoundDebugManifest) async throws -> BoundDebugVerification {
+        let context = try debugContext()
+        guard let descriptor = target.owners[context.session.owner.uuidString.lowercased()], descriptor.deviceID == store.deviceID,
+              let identity = debugSession.operation?.identities[context.session.owner.uuidString.lowercased()], identity.run == target.runID,
+              !workingStateAuthorized || self.identity == identity else { throw BoundDebugFailure.stale }
+        debugSwitchInProgress = true; debugRestoreHoldsCore = true; debugInstalledManifest = target; debugInstalledIdentity = identity
+        debugTerminalTransition = nil
+        debugOrdinaryBookmark = debugSession.bookmark ?? descriptor.bookmark
+        setDebugContinuation(nil)
+        let client = try debugSession.makeRunService(identity: identity)
+        let state = try await client.getSave(target.runID)
+        guard context.sameAuthority(as: try debugContext()), state.identity == identity,
+              state.epoch == UInt64(descriptor.ownershipEpoch), let upload = state.saves[identity.owner.uuidString.lowercased()] else { throw BoundDebugFailure.stale }
+        let current = try await client.downloadIndependent(identity: identity, upload: upload)
+        guard current.payload.manifest.deviceOwner == store.deviceID else { throw BoundDebugFailure.stale }
+        let selection = UUID(); serverSelection = selection
+        workingStateAuthorized = false
+        var installed = false
+        defer { if !installed { workingStateAuthorized = false } }
+        try await activateServerRun(state, profile: .init(name: descriptor.trainer.name, gender: descriptor.trainer.gender),
+            selection: selection, client: client, session: context.session, debugRestore: true)
+        guard let core, core.state == .paused, try MultiRedAdapter.debugTrainer(core: core) == descriptor.trainer,
+              context.sameAuthority(as: try debugContext()) else { throw BoundDebugFailure.nativeVerification }
+        debugInstallationProof = .init(deviceID: store.deviceID, ownershipEpoch: descriptor.ownershipEpoch,
+            payloadSHA256: descriptor.receipt.payloadSHA256, checkpoint: descriptor.receipt.checkpoint,
+            trainerID: descriptor.trainer.id, soulDigest: descriptor.soulDigest, applied: descriptor.applied, nativeVerified: true)
+        let proof = try await verifyDebugRestore(manifest: target)
+        installed = true
+        return proof
+    }
+    func completeDebugRestore(manifest: BoundDebugManifest) async throws {
+        _ = try await verifyDebugRestore(manifest: manifest)
+        debugSwitchInProgress = false; debugRestoreHoldsCore = false; debugCaptureOperation = nil; debugCaptureWasRunning = false
+        needsServerMenu = false; serverMenuBusy = false
+        if workingStateAuthorized, servicesActive { resumeAfterDebugSwitch?() }
+    }
+    func returnFromDebug(bookmark: BoundDebugBookmark) async throws -> BoundDebugReturnVerification {
+        let context = try debugContext()
+        guard bookmark.valid(owner: context.session.owner), bookmark.deviceID == store.deviceID,
+              bookmark.identity.gameID == game?.identifier, bookmark.identity.romSHA256 == selectedROMHash,
+              let core else { throw BoundDebugFailure.incompatible }
+        debugReturnInstallation = nil
+        if workingStateAuthorized {
+            // Reopening DEBUG must not discard a different ordinary run that
+            // the user has since selected and advanced in this process.
+            guard debugInstalledManifest != nil || identity == bookmark.identity else { throw BoundDebugFailure.stale }
+            try requireDebugBoundary()
+        }
+        guard core.state == .paused || core.pause() else { throw BoundDebugFailure.busy }
+        debugRestoreHoldsCore = true
+        debugSwitchInProgress = true; debugReturning = true
+        defer { debugReturning = false }
+        let client = BoundNakamaRunService()
+        try await Self.authorizeRunService(client, session: context.session)
+        let state = try await client.getSave(bookmark.identity.run)
+        guard context.sameAuthority(as: try debugContext()), state.identity == bookmark.identity,
+              state.epoch == UInt64(bookmark.ownershipEpoch), state.gameOver == nil,
+              let upload = state.saves[context.session.owner.uuidString.lowercased()] else { throw BoundDebugFailure.stale }
+        let package = try await client.downloadIndependent(identity: bookmark.identity, upload: upload)
+        guard package.payload.manifest.deviceOwner == store.deviceID else { throw BoundDebugFailure.stale }
+        guard let profile = state.profiles?[context.session.owner.uuidString.lowercased()], profile.valid else { throw BoundDebugFailure.invalidResponse }
+        let selection = UUID(); serverSelection = selection
+        workingStateAuthorized = false
+        var installed = false
+        defer { if !installed { workingStateAuthorized = false } }
+        try await activateServerRun(state, profile: profile, selection: selection, client: client, session: context.session, debugRestore: true)
+        guard core.state == .paused, identity == bookmark.identity,
+              context.sameAuthority(as: try debugContext()), head?.receipt == upload.receipt,
+              try MultiRedAdapter.debugTrainer(core: core).id == bookmark.identity.localSeed else { throw BoundDebugFailure.nativeVerification }
+        debugInstalledManifest = nil; debugInstalledIdentity = nil; debugInstallationProof = nil; debugOrdinaryBookmark = nil; debugTerminalTransition = nil
+        debugSwitchInProgress = false; debugRestoreHoldsCore = false; debugCaptureOperation = nil; debugCaptureWasRunning = false; setDebugAdmission(nil)
+        sharing.setDebugRealtimeProvider(scope: nil, provider: nil)
+        _ = onboarding.selectMultiplayerPartner(roomID: bookmark.identity.roomID, sharing: sharing, existing: { [weak self] in self?.account.session })
+        installed = true
+        let proof = BoundDebugReturnVerification(checkpoint: upload.receipt.checkpoint, deviceID: store.deviceID, nativeVerified: true)
+        debugReturnInstallation = .init(bookmark: bookmark, context: context, core: ObjectIdentifier(core),
+            selection: selection, receipt: upload.receipt, proof: proof)
+        resumeAfterDebugSwitch?()
+        return proof
+    }
+    func verifyDebugReturn(bookmark: BoundDebugBookmark, previous: BoundDebugReturnVerification) async throws -> BoundDebugReturnVerification {
+        let context = try debugContext()
+        guard let installed = debugReturnInstallation, installed.bookmark == bookmark, installed.proof == previous,
+              context.sameAuthority(as: installed.context), let core, ObjectIdentifier(core) == installed.core,
+              installed.selection == serverSelection, workingStateAuthorized,
+              core.state == .running || core.state == .paused, debugInstalledManifest == nil,
+              identity == bookmark.identity, setup?.serverEpoch == UInt64(bookmark.ownershipEpoch),
+              bookmark.deviceID == store.deviceID else { throw BoundDebugFailure.stale }
+        // Wait for the upload already owned by this execution, without chasing
+        // an unbounded chain of new captures. Every suspension rechecks the
+        // retained installation; an unrelated run never inherits its proof.
+        await snapshotTask?.value
+        try Task.checkCancellation()
+        guard context.sameAuthority(as: try debugContext()), self.core === core,
+              installed.selection == serverSelection, workingStateAuthorized, identity == bookmark.identity,
+              setup?.serverEpoch == UInt64(bookmark.ownershipEpoch), debugInstalledManifest == nil,
+              core.state == .running || core.state == .paused,
+              debugReturnInstallation?.proof == previous else { throw BoundDebugFailure.stale }
+        let requestedConfirmed = independentServerHead, requestedHead = head?.receipt
+        let client = BoundNakamaRunService()
+        try await Self.authorizeRunService(client, session: context.session)
+        let state = try await client.getSave(bookmark.identity.run)
+        try Task.checkCancellation()
+        guard context.sameAuthority(as: try debugContext()), self.core === core,
+              installed.selection == serverSelection, workingStateAuthorized, identity == bookmark.identity,
+              setup?.serverEpoch == UInt64(bookmark.ownershipEpoch),
+              debugInstalledManifest == nil, core.state == .running || core.state == .paused,
+              state.version == 2, state.save_id == bookmark.identity.run,
+              state.identity == bookmark.identity, state.epoch == UInt64(bookmark.ownershipEpoch),
+              state.committed, !state.cancelled, state.gameOver == nil,
+              let receipt = state.saves[context.session.owner.uuidString.lowercased()]?.receipt,
+              var current = debugReturnInstallation, current.bookmark == bookmark,
+              current.selection == installed.selection, current.core == installed.core,
+              current.proof == previous else { throw BoundDebugFailure.stale }
+        try Self.validateDebugReturnReceipt(receipt, installed: current.receipt,
+            requestedHead: requestedHead, currentHead: head?.receipt, requestedConfirmed: requestedConfirmed,
+            currentConfirmed: independentServerHead, uploadInFlight: snapshotTask != nil)
+        current.receipt = receipt
+        current.proof = .init(checkpoint: receipt.checkpoint, deviceID: store.deviceID, nativeVerified: true)
+        debugReturnInstallation = current
+        return current.proof
+    }
+    /// A moving owned head needs another proof attempt, not a restore. Exact
+    /// receipt equality is required even when the checkpoint UUID is familiar.
+    static func validateDebugReturnReceipt(_ receipt: BoundMultiplayerCheckpointReceipt,
+        installed: BoundMultiplayerCheckpointReceipt, requestedHead: BoundMultiplayerCheckpointReceipt?,
+        currentHead: BoundMultiplayerCheckpointReceipt?, requestedConfirmed: UUID?, currentConfirmed: UUID?,
+        uploadInFlight: Bool) throws {
+        guard receipt.run == installed.run, receipt.owner == installed.owner else { throw BoundDebugFailure.stale }
+        let known = [installed, requestedHead, currentHead].compactMap { $0 }
+        let matching = known.filter { $0.checkpoint == receipt.checkpoint }
+        guard matching.allSatisfy({ $0 == receipt }) else { throw BoundDebugFailure.stale }
+        guard !matching.isEmpty else {
+            // An upload can cross GET. Retry once against the newer baseline;
+            // the same unknown head with a stable baseline is a conflict.
+            if requestedConfirmed != currentConfirmed { throw BoundDebugFailure.busy }
+            throw BoundDebugFailure.stale
+        }
+        guard receipt.checkpoint == currentConfirmed, !uploadInFlight else { throw BoundDebugFailure.busy }
+    }
+    func setDebugAdmission(_ admission: BoundDebugAdmission?) {
+        debugAdmission = admission
+        sharing.setDebugActivityAdmission(admission)
+        if admission == nil, debugInstalledManifest != nil {
+            channel.reset(); peerHello = nil; host.connected = false; probe.publish(host)
+        }
+    }
+    func setDebugContinuation(_ scope: BoundDebugRealtimeScope?) {
+        if let scope {
+            guard let manifest = debugInstalledManifest, scope.sessionID == manifest.sessionID,
+                  scope.membershipEpoch == manifest.membershipEpoch, scope.generation == manifest.generation,
+                  scope.manifestDigest == manifest.digest else { return }
+            sharing.setDebugRealtimeProvider(scope: scope, provider: { [weak self] room, session in
+                guard let self else { throw BoundDebugFailure.unavailable }
+                return try await self.debugSession.makeRealtimeConfiguration(scope: scope, room: room, session: session)
+            })
+        } else if let manifest = debugInstalledManifest {
+            sharing.setDebugRealtimeProvider(scope: .init(sessionID: manifest.sessionID,
+                membershipEpoch: manifest.membershipEpoch, generation: manifest.generation, manifestDigest: manifest.digest), provider: nil)
+        }
+    }
+    func debugReturnReady(operation: BoundDebugOperation) async throws -> BoundDebugReturnReady {
+        let context = try debugContext()
+        try preflightDebugSwitch()
+        guard let current = debugInstalledManifest, operation.kind == .return,
+              operation.runID == current.runID, let identity, current.runID == identity.run,
+              let core else { throw BoundDebugFailure.stale }
+        let wasRunning = core.state == .running
+        guard core.state == .paused || core.pause() else { throw BoundDebugFailure.busy }
+        debugCaptureOperation = operation.operationID; debugCaptureWasRunning = wasRunning
+        do {
+            let state = try await settleDebugSource()
+            guard let receipt = state.saves[identity.owner.uuidString.lowercased()]?.receipt,
+                  state.epoch > 0, state.epoch <= UInt64(Int.max), core.state == .paused else { throw BoundDebugFailure.stale }
+            return .init(deviceID: store.deviceID, ownershipEpoch: Int(state.epoch), sourceCheckpoint: receipt.checkpoint, safe: true)
+        } catch {
+            // returnReady has not yet been sent, so no remote source fence can
+            // exist for this attempt. Subsequent failures retain this hold until
+            // an authenticated abort or the verified ordinary restore.
+            debugCaptureOperation = nil; debugCaptureWasRunning = false
+            resumeDebugBoundaryIfSafe(wasRunning: wasRunning, core: core, identity: identity, context: context)
+            throw error
+        }
     }
 }

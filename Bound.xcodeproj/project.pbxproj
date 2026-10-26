@@ -32,18 +32,34 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		F1502CBEAAB0DF1E7734BB70 /* NativeObservationEnduranceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E0D8D3D628E4AB7AE8466F1 /* NativeObservationEnduranceTests.swift */; };
+		1AA346A35B65DCE0A7CF1473 /* NativeStoryBattleAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F63BAD716F1B9CF6EE21AF16 /* NativeStoryBattleAcceptanceTests.swift */; };
 		3F84EFCBAE0FCE9EE41C735D /* MultiRedAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83A96265A167ACD9C7D4C7AE /* MultiRedAdapterTests.swift */; };
 		2E6FAD85815A2A993C5B21E2 /* BoundGameProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9F4C16930EFA91B4E882814 /* BoundGameProfiles.swift */; };
 		4F03CDCC9F397264DAE197BE /* MultiRedAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D612312CF0A79B9A8A5F163 /* MultiRedAdapter.swift */; };
 		00DBC18786AC882BD890367E /* SDKPhase4EventOracle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C5B370A2ADBBFCEE32D371 /* SDKPhase4EventOracle.swift */; };
 		FFFD447B4E289538B40450F1 /* SDKPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B33375746DEFBFF86B6076D /* SDKPersistenceTests.swift */; };
 		31EB236CB4804C67AB308501 /* ObservationRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31EB236CB4804C67AB308502 /* ObservationRecoveryTests.swift */; };
+		4A97CEEA04AF2139A0FE1716 /* LocalDebugBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E8AE38A8779DFB4A7A01FB3 /* LocalDebugBackendTests.swift */; };
+		51D474CD702F99FAA59212A4 /* LocalDebugNativeBoundaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70C132152B9567007A84B38E /* LocalDebugNativeBoundaryTests.swift */; };
+		51EFF0EF34001DCE89CADDE2 /* ServerCheckpointSettlementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 112C011649100683A6BEFAA5 /* ServerCheckpointSettlementTests.swift */; };
+		612455EDE0D29ABA92D456AC /* SoulProbeOwnershipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5802703433545213DAE92FAE /* SoulProbeOwnershipTests.swift */; };
+		A20D3B703183D0D050BD6DB4 /* DebugNativePayloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A5E3C8D2ABBD2C849BF1A2A /* DebugNativePayloadTests.swift */; };
+		914B76FA375BE73B550B210F /* DebugFixtureGenerationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BC0EEB6607EA3397FDDEF41 /* DebugFixtureGenerationTests.swift */; };
+		C7630C99EA45518C46B1500F /* DebugSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12BF465CC73C782EE6AE6152 /* DebugSessionTests.swift */; };
 		BE67330B59A799C863B605DD /* SDKEventTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F54C325F9E214EDF64EC641 /* SDKEventTests.swift */; };
 		085B8B9A27989DE5689C8A8B /* SDKLifecycleTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2AB0812B3F1D7F4A01CF05A /* SDKLifecycleTransportTests.swift */; };
 		E657F02BC1209299174F9260 /* SDKPhase5ALifecycleOracle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 448BC7B1C34C76E35D89331D /* SDKPhase5ALifecycleOracle.swift */; };
 		B5E5D7CCB8B8C253BC8C439A /* SDKActivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0A146917D4A2BBEBD8CEBE /* SDKActivityTests.swift */; };
 		5DBFEF40F269A3B480722A6F /* BoundSDKPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDEAF73889B68A5B3CDAAC16 /* BoundSDKPersistence.swift */; };
 		D9E2167A8E54406A9E176C01 /* BoundSDKObservationPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9E2167A8E54406A9E176C02 /* BoundSDKObservationPipeline.swift */; };
+		5E65B8B17B096EE6B98E8DDD /* BoundDebugFixtureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B05C5A06E3460142DF90908 /* BoundDebugFixtureStore.swift */; };
+		A0268CC673C7A210131C270E /* BoundDebugNativePayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 826F7555670E48BD48A2501A /* BoundDebugNativePayload.swift */; };
+		2761A017530E47D6A0D7FDF2 /* BoundDebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FA1D211027A65E78A604EC5 /* BoundDebugView.swift */; };
+		4B11CDBDB34B5075A39F8C71 /* BoundDebugSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B4031CDC66AF9E1DF9B395C /* BoundDebugSession.swift */; };
+		D733C23AEA6A95D495585A6F /* BoundDebugService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 703BAC4C692F61E9198C959D /* BoundDebugService.swift */; };
+		AB90266754610AC0027C437D /* BoundDebugModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED928A70F03A761C23C6F2C2 /* BoundDebugModels.swift */; };
+		0B5C28F2C4887DE9A54D12CF /* BoundDebugCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F8F8B1310B12F545E460EAA /* BoundDebugCatalog.swift */; };
 		65E7E41A7CF6291BA07CFCBB /* BoundSDKEventJournalRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECCDC5CF923B2CFD4F1D5EF3 /* BoundSDKEventJournalRules.swift */; };
 		D354721E7DAA6257761D5821 /* BoundSDKEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DC29D14A85686EFA7BC5EE1 /* BoundSDKEvent.swift */; };
 		A08F00843FB3548348EB2264 /* BoundSDKLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4725ADD69BABEBFF0F15082C /* BoundSDKLifecycle.swift */; };
@@ -58,6 +74,7 @@
 		B63D7EDEDAFCB8D1D74BE7F3 /* BoundSDKBytes.swift in Sources */ = {isa = PBXBuildFile; fileRef = F45B97C1BEB3242A8EEE7F11 /* BoundSDKBytes.swift */; };
 		D24100000000000000000002 /* BoundServerMemoryFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = D24000000000000000000002; };
 		D24100000000000000000003 /* BoundServerDisconnectSave.swift in Sources */ = {isa = PBXBuildFile; fileRef = D24000000000000000000003; };
+		D25100000000000000000001 /* BoundServerFinalSaveBoundary.swift in Sources */ = {isa = PBXBuildFile; fileRef = D25000000000000000000001; };
 		D24100000000000000000001 /* BoundMultiplayerSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = D24000000000000000000001; };
 		7F4D62F4E73C84D5370C7696 /* BoundServerBackupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B216D18DCBA716E8ADA2A73C /* BoundServerBackupView.swift */; };
 		FA8034E464163C5A453FEF2D /* BoundServerBackupManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7AFBC9246DF97A56D45A76D /* BoundServerBackupManager.swift */; };
@@ -81,6 +98,7 @@
 		503000000000000000000009 /* ROMMultiplayerContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50300000000000000000000A; };
 		503000000000000000000007 /* MultiplayerSavePackageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000008; };
 		D24100000000000000000004 /* ServerDisconnectSaveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D24000000000000000000004; };
+		D25100000000000000000002 /* ServerFinalSaveLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D25000000000000000000002; };
 		503000000000000000000005 /* BoundRunLease.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000006; };
 		503000000000000000000003 /* BoundMultiplayerSavePackage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000004; };
 		503000000000000000000001 /* BoundROMMultiplayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503000000000000000000002; };
@@ -542,6 +560,10 @@
 		6A17BE0980A8001F718195FB /* BoundPasskeyAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0756130DACFA8B7912B7CD5 /* BoundPasskeyAuthorization.swift */; };
 		BCE5B385F6C0737FD6123053 /* BoundAccountSecurityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0981A00AD461E9397CC203BB /* BoundAccountSecurityTests.swift */; };
 		A5AE64D04542272BAE4E4C27 /* BoundPasskeyAuthorizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A6DCD6DC10B39963CC46BE6 /* BoundPasskeyAuthorizationTests.swift */; };
+		B6FC5D24924B1E5A17AB26E6 /* BoundSDKDotsNative.mm in Sources */ = {isa = PBXBuildFile; fileRef = 5A9D19F1268DB338BD5E13D3 /* BoundSDKDotsNative.mm */; };
+		93B132D829CA33C365BF1452 /* BoundSDKDotsAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B985D3BBCC46D0EFB0C667A1 /* BoundSDKDotsAdapter.swift */; };
+		73D7A25395592E5E871CBDB2 /* BoundSDKDotsRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BAB1CF0DB26D0C6F2C13378 /* BoundSDKDotsRuntime.swift */; };
+		28E73CF976B321E65D8FA6E3 /* SDKDotsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D32FC57FCE6D050E8356D49 /* SDKDotsTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -918,18 +940,34 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		3E0D8D3D628E4AB7AE8466F1 /* NativeObservationEnduranceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeObservationEnduranceTests.swift; sourceTree = "<group>"; };
+		F63BAD716F1B9CF6EE21AF16 /* NativeStoryBattleAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeStoryBattleAcceptanceTests.swift; sourceTree = "<group>"; };
 		83A96265A167ACD9C7D4C7AE /* MultiRedAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiRedAdapterTests.swift; sourceTree = "<group>"; };
 		F9F4C16930EFA91B4E882814 /* BoundGameProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/Generated/BoundGameProfiles.swift; sourceTree = "<group>"; };
 		0D612312CF0A79B9A8A5F163 /* MultiRedAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiRedAdapter.swift; sourceTree = "<group>"; };
 		A6C5B370A2ADBBFCEE32D371 /* SDKPhase4EventOracle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKPhase4EventOracle.swift; sourceTree = "<group>"; };
 		6B33375746DEFBFF86B6076D /* SDKPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKPersistenceTests.swift; sourceTree = "<group>"; };
 		31EB236CB4804C67AB308502 /* ObservationRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationRecoveryTests.swift; sourceTree = "<group>"; };
+		3E8AE38A8779DFB4A7A01FB3 /* LocalDebugBackendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalDebugBackendTests.swift; sourceTree = "<group>"; };
+		70C132152B9567007A84B38E /* LocalDebugNativeBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalDebugNativeBoundaryTests.swift; sourceTree = "<group>"; };
+		112C011649100683A6BEFAA5 /* ServerCheckpointSettlementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerCheckpointSettlementTests.swift; sourceTree = "<group>"; };
+		5802703433545213DAE92FAE /* SoulProbeOwnershipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoulProbeOwnershipTests.swift; sourceTree = "<group>"; };
+		0A5E3C8D2ABBD2C849BF1A2A /* DebugNativePayloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugNativePayloadTests.swift; sourceTree = "<group>"; };
+		8BC0EEB6607EA3397FDDEF41 /* DebugFixtureGenerationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugFixtureGenerationTests.swift; sourceTree = "<group>"; };
+		12BF465CC73C782EE6AE6152 /* DebugSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugSessionTests.swift; sourceTree = "<group>"; };
 		2F54C325F9E214EDF64EC641 /* SDKEventTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKEventTests.swift; sourceTree = "<group>"; };
 		A2AB0812B3F1D7F4A01CF05A /* SDKLifecycleTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKLifecycleTransportTests.swift; sourceTree = "<group>"; };
 		448BC7B1C34C76E35D89331D /* SDKPhase5ALifecycleOracle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKPhase5ALifecycleOracle.swift; sourceTree = "<group>"; };
 		FD0A146917D4A2BBEBD8CEBE /* SDKActivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKActivityTests.swift; sourceTree = "<group>"; };
 		DDEAF73889B68A5B3CDAAC16 /* BoundSDKPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/BoundSDKPersistence.swift; sourceTree = "<group>"; };
 		D9E2167A8E54406A9E176C02 /* BoundSDKObservationPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/BoundSDKObservationPipeline.swift; sourceTree = "<group>"; };
+		1B05C5A06E3460142DF90908 /* BoundDebugFixtureStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Debug/BoundDebugFixtureStore.swift; sourceTree = "<group>"; };
+		826F7555670E48BD48A2501A /* BoundDebugNativePayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Debug/BoundDebugNativePayload.swift; sourceTree = "<group>"; };
+		8FA1D211027A65E78A604EC5 /* BoundDebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Debug/BoundDebugView.swift; sourceTree = "<group>"; };
+		8B4031CDC66AF9E1DF9B395C /* BoundDebugSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Debug/BoundDebugSession.swift; sourceTree = "<group>"; };
+		703BAC4C692F61E9198C959D /* BoundDebugService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Debug/BoundDebugService.swift; sourceTree = "<group>"; };
+		ED928A70F03A761C23C6F2C2 /* BoundDebugModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Debug/BoundDebugModels.swift; sourceTree = "<group>"; };
+		3F8F8B1310B12F545E460EAA /* BoundDebugCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Debug/BoundDebugCatalog.swift; sourceTree = "<group>"; };
 		ECCDC5CF923B2CFD4F1D5EF3 /* BoundSDKEventJournalRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/BoundSDKEventJournalRules.swift; sourceTree = "<group>"; };
 		5DC29D14A85686EFA7BC5EE1 /* BoundSDKEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/BoundSDKEvent.swift; sourceTree = "<group>"; };
 		4725ADD69BABEBFF0F15082C /* BoundSDKLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/BoundSDKLifecycle.swift; sourceTree = "<group>"; };
@@ -944,6 +982,7 @@
 		F45B97C1BEB3242A8EEE7F11 /* BoundSDKBytes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDK/BoundSDKBytes.swift; sourceTree = "<group>"; };
 		D24000000000000000000002 /* BoundServerMemoryFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundServerMemoryFiles.swift; sourceTree = "<group>"; };
 		D24000000000000000000003 /* BoundServerDisconnectSave.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundServerDisconnectSave.swift; sourceTree = "<group>"; };
+		D25000000000000000000001 /* BoundServerFinalSaveBoundary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundServerFinalSaveBoundary.swift; sourceTree = "<group>"; };
 		D24000000000000000000001 /* BoundMultiplayerSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundMultiplayerSetup.swift; sourceTree = "<group>"; };
 		B216D18DCBA716E8ADA2A73C /* BoundServerBackupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundServerBackupView.swift; sourceTree = "<group>"; };
 		C7AFBC9246DF97A56D45A76D /* BoundServerBackupManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundServerBackupManager.swift; sourceTree = "<group>"; };
@@ -967,6 +1006,7 @@
 		50300000000000000000000A /* ROMMultiplayerContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ROMMultiplayerContractTests.swift; sourceTree = "<group>"; };
 		503000000000000000000008 /* MultiplayerSavePackageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiplayerSavePackageTests.swift; sourceTree = "<group>"; };
 		D24000000000000000000004 /* ServerDisconnectSaveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerDisconnectSaveTests.swift; sourceTree = "<group>"; };
+		D25000000000000000000002 /* ServerFinalSaveLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerFinalSaveLifecycleTests.swift; sourceTree = "<group>"; };
 		503000000000000000000006 /* BoundRunLease.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundRunLease.swift; sourceTree = "<group>"; };
 		503000000000000000000004 /* BoundMultiplayerSavePackage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundMultiplayerSavePackage.swift; sourceTree = "<group>"; };
 		503000000000000000000002 /* BoundROMMultiplayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMMultiplayer.swift; sourceTree = "<group>"; };
@@ -1445,6 +1485,11 @@
 		F0756130DACFA8B7912B7CD5 /* BoundPasskeyAuthorization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPasskeyAuthorization.swift; sourceTree = "<group>"; };
 		0981A00AD461E9397CC203BB /* BoundAccountSecurityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundAccountSecurityTests.swift; sourceTree = "<group>"; };
 		1A6DCD6DC10B39963CC46BE6 /* BoundPasskeyAuthorizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPasskeyAuthorizationTests.swift; sourceTree = "<group>"; };
+		938442E318EE9B36FB6226F1 /* BoundSDKDotsNative.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Samples/SDKDots/BoundSDKDotsNative.h; sourceTree = "<group>"; };
+		5A9D19F1268DB338BD5E13D3 /* BoundSDKDotsNative.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = Samples/SDKDots/BoundSDKDotsNative.mm; sourceTree = "<group>"; };
+		B985D3BBCC46D0EFB0C667A1 /* BoundSDKDotsAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Samples/SDKDots/BoundSDKDotsAdapter.swift; sourceTree = "<group>"; };
+		2BAB1CF0DB26D0C6F2C13378 /* BoundSDKDotsRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Samples/SDKDots/BoundSDKDotsRuntime.swift; sourceTree = "<group>"; };
+		3D32FC57FCE6D050E8356D49 /* SDKDotsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKDotsTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1574,12 +1619,23 @@
 				A6C5B370A2ADBBFCEE32D371 /* SDKPhase4EventOracle.swift */,
 				6B33375746DEFBFF86B6076D /* SDKPersistenceTests.swift */,
 				31EB236CB4804C67AB308502 /* ObservationRecoveryTests.swift */,
+				3E8AE38A8779DFB4A7A01FB3 /* LocalDebugBackendTests.swift */,
+				70C132152B9567007A84B38E /* LocalDebugNativeBoundaryTests.swift */,
+				112C011649100683A6BEFAA5 /* ServerCheckpointSettlementTests.swift */,
+				3D32FC57FCE6D050E8356D49 /* SDKDotsTests.swift */,
+				3E0D8D3D628E4AB7AE8466F1 /* NativeObservationEnduranceTests.swift */,
+				F63BAD716F1B9CF6EE21AF16 /* NativeStoryBattleAcceptanceTests.swift */,
+				5802703433545213DAE92FAE /* SoulProbeOwnershipTests.swift */,
+				0A5E3C8D2ABBD2C849BF1A2A /* DebugNativePayloadTests.swift */,
+				8BC0EEB6607EA3397FDDEF41 /* DebugFixtureGenerationTests.swift */,
+				12BF465CC73C782EE6AE6152 /* DebugSessionTests.swift */,
 				2F54C325F9E214EDF64EC641 /* SDKEventTests.swift */,
 				A2AB0812B3F1D7F4A01CF05A /* SDKLifecycleTransportTests.swift */,
 				448BC7B1C34C76E35D89331D /* SDKPhase5ALifecycleOracle.swift */,
 				FD0A146917D4A2BBEBD8CEBE /* SDKActivityTests.swift */,
 				503000000000000000000008 /* MultiplayerSavePackageTests.swift */,
 				D24000000000000000000004 /* ServerDisconnectSaveTests.swift */,
+				D25000000000000000000002 /* ServerFinalSaveLifecycleTests.swift */,
                 501200000000000000000004 /* SharedWorldTests.swift */,
 				B4771000000000000000000C /* NativeBattleRuntimeTests.swift */,
 				A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */,
@@ -1672,6 +1728,7 @@
 				D16800000000000000000001 /* BoundNakamaAuthorization.swift */,
 				D24000000000000000000002 /* BoundServerMemoryFiles.swift */,
 				D24000000000000000000003 /* BoundServerDisconnectSave.swift */,
+				D25000000000000000000001 /* BoundServerFinalSaveBoundary.swift */,
 				D24000000000000000000001 /* BoundMultiplayerSetup.swift */,
 				D16800000000000000000000 /* BoundNakamaClient.swift */,
 				26C47EB2F43565AEDD44B055 /* FriendSharingTokens.swift */,
@@ -1739,7 +1796,18 @@
 				F9F4C16930EFA91B4E882814 /* BoundGameProfiles.swift */,
 				0D612312CF0A79B9A8A5F163 /* MultiRedAdapter.swift */,
 				DDEAF73889B68A5B3CDAAC16 /* BoundSDKPersistence.swift */,
+				938442E318EE9B36FB6226F1 /* BoundSDKDotsNative.h */,
+				5A9D19F1268DB338BD5E13D3 /* BoundSDKDotsNative.mm */,
+				B985D3BBCC46D0EFB0C667A1 /* BoundSDKDotsAdapter.swift */,
+				2BAB1CF0DB26D0C6F2C13378 /* BoundSDKDotsRuntime.swift */,
 				D9E2167A8E54406A9E176C02 /* BoundSDKObservationPipeline.swift */,
+				1B05C5A06E3460142DF90908 /* BoundDebugFixtureStore.swift */,
+				826F7555670E48BD48A2501A /* BoundDebugNativePayload.swift */,
+				8FA1D211027A65E78A604EC5 /* BoundDebugView.swift */,
+				8B4031CDC66AF9E1DF9B395C /* BoundDebugSession.swift */,
+				703BAC4C692F61E9198C959D /* BoundDebugService.swift */,
+				ED928A70F03A761C23C6F2C2 /* BoundDebugModels.swift */,
+				3F8F8B1310B12F545E460EAA /* BoundDebugCatalog.swift */,
 				ECCDC5CF923B2CFD4F1D5EF3 /* BoundSDKEventJournalRules.swift */,
 				5DC29D14A85686EFA7BC5EE1 /* BoundSDKEvent.swift */,
 				4725ADD69BABEBFF0F15082C /* BoundSDKLifecycle.swift */,
@@ -3311,7 +3379,7 @@
             buildActionMask = 2147483647;
             files = ();
             inputPaths = ();
-            outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/rrbin-integrated.gba");
+            outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/multiplayer.gba");
             name = "Bundle Development ROM";
             runOnlyForDeploymentPostprocessing = 0;
             shellPath = /bin/sh;
@@ -3464,12 +3532,23 @@
 				00DBC18786AC882BD890367E /* SDKPhase4EventOracle.swift in Sources */,
 				FFFD447B4E289538B40450F1 /* SDKPersistenceTests.swift in Sources */,
 				31EB236CB4804C67AB308501 /* ObservationRecoveryTests.swift in Sources */,
+				4A97CEEA04AF2139A0FE1716 /* LocalDebugBackendTests.swift in Sources */,
+				51D474CD702F99FAA59212A4 /* LocalDebugNativeBoundaryTests.swift in Sources */,
+				51EFF0EF34001DCE89CADDE2 /* ServerCheckpointSettlementTests.swift in Sources */,
+				28E73CF976B321E65D8FA6E3 /* SDKDotsTests.swift in Sources */,
+				F1502CBEAAB0DF1E7734BB70 /* NativeObservationEnduranceTests.swift in Sources */,
+				1AA346A35B65DCE0A7CF1473 /* NativeStoryBattleAcceptanceTests.swift in Sources */,
+				612455EDE0D29ABA92D456AC /* SoulProbeOwnershipTests.swift in Sources */,
+				A20D3B703183D0D050BD6DB4 /* DebugNativePayloadTests.swift in Sources */,
+				914B76FA375BE73B550B210F /* DebugFixtureGenerationTests.swift in Sources */,
+				C7630C99EA45518C46B1500F /* DebugSessionTests.swift in Sources */,
 				BE67330B59A799C863B605DD /* SDKEventTests.swift in Sources */,
 				085B8B9A27989DE5689C8A8B /* SDKLifecycleTransportTests.swift in Sources */,
 				E657F02BC1209299174F9260 /* SDKPhase5ALifecycleOracle.swift in Sources */,
 				B5E5D7CCB8B8C253BC8C439A /* SDKActivityTests.swift in Sources */,
 				503000000000000000000007 /* MultiplayerSavePackageTests.swift in Sources */,
 				D24100000000000000000004 /* ServerDisconnectSaveTests.swift in Sources */,
+				D25100000000000000000002 /* ServerFinalSaveLifecycleTests.swift in Sources */,
                 501200000000000000000003 /* SharedWorldTests.swift in Sources */,
 				B4771000000000000000000D /* NativeBattleRuntimeTests.swift in Sources */,
 				A15E0000000000000000000A /* PresenceConnectionCheckTests.swift in Sources */,
@@ -3764,6 +3843,7 @@
 				D16900000000000000000001 /* BoundNakamaAuthorization.swift in Sources */,
 				D24100000000000000000002 /* BoundServerMemoryFiles.swift in Sources */,
 				D24100000000000000000003 /* BoundServerDisconnectSave.swift in Sources */,
+				D25100000000000000000001 /* BoundServerFinalSaveBoundary.swift in Sources */,
 				D24100000000000000000001 /* BoundMultiplayerSetup.swift in Sources */,
 				D16900000000000000000000 /* BoundNakamaClient.swift in Sources */,
 				0FACF7086F87199C6306CC15 /* FriendSharingTokens.swift in Sources */,
@@ -3825,7 +3905,17 @@
 				2E6FAD85815A2A993C5B21E2 /* BoundGameProfiles.swift in Sources */,
 				4F03CDCC9F397264DAE197BE /* MultiRedAdapter.swift in Sources */,
 				5DBFEF40F269A3B480722A6F /* BoundSDKPersistence.swift in Sources */,
+				B6FC5D24924B1E5A17AB26E6 /* BoundSDKDotsNative.mm in Sources */,
+				93B132D829CA33C365BF1452 /* BoundSDKDotsAdapter.swift in Sources */,
+				73D7A25395592E5E871CBDB2 /* BoundSDKDotsRuntime.swift in Sources */,
 				D9E2167A8E54406A9E176C01 /* BoundSDKObservationPipeline.swift in Sources */,
+				5E65B8B17B096EE6B98E8DDD /* BoundDebugFixtureStore.swift in Sources */,
+				A0268CC673C7A210131C270E /* BoundDebugNativePayload.swift in Sources */,
+				2761A017530E47D6A0D7FDF2 /* BoundDebugView.swift in Sources */,
+				4B11CDBDB34B5075A39F8C71 /* BoundDebugSession.swift in Sources */,
+				D733C23AEA6A95D495585A6F /* BoundDebugService.swift in Sources */,
+				AB90266754610AC0027C437D /* BoundDebugModels.swift in Sources */,
+				0B5C28F2C4887DE9A54D12CF /* BoundDebugCatalog.swift in Sources */,
 				65E7E41A7CF6291BA07CFCBB /* BoundSDKEventJournalRules.swift in Sources */,
 				D354721E7DAA6257761D5821 /* BoundSDKEvent.swift in Sources */,
 				A08F00843FB3548348EB2264 /* BoundSDKLifecycle.swift in Sources */,

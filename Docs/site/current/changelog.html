@@ -16,6 +16,13 @@
     <li>Fixed early A/B presses being ignored while native invitation menus were becoming ready.</li>
     <li>Reduced repeated Soul Link storage copying and fixed restored event histories with adjacent receipt gaps.</li>
     <li>Moved Soul Link record processing off the frame callback, with a paused Retry flow that preserves pending changes when saving fails.</li>
+    <li>Added session-scoped paired DEBUG controls for local testing, including reload, custom capture, return to ordinary runs and sanitized reports. Progression statepoints remain disabled until their validation is complete.</li>
+    <li>Fixed DEBUG checkpoint conflicts during paired readiness and retries after lost save replies.</li>
+    <li>Kept DEBUG restore and Return to Previous Run tied to their original ROM profile when the current test cartridge changes.</li>
+    <li>Final saves wait for pending history and uploads. Failed preparation keeps the paused run available for Retry, including after signing back in.</li>
+    <li>Fixed checkpoint capture repeatedly scheduling another save. DEBUG Return retries refresh confirmation without rewinding ordinary play.</li>
+    <li>DEBUG restore rechecks the stopped game before holding it for a switch, allowing an unchanged run to resume when that boundary is temporarily unsafe.</li>
+    <li>Each release includes its matching multiplayer.gba and installs it automatically while preserving older cartridges and saves.</li>
   </ul>
   <p><time datetime="2026-10-25">October 25, 2026</time></p>
   <p>Bound</p>

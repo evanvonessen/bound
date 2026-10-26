@@ -10,9 +10,30 @@ import UIKit
 struct BoundBackendConfiguration: Equatable, Sendable {
     enum Kind: String, Sendable { case legacy, selfhost }
     static let legacyOrigin = "https://qevnxhngdtlyihhmvnjv.supabase.co"
-    static let bundled = try? resolve(info: Bundle.main.infoDictionary ?? [:])
+    static let bundled = try? resolveBuild(info: Bundle.main.infoDictionary ?? [:], environment: ProcessInfo.processInfo.environment)
     let kind: Kind
     let origin: String
+
+    static func resolveBuild(info: [String: Any], environment: [String: String]) throws -> Self {
+        #if DEBUG && targetEnvironment(simulator)
+        if let endpoint = environment["BOUND_QA_BACKEND_URL"] {
+            guard environment["BOUND_QA_LOCAL_BACKEND"] == "1" else { throw BoundFriendError.unavailable }
+            return try resolveLocalQA(endpoint)
+        }
+        #endif
+        return try resolve(info: info)
+    }
+    #if DEBUG && targetEnvironment(simulator)
+    /// An explicit simulator-only account authority, isolated by origin. TLS
+    /// still uses normal system validation; this never installs trust itself.
+    static func resolveLocalQA(_ endpoint: String) throws -> Self {
+        guard let parts = URLComponents(string: endpoint), parts.scheme == "https",
+              parts.host == "127.0.0.1", let port = parts.port, (1024...65535).contains(port),
+              parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
+              parts.path.isEmpty || parts.path == "/", parts.url != nil else { throw BoundFriendError.unavailable }
+        return .init(kind: .selfhost, origin: "https://127.0.0.1:\(port)")
+    }
+    #endif
 
     static func resolve(info: [String: Any]) throws -> Self {
         func setting(_ key: String, placeholder: String) throws -> String? {
@@ -157,6 +178,15 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
         var body = ["protocol": "bound-saves-v1"]
         if let roomID { body["roomID"] = roomID.lowercased() }
         return try request(path: "/functions/v1/nakama-session", body: body)
+    }
+    func debugRequest(body: Data) throws -> URLRequest {
+        guard backend.kind == .selfhost, body.count <= 65_536,
+              (try JSONSerialization.jsonObject(with: body)) is [String: Any] else { throw BoundFriendError.unavailable }
+        var result = URLRequest(url: try backend.url(path: "/functions/v1/bound-debug"))
+        result.httpMethod = "POST"; result.timeoutInterval = 10; result.httpBody = body
+        result.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        result.setValue("Bearer " + (try validToken()), forHTTPHeaderField: "Authorization")
+        return result
     }
     func runLeaseRequest(action: String, payload: [String: Any]) throws -> URLRequest {
         try request(path: "/rest/v1/rpc/bound_run_lease_v1", body: ["action": action, "payload": payload])

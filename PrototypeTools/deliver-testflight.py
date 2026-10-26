@@ -5,9 +5,11 @@ import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
+import hashlib
 import json
 from pathlib import Path
 import plistlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -78,7 +80,7 @@ def write_json(path, data):
     temporary.replace(path)
 
 
-def archive_info(archive):
+def archive_info(archive, source):
     app = archive / "Products/Applications/Bound.app"
     with (app / "Info.plist").open("rb") as stream:
         info = plistlib.load(stream)
@@ -86,7 +88,20 @@ def archive_info(archive):
         properties = plistlib.load(stream)["ApplicationProperties"]
     if info.get("CFBundleIdentifier") != BUNDLE_ID or properties.get("Team") != TEAM_ID:
         raise ValueError("Archive does not match Bound's approved bundle ID and signing team")
-    return {"version": info["CFBundleShortVersionString"], "archive_build": info["CFBundleVersion"]}
+    pin = json.loads((source / "PrototypeTools/bundled-rom.json").read_text())
+    contract = re.search(r'romSHA256 = "([a-f0-9]{64})"',
+                         (source / "Delta/Bound/BoundSharedProgression.swift").read_text())
+    if not contract or pin.get("sha256") != contract[1]:
+        raise ValueError("Archived ROM pin does not match the published source contract")
+    rom = app / "multiplayer.gba"
+    if rom.is_symlink() or not rom.is_file() or rom.stat().st_size != 32 * 1024 * 1024:
+        raise ValueError("Archive is missing the complete multiplayer.gba resource")
+    digest = hashlib.sha256(rom.read_bytes()).hexdigest()
+    if digest != pin["sha256"]:
+        raise ValueError("Archived multiplayer.gba does not match the published source pin")
+    return {"version": info["CFBundleShortVersionString"], "archive_build": info["CFBundleVersion"],
+            "rom_resource": rom.name, "rom_sha256": digest, "rom_bytes": rom.stat().st_size,
+            "rom_release_tag": pin.get("tag")}
 
 
 def deliver(root, commit, upload):
@@ -123,7 +138,7 @@ def deliver(root, commit, upload):
                 "-disableAutomaticPackageResolution", "-onlyUsePackageVersionsFromResolvedFile",
                 "CLANG_ENABLE_EXPLICIT_MODULES=NO", "SWIFT_ENABLE_EXPLICIT_MODULES=NO", "archive",
             ], source, attempt / "archive.log")
-            info = archive_info(archive)
+            info = archive_info(archive, source)
             run_logged(["codesign", "--verify", "--deep", "--strict", str(archive / "Products/Applications/Bound.app")], source, attempt / "signature.log")
             run_logged([sys.executable, str(source / "PrototypeTools/verify_privacy_manifests.py"), "--archive", str(archive)], source, attempt / "archive-privacy.log")
             write_json(attempt / "archive.json", {"commit": commit, "bundle_id": BUNDLE_ID, **info})

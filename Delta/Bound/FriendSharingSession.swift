@@ -239,6 +239,72 @@ final class FriendSharingSession: ObservableObject {
     private var roomProvider: () -> String?
     private let tokenFetcher: @MainActor (String, AppCloudSession) async throws -> FriendSharingTokenLease
     private let nakamaFetcher: @MainActor (String, AppCloudSession) async throws -> BoundNakamaConfiguration
+    private var debugRealtimeScope: BoundDebugRealtimeScope?
+    private var debugRealtimeProvider: (@MainActor (String, AppCloudSession) async throws -> BoundNakamaConfiguration)?
+    private var debugRealtimeRevision = UUID()
+    private var debugRealtimeAttempts = 0
+    private var debugSwitchPending = false
+    private var debugActivityAdmission: BoundDebugAdmission?
+    private var debugAdmissionDeadline: (any SharingCancellation)?
+    private var debugContinuingNative = false, debugContinuingCooperative = false
+    private var debugActivitiesAllowed: Bool {
+        guard !debugSwitchPending else { return false }
+        guard let scope = debugRealtimeScope else { return true }
+        guard let admission = debugActivityAdmission else { return false }
+        return admission.sessionID == scope.sessionID && admission.membershipEpoch == scope.membershipEpoch
+            && admission.generation == scope.generation && admission.manifestDigest == scope.manifestDigest
+            && admission.expiresAt > Date().timeIntervalSince1970
+    }
+    func setDebugSwitchPending(_ pending: Bool) {
+        if pending && !debugSwitchPending {
+            debugContinuingNative = nativeBattle.isActive
+            debugContinuingCooperative = cooperativeDoubles.isActive
+        }
+        debugSwitchPending = pending; interactions.refreshInputGate()
+    }
+    func setDebugActivityAdmission(_ admission: BoundDebugAdmission?) {
+        if debugActivityAdmission != nil, admission == nil {
+            debugContinuingNative = nativeBattle.isActive
+            debugContinuingCooperative = cooperativeDoubles.isActive
+        }
+        debugActivityAdmission = admission
+        debugAdmissionDeadline?.cancel(); debugAdmissionDeadline = nil
+        if let admission {
+            let revision = debugRealtimeRevision
+            debugAdmissionDeadline = scheduler.schedule(at: scheduler.now + max(0, admission.expiresAt - Date().timeIntervalSince1970)) { [weak self] in
+                guard let self, self.debugRealtimeRevision == revision, self.debugActivityAdmission == admission else { return }
+                self.setDebugActivityAdmission(nil)
+            }
+        }
+        interactions.refreshInputGate()
+    }
+
+    /// A scope without a provider is an explicit fence, never ordinary-room
+    /// authorization. Clearing the scope is reserved for ordinary return.
+    func setDebugRealtimeProvider(scope: BoundDebugRealtimeScope?,
+        provider: (@MainActor (String, AppCloudSession) async throws -> BoundNakamaConfiguration)?) {
+        let changed = debugRealtimeScope != scope || (debugRealtimeProvider == nil) != (provider == nil)
+        if debugRealtimeScope != scope {
+            debugActivityAdmission = nil; debugAdmissionDeadline?.cancel(); debugAdmissionDeadline = nil
+            debugContinuingNative = false; debugContinuingCooperative = false
+        }
+        debugRealtimeScope = scope; debugRealtimeProvider = provider
+        guard changed else { return }
+        debugRealtimeRevision = UUID(); debugRealtimeAttempts = 0
+        tokenTask?.cancel(); tokenTask = nil; tokenDeadline?.cancel(); tokenDeadline = nil
+        guard let nakama = transport as? BoundNakamaSharingTransport else { return }
+        nakama.suspendGameplay(fenced: scope != nil)
+        guard active else { return }
+        joined = false; peerConnected = false; reconnecting = true
+        recoveryDeadline?.cancel(); recoveryDeadline = nil; recoveryID = nil
+        sharedWorld.peerGone(); soulLink.peerGone(); interactions.suspend()
+        nativeBattle.suspendTransport(); cooperativeDoubles.transportInterrupted()
+        livePresence.stop(keepPresentation: true)
+        // A withheld provider may remain fenced indefinitely without a retry
+        // spinning against the ordinary authorization endpoint.
+        if scope != nil && provider == nil { tokenExpiry = nil; status = "Waiting for DEBUG session"; return }
+        requestNakamaToken(initial: true)
+    }
     var isConfigured: Bool { authenticatedMode || configuration != nil }
     var authenticatedSession: (() -> AppCloudSession?)?
     var multiplayerPacketReceiver: ((Data) -> Void)?
@@ -407,6 +473,7 @@ final class FriendSharingSession: ObservableObject {
         cooperativeDoubles.connected = { [weak self] in
             guard let self else { return false }
             return self.active && self.joined && !self.reconnecting && !self.backgrounded && !self.nativeBattle.blocksAutoSave
+                && (self.debugActivitiesAllowed || self.debugContinuingCooperative && self.cooperativeDoubles.isActive)
         }
         cooperativeDoubles.context = { [weak livePresence] in
             guard let presence=livePresence,let peer=presence.peerEpoch else { return nil }
@@ -420,7 +487,7 @@ final class FriendSharingSession: ObservableObject {
         }
         soulLink.nativeActivity = { [weak self] in self?.nativeBattle.isActive == true || self?.cooperativeDoubles.isActive == true }
         interactions.agreed = { [weak self] activity, id, initiator in
-            guard let self else { return }
+            guard let self, self.debugActivitiesAllowed else { return }
             guard !self.cooperativeDoubles.blocksAutoSave else {
                 self.interactions.activityEnded("Finish the cooperative battle first");return
             }
@@ -432,7 +499,7 @@ final class FriendSharingSession: ObservableObject {
         interactions.cancelActivity = { [weak nativeBattle] in nativeBattle?.cancel() }
         interactions.context = { [weak livePresence] in livePresence?.interactionContext() }
         interactions.admissionIdentity = { [weak self] in
-            guard let self else { return nil }
+            guard let self, self.debugActivitiesAllowed || self.debugContinuingNative && self.nativeBattle.isActive else { return nil }
             let context=self.nativeBattle.continuationContext ?? self.nativeBattle.continuationContextProvider?()
             if self.authenticatedMode {
                 // Transport gaps retain the authenticated consent scope. The
@@ -505,11 +572,11 @@ final class FriendSharingSession: ObservableObject {
         // off-main; all actor-owned cancellation/RTC cleanup is explicitly enqueued.
         featureObservers.forEach(NotificationCenter.default.removeObserver)
         tokenTask?.cancel()
-        let tokenDeadline = tokenDeadline, receiverDisplayLink = receiverDisplayLink
+        let tokenDeadline = tokenDeadline, receiverDisplayLink = receiverDisplayLink, debugAdmissionDeadline = debugAdmissionDeadline
         let recoveryDeadline = recoveryDeadline, foregroundReconnectRetry = foregroundReconnectRetry
         let sharing = sharing, transport = transport
         BoundMainActorDisposal.enqueue {
-            tokenDeadline?.cancel()
+            tokenDeadline?.cancel(); debugAdmissionDeadline?.cancel()
             receiverDisplayLink?.cancel()
             recoveryDeadline?.cancel()
             foregroundReconnectRetry?.cancel()
@@ -676,7 +743,8 @@ final class FriendSharingSession: ObservableObject {
                 else { self.stop(reason: .unavailable); self.status = "Sharing unavailable · Retry" }
             case .connection: break
             case .failed:
-                self.handleForegroundReconnectFailure(run: run, status: "Sharing unavailable · Retrying")
+                if self.debugRealtimeScope != nil { self.handleDebugRealtimeFailure(run:run,revision:self.debugRealtimeRevision) }
+                else { self.handleForegroundReconnectFailure(run: run, status: "Sharing unavailable · Retrying") }
             }
             self.writeEvidence()
         }
@@ -715,7 +783,7 @@ final class FriendSharingSession: ObservableObject {
     }
 
     private func requestToken(initial: Bool) {
-        if transport is BoundNakamaSharingTransport, BoundMultiplayerFeatures.isEnabled {
+        if transport is BoundNakamaSharingTransport, BoundMultiplayerFeatures.isEnabled || debugRealtimeScope != nil {
             requestNakamaToken(initial: initial)
             return
         }
@@ -766,45 +834,73 @@ final class FriendSharingSession: ObservableObject {
         guard tokenTask == nil, active, let room = authRoom, let owner = tokenOwner,
               let identity = authenticatedSession?(), identity.owner == owner,
               let nakama = transport as? BoundNakamaSharingTransport else { return }
-        let run = generation, fetcher = nakamaFetcher
+        guard debugRealtimeScope == nil || debugRealtimeProvider != nil else { return }
+        let run = generation, scope = debugRealtimeScope, revision = debugRealtimeRevision
+        let fetcher = debugRealtimeProvider ?? nakamaFetcher
         tokenTask = Task { [weak self] in
             do {
                 let lease = try await fetcher(room, identity)
                 try Task.checkCancellation()
-                guard let self, self.generation == run, self.active else { return }
-                guard let roomID = UUID(uuidString: room), lease.isValid(room: roomID, owner: owner),
+                guard let self, self.generation == run, self.active,
+                      self.debugRealtimeRevision == revision, self.debugRealtimeScope == scope else { return }
+                guard let roomID = UUID(uuidString: room),
+                      (scope == nil ? lease.isValid(room: roomID, owner: owner) : lease.ownerID == owner && lease.roomID != roomID && lease.isValid()),
                       self.authenticatedSession?()?.isSameSession(as: identity) == true else { throw FriendSharingTokenError.unavailable }
                 guard self.reconnectPeerOwner == nil || self.reconnectPeerOwner == lease.peerOwnerID else {
-                    self.tokenTask = nil; self.stop(reason: .sessionChanged); self.status = "Friend changed · Reopen multiplayer"; return
+                    if scope == nil {
+                        self.tokenTask = nil; self.stop(reason: .sessionChanged)
+                        self.status = "Friend changed · Reopen multiplayer"; return
+                    }
+                    throw FriendSharingTokenError.unavailable
                 }
                 self.reconnectPeerOwner = lease.peerOwnerID
-                self.tokenTask = nil
+                self.tokenTask = nil; self.debugRealtimeAttempts = 0
                 if initial {
-                    nakama.configureGameplay(lease)
-                    // The shared session retains its legacy display identity;
-                    // this placeholder never opens Agora or authorizes gameplay.
+                    nakama.configureGameplay(lease, debug: scope != nil)
+                    // The display/continuation identity stays the logical friend
+                    // room. The socket uses only the server-issued match ID.
                     let localRole: UInt = lease.members.sorted { $0.uuidString < $1.uuidString }.first == owner ? 1 : 2
                     self.configuration = .init(appID: String(repeating: "0", count: 32),
                         channel: "nakama_" + roomID.uuidString.lowercased(), uid: localRole,
                         remoteUID: localRole == 1 ? 2 : 1, token: "nakama")
-                    self.startTransport()
+                    if !nakama.startConfiguredGameplay(rejoining: self.reconnecting) { self.startTransport() }
                 } else {
-                    guard nakama.renewGameplay(lease) else { throw FriendSharingTokenError.unavailable }
+                    guard nakama.renewGameplay(lease, debug: scope != nil) else { throw FriendSharingTokenError.unavailable }
                     self.tokenRenewals += 1
                 }
                 guard self.active else { return }
                 self.tokenExpiry = lease.expiresAt
                 let renewalRun = self.generation
                 self.tokenDeadline?.cancel()
-                self.tokenDeadline = self.scheduler.schedule(at: self.scheduler.now + max(1, min(40, lease.expiresAt - Date().timeIntervalSince1970 - 30))) { [weak self] in
-                    guard let self, self.generation == renewalRun, self.active else { return }
+                let delay = scope == nil ? max(1, min(40, lease.expiresAt - Date().timeIntervalSince1970 - 30))
+                    : max(1, min(10, lease.expiresAt - Date().timeIntervalSince1970 - 5))
+                self.tokenDeadline = self.scheduler.schedule(at: self.scheduler.now + delay) { [weak self] in
+                    guard let self, self.generation == renewalRun, self.active, self.debugRealtimeRevision == revision else { return }
                     self.requestToken(initial: false)
                 }
             } catch {
-                guard let self, self.generation == run, self.active else { return }
+                guard !Task.isCancelled, let self, self.generation == run, self.active, self.debugRealtimeRevision == revision else { return }
                 self.tokenTask = nil
-                self.handleForegroundReconnectFailure(run: run, status: "Multiplayer unavailable · Retrying")
+                if scope != nil {
+                    self.handleDebugRealtimeFailure(run:run,revision:revision)
+                } else { self.handleForegroundReconnectFailure(run: run, status: "Multiplayer unavailable · Retrying") }
             }
+        }
+    }
+
+    private func handleDebugRealtimeFailure(run:UUID,revision:UUID) {
+        guard generation==run,debugRealtimeRevision==revision,debugRealtimeScope != nil,active,
+              let nakama=transport as? BoundNakamaSharingTransport else { return }
+        nakama.suspendGameplay(); joined=false;peerConnected=false;reconnecting=true
+        sharedWorld.peerGone();soulLink.peerGone();interactions.suspend()
+        nativeBattle.suspendTransport();cooperativeDoubles.transportInterrupted()
+        livePresence.stop(keepPresentation:true);tokenExpiry=nil
+        status="DEBUG connection unavailable · Retrying"
+        debugRealtimeAttempts+=1;tokenDeadline?.cancel()
+        guard debugRealtimeProvider != nil else { return }
+        tokenDeadline=scheduler.schedule(at:scheduler.now+BoundSDKRetryDelay.seconds(attempt:debugRealtimeAttempts)) { [weak self] in
+            guard let self,self.generation==run,self.active,self.debugRealtimeRevision==revision,self.debugRealtimeProvider != nil else { return }
+            self.requestNakamaToken(initial:true)
         }
     }
 
@@ -843,8 +939,9 @@ final class FriendSharingSession: ObservableObject {
             if self.authenticatedMode && (self.authenticatedSession?()?.owner != self.tokenOwner || self.roomProvider() != self.authRoom) {
                 self.stop(reason: .sessionChanged); self.status = "Sign in to share"; return
             }
-            if self.authenticatedMode, (self.tokenExpiry ?? 0) <= Date().timeIntervalSince1970 {
-                self.handleForegroundReconnectFailure(run: run, status: "Restoring connection · Retrying")
+            if self.authenticatedMode, !(self.debugRealtimeScope != nil && self.tokenExpiry == nil), (self.tokenExpiry ?? 0) <= Date().timeIntervalSince1970 {
+                if self.debugRealtimeScope != nil { self.handleDebugRealtimeFailure(run:run,revision:self.debugRealtimeRevision) }
+                else { self.handleForegroundReconnectFailure(run: run, status: "Restoring connection · Retrying") }
                 return
             }
             self.sharedWorld.tick(enabled: BoundMultiplayerFeatures.isEnabled && self.livePresence.enabled && self.active, connected: self.joined && !self.reconnecting && !self.backgrounded)
