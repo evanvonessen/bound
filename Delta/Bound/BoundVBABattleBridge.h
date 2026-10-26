@@ -45,6 +45,9 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)prepareBattleForPlayer:(NSUInteger)player;
 + (BOOL)prepareTradeForPlayer:(NSUInteger)player;
 + (BOOL)installBattleForPlayer:(NSUInteger)player;
++ (void)configureDecisionsWithSeed:(NSUInteger)seed;
++ (NSData *)takeOutgoingDecisions;
++ (NSUInteger)receiveDecisions:(NSData *)data;
 /// Paused core only. Restore after its matching native state, without re-entering the battle or trade.
 + (NSData *)captureNativeSession;
 + (BOOL)restoreNativeSession:(NSData *)data;

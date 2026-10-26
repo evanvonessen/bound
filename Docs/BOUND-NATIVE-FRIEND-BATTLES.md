@@ -7,8 +7,9 @@ Nakama gameplay connection, and starts the cartridge's native single battle with
 The ordinary game controls select moves and Pokémon. Opening the app menu or
 backgrounding preserves an exact paused continuation. Run or deliberate
 cancellation ends the friendly battle and restores the local pre-battle world.
-A temporary network interruption keeps the same
-battle on screen, pauses native emulation and reconnects in the background.
+A temporary network interruption keeps the same battle on screen and reconnects
+in the background. Local menus, text and animations continue; only missing
+player decisions wait.
 Quick saves are suppressed during battle; quick load ends the battle before
 loading the selected state. Each player keeps their own fast-forward setting,
 including after a paused continuation is reopened. Trades still use normal speed.
@@ -58,6 +59,44 @@ These references alone do not establish compatibility with a modified ROM;
 exact-profile disassembly and runtime acceptance are separate evidence.
 
 ## Transport and ownership
+
+### Decision-only friendly battles — October 25, 2026
+
+Friendly battles use protocol 2. After native party/link setup, each cartridge
+runs its own native battle simulation and presentation. Only confirmed moves,
+switches and Run decisions cross the reliable wire; Fight, Back, cursor changes,
+text, animations and HP-bar updates do not. Setup, liveness, recovery and a final
+result checksum remain protocol messages. Older battle clients are rejected
+before entry. Trades and cooperative battles retain their native cable protocol.
+
+`NativeBattle/battle-decisions.c` replaces the friendly battle's native transfer,
+execution-bit and frame dispatchers temporarily. It uses a hash-verified empty
+ROM region and bounded queues in unused virtual-cable storage, outside the Soul
+Link journal. Both peers preserve their native controller orientation. A shared
+seed is derived from the activity ID; battle logic owns that RNG independently
+of visual callbacks and VBlank. Native overworld weather/terrain do not leak into
+the friendly battle; move- and ability-generated conditions remain native.
+
+Each decision includes an ordinal, canonical state fingerprint and bounded native
+response. Duplicate delivery is harmless; invalid/stale offers cannot become
+native inputs. Forced native actions need no artificial move selection. The
+terminal checksum covers both canonical battlers, RNG and normalized outcome;
+disagreement restores the original party and is never recorded as a successful
+battle. Exact guest state, queued decisions and wire counters survive the existing
+durable continuation mechanism.
+
+Retired sessions return a marked terminal receipt when a final result is lost;
+receipts do not generate reply loops. A failed local result write retains the
+chosen completion/cancellation outcome and pauses the core until persistence
+can retry safely. Diagnostic errors do not determine the battle result.
+
+Network replacement fences incoming gameplay until the activity's fresh handshake
+completes, while local presentation continues. Menu/background checkpoints still
+pause and freeze execution before capturing it. Idle heartbeats stop during an
+outage rather than filling the reliable queue. Already-ready setup/trade records
+are batched up to 13 per packet without a batching timer.
+
+### Native cable setup and retained trade/cooperative transport
 
 Bound replaces physical serial timing with a bounded mailbox in the native
 link queue storage. Each completed emulation frame drains outgoing eight-word
@@ -118,7 +157,8 @@ the stored native response. A changed offer reopens native selection instead
 of replaying a stale choice. Link Standby begins after submission while the
 required native exchange is pending. RNG, battle resolution, controller command
 ordering, acknowledgements and animation-completion boundaries remain native.
-The faster player cannot bypass the slower player's controller completion.
+This earlier implementation still waited for the slower player's controller
+completion. Protocol 2 above replaces that dependency for friendly battles.
 
 The guest send gate and native receive-slot protection permit different emulation
 rates without overflowing the
@@ -217,6 +257,51 @@ automatic state capture. This mechanism is local recovery; it is not a durable
 battle history or trade transaction protocol.
 
 ## Verification
+
+### Decision protocol checks — October 25, 2026
+
+The current adapter uses the integrated ROM SHA-256
+`8bf5b9675e0e34e785b0a40eb2d8120a1d2d6874890c4f6d2f43b5d1d3ab90fb`.
+`.build/decision-paired-1/summary.json` passed a complete native battle with
+3×/1× playback. `.build/decision-paired-reconnect/summary.json` passed with
+1×/3× playback, 100 ms one-way relay latency and a three-second silent outage.
+Both peers sent five confirmed decisions and **zero native presentation blocks
+after the first decision**. Both computed terminal fingerprint `1636687964`,
+returned complementary outcomes and restored their original parties and Soul
+Link histories. Fight/Back/Fight rendered within 6–8 local frames across the
+two runs. Cold-core continuation restoration passed on both peers.
+
+The final production code also passed
+`.build/decision-battle-native-input-final/summary.json` with 3×/1× playback,
+100 ms one-way latency, a silent outage and the same zero-presentation-block,
+matching-result and exact-party-restoration assertions. The menu driver tracks
+retained native responses so an input reset cannot lose a one-frame test tap;
+it never retries an action already acknowledged by the game.
+
+`.build/decision-run-result-retry-final/summary.json` passed native Run with
+3×/1× playback and an ordinary zero-HP starting party. Native healing supplied
+the temporary battle party; both original parties were restored exactly. The
+faster player exited before the slower player's local introduction finished.
+Each session deliberately failed its first terminal-file write, paused before
+retrying, then stored the correct `ranAway` receipt on its second attempt.
+
+All 83 distinct focused interaction, cable, continuation, ROM contract and
+handoff tests passed, including terminal retry/no-echo regressions. The final
+Debug test build, unsigned Release iPhone build, both generated adapter checks,
+17,061 pinned-source checks and privacy-manifest checks passed.
+
+`verify-battle-decisions.py` executes the adapter's ARM instructions for local
+presentation, confirmed/canceled decisions, queue bounds, invalid input,
+deterministic RNG, terminal orientation and field-weather/terrain isolation.
+`verify-battle-decision-selection.py` additionally executes the exact cartridge
+dispatcher on both admitted ROM profiles: normal moves, Encore, Struggle,
+NoMoreMoving and normal/forced party order. Controlled prerequisites in those
+instruction fixtures do not establish complete gameplay coverage for every
+move, ability or item.
+
+These paired checks use two owned simulators and the production reliable wire
+over host loopback. Physical phones, separate networks, authenticated Friends
+entry and device frame pacing remain pending for this protocol.
 
 The bounded local engine harness is `PrototypeTools/native-link-battle.py` with
 `NativeBattleRuntimeTests.testActualNativeLinkBattle`. It uses two explicitly

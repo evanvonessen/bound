@@ -26,7 +26,7 @@ RESTORED = [UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R4,
 PRESERVED = [UC_ARM_REG_R8, UC_ARM_REG_R9, UC_ARM_REG_R10, UC_ARM_REG_R11]
 
 
-def verify(path, allowed, code, hook, choice_hook, pump_hook, link_hook):
+def verify(path, allowed, code, hook, choice_hook, pump_hook, link_hook, trade_send_hook, trade_wait_hook, idle_hook):
     image = path.read_bytes()
     digest = hashlib.sha256(image).hexdigest()
     assert digest in allowed and len(image) == 0x2000000, "Unsupported ROM profile"
@@ -212,7 +212,107 @@ def verify(path, allowed, code, hook, choice_hook, pump_hook, link_hook):
             assert cpu.reg_read(UC_ARM_REG_PC)==STOP and cpu.reg_read(UC_ARM_REG_SP)==STACK
         assert cpu.reg_read(UC_ARM_REG_R0)==0 and destroyed==([3] if connected else [])
         timers.append({'connected':bool(connected),'nativeCleanup':bool(destroyed),'frameTimeoutSuppressed':True})
-    return {"romSHA256": digest, "entryBytes": len(code), "cases": cases, "runOutcomes":run_outcomes,"runSelectionCases":selections,"flowControl":flow,"connectionTimers":timers,"causalDelivery":causal,"passed": True}
+    assert image[0x4FF4C:0x4FF54] == bytes.fromhex('30b508480268111c'), 'Trade timeout signature changed'
+    assert image[0x508F4:0x508FC] == bytes.fromhex('10b5044c20689330'), 'Trade sender signature changed'
+    assert image[0x53E1C:0x53E24] == bytes.fromhex('10b5fcf7d1f8041c'), 'Trade wait signature changed'
+    trade_sends=[]
+    for patched in [False, True]:
+        for pending,ready,accepted in [(0,False,False),(2,False,False),(1,False,False),(1,True,False),(1,True,True)]:
+            cpu=Uc(UC_ARCH_ARM,UC_MODE_THUMB)
+            for address,size in [(ROM_BASE,len(image)),(0x02000000,0x40000),(0x03000000,0x8000)]:cpu.mem_map(address,size)
+            cpu.mem_write(ROM_BASE,image);cpu.mem_write(ENTRY,code)
+            if patched:cpu.mem_write(0x080508F4,bytes.fromhex('00480047')+struct.pack('<I',trade_send_hook))
+            trade=0x02010000
+            before=bytearray([0xA5]*0x140);before[0x93]=pending
+            cpu.mem_write(0x02031DAC,struct.pack('<I',trade));cpu.mem_write(trade,bytes(before))
+            sent=[]
+            def observe_trade_send(machine,address,size,user):
+                if address==STOP:machine.emu_stop()
+                elif address==0x0800A4BC:
+                    machine.reg_write(UC_ARM_REG_R0,int(ready));machine.reg_write(UC_ARM_REG_PC,machine.reg_read(UC_ARM_REG_LR))
+                elif address==0x0800A42C:
+                    machine.reg_write(UC_ARM_REG_R0,2);machine.reg_write(UC_ARM_REG_PC,machine.reg_read(UC_ARM_REG_LR))
+                elif address==0x0800A448:
+                    sent.append([machine.reg_read(r) for r in [UC_ARM_REG_R0,UC_ARM_REG_R1,UC_ARM_REG_R2]])
+                    machine.reg_write(UC_ARM_REG_R0,int(accepted));machine.reg_write(UC_ARM_REG_PC,machine.reg_read(UC_ARM_REG_LR))
+            cpu.hook_add(UC_HOOK_CODE,observe_trade_send)
+            def run_trade_send():
+                cpu.reg_write(UC_ARM_REG_SP,STACK);cpu.reg_write(UC_ARM_REG_LR,STOP|1)
+                cpu.emu_start(0x080508F5,STOP,count=1000)
+                assert cpu.reg_read(UC_ARM_REG_PC)==STOP and cpu.reg_read(UC_ARM_REG_SP)==STACK
+            run_trade_send()
+            expected=1 if patched and pending==1 and not (ready and accepted) else 0
+            after=bytes(cpu.mem_read(trade,len(before)))
+            before[0x93]=expected
+            assert after==bytes(before), 'Trade sender changed data or lost a pending ready message'
+            assert sent==([[0 if patched else 2,trade+0x74,20]] if pending==1 and ready else []), 'Trade send payload changed'
+            if patched and expected==1:
+                # The exact same retained message must be retried once when
+                # congestion clears, then never resent after acceptance.
+                ready=accepted=True
+                sent.clear();run_trade_send();run_trade_send()
+                assert cpu.mem_read(trade+0x93,1)==b'\0' and sent==[[0,trade+0x74,20]]
+            trade_sends.append({'patched':patched,'initialPending':pending,'retained':expected==1})
+    trade_waits=[]
+    for patched in [False,True]:
+        for role,pending,status in [(0,1,0),(1,1,0),(0,0,0x0101),(1,0,0x0101),(0,0,0x0100)]:
+            cpu=Uc(UC_ARCH_ARM,UC_MODE_THUMB)
+            for address,size in [(ROM_BASE,len(image)),(0x02000000,0x40000),(0x03000000,0x8000)]:cpu.mem_map(address,size)
+            cpu.mem_write(ROM_BASE,image);cpu.mem_write(ENTRY,code);cpu.mem_write(0x09FFFCF0,bytes([role]))
+            if patched:cpu.mem_write(0x08053E1C,bytes.fromhex('00480047')+struct.pack('<I',trade_wait_hook))
+            trade=0x02010000;sent=[];tails=[];ready=False;accepted=False
+            cpu.mem_write(0x02031DAC,struct.pack('<I',trade));cpu.mem_write(trade+0x93,bytes([pending]))
+            cpu.mem_write(trade+0x72,struct.pack('<H',status));cpu.mem_write(trade+0x74,struct.pack('<H',0xABCD))
+            def observe_trade_wait(machine,address,size,user):
+                if address==STOP:machine.emu_stop()
+                elif address in [0x0800A4BC,0x0800A42C,0x0804FFC4]:
+                    result=int(ready) if address==0x0800A4BC else role if address==0x0804FFC4 else 2
+                    machine.reg_write(UC_ARM_REG_R0,result);machine.reg_write(UC_ARM_REG_PC,machine.reg_read(UC_ARM_REG_LR))
+                elif address==0x0800A448:
+                    src=machine.reg_read(UC_ARM_REG_R1);count=machine.reg_read(UC_ARM_REG_R2)
+                    assert src==trade+0x74 and count==20
+                    sent.append((int.from_bytes(machine.mem_read(src,2),'little'),accepted))
+                    machine.reg_write(UC_ARM_REG_R0,int(accepted));machine.reg_write(UC_ARM_REG_PC,machine.reg_read(UC_ARM_REG_LR))
+                elif address in [0x0805383C,0x08077578,0x08006B5C,0x08006BA8,0x080704D0]:
+                    tails.append(address);machine.reg_write(UC_ARM_REG_PC,machine.reg_read(UC_ARM_REG_LR))
+            cpu.hook_add(UC_HOOK_CODE,observe_trade_wait)
+            def run_trade_wait():
+                cpu.reg_write(UC_ARM_REG_SP,STACK);cpu.reg_write(UC_ARM_REG_LR,STOP|1);cpu.reg_write(UC_ARM_REG_R4,0x45678901)
+                cpu.emu_start(0x08053E1D,STOP,count=2000)
+                assert cpu.reg_read(UC_ARM_REG_PC)==STOP and cpu.reg_read(UC_ARM_REG_SP)==STACK and cpu.reg_read(UC_ARM_REG_R4)==0x45678901
+                assert tails[-5:]==[0x0805383C,0x08077578,0x08006B5C,0x08006BA8,0x080704D0], 'Native animation tail changed'
+            run_trade_wait()
+            expected_status=0x0202 if not patched and role==0 and status==0x0101 else status
+            assert int.from_bytes(cpu.mem_read(trade+0x72,2),'little')==expected_status
+            ready=accepted=True;run_trade_wait();run_trade_wait()
+            if pending:
+                assert sent==([(0xABCD,True)] if patched else []), 'Pending trade message did not retry exactly once from the wait callback'
+            elif role==0 and status==0x0101:
+                assert sent==([(0xDCBA,False),(0xDCBA,True)] if patched else [(0xDCBA,False)]), 'Trade confirmation was retired without acceptance'
+                assert int.from_bytes(cpu.mem_read(trade+0x72,2),'little')==0x0202
+            else:assert sent==[], 'Trade confirmed without both ready participants or from the wrong role'
+            trade_waits.append({'patched':patched,'role':role,'pending':pending,'bothReady':status==0x0101,'sends':sent})
+    trade_timeouts=[]
+    for patched in [False,True]:
+        cpu=Uc(UC_ARCH_ARM,UC_MODE_THUMB)
+        for address,size in [(ROM_BASE,len(image)),(0x02000000,0x40000),(0x03000000,0x8000)]:cpu.mem_map(address,size)
+        cpu.mem_write(ROM_BASE,image);cpu.mem_write(ENTRY,code)
+        if patched:cpu.mem_write(0x0804FF4C,bytes.fromhex('00480047')+struct.pack('<I',idle_hook))
+        trade=0x02010000
+        cpu.mem_write(0x02031DAC,struct.pack('<I',trade));cpu.mem_write(trade+0x8A,struct.pack('<H',300))
+        aborts=[]
+        def observe_trade_timeout(machine,address,size,user):
+            if address==STOP:machine.emu_stop()
+            elif address in [0x080098B8,0x08000544]:
+                aborts.append(address);machine.reg_write(UC_ARM_REG_PC,machine.reg_read(UC_ARM_REG_LR))
+        cpu.hook_add(UC_HOOK_CODE,observe_trade_timeout)
+        for _ in range(1200 if patched else 1):
+            cpu.reg_write(UC_ARM_REG_SP,STACK);cpu.reg_write(UC_ARM_REG_LR,STOP|1)
+            cpu.emu_start(0x0804FF4D,STOP,count=1000)
+            assert cpu.reg_read(UC_ARM_REG_PC)==STOP and cpu.reg_read(UC_ARM_REG_SP)==STACK
+        assert aborts==([] if patched else [0x080098B8,0x08000544]), 'Trade scene used emulated frames as a disconnect deadline'
+        trade_timeouts.append({'patched':patched,'nativeAbortCalls':len(aborts),'frames':1200 if patched else 1})
+    return {"romSHA256": digest, "entryBytes": len(code), "cases": cases, "runOutcomes":run_outcomes,"runSelectionCases":selections,"flowControl":flow,"connectionTimers":timers,"causalDelivery":causal,"tradeSendRetention":trade_sends,"tradeWaitRetries":trade_waits,"tradeTimers":trade_timeouts,"passed": True}
 
 
 def main():
@@ -229,8 +329,11 @@ def main():
     choice_hook = int(re.search(r"BoundBattleChoiceAddress = 0x([0-9A-Fa-f]+)", header)[1], 16)
     pump_hook = int(re.search(r"BoundBattlePumpAddress = 0x([0-9A-Fa-f]+)", header)[1], 16)
     link_hook = int(re.search(r"BoundBattleLinkMain1Address = 0x([0-9A-Fa-f]+)", header)[1], 16)
+    trade_send_hook = int(re.search(r"BoundBattleTradeSendAddress = 0x([0-9A-Fa-f]+)", header)[1], 16)
+    trade_wait_hook = int(re.search(r"BoundBattleTradeWaitAddress = 0x([0-9A-Fa-f]+)", header)[1], 16)
+    idle_hook = int(re.search(r"BoundBattleLinkVSyncAddress = 0x([0-9A-Fa-f]+)", header)[1], 16)
     assert len(code) <= 0x4F0, "Entry overlaps the role byte"
-    report = {"profiles": [verify(path, allowed, code, hook,choice_hook,pump_hook,link_hook) for path in args.rom], "passed": True}
+    report = {"profiles": [verify(path, allowed, code, hook,choice_hook,pump_hook,link_hook,trade_send_hook,trade_wait_hook,idle_hook) for path in args.rom], "passed": True}
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2) + "\n")

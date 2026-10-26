@@ -718,10 +718,127 @@ final class BattleCableTests:XCTestCase {
         XCTAssertNil(BoundNativeCommandPacket.decode(Data([1,2])))
         XCTAssertNil(BoundNativeCommandPacket.encode(Data(repeating:0,count:240)))
     }
+    private func nativeRecord(generation:UInt16=1,sequence:UInt16,marker:UInt8=0)->Data {
+        var command=Data(repeating:marker,count:16)
+        command[0]=0x88;command[1]=0x88
+        return Data([UInt8(truncatingIfNeeded:generation),UInt8(generation>>8),
+                     UInt8(truncatingIfNeeded:sequence),UInt8(sequence>>8)])+command
+    }
+    private func expandedNativePackets(_ batches:[BoundNativeCommandPacket.Batch]) throws ->Data {
+        var result=Data()
+        for batch in batches {
+            let generation=try XCTUnwrap(BoundNativeCommandPacket.generation(batch.packet))
+            let first=try XCTUnwrap(BoundNativeCommandPacket.sequence(batch.packet))
+            let commands=try XCTUnwrap(BoundNativeCommandPacket.decode(batch.packet))
+            for offset in stride(from:0,to:commands.count,by:16) {
+                let sequence=first &+ UInt16(offset/16)
+                result.append(contentsOf:[UInt8(truncatingIfNeeded:generation),UInt8(generation>>8),
+                                          UInt8(truncatingIfNeeded:sequence),UInt8(sequence>>8)])
+                result.append(commands.subdata(in:offset..<offset+16))
+            }
+        }
+        return result
+    }
+    func testNativeCommandBatchingPreservesEveryRecordAndSendsPartialFrameImmediately() throws {
+        let records=(0..<32).reduce(Data()) { $0+nativeRecord(sequence:UInt16($1+1),marker:UInt8($1)) }
+        let batches=try XCTUnwrap(BoundNativeCommandPacket.batches(records))
+        XCTAssertEqual(batches.map(\.commandCount),[13,13,6])
+        XCTAssertEqual(batches.map { $0.packet.count },[213,213,101])
+        XCTAssertEqual(batches.reduce(Data()) { $0+$1.records },records)
+        XCTAssertEqual(try expandedNativePackets(batches),records,"Network batching must not change canonical continuation records")
+        let partial=try XCTUnwrap(BoundNativeCommandPacket.batches(nativeRecord(sequence:1)))
+        XCTAssertEqual(partial.count,1,"A lone action must be sent immediately instead of waiting to fill a batch")
+        XCTAssertEqual(partial.first?.commandCount,1)
+        XCTAssertEqual(BoundNativeCommandPacket.batches(Data())?.count,0)
+    }
+    func testNativeCommandBatchingSplitsGenerationsAndSequenceGapsWithoutReordering() throws {
+        let records=nativeRecord(sequence:10)+nativeRecord(sequence:11)+nativeRecord(sequence:15)
+            + nativeRecord(generation:2,sequence:16)+nativeRecord(generation:2,sequence:17)
+        let batches=try XCTUnwrap(BoundNativeCommandPacket.batches(records))
+        XCTAssertEqual(batches.map(\.commandCount),[2,1,2])
+        XCTAssertEqual(batches.map { BoundNativeCommandPacket.generation($0.packet) },[1,1,2])
+        XCTAssertEqual(batches.map { BoundNativeCommandPacket.sequence($0.packet) },[10,15,16])
+        XCTAssertEqual(try expandedNativePackets(batches),records)
+        let duplicate=nativeRecord(sequence:20)+nativeRecord(sequence:20)+nativeRecord(sequence:19)
+        XCTAssertEqual(try XCTUnwrap(BoundNativeCommandPacket.batches(duplicate)).map(\.commandCount),[1,1,1])
+        XCTAssertEqual(try expandedNativePackets(XCTUnwrap(BoundNativeCommandPacket.batches(duplicate))),duplicate)
+    }
+    func testNativeCommandBatchingSupportsSequenceWrapAndRejectsMalformedRecords() throws {
+        let records=nativeRecord(sequence:65534)+nativeRecord(sequence:65535)+nativeRecord(sequence:0)+nativeRecord(sequence:1)
+        let batches=try XCTUnwrap(BoundNativeCommandPacket.batches(records))
+        XCTAssertEqual(batches.map(\.commandCount),[4])
+        XCTAssertEqual(try expandedNativePackets(batches),records)
+        XCTAssertNil(BoundNativeCommandPacket.batches(Data(records.dropLast())))
+        XCTAssertNil(BoundNativeCommandPacket.batches(Data(repeating:0,count:33*20)))
+        XCTAssertNil(BoundNativeCommandPacket.batches(nativeRecord(generation:0,sequence:1)))
+        var invalid=nativeRecord(sequence:2)
+        invalid[4]=0xDD;invalid[5]=0xDD
+        XCTAssertNil(BoundNativeCommandPacket.batches(nativeRecord(sequence:1)+invalid),"Validate the entire frame before sending any partial batch")
+    }
 }
 
 @MainActor
 extension FriendInteractionTests {
+    func testDecisionPacketsCarryOnlyBoundedConfirmedInputs() throws {
+        var move=Data(repeating:0,count:32)
+        move[0]=1;move[4]=42;move[8]=1;move[9]=20;move[10]=0;move[11]=8
+        move.replaceSubrange(12..<20,with:[33,10,2,0,1,0,0,0])
+        let packet=try XCTUnwrap(BoundBattleDecisionPacket.encode(move))
+        XCTAssertEqual(BoundBattleDecisionPacket.decode(packet),move)
+        XCTAssertNil(BoundNativeCommandPacket.decode(packet),"Choices cannot enter the old serial command decoder")
+        for (offset,value) in [(0,0),(8,2),(9,16),(10,1),(11,17),(12,255),(14,4),(15,2),(16,2),(28,1)] {
+            var invalid=move;invalid[offset]=UInt8(value)
+            XCTAssertNil(BoundBattleDecisionPacket.encode(invalid),"Rejected field \(offset)")
+        }
+        XCTAssertNil(BoundBattleDecisionPacket.decode(Data([4,2])+move))
+        XCTAssertNil(BoundBattleDecisionPacket.encode(Data()))
+        XCTAssertNil(BoundBattleDecisionPacket.encode(move+Data([0])))
+        XCTAssertNotNil(BoundBattleDecisionPacket.encode(Data(Array(repeating:move,count:8).joined())))
+        XCTAssertNil(BoundBattleDecisionPacket.encode(Data(Array(repeating:move,count:9).joined())))
+        var party=move;party[9]=22;party[10]=2;party[11]=5
+        party.replaceSubrange(12..<28,with:[34,1,0,0,0]+Array(repeating:UInt8(0),count:11))
+        XCTAssertNotNil(BoundBattleDecisionPacket.encode(party))
+        party[13]=6;XCTAssertNil(BoundBattleDecisionPacket.encode(party))
+    }
+    func testFinishedBattleReceiptRetainsProtocolAndResultForReconnect() throws {
+        let packet=BoundBattleControlPacket(id:UUID(),kind:.finished,battleProtocol:2,battleResult:0x12345678)
+        let decoded=try XCTUnwrap(BoundBattleControlPacket.decode(try XCTUnwrap(packet.encoded())))
+        XCTAssertEqual(decoded.id,packet.id);XCTAssertEqual(decoded.battleProtocol,2)
+        XCTAssertEqual(decoded.battleResult,packet.battleResult)
+        let legacy=try XCTUnwrap(BoundBattleControlPacket.decode(try XCTUnwrap(BoundBattleControlPacket(id:UUID(),kind:.prepared).encoded())))
+        XCTAssertNil(legacy.battleProtocol,"An older client must never negotiate decision-only execution")
+    }
+    func testRetiredBattleAnswersLostFinishedResultWithoutReceiptEcho() throws {
+        let id=UUID(),finished=BoundBattleControlPacket(id:id,kind:.finished,battleProtocol:2,battleResult:0x12345678)
+        let reply=try XCTUnwrap(finished.retainedReply(to:finished))
+        let received=try XCTUnwrap(BoundBattleControlPacket.decode(try XCTUnwrap(reply.encoded())))
+        XCTAssertEqual(received.kind,.finished);XCTAssertEqual(received.battleResult,finished.battleResult)
+        XCTAssertEqual(received.battleProtocol,2);XCTAssertEqual(received.terminalReceipt,true)
+        XCTAssertNil(finished.retainedReply(to:received),"Two retired peers must stop after one terminal receipt")
+        XCTAssertNotNil(finished.retainedReply(to:finished),"A lost receipt is repaired by the active peer's next finished retry")
+        XCTAssertNil(finished.retainedReply(to:BoundBattleControlPacket(id:UUID(),kind:.finished)))
+        for kind in [BoundBattleControlPacket.Kind.ranAway,.abort] {
+            let terminal=BoundBattleControlPacket(id:id,kind:kind,battleProtocol:2)
+            XCTAssertEqual(terminal.retainedReply(to:finished)?.kind,kind,"A retry cannot convert a cancellation or failure into a win")
+        }
+        for kind in [BoundBattleControlPacket.Kind.prepared,.connected,.resumeRequest,.resumeReady] {
+            XCTAssertEqual(finished.retainedReply(to:BoundBattleControlPacket(id:id,kind:kind))?.battleResult,finished.battleResult)
+        }
+    }
+    func testTerminalPersistenceRetryKeepsVerifiedOutcomeAndRealFailures() throws {
+        for kind in [BoundBattleControlPacket.Kind.finished,.abort,.ranAway] {
+            var persistence=BoundBattleTerminalPersistence()
+            let packet=BoundBattleControlPacket(id:UUID(),kind:kind,battleProtocol:2,battleResult:kind == .finished ? 0x12345678:nil)
+            XCTAssertThrowsError(try persistence.save(packet) { _ in throw CocoaError(.fileWriteUnknown) })
+            XCTAssertTrue(persistence.needsRetry)
+            var stored=Data()
+            try persistence.save(packet) { stored=$0 }
+            XCTAssertFalse(persistence.needsRetry)
+            let recovered=try XCTUnwrap(BoundBattleControlPacket.decode(stored))
+            XCTAssertEqual(recovered.kind,kind,"Disk recovery must preserve the actual battle outcome")
+            XCTAssertEqual(recovered.id,packet.id);XCTAssertEqual(recovered.battleResult,packet.battleResult)
+        }
+    }
     func testAcceptedTradeHandsControlsToNativeActivityAndCancelReturnsToAdapter() throws {
         let p=peers(); var canceled=0
         p.a.agreed={ [weak a=p.a] activity,_,_ in

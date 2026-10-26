@@ -118,13 +118,21 @@ the activity writes a `tradeStarted` marker to its private recovery journal.
 After that boundary, **the pre-trade party is never automatically restored**.
 
 A normal return keeps the actual exchanged party, native save and world state.
-A temporary transport interruption or background/foreground reconnect pauses
-the resident cartridge on its current trade screen, preserving native offers,
-exchange state, command queues and the same recovery journal. It retries in the
-background until the authenticated peer completes a fresh resume handshake.
+A temporary transport interruption preserves native offers, exchange state,
+command queues and the same recovery journal. Local controls and trade animation
+continue while the connection retries in the background. Incoming gameplay waits
+for the authenticated peer's fresh resume handshake; mutual confirmation and
+save barriers still wait for the real peer.
 There is no elapsed-time cancellation, reboot, party restore or repeated
 exchange during that wait. Native commands are delivered once; the cartridge
 continues to own confirmation, exchange and linked save.
+
+The trade scene's former 300-frame timeout is disabled while the adapter owns
+the cable. A busy/rejected native send retains its READY or CONFIRM message;
+the subsequent wait callback retries it until native acceptance. This fixes
+confirmation loss when animation finishes during congestion. Neither local
+animation completion nor a reconnect substitutes for the peer's consent or
+completed save. Setup/transaction records batch without a fill delay.
 
 Opening Menu and backgrounding preserve the exact paused trade, including the
 native save state, battery, bridge metadata, command queues, consent and original
@@ -210,6 +218,23 @@ Repeated join callbacks preserve an already active activity's consent and input
 handoff. Cancellation diagnostics identify the calling source without account or
 credential data. The UIKit tests wait for stable control rectangles after a
 foreground transition before touching them.
+
+## Local presentation and confirmation retries — October 25, 2026
+
+`.build/decision-trade-reconnect/summary.json` passed a full native exchange
+with 100 ms one-way relay latency and a **70-second silent outage** during
+exchange. The activity and local presentation survived, each peer completed
+exactly one trade and linked save, and both returned to playable worlds.
+Offered Pokémon/trainer identities and the unchanged unoffered members passed
+verification after restoring the resulting server state and battery in fresh
+cores. The production continuation also survived replacement of both session
+owners before the exchange. Trades retain their normal playback rate.
+
+The exact-instruction trade checks reproduce busy/rejected confirmation sends
+and confirm retry without duplicating acceptance. They cover a 1,200-frame
+interruption without the former native timeout. Both admitted ROM profiles pass.
+These checks use owned simulators and a local relay; physical phones and the
+authenticated internet flow remain pending for these changes.
 
 ## Durable continuation and exchange reconnect — October 24, 2026
 

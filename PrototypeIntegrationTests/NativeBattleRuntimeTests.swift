@@ -20,6 +20,8 @@ private final class NativeBattleDriver:@unchecked Sendable {
     private var firstMenuHP:[Int]?,firstMenuEnemyHP:[Int]?
     private var initialHP:[Int]?
     private var menuCheckStage=0,menuCheckFrame=0
+    private var menuInputAcknowledged=false,menuInputRetries=0
+    private var menuBattler:Int?
     private var measuredMenuFrames:[Int]=[]
     private var checkedMoveCursor=false
     private let menuChecks=ProcessInfo.processInfo.environment["BOUND_NATIVE_LOCAL_MENUS"]=="1"
@@ -66,22 +68,40 @@ private final class NativeBattleDriver:@unchecked Sendable {
         }
         if battle,menuChecks,menuCheckStage<6 {
             let kind=menu["kind"] as? String
+            if let battler=menu["battler"] as? Int { menuBattler=battler }
+            // This durable native response survives the frame boundary;
+            // gMain.newKeys is transient and may already have been cleared.
+            let slot=menuBattler.flatMap { core.deltaCore.emulatorBridge.readMemory?(at:0x4620+40+12*$0,size:12) } ?? Data()
+            if frame%600==0 { NSLog("Native local-menu fixture stage=%d kind=%@ cursor=%d lastMask=%d elapsed=%d",menuCheckStage,kind ?? "none",menu["cursor"] as? Int ?? -1,lastMask,frame-menuCheckFrame) }
             var mask=0
+            if [1,3,5].contains(menuCheckStage) {
+                let button=menuCheckStage==3 ? 2:1
+                if slot.count==12,slot[9]==(menuCheckStage==3 ? 255:0) { menuInputAcknowledged=true }
+                // Continuation/reconnect can reset inputs between the driver
+                // staging a tap and the guest sampling it. Retry only a tap
+                // never observed by the guest, after an observed release;
+                // never hide a slow response to an acknowledged native input.
+                if !menuInputAcknowledged,slot.count==12,frame-menuCheckFrame>=12,
+                   kind==(menuCheckStage==3 ? "move":"action"),lastMask==0,menuInputRetries<3 {
+                    menuInputRetries+=1;menuCheckFrame=frame;mask=button
+                    NSLog("Native local-menu fixture retries unsampled tap at stage %d",menuCheckStage)
+                }
+            }
             switch menuCheckStage {
             case 0:
                 if kind=="action" {
-                    if lastMask==0 { menuCheckFrame=frame;menuCheckStage=1;mask=1 }
+                    if lastMask==0 { menuCheckFrame=frame;menuCheckStage=1;menuInputAcknowledged=false;menuInputRetries=0;mask=1 }
                 } else { mask=frame%12<2 ? 1:0 } // Dismiss native introduction text first.
             case 1:
                 if kind=="move" { lock.lock();measuredMenuFrames.append(frame-menuCheckFrame);lock.unlock();menuCheckFrame=frame;menuCheckStage=2 }
             case 2:
                 if frame-menuCheckFrame==4 { mask=16 } // Growl/second move, local cursor input.
                 if frame-menuCheckFrame==7 { lock.lock();checkedMoveCursor=menu["cursor"] as? Int == 1;lock.unlock() }
-                if frame-menuCheckFrame>=8 { menuCheckFrame=frame;menuCheckStage=3;mask=2 } // Back, without submitting.
+                if frame-menuCheckFrame>=8 { menuCheckFrame=frame;menuCheckStage=3;menuInputAcknowledged=false;menuInputRetries=0;mask=2 } // Back, without submitting.
             case 3:
                 if kind=="action" { lock.lock();measuredMenuFrames.append(frame-menuCheckFrame);lock.unlock();menuCheckFrame=frame;menuCheckStage=4 }
             case 4:
-                if frame-menuCheckFrame>=4 { menuCheckFrame=frame;menuCheckStage=5;mask=1 }
+                if frame-menuCheckFrame>=4 { menuCheckFrame=frame;menuCheckStage=5;menuInputAcknowledged=false;menuInputRetries=0;mask=1 }
             case 5:
                 if kind=="move" { lock.lock();measuredMenuFrames.append(frame-menuCheckFrame);lock.unlock();menuCheckStage=6 }
             default:break
@@ -1120,6 +1140,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         core.updateHandler={ core in driver.receive(core); soulProbe.receive(core); probe.receive(core) }
         var channel:NativeBattleRelayChannel?
         var networkAvailable=true,disconnectResumed=false
+        var terminalWriteAttempts=0
         defer {
             native.cancel(resume:false); channel?.close(); native.makeChannel=nil; native.sendControl=nil
             _=core.pause(); BoundVBABattleBridge.close(); _=core.stop()
@@ -1168,6 +1189,13 @@ final class NativeBattleRuntimeTests:XCTestCase {
         native.bind(core:core,gameID:output.lastPathComponent,interactions:interactions)
         native.canResume={ true }
         func configureTransport(_ session:BoundNativeBattleSession) {
+            if runBattle {
+                session.beforeTerminalWriteForTesting={
+                    terminalWriteAttempts+=1
+                    if terminalWriteAttempts==1 { throw CocoaError(.fileWriteUnknown) }
+                    XCTAssertEqual(core.state,.paused,"A pending terminal write must fence native gameplay before retry")
+                }
+            }
             session.makeChannel={ receiver,failed in
                 guard networkAvailable else { return nil }
                 let value=NativeBattleRelayChannel(port:relayPort,peer:peer,receive:{ data in
@@ -1246,6 +1274,12 @@ final class NativeBattleRuntimeTests:XCTestCase {
             }
             XCTAssertTrue(done,"Native battle failed: \(native.lastFailure), \(native.lastCableDiagnostic)")
             XCTAssertTrue(native.lastFailure.isEmpty)
+            if runBattle {
+                XCTAssertEqual(terminalWriteAttempts,2,"Run must retry a temporary result-write failure and finish cleanup")
+                let context=try XCTUnwrap(native.continuationContext)
+                let terminal=try XCTUnwrap(BoundNativeContinuationStore().terminal(id:uuid,context:context,gameID:output.lastPathComponent))
+                XCTAssertEqual(BoundBattleControlPacket.decode(terminal)?.kind,.ranAway,"Storage retries must retain the deliberate Run result")
+            }
             if env["BOUND_NATIVE_LOCAL_MENUS"]=="1" {
                 XCTAssertEqual(driver.menuFrames.count,3)
                 XCTAssertTrue(driver.moveCursorResponded,"Growl cursor navigation must respond locally")
@@ -1253,9 +1287,19 @@ final class NativeBattleRuntimeTests:XCTestCase {
             }
             if runBattle,peer=="A" { XCTAssertTrue(native.observation?.runRequested==true,"Only actual native Run input may trigger unilateral exit") }
             if !runBattle { XCTAssertTrue(driver.damaged,"A native move must change party HP") }
-            XCTAssertEqual(driver.menuHP?.count,1,"Only the eligible mon enters this fixture battle")
-            XCTAssertTrue(driver.menuHP?.allSatisfy { $0>0 } == true,"Native action selection cannot start with zero HP")
-            XCTAssertGreaterThan(driver.menuEnemyHP?.first ?? 0,0,"The peer's exchanged lead must also be healed")
+            if !runBattle {
+                XCTAssertGreaterThan(native.lastDecisionDiagnostics["sent"] ?? 0,0)
+                XCTAssertGreaterThan(native.lastDecisionDiagnostics["received"] ?? 0,0)
+                XCTAssertEqual(native.lastDecisionDiagnostics["nativeBlocksAfterDecision"],0,"Battle text, animation and HP commands must stay local")
+                XCTAssertNotEqual(native.observation?.terminalFingerprint,0,"Native completion must retain a canonical result check")
+            }
+            if !runBattle || peer=="A" || driver.menuHP != nil {
+                XCTAssertEqual(driver.menuHP?.count,1,"Only the eligible mon enters this fixture battle")
+                XCTAssertTrue(driver.menuHP?.allSatisfy { $0>0 } == true,"Native action selection cannot start with zero HP")
+                XCTAssertGreaterThan(driver.menuEnemyHP?.first ?? 0,0,"The peer's exchanged lead must also be healed")
+            }
+            // A faster player may Run before the peer finishes its local
+            // introduction. Exiting must not wait for that peer's menu to show.
         }
         try await Task.sleep(for:.milliseconds(200))
         _=core.pause()
@@ -1275,6 +1319,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
             "damaged":driver.damaged,"restored":native.restoredBattles==1,"cable":native.lastCableDiagnostic,
             "outcome":native.observation?.outcome ?? 0,"soulLedgerUnchanged":soulProbe.read().ledger==soulBefore,
             "battleRate":battleRate,"menuFrames":driver.menuFrames,"ownerRestored":true,"ran":runBattle,"nativeRunIntent":native.observation?.runRequested==true,"partyMode":partyMode,"checkedSoulHistory":partyMode != 1,"startingHP":driver.menuHP ?? [],"startingEnemyHP":driver.menuEnemyHP ?? [],"partyUnchanged":BoundVBABattleBridge.qaTradeParty()==partyBefore,
+            "decisions":native.lastDecisionDiagnostics,"terminalFingerprint":native.observation?.terminalFingerprint ?? 0,"terminalWriteAttempts":terminalWriteAttempts,
             "disconnectResumed":disconnectResumed,"disconnectSeconds":disconnectSeconds,"disconnectPhase":4,"silentDisconnect":silentDisconnect]
         try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("report.json"))
         _=try await request(port:port,peer:peer,body:report)
@@ -1416,18 +1461,17 @@ final class NativeBattleRuntimeTests:XCTestCase {
         }
         try await Task.sleep(for:.milliseconds(100))
         XCTAssertTrue(native.isTransportSuspended)
-        XCTAssertEqual(core.state,.paused,"The native engine must not run link timeouts while transport is unavailable")
-        for packet in [BoundBattleControlPacket(id:id,kind:.prepared),BoundBattleControlPacket(id:id,kind:.connected),
-            BoundBattleControlPacket(id:id,kind:.resumeReady,nonce:UUID(),acknowledgement:UUID()),
+        XCTAssertEqual(core.state,.running,"Local presentation continues while peer-dependent native decisions wait")
+        let protocolVersion=activity == .battle ? 2:nil
+        for packet in [BoundBattleControlPacket(id:id,kind:.prepared,battleProtocol:protocolVersion),BoundBattleControlPacket(id:id,kind:.connected,battleProtocol:protocolVersion),
+            BoundBattleControlPacket(id:id,kind:.resumeReady,nonce:UUID(),acknowledgement:UUID(),battleProtocol:protocolVersion),
             BoundBattleControlPacket(id:UUID(),kind:.abort)] {
             native.receive(try XCTUnwrap(packet.encoded()))
             XCTAssertTrue(native.isTransportSuspended,"Old barriers and another activity cannot satisfy fresh reconnect consent")
             XCTAssertTrue(native.isActive)
-            XCTAssertEqual(core.state,.paused)
+            XCTAssertEqual(core.state,.running)
         }
         let heldFrame=native.observation?.frame
-        let heldHP=native.observation?.playerHP
-        let heldTrades=native.observation?.tradeCount
         try await barrier(2)
         for _ in 0..<Int(ceil(seconds*10)) {
             XCTAssertTrue(native.isActive,"Temporary loss must not end the native activity: \(native.lastFailure)")
@@ -1435,17 +1479,16 @@ final class NativeBattleRuntimeTests:XCTestCase {
             XCTAssertTrue(native.isTransportSuspended)
             XCTAssertEqual(native.activity,activity)
             XCTAssertEqual(interactions.requestID,consent)
-            XCTAssertEqual(interactions.phase,.connecting)
-            XCTAssertTrue(interactions.blocksGameplay,"Reconnect must not let new input mutate a paused transaction")
-            XCTAssertEqual(core.state,.paused)
-            XCTAssertEqual(native.observation?.frame,heldFrame)
-            XCTAssertEqual(native.observation?.playerHP,heldHP)
-            XCTAssertEqual(native.observation?.tradeCount,heldTrades)
+            XCTAssertEqual(interactions.phase,.playing)
+            XCTAssertFalse(interactions.blocksGameplay,"Connection replacement cannot block local native controls")
+            XCTAssertEqual(core.state,.running)
+            XCTAssertGreaterThanOrEqual(native.observation?.frame ?? 0,heldFrame ?? 0)
             XCTAssertEqual(native.restoredBattles,0)
             XCTAssertEqual(native.completedTrades,0)
             XCTAssertTrue(native.lastFailure.isEmpty)
             try await Task.sleep(for:.milliseconds(100))
         }
+        XCTAssertGreaterThan(native.observation?.frame ?? 0,heldFrame ?? 0,"Native frames continue throughout the outage")
         try await barrier(3)
         reconnect(); native.resumeTransport()
         for _ in 0..<600 {

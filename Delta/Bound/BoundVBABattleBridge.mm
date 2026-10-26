@@ -11,6 +11,7 @@
 #include <string>
 #include <zlib.h>
 #include "NativeBattle/BoundBattleEntryCode.h"
+#include "NativeBattle/BoundBattleDecisionCode.h"
 
 extern uint8_t *rom,*workRAM,*internalRAM,*ioMem;
 extern uint8_t flashSaveMemory[0x20000];
@@ -114,13 +115,33 @@ Hook hooks[]={
     // Host monotonic liveness owns network timeouts. Retain the native task's
     // connection-complete cleanup and the linkup predicate's false epilogue.
     {0x81A98,0x08081AC3},
-    {0x8103C,0x0808104D}
+    {0x8103C,0x0808104D},
+    // Trade-scene network time belongs to the host monotonic clock. A local
+    // animation may continue through an outage without a 300-frame abort.
+    {0x4FF4C,BoundBattleLinkVSyncAddress},
+    {0x508F4,BoundBattleTradeSendAddress},
+    {0x53E1C,BoundBattleTradeWaitAddress}
 };
+Hook decisionHooks[]={
+    {0xD8B0,BoundDecisionTransferAddress,{},{},true},
+    {0xD9EC,BoundDecisionLinkTransferAddress,{},{},true},
+    {0x17248,BoundDecisionMarkAddress,{},{},true},
+    {0x123E4,BoundDecisionFrameAddress,{},{},true},
+    {0x724,BoundDecisionVBlankAddress,{},{},true},
+    {0x7AF98,BoundDecisionOverworldWeatherAddress,{},{},true},
+    {0x106E52C,BoundDecisionOverworldTerrainAddress,{},{},true}
+};
+constexpr size_t DecisionCodeOffset=BOUND_DECISION_CODE_ADDRESS-0x08000000;
+constexpr size_t DecisionStateOffset=BOUND_DECISION_ADDRESS-0x03000000;
+uint32_t decisionSeed=1;
 uint8_t *verifiedROM=nullptr,*patchedROM=nullptr;
 bool armed=false,installed=false,failed=false,syntheticHeld=false,cooperativeCable=false;
 unsigned role=0,preparationFrames=0,tradeCount=0;
 bool tradeMode=false,tradeOpened=false,tradeScene=false;
-bool usesHook(size_t index) { return index>=13 || (cooperativeCable ? index>=2&&index<9 : tradeMode ? index>=2&&index<11 : index<9||index>=11); }
+bool usesHook(size_t index) {
+    if(index>=16) return tradeMode;
+    return index>=13 || (cooperativeCable ? index>=2&&index<9 : tradeMode ? index>=2&&index<11 : index<9||index>=11);
+}
 uint16_t networkRead=0;
 uint32_t word(const uint8_t *p) { return p[0]|uint32_t(p[1])<<8|uint32_t(p[2])<<16|uint32_t(p[3])<<24; }
 unsigned half(const uint8_t *p) { return p[0]|unsigned(p[1])<<8; }
@@ -146,6 +167,11 @@ bool fieldTextIdle() {
 }
 bool fieldInterruptionReady() { return overworld()&&fieldTextIdle(); }
 bool mailboxReady() { return installed&&internalRAM&&word(internalRAM+Mailbox)==MailboxMagic; }
+BoundDecisionState *decisionState() {
+    if(!installed||tradeMode||cooperativeCable||!internalRAM) return nullptr;
+    auto *state=reinterpret_cast<BoundDecisionState *>(internalRAM+DecisionStateOffset);
+    return state->magic==BOUND_DECISION_MAGIC ? state:nullptr;
+}
 NSMutableArray<NSNumber *> *partyHP(size_t offset,unsigned count) {
     NSMutableArray<NSNumber *> *values=[NSMutableArray array];
     for(unsigned i=0;i<count&&i<6;i++) [values addObject:@(half(workRAM+offset+i*100+86))];
@@ -167,7 +193,9 @@ bool nativeProfileVerified() {
     return soulOriginalHash(digest)&&memcmp(digest,expected,32)==0;
 }
 NSData *nativeCodeIdentity() {
-    uint8_t digest[CC_SHA256_DIGEST_LENGTH];CC_SHA256(BoundBattleEntryCode,sizeof(BoundBattleEntryCode),digest);
+    uint8_t digest[CC_SHA256_DIGEST_LENGTH];CC_SHA256_CTX context;
+    CC_SHA256_Init(&context);CC_SHA256_Update(&context,BoundBattleEntryCode,sizeof(BoundBattleEntryCode));
+    CC_SHA256_Update(&context,BoundBattleDecisionCode,sizeof(BoundBattleDecisionCode));CC_SHA256_Final(digest,&context);
     return [NSData dataWithBytes:digest length:sizeof(digest)];
 }
 bool soulDenies(const uint8_t *mon) {
@@ -193,6 +221,14 @@ bool prepareFriendlyParty() {
 // Recreating this fixed ROM code does not execute the entry script. A resumed
 // native core keeps its existing PC, script context, mailbox and party in RAM.
 bool writeNativeROM() {
+    if(tradeMode) {
+        // These two entry points are identical in both admitted ROM profiles.
+        // Never install a trade-only hook over an unexpected native routine.
+        const uint8_t timeout[8]={0x30,0xB5,0x08,0x48,0x02,0x68,0x11,0x1C};
+        const uint8_t send[8]={0x10,0xB5,0x04,0x4C,0x20,0x68,0x93,0x30};
+        const uint8_t wait[8]={0x10,0xB5,0xFC,0xF7,0xD1,0xF8,0x04,0x1C};
+        if(memcmp(rom+0x4FF4C,timeout,8)||memcmp(rom+0x508F4,send,8)||memcmp(rom+0x53E1C,wait,8)) return false;
+    }
     uint8_t script[128];size_t n=0;
     auto byte=[&](uint8_t v) { script[n++]=v; };
     auto half=[&](uint16_t v) { byte(v);byte(v>>8); };
@@ -229,6 +265,14 @@ bool writeNativeROM() {
         hook.thunk[0]=0;hook.thunk[1]=hook.preservesArguments?0x4B:0x48;
         hook.thunk[2]=hook.preservesArguments?0x18:0;hook.thunk[3]=0x47;
         put32(hook.thunk+4,hook.target);memcpy(rom+hook.offset,hook.thunk,8);
+    }
+    if(!tradeMode&&!cooperativeCable) {
+        memcpy(rom+DecisionCodeOffset,BoundBattleDecisionCode,sizeof(BoundBattleDecisionCode));
+        for(auto &hook:decisionHooks) {
+            memcpy(hook.original,rom+hook.offset,8);
+            hook.thunk[0]=0;hook.thunk[1]=0x4B;hook.thunk[2]=0x18;hook.thunk[3]=0x47;
+            put32(hook.thunk+4,hook.target);memcpy(rom+hook.offset,hook.thunk,8);
+        }
     }
     patchedROM=rom;return true;
 }
@@ -611,6 +655,7 @@ static uint8_t soulQAScriptBackup[128];
     uint8_t digest[CC_SHA256_DIGEST_LENGTH]; soulOriginalHash(digest);
     if(memcmp(digest,expected,32)!=0) return NO;
     for(size_t i=0;i<RegionSize;i++) if(rom[RegionOffset+i]!=0xFF) return NO;
+    for(size_t i=0;i<sizeof(BoundBattleDecisionCode);i++) if(rom[DecisionCodeOffset+i]!=0xFF) return NO;
     if(word(internalRAM+0xF0C)!=0x0815F9B4||word(internalRAM+0xF10)!=0x0815FD08) return NO;
     verifiedROM=rom; failed=false; return YES;
 }
@@ -648,7 +693,40 @@ static uint8_t soulQAScriptBackup[128];
     internalRAM[0xF9D]=0; internalRAM[0xF9E]=0; internalRAM[0xFA0]=0;
     memset(internalRAM+Mailbox,0,1176); networkRead=0;internalRAM[0x402F]=0;
     put32(internalRAM+Mailbox,MailboxMagic);
+    if(!tradeMode) {
+        auto *state=reinterpret_cast<BoundDecisionState *>(internalRAM+DecisionStateOffset);
+        memset(state,0,sizeof(*state));state->magic=BOUND_DECISION_MAGIC;state->seed=decisionSeed;
+    }
     preparationFrames=0; installed=true; return YES;
+}
++ (void)configureDecisionsWithSeed:(NSUInteger)seed {
+    if(armed&&!installed&&!tradeMode&&!cooperativeCable) decisionSeed=uint32_t(seed ? seed:1);
+}
++ (NSData *)takeOutgoingDecisions {
+    auto *state=decisionState();if(!state) return [NSData data];
+    const unsigned count=uint16_t(state->outWrite-state->outRead);
+    if(state->error||count>BOUND_DECISION_CAPACITY) { failed=true;return [NSData data]; }
+    NSMutableData *records=[NSMutableData dataWithCapacity:count*sizeof(BoundDecisionRecord)];
+    while(state->outRead!=state->outWrite) {
+        [records appendBytes:&state->outgoing[state->outRead&(BOUND_DECISION_CAPACITY-1)] length:sizeof(BoundDecisionRecord)];
+        state->outRead++;
+    }
+    return records;
+}
++ (NSUInteger)receiveDecisions:(NSData *)data {
+    auto *state=decisionState();if(!state) return 0;
+    if(data.length%sizeof(BoundDecisionRecord)) { failed=true;return 0; }
+    unsigned count=uint16_t(state->inWrite-state->inRead),consumed=0;
+    if(state->error||count>BOUND_DECISION_CAPACITY) { failed=true;return 0; }
+    while(consumed<data.length&&count<BOUND_DECISION_CAPACITY) {
+        BoundDecisionRecord record;
+        memcpy(&record,static_cast<const uint8_t *>(data.bytes)+consumed,sizeof(record));
+        if(!record.ordinal||record.battler!=(role^1)||record.request<18||record.request>22||
+           !record.size||record.size>16||record.reserved) { failed=true;return consumed; }
+        state->incoming[state->inWrite&(BOUND_DECISION_CAPACITY-1)]=record;
+        state->inWrite++;count++;consumed+=sizeof(record);
+    }
+    return consumed;
 }
 + (NSData *)captureNativeSession { return [self captureSessionForCooperative:NO]; }
 + (NSData *)captureCooperativeSession { return [self captureSessionForCooperative:YES]; }
@@ -659,6 +737,10 @@ static uint8_t soulQAScriptBackup[128];
         if(!mailboxReady()||patchedROM!=rom||memcmp(rom+RegionOffset,BoundBattleEntryCode,sizeof(BoundBattleEntryCode))) return [NSData data];
         for(size_t i=0;i<sizeof(hooks)/sizeof(hooks[0]);i++)
             if(usesHook(i)&&memcmp(rom+hooks[i].offset,hooks[i].thunk,8)) return [NSData data];
+        if(!tradeMode&&!cooperativeCable) {
+            if(!decisionState()||memcmp(rom+DecisionCodeOffset,BoundBattleDecisionCode,sizeof(BoundBattleDecisionCode))) return [NSData data];
+            for(const auto &hook:decisionHooks) if(memcmp(rom+hook.offset,hook.thunk,8)) return [NSData data];
+        }
     }
     NSDictionary *value=@{@"version":@1,@"scriptVersion":@2,@"code":[nativeCodeIdentity() base64EncodedStringWithOptions:0],
         @"armed":@(armed),@"installed":@(installed),@"cooperative":@(cooperativeCable),@"role":@(role),@"tradeMode":@(tradeMode),
@@ -691,9 +773,16 @@ static uint8_t soulQAScriptBackup[128];
            ||uint16_t(half(internalRAM+Mailbox+10)-half(internalRAM+Mailbox+8))>32
            ||uint16_t([value[@"networkRead"] unsignedIntValue]-half(internalRAM+Mailbox+4))>
              uint16_t(half(internalRAM+Mailbox+6)-half(internalRAM+Mailbox+4))) return NO;
+        if(!resumedTrade&&!cooperative) {
+            const auto *state=reinterpret_cast<const BoundDecisionState *>(internalRAM+DecisionStateOffset);
+            if(state->magic!=BOUND_DECISION_MAGIC||state->error||state->inSimulation||
+               uint16_t(state->outWrite-state->outRead)>BOUND_DECISION_CAPACITY||
+               uint16_t(state->inWrite-state->inRead)>BOUND_DECISION_CAPACITY) return NO;
+        }
     } else if(!overworld()) return NO;
     if(!nativeProfileVerified()) return NO;
     for(size_t i=0;i<RegionSize;i++) if(rom[RegionOffset+i]!=0xFF) return NO;
+    for(size_t i=0;i<sizeof(BoundBattleDecisionCode);i++) if(rom[DecisionCodeOffset+i]!=0xFF) return NO;
     if(cooperative&&![self installCooperativeDoubles]) return NO;
     role=[value[@"role"] unsignedIntValue];tradeMode=resumedTrade;cooperativeCable=cooperative;
     if(resumedInstalled&&!writeNativeROM()) return NO;
@@ -759,6 +848,8 @@ static uint8_t soulQAScriptBackup[128];
         NSLog(@"Bound native link error: status=%08x receiveQueue=%u sendQueue=%u",word(workRAM+0x22854),unsigned(workRAM[0x22858]),unsigned(workRAM[0x22859])); failed=true;
     }
     if(mailboxReady()&&half(internalRAM+Mailbox+12)) failed=true;
+    const auto *decisions=decisionState();
+    if(decisions&&decisions->error) failed=true;
     if(installed&&ioMem) put16(ioMem+0x128,0x2008|(role<<4)|(role?4:0));
     const bool battle=(internalRAM[0x3529]&2)!=0;
     if(installed&&tradeMode) {
@@ -784,6 +875,9 @@ static uint8_t soulQAScriptBackup[128];
         @"playerHP":partyHP(0x24284,workRAM[0x24029]),@"enemyHP":partyHP(0x2402C,6),
         @"pendingCommands":@(mailboxReady()?uint16_t(half(internalRAM+Mailbox+6)-half(internalRAM+Mailbox+4)):0),
         @"runRequested":@(installed&&!tradeMode&&!cooperativeCable&&internalRAM[0x402F]==3),
+        @"decisionError":@(decisions?decisions->error:0),@"decisionsSent":@(decisions?decisions->sentOrdinal:0),
+        @"decisionsReceived":@(decisions?decisions->receivedOrdinal:0),@"decisionFrames":@(decisions?decisions->frames:0),
+        @"terminalFingerprint":@(decisions?decisions->terminalFingerprint:0),
         @"tradeOpened":@(tradeOpened),@"tradeCount":@(tradeCount)};
 }
 + (void)close {
@@ -792,10 +886,18 @@ static uint8_t soulQAScriptBackup[128];
         bool allOurs=true;
         for(size_t index=0;index<sizeof(hooks)/sizeof(hooks[0]);index++)
             if(usesHook(index)&&memcmp(rom+hooks[index].offset,hooks[index].thunk,8)!=0) allOurs=false;
+        if(!tradeMode&&!cooperativeCable) {
+            if(memcmp(rom+DecisionCodeOffset,BoundBattleDecisionCode,sizeof(BoundBattleDecisionCode))) allOurs=false;
+            for(const auto &hook:decisionHooks) if(memcmp(rom+hook.offset,hook.thunk,8)) allOurs=false;
+        }
         if(allOurs) {
             for(size_t index=0;index<sizeof(hooks)/sizeof(hooks[0]);index++)
                 if(usesHook(index)) memcpy(rom+hooks[index].offset,hooks[index].original,8);
             memset(rom+RegionOffset,0xFF,RegionSize);
+            if(!tradeMode&&!cooperativeCable) {
+                for(const auto &hook:decisionHooks) memcpy(rom+hook.offset,hook.original,8);
+                memset(rom+DecisionCodeOffset,0xFF,sizeof(BoundBattleDecisionCode));
+            }
         }
     }
     armed=installed=failed=syntheticHeld=tradeMode=tradeOpened=tradeScene=cooperativeCable=false;

@@ -10,6 +10,9 @@ struct BoundBattleControlPacket:Codable {
     let kind:Kind
     var nonce:UUID? = nil
     var acknowledgement:UUID? = nil
+    var battleProtocol:Int? = nil
+    var battleResult:UInt32? = nil
+    var terminalReceipt:Bool? = nil
     func encoded()->Data? {
         guard let bytes=try? JSONEncoder().encode(self) else { return nil }
         return Self.prefix+bytes
@@ -20,6 +23,26 @@ struct BoundBattleControlPacket:Codable {
         if packet.kind == .resumeRequest,packet.nonce == nil { return nil }
         if packet.kind == .resumeReady,packet.nonce == nil || packet.acknowledgement == nil { return nil }
         return packet
+    }
+    /// A retired activity answers a lost final result immediately. Receipts
+    /// are one-way replies, so two retired peers cannot echo them forever.
+    func retainedReply(to request:Self)->Self? {
+        guard id==request.id,[.finished,.ranAway,.abort].contains(kind),
+              [.resumeRequest,.resumeReady,.prepared,.connected].contains(request.kind)
+                || request.kind == .finished && request.terminalReceipt != true else { return nil }
+        var reply=self;reply.terminalReceipt=true;return reply
+    }
+}
+
+/// Result-file retries are separate from the gameplay outcome. A temporary
+/// write error cannot turn an already verified battle result into an abort.
+struct BoundBattleTerminalPersistence {
+    private(set) var needsRetry=false
+    mutating func save(_ packet:BoundBattleControlPacket,write:(Data)throws->Void) throws {
+        do {
+            try write(BoundBattleControlPacket.prefix + JSONEncoder().encode(packet))
+            needsRetry=false
+        } catch { needsRetry=true;throw error }
     }
 }
 
@@ -40,6 +63,11 @@ struct BoundNativeBattleObservation:Sendable,Codable {
     let enemyHP:[Int]
     let pendingCommands:Int
     let runRequested:Bool
+    let decisionError:Int?
+    let decisionsSent:Int?
+    let decisionsReceived:Int?
+    let decisionFrames:Int?
+    let terminalFingerprint:UInt32?
     init(frame:UInt64,values:[String:Any]) {
         self.frame=frame
         error=values["error"] as? Bool ?? true; connected=values["connected"] as? Bool ?? false
@@ -51,6 +79,11 @@ struct BoundNativeBattleObservation:Sendable,Codable {
         playerHP=values["playerHP"] as? [Int] ?? []; enemyHP=values["enemyHP"] as? [Int] ?? []
         pendingCommands=values["pendingCommands"] as? Int ?? 0
         runRequested=values["runRequested"] as? Bool ?? false
+        decisionError=values["decisionError"] as? Int
+        decisionsSent=values["decisionsSent"] as? Int
+        decisionsReceived=values["decisionsReceived"] as? Int
+        decisionFrames=values["decisionFrames"] as? Int
+        terminalFingerprint=values["terminalFingerprint"] as? UInt32
     }
 }
 
@@ -94,6 +127,7 @@ struct BoundNativeContinuation:BoundActivityContinuation {
     let state:Data,battery:Data,bridge:Data,probe:Data,wire:Data,backup:Data,journal:Data
     let memoryFiles:[String:Data]
     let heads:BoundContinuationHeads?
+    var peerBattleResult:UInt32? = nil
     var activityID:UUID { id }
     var valid:Bool {
         version==1 && context.valid && (context.runID==nil || heads != nil) && !gameID.isEmpty && gameID.utf8.count<=512
@@ -198,6 +232,8 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
     private var latest:BoundNativeBattleObservation?
     private var frame:UInt64=0
     private var incoming=Data()
+    private var incomingDecisions=Data()
+    private var usesDecisions=false
     private var blockAdmission=BoundNativeBlockAdmission()
     private var peerGeneration:UInt16=0,receivedGeneration:UInt16=0,announcedGeneration:UInt16=0,lastAcceptedSequence:UInt16=0
     private var pendingAcknowledgement=Data(),lastAcknowledgement=Data()
@@ -210,15 +246,18 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
     private var lastSent:TimeInterval=0
     private var lastReceived=ProcessInfo.processInfo.systemUptime
     private var sentCommands=0,receivedCommands=0
-    func configure(core:EmulatorCore?) {
+    private var sentDecisions=0,receivedDecisions=0,nativeBlocksAfterDecision=0
+    func configure(core:EmulatorCore?,decisions:Bool=false) {
         lock.lock(); defer { lock.unlock() }
         coreID=core.map(ObjectIdentifier.init); entryPlayer=nil; peerDisconnectPending=false; latest=nil; frame=0
         incoming.removeAll(); blockAdmission=BoundNativeBlockAdmission(); sender=nil; senderEnabled=false; failed=nil; lastSent=0
+        incomingDecisions.removeAll();usesDecisions=decisions
         interrupted=nil;transportSuspended=false
         peerGeneration=0; receivedGeneration=0; announcedGeneration=0;lastAcceptedSequence=0
         pendingAcknowledgement.removeAll(); lastAcknowledgement.removeAll()
         sentHistory=Data(repeating:0,count:32);receivedHistory=Data(repeating:0,count:32)
         lastReceived=ProcessInfo.processInfo.systemUptime; sentCommands=0; receivedCommands=0
+        sentDecisions=0;receivedDecisions=0;nativeBlocksAfterDecision=0
     }
     func setSender(_ sender:@escaping @Sendable (Data)->Bool,failed:@escaping @Sendable ()->Void,
                    interrupted:(@Sendable ()->Void)? = nil) {
@@ -235,6 +274,17 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
         lock.lock(); senderEnabled=true; lastReceived=ProcessInfo.processInfo.systemUptime; lock.unlock()
     }
     func receiveNetworkPacket(_ packet:Data)->Bool {
+        if packet.first == 4 {
+            guard let records=BoundBattleDecisionPacket.decode(packet) else { return false }
+            lock.lock();defer { lock.unlock() }
+            guard usesDecisions,coreID != nil,incomingDecisions.count+records.count<=32*32 else { return false }
+            incomingDecisions.append(records)
+            receivedDecisions+=records.count/32
+            for start in stride(from:0,to:records.count,by:32) {
+                receivedHistory=Data(SHA256.hash(data:receivedHistory+Data([4])+records.subdata(in:start..<start+32)))
+            }
+            lastReceived=ProcessInfo.processInfo.systemUptime;return true
+        }
         guard let commands=BoundNativeCommandPacket.decode(packet) else { return false }
         lock.lock(); defer { lock.unlock() }
         guard coreID != nil,incoming.count+commands.count/16*20<=10240 else { return false }
@@ -276,6 +326,8 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
         let senderEnabled:Bool?
         let peerDisconnectPending:Bool?
         let frame:UInt64?
+        let decisions:Data?
+        let usesDecisions:Bool?
     }
     /// Captured after the core and network wire are fenced. Native mailbox and
     /// host continuation admission are one recovery transaction.
@@ -284,16 +336,20 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
         return (try? JSONEncoder().encode(RecoveryState(incoming:incoming,remaining:blockAdmission.recoveryRemaining,
             peerGeneration:peerGeneration,receivedGeneration:receivedGeneration,lastAcceptedSequence:lastAcceptedSequence,
             pendingAcknowledgement:pendingAcknowledgement,sentHistory:sentHistory,receivedHistory:receivedHistory,
-            entryPlayer:entryPlayer,senderEnabled:senderEnabled,peerDisconnectPending:peerDisconnectPending,frame:frame))) ?? Data()
+            entryPlayer:entryPlayer,senderEnabled:senderEnabled,peerDisconnectPending:peerDisconnectPending,frame:frame,
+            decisions:incomingDecisions,usesDecisions:usesDecisions))) ?? Data()
     }
     func restoreRecoveryData(_ bytes:Data)->Bool {
         guard bytes.count<=32768,let value=try? JSONDecoder().decode(RecoveryState.self,from:bytes),
               value.incoming.count<=10240,value.incoming.count%20==0,
               [0,4].contains(value.pendingAcknowledgement.count),value.sentHistory.count==32,value.receivedHistory.count==32,
               value.entryPlayer == nil || [0,1].contains(value.entryPlayer!),
+              (value.decisions?.count ?? 0)<=1024,(value.decisions?.count ?? 0)%32==0,
+              (value.usesDecisions ?? false)==usesDecisions,
               let admission=BoundNativeBlockAdmission(recoveryRemaining:value.remaining) else { return false }
         lock.lock();defer { lock.unlock() }
         incoming=value.incoming;blockAdmission=admission;peerGeneration=value.peerGeneration
+        incomingDecisions=value.decisions ?? Data()
         receivedGeneration=value.receivedGeneration;lastAcceptedSequence=value.lastAcceptedSequence
         pendingAcknowledgement=value.pendingAcknowledgement;announcedGeneration=0;lastAcknowledgement=Data()
         sentHistory=value.sentHistory;receivedHistory=value.receivedHistory
@@ -306,6 +362,7 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
         guard bytes.count<=32768,mailbox.count==1176,
               let value=try? JSONDecoder().decode(RecoveryState.self,from:bytes),
               value.incoming.isEmpty,value.remaining==0,value.pendingAcknowledgement.isEmpty,
+              value.decisions?.isEmpty != false,
               value.sentHistory.count==32,value.receivedHistory.count==32 else { return false }
         func half(_ at:Int)->UInt16 { UInt16(mailbox[at]) | UInt16(mailbox[at+1]) << 8 }
         return half(12)==0 && half(4)==half(6) && half(14)==half(4) && half(8)==half(10)
@@ -319,33 +376,54 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
     }
     var networkAge:TimeInterval { lock.lock(); defer { lock.unlock() }; return ProcessInfo.processInfo.systemUptime-lastReceived }
     var diagnostics:String { lock.lock(); defer { lock.unlock() }; return "sentCommands=\(sentCommands) receivedCommands=\(receivedCommands) pending=\(incoming.count/20)" }
+    var decisionDiagnostics:[String:Int] {
+        lock.lock();defer { lock.unlock() }
+        return ["sent":sentDecisions,"received":receivedDecisions,"nativeBlocksAfterDecision":nativeBlocksAfterDecision]
+    }
     func disconnectFinishedPeer() { lock.lock(); peerDisconnectPending=true; lock.unlock() }
     func enter(player:Int) { lock.lock(); entryPlayer=player; lock.unlock() }
     func receive(_ core:EmulatorCore) {
         lock.lock()
-        guard coreID==ObjectIdentifier(core),!transportSuspended else { lock.unlock(); return }
-        let player=entryPlayer; entryPlayer=nil
+        guard coreID==ObjectIdentifier(core) else { lock.unlock(); return }
+        let player=transportSuspended ? nil:entryPlayer
+        if !transportSuspended { entryPlayer=nil }
         let disconnectPeer=peerDisconnectPending; peerDisconnectPending=false
         let send=senderEnabled ? sender:nil,failure=failed
+        let connectedTransport = !transportSuspended
         lock.unlock()
         if let player { _=BoundVBABattleBridge.installBattle(forPlayer:UInt(player)) }
         if disconnectPeer { BoundVBABattleBridge.requestPeerDisconnect() }
         lock.lock()
-        BoundVBABattleBridge.setPeerGeneration(UInt(peerGeneration))
-        if pendingAcknowledgement.count==4 {
+        if !transportSuspended { BoundVBABattleBridge.setPeerGeneration(UInt(peerGeneration)) }
+        if !transportSuspended,pendingAcknowledgement.count==4 {
             let ack=pendingAcknowledgement
             BoundVBABattleBridge.acknowledgeGeneration(UInt(ack[0])|UInt(ack[1])<<8,sequence:UInt(ack[2])|UInt(ack[3])<<8)
             pendingAcknowledgement.removeAll()
         }
         let pending=Data(incoming.prefix(260))
-        if !pending.isEmpty {
+        if !transportSuspended,!pending.isEmpty {
             let accepted=Int(BoundVBABattleBridge.receiveCommands(pending))
             if accepted>0 { incoming.removeFirst(accepted) }
+        }
+        if !transportSuspended,!incomingDecisions.isEmpty {
+            let accepted=Int(BoundVBABattleBridge.receiveDecisions(Data(incomingDecisions.prefix(256))))
+            if accepted>0 { incomingDecisions.removeFirst(accepted) }
         }
         lock.unlock()
         let generation=UInt16(BoundVBABattleBridge.connectionGeneration())
         let outgoing=BoundVBABattleBridge.takeOutgoingCommands()
         var delivered=0,bad=false,didSend=false
+        let decisions=usesDecisions ? BoundVBABattleBridge.takeOutgoingDecisions():Data()
+        if !decisions.isEmpty {
+            if let packet=BoundBattleDecisionPacket.encode(decisions),send?(packet)==true {
+                lock.lock()
+                for start in stride(from:0,to:decisions.count,by:32) {
+                    sentHistory=Data(SHA256.hash(data:sentHistory+Data([4])+decisions.subdata(in:start..<start+32)))
+                }
+                sentDecisions+=decisions.count/32
+                lock.unlock();didSend=true
+            } else { bad=true }
+        }
         let acknowledged=BoundVBABattleBridge.peerAcknowledgement()
         if !acknowledged.isEmpty,acknowledged != lastAcknowledgement,send != nil {
             if send?(Data([3])+acknowledged)==true { lastAcknowledgement=acknowledged; didSend=true } else { bad=true }
@@ -355,18 +433,23 @@ final class BoundNativeBattleProbe:@unchecked Sendable {
             else { bad=true }
         }
         if !outgoing.isEmpty {
-            for start in stride(from:0,to:outgoing.count,by:20) {
-                let connection=UInt16(outgoing[start])|UInt16(outgoing[start+1])<<8
-                let sequence=UInt16(outgoing[start+2])|UInt16(outgoing[start+3])<<8
-                let commands=outgoing.subdata(in:start+4..<start+20)
-                guard let packet=BoundNativeCommandPacket.encode(commands,generation:connection,sequence:sequence),send?(packet)==true else {
-                    let code=commands.prefix(2).reduce(UInt16(0)) { ($0>>8)|(UInt16($1)<<8) }
-                    NSLog("Bound native command send failed: %04x",code); bad=true; break
+            if let batches=BoundNativeCommandPacket.batches(outgoing) {
+                for batch in batches {
+                    guard send?(batch.packet)==true else {
+                        NSLog("Bound native command batch send failed");bad=true;break
+                    }
+                    lock.lock()
+                    for start in stride(from:0,to:batch.records.count,by:20) {
+                        sentHistory=Data(SHA256.hash(data:sentHistory+batch.records.subdata(in:start..<start+20)))
+                        if usesDecisions,sentDecisions>0,batch.records[start+4]==0xBB,batch.records[start+5]==0xBB {
+                            nativeBlocksAfterDecision+=1
+                        }
+                    }
+                    lock.unlock()
+                    delivered+=batch.commandCount;didSend=true
                 }
-                lock.lock();sentHistory=Data(SHA256.hash(data:sentHistory+outgoing.subdata(in:start..<start+20)));lock.unlock()
-                delivered+=1; didSend=true
-            }
-        } else if send != nil,ProcessInfo.processInfo.systemUptime-lastSent>=1 {
+            } else { NSLog("Bound native command records are invalid");bad=true }
+        } else if connectedTransport,send != nil,ProcessInfo.processInfo.systemUptime-lastSent>=1 {
             if send?(Data([0])) != true { bad=true } else { didSend=true }
         }
         let values=BoundVBABattleBridge.advanceAndObserve()
@@ -399,6 +482,13 @@ final class BoundNativeBattleSession {
     private var localPrepared=false,peerPrepared=false
     private var localConnected=false,peerConnected=false,entryQueued=false
     private var localFinished=false,peerFinished=false,played=false,peerLinkClosed=false
+    private var peerBattleResult:UInt32?
+    private var terminalPersistence=BoundBattleTerminalPersistence()
+    private struct PendingFinish { let packet:BoundBattleControlPacket;let message:String;let resume:Bool }
+    private var pendingFinish:PendingFinish?
+    #if DEBUG
+    var beforeTerminalWriteForTesting:(()throws->Void)?
+    #endif
     private(set) var isTransportSuspended=false
     var activityID:UUID? { id }
     private var pausedForTransport=false
@@ -407,8 +497,7 @@ final class BoundNativeBattleSession {
     private var retiredResumeNonces:[UUID]=[]
     private var resumeAcknowledged=false,sentResumeReady=false
     private var lastControl:TimeInterval=0,lastPeerControl=ProcessInfo.processInfo.systemUptime,lastChannelAttempt:TimeInterval=0
-    private var retired:[UUID:BoundBattleControlPacket.Kind]=[:]
-    private var endedByRun=false
+    private var retired:[UUID:BoundBattleControlPacket]=[:]
     private var retiredOrder:[UUID]=[]
     private var backupURL:URL?
     private var journalURL:URL?
@@ -433,6 +522,7 @@ final class BoundNativeBattleSession {
     private(set) var lastCancellation=""
     private(set) var lastFailure=""
     private(set) var lastCableDiagnostic=""
+    private(set) var lastDecisionDiagnostics:[String:Int]=[:]
     private(set) var completedBattles=0
     private(set) var restoredBattles=0
     private(set) var completedTrades=0
@@ -445,7 +535,7 @@ final class BoundNativeBattleSession {
     var soulProbe:BoundSoulProbe?
     var isActive:Bool { id != nil || recovery != nil }
     var protectsTemporaryState:Bool { isActive || recoveryFailed }
-    var blocksCoreResume:Bool { isTransportSuspended || recoveryFailed }
+    var blocksCoreResume:Bool { pausedForTransport || continuationTicket != nil || continuationWriteBlocked || recoveryFailed }
     var blocksAutoSave:Bool { protectsTemporaryState || interactions?.nativeDialogueBusy == true }
 
     func bind(core:EmulatorCore?,gameID:String,interactions:BoundFriendInteractionSession) {
@@ -469,8 +559,11 @@ final class BoundNativeBattleSession {
         continuationTicket=nil;continuationWriteBlocked=false
         self.id=id; self.activity=activity; self.initiator=initiator; lastFailure=""; lastCancellation=""; observation=nil
         localPrepared=false; peerPrepared=earlyPreparation==id; earlyPreparation=nil; localConnected=false; peerConnected=false
-        localFinished=false; peerFinished=false; entryQueued=false; played=false; peerLinkClosed=false; endedByRun=false
+        localFinished=false; peerFinished=false; entryQueued=false; played=false; peerLinkClosed=false
         isTransportSuspended=false;pausedForTransport=false;peerResumeNonce=nil
+        peerBattleResult=nil
+        terminalPersistence=BoundBattleTerminalPersistence()
+        pendingFinish=nil
         retiredResumeNonces.removeAll()
         resumeAcknowledged=false;sentResumeReady=false;lastControl=0;lastPeerControl=ProcessInfo.processInfo.systemUptime
         interactions?.activityProgress(activity == .trade ? "Connecting trade…" : "Connecting battle…",playing:false)
@@ -496,12 +589,15 @@ final class BoundNativeBattleSession {
                 var protectedFolder=folder; try protectedFolder.setResourceValues(resource)
             }
         } catch { fail("Couldn’t prepare a recovery snapshot"); return }
-        probe.configure(core:core)
+        probe.configure(core:core,decisions:activity == .battle)
         configureWire(id:id)
         let prepared = activity == .trade ? BoundVBABattleBridge.prepareTrade(forPlayer:initiator ? 0:1)
             : BoundVBABattleBridge.prepareBattle(forPlayer:initiator ? 0:1)
         guard prepared else {
             fail("Couldn’t prepare the native \(activity.rawValue) link"); return
+        }
+        if activity == .battle {
+            BoundVBABattleBridge.configureDecisions(withSeed:Self.decisionSeed(id))
         }
         localPrepared=true
         _=core.resume()
@@ -529,6 +625,12 @@ final class BoundNativeBattleSession {
         self.wire=safeWire
         probe.setSender({ bytes in safeWire.send(bytes) },failed:failure,interrupted:interrupted)
     }
+    private static func decisionSeed(_ id:UUID)->UInt {
+        var bytes=id.uuid
+        let digest=withUnsafeBytes(of:&bytes) { SHA256.hash(data:Data($0)) }
+        let seed=digest.prefix(4).enumerated().reduce(UInt32(0)) { $0 | UInt32($1.element)<<($1.offset*8) }
+        return UInt(seed == 0 ? 1:seed)
+    }
     private func startTimer() {
         timer?.invalidate()
         let timer=Timer(timeInterval:1.0/60,repeats:true) { [weak self] _ in MainActor.assumeIsolated { self?.advance() } }
@@ -538,8 +640,12 @@ final class BoundNativeBattleSession {
     /// Keep a durable fence so its old rollback path cannot silently replace an
     /// interrupted trade while the user is outside the resident game.
     func protectLocalLifecycle()->Bool {
+        if let pending=pendingFinish {
+            finish(message:pending.message,resume:pending.resume,terminal:pending.packet.kind)
+            if pendingFinish != nil { return false }
+        }
         guard id != nil else { return true }
-        suspendTransport();pausedForTransport=true
+        suspendTransport();pauseForContinuation()
         do {
             guard let journalURL,let bytes=try? BoundServerMemoryFiles.read(journalURL,gameID:gameID),
                   var value=try JSONSerialization.jsonObject(with:bytes) as? [String:String] else { throw CocoaError(.fileReadCorruptFile) }
@@ -555,10 +661,14 @@ final class BoundNativeBattleSession {
     /// A Menu/background checkpoint is the exact native execution, including
     /// reliable packet counters. World checkpoints deliberately exclude it.
     @discardableResult func checkpointForContinuation()->Bool {
+        if let pending=pendingFinish {
+            finish(message:pending.message,resume:pending.resume,terminal:pending.packet.kind)
+            if pendingFinish != nil { return false }
+        }
         guard let id else { return !recoveryFailed }
         if continuationTicket != nil { return true }
         suspendTransport()
-        pausedForTransport=true
+        pauseForContinuation()
         guard let core,core.state == .paused,let context=activeContinuationContext,context.valid,
               let wire,let backupURL,let journalURL else {
             lastFailure="Keep this game open until its activity can be saved";return false
@@ -573,7 +683,7 @@ final class BoundNativeBattleSession {
                 observation:observation,state:BoundVBABattleBridge.captureServerState(),battery:BoundVBABattleBridge.captureServerBattery(),
                 bridge:BoundVBABattleBridge.captureNativeSession(),probe:probe.recoveryData(),wire:transport,
                 backup:try BoundServerMemoryFiles.read(backupURL,gameID:gameID),journal:try BoundServerMemoryFiles.read(journalURL,gameID:gameID),
-                memoryFiles:BoundServerMemoryFiles.snapshot(gameID:gameID),heads:continuationHeadsProvider?(context))
+                memoryFiles:BoundServerMemoryFiles.snapshot(gameID:gameID),heads:continuationHeadsProvider?(context),peerBattleResult:peerBattleResult)
             try continuationStore.save(value)
             continuationTicket=value.ticket;continuationWriteBlocked=false
             return true
@@ -600,6 +710,7 @@ final class BoundNativeBattleSession {
             guard BoundVBABattleBridge.restoreServerState(value.state),
                   BoundVBABattleBridge.restoreServerBattery(value.battery),
                   BoundVBABattleBridge.restoreNativeSession(value.bridge) else { throw CocoaError(.fileReadCorruptFile) }
+            if value.activity == .battle { BoundVBABattleBridge.configureDecisions(withSeed:Self.decisionSeed(value.id)) }
             if BoundServerMemoryFiles.isEnabled(for:gameID) { try BoundServerMemoryFiles.restore(value.memoryFiles,gameID:gameID) }
             let folder=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0]
                 .appendingPathComponent("Friend Battles",isDirectory:true)
@@ -613,11 +724,12 @@ final class BoundNativeBattleSession {
             }
             try BoundServerMemoryFiles.write(value.backup,to:backup,gameID:gameID)
             try BoundServerMemoryFiles.write(value.journal,to:journal,gameID:gameID)
-            probe.configure(core:core);configureWire(id:value.id)
+            probe.configure(core:core,decisions:value.activity == .battle);configureWire(id:value.id)
             guard probe.restoreRecoveryData(value.probe),wire?.restoreContinuation(value.wire)==true else { throw CocoaError(.fileReadCorruptFile) }
             id=value.id;activity=value.activity;initiator=value.initiator;originalRate=value.rate
             localPrepared=value.localPrepared;peerPrepared=value.peerPrepared;localConnected=value.localConnected;peerConnected=value.peerConnected
             entryQueued=value.entryQueued;localFinished=value.localFinished;peerFinished=value.peerFinished;played=value.played;peerLinkClosed=value.peerLinkClosed
+            peerBattleResult=value.peerBattleResult
             observation=value.observation;backupURL=backup;journalURL=journal;recoveryFailed=false
             activeContinuationContext=context;continuationTicket=value.ticket;continuationWriteBlocked=false
             core.rate=activity == .battle ? value.rate:core.deltaCore.supportedRates.lowerBound
@@ -663,15 +775,20 @@ final class BoundNativeBattleSession {
             if let peerResumeNonce { retiredResumeNonces=Array((retiredResumeNonces+[peerResumeNonce]).suffix(32)) }
             isTransportSuspended=true;resumeNonce=UUID();peerResumeNonce=nil
             resumeAcknowledged=false;sentResumeReady=false
-            pausedForTransport=core.state == .running
-            releaseGameplayInputs?()
             probe.suspendTransport()
-            if pausedForTransport { _=core.pause() }
-            if core.state == .paused { core.deltaCore.emulatorBridge.resetInputs() }
-            interactions?.activityProgress("Waiting for your friend…",playing:false)
+            // Losing a socket is not losing the local game. Its own menus,
+            // text and animation keep running; native decision/commit barriers
+            // retain work that actually requires the other player's input.
+            interactions?.activityProgress("Reconnecting…",playing:played || activity == .trade && entryQueued)
         }
         transportGeneration=UUID();channel?.close();channel=nil;wire?.suspend()
         lastChannelAttempt=0;lastControl=0
+    }
+    private func pauseForContinuation() {
+        pausedForTransport=true
+        releaseGameplayInputs?()
+        if core?.state == .running { _=core?.pause() }
+        if core?.state == .paused { core?.deltaCore.emulatorBridge.resetInputs() }
     }
     func resumeTransport() {
         guard id != nil,isTransportSuspended else { return }
@@ -693,8 +810,8 @@ final class BoundNativeBattleSession {
         let nonce=resumeNonce
         // Lifecycle/UI callbacks may try to resume playback before the peer is
         // ready. Reassert ownership without resetting or restoring the game.
-        if core.state == .running { pausedForTransport=true;_ = core.pause() }
-        if core.state == .paused { core.deltaCore.emulatorBridge.resetInputs() }
+        if pausedForTransport,core.state == .running { _ = core.pause() }
+        if pausedForTransport,core.state == .paused { core.deltaCore.emulatorBridge.resetInputs() }
         guard canResume?() ?? true,claimContinuation() else { return }
         if channel==nil,now-lastChannelAttempt>=1 {
             lastChannelAttempt=now
@@ -718,8 +835,8 @@ final class BoundNativeBattleSession {
     func receive(_ data:Data) {
         guard let packet=BoundBattleControlPacket.decode(data) else { return }
         if packet.id != id {
-            if let terminal=retired[packet.id] ?? persistedTerminal(packet.id),[.resumeRequest,.resumeReady,.prepared,.connected].contains(packet.kind) {
-                if let bytes=BoundBattleControlPacket(id:packet.id,kind:terminal).encoded() { _=sendControl?(bytes) }
+            if let terminal=retired[packet.id] ?? persistedTerminal(packet.id),let reply=terminal.retainedReply(to:packet) {
+                if let bytes=reply.encoded() { _=sendControl?(bytes) }
                 return
             }
             // Ordered confirm/prepared messages can arrive together while our
@@ -733,16 +850,24 @@ final class BoundNativeBattleSession {
             return
         }
         lastPeerControl=ProcessInfo.processInfo.systemUptime
+        if activity == .battle,[.prepared,.connected,.resumeRequest,.resumeReady].contains(packet.kind),packet.battleProtocol != 2 {
+            fail("Both players need the updated battle version");return
+        }
         switch packet.kind {
         case .prepared: peerPrepared=true; interactions?.peerPreparedActivity()
         case .connected: peerConnected=true
-        case .finished: peerFinished=true
+        case .finished:
+            peerFinished=true;peerBattleResult=packet.battleResult
+            if let pending=pendingFinish,pending.packet.kind == .finished,activity == .battle,played,
+               pending.packet.battleResult != packet.battleResult {
+                fail("The battle results differed. Your original party was kept.");return
+            }
         case .ranAway:
             guard activity == .battle else { return }
-            endedByRun=true;finish(message:"Battle ended",resume:true);return
+            finish(message:"Battle ended",resume:true,terminal:.ranAway);return
         case .abort:
             lastFailure="Your friend ended the \(activity.rawValue)"
-            finish(message:lastFailure,resume:true); return
+            finish(message:lastFailure,resume:true,terminal:.abort); return
         case .resumeRequest:
             guard let nonce=packet.nonce,!retiredResumeNonces.contains(nonce) else { return }
             if !isTransportSuspended {
@@ -775,35 +900,49 @@ final class BoundNativeBattleSession {
         advance()
     }
     private func advance() {
+        if let pending=pendingFinish {
+            finish(message:pending.message,resume:pending.resume,terminal:pending.packet.kind);return
+        }
         if recovery != nil { recoverIfRunning(); return }
         guard id != nil else { return }
         // The peer may already have closed its channel after completing. Its
         // retained terminal reply is sufficient once our native game finished.
         if localFinished && peerFinished {
             guard continuationTicket==nil || (canResume?() ?? true) else { return }
+            if activity == .battle,played,
+               (observation?.terminalFingerprint == nil || observation?.terminalFingerprint == 0 ||
+                observation?.terminalFingerprint != peerBattleResult) {
+                fail("The battle results differed. Your original party was kept.");return
+            }
             let outcome=Self.terminalOutcome(observation?.outcome ?? 0) ?? 0
             if activity == .trade {
-                finish(message:observation?.tradeCount ?? 0 > 0 ? "Trade complete · Pokémon saved" : "Trade ended",resume:true)
+                finish(message:observation?.tradeCount ?? 0 > 0 ? "Trade complete · Pokémon saved" : "Trade ended",resume:true,terminal:.finished)
                 return
             }
-            finish(message:!played ? "Battle could not start" : outcome==1 ? "Battle won" : outcome==2 ? "Battle lost" : outcome==3 ? "Battle draw" : "Battle ended",resume:true)
+            finish(message:!played ? "Battle could not start" : outcome==1 ? "Battle won" : outcome==2 ? "Battle lost" : outcome==3 ? "Battle draw" : "Battle ended",resume:true,terminal:played ? .finished:.abort)
             return
         }
         let now=ProcessInfo.processInfo.systemUptime
-        if isTransportSuspended { retryTransport(at:now);return }
-        wire?.tick(at:now)
-        if now-lastControl>=1 {
+        if isTransportSuspended { retryTransport(at:now) }
+        else { wire?.tick(at:now) }
+        if !isTransportSuspended,now-lastControl>=1 {
             lastControl=now
-            if localPrepared { _=emit(.prepared) }
-            if localConnected { _=emit(.connected) }
+            let entered = activity == .battle ? (observation?.decisionFrames ?? 0)>0 : observation?.tradeOpened==true
+            if !entered {
+                if localPrepared { _=emit(.prepared) }
+                if localConnected { _=emit(.connected) }
+            }
             if localFinished { _=emit(.finished) }
         }
         if let value=probe.take() {
             observation=value
             if activity == .battle,value.runRequested {
-                endedByRun=true;_=emit(.ranAway);finish(message:"Battle ended",resume:true);return
+                _=emit(.ranAway);finish(message:"Battle ended",resume:true,terminal:.ranAway);return
             }
-            if value.error { fail("Native \(activity.rawValue) connection failed"); return }
+            if value.error {
+                NSLog("Bound native %@ connection failed: decision error %d",activity.rawValue,value.decisionError ?? 0)
+                fail("Native \(activity.rawValue) connection failed");return
+            }
             if value.connected && localPrepared && peerPrepared && !localConnected { localConnected=true; _=emit(.connected) }
             if !value.connected && entryQueued { fail("\(activity.title) cable disconnected"); return }
             if (activity == .battle ? value.battle : value.tradeOpened) && !played {
@@ -819,7 +958,8 @@ final class BoundNativeBattleSession {
                 localFinished=true; _=emit(.finished)
             }
         }
-        if now-lastPeerControl>2 || entryQueued && probe.networkAge>2 { suspendTransport(); return }
+        if !isTransportSuspended,now-lastPeerControl>2,(!entryQueued || probe.networkAge>2) { suspendTransport() }
+        if isTransportSuspended { return }
         if localConnected && peerConnected && !entryQueued {
             // Both receivers now exist. Sending sequence 1 before this barrier
             // loses it while the peer is still dismissing its native invitation.
@@ -849,42 +989,65 @@ final class BoundNativeBattleSession {
         try BoundServerMemoryFiles.write(JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]),to:journalURL,gameID:gameID)
     }
     private func emit(_ kind:BoundBattleControlPacket.Kind,nonce:UUID?=nil,acknowledgement:UUID?=nil)->Bool {
-        guard let id,let data=BoundBattleControlPacket(id:id,kind:kind,nonce:nonce,acknowledgement:acknowledgement).encoded() else { return false }
+        guard let id,let data=BoundBattleControlPacket(id:id,kind:kind,nonce:nonce,acknowledgement:acknowledgement,
+            battleProtocol:activity == .battle ? 2:nil,
+            battleResult:kind == .finished && activity == .battle ? observation?.terminalFingerprint:nil).encoded() else { return false }
         return sendControl?(data)==true
     }
     func cancel(resume:Bool=true,source:String=#fileID,line:Int=#line) {
         earlyPreparation=nil
         guard id != nil else { return }
         lastCancellation="\(source):\(line)"
-        _=emit(.abort); finish(message:"\(activity.title) ended",resume:resume)
+        _=emit(.abort); finish(message:"\(activity.title) ended",resume:resume,terminal:.abort)
     }
     private func fail(_ message:String) {
         guard id != nil else { return }
-        lastFailure=message; _=emit(.abort); finish(message:message,resume:true)
+        lastFailure=message; _=emit(.abort); finish(message:message,resume:true,terminal:.abort)
     }
-    private func persistedTerminal(_ id:UUID)->BoundBattleControlPacket.Kind? {
+    private func persistedTerminal(_ id:UUID)->BoundBattleControlPacket? {
         guard let context=activeContinuationContext ?? continuationContext ?? continuationContextProvider?(),
-              let bytes=try? continuationStore.terminal(id:id,context:context,gameID:gameID),
-              let text=String(data:bytes,encoding:.utf8),let kind=BoundBattleControlPacket.Kind(rawValue:text),
+              let bytes=try? continuationStore.terminal(id:id,context:context,gameID:gameID) else { return nil }
+        if let packet=BoundBattleControlPacket.decode(bytes),packet.id==id,
+           [.finished,.ranAway,.abort].contains(packet.kind) { return packet }
+        guard let text=String(data:bytes,encoding:.utf8),let kind=BoundBattleControlPacket.Kind(rawValue:text),
               [.finished,.ranAway,.abort].contains(kind) else { return nil }
-        return kind
+        return BoundBattleControlPacket(id:id,kind:kind)
     }
-    private func finish(message:String,resume:Bool) {
+    private func finish(message:String,resume:Bool,terminal:BoundBattleControlPacket.Kind) {
         guard let finishedID = id else { return }
-        let terminal:BoundBattleControlPacket.Kind=endedByRun ? .ranAway:localFinished && peerFinished ? .finished:.abort
-        if let context=activeContinuationContext {
-            do { try continuationStore.saveTerminal(id:finishedID,data:Data(terminal.rawValue.utf8),context:context,gameID:gameID) }
-            catch { suspendTransport();lastFailure="Couldn’t save the activity result. Try again.";return }
+        if pendingFinish == nil || pendingFinish?.packet.kind != .abort && terminal == .abort
+            || pendingFinish?.packet.kind == .finished && terminal == .ranAway {
+            let packet=BoundBattleControlPacket(id:finishedID,kind:terminal,battleProtocol:activity == .battle ? 2:nil,
+                battleResult:terminal == .finished && activity == .battle ? observation?.terminalFingerprint:nil)
+            pendingFinish=PendingFinish(packet:packet,message:message,resume:resume)
         }
-        guard claimContinuation() else { return }
+        guard let pending=pendingFinish else { return }
+        let terminalPacket=pending.packet,message=pending.message,resume=pending.resume
+        if let context=activeContinuationContext {
+            do {
+                try terminalPersistence.save(terminalPacket) { data in
+                    #if DEBUG
+                    try beforeTerminalWriteForTesting?()
+                    #endif
+                    try continuationStore.saveTerminal(id:finishedID,data:data,context:context,gameID:gameID)
+                }
+            } catch {
+                suspendTransport();pauseForContinuation()
+                interactions?.activityProgress("Couldn’t save the activity result. Retrying…",playing:played)
+                return
+            }
+        }
+        guard claimContinuation() else { pauseForContinuation();return }
+        pendingFinish=nil
         pendingSettlement=activeContinuationContext.flatMap { try? continuationStore.settlement(context:$0,gameID:gameID) }
-        retired[finishedID]=terminal
+        retired[finishedID]=terminalPacket
         retiredOrder.append(finishedID)
         if retiredOrder.count>32 { retired.removeValue(forKey:retiredOrder.removeFirst()) }
         id=nil;activeContinuationContext=nil; timer?.invalidate(); timer=nil
         isTransportSuspended=false;pausedForTransport=false;transportGeneration=UUID()
         // Fence background delivery before pausing the sole native RAM owner.
-        lastCableDiagnostic=(wire?.diagnostics ?? "no wire")+" "+probe.diagnostics
+        lastDecisionDiagnostics=probe.decisionDiagnostics
+        lastCableDiagnostic=(wire?.diagnostics ?? "no wire")+" "+probe.diagnostics+" decisions=\(lastDecisionDiagnostics)"
         NSLog("Bound battle cable: %@",lastCableDiagnostic)
         channel?.close(); wire?.close(); channel=nil; wire=nil
         guard let core else { interactions?.activityEnded(message); return }
@@ -921,7 +1084,7 @@ final class BoundNativeBattleSession {
         if didRestore {
             if activity == .battle {
                 restoredBattles += 1
-                if played && localFinished && peerFinished { completedBattles += 1 }
+                if played && localFinished && peerFinished && terminalPacket.kind == .finished { completedBattles += 1 }
             }
             restored?()
         }

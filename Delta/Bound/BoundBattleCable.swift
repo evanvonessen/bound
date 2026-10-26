@@ -177,9 +177,76 @@ final class BoundBattleWire: @unchecked Sendable {
 /// Only native battle/link command records enter the emulated link queues.
 /// Commands retain the cartridge's block and battle processing; no addresses or
 /// save-state blobs can be selected by a peer.
+enum BoundBattleDecisionPacket {
+    static let prefix = Data([4, 1])
+    static let recordBytes = 32
+    static let maximumRecords = 8
+    static func encode(_ records: Data) -> Data? {
+        guard valid(records) else { return nil }
+        return prefix + records
+    }
+    static func decode(_ packet: Data) -> Data? {
+        guard packet.starts(with: prefix) else { return nil }
+        let records = Data(packet.dropFirst(prefix.count))
+        return valid(records) ? records : nil
+    }
+    private static func valid(_ records: Data) -> Bool {
+        guard !records.isEmpty, records.count <= recordBytes * maximumRecords,
+              records.count % recordBytes == 0 else { return false }
+        for start in stride(from: 0, to: records.count, by: recordBytes) {
+            let ordinal = records[start..<start+4].enumerated().reduce(UInt32(0)) { $0 | UInt32($1.element) << ($1.offset * 8) }
+            guard ordinal > 0, records[start+8] < 2,
+                  [18,20,22].contains(records[start+9]),
+                  records[start+11] > 0, records[start+11] <= 16,
+                  records[start+28..<start+32].allSatisfy({ $0 == 0 }) else { return false }
+            let request=records[start+9],parent=records[start+10],size=Int(records[start+11])
+            let response=records.subdata(in:start+12..<start+12+size)
+            guard records[start+12+size..<start+28].allSatisfy({ $0 == 0 }) else { return false }
+            switch request {
+            case 18:
+                guard size==4,response[0]==33,[0,3].contains(response[1]),response[2]==0,response[3]==0,parent==255 else { return false }
+            case 20:
+                guard [4,8].contains(size),response[0]==33,response[1]==10,response[2]<4,response[3]<2,
+                      [0,255].contains(parent),response.dropFirst(4).allSatisfy({ $0<=1 }) else { return false }
+            case 22:
+                guard size==5,response[0]==34,response[1]<6,[2,255].contains(parent) else { return false }
+            default:return false
+            }
+        }
+        return true
+    }
+}
+
 enum BoundNativeCommandPacket {
     static let commandBytes=16
     static let maxCommands=13
+    struct Batch {
+        let packet:Data
+        /// Original generation/sequence/command records, retained for the
+        /// continuation history independently of network packet boundaries.
+        let records:Data
+        var commandCount:Int { records.count/20 }
+    }
+    /// Coalesce only records already available in this frame. Never delay a
+    /// decision to fill a packet or combine distinct native link generations.
+    static func batches(_ records:Data)->[Batch]? {
+        guard records.count%20==0,records.count<=32*20 else { return nil }
+        var result=[Batch](),start=0
+        while start<records.count {
+            let generation=UInt16(records[start])|UInt16(records[start+1])<<8
+            let sequence=UInt16(records[start+2])|UInt16(records[start+3])<<8
+            var end=start,commands=Data()
+            while end<records.count,commands.count/commandBytes<maxCommands {
+                let nextGeneration=UInt16(records[end])|UInt16(records[end+1])<<8
+                let nextSequence=UInt16(records[end+2])|UInt16(records[end+3])<<8
+                guard nextGeneration==generation,nextSequence==sequence &+ UInt16(commands.count/commandBytes) else { break }
+                commands.append(records.subdata(in:end+4..<end+20));end+=20
+            }
+            guard let packet=encode(commands,generation:generation,sequence:sequence) else { return nil }
+            result.append(Batch(packet:packet,records:records.subdata(in:start..<end)));start=end
+        }
+        return result
+    }
     static func encode(_ commands:Data,generation:UInt16=1,sequence:UInt16=1)->Data? {
         guard !commands.isEmpty,commands.count<=commandBytes*maxCommands,commands.count%16==0,valid(commands) else { return nil }
         guard generation>0 else { return nil }

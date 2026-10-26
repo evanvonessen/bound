@@ -119,6 +119,43 @@ void BoundBattleTradeReturn(void)
     ((void (*)(void))0x080568FD)();
 }
 
+/* A busy native block sender must retain the final trade-ready message.
+ * The original fallthrough clears it even when IsLinkTaskFinished is false,
+ * stranding a completed local animation before the linked save handshake. */
+static u8 __attribute__((noinline)) SendTradeControl(volatile u8 *trade)
+{
+    /* SendBlock's first argument is unused for this wired link profile. */
+    return ((u8 (*)(u8,const void *,u16))0x0800A449)(0,(const void *)(trade+0x74),20);
+}
+void BoundBattleTradeSend(void)
+{
+    volatile u8 *trade=*(volatile u8 *volatile *)0x02031DAC;
+    u8 pending=trade[0x93];
+    if (pending==1) {
+        if (((u8 (*)(void))0x0800A4BD)() && SendTradeControl(trade))
+            trade[0x93]=0;
+    } else if (pending==2) trade[0x93]=0;
+}
+
+static void __attribute__((noinline,used)) TradeWait(void)
+{
+    volatile u8 *trade=*(volatile u8 *volatile *)0x02031DAC;
+    BoundBattleTradeSend();
+    ((void (*)(void))0x0805383D)();
+    if (ROLE==0
+        && *(volatile u16 *)(trade+0x72)==0x0101) {
+        *(volatile u16 *)(trade+0x74)=0xDCBA;
+        if (SendTradeControl(trade))
+            *(volatile u16 *)(trade+0x72)=0x0202;
+    }
+}
+/* WaitComplete replaces the animation callback after its first send attempt.
+ * Retry there too, then keep the native task/sprite/fade tail unchanged. */
+void __attribute__((naked)) BoundBattleTradeWait(void)
+{
+    __asm__ volatile("push {r4,lr}\nbl TradeWait\nldr r3,=0x08053E69\nbx r3\n.ltorg");
+}
+
 /* RR's loss cleanup clears the link flag before the native terminal controller
  * command is emitted. Keep that command on the cable, so the guest receives its
  * native outcome. Installed only for a friendly battle; no outcome is invented.
