@@ -57,6 +57,17 @@ export async function migrate(pool) {
   }
 }
 
+// Runtime gateways can use a least-privilege role after an administrator ran
+// migrations. Verify every expected immutable migration instead of doing DDL.
+export async function verifyMigrations(pool) {
+  for (const name of migrations) {
+    const sql = adaptContract(await readFile(new URL(name, import.meta.url), 'utf8'));
+    const hash = createHash('sha256').update(sql).digest('hex');
+    const result = await pool.query('SELECT sha256 FROM public.bound_schema_migrations WHERE name=$1', [name]);
+    if (result.rows.length !== 1 || result.rows[0].sha256 !== hash) throw Error('Missing or changed migration: ' + name);
+  }
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { default: pg } = await import('pg');
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 1 });

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 // All privileged Nakama calls stay on the private Compose network.
 export class NakamaError extends Error {
-  constructor(status, code) { super('Nakama request failed'); this.status = status; this.code = code; }
+  constructor(status, code, message) { super(/^debug_[a-z_]+$/.test(message ?? '') ? message : 'Nakama request failed'); this.status = status; this.code = code; }
 }
 export function createNakamaClient(config, fetchImpl = fetch) {
   const origin = new URL(config.NAKAMA_INTERNAL_URL || config.NAKAMA_HTTP_URL || 'http://nakama:7350');
@@ -12,7 +12,7 @@ export function createNakamaClient(config, fetchImpl = fetch) {
       headers: { 'Content-Type': 'application/json', Authorization: token ? 'Bearer ' + token : 'Basic ' + Buffer.from(config.NAKAMA_SERVER_KEY + ':').toString('base64') },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }), redirect: 'error', signal: AbortSignal.timeout(10000) });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new NakamaError(response.status, data.code);
+    if (!response.ok) throw new NakamaError(response.status, data.code, data.message ?? data.error);
     return data;
   }
   async function rpc(action, body = {}) {
@@ -21,6 +21,10 @@ export function createNakamaClient(config, fetchImpl = fetch) {
   }
   return {
     rpc,
+    debug: async envelope => {
+      const response = await request('/v2/rpc/bound_debug_v1?http_key=' + encodeURIComponent(config.NAKAMA_HTTP_KEY), JSON.stringify(envelope));
+      return typeof response.payload === 'string' ? JSON.parse(response.payload) : response;
+    },
     account: id => rpc('account', { id }),
     lookup: email => rpc('lookup', { email }),
     signup: (email, password, username) => rpc('signup', { email, password, username }),

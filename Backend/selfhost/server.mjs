@@ -11,7 +11,9 @@ import { createFileService } from './files.mjs';
 import { createArchive } from './archive.mjs';
 import { createDeletion } from './deletion.mjs';
 import { createBackups } from './backups.mjs';
-import { migrate } from './migrate.mjs';
+import { migrate, verifyMigrations } from './migrate.mjs';
+import { createDebug } from './debug.mjs';
+import { localFixtureDelivery } from './local-fixture.mjs';
 
 const json = (status, error) => new Response(JSON.stringify({ error }), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 const privatePeer = value => /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(value.replace(/^::ffff:/, '')) || value === '::1';
@@ -33,14 +35,18 @@ export function httpHandler({ config, handle }) {
       const clientIP = config.TRUST_PROXY && privatePeer(peer) && typeof forwarded === 'string' ? forwarded : peer;
       headers.set('x-bound-client-ip', clientIP);
       if (url.pathname !== '/healthz') {
-        const time = Date.now(), key = clientIP + (url.pathname.endsWith('/bound_username_available') ? ':username' : ':general');
+        const localDebug = config.BOUND_DEBUG_MODE === 'local' && url.pathname === '/functions/v1/bound-debug';
+        const time = Date.now(), key = clientIP + (localDebug ? ':local-debug' : url.pathname.endsWith('/bound_username_available') ? ':username' : ':general');
         if (requests.size >= 4096) for (const [key, value] of requests) if (value.until <= time) requests.delete(key);
         let bucket = requests.get(key);
         if (!bucket || bucket.until <= time) {
           if (requests.size >= 4096) { outgoing.writeHead(429, { 'Retry-After': '60' }); outgoing.end(); return; }
           bucket = { count: 0, until: time + 60000 }; requests.set(key, bucket);
         }
-        if (++bucket.count > (key.endsWith(':username') ? 30 : 120)) { outgoing.writeHead(429, { 'Retry-After': '60' }); outgoing.end(); return; }
+        // A paired 16MiB native payload uses up to 3,730 immutable 12k chunks.
+        // This higher, still bounded quota is only the opt-in loopback DEBUG
+        // route; its handler separately requires allowlisted verified owners.
+        if (++bucket.count > (localDebug ? 6000 : key.endsWith(':username') ? 30 : 120)) { outgoing.writeHead(429, { 'Retry-After': '60' }); outgoing.end(); return; }
       }
       let size = 0;
       const bounded = new Transform({ transform(chunk, _encoding, callback) {
@@ -70,12 +76,14 @@ export async function start(env = process.env) {
   const config = configuration(env);
   const pool = new pg.Pool({ connectionString: config.DATABASE_URL, max: 8, connectionTimeoutMillis: 5000, idleTimeoutMillis: 30000 });
   pool.on('error', () => console.error('Database connection unavailable'));
-  await migrate(pool);
+  await (config.BOUND_MIGRATION_MODE === 'verify' ? verifyMigrations(pool) : migrate(pool));
   const nakama = createNakamaClient(config);
-  const auth = createAuth({ nakama, config });
+  const delivery = await localFixtureDelivery(config);
+  const auth = createAuth({ nakama, config, ...(delivery ? { fetchImpl: delivery } : {}) });
   let backups;
   const services = createServices({ pool, authenticate: auth.authenticate, config,
     withDropbox: (...args) => backups.withDropbox(...args) });
+  const debug = createDebug({ authenticate: auth.authenticate, nakama, rpc: services.rpc, config });
   const files = createFileService({ pool, authenticate: auth.authenticate, rpc: services.rpc, config });
   const archive = createArchive({ pool, authenticate: auth.authenticate, rpc: services.rpc, config });
   backups = createBackups({ pool, authenticate: auth.authenticate, rpc: services.rpc, config });
@@ -85,7 +93,7 @@ export async function start(env = process.env) {
       try { await pool.query('SELECT 1'); return new Response('{"status":"ok"}', { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }); }
       catch { return json(503, 'unavailable'); }
     }
-    return await deletion.handle(request) ?? await auth.handle(request) ?? await services.handle(request) ?? await backups.handle(request) ?? await files.handle(request) ?? await archive.handle(request) ?? json(404, 'not_found');
+    return await debug.handle(request) ?? await deletion.handle(request) ?? await auth.handle(request) ?? await services.handle(request) ?? await backups.handle(request) ?? await files.handle(request) ?? await archive.handle(request) ?? json(404, 'not_found');
   };
   const server = http.createServer({ maxHeaderSize: 16384, requestTimeout: 60000, headersTimeout: 15000 }, httpHandler({ config, handle }));
   server.maxConnections = 256;

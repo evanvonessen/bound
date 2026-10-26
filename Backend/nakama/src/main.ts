@@ -435,6 +435,7 @@ function InitModule(ctx: nkruntime.Context, logger: nkruntime.Logger, _nk: nkrun
     // Nakama extracts callback identifiers from top-level InitModule statements;
     // mode checks belong inside the callback, never in conditional registration.
     initializer.registerRpc("bound_account_v1", boundAccountRPC);
+    initializer.registerRpc("bound_debug_v1", boundDebugRPC);
     initializer.registerBeforeUpdateAccount(boundDeny);
     initializer.registerBeforeDeleteAccount(boundDeny);
     // Bound storage is exclusively server-owned. A client must not create a
@@ -444,6 +445,10 @@ function InitModule(ctx: nkruntime.Context, logger: nkruntime.Logger, _nk: nkrun
     initializer.registerRpc("bound_run_v1", boundRunRPC);
     initializer.registerRpc("bound_independent_v2", boundIndependentRPC);
     initializer.registerRpc("bound_room_v1", boundRoomRPC);
+    initializer.registerMatch("bound-debug-room-v1", {
+        matchInit: boundDebugMatchInit, matchJoinAttempt: boundDebugMatchJoinAttempt, matchJoin: boundDebugMatchJoin,
+        matchLeave: boundDebugMatchLeave, matchLoop: boundDebugMatchLoop, matchTerminate: boundDebugMatchTerminate, matchSignal: boundDebugMatchSignal
+    });
     initializer.registerMatch("bound_room_v1", {
         matchInit: boundMatchInit,
         matchJoinAttempt: boundMatchJoinAttempt,
