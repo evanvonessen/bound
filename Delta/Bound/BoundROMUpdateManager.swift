@@ -192,7 +192,7 @@ final class BoundROMUpdateManager: ObservableObject {
                     }
                     let cloud = try JSONDecoder().decode(BoundSaveClearCloudContext.self, from: pending.cloudContext)
                     NotificationCenter.default.post(name: Self.saveClearBegan, object: gameID)
-                    BoundROMUpdateActivity.close(gameID: gameID)
+                    guard BoundROMUpdateActivity.close(gameID: gameID) else { throw BoundROMUpdateError.busy }
                     try await SyncManager.shared.deleteCloudSaves(gameID: gameID, context: cloud)
                     try self.clearLocalSaves(gameID: gameID)
                     try await SyncManager.shared.removeLocalSaveSyncRecords(gameID: gameID, context: cloud)

@@ -248,11 +248,11 @@ final class BoundCooperativeProbe: @unchecked Sendable {
             for index in 0..<6 where value.faintedMask & (1 << index) != 0 {
                 if let identity=BoundSoulIdentity.read(value.party,at:index*100) { fainted.insert(identity) }
             }
-            soul?.observeCooperativeParty(value.owned,fainted:fainted,for:core)
+            let soulDurable=soul?.observeCooperativeParty(value.owned,fainted:fainted,for:core) ?? true
             if let state=soul?.read(),state.ledger?.ended == false,let error=state.error { lastError=error;return }
-            // The cartridge's owned latch is committed before clearing native
-            // mixed-team events; a friend's identity cannot become a local loss.
-            BoundVBABattleBridge.acknowledgeSoulLinkFaints()
+            // The asynchronous reducer owns the exact-ring ACK after the owned
+            // latch reaches the backing store. Do not capture a stale journal.
+            if !soulDurable { return }
         }
         guard let checkpoint,let journal,value.phase >= 3,value.phase != 8 else { return }
         // Full emulator checkpoints occur at phase/XP/faint boundaries, never
@@ -719,6 +719,7 @@ final class BoundCooperativeDoublesSession {
         checkpoint=folder.appendingPathComponent(encounter.uuidString+".state");journal=folder.appendingPathComponent(encounter.uuidString+".json")
         guard let checkpoint,let journal else { throw CocoaError(.fileWriteUnknown) }
         let running=core.state == .running;if running { _=core.pause() }
+        try soul?.prepareCheckpoint(core:core)
         defer { if running { resumeIfPermitted(core) } }
         try BoundServerMemoryFiles.saveState(core:core,to:checkpoint,gameID:gameID)
         let saved=try BoundServerMemoryFiles.read(checkpoint,gameID:gameID);guard saved.count > 1024 else { throw CocoaError(.fileReadCorruptFile) }
@@ -751,6 +752,7 @@ final class BoundCooperativeDoublesSession {
         self.snapshot=snapshot
         do {
             continuationWriteBlocked=true
+            try soul?.prepareCheckpoint(core:core)
             let transport=try wire?.freezeForContinuation() ?? Data()
             let locations=probe.recoveryLocation(),stateURL=locations.0 ?? checkpoint,journalURL=locations.1 ?? journal
             let value=BoundCooperativeContinuation(version:1,ticket:UUID(),context:context,gameID:gameID,
@@ -779,6 +781,7 @@ final class BoundCooperativeDoublesSession {
         let admitted=try MultiRedAdapter(rom:Data(contentsOf:core.game.fileURL,options:.mappedIfSafe)).profile
         guard admitted.supportsCooperativeDoubles,value.cartridge==admitted.romSHA256,
               let savedSnapshot=BoundCooperativeSnapshot(value.snapshot) else { throw CocoaError(.fileReadCorruptFile) }
+        try soul?.prepareForNativeMemoryReplacement(core:core)
         // Restore is already holding the paused core. Keep this exact admission
         // through the operation and prevent a late bind task rescanning recovery.
         profileVerification?.cancel();profileVerification=nil;gameProfile=admitted
@@ -811,6 +814,7 @@ final class BoundCooperativeDoublesSession {
             peerTransportReady=false;sentTransportReady=false;lastSent=0;lastPeer=clock();retryChannelAt=0
             cable.suspendTransport();core.deltaCore.emulatorBridge.resetInputs()
             soul?.setCooperativeBattleActive(prepared || started,for:core)
+            try soul?.refreshAfterNativeMemoryReplacement(core:core)
             _=BoundVBABattleBridge.setCooperativeGameSaveAllowed(false,for:core.game.gameSaveURL)
             status="Waiting for your friend"
             return true
@@ -1008,7 +1012,9 @@ final class BoundCooperativeDoublesSession {
               coopHash(saved).map({ String(format:"%02x",$0) }).joined()==recoveryDigest else { return }
         do {
             guard try MultiRedAdapter(rom:Data(contentsOf:core.game.fileURL,options:.mappedIfSafe)).profile == gameProfile else { throw CocoaError(.fileReadCorruptFile) }
+            try soul?.prepareForNativeMemoryReplacement(core:core)
             try BoundServerMemoryFiles.loadState(core:core,from:checkpoint,gameID:gameID)
+            try soul?.refreshAfterNativeMemoryReplacement(core:core)
             if recoveryCut?.isAdmission == true {
                 guard let restored=BoundCooperativeSnapshot(BoundVBABattleBridge.cooperativeSnapshot()),restored.phase==3,
                       let capture,restored.encounter==capture.encounter,restored.partyHash==capture.partyHash,

@@ -985,6 +985,104 @@ extension PlaybackSharingTests {
         DispatchQueue.concurrentPerform(iterations: 2) { _ in stops.record(core.stop()) }
         XCTAssertEqual(stops.count, 1); XCTAssertEqual(core.state, .stopped)
     }
+
+    func testActualGameReplacementBindsNewSoulOwnerWithoutExternalCoreRetention() throws {
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let owner = GameViewController()
+        owner.loadViewIfNeeded()
+        let probe = owner.boundCompanionForTesting.sharing.soulLink.probe
+        defer { owner.game = nil }
+        for index in 0..<3 {
+            // Deliberately keep no external strong reference to the previous
+            // core, including when assigning the same cartridge URL again.
+            owner.game = FixtureGame(fileURL: fixture, gameSaveURL: directory.appendingPathComponent("\(index).sav"))
+            let current = try XCTUnwrap(owner.emulatorCore)
+            XCTAssertNoThrow(try probe.drainBeforeMemoryReplacement(core: current),
+                "The companion must finish rebinding to the replacement core")
+        }
+    }
+
+    func testROMUpdateCloseRetainsPausedCoreAndFilesUntilObservationRecovery() throws {
+        let modelURL = try XCTUnwrap(Bundle(for: DatabaseManager.self).url(forResource: "Delta", withExtension: "momd"))
+        let model = try XCTUnwrap(NSManagedObjectModel(contentsOf: modelURL))
+        let context = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
+        context.persistentStoreCoordinator = NSPersistentStoreCoordinator(managedObjectModel: model)
+        let game = Game(entity: try XCTUnwrap(model.entitiesByName["Game"]), insertInto: context)
+        game.type = .gba; game.identifier = UUID().uuidString
+        game.filename = game.identifier + ".gba"; game.name = "Observation close fixture"
+        let cartridge = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        try FileManager.default.createDirectory(at: game.fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: cartridge, to: game.fileURL)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let owner = GameViewController()
+        owner.loadViewIfNeeded(); owner.game = game
+        let probe = owner.boundCompanionForTesting.sharing.soulLink.probe
+        defer {
+            if let current = owner.emulatorCore { _ = current.pause(); probe.configure(core: current, url: nil) }
+            owner.game = nil
+            try? FileManager.default.removeItem(at: game.fileURL)
+            try? FileManager.default.removeItem(at: game.gameSaveURL)
+            try? FileManager.default.removeItem(at: directory)
+            context.reset()
+        }
+        let core = try XCTUnwrap(owner.emulatorCore)
+        try BoundROMMultiplayerCoordinator.prepareServerCoreForSelection(core)
+        let corrupt = directory.appendingPathComponent("failed.json"), bytes = Data("{}".utf8)
+        try bytes.write(to: corrupt)
+        probe.configure(core: core, url: corrupt)
+        XCTAssertFalse(BoundROMUpdateActivity.close(gameID: game.identifier))
+        XCTAssertTrue(owner.emulatorCore === core)
+        XCTAssertEqual(core.state, .paused, "A refused close must not strand recovery in a stopped core")
+        XCTAssertTrue(BoundROMUpdateActivity.isGameOpen(gameID: game.identifier))
+        XCTAssertEqual(try Data(contentsOf: corrupt), bytes)
+        probe.configure(core: core, url: nil)
+        XCTAssertTrue(BoundROMUpdateActivity.close(gameID: game.identifier))
+        XCTAssertNil(owner.game); XCTAssertEqual(core.state, .stopped)
+    }
+
+    func testActualGameReplacementRetainsFailedSoulOwnerUntilRecovery() throws {
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let records = directory.appendingPathComponent("Soul Link")
+        try FileManager.default.createDirectory(at: records, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let replacement = directory.appendingPathComponent("replacement.gba")
+        try FileManager.default.copyItem(at: fixture, to: replacement)
+        let owner = GameViewController()
+        owner.loadViewIfNeeded()
+        owner.game = FixtureGame(fileURL: fixture, gameSaveURL: directory.appendingPathComponent("first.sav"))
+        let original = try XCTUnwrap(owner.emulatorCore)
+        let companion = owner.boundCompanionForTesting, probe = companion.sharing.soulLink.probe
+        defer {
+            if let current = owner.emulatorCore {
+                _ = current.pause()
+                probe.configure(core: current, url: nil)
+                _ = current.stop()
+            }
+            owner.game = nil
+        }
+        let corrupt = records.appendingPathComponent("failed.json")
+        try Data("{}".utf8).write(to: corrupt)
+        probe.configure(core: original, url: corrupt)
+        XCTAssertNotNil(probe.read().error)
+        owner.game = FixtureGame(fileURL: replacement, gameSaveURL: directory.appendingPathComponent("second.sav"))
+        XCTAssertTrue(owner.emulatorCore === original, "Reject replacement before upstream destroys the old core")
+        XCTAssertEqual(owner.game?.fileURL, fixture)
+        XCTAssertFalse(companion.stop(), "Closing must preserve the same failed observation owner")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: corrupt.path))
+        // This disposable fixture is repaired through the ordinary probe bind;
+        // no production recovery authority or persisted record is fabricated.
+        probe.configure(core: original, url: nil)
+        XCTAssertNil(probe.read().error)
+        owner.game = FixtureGame(fileURL: replacement, gameSaveURL: directory.appendingPathComponent("second.sav"))
+        XCTAssertFalse(owner.emulatorCore === original)
+        XCTAssertEqual(owner.game?.fileURL, replacement)
+        XCTAssertEqual(original.state, .stopped)
+    }
 }
 
 private final class BoundHeldExternalController: NSObject, GameController {
@@ -1066,6 +1164,51 @@ private final class ForegroundReconnectFixture {
 }
 
 extension PlaybackSharingTests {
+    func testInvitationIdentityPreservesLocalTransportAndRejectsStoppedSession() throws {
+        let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer { UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key) }
+        let session = FriendSharingSession(configuration: configuration(), transport: OfflineVideoTransport(), authenticatedMode: false)
+        XCTAssertNil(session.interactions.admissionIdentity?())
+        session.start()
+        XCTAssertTrue(session.joined)
+        XCTAssertNotNil(session.interactions.admissionIdentity?())
+        session.stop()
+        XCTAssertNil(session.interactions.admissionIdentity?())
+    }
+
+    func testInvitationIdentityRevalidatesCurrentOwnerRoomAndRunBeforeDisplayTick() async throws {
+        let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer { UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key) }
+        let fixture = ForegroundReconnectFixture()
+        fixture.room = UUID().uuidString.lowercased()
+        let session = authenticatedReconnectSession(fixture)
+        session.authenticatedSession = { try? fixture.identity() }
+        session.start(); defer { session.stop() }
+        try await wait(0.05)
+        XCTAssertTrue(session.joined)
+        let first = try XCTUnwrap(session.interactions.admissionIdentity?())
+        session.nativeBattle.continuationContext = .init(owner: fixture.owner, roomID: fixture.room, runID: UUID())
+        let run = try XCTUnwrap(session.interactions.admissionIdentity?())
+        XCTAssertNotEqual(first, run)
+        session.nativeBattle.continuationContext = .init(owner: fixture.owner, roomID: fixture.room, runID: UUID())
+        XCTAssertNotEqual(run, session.interactions.admissionIdentity?())
+        let owner=fixture.owner, room=fixture.room
+        fixture.owner=UUID()
+        XCTAssertNil(session.interactions.admissionIdentity?(), "Do not wait for the display loop to detect sign-out or account change")
+        fixture.owner=owner; fixture.room=UUID().uuidString
+        XCTAssertNil(session.interactions.admissionIdentity?())
+        fixture.room=room
+        session.nativeBattle.continuationContext = .init(owner: UUID(), roomID: room, runID: UUID())
+        XCTAssertNil(session.interactions.admissionIdentity?())
+        session.nativeBattle.continuationContext = .init(owner: owner, roomID: UUID().uuidString, runID: UUID())
+        XCTAssertNil(session.interactions.admissionIdentity?())
+        session.nativeBattle.continuationContext = nil
+        session.authenticatedSession = { nil }
+        XCTAssertNil(session.interactions.admissionIdentity?())
+    }
+
     func testManualAuthenticatedSessionRetriesSocketLossWithoutDiscardingInteractionOrSpectator() async throws {
         let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
         BoundMultiplayerFeatures.setEnabled(true)
@@ -1083,6 +1226,7 @@ extension PlaybackSharingTests {
         session.start(); try await wait(0.05)
         XCTAssertTrue(session.joined)
         XCTAssertTrue(session.interactions.open())
+        let consentIdentity = try XCTUnwrap(session.interactions.admissionIdentity?())
         session.watchPartner()
         transport.failConnection()
         XCTAssertFalse(session.active)
@@ -1091,12 +1235,14 @@ extension PlaybackSharingTests {
         XCTAssertFalse(session.spectatorLive)
         XCTAssertEqual(session.interactions.phase, .choosing)
         XCTAssertFalse(session.interactions.connected)
+        XCTAssertEqual(session.interactions.admissionIdentity?(), consentIdentity)
         try await wait(1.2)
         XCTAssertTrue(session.joined)
         XCTAssertEqual(fixture.tokenRequests, 2)
         XCTAssertEqual(session.configuration?.channel, "fresh-2")
         XCTAssertEqual(session.interactions.phase, .choosing)
         XCTAssertTrue(session.interactions.connected)
+        XCTAssertEqual(session.interactions.admissionIdentity?(), consentIdentity)
         XCTAssertTrue(session.watchingPartner)
 
         // A changed account is a deliberate boundary, not another network gap.

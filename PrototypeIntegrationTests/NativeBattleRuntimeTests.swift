@@ -251,6 +251,160 @@ final class NativeBattleRuntimeTests:XCTestCase {
         super.tearDown()
     }
 
+    private func soulWorkerFixture(_ name:String) throws->(EmulatorCore,URL) {
+        let root=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("Phase6SoulQA")
+        let rom=root.appendingPathComponent("current.gba"),state=root.appendingPathComponent("observer.state")
+        guard FileManager.default.fileExists(atPath:state.path) else { throw XCTSkip("Requires frozen actual VBA Soul observer fixture") }
+        let output=root.appendingPathComponent(name+"-"+UUID().uuidString)
+        try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+        let battery=output.appendingPathComponent("work.sav");try Data(repeating:0xFF,count:131072).write(to:battery)
+        let core=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
+        core.audioManager.isEnabled=false
+        try BoundROMMultiplayerCoordinator.prepareServerCoreForSelection(core)
+        XCTAssertTrue(MultiRedAdapter.restoreState(try Data(contentsOf:state)))
+        return (core,output)
+    }
+    private func soulRAM(_ core:EmulatorCore) throws->Data {
+        let memory=try XCTUnwrap(BoundGBAMemorySnapshot.capture(readMemory:{ core.deltaCore.emulatorBridge.readMemory?(at:$0,size:$1) }))
+        return Data(memory.workRAM)+Data(memory.internalRAM)
+    }
+    func testActualSoulFrameFencePreservesRAMCompletesPauseAndRejectsReplacement() async throws {
+        continueAfterFailure=false
+        let (core,_)=try soulWorkerFixture("frame-fence")
+        defer { _=core.pause();_=core.stop() }
+        XCTAssertTrue(BoundVBABattleBridge.installSoulLink())
+        let token=UUID().uuidString,epoch=BoundVBABattleBridge.claimSoulFrameOwner(token,gameURL:core.game.fileURL)
+        XCTAssertNotEqual(epoch,0);XCTAssertTrue(BoundVBABattleBridge.setSoulFrameBlocked(true,owner:token,generation:epoch))
+        let before=try soulRAM(core),callback=expectation(description:"Delta callbacks continue through native fence"),once=NativeFixtureCompletion()
+        core.updateHandler={ _ in if once.claim() { callback.fulfill() } }
+        XCTAssertTrue(core.resume());await fulfillment(of:[callback],timeout:2)
+        XCTAssertTrue(core.pause(),"Pause must complete without waiting for a native CPU frame")
+        XCTAssertEqual(try soulRAM(core),before)
+        XCTAssertTrue(core.stop())
+        let (replacement,_)=try soulWorkerFixture("frame-fence-replacement")
+        defer { _=replacement.pause();_=replacement.stop() }
+        let nextToken=UUID().uuidString,nextEpoch=BoundVBABattleBridge.claimSoulFrameOwner(nextToken,gameURL:replacement.game.fileURL)
+        XCTAssertNotEqual(nextEpoch,epoch)
+        XCTAssertFalse(BoundVBABattleBridge.setSoulFrameBlocked(true,owner:token,generation:epoch))
+        XCTAssertTrue(BoundVBABattleBridge.setSoulFrameBlocked(true,owner:nextToken,generation:nextEpoch))
+        XCTAssertFalse(BoundVBABattleBridge.setSoulFrameBlocked(false,owner:token,generation:epoch))
+        XCTAssertTrue(BoundVBABattleBridge.isSoulFrameBlocked(forOwner:nextToken,generation:nextEpoch))
+        XCTAssertTrue(BoundVBABattleBridge.setSoulFrameBlocked(false,owner:nextToken,generation:nextEpoch))
+        let original=try soulRAM(replacement)
+        XCTAssertTrue(replacement.resume());try await Task.sleep(for:.milliseconds(100));XCTAssertTrue(replacement.pause())
+        XCTAssertNotEqual(try soulRAM(replacement),original,"A stale fence must not stop the replacement cartridge")
+    }
+    func testActualSoulFailedPersistenceRetainsFaintUntilPausedRetryAndExplicitResume() async throws {
+        continueAfterFailure=false
+        let (core,output)=try soulWorkerFixture("writer-recovery")
+        let directory=output.appendingPathComponent("journal"),backup=output.appendingPathComponent("preserved-journal")
+        let probe=BoundSoulProbe(),hostProbe=BoundROMMultiplayerProbe()
+        XCTAssertTrue(probe.configure(core:core,url:directory.appendingPathComponent("run.json")))
+        probe.setVerified(true);probe.setPreviewEnabled(true)
+        hostProbe.configure(core:core);hostProbe.setVerified(true)
+        var host=BoundROMHostState();host.enabled=true;host.ended=true;host.status = .complete;hostProbe.publish(host);hostProbe.receive(core)
+        core.updateHandler={ core in BoundFrameMemory.perform { hostProbe.receive(core);probe.receive(core) } }
+        defer { _=core.pause();BoundVBABattleBridge.closeSoulLink();_=core.stop() }
+        try probe.prepareCheckpoint(core:core)
+        try probe.startPreparedRun(run:UUID(),binding:String(repeating:"f",count:64))
+        try probe.prepareCheckpoint(core:core)
+        let starter=try XCTUnwrap(probe.read().ledger?.records.first)
+        let beforeRestart=probe.read().ledger,restartState=MultiRedAdapter.captureState()
+        try probe.prepareForNativeMemoryReplacement(core:core)
+        XCTAssertTrue(core.stop());XCTAssertTrue(core.start());XCTAssertTrue(core.pause())
+        XCTAssertTrue(MultiRedAdapter.restoreState(restartState))
+        try probe.refreshAfterNativeMemoryReplacement(core:core)
+        XCTAssertEqual(probe.read().ledger,beforeRestart,"Same-core restart must retain the worker's permanent facts")
+        try probe.prepareCheckpoint(core:core)
+        try FileManager.default.moveItem(at:directory,to:backup)
+        try Data("deliberate disposable write failure".utf8).write(to:directory)
+        let writing=expectation(description:"Immutable write is in flight"),release=DispatchSemaphore(value:0),once=NativeFixtureCompletion()
+        defer { release.signal();probe.qaSetPersistenceInterceptor(nil) }
+        probe.qaSetPersistenceInterceptor {
+            if once.claim() { writing.fulfill();release.wait() }
+        }
+        XCTAssertTrue(BoundVBABattleBridge.qaStartSoulCheck());XCTAssertTrue(core.resume())
+        await fulfillment(of:[writing],timeout:3)
+        XCTAssertTrue(core.pause(),"A slow writer cannot block Delta's pause transition")
+        let awaitingWrite=try soulRAM(core)
+        XCTAssertNil(probe.read().error,"A brief critical-fact fence is separate from a failure pause")
+        XCTAssertTrue(core.resume());try await Task.sleep(for:.milliseconds(100));XCTAssertTrue(core.pause())
+        XCTAssertEqual(try soulRAM(core),awaitingWrite,"A lost mon cannot act in another native frame while its write is pending")
+        XCTAssertThrowsError(try probe.prepareCheckpoint(core:core,timeout:0.02))
+        XCTAssertEqual(core.state,.paused)
+        release.signal();probe.qaSetPersistenceInterceptor(nil)
+        XCTAssertThrowsError(try probe.prepareCheckpoint(core:core,timeout:1),"The real disposable backing-store failure remains")
+        for _ in 0..<200 {
+            if core.state == .paused,probe.read().error != nil { break }
+            try await Task.sleep(for:.milliseconds(25))
+        }
+        XCTAssertEqual(core.state,.paused);XCTAssertNotNil(probe.read().error)
+        XCTAssertFalse(probe.read().ledger?.dead.contains(starter.slot)==true,"Uncommitted loss cannot be published as durable")
+        let pending=try XCTUnwrap(BoundVBABattleBridge.soulLinkSnapshot()["faints"] as? Data)
+        XCTAssertFalse(pending.isEmpty);XCTAssertFalse(BoundVBABattleBridge.acknowledgeSoulLinkFaints(matching:Data()))
+        let frozen=try soulRAM(core)
+        XCTAssertTrue(core.resume());try await Task.sleep(for:.milliseconds(100))
+        if core.state == .running { XCTAssertTrue(core.pause()) }
+        XCTAssertEqual(core.state,.paused)
+        XCTAssertEqual(try soulRAM(core),frozen,"Explicit resume cannot cross a failed storage fence")
+        XCTAssertGreaterThan(probe.observationMetrics()["blockedCallbacks"] ?? 0,0)
+        try FileManager.default.removeItem(at:directory);try FileManager.default.moveItem(at:backup,to:directory)
+        BoundVBABattleBridge.qaFinishSoulCheck()
+        try probe.retryPendingPersistence(core:core)
+        XCTAssertEqual(core.state,.paused,"Recovery must not resume gameplay")
+        XCTAssertNil(probe.read().error);XCTAssertTrue(probe.read().ledger?.dead.contains(starter.slot)==true)
+        XCTAssertTrue((BoundVBABattleBridge.soulLinkSnapshot()["faints"] as? Data)?.isEmpty==true)
+        XCTAssertEqual(BoundVBABattleBridge.playerHP().first?.intValue,0)
+        let saved=try JSONDecoder().decode(BoundSoulLedger.self,from:Data(contentsOf:directory.appendingPathComponent("run.json")))
+        XCTAssertTrue(saved.dead.contains(starter.slot))
+        let recovered=try soulRAM(core)
+        XCTAssertTrue(core.resume());try await Task.sleep(for:.milliseconds(100));XCTAssertTrue(core.pause())
+        XCTAssertNotEqual(try soulRAM(core),recovered)
+        try probe.prepareCheckpoint(core:core)
+    }
+    func testSoulRingAcknowledgementRejectsChangedOverflowAndMalformedRings() {
+        let checks=BoundVBABattleBridge.qaSoulFaintAcknowledgementChecks()
+        for key in ["stale","wrong","overflow","count","exact"] { XCTAssertEqual(checks[key] as? Bool,true,key) }
+    }
+    func testActualSoulEndedRunReleasesOutstandingCriticalFence() async throws {
+        continueAfterFailure=false
+        for replaceState in [false,true] {
+        let (core,output)=try soulWorkerFixture("ended-fence")
+        let probe=BoundSoulProbe(),hostProbe=BoundROMMultiplayerProbe()
+        XCTAssertTrue(probe.configure(core:core,url:output.appendingPathComponent("run.json")))
+        probe.setVerified(true);probe.setPreviewEnabled(true)
+        hostProbe.configure(core:core);hostProbe.setVerified(true)
+        var host=BoundROMHostState();host.enabled=true;host.ended=true;host.status = .complete
+        hostProbe.publish(host);hostProbe.receive(core)
+        core.updateHandler={ core in BoundFrameMemory.perform { hostProbe.receive(core);probe.receive(core) } }
+        defer { _=core.pause();BoundVBABattleBridge.closeSoulLink();_=core.stop() }
+        try probe.prepareCheckpoint(core:core)
+        try probe.startPreparedRun(run:UUID(),binding:String(repeating:"e",count:64))
+        try probe.prepareCheckpoint(core:core)
+        let writing=expectation(description:"Critical write held before endRun"),release=DispatchSemaphore(value:0),once=NativeFixtureCompletion()
+        defer { release.signal();probe.qaSetPersistenceInterceptor(nil) }
+        probe.qaSetPersistenceInterceptor { if once.claim() { writing.fulfill();release.wait() } }
+        XCTAssertTrue(BoundVBABattleBridge.qaStartSoulCheck());XCTAssertTrue(core.resume())
+        await fulfillment(of:[writing],timeout:3);XCTAssertTrue(core.pause())
+        let frozen=try soulRAM(core)
+        XCTAssertTrue(core.resume());try await Task.sleep(for:.milliseconds(75));XCTAssertTrue(core.pause())
+        XCTAssertEqual(try soulRAM(core),frozen)
+        release.signal();probe.qaSetPersistenceInterceptor(nil)
+        try probe.endRun();probe.setPreviewEnabled(false)
+        XCTAssertTrue(probe.read().ledger?.ended==true)
+        if replaceState {
+            let state=MultiRedAdapter.captureState()
+            try probe.prepareForNativeMemoryReplacement(core:core)
+            XCTAssertTrue(MultiRedAdapter.restoreState(state))
+            try probe.refreshAfterNativeMemoryReplacement(core:core)
+        }
+        BoundVBABattleBridge.qaFinishSoulCheck()
+        let ended=try soulRAM(core)
+        XCTAssertTrue(core.resume());try await Task.sleep(for:.milliseconds(100));XCTAssertTrue(core.pause())
+        XCTAssertNotEqual(try soulRAM(core),ended,"A durable ended run must release the old critical fence even without preview")
+        }
+    }
+
     func testCreateSoulObservationFixture() async throws {
         continueAfterFailure=false
         let root=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("Phase6SoulQA")
@@ -326,7 +480,10 @@ final class NativeBattleRuntimeTests:XCTestCase {
                         "p99_ns":Double(s[n*99/100]),"max_ns":Double(s[n-1]),"mean_ns":Double(s.reduce(0,+))/Double(n)]
                 }
                 for _ in 0..<128 { BoundFrameMemory.perform { probe.receive(core) } }
+                var observationErrors=0
+                do { try probe.prepareCheckpoint(core:core) } catch { observationErrors+=1 }
                 let before=resident();var peak=before,invalid=0,native=[UInt64](),full=[UInt64]()
+                var drains=[UInt64]()
                 native.reserveCapacity(4096);full.reserveCapacity(4096)
                 var initialPayload=Data(),finalPayload=Data()
                 func payload(_ value:[String:Any])->Data {
@@ -342,14 +499,24 @@ final class NativeBattleRuntimeTests:XCTestCase {
                     native.append(DispatchTime.now().uptimeNanoseconds-start)
                     if index%256==255 { peak=max(peak,resident()) }
                 }
+                let metricsBefore=probe.observationMetrics()
                 for index in 0..<4096 {
                     let start=DispatchTime.now().uptimeNanoseconds
                     BoundFrameMemory.perform { probe.receive(core) }
                     full.append(DispatchTime.now().uptimeNanoseconds-start)
+                    let drain=DispatchTime.now().uptimeNanoseconds
+                    do { try probe.drainBeforeMemoryReplacement(core:core) } catch { observationErrors+=1 }
+                    drains.append(DispatchTime.now().uptimeNanoseconds-drain)
                     if index%256==255 { peak=max(peak,resident()) }
                 }
+                let metricsAfter=probe.observationMetrics()
+                let metrics=metricsAfter.mapValues { $0 }.reduce(into:[String:UInt64]()) { result,pair in
+                    result[pair.key]=pair.key=="highWater" || pair.key=="queued" ? pair.value:pair.value-(metricsBefore[pair.key] ?? 0)
+                }
+                do { try probe.prepareCheckpoint(core:core) } catch { observationErrors+=1 }
                 BoundFrameMemory.perform { finalPayload=payload(BoundVBABattleBridge.soulLinkSnapshot()) }
                 continuation.resume(returning:["native":summary(native),"fullObserver":summary(full),"residentStart":before,
+                    "workerDrainOutsideCallback":summary(drains),"workerMetrics":metrics,"observationErrors":observationErrors,
                     "residentPeakGrowth":peak-before,"invalidSnapshots":invalid,"payloadUnchanged":initialPayload==finalPayload,
                     "payloadSHA256":SHA256.hash(data:initialPayload).map { String(format:"%02x",$0) }.joined(),
                     "partyCount":probe.read().mons.filter { $0.hp != nil }.count,"observedMonCount":probe.read().mons.count])
@@ -361,9 +528,40 @@ final class NativeBattleRuntimeTests:XCTestCase {
         report["warmupCallbacks"]=128;report["label"]=label
         let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
         report["ledgerSHA256"]=SHA256.hash(data:try encoder.encode(probe.read().ledger)).map { String(format:"%02x",$0) }.joined()
+        var captureTimes=[UInt64](),cutTimes=[UInt64](),packageTimes=[UInt64](),checkpointDrains=[UInt64](),packageBytes=0
+        for _ in 0..<64 {
+            let drainStart=DispatchTime.now().uptimeNanoseconds
+            try probe.prepareCheckpoint(core:core)
+            let start=DispatchTime.now().uptimeNanoseconds
+            checkpointDrains.append(start-drainStart)
+            let state=MultiRedAdapter.captureState(),battery=BoundVBABattleBridge.captureServerBattery()
+            let captured=DispatchTime.now().uptimeNanoseconds
+            let ledger=probe.read().ledger,events=probe.sharedEvents(),files=BoundServerMemoryFiles.snapshot(gameID:gameID)
+            let cut=DispatchTime.now().uptimeNanoseconds
+            let package:[String:Data] = ["state":state,"battery":battery,"ledger":try encoder.encode(ledger),
+                "events":try encoder.encode(events),"files":try encoder.encode(files)]
+            let bytes=try encoder.encode(package)
+            _=SHA256.hash(data:bytes);packageBytes=bytes.count
+            let encoded=DispatchTime.now().uptimeNanoseconds
+            captureTimes.append(captured-start);cutTimes.append(cut-captured);packageTimes.append(encoded-cut)
+        }
+        func componentSummary(_ samples:[UInt64])->[String:Double] {
+            let s=samples.sorted(),n=s.count
+            return ["samples":Double(n),"p50_ns":Double(s[n/2]),"p95_ns":Double(s[n*95/100]),
+                "p99_ns":Double(s[n*99/100]),"mean_ns":Double(s.reduce(0,+))/Double(n)]
+        }
+        report["checkpointComponents"]=["nativeStateAndBattery":componentSummary(captureTimes),
+            "workerFinalCutDrain":componentSummary(checkpointDrains),
+            "ledgerEventsAndMemoryCut":componentSummary(cutTimes),"postCaptureJSONAndSHA":componentSummary(packageTimes)]
+        report["checkpointPackageBytes"]=packageBytes
+        report["checkpointScope"]="Paused exact VBA component benchmark; excludes pause scheduling, audio/UI and authenticated coordinator. Packaging was already outside managed pause before this work."
         try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("measurements.json"))
         NSLog("Soul observation performance %@",String(describing:report))
         XCTAssertEqual(result["invalidSnapshots"] as? Int,0)
+        XCTAssertEqual(result["observationErrors"] as? Int,0)
+        let metrics=try XCTUnwrap(result["workerMetrics"] as? [String:UInt64])
+        XCTAssertEqual(metrics["callbacks"],4096);XCTAssertEqual(metrics["blockedCallbacks"],0)
+        XCTAssertEqual(metrics["rejected"],0);XCTAssertEqual(metrics["admitted"],metrics["reduced"])
         XCTAssertEqual(result["partyCount"] as? Int,1)
         XCTAssertGreaterThanOrEqual(result["observedMonCount"] as? Int ?? 0,1)
         XCTAssertEqual(result["payloadUnchanged"] as? Bool,true)
@@ -1039,6 +1237,8 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertEqual(try Data(contentsOf: journal), friendlyJournal, "Friendly battles must not rewrite the durable run journal")
         let retainedFaints = try XCTUnwrap(BoundVBABattleBridge.soulLinkSnapshot()["faints"] as? Data)
         XCTAssertEqual(retainedFaints, starter.identity.bytes, "Quarantine must not acknowledge the native faint buffer before recovery")
+        XCTAssertFalse(BoundVBABattleBridge.acknowledgeSoulLinkFaints(matching:Data()))
+        XCTAssertEqual(BoundVBABattleBridge.soulLinkSnapshot()["faints"] as? Data,retainedFaints)
         BoundVBABattleBridge.qaFinishSoulCheck()
         try core.load(DeltaCore.SaveState(fileURL: friendlyBefore, gameType: .gba))
         probe.setFriendlyBattleActive(false, for: core)

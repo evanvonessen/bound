@@ -581,6 +581,11 @@ final class BoundNativeBattleSession {
         resumeAcknowledged=false;sentResumeReady=false;lastControl=0;lastPeerControl=ProcessInfo.processInfo.systemUptime
         interactions?.activityProgress(activity == .trade ? "Connecting trade…" : "Connecting battle…",playing:false)
         guard core.pause(),BoundVBABattleBridge.verifyBattleEntryReady() else { fail("Game is not ready for a link \(activity.rawValue)"); return }
+        do { try soulProbe?.prepareCheckpoint(core:core) }
+        catch {
+            lastFailure="Soul Link needs recovery before this activity. Keep the game paused."
+            _=emit(.abort);finish(message:lastFailure,resume:false,terminal:.abort);return
+        }
         if activity == .battle { soulProbe?.setFriendlyBattleActive(true, for:core) }
         if activity == .trade { core.rate=core.deltaCore.supportedRates.lowerBound }
         do {
@@ -688,6 +693,7 @@ final class BoundNativeBattleSession {
         }
         do {
             continuationWriteBlocked=true
+            try soulProbe?.prepareCheckpoint(core:core)
             let transport=try wire.freezeForContinuation()
             let cartridge=Self.hash(try Data(contentsOf:core.game.fileURL,options:.mappedIfSafe))
             let value=BoundNativeContinuation(version:1,ticket:UUID(),context:context,gameID:gameID,
@@ -719,6 +725,7 @@ final class BoundNativeBattleSession {
         guard context.runID==nil || value.heads?.permits(serverHead)==true else { throw BoundContinuationError.serverChanged }
         let cartridge=Self.hash(try Data(contentsOf:core.game.fileURL,options:.mappedIfSafe))
         guard value.rom == (try contractSHA256(cartridge:cartridge)), value.cartridge==cartridge else { throw CocoaError(.fileReadCorruptFile) }
+        try soulProbe?.prepareForNativeMemoryReplacement(core:core)
         timer?.invalidate();timer=nil;recovery=nil;probe.configure(core:nil)
         BoundVBABattleBridge.close()
         do {
@@ -752,6 +759,7 @@ final class BoundNativeBattleSession {
             resumeAcknowledged=false;sentResumeReady=false;lastControl=0;lastChannelAttempt=0;lastPeerControl=ProcessInfo.processInfo.systemUptime
             probe.suspendTransport();core.deltaCore.emulatorBridge.resetInputs()
             if activity == .battle { soulProbe?.setFriendlyBattleActive(true,for:core) }
+            try soulProbe?.refreshAfterNativeMemoryReplacement(core:core)
             interactions?.restoreActivity(activity,id:value.id,initiator:initiator)
             startTimer()
             return true
@@ -1053,6 +1061,11 @@ final class BoundNativeBattleSession {
             }
         }
         guard claimContinuation() else { pauseForContinuation();return }
+        if let core {
+            if core.state == .running { _=core.pause() }
+            do { try soulProbe?.drainBeforeMemoryReplacement(core:core) }
+            catch { pauseForContinuation();interactions?.activityProgress("Soul Link needs recovery. Keep the game paused.",playing:played);return }
+        }
         pendingFinish=nil
         pendingSettlement=activeContinuationContext.flatMap { try? continuationStore.settlement(context:$0,gameID:gameID) }
         retired[finishedID]=terminalPacket
@@ -1080,10 +1093,13 @@ final class BoundNativeBattleSession {
         var recovered=backupURL==nil
         if let backupURL,core.state != .stopped {
             do {
+                try soulProbe?.prepareForNativeMemoryReplacement(core:core)
                 try BoundServerMemoryFiles.loadState(core:core,from:backupURL,gameID:gameID)
                 let check=BoundVBABattleBridge.advanceAndObserve()
                 recovered=(check["callback"] as? Int)==0x080565B5 && (check["battle"] as? Bool)==false && BoundVBABattleBridge.verifyBattleReady()
                 if recovered {
+                    if activity == .battle { soulProbe?.setFriendlyBattleActive(false,for:core) }
+                    try soulProbe?.refreshAfterNativeMemoryReplacement(core:core)
                     didRestore=true
                     // Remove the recovery instruction before its state. A crash
                     // between removals leaves an inert orphan, not a stale restore.
@@ -1111,7 +1127,14 @@ final class BoundNativeBattleSession {
         // or destroys exchanged Pokémon. Interrupted trades boot the native save.
         let finished=localFinished && peerFinished && observation?.returned == true
         var success=finished
-        if !finished { success=core.stop() && core.start() }
+        if !finished {
+            do {
+                try soulProbe?.prepareForNativeMemoryReplacement(core:core)
+                guard core.stop(),core.start(),core.pause() else { throw CocoaError(.fileReadUnknown) }
+                try soulProbe?.refreshAfterNativeMemoryReplacement(core:core)
+                success=true
+            } catch { success=false }
+        }
         if activity == .trade { core.rate=originalRate }
         if success {
             if finished {
@@ -1186,6 +1209,7 @@ final class BoundNativeBattleSession {
         if core.state == .running { _=core.pause() }
         probe.configure(core:nil); BoundVBABattleBridge.close()
         do {
+            try soulProbe?.prepareForNativeMemoryReplacement(core:core)
             let bytes=try BoundServerMemoryFiles.read(recovery.state,gameID:gameID)
             guard Self.hash(bytes)==recovery.digest else { throw CocoaError(.fileReadCorruptFile) }
             _=try BoundPlayerROMProfile(rom:Data(contentsOf:core.game.fileURL,options:.mappedIfSafe))
@@ -1195,8 +1219,9 @@ final class BoundNativeBattleSession {
                     guard core.start(),core.pause(),BoundVBABattleBridge.restoreServerBattery(battery) else { throw CocoaError(.fileReadUnknown) }
                 } else {
                     try battery.write(to:core.game.gameSaveURL,options:.atomic)
-                    guard core.start() else { throw CocoaError(.fileReadUnknown) }
+                    guard core.start(),core.pause() else { throw CocoaError(.fileReadUnknown) }
                 }
+                try soulProbe?.refreshAfterNativeMemoryReplacement(core:core)
                 try BoundServerMemoryFiles.remove(recovery.journal,gameID:gameID)
                 try? BoundServerMemoryFiles.remove(recovery.state,gameID:gameID)
                 self.recovery=nil; timer?.invalidate(); timer=nil
@@ -1208,6 +1233,8 @@ final class BoundNativeBattleSession {
             try BoundServerMemoryFiles.loadState(core:core,from:recovery.state,gameID:gameID)
             let check=BoundVBABattleBridge.advanceAndObserve()
             guard (check["callback"] as? Int)==0x080565B5,(check["battle"] as? Bool)==false else { throw CocoaError(.fileReadCorruptFile) }
+            if recovery.friendlyBattle { soulProbe?.setFriendlyBattleActive(false,for:core) }
+            try soulProbe?.refreshAfterNativeMemoryReplacement(core:core)
             try BoundServerMemoryFiles.remove(recovery.journal,gameID:gameID)
             try? BoundServerMemoryFiles.remove(recovery.state,gameID:gameID)
             self.recovery=nil; timer?.invalidate(); timer=nil

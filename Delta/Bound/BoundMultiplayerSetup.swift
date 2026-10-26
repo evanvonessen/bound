@@ -79,11 +79,15 @@ struct BoundMultiplayerSetupView: View {
         NavigationStack {
             Form {
                 if let message = coordinator.serverMenuError { Text(message).foregroundStyle(.red) }
-                if coordinator.hasUnconfirmedServerSave {
+                if coordinator.hasUnconfirmedServerSave && !coordinator.observationRecoveryRequired {
                     Button("Retry Save") { Task { await coordinator.retryFinalServerSave() } }
                     Button("Use Last Server Save", role: .destructive) { confirmingDiscard = true }
                 }
-                if !multiplayerEnabled {
+                if coordinator.observationRecoveryRequired {
+                    Button("Retry") { Task { await coordinator.retryObservationRecovery() } }
+                        .disabled(!multiplayerEnabled)
+                        .accessibilityIdentifier("bound.multiplayer.retry-observations")
+                } else if !multiplayerEnabled {
                     Text("Enable Experimental Multiplayer in Settings to play.")
                 } else if stage == 0 {
                     Section("Server Saves") {
@@ -149,7 +153,7 @@ struct BoundMultiplayerSetupView: View {
                 ToolbarItem(placement: .primaryAction) { Button("Settings", action: openSettings) }
                 ToolbarItem(placement: .cancellationAction) {
                     if stage > 0 { Button("Back") { stage = 0; profileRun = nil } }
-                    else { Button("Close", action: close) }
+                    else { Button("Close", action: close).disabled(coordinator.observationRecoveryRequired) }
                 }
             }
         }

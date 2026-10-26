@@ -255,3 +255,75 @@ multichoice fade/delay gates, so the first accepted A/B edge is handled. All 28
 invitation tests passed, including actual VBA pending-frame progress, explicit
 menu opening, cancellation/expiry cleanup and notification hit testing. Exact
 native instruction probes and 23 compiled readiness checks also passed.
+
+## Observation worker and recovery
+
+The frame callback captures immutable native observations. A bounded FIFO feeds
+one reducer and a separate serialized writer; pending writes can coalesce only
+because their replacement includes every accepted fact and history entry.
+There are at most 32 queued observations plus one retained pressure handoff.
+Timeouts and failed writes retain their inputs, and a computed model is never
+published as a successful storage receipt. Existing managed games still write
+to their existing in-memory store; this receipt does not establish server
+durability or advance the confirmed server head.
+
+Critical acquisition and faint changes fence the next native frame until the
+matching receipt is available and the existing safe native policy is applied.
+The Bound-owned bridge fence preserves Delta callbacks and pause completion;
+it does not change upstream core code or pins. Owner identity, cartridge load
+generation and ROM identity prevent a stale fence from controlling a replacement
+core. Faint acknowledgement compares the complete native ring before clearing
+it. Storage failure and queue pressure keep the affected execution paused.
+
+Checkpoint capture drains accepted observations, applies the event boundary,
+and drains again while paused before copying state, managed memory and history.
+Only immutable copies are encoded or hashed after resume. Native battle and
+cooperative continuation captures use the same ordering; teardown and run
+replacement drain the old owner before changing memory or core ownership.
+
+The host Retry action retains the paused execution and its pending facts.
+Unchanged account credentials and retained authority permit a local retry
+offline. Reauthentication requires a fresh server check of the exact owner,
+run, epoch and known checkpoint head; a lost upload response is recognized only
+by its exact pending receipt. Unknown newer heads remain conflicts. Newly
+received permanent losses are applied while paused, and an authenticated Game
+Over transfers to the existing terminal flow. Resume remains subject to the
+normal foreground, UI and admitted-activity guards.
+
+Actual VBA tests cover a slow writer followed by a real backing-store failure,
+unchanged RAM while a faint receipt is pending, timeout, retained native faint
+records, paused retry, and permanent HP enforcement before explicit resume.
+They also cover replacement-core rejection of stale owners, same-core restart,
+ending a run during a critical hold, and paused state replacement without a
+restart. The focused gate passed all 90 tests. The broad hosted suite passed
+425 of 427 tests, with the exclusive timing opt-in and Mac launch-mode cases
+explicitly skipped. It includes refused updater-close and repeated same-ROM
+core replacement regressions. All four generated-source checks and the
+unsigned Release iPhone build passed; the bundled ROM remains exactly
+`7e170ed0d868cc3353552523c0a417ae600c6c24b0f7c28ff2781925bf6b9ca8`.
+Exact authenticated terminal-response interleavings still need the later
+paired coordinator integration fixture.
+
+Fresh-process measurements use the same frozen populated VBA state and match
+the ROM, state, observed payload and ledger hashes. The worker run drains
+outside each timed callback, recording 4,096 callbacks, 273 admitted/reduced
+observations and zero blocked, rejected or erroneous observations.
+
+| Simulator component | Original observer | Copy/policy cache | Worker |
+| --- | ---: | ---: | ---: |
+| Callback median | 31.625 µs | 16.625 µs | 9.375 µs |
+| Callback p95 | 166.459 µs | 137.041 µs | 12.542 µs |
+| Peak resident growth | 81.49 MiB | 25.70 MiB | 64.23 MiB |
+
+Moving work off the callback does not eliminate it: the separately measured
+worker drain has a median of 11.208 µs and p95 of 170.375 µs. The worker uses more
+memory than the copy-only version; bounded queues do not by themselves prove a
+long-session memory plateau. These are paused component measurements, not full
+upstream-app or phone playback results.
+
+The 64-sample checkpoint component measurement adds a median 0.102 ms final
+worker drain. Native state/battery capture is 4.982 ms versus 4.670 ms before
+the worker, so this measurement does not establish a shorter checkpoint pause.
+JSON/hashing was already outside the managed pause before this work. The
+measurement excludes pause scheduling, UI/audio and the authenticated
+coordinator; the later paired acceptance gate must exercise that complete path.

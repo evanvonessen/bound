@@ -257,7 +257,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
         }
         memorials = entries
     }
-    mutating func observe(_ mons: [BoundSoulMon], registering: Bool, fainted: Set<BoundSoulIdentity>) throws {
+    mutating func observe(_ mons: [BoundSoulMon], registering: Bool, fainted: Set<BoundSoulIdentity>,at date:Date=Date()) throws {
         let previousDeaths = dead
         for mon in mons {
             if let index = records.firstIndex(where: { $0.identities.contains(mon.identity) }) {
@@ -284,7 +284,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
                 dead.insert(record.slot)
             }
         }
-        recordDeaths(previous: previousDeaths)
+        recordDeaths(previous: previousDeaths,at:date)
         guard valid else { throw Error.capacity }
     }
     enum Error: Swift.Error { case capacity, corrupt }
@@ -488,303 +488,549 @@ struct BoundSoulEncounter: Identifiable, Equatable {
 /// Only main updates peer tombstones; neither networking callbacks nor SwiftUI accesses live RAM.
 final class BoundSoulProbe: @unchecked Sendable {
     struct Snapshot: Sendable {
-        var ready = false
-        var mons: [BoundSoulMon] = []
-        var team: BoundSoulTeam?
-        var teamCapturedAt: TimeInterval?
-        var ledger: BoundSoulLedger?
-        var error: String?
-        var activeDenied = false
-        var partyWipedOut = false
+        var ready=false
+        var mons:[BoundSoulMon]=[]
+        var team:BoundSoulTeam?
+        var teamCapturedAt:TimeInterval?
+        var ledger:BoundSoulLedger?
+        var error:String?
+        var activeDenied=false
+        var partyWipedOut=false
     }
-    let timeline = BoundRunTimeline()
-    private let lock = NSRecursiveLock()
-    private var previewEnabled = false
-    private var verified = false
-    private var nativeObservationAllowed = true
-    private var friendlyBattleCoreID: ObjectIdentifier?
-    private var cooperativeBattleCoreID: ObjectIdentifier?
-    private var coreID: ObjectIdentifier?
-    private var url: URL?
-    private var gameID = ""
-    // Mutations publish this value only after persistence succeeds. Configure
-    // and continuation reload also invalidate the derived native policy.
-    private var ledger: BoundSoulLedger? { didSet { deniedPolicy = nil } }
-    private var deniedPolicy: Data?
-    private var installed = false
-    private var reachedField = false
-    private var frame = 0
-    private var snapshot = Snapshot()
-    private var lastPolicy = Data()
-    private var lastBoxes = Data()
-    private var cachedBoxes: [BoundSoulMon] = []
-    private func policyBytes(for value: BoundSoulLedger) -> Data {
+    private struct Observation: Equatable, Sendable {
+        let generation:UUID,frame:Int
+        let date=Date(),uptime=ProcessInfo.processInfo.systemUptime
+        let ready:Bool,battle:Bool,overflow:Bool,cooperative:Bool
+        let party:Data,boxes:Data,faints:Data,battleFaints:Data,nativeRing:Data
+        let outcome:Int,flags:UInt32
+        func sameContents(as other:Self)->Bool {
+            generation==other.generation && ready==other.ready && battle==other.battle && overflow==other.overflow
+                && cooperative==other.cooperative && party==other.party && boxes==other.boxes && faints==other.faints
+                && battleFaints==other.battleFaints && nativeRing==other.nativeRing && outcome==other.outcome && flags==other.flags
+        }
+    }
+    private struct FileAction: Sendable {
+        let id=UUID(),source:URL?,destination:URL,data:Data?
+    }
+    private struct Candidate: Sendable {
+        let generation:UUID,url:URL?,gameID:String,ledger:BoundSoulLedger?,timeline:Data
+        let snapshot:Snapshot,ring:Data?,policy:Data,actions:[FileAction],writeLedger:Bool,writeTimeline:Bool,observation:Observation?
+    }
+    private struct Owner {
+        var generation=UUID(),coreID:ObjectIdentifier?
+        var preview=false,verified=false,nativeAllowed=true,installed=false,blocked=false,criticalGate=false
+        var friendly:ObjectIdentifier?,cooperative:ObjectIdentifier?
+        var frame=0,nativeGeneration:UInt=0
+        var lastPolicy=Data(),lastInput:Observation?
+        var replacementVerification:Bool?
+        var callbacks:UInt64=0,blockedCallbacks:UInt64=0,criticalCallbacks:UInt64=0
+    }
+    let timeline=BoundRunTimeline()
+    private let lock=NSLock()
+    private var owner=Owner(),published=Snapshot(),receipt:Candidate?
+    private weak var core:EmulatorCore?
+    // Everything below belongs to the compute queue. Only immutable candidates
+    // cross to persistence; frame callbacks never take this model's lock.
+    private var generation=UUID(),url:URL?,gameID=""
+    private var ledger:BoundSoulLedger? { didSet { deniedPolicy=nil } }
+    private var deniedPolicy:Data?,snapshot=Snapshot(),reachedField=false
+    private var lastBoxes=Data(),cachedBoxes:[BoundSoulMon]=[],ring:Data?
+    private var actions:[FileAction]=[],needsCandidate=false
+    private var stagedTimeline=Data(),durableTimeline=Data(),durableLedger:BoundSoulLedger?
+    private var observation:Observation?
+#if DEBUG
+    private var persistenceInterceptor:(() throws->Void)?
+    func qaSetPersistenceInterceptor(_ value:(() throws->Void)?) { lock.lock();persistenceInterceptor=value;lock.unlock() }
+#endif
+    private lazy var pipeline=BoundSDKObservationPipeline<Observation,Candidate>(
+        reduce:{ [weak self] in try self?.reduce($0) },candidate:{ [weak self] in try self?.candidate() },
+        write:{ [weak self] value in
+            if let self { try self.writeCandidate(value) } else { try Self.write(value) }
+        },committed:{ [weak self] in self?.committed($0) },
+        failed:{ [weak self] _ in self?.requestPause("Soul Link couldn’t save its rules. Retry while the game is paused.") },
+        backpressure:{ [weak self] in self?.requestPause("Soul Link is catching up. Retry while the game is paused.") })
+
+    init() {
+        timeline.stageWrites(execute:{ [weak self] body in
+            guard let self else { return }
+            self.pipeline.perform(body)
+            do { try self.pipeline.flush() }
+            catch { self.requestPause("Run history couldn’t be saved. Retry while the game is paused.") }
+        },
+                             isExecuting:{ [weak self] in self?.pipeline.isComputing == true })
+    }
+    private func policyBytes(for value:BoundSoulLedger)->Data {
         if let deniedPolicy { return deniedPolicy }
-        let bytes = value.denied.sorted().reduce(into: Data()) { $0.append($1.bytes) }
-        deniedPolicy = bytes
-        return bytes
+        let bytes=value.denied.sorted().reduce(into:Data()) { $0.append($1.bytes) }
+        deniedPolicy=bytes;return bytes
     }
-    func configure(core: EmulatorCore?, url: URL?, gameID: String = "") {
-        lock.lock(); defer { lock.unlock() }
-        self.coreID = core.map(ObjectIdentifier.init); self.url = url; self.gameID = gameID
-        if friendlyBattleCoreID != self.coreID { friendlyBattleCoreID = nil }
-        if cooperativeBattleCoreID != self.coreID { cooperativeBattleCoreID = nil }
-        verified = false; ledger = nil; installed = false; reachedField = false; frame = 0; snapshot = Snapshot(); lastPolicy = Data(); lastBoxes = Data(); cachedBoxes = []
-        timeline.configure(url: url.map { $0.deletingPathExtension().appendingPathExtension("timeline.json") }, gameID: gameID)
-        guard let url, BoundServerMemoryFiles.exists(url, gameID: gameID) else { return }
-        do {
-            let data = try BoundServerMemoryFiles.read(url, gameID: gameID)
-            guard data.count <= 2_097_152 else { throw BoundSoulLedger.Error.corrupt }
-            var value = try JSONDecoder().decode(BoundSoulLedger.self, from: data)
-            guard value.valid else { throw BoundSoulLedger.Error.corrupt }
-            value.recordDeaths(previous: value.dead)
-            ledger = value; snapshot.ledger = value
-        } catch { snapshot.error = "Soul Link record couldn’t be read. Your run is paused." }
+    private func candidate() throws->Candidate? {
+        if let ledger { timeline.observeSoul(ledger) }
+        let bytes=try timeline.pendingBytes()
+        // External timeline reductions share the compute queue too.
+        guard needsCandidate || stagedTimeline != bytes else { return nil }
+        needsCandidate=false;stagedTimeline=bytes
+        return .init(generation:generation,url:url,gameID:gameID,ledger:ledger,timeline:bytes,
+                     snapshot:snapshot,ring:ring,policy:ledger.map { policyBytes(for:$0) } ?? Data(),actions:actions,
+                     writeLedger:ledger != durableLedger,writeTimeline:bytes != durableTimeline,observation:observation)
     }
-    /// Refresh only host caches after restoring an exact native continuation.
-    /// The saved cartridge already owns its in-flight battle/trade execution.
-    func reloadContinuationMemory(for core:EmulatorCore) throws {
+    private static func write(_ value:Candidate) throws {
+        for action in value.actions {
+            try BoundServerMemoryFiles.directory(action.destination.deletingLastPathComponent(),gameID:value.gameID)
+            if let source=action.source {
+                if BoundServerMemoryFiles.exists(source,gameID:value.gameID) {
+                    try BoundServerMemoryFiles.move(source,to:action.destination,gameID:value.gameID)
+                } else if !BoundServerMemoryFiles.exists(action.destination,gameID:value.gameID) { throw BoundSoulLedger.Error.corrupt }
+            } else if let data=action.data,!BoundServerMemoryFiles.exists(action.destination,gameID:value.gameID) {
+                try BoundServerMemoryFiles.write(data,to:action.destination,gameID:value.gameID)
+            }
+        }
+        guard let url=value.url,value.writeLedger || value.writeTimeline else { return }
+        try BoundServerMemoryFiles.directory(url.deletingLastPathComponent(),gameID:value.gameID)
+        if value.writeTimeline {
+            try BoundServerMemoryFiles.write(value.timeline,to:url.deletingPathExtension().appendingPathExtension("timeline.json"),gameID:value.gameID)
+        }
+        if value.writeLedger,let ledger=value.ledger {
+            guard ledger.valid else { throw BoundSoulLedger.Error.corrupt }
+            try BoundServerMemoryFiles.write(JSONEncoder().encode(ledger),to:url,gameID:value.gameID)
+        }
+    }
+    private func writeCandidate(_ value:Candidate) throws {
+#if DEBUG
+        lock.lock();let interceptor=persistenceInterceptor;lock.unlock()
+        if value.writeLedger || value.writeTimeline || !value.actions.isEmpty { try interceptor?() }
+#endif
+        try Self.write(value)
+    }
+    private func committed(_ value:Candidate) {
+        guard value.generation==generation else { return }
+        let changedTimeline=durableTimeline != value.timeline
+        durableLedger=value.ledger;durableTimeline=value.timeline
+        if changedTimeline { timeline.confirm(value.timeline) }
+        let completed=Set(value.actions.map(\.id));actions.removeAll { completed.contains($0.id) }
         lock.lock();defer { lock.unlock() }
-        guard coreID==ObjectIdentifier(core),core.state == .paused else { throw BoundSoulLedger.Error.corrupt }
-        let wasVerified=verified
-        configure(core:core,url:url,gameID:gameID)
-        verified=wasVerified
-        if snapshot.error != nil { throw BoundSoulLedger.Error.corrupt }
+        guard owner.generation==value.generation else { return }
+        let error=owner.blocked ? published.error:value.snapshot.error
+        receipt=value;published=value.snapshot;published.ledger=value.ledger;published.error=error
     }
-    func setPreviewEnabled(_ value: Bool) { lock.lock(); previewEnabled = value; lock.unlock() }
-    func setVerified(_ value: Bool) { lock.lock(); verified = value; lock.unlock() }
-    func setNativeObservationAllowed(_ value: Bool) { lock.lock(); nativeObservationAllowed = value; lock.unlock() }
-    /// Friendly battle RAM is temporary until its prebattle state is restored.
-    /// Keep this separate from run ownership: either fence can deny observation.
-    func setFriendlyBattleActive(_ active: Bool, for core: EmulatorCore) {
-        lock.lock(); defer { lock.unlock() }
-        let identity = ObjectIdentifier(core)
-        if active { friendlyBattleCoreID = identity }
-        else if friendlyBattleCoreID == identity { friendlyBattleCoreID = nil }
+    private func requestPause(_ message:String) {
+        lock.lock();owner.blocked=true;published.error=message
+        let token=owner.generation,epoch=owner.nativeGeneration,core=self.core;lock.unlock()
+        _=BoundVBABattleBridge.setSoulFrameBlocked(true,owner:token.uuidString,generation:epoch)
+        Task { @MainActor [weak self,weak core] in
+            guard let self,let core else { return }
+            self.lock.lock();let current=self.owner.generation==token && self.owner.coreID==ObjectIdentifier(core) && self.owner.blocked;self.lock.unlock()
+            if current,core.state == .running { _=core.pause() }
+        }
+    }
+    private func durableMutation(_ body:() throws->Void) throws {
+        try pipeline.perform(body)
+        do { try pipeline.flush() }
+        catch { requestPause("Soul Link couldn’t save its rules. Retry while the game is paused.");throw error }
+    }
+    @discardableResult func configure(core:EmulatorCore?,url:URL?,gameID:String="")->Bool {
+        do { try pipeline.flush() }
+        catch { requestPause("Soul Link still has unsaved rules. Retry before changing games.");return false }
+        let next=UUID()
+        lock.lock()
+        if owner.blocked,let previous=self.core,previous.state != .paused && previous.state != .stopped {
+            lock.unlock();requestPause("Pause the current game before changing Soul Link ownership.");return false
+        }
+        _=BoundVBABattleBridge.setSoulFrameBlocked(false,owner:owner.generation.uuidString,generation:owner.nativeGeneration)
+        let oldID=owner.coreID,friendly=owner.friendly,cooperative=owner.cooperative
+        owner=Owner();owner.generation=next;owner.coreID=core.map(ObjectIdentifier.init)
+        if oldID==owner.coreID { owner.friendly=friendly;owner.cooperative=cooperative }
+        self.core=core;published=Snapshot();receipt=nil;lock.unlock()
+        pipeline.perform {
+            generation=next;self.url=url;self.gameID=gameID;ledger=nil;snapshot=Snapshot();reachedField=false
+            lastBoxes=Data();cachedBoxes=[];ring=nil;observation=nil;actions=[];needsCandidate=false
+            timeline.configure(url:url.map { $0.deletingPathExtension().appendingPathExtension("timeline.json") },gameID:gameID)
+            if let url,BoundServerMemoryFiles.exists(url,gameID:gameID) {
+                do {
+                    let data=try BoundServerMemoryFiles.read(url,gameID:gameID)
+                    guard data.count<=2_097_152 else { throw BoundSoulLedger.Error.corrupt }
+                    var value=try JSONDecoder().decode(BoundSoulLedger.self,from:data)
+                    guard value.valid else { throw BoundSoulLedger.Error.corrupt }
+                    value.recordDeaths(previous:value.dead);ledger=value;snapshot.ledger=value
+                } catch { snapshot.error="Soul Link record couldn’t be read. Your run is paused." }
+            }
+            durableLedger=ledger;durableTimeline=(try? timeline.pendingBytes()) ?? Data();stagedTimeline=durableTimeline
+            lock.lock();published=snapshot;lock.unlock()
+        }
+        return true
+    }
+    func reloadContinuationMemory(for core:EmulatorCore) throws {
+        lock.lock();let valid=owner.coreID==ObjectIdentifier(core),verified=owner.verified;lock.unlock()
+        guard valid,core.state == .paused else { throw BoundSoulLedger.Error.corrupt }
+        try pipeline.flush()
+        let context=pipeline.inspect { (url,gameID) }
+        guard configure(core:core,url:context.0,gameID:context.1) else { throw BoundSoulLedger.Error.corrupt };setVerified(verified)
+        if read().error != nil { throw BoundSoulLedger.Error.corrupt }
+    }
+    func setPreviewEnabled(_ value:Bool) { lock.lock();owner.preview=value;lock.unlock() }
+    func setVerified(_ value:Bool) { lock.lock();owner.verified=value;lock.unlock() }
+    func setNativeObservationAllowed(_ value:Bool) { lock.lock();owner.nativeAllowed=value;lock.unlock() }
+    func setFriendlyBattleActive(_ active:Bool,for core:EmulatorCore) {
+        lock.lock();defer { lock.unlock() };let id=ObjectIdentifier(core)
+        if active { owner.friendly=id } else if owner.friendly==id { owner.friendly=nil }
     }
     func setCooperativeBattleActive(_ active:Bool,for core:EmulatorCore) {
+        lock.lock();defer { lock.unlock() };let id=ObjectIdentifier(core)
+        if active { owner.cooperative=id } else if owner.cooperative==id { owner.cooperative=nil }
+    }
+    @discardableResult func observeCooperativeParty(_ party:Data,fainted:Set<BoundSoulIdentity>,for core:EmulatorCore)->Bool {
+        captureCooperative(party,fainted:fainted,core:core,force:false).durable
+    }
+    private func captureCooperative(_ party:Data,fainted:Set<BoundSoulIdentity>,core:EmulatorCore,force:Bool)->(accepted:Bool,durable:Bool) {
         lock.lock();defer { lock.unlock() }
-        if active { cooperativeBattleCoreID=ObjectIdentifier(core) }
-        else if cooperativeBattleCoreID==ObjectIdentifier(core) { cooperativeBattleCoreID=nil }
-    }
-    /// Cartridge-owned live projection excludes the friend's three records.
-    func observeCooperativeParty(_ party:Data,fainted:Set<BoundSoulIdentity>,for core:EmulatorCore) {
-        lock.lock();defer { lock.unlock() }
-        guard cooperativeBattleCoreID==ObjectIdentifier(core),party.count==600,var value=ledger,!value.ended else { return }
-        let mons=BoundSoulMon.decode(party,stride:100),previous=value
-        do {
-            try value.observe(mons,registering:false,fainted:fainted)
-            if value != previous { try persist(value);ledger=value;snapshot.ledger=value }
-            snapshot.partyWipedOut = snapshot.partyWipedOut || BoundSoulWipeout.occurred(party: mons, ledger: value)
-        } catch { snapshot.error="Soul Link couldn’t preserve cooperative faints. Your run is paused." }
-    }
-    func start(run: UUID, binding: String, offering: Bool = false) throws {
-        lock.lock(); defer { lock.unlock() }
-        guard snapshot.ready, (ledger == nil || ledger?.ended == true), snapshot.mons.count == 1, let starter = snapshot.mons.first,
-              !starter.eggOrigin, (starter.hp ?? 0) > 0 else { throw BoundSoulLedger.Error.corrupt }
-        var value = BoundSoulLedger(run: run, binding: binding)
-        value.offering = offering
-        try value.observe(snapshot.mons, registering: true, fainted: [])
-        if let old = ledger, old.ended, let url {
-            let archive = url.deletingLastPathComponent().appendingPathComponent("Finished Runs", isDirectory: true)
-            try BoundServerMemoryFiles.directory(archive, gameID: gameID)
-            let destination = archive.appendingPathComponent(old.run.uuidString + ".json")
-            if !BoundServerMemoryFiles.exists(destination, gameID: gameID) { try BoundServerMemoryFiles.write(JSONEncoder().encode(old), to: destination, gameID: gameID) }
-        }
-        try persist(value); ledger = value; snapshot.ledger = value
-    }
-    /// Called after this cartridge applies the committed shared configuration.
-    /// No starter exists yet; ordinary play enrolls it later.
-    func startPreparedRun(run: UUID, binding: String) throws {
-        lock.lock(); defer { lock.unlock() }
-        if let ledger, ledger.run == run, ledger.binding == binding, !ledger.ended { return }
-        guard ledger == nil || ledger?.ended == true else { throw BoundSoulLedger.Error.corrupt }
-        if let old = ledger, let url {
-            let archive = url.deletingLastPathComponent().appendingPathComponent("Finished Runs", isDirectory: true)
-            try BoundServerMemoryFiles.directory(archive, gameID: gameID)
-            let destination = archive.appendingPathComponent(old.run.uuidString + ".json")
-            if !BoundServerMemoryFiles.exists(destination, gameID: gameID) {
-                try BoundServerMemoryFiles.write(JSONEncoder().encode(old), to: destination, gameID: gameID)
+        guard owner.cooperative==ObjectIdentifier(core),party.count==600,force || !owner.blocked else { return (false,false) }
+        if published.ledger?.ended != false { return (true,true) }
+        if owner.nativeGeneration==0 {
+            owner.nativeGeneration=BoundVBABattleBridge.claimSoulFrameOwner(owner.generation.uuidString,gameURL:core.game.fileURL)
+            guard owner.nativeGeneration != 0 else {
+                lock.unlock();requestPause("Soul Link frame ownership is unavailable. Keep the game paused.");lock.lock();return (false,false)
             }
         }
-        let value = BoundSoulLedger(run: run, binding: binding)
-        try persist(value); ledger = value; snapshot.ledger = value
+        owner.frame+=1
+        let native=BoundVBABattleBridge.soulLinkSnapshot()
+        let input=Observation(generation:owner.generation,frame:owner.frame,ready:false,battle:true,overflow:native["overflow"] as? Bool==true,
+            cooperative:true,party:party,boxes:Data(),faints:fainted.sorted().reduce(into:Data()) { $0.append($1.bytes) },
+            battleFaints:Data(),nativeRing:native["faints"] as? Data ?? Data(),outcome:0,flags:0)
+        let saved=receipt?.observation
+        let durable=saved?.generation==input.generation && saved?.cooperative==true && saved?.party==party && saved?.faints==input.faints
+        if durable,!owner.blocked,let ring=receipt?.ring { _=BoundVBABattleBridge.acknowledgeSoulLinkFaints(matching:ring) }
+        if owner.criticalGate,durable,saved?.sameContents(as:input)==true {
+            owner.criticalGate=false
+            _=BoundVBABattleBridge.setSoulFrameBlocked(false,owner:owner.generation.uuidString,generation:owner.nativeGeneration)
+        }
+        if force { owner.lastInput=nil }
+        return (submitUnlocked(input),durable)
     }
-    func endRun() throws {
-        lock.lock(); defer { lock.unlock() }
-        guard var value = ledger else { return }
-        value.ended = true; value.offering = false
-        try persist(value); ledger = value; snapshot.ledger = value
-        if installed { BoundVBABattleBridge.closeSoulLink(); installed = false; lastPolicy = Data() }
+    private func archive(_ value:BoundSoulLedger,folder:String) throws {
+        guard let url else { return }
+        actions.append(.init(source:nil,destination:url.deletingLastPathComponent().appendingPathComponent(folder)
+            .appendingPathComponent(value.run.uuidString+".json"),data:try JSONEncoder().encode(value)))
     }
-    func markAccepted() throws {
-        lock.lock(); defer { lock.unlock() }
-        guard var value = ledger, value.offering else { return }
-        value.offering = false; try persist(value); ledger = value; snapshot.ledger = value
-    }
-    func cancelOffer() throws {
-        lock.lock(); defer { lock.unlock() }
-        guard let value = ledger, value.offering, let url else { return }
-        let archive = url.deletingLastPathComponent().appendingPathComponent("Cancelled Invitations", isDirectory: true)
-        try BoundServerMemoryFiles.directory(archive, gameID: gameID)
-        try BoundServerMemoryFiles.move(url, to: archive.appendingPathComponent(value.run.uuidString + ".json"), gameID: gameID)
-        ledger = nil; snapshot.ledger = nil
-        if installed { BoundVBABattleBridge.closeSoulLink(); installed = false; lastPolicy = Data() }
-    }
-    private func persist(_ value: BoundSoulLedger) throws {
-        do {
-            guard let url, value.valid else { throw BoundSoulLedger.Error.corrupt }
-            try BoundServerMemoryFiles.directory(url.deletingLastPathComponent(), gameID: gameID)
-            try BoundServerMemoryFiles.write(JSONEncoder().encode(value), to: url, gameID: gameID)
-            snapshot.error = nil
-        } catch {
-            snapshot.error = "Soul Link couldn’t save its rules. Your run is paused."
-            throw error
+    func start(run:UUID,binding:String,offering:Bool=false) throws {
+        try durableMutation {
+            guard snapshot.ready,(ledger==nil || ledger?.ended==true),snapshot.mons.count==1,let starter=snapshot.mons.first,
+                  !starter.eggOrigin,(starter.hp ?? 0)>0 else { throw BoundSoulLedger.Error.corrupt }
+            var value=BoundSoulLedger(run:run,binding:binding);value.offering=offering
+            try value.observe(snapshot.mons,registering:true,fainted:[])
+            if let old=ledger,old.ended { try archive(old,folder:"Finished Runs") }
+            try persist(value)
         }
     }
-    func merge(run: UUID, rows: [BoundSoulRow], losses: Data, acquired: Data? = nil) throws {
-        lock.lock(); defer { lock.unlock() }
-        guard var value = ledger, value.run == run else { return }
-        guard losses.count == 288, rows.allSatisfy(\.valid), acquired == nil || acquired?.count == 288 else { throw BoundSoulLedger.Error.corrupt }
-        let previous = value
+    func startPreparedRun(run:UUID,binding:String) throws {
+        try durableMutation {
+            if let ledger,ledger.run==run,ledger.binding==binding,!ledger.ended { return }
+            guard ledger==nil || ledger?.ended==true else { throw BoundSoulLedger.Error.corrupt }
+            if let old=ledger { try archive(old,folder:"Finished Runs") }
+            try persist(.init(run:run,binding:binding))
+        }
+    }
+    func endRun() throws { try durableMutation {
+        guard var value=ledger else { return };value.ended=true;value.offering=false;try persist(value)
+    } }
+    func markAccepted() throws { try durableMutation {
+        guard var value=ledger,value.offering else { return };value.offering=false;try persist(value)
+    } }
+    func cancelOffer() throws { try durableMutation {
+        guard let value=ledger,value.offering,let url else { return }
+        actions.append(.init(source:url,destination:url.deletingLastPathComponent().appendingPathComponent("Cancelled Invitations")
+            .appendingPathComponent(value.run.uuidString+".json"),data:nil))
+        ledger=nil;snapshot.ledger=nil;needsCandidate=true
+    } }
+    private func persist(_ value:BoundSoulLedger) throws {
+        guard url != nil,value.valid,snapshot.error==nil else { throw BoundSoulLedger.Error.corrupt }
+        ledger=value;snapshot.ledger=value;needsCandidate=true
+    }
+    func merge(run:UUID,rows:[BoundSoulRow],losses:Data,acquired:Data?=nil) throws { try durableMutation {
+        guard var value=ledger,value.run==run else { return }
+        guard losses.count==288,rows.allSatisfy(\.valid),acquired==nil || acquired?.count==288 else { throw BoundSoulLedger.Error.corrupt }
+        let previous=value
         if let acquired {
-            value.partnerAcquisitions = value.partnerSlots.union(BoundSoulLedger.losses(acquired))
-            var names = value.partnerNames ?? [:]
-            for row in rows where value.partnerSlots.contains(row.slot) && !row.name.isEmpty { names[row.slot] = row.name }
-            value.partnerNames = names
+            value.partnerAcquisitions=value.partnerSlots.union(BoundSoulLedger.losses(acquired))
+            var names=value.partnerNames ?? [:]
+            for row in rows where value.partnerSlots.contains(row.slot) && !row.name.isEmpty { names[row.slot]=row.name }
+            value.partnerNames=names
         }
-        value.dead.formUnion(BoundSoulLedger.losses(losses))
-        value.dead.formUnion(rows.filter(\.dead).map(\.slot))
-        value.recordDeaths(previous: previous.dead)
-        if value != previous { try persist(value); ledger = value; snapshot.ledger = value }
-    }
-    func sharedEvents() -> [BoundSoulSharedEvent] {
-        lock.lock(); defer { lock.unlock() }
-        return ledger?.sharedEvents ?? []
-    }
-    /// The event journal persists receipt before this call. Apply to the ledger
-    /// first; native enforcement is picked up by the frame owner in the field.
-    func receiveSharedEvent(_ payload: Data, localOrigin: Bool = false) throws {
-        lock.lock(); defer { lock.unlock() }
-        guard payload.count <= 1024,
-              let event = try? JSONDecoder().decode(BoundSoulSharedEvent.self, from: payload), event.valid,
-              var value = ledger, value.run == event.run else { throw BoundSoulLedger.Error.corrupt }
-        let previous = value
+        value.dead.formUnion(BoundSoulLedger.losses(losses));value.dead.formUnion(rows.filter(\.dead).map(\.slot))
+        value.recordDeaths(previous:previous.dead)
+        if value != previous { try persist(value) }
+    } }
+    func sharedEvents()->[BoundSoulSharedEvent] { read().ledger?.sharedEvents ?? [] }
+    func receiveSharedEvent(_ payload:Data,localOrigin:Bool=false) throws { try durableMutation {
+        guard payload.count<=1024,let event=try? JSONDecoder().decode(BoundSoulSharedEvent.self,from:payload),event.valid,
+              var value=ledger,value.run==event.run else { throw BoundSoulLedger.Error.corrupt }
+        let previous=value
         switch event.kind {
         case .acquired:
-            if let slot = event.slot {
+            if let slot=event.slot {
                 if localOrigin {
-                    value.consumedSlots = (value.consumedSlots ?? []).union([slot])
-                    if slot.hasPrefix("egg:"), let ordinal = Int(slot.dropFirst(4)) { value.nextEgg = max(value.nextEgg, ordinal + 1) }
-                } else { value.partnerAcquisitions = value.partnerSlots.union([slot]) }
+                    value.consumedSlots=(value.consumedSlots ?? []).union([slot])
+                    if slot.hasPrefix("egg:"),let ordinal=Int(slot.dropFirst(4)) { value.nextEgg=max(value.nextEgg,ordinal+1) }
+                } else { value.partnerAcquisitions=value.partnerSlots.union([slot]) }
             }
-        case .death:
-            if let slot = event.slot { value.dead.insert(slot) }
-        case .ended: value.ended = true; value.offering = false
+        case .death:if let slot=event.slot { value.dead.insert(slot) }
+        case .ended:value.ended=true;value.offering=false
         }
-        value.recordDeaths(previous: previous.dead)
-        if value != previous { try persist(value); ledger = value; snapshot.ledger = value }
+        value.recordDeaths(previous:previous.dead)
+        if value != previous { try persist(value) }
+    } }
+    static func mayApplyNativePolicy(ready:Bool,battle:Bool)->Bool { ready && !battle }
+    func acknowledgeDeath(run:UUID,slot:String) throws { try durableMutation {
+        guard var value=ledger,value.run==run,let index=value.memorials?.firstIndex(where:{$0.slot==slot}),
+              value.memorials?[index].announced==false else { return }
+        value.memorials?[index].announced=true;try persist(value)
+    } }
+    func read()->Snapshot { lock.lock();defer { lock.unlock() };return published }
+    func observationMetrics()->[String:UInt64] {
+        var result=pipeline.metrics()
+        lock.lock();result["callbacks"]=owner.callbacks;result["blockedCallbacks"]=owner.blockedCallbacks
+        result["criticalCallbacks"]=owner.criticalCallbacks;lock.unlock();return result
     }
-    static func mayApplyNativePolicy(ready: Bool, battle: Bool) -> Bool { ready && !battle }
-    func acknowledgeDeath(run: UUID, slot: String) throws {
-        lock.lock(); defer { lock.unlock() }
-        guard var value = ledger, value.run == run,
-              let index = value.memorials?.firstIndex(where: { $0.slot == slot }), value.memorials?[index].announced == false else { return }
-        value.memorials?[index].announced = true
-        try persist(value); ledger = value; snapshot.ledger = value
+
+    @discardableResult private func submitUnlocked(_ input:Observation)->Bool {
+        if let previous=owner.lastInput,input.sameContents(as:previous),input.frame%15 != 0 { return true }
+        let prior=owner.lastInput
+        let critical=published.ledger?.ended==false && (
+            (input.ready && (prior?.party != input.party || prior?.boxes != input.boxes))
+            || (!input.faints.isEmpty && prior?.faints != input.faints)
+            || (!input.battleFaints.isEmpty && prior?.battleFaints != input.battleFaints))
+        if critical {
+            owner.criticalGate=true
+            _=BoundVBABattleBridge.setSoulFrameBlocked(true,owner:owner.generation.uuidString,generation:owner.nativeGeneration)
+        }
+        // submit may synchronously close admission, so never hold publication
+        // lock across it. There is one native producer; checkpoints pause it.
+        owner.lastInput=input;lock.unlock();let accepted=pipeline.submit(input);lock.lock()
+        if !accepted { owner.lastInput=nil }
+        return accepted
     }
-    func read() -> Snapshot { lock.lock(); defer { lock.unlock() }; return snapshot }
-    /// Restore is a local integrity boundary. The coordinator has verified the
-    /// exact cartridge and paused it after loading its authorized snapshot. The
-    /// bridge verifies the loaded native image again before installing policy;
-    /// no asynchronously scheduled verifier or resumed frame is needed.
-    func prepareRestoredState(_ core: EmulatorCore) throws {
-        lock.lock(); defer { lock.unlock() }
-        guard coreID == ObjectIdentifier(core), core.deltaCore.identifier == "com.rileytestut.GBADeltaCore",
-              core.state == .paused, friendlyBattleCoreID != ObjectIdentifier(core),
-              cooperativeBattleCoreID != ObjectIdentifier(core), let ledger, ledger.valid,
-              snapshot.error == nil else { throw BoundSoulLedger.Error.corrupt }
-        if ledger.ended {
-            BoundVBABattleBridge.closeSoulLink(); installed = false; lastPolicy = Data()
+    func receive(_ core:EmulatorCore) { _=receive(core,force:false) }
+    private func receive(_ core:EmulatorCore,force:Bool)->Bool {
+        lock.lock();defer { lock.unlock() }
+        guard owner.coreID==ObjectIdentifier(core),owner.verified,owner.nativeAllowed,
+              core.deltaCore.identifier=="com.rileytestut.GBADeltaCore" else { return true }
+        owner.callbacks &+= 1
+        if owner.criticalGate,!owner.blocked,let receipt,receipt.generation==owner.generation,
+           receipt.ledger?.ended != false {
+            // Ending a run is a durable candidate too. Its receipt retires the
+            // critical-fact fence before the inactive fast path closes hooks.
+            owner.criticalGate=false
+            _=BoundVBABattleBridge.setSoulFrameBlocked(false,owner:owner.generation.uuidString,generation:owner.nativeGeneration)
+        }
+        if owner.installed,published.ledger?.ended != false {
+            BoundVBABattleBridge.closeSoulLink();owner.installed=false;owner.lastPolicy=Data()
+        }
+        guard owner.friendly != ObjectIdentifier(core),owner.cooperative != ObjectIdentifier(core) else { return true }
+        if owner.blocked && !force { owner.blockedCallbacks &+= 1;return true }
+        if owner.criticalGate { owner.criticalCallbacks &+= 1 }
+        let active=published.ledger?.ended==false
+        guard owner.preview || owner.installed || active else { return true }
+        owner.frame+=1
+        if !force,!active,owner.frame%30 != 1 { return true }
+        if owner.nativeGeneration==0 {
+            owner.nativeGeneration=BoundVBABattleBridge.claimSoulFrameOwner(owner.generation.uuidString,gameURL:core.game.fileURL)
+            guard owner.nativeGeneration != 0 else {
+                lock.unlock();requestPause("Soul Link frame ownership is unavailable. Keep the game paused.");lock.lock();return false
+            }
+        }
+        if active,!owner.installed {
+            owner.installed=BoundVBABattleBridge.installSoulLink()
+            guard owner.installed else {
+                lock.unlock();requestPause("Soul Link requires the supported Radical Red game. Keep the game paused.");lock.lock();return false
+            }
+        }
+        applyReceiptUnlocked()
+        let native=BoundVBABattleBridge.soulLinkSnapshot()
+        let input=Observation(generation:owner.generation,frame:owner.frame,ready:native["ready"] as? Bool==true,
+            battle:native["battle"] as? Bool==true,overflow:native["overflow"] as? Bool==true,cooperative:false,
+            party:native["party"] as? Data ?? Data(),boxes:native["boxes"] as? Data ?? Data(),
+            faints:native["faints"] as? Data ?? Data(),battleFaints:native["battleFaints"] as? Data ?? Data(),
+            nativeRing:native["faints"] as? Data ?? Data(),
+            outcome:native["outcome"] as? Int ?? 0,flags:native["battleFlags"] as? UInt32 ?? 0)
+        if force { owner.lastInput=nil }
+        return submitUnlocked(input)
+    }
+    private func reduce(_ input:Observation) throws {
+        guard input.generation==generation else { return }
+        observation=input
+        guard !input.overflow else { throw BoundSoulLedger.Error.capacity }
+        let party=BoundSoulMon.decode(input.party,stride:100)
+        var fainted:Set<BoundSoulIdentity>=[]
+        for data in [input.faints,input.battleFaints] {
+            guard data.count%8==0 else { throw BoundSoulLedger.Error.corrupt }
+            for offset in stride(from:0,to:data.count,by:8) { if let id=BoundSoulIdentity.read(data,at:offset) { fainted.insert(id) } }
+        }
+        if input.cooperative {
+            guard var value=ledger,!value.ended else { return }
+            try value.observe(party,registering:false,fainted:fainted,at:input.date)
+            if value != ledger { try persist(value) }
+            snapshot.partyWipedOut=snapshot.partyWipedOut || BoundSoulWipeout.occurred(party:party,ledger:value)
+            ring=input.nativeRing;needsCandidate=true;return
+        }
+        reachedField=reachedField || input.ready
+        let boxesChanged=input.ready && input.boxes != lastBoxes
+        if boxesChanged { lastBoxes=input.boxes;cachedBoxes=BoundSoulMon.decode(input.boxes,stride:58) }
+        let mons=party+cachedBoxes
+        timeline.observe(mons:mons,ready:input.ready,battle:input.battle,outcome:input.outcome,flags:input.flags,at:input.date)
+        snapshot.ready=input.ready;if input.ready { snapshot.mons=mons }
+        if reachedField,var value=ledger,!value.ended {
+            let previous=value
+            try value.observe(input.ready && boxesChanged ? mons:party,registering:input.ready,fainted:fainted,at:input.date)
+            if value != previous { try persist(value) }
+            snapshot.partyWipedOut=snapshot.partyWipedOut || BoundSoulWipeout.occurred(party:party,ledger:value)
+            if input.ready && (snapshot.team==nil || input.frame%15==0 || boxesChanged || value != previous) {
+                snapshot.team=BoundSoulTeam.capture(mons:snapshot.mons,ledger:value)
+                snapshot.teamCapturedAt=input.uptime
+            }
+            ring=input.faints
+        }
+        needsCandidate=true
+    }
+    private func applyReceiptUnlocked() {
+        guard let value=receipt,value.generation==owner.generation,!owner.blocked else { return }
+        guard owner.installed,value.ledger?.ended==false else { return }
+        if owner.criticalGate {
+            guard let latest=owner.lastInput,value.observation?.sameContents(as:latest)==true else { return }
+        }
+        let current=BoundVBABattleBridge.soulLinkSnapshot()
+        if let ring=value.ring { _=BoundVBABattleBridge.acknowledgeSoulLinkFaints(matching:ring) }
+        if Self.mayApplyNativePolicy(ready:current["ready"] as? Bool==true,battle:current["battle"] as? Bool==true) {
+            if value.policy != owner.lastPolicy {
+                guard BoundVBABattleBridge.setSoulLinkDenied(value.policy) else {
+                    lock.unlock();requestPause("Soul Link native rules couldn’t be applied. Keep the game paused.");lock.lock();return
+                }
+                owner.lastPolicy=value.policy
+            }
+            BoundVBABattleBridge.enforceSoulLink()
+        }
+        if owner.criticalGate {
+            owner.criticalGate=false
+            _=BoundVBABattleBridge.setSoulFrameBlocked(false,owner:owner.generation.uuidString,generation:owner.nativeGeneration)
+        }
+    }
+    func prepareCheckpoint(core:EmulatorCore,timeout:TimeInterval=5) throws {
+        guard core.state == .paused else { throw BoundSoulLedger.Error.corrupt }
+        lock.lock();let id=owner.coreID,inactive=published.ledger==nil && !owner.installed,token=owner.generation
+        let verify=published.ledger?.ended==false && !owner.verified,allowed=owner.nativeAllowed;lock.unlock()
+        if id==nil && inactive { return }
+        guard id==ObjectIdentifier(core) else { throw BoundSoulLedger.Error.corrupt }
+        if verify {
+            // The paused capture boundary admits the exact owned file rather
+            // than waiting for an unrelated asynchronous verifier callback.
+            guard allowed,core.deltaCore.identifier=="com.rileytestut.GBADeltaCore",
+                  (try? BoundPlayerROMProfile(rom:Data(contentsOf:core.game.fileURL,options:.mappedIfSafe))) != nil else { throw BoundSoulLedger.Error.corrupt }
+            lock.lock();guard owner.generation==token else { lock.unlock();throw BoundSoulLedger.Error.corrupt }
+            owner.verified=true;lock.unlock()
+        }
+        guard allowed || inactive else { throw BoundSoulLedger.Error.corrupt }
+        let start=ProcessInfo.processInfo.systemUptime
+        do {
+            try pipeline.flush(timeout:timeout)
+            lock.lock();let cooperative=owner.cooperative==ObjectIdentifier(core);lock.unlock()
+            if cooperative {
+                guard let value=BoundCooperativeSnapshot(BoundVBABattleBridge.cooperativeSnapshot()) else { throw BoundSoulLedger.Error.corrupt }
+                var fainted:Set<BoundSoulIdentity>=[]
+                for index in 0..<6 where value.faintedMask & (1 << index) != 0 {
+                    if let identity=BoundSoulIdentity.read(value.party,at:index*100) { fainted.insert(identity) }
+                }
+                guard captureCooperative(value.owned,fainted:fainted,core:core,force:true).accepted else { throw BoundSoulLedger.Error.corrupt }
+            } else {
+                guard receive(core,force:true) else { throw BoundSDKObservationPipeline<Observation,Candidate>.Failure.rejected }
+            }
+            try pipeline.flush(timeout:max(0,timeout-(ProcessInfo.processInfo.systemUptime-start)))
+            guard pipeline.inspect({ snapshot.error })==nil else { throw BoundSoulLedger.Error.corrupt }
+        }
+        catch { requestPause("Soul Link couldn’t finish saving its rules. Retry while paused.");throw error }
+        lock.lock();defer { lock.unlock() }
+        guard owner.generation==token,owner.coreID==ObjectIdentifier(core),core.state == .paused else { throw BoundSoulLedger.Error.corrupt }
+        owner.blocked=false;published.error=nil
+        if owner.friendly != ObjectIdentifier(core),owner.cooperative != ObjectIdentifier(core) { applyReceiptUnlocked() }
+        guard !owner.blocked else { throw BoundSoulLedger.Error.corrupt }
+        owner.criticalGate=false
+        _=BoundVBABattleBridge.setSoulFrameBlocked(false,owner:token.uuidString,generation:owner.nativeGeneration)
+    }
+    func drainBeforeMemoryReplacement(core:EmulatorCore?,timeout:TimeInterval=5) throws {
+        guard core==nil || core?.state == .paused || core?.state == .stopped else { throw BoundSoulLedger.Error.corrupt }
+        lock.lock();let identity=owner.coreID;lock.unlock()
+        if let identity { guard core.map(ObjectIdentifier.init)==identity else { throw BoundSoulLedger.Error.corrupt } }
+        do {
+            try pipeline.flush(timeout:timeout)
+            guard pipeline.inspect({ snapshot.error })==nil else { throw BoundSoulLedger.Error.corrupt }
+        }
+        catch { requestPause("Soul Link still has unsaved rules. Retry before replacing this run.");throw error }
+    }
+    func retryPendingPersistence(core:EmulatorCore,timeout:TimeInterval=5) throws { try prepareCheckpoint(core:core,timeout:timeout) }
+    func prepareForNativeMemoryReplacement(core:EmulatorCore) throws {
+        try drainBeforeMemoryReplacement(core:core)
+        lock.lock();defer { lock.unlock() }
+        guard owner.coreID==ObjectIdentifier(core) else { return }
+        // start() can deliver callbacks before pause() completes. Retain the
+        // worker's permanent facts while suppressing observations of that boot.
+        _=BoundVBABattleBridge.setSoulFrameBlocked(false,owner:owner.generation.uuidString,generation:owner.nativeGeneration)
+        owner.criticalGate=false
+        if owner.replacementVerification==nil { owner.replacementVerification=owner.verified }
+        owner.verified=false;owner.installed=false;owner.nativeGeneration=0
+        owner.lastInput=nil;owner.lastPolicy=Data();receipt=nil
+    }
+    func refreshAfterNativeMemoryReplacement(core:EmulatorCore) throws {
+        guard core.state == .paused else { throw BoundSoulLedger.Error.corrupt }
+        try drainBeforeMemoryReplacement(core:core)
+        lock.lock();let matches=owner.coreID==ObjectIdentifier(core),active=published.ledger?.ended==false
+        let allowed=owner.nativeAllowed,token=owner.generation;lock.unlock()
+        guard matches else { return }
+        if active {
+            guard allowed,core.deltaCore.identifier=="com.rileytestut.GBADeltaCore",
+                  (try? BoundPlayerROMProfile(rom:Data(contentsOf:core.game.fileURL,options:.mappedIfSafe))) != nil else {
+                requestPause("Soul Link couldn’t restore its native rules. Keep the game paused.");throw BoundSoulLedger.Error.corrupt
+            }
+        }
+        lock.lock();defer { lock.unlock() }
+        guard owner.generation==token else { throw BoundSoulLedger.Error.corrupt }
+        owner.installed=false;owner.lastPolicy=Data();owner.lastInput=nil;receipt=nil
+        owner.nativeGeneration=0;owner.verified=active || owner.replacementVerification==true
+        owner.replacementVerification=nil
+        if active {
+            owner.nativeGeneration=BoundVBABattleBridge.claimSoulFrameOwner(token.uuidString,gameURL:core.game.fileURL)
+            guard owner.nativeGeneration != 0 else {
+                lock.unlock();requestPause("Soul Link frame ownership is unavailable. Keep the game paused.");lock.lock();throw BoundSoulLedger.Error.corrupt
+            }
+            if owner.friendly != ObjectIdentifier(core),owner.cooperative != ObjectIdentifier(core),let value=published.ledger {
+                let policy=value.denied.sorted().reduce(into:Data()) { $0.append($1.bytes) }
+                guard BoundVBABattleBridge.installSoulLink(),BoundVBABattleBridge.setSoulLinkDenied(policy) else {
+                    lock.unlock();requestPause("Soul Link couldn’t restore its native rules. Keep the game paused.");lock.lock();throw BoundSoulLedger.Error.corrupt
+                }
+                owner.installed=true;owner.lastPolicy=policy;BoundVBABattleBridge.enforceSoulLink()
+            }
+        } else { BoundVBABattleBridge.closeSoulLink() }
+        owner.blocked=false;owner.criticalGate=false;published.error=nil
+        _=BoundVBABattleBridge.setSoulFrameBlocked(false,owner:token.uuidString,generation:owner.nativeGeneration)
+    }
+    func prepareRestoredState(_ core:EmulatorCore) throws {
+        guard core.state == .paused else { throw BoundSoulLedger.Error.corrupt }
+        try pipeline.flush()
+        lock.lock();defer { lock.unlock() }
+        guard owner.coreID==ObjectIdentifier(core),core.deltaCore.identifier=="com.rileytestut.GBADeltaCore",
+              owner.friendly != ObjectIdentifier(core),owner.cooperative != ObjectIdentifier(core),
+              let value=published.ledger,value.valid,published.error==nil else { throw BoundSoulLedger.Error.corrupt }
+        if value.ended {
+            BoundVBABattleBridge.closeSoulLink();owner.installed=false;owner.lastPolicy=Data();owner.criticalGate=false
+            _=BoundVBABattleBridge.setSoulFrameBlocked(false,owner:owner.generation.uuidString,generation:owner.nativeGeneration)
             return
         }
-        guard BoundVBABattleBridge.installSoulLink() else {
-            snapshot.error = "Soul Link restore rules are unavailable. Retry recovery."
-            throw BoundSoulLedger.Error.corrupt
-        }
-        installed = true
-        let policy = policyBytes(for: ledger)
-        guard BoundVBABattleBridge.setSoulLinkDenied(policy) else {
-            snapshot.error = "Soul Link restore rules are unavailable. Retry recovery."
-            throw BoundSoulLedger.Error.corrupt
-        }
-        // Known durable tombstones must precede the first restored frame, even
-        // for a battle snapshot whose party originally contained healthy mons.
-        lastPolicy = policy; BoundVBABattleBridge.enforceSoulLink()
-        verified = true; reachedField = true
-    }
-    func receive(_ core: EmulatorCore) {
-        lock.lock(); defer { lock.unlock() }
-        guard verified, nativeObservationAllowed,
-              (previewEnabled || installed || (ledger != nil && ledger?.ended == false)), coreID == ObjectIdentifier(core) else { return }
-        frame += 1
-        // No ROM/RAM access on unrelated cores or before exact file verification.
-        guard core.deltaCore.identifier == "com.rileytestut.GBADeltaCore" else { return }
-        if ledger == nil || ledger?.ended == true { if frame % 30 != 1 { return } }
-        let friendlyBattle = friendlyBattleCoreID == ObjectIdentifier(core)
-        if installed, ledger?.ended == true, !friendlyBattle {
-            BoundVBABattleBridge.closeSoulLink(); installed = false; lastPolicy = Data()
-        }
-        if ledger != nil, ledger?.ended == false, !installed {
-            if friendlyBattle { return }
-            installed = BoundVBABattleBridge.installSoulLink()
-            if !installed { snapshot.error = "Soul Link requires the supported Radical Red 4.1 game."; return }
-        }
-        // Do not consume events, zero HP, team changes or victory history from
-        // the temporary battle. Its state rollback restores the original faint
-        // buffer too, so genuine events pending before entry are not discarded.
-        guard !friendlyBattle,cooperativeBattleCoreID != ObjectIdentifier(core) else { return }
-        let native = BoundVBABattleBridge.soulLinkSnapshot()
-        let ready = native["ready"] as? Bool == true
-        let safePolicyBoundary = Self.mayApplyNativePolicy(ready: ready, battle: native["battle"] as? Bool == true)
-        reachedField = reachedField || ready
-        let party = BoundSoulMon.decode(native["party"] as? Data ?? Data(), stride: 100)
-        let boxBytes = native["boxes"] as? Data ?? Data()
-        let boxesChanged = ready && boxBytes != lastBoxes
-        if boxesChanged { lastBoxes = boxBytes; cachedBoxes = BoundSoulMon.decode(boxBytes, stride: 58) }
-        let mons = party + cachedBoxes
-        timeline.observe(mons: mons, ready: ready, battle: native["battle"] as? Bool == true,
-                         outcome: native["outcome"] as? Int ?? 0, flags: native["battleFlags"] as? UInt32 ?? 0)
-        snapshot.ready = ready
-        if ready { snapshot.mons = mons }
-        guard reachedField, var value = ledger, !value.ended else { return }
-        do {
-            guard native["overflow"] as? Bool != true else { throw BoundSoulLedger.Error.capacity }
-            var fainted: Set<BoundSoulIdentity> = []
-            for key in ["faints", "battleFaints"] {
-                let data = native[key] as? Data ?? Data()
-                for offset in stride(from: 0, to: data.count, by: 8) {
-                    if let id = BoundSoulIdentity.read(data, at: offset) { fainted.insert(id) }
-                }
-            }
-            let previous = value
-            try value.observe(ready && boxesChanged ? mons : party, registering: ready, fainted: fainted)
-            if value != previous { try persist(value); ledger = value; snapshot.ledger = value }
-            snapshot.partyWipedOut = snapshot.partyWipedOut || BoundSoulWipeout.occurred(party: party, ledger: value)
-            if ready && (snapshot.team == nil || frame % 15 == 0 || boxesChanged || value != previous) {
-                snapshot.team = BoundSoulTeam.capture(mons: snapshot.mons, ledger: value)
-                snapshot.teamCapturedAt = ProcessInfo.processInfo.systemUptime
-            }
-            BoundVBABattleBridge.acknowledgeSoulLinkFaints()
-            let policy = policyBytes(for: value)
-            if safePolicyBoundary && (policy != lastPolicy || !installed) {
-                guard BoundVBABattleBridge.setSoulLinkDenied(policy) else { throw BoundSoulLedger.Error.corrupt }
-                lastPolicy = policy
-            }
-            if safePolicyBoundary { BoundVBABattleBridge.enforceSoulLink() }
-        } catch { snapshot.error = "Soul Link couldn’t save its rules. Your run is paused." }
+        guard BoundVBABattleBridge.installSoulLink() else { throw BoundSoulLedger.Error.corrupt }
+        let policy=value.denied.sorted().reduce(into:Data()) { $0.append($1.bytes) }
+        guard BoundVBABattleBridge.setSoulLinkDenied(policy) else { throw BoundSoulLedger.Error.corrupt }
+        owner.installed=true;owner.lastPolicy=policy;owner.verified=true
+        owner.nativeGeneration=BoundVBABattleBridge.claimSoulFrameOwner(owner.generation.uuidString,gameURL:core.game.fileURL)
+        guard owner.nativeGeneration != 0 else { throw BoundSoulLedger.Error.corrupt }
+        BoundVBABattleBridge.enforceSoulLink()
     }
 }
+
 
 @MainActor
 final class BoundSoulSession: ObservableObject {
@@ -848,7 +1094,14 @@ final class BoundSoulSession: ObservableObject {
     /// ROM-driven runs surface local integrity errors in their native UI.
     var cartridgeManagesPause = false
     private(set) var recoveryError: String?
-    func retryRecovery() { recoveryError = nil }
+    func retryRecovery() {
+        if probe.read().error==nil { recoveryError=nil;return }
+        guard let core,core.state == .paused else { return }
+        do {
+            try probe.retryPendingPersistence(core:core)
+            ledger=probe.read().ledger;recoveryError=nil;status="Rules saved. Resume when ready."
+        } catch { recoveryError=probe.read().error ?? "Soul Link couldn’t save its rules. Keep the game paused.";status=recoveryError! }
+    }
     private func haltForRecovery() {
         recoveryError = status
         if !cartridgeManagesPause { _ = core?.pause() }
@@ -886,12 +1139,16 @@ final class BoundSoulSession: ObservableObject {
     }
     func bind(core: EmulatorCore?, gameID: String) {
         guard self.core !== core || self.gameID != gameID else { return }
+        let url = core.map { _ in Self.directory.appendingPathComponent(Self.hash(gameID) + ".json") }
+        guard probe.configure(core:core,url:url,gameID:gameID) else {
+            recoveryError=probe.read().error;status=recoveryError ?? "Soul Link still has unsaved rules."
+            return
+        }
         deathMoment = nil; deathMomentStarted = nil; recoveryError = nil
         peerGone(); localTeam = nil; localTeamCurrent = false
         self.core = core; self.gameID = gameID; supported = false
         confirmed = false; lastPeer = 0; offered = nil; incoming = nil; cursor = 0
-        let url = core.map { _ in Self.directory.appendingPathComponent(Self.hash(gameID) + ".json") }
-        probe.configure(core: core, url: url, gameID: gameID); ledger = probe.read().ledger
+        ledger = probe.read().ledger
         loadTask?.cancel()
         guard let core, core.deltaCore.identifier == "com.rileytestut.GBADeltaCore" else { return }
         let id = ObjectIdentifier(core), file = core.game.fileURL
@@ -1146,6 +1403,9 @@ struct BoundSoulControls: View {
         if BoundMultiplayerFeatures.isEnabled {
             Section("Soul Link") {
                 Text(session.status).font(.caption).accessibilityIdentifier("bound.soul-link.status")
+                if session.recoveryError != nil || session.probe.read().error != nil {
+                    Button("Retry") { session.retryRecovery() }.accessibilityIdentifier("bound.soul-link.retry")
+                }
                 if session.ledger == nil || session.ledger?.ended == true {
                     if session.incoming != nil {
                         Button("Accept Soul Link") { confirming = true }.disabled(!session.canStart)
@@ -1422,9 +1682,27 @@ final class BoundRunTimeline: @unchecked Sendable {
     private var inBattle = false
     private var battleID: UUID?
     private var battleFlags: UInt32 = 0
+    private var execute: (((() -> Void)) -> Void)?
+    private var isExecuting: (() -> Bool)?
+    private var durableJournal: Journal?
+    private var pendingEncoded:Data?
+    func stageWrites(execute: @escaping ((() -> Void) -> Void), isExecuting: @escaping () -> Bool) {
+        self.execute=execute;self.isExecuting=isExecuting
+    }
+    func pendingBytes() throws -> Data {
+        lock.lock();defer { lock.unlock() }
+        if let pendingEncoded { return pendingEncoded }
+        let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys]
+        let bytes=try encoder.encode(journal);pendingEncoded=bytes;return bytes
+    }
+    func confirm(_ bytes:Data) {
+        lock.lock();defer { lock.unlock() }
+        durableJournal=try? JSONDecoder().decode(Journal.self,from:bytes)
+    }
     func configure(url: URL?, gameID: String = "") {
+        if let execute,isExecuting?() == false { execute { self.configure(url:url,gameID:gameID) };return }
         lock.lock(); defer { lock.unlock() }
-        self.url = url; self.gameID = gameID; journal = Journal(); error = nil; inBattle = false; battleID = nil
+        self.url = url; self.gameID = gameID; journal = Journal();durableJournal=journal;pendingEncoded=nil; error = nil; inBattle = false; battleID = nil
         guard let url, BoundServerMemoryFiles.exists(url, gameID: gameID) else { return }
         do {
             let bytes = try BoundServerMemoryFiles.read(url, gameID: gameID)
@@ -1433,19 +1711,23 @@ final class BoundRunTimeline: @unchecked Sendable {
             guard value.version == 1, value.events.count <= 20000, value.known.count <= 20000,
                   Set(value.events.map(\.id)).count == value.events.count,
                   value.events.allSatisfy({ $0.id.count <= 180 && $0.title.count <= 100 && $0.detail.count <= 200 && $0.date.timeIntervalSince1970.isFinite }) else { throw BoundSoulLedger.Error.corrupt }
-            journal = value
+            journal = value;durableJournal=value
         } catch { self.error = "Run history couldn’t be read." }
     }
     func read() -> (events: [BoundRunEvent], error: String?) {
-        lock.lock(); defer { lock.unlock() }; return (journal.events, error)
+        lock.lock(); defer { lock.unlock() }; return ((execute == nil ? journal:durableJournal ?? Journal()).events, error)
     }
     private func save(_ value: Journal) throws {
         guard let url, value.events.count <= 20000, value.known.count <= 20000 else { throw BoundSoulLedger.Error.capacity }
-        try BoundServerMemoryFiles.directory(url.deletingLastPathComponent(), gameID: gameID)
-        try BoundServerMemoryFiles.write(JSONEncoder().encode(value), to: url, gameID: gameID)
+        if execute == nil {
+            try BoundServerMemoryFiles.directory(url.deletingLastPathComponent(), gameID: gameID)
+            try BoundServerMemoryFiles.write(JSONEncoder().encode(value), to: url, gameID: gameID)
+        } else { _=try JSONEncoder().encode(value) }
         journal = value
+        pendingEncoded=nil
     }
     func append(id: String, kind: BoundRunEvent.Kind, title: String, detail: String = "", at date: Date = Date()) {
+        if let execute,isExecuting?() == false { execute { self.append(id:id,kind:kind,title:title,detail:detail,at:date) };return }
         lock.lock(); defer { lock.unlock() }
         guard error == nil, url != nil, !journal.events.contains(where: { $0.id == id }) else { return }
         var value = journal
@@ -1453,6 +1735,7 @@ final class BoundRunTimeline: @unchecked Sendable {
         do { try save(value) } catch { self.error = "Run history couldn’t be saved." }
     }
     func observe(mons: [BoundSoulMon], ready: Bool, battle: Bool, outcome: Int, flags: UInt32, at date: Date = Date()) {
+        if let execute,isExecuting?() == false { execute { self.observe(mons:mons,ready:ready,battle:battle,outcome:outcome,flags:flags,at:date) };return }
         lock.lock(); defer { lock.unlock() }
         guard error == nil, url != nil else { return }
         // Ignore link/scripted demonstrations; never claim a victory from a
@@ -1479,6 +1762,7 @@ final class BoundRunTimeline: @unchecked Sendable {
         }
     }
     func observeSoul(_ ledger: BoundSoulLedger) {
+        if let execute,isExecuting?() == false { execute { self.observeSoul(ledger) };return }
         for death in ledger.memorials ?? [] {
             // Undated migrated losses are historical, not fabricated new events.
             guard let date = death.recordedAt else { continue }

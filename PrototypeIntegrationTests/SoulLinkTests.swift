@@ -1115,3 +1115,119 @@ final class SoulLinkTests: XCTestCase {
         party[19] = 0; XCTAssertTrue(BoundSoulMon.decode(party, stride: 100).isEmpty)
     }
 }
+
+private final class SoulPipelineFixture: @unchecked Sendable {
+    enum Failure: Error { case write, candidate }
+    private let lock=NSLock()
+    private var values:[Int]=[],staged=0,committed:[Int]=[],writes=0,pressures=0,failures=0
+    private var failWrite=false,failCandidate=false
+    func append(_ input:Int) { lock.lock();values.append(input);lock.unlock() }
+    func candidate() throws->[Int]? {
+        lock.lock();defer { lock.unlock() }
+        if failCandidate { throw Failure.candidate }
+        guard staged != values.count else { return nil };staged=values.count;return values
+    }
+    func write(_ value:[Int]) throws {
+        lock.lock();defer { lock.unlock() };writes+=1
+        if failWrite { throw Failure.write }
+    }
+    func commit(_ value:[Int]) { lock.lock();committed=value;lock.unlock() }
+    func pressure() { lock.lock();pressures+=1;lock.unlock() }
+    func failure() { lock.lock();failures+=1;lock.unlock() }
+    func failing(write:Bool=false,candidate:Bool=false) { lock.lock();failWrite=write;failCandidate=candidate;lock.unlock() }
+    func read()->(values:[Int],committed:[Int],writes:Int,pressures:Int,failures:Int) {
+        lock.lock();defer { lock.unlock() };return(values,committed,writes,pressures,failures)
+    }
+}
+
+extension SoulLinkTests {
+    func testWorkerLedgerCommitPreservesCorruptTimelineDiagnosticAndBytes() throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let ledger=root.appendingPathComponent("run.json"),history=root.appendingPathComponent("run.timeline.json")
+        let original=Data("corrupt history retained".utf8);try original.write(to:history)
+        let probe=BoundSoulProbe();XCTAssertTrue(probe.configure(core:nil,url:ledger))
+        XCTAssertNotNil(probe.timeline.read().error)
+        probe.timeline.append(id:"discarded",kind:.victory,title:"Must remain rejected")
+        try probe.startPreparedRun(run:UUID(),binding:String(repeating:"a",count:64))
+        XCTAssertNotNil(probe.read().ledger);XCTAssertNotNil(probe.timeline.read().error)
+        XCTAssertTrue(probe.timeline.read().events.isEmpty)
+        XCTAssertEqual(try Data(contentsOf:history),original)
+    }
+    func testWorkerLedgerCommitCannotClearTimelineCapacityFailure() throws {
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let ledger=root.appendingPathComponent("run.json"),history=root.appendingPathComponent("run.timeline.json")
+        let events=(0..<20000).map { BoundRunEvent(id:"event-\($0)",date:Date(timeIntervalSince1970:1),kind:.victory,title:"Fixture",detail:"") }
+        let original=try JSONEncoder().encode(BoundRunTimeline.Journal(events:events,known:[],initialized:true))
+        try original.write(to:history)
+        let probe=BoundSoulProbe();XCTAssertTrue(probe.configure(core:nil,url:ledger));XCTAssertNil(probe.timeline.read().error)
+        probe.timeline.append(id:"overflow",kind:.victory,title:"Must remain rejected")
+        XCTAssertNotNil(probe.timeline.read().error)
+        try probe.startPreparedRun(run:UUID(),binding:String(repeating:"b",count:64))
+        XCTAssertNotNil(probe.timeline.read().error);XCTAssertEqual(probe.timeline.read().events.count,20000)
+        XCTAssertFalse(probe.timeline.read().events.contains { $0.id=="overflow" })
+        XCTAssertEqual(try Data(contentsOf:history),original)
+    }
+    func testObservationPipelineFoldsWhileWriterIsSlowAndRetainsTimedOutCut() throws {
+        let fixture=SoulPipelineFixture(),writing=DispatchSemaphore(value:0),release=DispatchSemaphore(value:0)
+        defer { release.signal() }
+        let pipeline=BoundSDKObservationPipeline<Int,[Int]>(capacity:4,reduce:{ fixture.append($0) },candidate:{ try fixture.candidate() },
+            write:{ value in
+                if value==[0] { writing.signal();release.wait() }
+                try fixture.write(value)
+            },committed:{ fixture.commit($0) },failed:{ _ in fixture.failure() },backpressure:{ fixture.pressure() })
+        XCTAssertTrue(pipeline.submit(0));XCTAssertEqual(writing.wait(timeout:.now()+1),.success)
+        for value in 1...20 { XCTAssertTrue(pipeline.submit(value));pipeline.inspect {} }
+        XCTAssertEqual(fixture.read().values,Array(0...20))
+        XCTAssertTrue(fixture.read().committed.isEmpty,"A compute result is not a storage receipt")
+        XCTAssertThrowsError(try pipeline.flush(timeout:0.02))
+        XCTAssertFalse(pipeline.status().drained)
+        release.signal();try pipeline.flush(timeout:2)
+        XCTAssertEqual(fixture.read().committed,Array(0...20))
+        XCTAssertLessThanOrEqual(fixture.read().writes,2,"One in-flight value plus the complete latest aggregate")
+        XCTAssertTrue(pipeline.status().drained)
+    }
+    func testObservationPipelineFailedWriterRetriesEveryOrderedFact() throws {
+        let fixture=SoulPipelineFixture();fixture.failing(write:true)
+        let pipeline=BoundSDKObservationPipeline<Int,[Int]>(capacity:8,reduce:{ fixture.append($0) },candidate:{ try fixture.candidate() },
+            write:{ try fixture.write($0) },committed:{ fixture.commit($0) },failed:{ _ in fixture.failure() },backpressure:{ fixture.pressure() })
+        for value in 1...6 { XCTAssertTrue(pipeline.submit(value)) }
+        XCTAssertThrowsError(try pipeline.flush(timeout:1))
+        XCTAssertTrue(fixture.read().committed.isEmpty)
+        XCTAssertEqual(fixture.read().values,Array(1...6))
+        fixture.failing();try pipeline.flush(timeout:2)
+        XCTAssertEqual(fixture.read().committed,Array(1...6))
+        XCTAssertTrue(pipeline.status().drained)
+    }
+    func testObservationPipelineSaturationRetainsHandoffAndBoundsBlockedReducerTimeout() throws {
+        let fixture=SoulPipelineFixture(),reducing=DispatchSemaphore(value:0),release=DispatchSemaphore(value:0)
+        defer { release.signal() }
+        let pipeline=BoundSDKObservationPipeline<Int,[Int]>(capacity:2,reduce:{ value in
+            if value==0 { reducing.signal();release.wait() };fixture.append(value)
+        },candidate:{ try fixture.candidate() },write:{ try fixture.write($0) },committed:{ fixture.commit($0) },
+            failed:{ _ in fixture.failure() },backpressure:{ fixture.pressure() })
+        XCTAssertTrue(pipeline.submit(0));XCTAssertEqual(reducing.wait(timeout:.now()+1),.success)
+        XCTAssertTrue(pipeline.submit(1));XCTAssertTrue(pipeline.submit(2))
+        let retainedByOwner=3
+        XCTAssertFalse(pipeline.submit(retainedByOwner));XCTAssertEqual(pipeline.status().queued,3)
+        XCTAssertGreaterThanOrEqual(fixture.read().pressures,1)
+        let start=ProcessInfo.processInfo.systemUptime
+        XCTAssertThrowsError(try pipeline.flush(timeout:0.02))
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime-start,0.5,"Timed barrier cannot block on compute.sync")
+        release.signal();try pipeline.flush(timeout:2)
+        XCTAssertEqual(fixture.read().committed,[0,1,2])
+        XCTAssertTrue(pipeline.submit(retainedByOwner));try pipeline.flush(timeout:2)
+        XCTAssertEqual(fixture.read().committed,[0,1,2,3])
+    }
+    func testObservationPipelineCandidateFailureCannotReportDurableSuccess() throws {
+        let fixture=SoulPipelineFixture();fixture.failing(candidate:true)
+        let pipeline=BoundSDKObservationPipeline<Int,[Int]>(capacity:2,reduce:{ fixture.append($0) },candidate:{ try fixture.candidate() },
+            write:{ try fixture.write($0) },committed:{ fixture.commit($0) },failed:{ _ in fixture.failure() },backpressure:{ fixture.pressure() })
+        XCTAssertTrue(pipeline.submit(7));XCTAssertThrowsError(try pipeline.flush(timeout:1))
+        XCTAssertFalse(pipeline.status().drained);XCTAssertTrue(fixture.read().committed.isEmpty)
+        XCTAssertEqual(fixture.read().writes,0);XCTAssertEqual(fixture.read().values,[7])
+    }
+}

@@ -66,11 +66,18 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)setSoulLinkDenied:(NSData *)identities;
 + (NSDictionary<NSString *,id> *)soulLinkSnapshot;
 + (void)acknowledgeSoulLinkFaints;
++ (BOOL)acknowledgeSoulLinkFaintsMatching:(NSData *)identities;
+/// Bound-owned admission fence. Load epochs prevent a stale owner from fencing
+/// a replacement cartridge even when native allocations reuse an address.
++ (NSUInteger)claimSoulFrameOwner:(NSString *)owner gameURL:(NSURL *)url;
++ (BOOL)setSoulFrameBlocked:(BOOL)blocked owner:(NSString *)owner generation:(NSUInteger)generation;
++ (BOOL)isSoulFrameBlockedForOwner:(NSString *)owner generation:(NSUInteger)generation;
 + (void)enforceSoulLink;
 + (void)closeSoulLink;
 #if DEBUG && TARGET_OS_SIMULATOR
 + (NSDictionary<NSString *,id> *)qaUncachedSoulLinkSnapshot;
 + (NSDictionary<NSString *,id> *)qaSoulBoxCacheChecks;
++ (NSDictionary<NSString *,id> *)qaSoulFaintAcknowledgementChecks;
 + (BOOL)qaStartNativePartyFixture;
 + (BOOL)qaConfigureBattleParty:(NSUInteger)mode;
 + (NSDictionary<NSString *,id> *)qaBattleMenu;

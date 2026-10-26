@@ -38,6 +38,53 @@ struct GameSaveFence {
     GameSaveWriter reader=nullptr,stateWriter=nullptr,stateReader=nullptr;
 };
 GameSaveFence &gameSaveFence() { static GameSaveFence value; return value; }
+using NativeFrameRunner=void (*)(id,SEL,BOOL);
+using NativeStarter=void (*)(id,SEL,NSURL *);
+using NativeStopper=void (*)(id,SEL);
+struct SoulFrameFence {
+    std::mutex lock;
+    NativeFrameRunner run=nullptr;
+    NativeStarter start=nullptr;
+    NativeStopper stop=nullptr;
+    uint64_t generation=1;
+    std::string owner;
+    uint8_t *cartridge=nullptr;
+    bool blocked=false;
+};
+SoulFrameFence &soulFrameFence() { static SoulFrameFence value; return value; }
+void advanceSoulFrameGeneration() {
+    auto &fence=soulFrameFence();std::lock_guard<std::mutex> lock(fence.lock);
+    if(++fence.generation==0) fence.generation=1;
+    fence.owner.clear();fence.cartridge=nullptr;fence.blocked=false;
+}
+void fencedNativeFrame(id bridge,SEL selector,BOOL video) {
+    auto &fence=soulFrameFence();NativeFrameRunner original;
+    { std::lock_guard<std::mutex> lock(fence.lock);
+      if(fence.blocked&&fence.cartridge==rom) return;
+      original=fence.run; }
+    if(original) original(bridge,selector,video);
+}
+void fencedNativeStart(id bridge,SEL selector,NSURL *url) {
+    advanceSoulFrameGeneration();
+    if(auto original=soulFrameFence().start) original(bridge,selector,url);
+}
+void fencedNativeStop(id bridge,SEL selector) {
+    advanceSoulFrameGeneration();
+    if(auto original=soulFrameFence().stop) original(bridge,selector);
+}
+bool installSoulFrameFence() {
+    auto &fence=soulFrameFence();std::lock_guard<std::mutex> lock(fence.lock);
+    if(fence.run) return true;
+    Class cls=[GBAEmulatorBridge class];
+    Method run=class_getInstanceMethod(cls,@selector(runFrameAndProcessVideo:));
+    Method start=class_getInstanceMethod(cls,@selector(startWithGameURL:));
+    Method stop=class_getInstanceMethod(cls,@selector(stop));
+    if(!run||!start||!stop) return false;
+    fence.run=reinterpret_cast<NativeFrameRunner>(method_setImplementation(run,reinterpret_cast<IMP>(fencedNativeFrame)));
+    fence.start=reinterpret_cast<NativeStarter>(method_setImplementation(start,reinterpret_cast<IMP>(fencedNativeStart)));
+    fence.stop=reinterpret_cast<NativeStopper>(method_setImplementation(stop,reinterpret_cast<IMP>(fencedNativeStop)));
+    return fence.run&&fence.start&&fence.stop;
+}
 std::string canonicalSavePath(NSURL *url) {
     if(!url.isFileURL) return {};
     NSString *path=url.URLByStandardizingPath.URLByResolvingSymlinksInPath.path;
@@ -149,6 +196,12 @@ uint32_t word(const uint8_t *p) { return p[0]|uint32_t(p[1])<<8|uint32_t(p[2])<<
 unsigned half(const uint8_t *p) { return p[0]|unsigned(p[1])<<8; }
 void put16(uint8_t *p,unsigned v) { p[0]=v; p[1]=v>>8; }
 void put32(uint8_t *p,uint32_t v) { for(int i=0;i<4;i++) p[i]=uint8_t(v>>(i*8)); }
+bool acknowledgeSoulRing(uint8_t *ring,NSData *identities) {
+    if(!ring||word(ring)!=0x314C5342||word(ring+8)) return false;
+    const unsigned count=word(ring+4);
+    if(count>32||identities.length!=count*8||(identities.length&&memcmp(ring+12,identities.bytes,identities.length))) return false;
+    put32(ring+4,0);put32(ring+8,0);return true;
+}
 // Used only by the completed-frame owner or while its core is paused. Returned
 // data owns immutable bytes; a retained Swift snapshot never aliases live RAM.
 struct SoulBoxSnapshotCache {
@@ -1017,6 +1070,28 @@ static uint8_t soulQAScriptBackup[128];
 + (void)acknowledgeSoulLinkFaints {
     if(soulHooked()&&word(internalRAM+0x4500)==0x314C5342) { put32(internalRAM+0x4504,0); put32(internalRAM+0x4508,0); }
 }
++ (BOOL)acknowledgeSoulLinkFaintsMatching:(NSData *)identities {
+    return soulHooked()&&internalRAM&&acknowledgeSoulRing(internalRAM+0x4500,identities);
+}
++ (NSUInteger)claimSoulFrameOwner:(NSString *)owner gameURL:(NSURL *)url {
+    if(!rom||!owner.length||!installSoulFrameFence()
+       ||canonicalSavePath([GBAEmulatorBridge sharedBridge].gameURL)!=canonicalSavePath(url)) return 0;
+    auto &fence=soulFrameFence();std::lock_guard<std::mutex> lock(fence.lock);
+    const std::string identity=owner.UTF8String;
+    if(fence.blocked&&fence.owner!=identity) return 0;
+    fence.owner=identity;fence.cartridge=rom;
+    return NSUInteger(fence.generation);
+}
++ (BOOL)setSoulFrameBlocked:(BOOL)blocked owner:(NSString *)owner generation:(NSUInteger)generation {
+    auto &fence=soulFrameFence();std::lock_guard<std::mutex> lock(fence.lock);
+    if(!generation||generation!=fence.generation||fence.cartridge!=rom||fence.owner!=std::string(owner.UTF8String)) return NO;
+    fence.blocked=blocked;return YES;
+}
++ (BOOL)isSoulFrameBlockedForOwner:(NSString *)owner generation:(NSUInteger)generation {
+    auto &fence=soulFrameFence();std::lock_guard<std::mutex> lock(fence.lock);
+    return generation&&generation==fence.generation&&fence.cartridge==rom
+        &&fence.owner==std::string(owner.UTF8String)&&fence.blocked;
+}
 + (void)enforceSoulLink {
     if(!soulHooked()||!workRAM||!internalRAM) return;
     const unsigned count=word(rom+SoulPolicy+4);
@@ -1060,6 +1135,18 @@ static uint8_t soulQAScriptBackup[128];
 
 #if DEBUG && TARGET_OS_SIMULATOR
 // Frozen phase-5E pure observer used only as a byte/validation oracle in QA.
++ (NSDictionary<NSString *,id> *)qaSoulFaintAcknowledgementChecks {
+    uint8_t ring[12+32*8]={};put32(ring,0x314C5342);put32(ring+4,1);put32(ring+12,17);put32(ring+16,42);
+    NSData *first=[NSData dataWithBytes:ring+12 length:8];
+    put32(ring+4,2);put32(ring+20,18);put32(ring+24,42);
+    NSData *full=[NSData dataWithBytes:ring+12 length:16];
+    const bool stale=!acknowledgeSoulRing(ring,first)&&word(ring+4)==2;
+    const bool wrong=!acknowledgeSoulRing(ring,[NSMutableData dataWithLength:16])&&word(ring+4)==2;
+    put32(ring+8,1);const bool overflow=!acknowledgeSoulRing(ring,full)&&word(ring+4)==2&&word(ring+8)==1;
+    put32(ring+8,0);put32(ring+4,33);const bool count=!acknowledgeSoulRing(ring,full)&&word(ring+4)==33;
+    put32(ring+4,2);const bool exact=acknowledgeSoulRing(ring,full)&&word(ring+4)==0&&word(ring+8)==0;
+    return @{@"stale":@(stale),@"wrong":@(wrong),@"overflow":@(overflow),@"count":@(count),@"exact":@(exact)};
+}
 + (NSDictionary<NSString *,id> *)qaSoulBoxCacheChecks {
     NSMutableData *table=[NSMutableData dataWithLength:25*4],*ram=[NSMutableData dataWithLength:0x40000];
     auto *t=static_cast<uint8_t *>(table.mutableBytes),*r=static_cast<uint8_t *>(ram.mutableBytes);

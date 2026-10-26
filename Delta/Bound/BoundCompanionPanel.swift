@@ -756,6 +756,9 @@ final class BoundCompanionCoordinator {
         macHost = host
     }
     func bind(core: EmulatorCore?, gameID: String) {
+        if boundCore !== core || self.gameID != gameID {
+            guard romMultiplayer.prepareForCoreReplacement() else { core?.pause(); return }
+        }
         defer { refreshMultiplayerServices() }
         let preservingNative=sharing.nativeBattle.hasSavedContinuation || sharing.cooperativeDoubles.hasSavedContinuation
         if (owner?.game as? Game)?.boundUsesServerMultiplayer != true {
@@ -785,6 +788,21 @@ final class BoundCompanionCoordinator {
             owner.boundRRDexDidLoadSaveState(core: core)
         }
         romMultiplayer.didCompleteCheckpoint = { [weak owner] in owner?.boundDidCompleteMultiplayerCheckpoint() }
+        romMultiplayer.resumeAfterObservationRecovery = { [weak self, weak owner, weak core] in
+            // The published menu change removes its host on the main queue.
+            // Recheck all normal UI/activity pause owners after that removal.
+            DispatchQueue.main.async { [weak self, weak owner, weak core] in
+                guard let self, let owner, let core, self.boundCore === core,
+                      owner.emulatorCore === core, self.gameID == gameID, core.state == .paused,
+                      UIApplication.shared.applicationState == .active,
+                      owner.view.window?.windowScene?.activationState == .foregroundActive,
+                      owner.view.window?.windowScene?.hasKeyboardFocus == true,
+                      !self.sharing.nativeBattle.protectsTemporaryState,
+                      !self.sharing.cooperativeDoubles.blocksAutoSave,
+                      owner.boundCanResumeEmulation(resumingNativeActivity: false) else { return }
+                core.resume()
+            }
+        }
         sharing.nativeBattle.tradeCompleted = { [weak soul = sharing.soulLink] id, count in
             soul?.probe.timeline.append(id: "trade:" + id.uuidString, kind: .trade,
                                         title: count == 1 ? "Trade completed" : "\(count) trades completed")
@@ -1559,6 +1577,7 @@ final class BoundCompanionCoordinator {
         tap.setEnabled(false); sharing.background(); refreshMultiplayerServices(temporary: true); onboarding.close()
     }
     @discardableResult func stop()->Bool {
+        guard romMultiplayer.prepareForCoreReplacement() else { return false }
         let preserving=sharing.nativeBattle.isActive || sharing.cooperativeDoubles.blocksAutoSave
         if preserving,!romMultiplayer.serverOnly {
             _=preserveNativeActivity()

@@ -356,7 +356,15 @@ class GameViewController: DeltaCore.GameViewController
             if let game = newValue as? Game,
                BoundServerBackupManager.hasPendingRestore(gameID: game.identifier) { return }
             let oldValue = super.game
-            if oldValue?.fileURL != newValue?.fileURL, (boundCompanion.sharing.nativeBattle.isActive || boundCompanion.sharing.cooperativeDoubles.blocksAutoSave) {
+            let previousCore = emulatorCore
+            // Companion and its probes hold weak references. Keep the stopped
+            // owner alive through their final drain and the replacement bind.
+            defer { withExtendedLifetime(previousCore) {} }
+            // Upstream replaces the core even when the same URL is assigned.
+            // Drain the old owner before its native memory can be stopped or
+            // reused, and keep failed observations attached to that execution.
+            if emulatorCore != nil, !boundCompanion.romMultiplayer.prepareForCoreReplacement() { return }
+            if oldValue != nil, (boundCompanion.sharing.nativeBattle.isActive || boundCompanion.sharing.cooperativeDoubles.blocksAutoSave) {
                 if !boundCompanion.romMultiplayer.serverOnly {
                     _ = boundCompanion.stop()
                     return
@@ -375,9 +383,6 @@ class GameViewController: DeltaCore.GameViewController
             
             let previousGame = self.game as? Game
             NotificationCenter.default.removeObserver(self, name: .NSManagedObjectContextDidSave, object: previousGame?.managedObjectContext)
-            if boundCompanion.romMultiplayer.serverOnly, oldValue?.fileURL != newValue?.fileURL {
-                _ = boundCompanion.romMultiplayer.suspend()
-            }
             // Register the save/load fence before upstream creates or starts a core.
             if let next = newValue as? Game, next.boundUsesServerMultiplayer {
                 BoundServerMemoryFiles.setEnabled(true, for: next.identifier)

@@ -432,9 +432,25 @@ final class FriendSharingSession: ObservableObject {
         interactions.cancelActivity = { [weak nativeBattle] in nativeBattle?.cancel() }
         interactions.context = { [weak livePresence] in livePresence?.interactionContext() }
         interactions.admissionIdentity = { [weak self] in
-            guard let self,let owner=self.tokenOwner,let room=self.authRoom else { return nil }
+            guard let self else { return nil }
             let context=self.nativeBattle.continuationContext ?? self.nativeBattle.continuationContextProvider?()
-            return owner.uuidString + ":" + room.lowercased() + ":" + (context?.runID?.uuidString ?? "")
+            if self.authenticatedMode {
+                // Transport gaps retain the authenticated consent scope. The
+                // interaction state machine separately requires fresh presence
+                // and a connected channel before it can admit an activity.
+                guard self.active || self.hasValidForegroundReconnectIntent,
+                      let owner=self.tokenOwner ?? self.foregroundReconnectIntent?.owner,
+                      let room=self.authRoom ?? self.foregroundReconnectIntent?.room,
+                      self.authenticatedSession?()?.owner == owner,
+                      self.roomProvider() == room else { return nil }
+                if let context, context.owner != owner || context.roomID != room.lowercased() { return nil }
+                return owner.uuidString + ":" + room.lowercased() + ":" + (context?.runID?.uuidString ?? "")
+            }
+            // The existing explicit local QA transport has no account token.
+            // Keep its distinct owner/peer/channel identity without granting it
+            // access to authenticated runs or server authorization.
+            guard self.active, let configuration=self.configuration else { return nil }
+            return "local:\(configuration.uid):\(configuration.remoteUID):\(configuration.channel):\(context?.runID?.uuidString ?? "")"
         }
         livePresence.peerWithdrew = { [weak self] in
             self?.connectionFeed.friendDisconnected(epoch: self?.livePresence.peerEpoch)
