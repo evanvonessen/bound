@@ -341,6 +341,7 @@ final class FriendSharingSession: ObservableObject {
     private var authRoom: String?
     private var tokenExpiry: TimeInterval?
     private var tokenRenewals = 0
+    private var nakamaRenewalAttempts = 0
     let remoteView = UIView()
     private var videoFrameCount = 0
     private var videoLastFrame: TimeInterval?
@@ -868,8 +869,10 @@ final class FriendSharingSession: ObservableObject {
         let run = generation, scope = debugRealtimeScope, revision = debugRealtimeRevision
         let fetcher = debugRealtimeProvider ?? nakamaFetcher
         tokenTask = Task { [weak self] in
+            var fetched = false
             do {
                 let lease = try await fetcher(room, identity)
+                fetched = true
                 try Task.checkCancellation()
                 guard let self, self.generation == run, self.active,
                       self.debugRealtimeRevision == revision, self.debugRealtimeScope == scope else { return }
@@ -884,7 +887,7 @@ final class FriendSharingSession: ObservableObject {
                     throw FriendSharingTokenError.unavailable
                 }
                 self.reconnectPeerOwner = lease.peerOwnerID
-                self.tokenTask = nil; self.debugRealtimeAttempts = 0
+                self.tokenTask = nil; self.debugRealtimeAttempts = 0; self.nakamaRenewalAttempts = 0
                 if initial {
                     nakama.configureGameplay(lease, debug: scope != nil)
                     // The display/continuation identity stays the logical friend
@@ -911,11 +914,32 @@ final class FriendSharingSession: ObservableObject {
             } catch {
                 guard !Task.isCancelled, let self, self.generation == run, self.active, self.debugRealtimeRevision == revision else { return }
                 self.tokenTask = nil
+                if !initial, !fetched, scope == nil, self.retryNakamaRenewal(error, run: run) { return }
                 if scope != nil {
                     self.handleDebugRealtimeFailure(run:run,revision:revision)
                 } else { self.handleForegroundReconnectFailure(run: run, status: "Multiplayer unavailable · Retrying") }
             }
         }
+    }
+
+    private func retryNakamaRenewal(_ error: Error, run: UUID) -> Bool {
+        let transient: Bool
+        if let error = error as? FriendSharingTokenError { transient = error.retryable }
+        else if let error = error as? URLError {
+            transient = [.timedOut, .networkConnectionLost, .notConnectedToInternet,
+                         .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed].contains(error.code)
+        } else { transient = false }
+        guard transient, joined, !reconnecting, !backgrounded, let tokenExpiry,
+              tokenExpiry > Date().timeIntervalSince1970 + 5 else { return false }
+        nakamaRenewalAttempts += 1
+        let delay = min(BoundSDKRetryDelay.seconds(attempt: nakamaRenewalAttempts),
+                        tokenExpiry - Date().timeIntervalSince1970 - 5)
+        tokenDeadline?.cancel()
+        tokenDeadline = scheduler.schedule(at: scheduler.now + max(0, delay)) { [weak self] in
+            guard let self, self.generation == run, self.active else { return }
+            self.requestNakamaToken(initial: false)
+        }
+        return true
     }
 
     private func handleDebugRealtimeFailure(run:UUID,revision:UUID) {

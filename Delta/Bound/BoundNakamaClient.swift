@@ -88,6 +88,7 @@ final class BoundNakamaClient: BoundSDKRoomTransport, @unchecked Sendable {
     static let maximumPayloadBytes = 8192
     static let maximumReliablePackets = 128
     static let maximumReliableBytes = 262_144
+    static let sendTimeout: TimeInterval = 15
 
     private struct Packet {
         let opcode: Int
@@ -98,6 +99,7 @@ final class BoundNakamaClient: BoundSDKRoomTransport, @unchecked Sendable {
     private let lock = NSLock()
     private let worker = DispatchQueue(label: "dev.bound.nakama.gameplay", qos: .userInitiated)
     private let makeSocket: SocketFactory
+    private let clock: @Sendable () -> TimeInterval
     private var socket: (any BoundNakamaSocket)?
     private var configuration: BoundNakamaConfiguration?
     private var callback: (@Sendable (Event) -> Void)?
@@ -116,10 +118,14 @@ final class BoundNakamaClient: BoundSDKRoomTransport, @unchecked Sendable {
     private var lastReceived: TimeInterval = 0
     private var lastPing: TimeInterval = 0
     private var joinDeadline: TimeInterval = 0
+    private var sendStartedAt: TimeInterval?
+    private var ownSessionID: String?
     private var timer: DispatchSourceTimer?
 
-    init(session: URLSession = .shared, socketFactory: SocketFactory? = nil) {
+    init(session: URLSession = .shared, socketFactory: SocketFactory? = nil,
+         clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         makeSocket = socketFactory ?? { BoundNakamaURLSocket(session: session, request: $0) }
+        self.clock = clock
     }
     deinit { stop() }
 
@@ -131,7 +137,8 @@ final class BoundNakamaClient: BoundSDKRoomTransport, @unchecked Sendable {
         lock.lock()
         self.socket = socket; self.configuration = configuration; callback = event
         generation.replace(with: run); active = true; queueFault = false; joined = false; sending = true; joinCID = cid
-        deadline = configuration.expiresAt; lastReceived = Date().timeIntervalSince1970; lastPing = lastReceived
+        deadline = configuration.expiresAt; lastReceived = clock(); lastPing = lastReceived
+        sendStartedAt = nil; ownSessionID = nil
         joinDeadline = lastReceived + 15
         lock.unlock()
         worker.async { [weak self] in
@@ -150,6 +157,7 @@ final class BoundNakamaClient: BoundSDKRoomTransport, @unchecked Sendable {
         let previous = socket, timer = self.timer
         self.timer = nil; socket = nil; configuration = nil; callback = nil
         generation.invalidate(); active = false; queueFault = false; joined = false; sending = false; drainScheduled = false
+        sendStartedAt = nil; ownSessionID = nil
         reliable.removeAll(); reliableBytes = 0; latestPresence = nil; reliableBurst = 0
         lock.unlock()
         timer?.cancel(); previous?.cancel()
@@ -234,12 +242,16 @@ final class BoundNakamaClient: BoundSDKRoomTransport, @unchecked Sendable {
 
     private func write(_ value: [String: Any], socket: any BoundNakamaSocket, run: BoundSDKGeneration.Token) {
         guard isActive(run), let bytes = try? JSONSerialization.data(withJSONObject: value), let text = String(data: bytes, encoding: .utf8) else { return }
+        lock.lock()
+        guard active, generation.admits(run) else { lock.unlock(); return }
+        sendStartedAt = clock()
+        lock.unlock()
         socket.send(text) { [weak self] error in
             guard let self else { return }
             self.worker.async {
                 guard self.isActive(run) else { return }
                 if error != nil { self.fail(.connectionLost, run: run); return }
-                self.lock.lock(); self.sending = false; self.lock.unlock()
+                self.lock.lock(); self.sending = false; self.sendStartedAt = nil; self.lock.unlock()
                 self.drain(run)
             }
         }
@@ -263,14 +275,26 @@ final class BoundNakamaClient: BoundSDKRoomTransport, @unchecked Sendable {
         guard data.count <= 65_536, let value = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { fail(.invalidMessage, run: run); return }
         lock.lock()
         guard active, generation.admits(run), let configuration else { lock.unlock(); return }
-        lastReceived = Date().timeIntervalSince1970
+        lastReceived = clock()
         let expectedCID = joinCID
         lock.unlock()
         if value["error"] != nil { fail(value["cid"] as? String == expectedCID ? .joinRejected : .connectionLost, run: run); return }
         if let match = value["match"] as? [String: Any], value["cid"] as? String == expectedCID {
             guard match["match_id"] as? String == configuration.matchID else { fail(.joinRejected, run: run); return }
-            lock.lock(); let first = !joined; joined = true; lock.unlock()
+            lock.lock(); let first = !joined; joined = true
+            ownSessionID = (match["self"] as? [String: Any])?["session_id"] as? String
+            lock.unlock()
             if first { emit(.joined, run: run) }; drain(run); return
+        }
+        if let presence = value["match_presence_event"] as? [String: Any],
+           presence["match_id"] as? String == configuration.matchID {
+            lock.lock(); let ownSession = ownSessionID; lock.unlock()
+            if let ownSession, let leaves = presence["leaves"] as? [[String: Any]],
+               leaves.contains(where: { $0["session_id"] as? String == ownSession &&
+                   ($0["user_id"] as? String).flatMap(UUID.init(uuidString:)) == configuration.nakamaUserID }) {
+                fail(.connectionLost, run: run)
+            }
+            return
         }
         if value["ping"] != nil {
             // Server ping envelopes are uncommon, but keep the reply serialized.
@@ -304,6 +328,9 @@ final class BoundNakamaClient: BoundSDKRoomTransport, @unchecked Sendable {
                       let online = row["online"] as? Bool, !members.contains(where: { $0.ownerID == owner }) else { fail(.invalidMessage, run: run); return }
                 members.append(Member(ownerID: owner, online: online))
             }
+            if members.contains(where: { $0.ownerID == configuration.ownerID && !$0.online }) {
+                fail(.connectionLost, run: run); return
+            }
             emit(.roster(members), run: run); return
         }
         guard let sender = envelope["senderOwnerID"] as? String, let owner = UUID(uuidString: sender),
@@ -333,6 +360,7 @@ final class BoundNakamaClient: BoundSDKRoomTransport, @unchecked Sendable {
         guard active, generation.admits(run) else { lock.unlock(); return }
         let callback = self.callback, socket = self.socket, timer = self.timer
         active = false; joined = false; sending = false; self.callback = nil; self.socket = nil; self.timer = nil
+        sendStartedAt = nil; ownSessionID = nil
         reliable.removeAll(); reliableBytes = 0; latestPresence = nil
         lock.unlock()
         timer?.cancel(); socket?.cancel(); callback?(.failed(failure))
@@ -346,10 +374,12 @@ final class BoundNakamaClient: BoundSDKRoomTransport, @unchecked Sendable {
         self.timer = timer; lock.unlock(); timer.resume()
     }
     private func tick(_ run: BoundSDKGeneration.Token) {
-        let now = Date().timeIntervalSince1970
+        let now = clock()
         lock.lock()
         guard active, generation.admits(run) else { lock.unlock(); return }
-        let expired = now >= deadline, timedOut = joined ? now - lastReceived > 45 : now >= joinDeadline
+        let expired = Date().timeIntervalSince1970 >= deadline
+        let timedOut = (joined ? now - lastReceived > 45 : now >= joinDeadline)
+            || sendStartedAt.map { now - $0 >= Self.sendTimeout } == true
         let shouldPing = joined && !sending && now - lastPing >= 15
         let socket = self.socket
         if shouldPing { sending = true; lastPing = now }

@@ -1,6 +1,13 @@
 import XCTest
 @testable import Delta
 
+private final class NakamaTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: TimeInterval = 10
+    func read() -> TimeInterval { lock.lock(); defer { lock.unlock() }; return value }
+    func advance(_ seconds: TimeInterval) { lock.lock(); value += seconds; lock.unlock() }
+}
+
 private final class NakamaSocketFixture: BoundNakamaSocket, @unchecked Sendable {
     private let lock = NSLock()
     private var receiver: (@Sendable (Result<Data, Error>) -> Void)?
@@ -10,7 +17,9 @@ private final class NakamaSocketFixture: BoundNakamaSocket, @unchecked Sendable 
     private var observer: (@Sendable (String) -> Void)?
     private var cancellationCount = 0
     let matchID: String
-    init(matchID: String) { self.matchID = matchID }
+    let selfUser: UUID?
+    let selfSession = UUID().uuidString
+    init(matchID: String, selfUser: UUID? = nil) { self.matchID = matchID; self.selfUser = selfUser }
     func resume() {}
     func observe(_ observer: @escaping @Sendable (String) -> Void) { lock.lock(); self.observer = observer; lock.unlock() }
     func holdSends() { lock.lock(); held = true; lock.unlock() }
@@ -25,7 +34,9 @@ private final class NakamaSocketFixture: BoundNakamaSocket, @unchecked Sendable 
         if !hold { completion(nil) }
         if let value = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
            value["match_join"] != nil, let cid = value["cid"] as? String {
-            deliver(["cid": cid, "match": ["match_id": matchID]])
+            var match: [String: Any] = ["match_id": matchID]
+            if let selfUser { match["self"] = ["user_id": selfUser.uuidString, "session_id": selfSession] }
+            deliver(["cid": cid, "match": match])
         }
     }
     func receive(_ completion: @escaping @Sendable (Result<Data, Error>) -> Void) {
@@ -53,6 +64,72 @@ private actor NakamaRPCRecordingFixture {
 }
 
 final class BoundNakamaClientTests: XCTestCase {
+    func testStalledSendFailsDespiteReceivingSocketPongsAndLateCompletionCannotReviveIt() async throws {
+        let clock = NakamaTestClock(), socket = NakamaSocketFixture(matchID: match)
+        let client = BoundNakamaClient(socketFactory: { _ in socket }, clock: { clock.read() })
+        defer { client.stop() }
+        let joined = expectation(description: "joined"), sent = expectation(description: "send stalled")
+        let failed = expectation(description: "stalled writer detected")
+        socket.observe { text in if self.outgoing(text)?.opcode == 1 { sent.fulfill() } }
+        try client.start(configuration: configuration()) { event in
+            if case .joined = event { joined.fulfill() }
+            if case .failed(let reason) = event { XCTAssertEqual(reason, .connectionLost); failed.fulfill() }
+        }
+        await fulfillment(of: [joined], timeout: 2)
+        socket.holdSends(); XCTAssertTrue(client.sendPresence(Data([1])))
+        await fulfillment(of: [sent], timeout: 2)
+        clock.advance(BoundNakamaClient.sendTimeout + 1)
+        socket.deliver(["pong": [:]])
+        await fulfillment(of: [failed], timeout: 2)
+        socket.completeNext()
+        XCTAssertTrue(socket.cancelled)
+        XCTAssertFalse(client.sendPresence(Data([2])))
+        XCTAssertFalse(client.renewTicket("ticket", expiresAt: Date().timeIntervalSince1970 + 90))
+    }
+
+    func testHealthyIdleSocketDoesNotExpireCompletedWrites() async throws {
+        let clock = NakamaTestClock(), socket = NakamaSocketFixture(matchID: match)
+        let client = BoundNakamaClient(socketFactory: { _ in socket }, clock: { clock.read() })
+        defer { client.stop() }
+        let joined = expectation(description: "joined"), failed = expectation(description: "healthy socket stays open")
+        failed.isInverted = true
+        try client.start(configuration: configuration()) { event in
+            if case .joined = event { joined.fulfill() }
+            if case .failed = event { failed.fulfill() }
+        }
+        await fulfillment(of: [joined], timeout: 2)
+        clock.advance(BoundNakamaClient.sendTimeout + 1)
+        socket.deliver(["pong": [:]])
+        await fulfillment(of: [failed], timeout: 1.2)
+        XCTAssertFalse(socket.cancelled)
+        XCTAssertTrue(client.sendPresence(Data([1])))
+    }
+
+    func testLocalMatchRemovalFailsTheGameplayLaneWithoutClosingTheWebSocketFirst() async throws {
+        let socket = NakamaSocketFixture(matchID: match, selfUser: user)
+        let client = BoundNakamaClient(socketFactory: { _ in socket })
+        defer { client.stop() }
+        let joined = expectation(description: "joined"), roster = expectation(description: "other leave ignored")
+        let failed = expectation(description: "local membership lost")
+        try client.start(configuration: configuration()) { event in
+            if case .joined = event { joined.fulfill() }
+            if case .roster = event { roster.fulfill() }
+            if case .failed(let reason) = event { XCTAssertEqual(reason, .connectionLost); failed.fulfill() }
+        }
+        await fulfillment(of: [joined], timeout: 2)
+        socket.deliver(["match_presence_event": ["match_id": match,
+            "leaves": [["user_id": user.uuidString, "session_id": UUID().uuidString]]]])
+        socket.deliver(incoming(opcode: 4, envelope: ["v": 1, "members": [
+            ["ownerID": owner.uuidString, "online": true], ["ownerID": peer.uuidString, "online": false]]]))
+        await fulfillment(of: [roster], timeout: 2)
+        XCTAssertFalse(socket.cancelled, "Another session leaving must not revoke this socket")
+        socket.deliver(["match_presence_event": ["match_id": match,
+            "leaves": [["user_id": user.uuidString, "session_id": socket.selfSession]]]])
+        await fulfillment(of: [failed], timeout: 2)
+        XCTAssertTrue(socket.cancelled)
+        XCTAssertFalse(client.sendPresence(Data([1])))
+    }
+
     func testAuthorizationFailuresKeepHTTPStatusAndHaveReadableMessages() throws {
         let url = URL(string: "https://bound.example/functions/v1/nakama-session")!
         let request = URLRequest(url: url)

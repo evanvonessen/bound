@@ -89,6 +89,43 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
 @MainActor private final class NakamaFrameCancellation: SharingCancellation { func cancel() {} }
 
 @MainActor final class NakamaSharingTransportTests: XCTestCase {
+    func testTransientRenewalFailureKeepsValidGameplayAndRetriesWithoutRejoining() async throws {
+        let wire = NakamaTransportWire(match: match)
+        let transport = BoundNakamaSharingTransport(media: NakamaMediaFixture(), client: BoundNakamaClient(socketFactory: { _ in wire }))
+        let identity = try identity(), lease = lease
+        var requests = 0
+        let joinedOnce = expectation(description: "one socket join")
+        joinedOnce.assertForOverFulfill = true
+        wire.observe { text in
+            let value = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
+            if value?["match_join"] != nil { joinedOnce.fulfill() }
+        }
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            nakamaFetcher: { _, _ in
+                requests += 1
+                if requests == 2 { throw FriendSharingTokenError.rejected(statusCode: 503) }
+                return .init(endpoint: lease.endpoint, accessToken: lease.accessToken,
+                    expiresAt: Date().timeIntervalSince1970 + (requests == 1 ? 31 : 90),
+                    matchID: lease.matchID, roomID: lease.roomID, ownerID: lease.ownerID,
+                    nakamaUserID: lease.nakamaUserID, joinTicket: lease.joinTicket,
+                    members: lease.members, peerOwnerID: lease.peerOwnerID)
+            })
+        defer { sharing.stop() }
+        sharing.configureAuthenticatedRoom(room.uuidString, identity: { identity })
+        sharing.setAutomaticMultiplayerConnection(true)
+        await fulfillment(of: [joinedOnce], timeout: 2)
+        for _ in 0..<400 { if requests >= 2 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(requests, 2)
+        XCTAssertTrue(sharing.joined, "A temporary broker error cannot discard a still-valid gameplay lease")
+        XCTAssertTrue(sharing.livePresence.connected)
+        XCTAssertTrue(sharing.sendMultiplayerPacket(Data("BRM1fixture".utf8)))
+        for _ in 0..<300 { if requests >= 3 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(requests, 3)
+        XCTAssertTrue(sharing.joined)
+        XCTAssertTrue(sharing.livePresence.connected)
+        XCTAssertFalse(sharing.connectionFailed)
+    }
+
     func testROMServerOwnsGameplayWhileScreenSharingRemainsIndependent() async throws {
         let identity = try identity(), lease = lease
         let room = FriendRoom(roomID: self.room.uuidString, displayName: "Friend")
