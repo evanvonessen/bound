@@ -2,6 +2,16 @@
 
 Reviewed 2026-10-06 against commit `4b971847ef6af8960e64a3bb446acb9bc7de3a29`. These are locally maintained declarations for the exact pinned sources, not manifests published by those SDK versions. No SDK version or runtime source changes accompany them.
 
+Rechecked 2026-10-27 for the audio mute change in `84b8cd0a`.
+`AudioManager.swift` adds an in-memory playback mute flag and applies it to the
+existing AVAudio mixer output-volume path. The change adds no required-reason
+API calls, persistence, data collection, or transmission. Its reviewed source
+hash is updated. The follow-up bug sweep also rechecks the mute flag when
+choosing the existing audio-session category and preserves disabled audio
+buffers/engines during route resets. These changes use the existing AVAudio
+paths and add no required-reason API calls or new data flows. The existing
+privacy declarations and broader review limits remain unchanged.
+
 Rechecked 2026-10-21 against `b433394b5d6c241dc01c50b67da8cb60adc8e313`
 when enabling personal TestFlight delivery. Compared all changes since the
 original audit in `MFiGameController.swift`, `ControllerSkinTraits.swift`,

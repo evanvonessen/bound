@@ -274,6 +274,20 @@ final class FriendOnboarding: ObservableObject {
         }
     }
 
+    /// Retry the authorized media lane without resending a friend notification.
+    @discardableResult
+    func retryScreenSharing() -> Bool {
+        guard permitsRTC, !busy, currentIdentity() != nil, let sharing else { return false }
+        let video = sharing.screenSharing
+        let roomID = video.configuredRoomID ?? screenSelected?.roomID ?? multiplayerPartnerRoomID ?? selected?.roomID
+        guard let roomID, let room = rooms.first(where: { $0.roomID == roomID && $0.valid }) else { return false }
+        cancelPendingJiggle()
+        video.stop(reason: .manual)
+        select(room)
+        video.start()
+        return video.connectionRequested
+    }
+
     func toggleScreenSharing(_ room: FriendRoom) {
         guard let video = sharing?.screenSharing else { return }
         if video.configuredRoomID == room.roomID && video.connectionRequested {

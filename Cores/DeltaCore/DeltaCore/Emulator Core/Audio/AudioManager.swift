@@ -72,6 +72,7 @@ public class AudioManager: NSObject, AudioRendering
                 if self.isEnabled
                 {
                     try self.audioEngine.start()
+                    self.updateAudioSessionCategory()
                 }
                 else
                 {
@@ -87,6 +88,14 @@ public class AudioManager: NSObject, AudioRendering
         }
     }
     
+    /// User mute survives core pause/resume and audio route changes.
+    public var isPlaybackMuted = false {
+        didSet {
+            self.updateOutputVolume()
+            self.updateAudioSessionCategory()
+        }
+    }
+
     public var respectsSilentMode: Bool = true {
         didSet {
             self.updateOutputVolume()
@@ -360,6 +369,7 @@ private extension AudioManager
             guard let ringBuffer = RingBuffer(preferredBufferSize: preferredBufferSize) else {
                 fatalError("Cannot initialize RingBuffer with preferredBufferSize of \(preferredBufferSize)")
             }
+            ringBuffer.isEnabled = self.isEnabled
             self.audioBuffer = ringBuffer
             
             let audioConverter = AVAudioConverter(from: self.audioFormat, to: outputAudioFormat)
@@ -404,12 +414,16 @@ private extension AudioManager
                     try AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
                 }
                 
-                try self.audioEngine.start()
-                
+                self.updateOutputVolume()
+                if self.isEnabled {
+                    try self.audioEngine.start()
+                }
+                else { self.audioEngine.pause() }
+
                 if #available(iOS 13.0, *) {}
                 else
                 {
-                    self.audioPlayerNode.play()
+                    if self.isEnabled { self.audioPlayerNode.play() }
                 }
             }
             catch
@@ -417,12 +431,13 @@ private extension AudioManager
                 print(error)
             }
         }
+        self.updateAudioSessionCategory()
     }
     
     // Interrupt other audio if the user wants to pause it AND we won't be silent.
     private var shouldInterruptOtherAudio: Bool
     {
-        return self.pausesOtherAudio && !(self.respectsSilentMode && self.isMuted)
+        return self.pausesOtherAudio && !self.isPlaybackMuted && !(self.respectsSilentMode && self.isMuted)
     }
     
     private func updateAudioSessionCategory()
@@ -447,7 +462,7 @@ private extension AudioManager
 
     @objc func updateOutputVolume()
     {
-        if !self.isEnabled
+        if !self.isEnabled || self.isPlaybackMuted
         {
             self.audioEngine.mainMixerNode.outputVolume = 0.0
         }

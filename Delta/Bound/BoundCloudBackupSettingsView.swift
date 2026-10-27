@@ -18,6 +18,7 @@ struct BoundCloudBackupSettingsView: View {
                     }
                 }
                 .pickerStyle(.inline)
+                .labelsHidden()
                 .disabled(changing || account.session == nil || account.deletionPending)
                 .accessibilityIdentifier("bound.cloud-backup-provider")
                 if changing { ProgressView("Changing provider…") }

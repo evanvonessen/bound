@@ -263,7 +263,8 @@ enum BoundPlayerSceneDecoder {
               let image = rom(BoundSceneBytes.word(raw, 12) + imageIndex * 8, 8),
               BoundSceneBytes.half(image, 4) == width * height / 2,
               let tiles = rom(BoundSceneBytes.word(image), width * height / 2),
-              let palette = memory.bytes(at: 0x020375F8 + 512 + (BoundSceneBytes.half(raw, 4) >> 12) * 32, count: 32) else { return nil }
+              let palette = memory.bytes(at: 0x05000200 + (BoundSceneBytes.half(raw, 4) >> 12) * 32, count: 32)
+                ?? memory.bytes(at: 0x020375F8 + 512 + (BoundSceneBytes.half(raw, 4) >> 12) * 32, count: 32) else { return nil }
         return .init(width: width, height: height, tiles: Data(tiles), palette: Data(palette),
                      flipX: raw[3] & 0x10 != 0, flipY: raw[3] & 0x20 != 0,
                      priority: (BoundSceneBytes.half(raw, 4) >> 10) & 3,

@@ -25,6 +25,7 @@ final class AudioSettingsUITests: XCTestCase {
         app.launch()
 
         let identifiers = [
+            "bound.audio.mute-all",
             "bound.audio.respect-silent-mode",
             "bound.audio.mix-with-other-audio",
             "bound.audio.pause-other-audio"

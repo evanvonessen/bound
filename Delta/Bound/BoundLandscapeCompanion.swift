@@ -419,6 +419,7 @@ struct BoundCompanionPresentation: View {
     var debugSettings: () -> Data? = { nil }
     var gameID: String
     let editingChanged: (Bool) -> Void
+    var connectFriend: () -> Void = {}
     var textEditingChanged: (Bool) -> Void = { _ in }
     var currentSave: (String) throws -> BoundRRDexSave
 
@@ -446,7 +447,7 @@ struct BoundCompanionPresentation: View {
                     .clipShape(RoundedRectangle(cornerRadius: state.landscape ? 8 : 4))
                     .opacity(showsFriend ? (arrangement.active ? arrangement.opacity(for: .friend) : landscape.active ? Double(landscape.draft.opacity) : 1) : 0)
                     .allowsHitTesting(!arrangement.active && !landscape.active && showsFriend)
-                    .accessibilityHidden(true)
+                    .accessibilityHidden(!(UIDevice.current.userInterfaceIdiom == .phone && !state.landscape && !BoundMacWorkspacePlatform.isEnabled))
                 }
                     .frame(width: max(0, friendFrame.width), height: max(0, friendFrame.height))
                     .offset(x: friendFrame.minX, y: friendFrame.minY)
@@ -566,7 +567,17 @@ struct BoundCompanionPresentation: View {
             Color.black
             BoundRemoteCanvas(view: sharing.screenSharing.remoteView, hidesAccessibilityChildren: true).opacity(sharing.screenSharing.remoteVisible || state.displaysFixtureVideo ? 1 : 0)
             if !sharing.screenSharing.remoteVisible && !state.displaysFixtureVideo {
-                Text(sharing.screenSharing.active ? "Waiting for friend" : "Connect a friend").foregroundStyle(.white).font(.callout)
+                if UIDevice.current.userInterfaceIdiom == .phone && !state.landscape && !BoundMacWorkspacePlatform.isEnabled {
+                    Button(action: connectFriend) {
+                        Text(sharing.screenSharing.active ? "Waiting for friend" : "Connect a friend")
+                            .foregroundStyle(.white).font(.callout)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("bound.portrait-connect-stream")
+                    .accessibilityHint("Retry the screen sharing connection")
+                } else {
+                    Text(sharing.screenSharing.active ? "Waiting for friend" : "Connect a friend").foregroundStyle(.white).font(.callout)
+                }
             }
         }
     }

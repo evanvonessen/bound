@@ -646,6 +646,7 @@ final class StockControlAndGestureTests: XCTestCase {
         let navigationPreferences = BoundControllerNavigationPreferences()
         let defaults = UserDefaults.standard
         let oldNavigationValue = defaults.object(forKey: BoundControllerNavigationPreferences.key)
+        let oldDeveloperFeatures = defaults.object(forKey: BoundDeveloperFeatures.key)
         let automaticMultiview = BoundControllerMultiviewPreferences()
         let oldAutomaticMultiview = automaticMultiview.isEnabled
         automaticMultiview.isEnabled = false
@@ -692,6 +693,9 @@ final class StockControlAndGestureTests: XCTestCase {
             } else {
                 defaults.removeObject(forKey: BoundControllerNavigationPreferences.key)
             }
+            if let oldDeveloperFeatures { defaults.set(oldDeveloperFeatures, forKey: BoundDeveloperFeatures.key) }
+            else { defaults.removeObject(forKey: BoundDeveloperFeatures.key) }
+            NotificationCenter.default.post(name: BoundDeveloperFeatures.didChange, object: nil)
             automaticMultiview.isEnabled = oldAutomaticMultiview
             landscapePreferences.option = oldLandscapeOption
             appearance.screenLayout = oldScreenLayout
@@ -863,26 +867,42 @@ final class StockControlAndGestureTests: XCTestCase {
             }
         }
 
-        // Previous/next tab bindings include the existing Connections panel,
-        // even while the retired preference is stored as false.
+        // Tab wrapping must follow availability, including History's developer gate.
+        defaults.set(false, forKey: BoundDeveloperFeatures.key)
+        NotificationCenter.default.post(name: BoundDeveloperFeatures.didChange, object: nil)
+        for _ in 0..<100 where gameController.boundCompanionForTesting.state.configuration.historyAvailable {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(gameController.boundCompanionForTesting.state.configuration.historyAvailable)
+        press(.boundShowDex)
+        let gatedCompanion = gameController.boundCompanionForTesting
+        func pressTab(_ action: ActionInput, expecting content: BoundPiPContent) async throws {
+            press(action)
+            for _ in 0..<200 where gatedCompanion.controllerReferenceContent != content {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertEqual(gatedCompanion.controllerReferenceContent, content, "Tab action \(action) must complete")
+        }
+        try await pressTab(.boundPreviousView, expecting: .types)
+        try await pressTab(.boundNextView, expecting: .dex)
+        defaults.set(true, forKey: BoundDeveloperFeatures.key)
+        NotificationCenter.default.post(name: BoundDeveloperFeatures.didChange, object: nil)
+        for _ in 0..<100 where !gameController.boundCompanionForTesting.state.configuration.historyAvailable {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(gameController.boundCompanionForTesting.state.configuration.historyAvailable)
         modePreferences.isEnabled = true
         landscapePreferences.option = .option7
         setViewport(CGSize(width: 844, height: 390), traits: landscapeTraits)
         press(.boundShowDex)
         let companion = gameController.boundCompanionForTesting
         XCTAssertEqual(companion.controllerReferenceContent, .dex)
-        press(.boundPreviousView)
-        XCTAssertEqual(companion.controllerReferenceContent, .connections, "Previous from the first tab must wrap to the last")
-        press(.boundNextView)
-        XCTAssertEqual(companion.controllerReferenceContent, .dex, "Next from the last tab must wrap to the first")
-        press(.boundNextView)
-        XCTAssertEqual(companion.controllerReferenceContent, .bosses)
-        press(.boundNextView)
-        XCTAssertEqual(companion.controllerReferenceContent, .types)
-        press(.boundNextView)
-        XCTAssertEqual(companion.controllerReferenceContent, .connections)
-        press(.boundNextView)
-        XCTAssertEqual(companion.controllerReferenceContent, .dex, "Next must continue cycling rather than stop at the last tab")
+        try await pressTab(.boundPreviousView, expecting: .connections)
+        try await pressTab(.boundNextView, expecting: .dex)
+        try await pressTab(.boundNextView, expecting: .bosses)
+        try await pressTab(.boundNextView, expecting: .types)
+        try await pressTab(.boundNextView, expecting: .connections)
+        try await pressTab(.boundNextView, expecting: .dex)
 
         // A tab action also dismisses the Boss selector and returns gameplay
         // from its pause.
@@ -1011,10 +1031,11 @@ final class StockControlAndGestureTests: XCTestCase {
         XCTAssertEqual(try nativeInputs(), 0)
         external.activate(MFiGameController.Input.rightTrigger)
         external.deactivate(MFiGameController.Input.rightTrigger)
-        XCTAssertEqual(companion.controllerReferenceContent, .bosses)
+        XCTAssertEqual(companion.controllerReferenceContent, .dex, "The default right trigger is not a next-tab binding")
+        XCTAssertEqual(try nativeInputs(), 0, "Unassigned Multiview triggers must not leak gameplay input")
         external.activate(MFiGameController.Input.leftTrigger)
         external.deactivate(MFiGameController.Input.leftTrigger)
-        XCTAssertEqual(companion.controllerReferenceContent, .dex)
+        XCTAssertEqual(companion.controllerReferenceContent, .connections, "The default left trigger selects the previous available tab")
         companion.toggleControllerPanel(.toggleBoundMultiview)
         XCTAssertFalse(companion.automaticControllerMultiviewAvailable)
         external.activate(MFiGameController.Input.up)

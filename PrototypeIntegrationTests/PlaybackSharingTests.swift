@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 import UIKit
 import SwiftUI
 import CoreVideo
@@ -129,6 +130,84 @@ private final class TransitionCount: @unchecked Sendable {
 }
 
 @MainActor final class PlaybackSharingTests: XCTestCase {
+    func testNativeStateChangesDoNotReadControllerUIOffMainThread() async throws {
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let owner = NativeStateUIThreadProbe()
+        owner.loadViewIfNeeded()
+        owner.game = FixtureGame(fileURL: fixture, gameSaveURL: directory.appendingPathComponent("fixture.sav"))
+        defer { owner.game = nil }
+        let core = try XCTUnwrap(owner.emulatorCore)
+        if core.state == .stopped { XCTAssertTrue(core.start()) }
+        if core.state == .paused { XCTAssertTrue(core.resume()) }
+        owner.clearBackgroundViewReads()
+        let paused = await Task.detached { core.pause() }.value
+        XCTAssertTrue(paused)
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(owner.backgroundViewReads, 0, "Native pause callbacks must return to MainActor before reading UIKit")
+        let resumed = await Task.detached { core.resume() }.value
+        XCTAssertTrue(resumed)
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(owner.backgroundViewReads, 0, "Native resume callbacks must return to MainActor before reading UIKit")
+    }
+
+    func testPlaybackMuteAllowsOtherAudioAtStartupAndWhenToggled() throws {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatInt16,
+            sampleRate: 44100, channels: 2, interleaved: true))
+        let audio = AudioManager(audioFormat: format)
+        audio.respectsSilentMode = false
+        audio.mixesWithOtherAudio = false
+        audio.pausesOtherAudio = true
+        audio.isPlaybackMuted = true
+        audio.start()
+        defer { audio.stop() }
+        XCTAssertTrue(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers),
+                      "A muted game must not interrupt another app's audio")
+        audio.isPlaybackMuted = false
+        XCTAssertFalse(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers))
+        audio.isPlaybackMuted = true
+        XCTAssertTrue(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers),
+                      "Muting an active game must release its non-mixing category")
+    }
+
+    func testMuteChangedWhilePausedUpdatesMixingOnResume() throws {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatInt16,
+            sampleRate: 44100, channels: 2, interleaved: true))
+        let audio = AudioManager(audioFormat: format)
+        audio.respectsSilentMode = false
+        audio.mixesWithOtherAudio = false
+        audio.pausesOtherAudio = true
+        audio.start()
+        defer { audio.stop() }
+        XCTAssertFalse(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers))
+        audio.isEnabled = false
+        audio.isPlaybackMuted = true
+        audio.isEnabled = true
+        XCTAssertTrue(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers),
+                      "Muting in a paused game's settings must take effect when gameplay resumes")
+        audio.isEnabled = false
+        audio.isPlaybackMuted = false
+        audio.isEnabled = true
+        XCTAssertFalse(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers))
+    }
+
+    func testAudioRouteResetKeepsPausedBufferDisabled() throws {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatInt16,
+            sampleRate: 44100, channels: 2, interleaved: true))
+        let audio = AudioManager(audioFormat: format)
+        audio.start()
+        defer { audio.stop() }
+        audio.isEnabled = false
+        XCTAssertFalse(audio.audioBuffer.isEnabled)
+        _ = audio.perform(NSSelectorFromString("resetAudioEngine"))
+        XCTAssertFalse(audio.audioBuffer.isEnabled,
+                       "An audio-route reset must not enable a paused game's new buffer")
+        audio.isEnabled = true
+        XCTAssertTrue(audio.audioBuffer.isEnabled)
+    }
+
     private let fastForwardRenderer = AppPacingNativeDelegate(metal: true)
     private func configuration() -> FriendSharingConfiguration {
         .init(appID: String(repeating: "0", count: 32), channel: "offline-fixture", uid: 1, remoteUID: 2, token: "offline-not-an-RTC-token")
@@ -1705,5 +1784,18 @@ extension PlaybackSharingTests {
         let data = try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])
         let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
         attachment.name = "actual-app-native-controller-pacing"; attachment.lifetime = .keepAlways; add(attachment)
+    }
+}
+
+private final class NativeStateUIThreadProbe: GameViewController {
+    private let viewReadLock = NSLock()
+    private var offMainViewReads = 0
+    var backgroundViewReads: Int { viewReadLock.lock(); defer { viewReadLock.unlock() }; return offMainViewReads }
+    func clearBackgroundViewReads() { viewReadLock.lock(); offMainViewReads = 0; viewReadLock.unlock() }
+    override var viewIfLoaded: UIView? {
+        viewReadLock.lock()
+        if !Thread.isMainThread { offMainViewReads += 1 }
+        viewReadLock.unlock()
+        return super.viewIfLoaded
     }
 }

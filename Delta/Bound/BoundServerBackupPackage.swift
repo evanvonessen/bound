@@ -23,6 +23,8 @@ struct BoundServerBackupStatusGate {
 /// Only save payloads are permitted. ROMs and account credentials never enter an archive.
 struct BoundServerBackupPackage: Sendable {
     static let maximumBytes = 64 * 1024 * 1024
+    // Includes JSON escaping for all 128 states' bounded display/core metadata.
+    static let maximumManifestBytes = 2 * 1024 * 1024
     static let maximumStates = 128
     struct State: Codable, Equatable, Sendable {
         var identifier: String
@@ -115,7 +117,9 @@ struct BoundServerBackupPackage: Sendable {
     }
     func manifestData() throws -> Data {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        return try encoder.encode(manifest)
+        let data = try encoder.encode(manifest)
+        guard data.count <= Self.maximumManifestBytes else { throw Failure.tooLarge }
+        return data
     }
 }
 
@@ -146,16 +150,19 @@ extension BoundServerBackupPackage {
         let archive = try Archive(url: url, accessMode: .read)
         var files: [String: Data] = [:]
         var total = 0
+        // The payload limit excludes metadata, just as validate() does when exporting.
+        let maximumExpandedBytes = maximumBytes + maximumManifestBytes
         for entry in archive {
             guard entry.type == .file, files[entry.path] == nil, files.count < maximumStates * 2 + 4,
-                  entry.uncompressedSize <= UInt64(maximumBytes - total),
+                  entry.uncompressedSize <= UInt64(maximumExpandedBytes - total),
+                  entry.path != "manifest.json" || entry.uncompressedSize <= UInt64(maximumManifestBytes),
                   entry.path == "manifest.json" || entry.path == "game.sav" || entry.path == "game.rtc" || entry.path == "complete.boundrun" ||
                     (entry.path.hasPrefix("states/") && entry.path.split(separator: "/").count == 2 &&
                      ["state", "png"].contains((entry.path as NSString).pathExtension)) else { throw Failure.invalid }
             var bytes = Data()
             let checksum = try archive.extract(entry) { chunk in
-                guard chunk.count <= maximumBytes - total else { throw Failure.tooLarge }
-                if entry.path == "manifest.json", bytes.count + chunk.count > 256 * 1024 { throw Failure.invalid }
+                guard chunk.count <= maximumExpandedBytes - total else { throw Failure.tooLarge }
+                if entry.path == "manifest.json", bytes.count + chunk.count > maximumManifestBytes { throw Failure.invalid }
                 bytes.append(chunk); total += chunk.count
             }
             guard checksum == entry.checksum, bytes.count == Int(entry.uncompressedSize) else { throw Failure.invalid }

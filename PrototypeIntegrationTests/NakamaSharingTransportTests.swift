@@ -184,6 +184,16 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
         sharing.interactions.context = { context }
         XCTAssertTrue(sharing.interactions.open())
         let consent = sharing.interactions.admissionIdentity?()
+        XCTAssertTrue(onboarding.retryScreenSharing())
+        await settle { video.joined && media.starts == 2 }
+        XCTAssertEqual(videoAuthorizations, 2)
+        XCTAssertEqual(gameplayAuthorizations, 1)
+        XCTAssertEqual(jiggles, 1, "Retrying media must not resend a friend notification")
+        XCTAssertEqual(state(sharing), .connected)
+        XCTAssertEqual(sharing.interactions.phase, .choosing)
+        XCTAssertEqual(sharing.interactions.admissionIdentity?(), consent)
+        media.callbacks.first?(.failed(.init(.connectionLost)))
+        XCTAssertTrue(video.joined, "Callbacks from the previous media attempt must be ignored")
         // Multiplayer only, with invitation and packet routing still live.
         onboarding.toggleScreenSharing(room)
         XCTAssertFalse(video.connectionRequested); XCTAssertEqual(state(sharing), .connected)

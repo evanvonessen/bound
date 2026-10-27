@@ -19,8 +19,19 @@ struct AudioSettingsView: View
     @AppStorage(Settings.Name.pauseOtherAudio.rawValue)
     private var pauseOtherAudio = false
 
+    @AppStorage(Settings.Name.muteAllAudio.rawValue)
+    private var muteAllAudio = false
+
     var body: some View {
         Form {
+            Section {
+                Toggle("Mute All Audio", isOn: Binding(
+                    get: { muteAllAudio },
+                    set: { Settings.muteAllAudio = $0 }
+                ))
+                .accessibilityIdentifier("bound.audio.mute-all")
+            }
+
             Section {
                 Toggle("Respect Silent Mode", isOn: Binding(
                     get: { respectSilentMode },

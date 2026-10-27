@@ -125,6 +125,7 @@ extension PreviewGameViewController
         // Temporarily prevent emulatorCore from updating gameView to prevent flicker of black, or other visual glitches
         self.emulatorCore?.remove(self.gameView)
         
+        self.emulatorCore?.audioManager.isPlaybackMuted = Settings.muteAllAudio
         self.emulatorCore?.audioManager.respectsSilentMode = Settings.respectSilentMode
         self.emulatorCore?.audioManager.mixesWithOtherAudio = Settings.mixWithOtherAudio
         self.emulatorCore?.audioManager.pausesOtherAudio = Settings.pauseOtherAudio

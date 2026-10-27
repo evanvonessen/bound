@@ -16,7 +16,7 @@ extension Settings {
     static func resetPreferenceValues(in defaults: UserDefaults = .standard) {
         var keys = Set(defaultPreferences.keys)
         keys.formUnion([
-            "gameShortcutIdentifiers", "preferredWFCServer", "customWFCServer", "preferredGBColorPalette",
+            Settings.Name.muteAllAudio.rawValue, "gameShortcutIdentifiers", "preferredWFCServer", "customWFCServer", "preferredGBColorPalette",
             "gameScreenOffsetPortrait", "gameScreenOffsetLandscape",
             "preferredSaveStatesSorting", "prefersDescendingSaveStatesSorting",
             BoundUIVersionPreferences.key, BoundExperimentalSettingsPreferences.key, BoundDeveloperFeatures.key,
@@ -90,7 +90,7 @@ extension Settings {
                      BoundLandscapePreferences.didChangeNotification] {
             NotificationCenter.default.post(name: name, object: nil)
         }
-        for name: Settings.Name in [.resetToDefaults, .respectSilentMode, .mixWithOtherAudio, .pauseOtherAudio,
+        for name: Settings.Name in [.resetToDefaults, .muteAllAudio, .respectSilentMode, .mixWithOtherAudio, .pauseOtherAudio,
                                    .pauseWhileInactive, .supportsExternalDisplays, .dsAirPlayTopScreenOnly] {
             NotificationCenter.default.post(name: didChangeNotification, object: nil,
                 userInfo: [NotificationUserInfoKey.name: name])

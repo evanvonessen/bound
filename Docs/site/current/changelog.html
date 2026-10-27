@@ -9,6 +9,25 @@
 <main>
   <p>Bound changelog</p>
   <p><time datetime="2026-10-27">October 27, 2026</time></p>
+  <p>Bound</p>
+  <ul>
+    <li>Server backups with many named save states restore correctly without losing their core metadata.</li>
+    <li>Native pause/resume updates Handoff and controller UI on the main thread and ignores callbacks from a replaced game.</li>
+    <li>Removed Export All Config and the redundant cloud backup Provider label.</li>
+    <li>Added Mute All Audio in Audio settings, preserved through pause, resume and relaunch.</li>
+    <li>Muted games allow other apps’ audio to continue, including when muting during playback.</li>
+    <li>Audio-route changes keep a paused game’s audio engine and buffer disabled.</li>
+    <li>Screen-share retries find the selected cartridge partner, revalidate account ownership, and preserve the gameplay connection without another friend notification.</li>
+    <li>Added bottom scroll clearance to Mac settings pages.</li>
+    <li>Tap the waiting friend screen on iPhone in portrait to retry the screen sharing connection.</li>
+  </ul>
+  <p>Radical Red multiplayer</p>
+  <ul>
+    <li>Server-save operations reject late responses after switching accounts; cancelled setup cannot leave usable save authorization.</li>
+    <li>New Game retains the selected friend when server-save access refreshes after browsing saves.</li>
+    <li>Friend sprites use the emulator’s displayed palette, including nighttime colors.</li>
+  </ul>
+  <p><time datetime="2026-10-27">October 27, 2026</time></p>
   <p>Radical Red multiplayer</p>
   <ul>
     <li>Soul Link shares one wild/raid catch per named area, exempts static encounters and gifts, and limits Celadon to one prize Pokémon. Eggs, gifts and static encounters each have separate numbered Soul Link pairs with permanent linked losses. Egg pairs persist after hatching.</li>

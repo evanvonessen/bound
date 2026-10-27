@@ -70,6 +70,7 @@ final class SettingsResetTests: XCTestCase {
         BoundControlPlacementStore(defaults: defaults).save(
             BoundControlLayout(positions: ["button": BoundControlPlacement(x: 0.3, y: 0.4, scale: 1.2)]),
             skin: "test-skin", landscape: true)
+        defaults.set(true, forKey: Settings.Name.muteAllAudio.rawValue)
         defaults.set("custom", forKey: "respectSilentMode")
         defaults.set("custom", forKey: "mixWithOtherAudio")
         defaults.set("custom", forKey: "pauseOtherAudio")
@@ -98,6 +99,7 @@ final class SettingsResetTests: XCTestCase {
         XCTAssertEqual(BoundUIVersionPreferences(defaults: defaults).version, .option2)
         XCTAssertFalse(BoundExperimentalSettingsPreferences(defaults: defaults).enabled)
         XCTAssertFalse(defaults.bool(forKey: BoundMultiplayerFeatures.key))
+        XCTAssertFalse(defaults.bool(forKey: Settings.Name.muteAllAudio.rawValue))
         XCTAssertEqual(appearance.effectiveScreenLayout, .bound)
         XCTAssertEqual(appearance.effectiveTheme, .delta)
         XCTAssertFalse(BoundFastForwardPreferences(defaults: defaults).isEnabled(for: "ROM123"))

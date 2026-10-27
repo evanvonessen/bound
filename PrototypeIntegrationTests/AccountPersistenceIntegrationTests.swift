@@ -1178,6 +1178,42 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         onboarding.close()
     }
 
+    func testPortraitRetryFindsCartridgePartnerAndDoesNotResendJiggle() async throws {
+        var identity: AppCloudSession? = try makeIdentity(owner: UUID())
+        let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
+        let transport = FriendTapSharingTransport()
+        var authorizations = 0
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true, mediaOnly: true,
+            tokenFetcher: { room, session in
+                authorizations += 1
+                return self.makeLease(room: room, owner: session.owner, request: authorizations)
+            })
+        var jiggles = 0
+        let onboarding = FriendOnboarding(call: { _, _, _ in .init(ok: true, rooms: [friend]) },
+            sendJiggle: { _, _ in jiggles += 1; return "" }, observeAccount: { OnboardingObservation($0) })
+        defer { onboarding.close(); sharing.stop() }
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+        onboarding.setMultiplayerPartner(roomID: friend.roomID)
+        XCTAssertTrue(sharing.isConfigured, "An authenticated lane exists before it has a room")
+        XCTAssertNil(sharing.configuredRoomID)
+        XCTAssertNil(onboarding.screenSelected)
+        XCTAssertTrue(onboarding.retryScreenSharing())
+        await waitUntil { sharing.joined }
+        XCTAssertEqual(sharing.configuredRoomID, friend.roomID)
+        XCTAssertEqual(onboarding.screenSelected, friend)
+        XCTAssertEqual(authorizations, 1)
+        XCTAssertTrue(onboarding.retryScreenSharing())
+        await waitUntil { sharing.joined && authorizations == 2 }
+        XCTAssertEqual(transport.configurations.count, 2)
+        XCTAssertEqual(jiggles, 0, "A connection retry must not send another friend notification")
+        identity = try makeIdentity(owner: UUID())
+        XCTAssertFalse(onboarding.retryScreenSharing(), "A stale account selection cannot authorize a retry")
+        XCTAssertEqual(authorizations, 2)
+        identity = nil
+        XCTAssertFalse(onboarding.retryScreenSharing())
+    }
+
     func testPendingJiggleIsCanceledOnNewSelection() async throws {
         let identity = try makeIdentity(owner: UUID())
         let first = FriendRoom(roomID: UUID().uuidString, displayName: "First Friend")
