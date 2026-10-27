@@ -1,3 +1,5 @@
+> Historical validation of the retired full-screen viewer. Current behavior is documented in [Friends multiview](../PARTNER-SPECTATING.md).
+
 # Partner battle spectating
 
 Branch: `codex/partner-spectating`, based on `54fa4691013fa3e5dd804513dce9c454a2b352f1`.

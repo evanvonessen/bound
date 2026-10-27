@@ -794,12 +794,6 @@ final class BoundCompanionCoordinator {
         romMultiplayer.debugModeChanged = { [weak self] enabled in self?.state.settings.setDebugGame(enabled) }
         romMultiplayer.bind(core: core, game: owner?.game as? Game)
         state.settings.setDebugGame(core == nil ? nil : romMultiplayer.probe.read()?.debugSetup)
-        romMultiplayer.watch = { [weak self, weak owner] in
-            guard let self, let owner, owner.presentedViewController == nil else { return }
-            self.sharing.screenSharing.watchPartner()
-            guard self.sharing.screenSharing.watchingPartner else { return }
-            owner.present(UIHostingController(rootView: BoundPartnerSpectatorView(sharing: self.sharing.screenSharing)), animated: true)
-        }
         romMultiplayer.didRestoreSnapshot = { [weak owner] in
             guard let owner, let core = owner.emulatorCore else { return }
             owner.boundRRDexDidLoadSaveState(core: core)
@@ -986,7 +980,7 @@ final class BoundCompanionCoordinator {
         if !arrangementLayers.active { arrangementLayers.apply() }
         if macHost != nil, let overlay {
             owner.view.bringSubviewToFront(overlay)
-            sharing.setRemotePresentationEnabled(!overlay.isHidden)
+            sharing.setRemotePresentationEnabled(!overlay.isHidden && state.macSidebarVisible && state.macFriendVisible)
             return
         }
         layoutCycleButton(bounds: owner.view.bounds, safeArea: owner.view.safeAreaInsets)
@@ -2051,7 +2045,6 @@ struct BoundFriendsSheet: View {
                         BoundLivePresenceControls(session: sharing.livePresence)
                         BoundSoulControls(session: sharing.soulLink)
                         BoundRunTimelineControls(timeline: sharing.soulLink.probe.timeline)
-                        BoundPartnerSpectatorControls(sharing: sharing)
                     }
                 }
             }.navigationTitle("Friends")
@@ -2598,51 +2591,5 @@ struct BoundDeleteAccountView: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button(account.session == nil ? "Done" : "Cancel") { dismiss() }.disabled(account.busy) } }
             .task { await account.loadDeletionIdentity() }
             .interactiveDismissDisabled(account.busy)
-    }
-}
-
-
-/// A separate canvas preserves the companion screen when the watch sheet closes.
-struct BoundPartnerSpectatorControls: View {
-    @ObservedObject var sharing: FriendSharingSession
-    @State private var showing = false
-    var body: some View {
-        Section("Partner Battle") {
-            Button("Watch partner", systemImage: "play.rectangle") {
-                sharing.screenSharing.watchPartner()
-                showing = sharing.screenSharing.watchingPartner
-            }
-            .disabled(!sharing.screenSharing.active || !sharing.screenSharing.joined || sharing.screenSharing.reconnecting)
-            .accessibilityIdentifier("bound.watch-partner")
-        }
-        .fullScreenCover(isPresented: $showing, onDismiss: { sharing.screenSharing.stopWatchingPartner() }) {
-            BoundPartnerSpectatorView(sharing: sharing.screenSharing)
-        }
-    }
-}
-
-struct BoundPartnerSpectatorView: View {
-    @ObservedObject var sharing: FriendSharingSession
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
-                BoundRemoteCanvas(view: sharing.spectatorView, hidesAccessibilityChildren: true)
-                    .aspectRatio(1.5, contentMode: .fit)
-                    .opacity(sharing.spectatorLive ? 1 : 0)
-                if !sharing.spectatorLive {
-                    Text(sharing.reconnecting ? "Reconnecting…" : "Waiting for live partner video…")
-                        .foregroundStyle(.white)
-                }
-            }
-            .navigationTitle(sharing.spectatorLive ? "Partner · Live" : "Partner")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } }
-            }
-        }
-        .onChange(of: sharing.watchingPartner) { _, watching in if !watching { dismiss() } }
-        .onDisappear { sharing.stopWatchingPartner() }
     }
 }

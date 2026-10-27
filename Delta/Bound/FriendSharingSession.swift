@@ -189,7 +189,7 @@ protocol FriendSharingTransport: SharingTransport {
     func start(configuration: FriendSharingConfiguration, remoteView: UIView,
                event: @escaping @MainActor (FriendSharingEvent) -> Void)
     func stop()
-    func setSpectatorView(_ view: UIView?)
+    func clearPresentation()
     func presentLatestFrame()
     func renewToken(_ token: String) -> Bool
     func recordRecoveryTimeout()
@@ -208,7 +208,7 @@ extension FriendSharingTransport {
     func makeBattleChannel(receiver: @escaping @Sendable (Data) -> Void, failed: @escaping @Sendable () -> Void) -> (any BoundBattleChannel)? { nil }
     var diagnostics: [String: Any] { [:] }
     var frameTiming: FriendSharingFrameTiming? { nil }
-    func setSpectatorView(_ view: UIView?) {}
+    func clearPresentation() {}
     func presentLatestFrame() {}
     func renewToken(_ token: String) -> Bool { false }
     func recordRecoveryTimeout() {}
@@ -340,37 +340,18 @@ final class FriendSharingSession: ObservableObject {
     private var tokenExpiry: TimeInterval?
     private var tokenRenewals = 0
     let remoteView = UIView()
-    let spectatorView = UIView()
-    @Published private(set) var watchingPartner = false
-    @Published private(set) var spectatorLive = false
-    private var spectatorFrameCount = 0
-    private var spectatorLastFrame: TimeInterval?
+    private var videoFrameCount = 0
+    private var videoLastFrame: TimeInterval?
     private var lastConvertedFrame: TimeInterval?
 
-    func watchPartner() {
-        guard active, joined, !reconnecting else { return }
-        watchingPartner = true
-        spectatorLive = false
-        invalidateSpectatorVideo()
-        spectatorView.backgroundColor = .black
-        transport.setSpectatorView(spectatorView)
-    }
-
-    func stopWatchingPartner() {
-        watchingPartner = false
-        spectatorLive = false
-        transport.setSpectatorView(nil)
-    }
-
-    private func invalidateSpectatorVideo() {
-        spectatorLive = false
-        spectatorLastFrame = nil
-        spectatorFrameCount = transport.receivedFrames
+    private func invalidateRemoteVideo() {
+        videoLastFrame = nil
+        videoFrameCount = transport.receivedFrames
         lastConvertedFrame = transport.frameTiming?.converted
         remoteVisible = false
     }
 
-    func updateSpectatorFreshness(received: Int, now: () -> TimeInterval = CACurrentMediaTime) {
+    func updateVideoFreshness(received: Int, now: () -> TimeInterval = CACurrentMediaTime) {
         // Decoding can finish after the display link's frame timestamp. Sample
         // host time after the timing snapshot so a new frame cannot look stale.
         let timing = transport.frameTiming
@@ -380,22 +361,21 @@ final class FriendSharingSession: ObservableObject {
             // detached pixel frame may refresh the production Live indicator.
             if let converted = timing.converted, converted != lastConvertedFrame {
                 lastConvertedFrame = converted
-                spectatorLastFrame = converted
+                videoLastFrame = converted
             }
-        } else if received != spectatorFrameCount {
+        } else if received != videoFrameCount {
             // Deterministic transports without SDK timing report decoded frames.
-            spectatorLastFrame = received > 0 ? timestamp : nil
+            videoLastFrame = received > 0 ? timestamp : nil
         }
-        spectatorFrameCount = received
-        let fresh = joined && !reconnecting && spectatorLastFrame.map {
+        videoFrameCount = received
+        let fresh = joined && !reconnecting && videoLastFrame.map {
             timestamp >= $0 && timestamp - $0 < 3
         } == true
-        if remoteVisible != fresh { remoteVisible = fresh }
-        if spectatorLive != (watchingPartner && fresh) { spectatorLive = watchingPartner && fresh }
+        if remoteVisible != (remotePresentationEnabled && fresh) { remoteVisible = remotePresentationEnabled && fresh }
         guard active else { return }
         if reconnecting { status = "Reconnecting…" }
         else if joined {
-            status = transport is BoundNakamaSharingTransport && !videoPublishing && !watchingPartner
+            status = transport is BoundNakamaSharingTransport && !videoPublishing
                 ? "Multiplayer connected" : fresh ? "Receiving game video" : "Waiting for fresh friend video"
         }
     }
@@ -412,6 +392,7 @@ final class FriendSharingSession: ObservableObject {
     private var remotePresentationEnabled = true
     func setRemotePresentationEnabled(_ enabled: Bool) {
         remotePresentationEnabled = enabled; mediaSession?.setRemotePresentationEnabled(enabled)
+        if !enabled { transport.clearPresentation(); remoteVisible = false }
     }
     private var sequence: UInt64 = 0
     private var captureClock = FriendSharingCaptureClock()
@@ -446,6 +427,9 @@ final class FriendSharingSession: ObservableObject {
          screenSession: FriendSharingSession? = nil,
          applicationIsBackgrounded: @escaping () -> Bool = { UIApplication.shared.applicationState == .background }) {
         self.mediaOnly = mediaOnly
+        // No surface is mounted in Account settings. Only the multiview owner
+        // enables presentation; temporary local QA transports retain their canvas.
+        self.remotePresentationEnabled = !authenticatedMode && configuration != nil && !mediaOnly
         self.connectionFeed = connectionFeed ?? BoundConnectionFeed()
         self.applicationIsBackgrounded = applicationIsBackgrounded
         self.authenticatedMode = authenticatedMode
@@ -473,7 +457,7 @@ final class FriendSharingSession: ObservableObject {
             }
             nakama.videoStateChanged = { [weak self, weak nakama] in
                 self?.videoPublishing = nakama?.videoPublishing == true
-                if nakama?.videoPublishing != true { self?.invalidateSpectatorVideo() }
+                if nakama?.videoPublishing != true { self?.invalidateRemoteVideo() }
             }
         }
         if let screenSession { attachScreenSharing(screenSession) }
@@ -585,7 +569,8 @@ final class FriendSharingSession: ObservableObject {
             }
             sharedWorld.stop()
             livePresence.setEnabled(false); livePresence.stop(); livePresence.connectionCheck.stop()
-            disconnectMultiplayer()
+            // Ordinary Agora/local video does not own a Nakama gameplay lane.
+            if authenticatedMode && transport is BoundNakamaSharingTransport { disconnectMultiplayer() }
         }
     }
 
@@ -755,7 +740,7 @@ final class FriendSharingSession: ObservableObject {
             case .remoteGone:
                 self.peerConnected = false
                 self.connectionFeed.friendUnavailable()
-                self.invalidateSpectatorVideo()
+                self.invalidateRemoteVideo()
                 self.sharedWorld.peerGone(); self.soulLink.peerGone()
                 self.cooperativeDoubles.transportInterrupted(); self.nativeBattle.suspendTransport()
                 self.interactions.suspend()
@@ -764,7 +749,7 @@ final class FriendSharingSession: ObservableObject {
                 self.receivedFrames = 0
                 self.status = "Waiting for friend"
             case .reconnecting:
-                self.invalidateSpectatorVideo()
+                self.invalidateRemoteVideo()
                 self.sharedWorld.peerGone(); self.soulLink.peerGone()
                 self.beginRecovery(run: run)
             case .rejoined:
@@ -947,7 +932,7 @@ final class FriendSharingSession: ObservableObject {
     }
 
     private func beginRecovery(run: UUID) {
-        invalidateSpectatorVideo()
+        invalidateRemoteVideo()
         guard !reconnecting else { return } // Repeated SDK events never extend the deadline.
         connectionFeed.recovering()
         sharedWorld.peerGone()
@@ -1000,10 +985,10 @@ final class FriendSharingSession: ObservableObject {
             self.interactions.tick()
             // Keep receiving/publishing while Notes, Types or a hidden PiP is
             // selected. Consume the bounded latest-frame mailbox only when visible.
-            if self.remotePresentationEnabled || self.watchingPartner { self.transport.presentLatestFrame() }
+            if self.remotePresentationEnabled { self.transport.presentLatestFrame() }
             let cadence = self.receiverCadence.tick(at: timestamp)
             let received = self.transport.receivedFrames
-            self.updateSpectatorFreshness(received: received)
+            self.updateVideoFreshness(received: received)
             if cadence.statistics {
                 if self.publishedFrames != self.transport.publishedFrames { self.publishedFrames = self.transport.publishedFrames }
                 if self.receivedFrames != received { self.receivedFrames = received }
@@ -1034,7 +1019,6 @@ final class FriendSharingSession: ObservableObject {
             return self.transport.sendPresence(data)
         }
         startInteractions()
-        if watchingPartner { transport.setSpectatorView(spectatorView) }
     }
 
     private func startInteractions() {
@@ -1064,8 +1048,7 @@ final class FriendSharingSession: ObservableObject {
     }
 
     private func stop(clearReconnectIntent: Bool) {
-        if clearReconnectIntent { stopWatchingPartner() }
-        invalidateSpectatorVideo()
+        invalidateRemoteVideo()
         BoundMainActorDisposal.drainPending()
         foregroundReconnectRetry?.cancel(); foregroundReconnectRetry = nil
         if clearReconnectIntent { pausedMultiplayerScope = nil; foregroundReconnectIntent = nil; foregroundReconnectAttempts = 0; reconnectPeerOwner = nil }
@@ -1162,7 +1145,7 @@ final class FriendSharingSession: ObservableObject {
         cooperativeDoubles.transportInterrupted(); nativeBattle.suspendTransport()
         interactions.suspend(); livePresence.stop(keepPresentation: true)
         transport.setInteractionReceiver(nil); transport.setPresenceReceiver(nil)
-        invalidateSpectatorVideo()
+        invalidateRemoteVideo()
         generation = UUID()
         tokenTask?.cancel(); tokenTask = nil
         tokenDeadline?.cancel(); tokenDeadline = nil

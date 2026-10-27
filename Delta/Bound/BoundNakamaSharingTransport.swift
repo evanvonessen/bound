@@ -11,7 +11,6 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     private var gameplay: BoundNakamaConfiguration?
     private var event: (@MainActor (FriendSharingEvent) -> Void)?
     private var remoteView: UIView?
-    private var spectatorView: UIView?
     private var mediaConfiguration: FriendSharingConfiguration?
     private var generation = BoundSDKGeneration()
     private var gameplayGeneration = BoundSDKGeneration()
@@ -67,7 +66,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     func setVideoRequired(_ value: Bool) {
         videoRequested = value
         if value { ensureVideo() }
-        else if spectatorView == nil { stopVideo() }
+        else { stopVideo() }
     }
 
     var videoPublishing: Bool { videoStarted && videoConnected }
@@ -195,7 +194,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     }
 
     private func ensureVideo() {
-        guard event != nil, (videoRequested || spectatorView != nil), !videoStarted, videoTask == nil, videoRetry == nil,
+        guard event != nil, videoRequested, !videoStarted, videoTask == nil, videoRetry == nil,
               let remoteView else { return }
         let run = generation.token, attempt = BoundSDKGeneration.Token(); videoGeneration.replace(with: attempt)
         if gameplay == nil, !gameplayFenced, let mediaConfiguration {
@@ -209,7 +208,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
                     let lease = try await videoAuthorization()
                     try Task.checkCancellation()
                     guard let self, self.generation.admits(run), self.videoGeneration.admits(attempt), self.event != nil,
-                          self.videoRequested || self.spectatorView != nil else { return }
+                          self.videoRequested else { return }
                     self.videoTask = nil; self.beginVideo(lease.configuration, view: remoteView, run: run)
                     self.scheduleVideoRenewal(lease, run: run)
                 } catch {
@@ -252,7 +251,6 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
                 }
             }
         }
-        media.setSpectatorView(spectatorView)
     }
 
     private func scheduleVideoRenewal(_ lease: FriendSharingTokenLease, run: BoundSDKGeneration.Token) {
@@ -283,7 +281,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         scheduleVideoRetry()
     }
     private func scheduleVideoRetry() {
-        guard gameplay != nil, connected, event != nil, videoRequested || spectatorView != nil, videoRetry == nil else { return }
+        guard gameplay != nil, connected, event != nil, videoRequested, videoRetry == nil else { return }
         videoRetryAttempts += 1
         let delay = BoundSDKRetryDelay.seconds(attempt: videoRetryAttempts)
         let run = generation.token, attempt = videoGeneration.token
@@ -312,10 +310,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         videoTask?.cancel(); videoTask = nil; videoDeadline?.cancel(); videoDeadline = nil
         media.stop(); videoStarted = false; videoConnected = false; videoStateChanged?()
     }
-    func setSpectatorView(_ view: UIView?) {
-        spectatorView = view; media.setSpectatorView(view)
-        if view != nil { ensureVideo() } else if !videoRequested { stopVideo() }
-    }
+    func clearPresentation() { media.clearPresentation() }
     func presentLatestFrame() { if videoStarted { media.presentLatestFrame() } }
     func renewToken(_ token: String) -> Bool { media.renewToken(token) }
     func recordRecoveryTimeout() { media.recordRecoveryTimeout() }
@@ -326,7 +321,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
     }
     func stop() {
         generation.invalidate(); gameplayGeneration.invalidate(); event = nil; connected = false; client.stop(); battleInbox.close()
-        stopVideo(); gameplay = nil; gameplayFenced = false; gameplayIsDebug = false; mediaConfiguration = nil; remoteView = nil; spectatorView = nil
+        stopVideo(); gameplay = nil; gameplayFenced = false; gameplayIsDebug = false; mediaConfiguration = nil; remoteView = nil
         pendingPresence = nil; pendingRetainedPresence = nil; pendingInteractions.removeAll(); pendingInteractionBytes = 0; peerOnline = false
     }
 }

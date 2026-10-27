@@ -534,32 +534,26 @@ final class LivePresenceTests: XCTestCase {
         XCTAssertEqual(session.peerEpoch, old)
     }
 
-    func testPartnerSpectatingFreshnessAndRecovery() {
+    func testFriendsMultiviewFreshnessAndRecovery() {
         let transport = PresenceFixtureTransport()
         let sharing = FriendSharingSession(configuration: .init(appID: String(repeating: "0", count: 32),
-            channel: "spectator-test", uid: 1, remoteUID: 2, token: "offline-fixture"),
+            channel: "multiview-test", uid: 1, remoteUID: 2, token: "offline-fixture"),
             transport: transport, authenticatedMode: false)
-        sharing.watchPartner()
-        XCTAssertFalse(sharing.watchingPartner)
         sharing.start()
-        sharing.watchPartner()
-        XCTAssertTrue(sharing.watchingPartner)
-        sharing.updateSpectatorFreshness(received: 0, now: { 10 })
-        XCTAssertFalse(sharing.spectatorLive)
-        sharing.updateSpectatorFreshness(received: 1, now: { 11 })
-        XCTAssertTrue(sharing.spectatorLive)
-        sharing.updateSpectatorFreshness(received: 1, now: { 14 })
-        XCTAssertFalse(sharing.spectatorLive)
-        sharing.updateSpectatorFreshness(received: 2, now: { 15 })
-        XCTAssertTrue(sharing.spectatorLive)
+        sharing.updateVideoFreshness(received: 0, now: { 10 })
+        XCTAssertFalse(sharing.remoteVisible)
+        sharing.updateVideoFreshness(received: 1, now: { 11 })
+        XCTAssertTrue(sharing.remoteVisible)
+        sharing.updateVideoFreshness(received: 1, now: { 14 })
+        XCTAssertFalse(sharing.remoteVisible)
+        sharing.updateVideoFreshness(received: 2, now: { 15 })
+        XCTAssertTrue(sharing.remoteVisible)
         transport.event?(.reconnecting)
-        sharing.updateSpectatorFreshness(received: 2, now: { 15.1 })
-        XCTAssertFalse(sharing.spectatorLive)
-        sharing.stopWatchingPartner()
+        sharing.updateVideoFreshness(received: 2, now: { 15.1 })
+        XCTAssertFalse(sharing.remoteVisible)
         XCTAssertTrue(sharing.active)
-        XCTAssertFalse(sharing.watchingPartner)
         sharing.stop()
-        XCTAssertFalse(sharing.spectatorLive)
+        XCTAssertFalse(sharing.remoteVisible)
     }
 
     func testDecodedVideoFreshnessRejectsInvalidFramesAndRequiresFreshPixelsAfterPeerDeparture() {
@@ -568,27 +562,26 @@ final class LivePresenceTests: XCTestCase {
             channel: "recovery-test", uid: 1, remoteUID: 2, token: "offline-fixture"), transport: transport, authenticatedMode: false)
         sharing.start(); defer { sharing.stop() }
         transport.frameTiming = .init(received: 10, converted: nil, presented: nil, published: nil)
-        sharing.watchPartner()
-        sharing.updateSpectatorFreshness(received: 1, now: { 10 })
-        XCTAssertFalse(sharing.remoteVisible); XCTAssertFalse(sharing.spectatorLive)
+        sharing.updateVideoFreshness(received: 1, now: { 10 })
+        XCTAssertFalse(sharing.remoteVisible)
         transport.frameTiming = .init(received: 11, converted: 11, presented: nil, published: nil)
-        sharing.updateSpectatorFreshness(received: 2, now: { 11 })
-        XCTAssertTrue(sharing.remoteVisible); XCTAssertTrue(sharing.spectatorLive)
+        sharing.updateVideoFreshness(received: 2, now: { 11 })
+        XCTAssertTrue(sharing.remoteVisible)
         transport.frameTiming = .init(received: 14, converted: 11, presented: nil, published: nil)
-        sharing.updateSpectatorFreshness(received: 30, now: { 14 })
-        XCTAssertFalse(sharing.remoteVisible); XCTAssertFalse(sharing.spectatorLive)
+        sharing.updateVideoFreshness(received: 30, now: { 14 })
+        XCTAssertFalse(sharing.remoteVisible)
         transport.event?(.remoteGone)
-        sharing.updateSpectatorFreshness(received: 30, now: { 14.1 })
+        sharing.updateVideoFreshness(received: 30, now: { 14.1 })
         XCTAssertFalse(sharing.remoteVisible)
         transport.frameTiming = .init(received: 15, converted: 15, presented: nil, published: nil)
-        sharing.updateSpectatorFreshness(received: 31, now: { 15 })
+        sharing.updateVideoFreshness(received: 31, now: { 15 })
         XCTAssertTrue(sharing.remoteVisible)
         transport.event?(.reconnecting)
-        sharing.updateSpectatorFreshness(received: 31, now: { 15.1 })
+        sharing.updateVideoFreshness(received: 31, now: { 15.1 })
         XCTAssertFalse(sharing.remoteVisible)
         XCTAssertEqual(sharing.status, "Reconnecting…")
         transport.event?(.rejoined)
-        sharing.updateSpectatorFreshness(received: 31, now: { 15.2 })
+        sharing.updateVideoFreshness(received: 31, now: { 15.2 })
         XCTAssertFalse(sharing.remoteVisible)
     }
 
@@ -598,43 +591,42 @@ final class LivePresenceTests: XCTestCase {
             channel: "fresh-frame-clock-test", uid: 1, remoteUID: 2, token: "offline-fixture"),
             transport: transport, authenticatedMode: false)
         sharing.start(); defer { sharing.stop() }
-        sharing.watchPartner()
         // Simulate a conversion completing between the previous display refresh
         // and the receiver callback. Sample the clock after reading that frame.
         var clock = 10.0
         var sampledTiming = false
         transport.frameTiming = .init(received: 10.004, converted: 10.005, presented: nil, published: nil)
         transport.frameTimingRead = { sampledTiming = true; clock = 10.006 }
-        sharing.updateSpectatorFreshness(received: 1, now: {
+        sharing.updateVideoFreshness(received: 1, now: {
             XCTAssertTrue(sampledTiming, "Reading the clock before the decoded frame can mark fresh video stale")
             return clock
         })
         XCTAssertTrue(sharing.remoteVisible, "A newly converted frame must not be hidden as stale")
-        XCTAssertTrue(sharing.spectatorLive)
+        XCTAssertTrue(sharing.remoteVisible)
         transport.frameTimingRead = nil
         clock = 13.004
-        sharing.updateSpectatorFreshness(received: 1, now: { clock })
+        sharing.updateVideoFreshness(received: 1, now: { clock })
         XCTAssertTrue(sharing.remoteVisible)
         clock = 13.006
-        sharing.updateSpectatorFreshness(received: 1, now: { clock })
+        sharing.updateVideoFreshness(received: 1, now: { clock })
         XCTAssertFalse(sharing.remoteVisible, "A truly stalled decoded stream still expires after three seconds")
-        XCTAssertFalse(sharing.spectatorLive)
+        XCTAssertFalse(sharing.remoteVisible)
     }
 
-    func testSpectatorCanvasDoesNotStealCompanionPixels() {
+    func testDistinctCanvasPresentersDoNotStealPixels() {
         let companion = UIView(frame: CGRect(x: 0, y: 0, width: 240, height: 160))
-        let spectator = UIView(frame: companion.frame)
+        let otherCanvas = UIView(frame: companion.frame)
         let first = FriendSharingCanvasPresenter()
         let second = FriendSharingCanvasPresenter()
         let pixels = Data(repeating: 255, count: SharingFrame.byteCount)
         XCTAssertTrue(first.present(pixels, in: companion))
-        XCTAssertTrue(second.present(pixels, in: spectator))
+        XCTAssertTrue(second.present(pixels, in: otherCanvas))
         XCTAssertEqual(companion.subviews.count, 1)
-        XCTAssertEqual(spectator.subviews.count, 1)
+        XCTAssertEqual(otherCanvas.subviews.count, 1)
         second.clear()
         XCTAssertTrue(first.isVisible)
         XCTAssertEqual(companion.subviews.count, 1)
-        XCTAssertTrue(spectator.subviews.isEmpty)
+        XCTAssertTrue(otherCanvas.subviews.isEmpty)
         first.clear()
     }
 

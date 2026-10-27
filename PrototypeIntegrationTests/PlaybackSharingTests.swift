@@ -64,9 +64,7 @@ private final class TransitionCount: @unchecked Sendable {
     let callbacks = AgoraSharingCallbacks(remoteUID: 2) { _, _ in }
     let presenter = FriendSharingCanvasPresenter()
     private var host: UIView?
-    private var spectator: UIView?
-    let spectatorPresenter = FriendSharingCanvasPresenter()
-    func setSpectatorView(_ view: UIView?) { spectatorPresenter.clear(); spectator = view }
+    func clearPresentation() { presenter.clear() }
     private var generation = 0
     private(set) var publishedFrames = 0
     var receivedFrames: Int { callbacks.receivedFrames }
@@ -124,7 +122,6 @@ private final class TransitionCount: @unchecked Sendable {
         presentationCalls += 1
         if let host, let pixels = callbacks.takeLatestPixels() {
             presenter.present(pixels, in: host)
-            if let spectator { spectatorPresenter.present(pixels, in: spectator) }
         }
     }
     func interrupt() { callbacks.suspendFrames(); presenter.clear(); event?(.reconnecting) }
@@ -334,33 +331,30 @@ private final class TransitionCount: @unchecked Sendable {
         XCTAssertEqual(transport.presentationCalls, calls)
         XCTAssertTrue(session.active)
     }
-    func testSpectatingReceivesPixelsWithCompanionHiddenAndClosesIndependently() async throws {
+    func testFriendsMultiviewHidesPixelsKeepsMediaAndRequiresFreshVideoAfterRecovery() async throws {
         let transport = OfflineVideoTransport()
         let session = FriendSharingSession(configuration: configuration(), transport: transport, authenticatedMode: false)
-        session.setRemotePresentationEnabled(false)
+        session.setRemotePresentationEnabled(true)
         session.start(); defer { session.stop() }
-        session.watchPartner()
-        for i in 1...4 {
-            session.receivePlaybackFrame(GameFrame(rgba: FriendSharingPixels.rgba(sequence: UInt64(i), uid: 2), number: UInt64(i), buttons: 0))
-            try await wait(0.1)
-        }
-        XCTAssertTrue(session.spectatorLive)
-        XCTAssertTrue(transport.spectatorPresenter.isVisible)
-        XCTAssertEqual(session.spectatorView.subviews.count, 1)
-        transport.interrupt()
-        XCTAssertFalse(session.spectatorLive)
-        transport.recover()
-        XCTAssertFalse(session.spectatorLive, "Rejoining cannot label a retained frame live")
-        session.receivePlaybackFrame(GameFrame(rgba: FriendSharingPixels.rgba(sequence: 5, uid: 2), number: 5, buttons: 0))
+        session.receivePlaybackFrame(GameFrame(rgba: FriendSharingPixels.rgba(sequence: 1, uid: 2), number: 1, buttons: 0))
         try await wait(0.2)
-        XCTAssertTrue(session.spectatorLive)
-        session.stopWatchingPartner()
-        XCTAssertTrue(session.active)
-        XCTAssertTrue(session.spectatorView.subviews.isEmpty)
-        XCTAssertTrue(transport.presenter.isVisible)
+        XCTAssertTrue(session.remoteVisible); XCTAssertTrue(transport.presenter.isVisible)
+        session.setRemotePresentationEnabled(false)
+        XCTAssertFalse(session.remoteVisible); XCTAssertFalse(transport.presenter.isVisible)
         let calls = transport.presentationCalls
-        try await wait(0.15)
+        session.receivePlaybackFrame(GameFrame(rgba: FriendSharingPixels.rgba(sequence: 2, uid: 2), number: 2, buttons: 0))
+        try await wait(0.2)
         XCTAssertEqual(transport.presentationCalls, calls)
+        XCTAssertTrue(session.active); XCTAssertTrue(session.joined)
+        transport.interrupt(); transport.recover()
+        XCTAssertFalse(session.remoteVisible, "Rejoining cannot present a retained stale frame")
+        session.setRemotePresentationEnabled(true)
+        session.receivePlaybackFrame(GameFrame(rgba: FriendSharingPixels.rgba(sequence: 3, uid: 2), number: 3, buttons: 0))
+        try await wait(0.2)
+        XCTAssertTrue(session.remoteVisible); XCTAssertTrue(transport.presenter.isVisible)
+        session.stop()
+        XCTAssertFalse(session.active); XCTAssertFalse(transport.presenter.isVisible)
+        XCTAssertFalse(session.connectionRequested)
     }
 
     func testDecodedFrameDiagnosticsAreDisabledInRelease() {
@@ -627,6 +621,13 @@ extension PlaybackSharingTests {
 
 extension PlaybackSharingTests {
     func testMenuChordsReleaseActualGBAInputsWithEitherGesturePreference() async throws {
+        // Exercise native input with a visible remote canvas throughout. This
+        // local transport supplies deterministic decoded frames without Agora.
+        let videoTransport = OfflineVideoTransport()
+        let video = FriendSharingSession(configuration: configuration(), transport: videoTransport, authenticatedMode: false)
+        video.setRemotePresentationEnabled(true); video.start()
+        defer { video.stop() }
+
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -642,6 +643,13 @@ extension PlaybackSharingTests {
         window.makeKeyAndVisible()
         let core = try XCTUnwrap(owner.emulatorCore)
         let touch = try XCTUnwrap(owner.controllerView)
+        let panel = UIHostingController(rootView: BoundCompanionPanel(sharing: video,
+            state: BoundCompanionState(), gameID: "input-qa", editingChanged: { _ in }))
+        owner.addChild(panel); owner.view.addSubview(panel.view)
+        panel.view.frame = CGRect(x: 0, y: 0, width: 240, height: 160)
+        panel.didMove(toParent: owner)
+        defer { panel.willMove(toParent: nil); panel.view.removeFromSuperview(); panel.removeFromParent() }
+        video.receivePlaybackFrame(GameFrame(rgba: FriendSharingPixels.rgba(sequence: 1, uid: 2), number: 1, buttons: 0))
         touch.playerIndex = 0
         let savedGestures = Settings.isQuickGesturesEnabled
         defer {
@@ -657,6 +665,8 @@ extension PlaybackSharingTests {
         for _ in 0..<40 where core.state != .running { try await wait(0.05) }
         XCTAssertEqual(core.state, .running)
         XCTAssertTrue(scene.hasKeyboardFocus)
+        XCTAssertTrue(videoTransport.presenter.isVisible)
+        XCTAssertNil(owner.presentedViewController, "Friends video must not open a blocking viewer")
         core.audioManager.isEnabled = false
         let bridge = try XCTUnwrap(core.deltaCore.emulatorBridge as? NSObject)
         func nativeInputs() throws -> UInt32 {
@@ -1209,7 +1219,7 @@ extension PlaybackSharingTests {
         XCTAssertNil(session.interactions.admissionIdentity?())
     }
 
-    func testManualAuthenticatedSessionRetriesSocketLossWithoutDiscardingInteractionOrSpectator() async throws {
+    func testManualAuthenticatedSessionRetriesSocketLossWithoutDiscardingInteraction() async throws {
         let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
         BoundMultiplayerFeatures.setEnabled(true)
         defer { UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key) }
@@ -1227,12 +1237,11 @@ extension PlaybackSharingTests {
         XCTAssertTrue(session.joined)
         XCTAssertTrue(session.interactions.open())
         let consentIdentity = try XCTUnwrap(session.interactions.admissionIdentity?())
-        session.watchPartner()
+        session.setRemotePresentationEnabled(true)
         transport.failConnection()
         XCTAssertFalse(session.active)
         XCTAssertTrue(session.connectionRequested)
-        XCTAssertTrue(session.watchingPartner)
-        XCTAssertFalse(session.spectatorLive)
+        XCTAssertFalse(session.remoteVisible)
         XCTAssertEqual(session.interactions.phase, .choosing)
         XCTAssertFalse(session.interactions.connected)
         XCTAssertEqual(session.interactions.admissionIdentity?(), consentIdentity)
@@ -1243,7 +1252,6 @@ extension PlaybackSharingTests {
         XCTAssertEqual(session.interactions.phase, .choosing)
         XCTAssertTrue(session.interactions.connected)
         XCTAssertEqual(session.interactions.admissionIdentity?(), consentIdentity)
-        XCTAssertTrue(session.watchingPartner)
 
         // A changed account is a deliberate boundary, not another network gap.
         transport.failConnection(); fixture.owner = UUID()
@@ -1252,7 +1260,6 @@ extension PlaybackSharingTests {
         XCTAssertFalse(session.connectionRequested)
         XCTAssertEqual(fixture.tokenRequests, 2)
         XCTAssertEqual(session.interactions.phase, .ended)
-        XCTAssertFalse(session.watchingPartner)
     }
 
     private func authenticatedReconnectSession(_ fixture: ForegroundReconnectFixture,

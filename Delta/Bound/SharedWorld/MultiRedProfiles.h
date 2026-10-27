@@ -5,6 +5,9 @@
 namespace BoundOriginalGame {
 #include "BoundOriginalGameABI.h"
 }
+namespace BoundDebugDefaultsGame {
+#include "BoundDebugDefaultsGameABI.h"
+}
 namespace BoundStackSafeGame {
 #include "BoundStackSafeGameABI.h"
 }
@@ -84,8 +87,20 @@ static const MultiRedNativeProfile MultiRedStackSafeProfile={
     BoundStackSafeGame::GameCooperativeCodeStart,BoundStackSafeGame::GameCooperativeCodeEnd,
     [](uint8_t *p) { for(const auto &entry:BoundStackSafeGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); }
 };
+static const MultiRedNativeProfile MultiRedDebugDefaultsProfile={
+    BoundDebugDefaultsGame::GameDescriptor,BoundDebugDefaultsGame::GameCanonicalSHA256,BoundDebugDefaultsGame::GameRulesetID,
+    BoundDebugDefaultsGame::GameDescriptorOffset,sizeof(BoundDebugDefaultsGame::GameDescriptor),BoundDebugDefaultsGame::GameHostOffset,BoundDebugDefaultsGame::GameHostSize,
+    BoundDebugDefaultsGame::GameSnapshotAddress,BoundDebugDefaultsGame::GameSnapshotSize,BoundDebugDefaultsGame::GameSnapshotRegionSize,
+    BoundDebugDefaultsGame::GameABIMajor,BoundDebugDefaultsGame::GameABIMinor,BoundDebugDefaultsGame::GameSaveStateLayout,
+    BoundDebugDefaultsGame::GameUIHostOffset,BoundDebugDefaultsGame::GameUIHostSize,BoundDebugDefaultsGame::GameUIRequestAddress,BoundDebugDefaultsGame::GameUIRequestSize,
+    BoundDebugDefaultsGame::GameCodeStart,BoundDebugDefaultsGame::GameCodeEnd,
+    BoundDebugDefaultsGame::GameCooperativeHostOffset,BoundDebugDefaultsGame::GameCooperativeHostSize,
+    BoundDebugDefaultsGame::GameCooperativeCodeStart,BoundDebugDefaultsGame::GameCooperativeCodeEnd,
+    [](uint8_t *p) { for(const auto &entry:BoundDebugDefaultsGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); }
+};
 static const MultiRedNativeProfile *multiRedProfile(const uint8_t *p) {
     if(MultiRedCurrentProfile.matches(p)) return &MultiRedCurrentProfile;
+    if(MultiRedDebugDefaultsProfile.matches(p)) return &MultiRedDebugDefaultsProfile;
     if(MultiRedStackSafeProfile.matches(p)) return &MultiRedStackSafeProfile;
     if(MultiRedOriginalProfile.matches(p)) return &MultiRedOriginalProfile;
     return nullptr;

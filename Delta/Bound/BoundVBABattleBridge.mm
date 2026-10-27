@@ -271,6 +271,9 @@ static_assert(GameCooperativeHostSize==BOUND_SDK_COOPERATIVE_HOST_BYTE_SIZE
 static_assert(BoundStackSafeGame::GameCooperativeSnapshotAddress==GameCooperativeSnapshotAddress
               && BoundStackSafeGame::GameCooperativeSnapshotSize==GameCooperativeSnapshotSize,
               "Historical cooperative snapshot requires a separate decoder");
+static_assert(BoundDebugDefaultsGame::GameCooperativeSnapshotAddress==GameCooperativeSnapshotAddress
+              && BoundDebugDefaultsGame::GameCooperativeSnapshotSize==GameCooperativeSnapshotSize,
+              "Historical cooperative snapshot requires a separate decoder");
 #endif
 #include "SoulLink/bridge.inc"
 #include "NativeBattle/invitation.inc"

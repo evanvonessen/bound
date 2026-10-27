@@ -350,8 +350,6 @@ final class AgoraSharingTransport: FriendSharingTransport {
     private var timestamps = AgoraSharingTimestamp()
     private var lastAttemptedSequence: UInt64 = 0
     private let presenter = FriendSharingCanvasPresenter()
-    private let spectatorPresenter = FriendSharingCanvasPresenter()
-    private weak var spectatorView: UIView?
     private var presentedFrames = 0
     private var lastPresentedAt: TimeInterval?
     private var lastPublishedAt: TimeInterval?
@@ -428,10 +426,9 @@ final class AgoraSharingTransport: FriendSharingTransport {
         // Keep SDK/UI disposal on main without an isolated-deinit runtime trampoline.
         // Normal stop() remains synchronous; this fallback also covers off-main release.
         let engine = engine, callbacks = callbacks, remoteView = remoteView
-        let presenter = presenter, spectatorPresenter = spectatorPresenter, remoteUID = remoteUID
+        let presenter = presenter, remoteUID = remoteUID
         BoundMainActorDisposal.enqueue {
             callbacks?.resetFrames(enabled: false)
-            spectatorPresenter.clear()
             guard let engine else { return }
             engine.setVideoFrameDelegate(nil)
             presenter.clear()
@@ -614,14 +611,10 @@ final class AgoraSharingTransport: FriendSharingTransport {
         if let lastPushAccepted { lastFailure["lastPushAccepted"] = lastPushAccepted }
     }
 
-    func setSpectatorView(_ view: UIView?) {
-        spectatorPresenter.clear()
-        spectatorView = view
-    }
+    func clearPresentation() { presenter.clear() }
     func presentLatestFrame() {
         guard joined, let data = callbacks?.takeLatestPixels(), let remoteView,
               presenter.present(data, in: remoteView) else { return }
-        if let spectatorView { spectatorPresenter.present(data, in: spectatorView) }
         presentedFrames += 1
         lastPresentedAt = CACurrentMediaTime()
     }
@@ -632,7 +625,6 @@ final class AgoraSharingTransport: FriendSharingTransport {
         setupResult = engine.map { Int($0.setupRemoteVideo(canvas)) }
     }
     private func clearRemote() {
-        spectatorPresenter.clear()
         presenter.clear()
         presentedFrames = 0
         lastPresentedAt = nil

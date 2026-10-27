@@ -686,7 +686,6 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     private var serverContinuationSettlements: [UUID: ServerContinuationSettlement] = [:]
     @Published private(set) var hasUnconfirmedServerSave = false
     private var accountObservation: AnyCancellable?
-    var watch: (() -> Void)?
     var didRestoreSnapshot: (() -> Void)?
     var didCompleteCheckpoint: (() -> Void)?
 
@@ -1988,10 +1987,8 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     }
     private func dispatchPendingAction(request: BoundROMRequest?, connected: Bool, at now: TimeInterval) {
         guard let action = pendingAction.ready(request: request, connected: connected, at: now) else { return }
-        if action == .watch {
-            watch?()
-            pendingAction.clear()
-        } else if sharing.interactions.open() {
+        guard action == .battle || action == .trade else { pendingAction.clear(); return }
+        if sharing.interactions.open() {
             sharing.interactions.request(action == .battle ? .battle : .trade)
             pendingAction.clear()
         }
@@ -2073,7 +2070,12 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
             }
             if manifest != nil { error = nil }
         case .resume: host.status = .waiting
-        case .watch, .battle, .trade:
+        case .watch:
+            // Reserved command 11 remains decodable for exact historical ROMs.
+            // It may not start media, gameplay, or a modal presentation.
+            pendingAction.clear()
+            host.status = .unavailable; host.message = "Use Screen Share in Friends multiview."
+        case .battle, .trade:
             guard let room = onboarding.rooms.first(where: { UUID(uuidString:$0.roomID) == request.identifier }),
                   identity == nil || identity?.roomID == room.roomID else {
                 host.status = .unavailable; host.message = "Choose your connected friend."; return

@@ -32,9 +32,9 @@ When both devices are connected and unlocked:
    with separate friend accounts. Preserve existing saves before installation;
    use disposable QA games for battle/trade interruption scenarios.
 2. Establish friend sharing and verify movement/video in both directions and
-   full-screen spectating, with audio disabled. Record both device models,
+   Friends multiview video alongside responsive local gameplay, with audio disabled. Record both device models,
    app commit/build, ROM hash, connection type and observed recovery times.
-3. Interrupt one connection. Confirm stale video disappears, spectator shows
+3. Interrupt one connection. Confirm stale video disappears, Friends multiview shows
    waiting/reconnecting, and shared sessions stop treating the peer as fresh.
    Restore connectivity and require fresh video before Live returns.
 4. Lock/background and foreground each device in turn. Verify fresh authorization,

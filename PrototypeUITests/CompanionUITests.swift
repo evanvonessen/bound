@@ -5156,7 +5156,7 @@ final class CompanionUITests: XCTestCase {
     }
 
     func testOfflineFriendPixelsFitBothLayouts() throws {
-        let app = openGame(arguments: ["--bound-ui-friend-fixture"])
+        let app = openGame(arguments: ["--bound-ui-reset-layout", "--bound-ui-friend-fixture", "-bound.landscape.v1.option", "7", "-bound.landscape.option7.friend-visible", "YES"])
         selectCompanion("Friend", in: app)
         let friend = element("bound.friend-screen", in: app)
         let game = element("bound.game-screen", in: app)
@@ -5168,14 +5168,16 @@ final class CompanionUITests: XCTestCase {
         screenshot("Bound-portrait-offline-friend-pixels")
         XCUIDevice.shared.orientation = .landscapeLeft
         waitForFrame(game) { $0.height > app.frame.height * 0.8 }
-        XCTAssertEqual(friend.frame.width / friend.frame.height, 1.5, accuracy: 0.015)
+        let landscapeFriend = element("bound.landscape7-friend", in: app)
+        XCTAssertTrue(landscapeFriend.waitForExistence(timeout: 5))
+        XCTAssertEqual(landscapeFriend.frame.width / landscapeFriend.frame.height, 1.5, accuracy: 0.015)
         screenshot("Bound-landscape-offline-friend-pixels")
     }
 
-    func testDualScreenPortraitAndLandscapePictureInPicture() throws {
-        let app = openGame()
+    func testFriendsMultiviewRotationHideAndForeground() throws {
+        let app = openGame(arguments: ["--bound-ui-reset-layout"])
         selectCompanion("Friend", in: app)
-        let friend = element("bound.friend-screen", in: app)
+        var friend = element("bound.friend-screen", in: app)
         let game = element("bound.game-screen", in: app)
         XCTAssertTrue(friend.waitForExistence(timeout: 5))
         XCTAssertTrue(game.waitForExistence(timeout: 5))
@@ -5185,6 +5187,16 @@ final class CompanionUITests: XCTestCase {
 
         XCUIDevice.shared.orientation = .landscapeLeft
         waitForFrame(game) { $0.width > $0.height && $0.height > app.frame.height * 0.8 }
+        friend = element("bound.landscape7-friend", in: app)
+        let friendButton = app.buttons["bound.landscape7-friend-button"]
+        XCTAssertTrue(friendButton.waitForExistence(timeout: 5))
+        if !friend.exists { friendButton.tap() }
+        XCTAssertTrue(friend.waitForExistence(timeout: 5))
+        friendButton.tap()
+        XCTAssertTrue(friend.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(game.exists)
+        friendButton.tap()
+        XCTAssertTrue(friend.waitForExistence(timeout: 5))
         XCTAssertGreaterThanOrEqual(friend.frame.minX, app.frame.minX)
         XCTAssertGreaterThanOrEqual(friend.frame.minY, app.frame.minY)
         XCTAssertLessThanOrEqual(friend.frame.maxX, app.frame.maxX + 1)
@@ -5197,6 +5209,7 @@ final class CompanionUITests: XCTestCase {
         XCTAssertTrue(friend.waitForExistence(timeout: 5))
         XCTAssertTrue(game.exists)
         XCUIDevice.shared.orientation = .portrait
+        friend = element("bound.friend-screen", in: app)
         waitForFrame(friend) { $0.maxY <= game.frame.minY + 2 }
         screenshot("Bound-portrait-after-rotation-and-foreground")
     }

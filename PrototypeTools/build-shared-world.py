@@ -29,9 +29,9 @@ supported={'abi_major':1,'abi_minor':0,'wire_version':2,'checkpoint_format':1,
            'host_port_size':1024,'reserved_heap_bytes':4096,
            'ui_abi_major':1,'ui_abi_minor':0,'ui_host_port_size':2048,'ui_snapshot_size':256}
 if c.get('independent_progression'):
- supported.update(save_state_layout=7, setup_settings_version=5, independent_progression=True)
+ supported.update(save_state_layout=9, setup_settings_version=5, independent_progression=True)
 if c.get('cooperative_doubles'):
- supported.update(save_state_layout=8 if c.get('independent_progression') else 4,reserved_heap_bytes=8192,cooperative_abi_major=1,cooperative_abi_minor=0,
+ supported.update(save_state_layout=10 if c.get('independent_progression') else 4,reserved_heap_bytes=8192,cooperative_abi_major=1,cooperative_abi_minor=0,
   cooperative_host_port_offset=0x1FE0000,cooperative_host_port_size=16384,cooperative_snapshot_address=0x02001800,cooperative_snapshot_size=2048)
 if any(c.get(key)!=value for key,value in supported.items()):
  raise SystemExit('This Bound adapter does not support the exported game layout')

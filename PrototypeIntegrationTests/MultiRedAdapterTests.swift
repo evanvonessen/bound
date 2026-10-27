@@ -17,7 +17,7 @@ final class MultiRedAdapterTests: XCTestCase {
             throw XCTSkip("Requires the button-only native wild-loss evidence for the exact candidate ROM")
         }
         let proof = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("native-loss-proof.json"))) as? [String: Any])
-        XCTAssertEqual(proof["romSHA256"] as? String, BoundGameProfiles.current.romSHA256)
+        XCTAssertEqual(proof["romSHA256"] as? String, BoundGameProfiles.debugDefaults.romSHA256)
         XCTAssertEqual(proof["nativeBattleOutcome"] as? Int, 2)
         XCTAssertEqual(proof["gameplayMemoryWrites"] as? Int, 0)
         let hashes = try XCTUnwrap(proof["partySHA256"] as? [String: String])
@@ -32,7 +32,7 @@ final class MultiRedAdapterTests: XCTestCase {
         XCTAssertEqual(before.first?.hp, 20); XCTAssertEqual(lost.first?.hp, 0); XCTAssertEqual(healed.first?.hp, 20)
         XCTAssertEqual(before.first?.identity, lost.first?.identity)
         XCTAssertEqual(lost.first?.identity, healed.first?.identity)
-        var ledger = BoundSoulLedger(run: UUID(), binding: BoundGameProfiles.current.romSHA256)
+        var ledger = BoundSoulLedger(run: UUID(), binding: BoundGameProfiles.debugDefaults.romSHA256)
         try ledger.observe(before, registering: true, fainted: [])
         XCTAssertFalse(BoundSoulWipeout.occurred(party: before, ledger: ledger))
         try ledger.observe(lost, registering: false, fainted: [])
@@ -106,7 +106,7 @@ final class MultiRedAdapterTests: XCTestCase {
         XCTAssertEqual(old.family, current.family)
         XCTAssertNotEqual(old.ruleset, current.ruleset)
         XCTAssertEqual(old.saveStateLayout, 5); XCTAssertEqual(BoundGameProfiles.stackSafe.saveStateLayout, 6)
-        XCTAssertEqual(current.saveStateLayout, 8)
+        XCTAssertEqual(current.saveStateLayout, 10)
         XCTAssertFalse(old.supportsCooperativeDoubles); XCTAssertTrue(current.supportsCooperativeDoubles)
         XCTAssertFalse(old.admits(romSHA256: current.romSHA256, saveStateLayout: old.saveStateLayout))
         XCTAssertFalse(old.admits(romSHA256: old.romSHA256, saveStateLayout: current.saveStateLayout))
@@ -144,13 +144,14 @@ final class MultiRedAdapterTests: XCTestCase {
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("MultiRedProfilesQA")
         guard FileManager.default.fileExists(atPath: root.appendingPathComponent("original.gba").path),
               FileManager.default.fileExists(atPath: root.appendingPathComponent("stack-safe.gba").path),
+              FileManager.default.fileExists(atPath: root.appendingPathComponent("debug-defaults.gba").path),
               FileManager.default.fileExists(atPath: root.appendingPathComponent("current.gba").path) else {
             throw XCTSkip("Requires both exact owned profile ROM fixtures in MultiRedProfilesQA")
         }
         let output = root.appendingPathComponent("results-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         var states: [String: Data] = [:]
-        let pairs = [("original", BoundGameProfiles.original), ("stack-safe", BoundGameProfiles.stackSafe), ("current", BoundGameProfiles.current)]
+        let pairs = [("original", BoundGameProfiles.original), ("stack-safe", BoundGameProfiles.stackSafe), ("debug-defaults", BoundGameProfiles.debugDefaults), ("current", BoundGameProfiles.current)]
         for (name, expected) in pairs {
             let rom = root.appendingPathComponent(name + ".gba"), bytes = try Data(contentsOf: rom)
             let profile = try BoundPlayerROMProfile(rom: bytes)
