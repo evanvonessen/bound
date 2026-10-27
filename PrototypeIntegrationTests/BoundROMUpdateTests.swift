@@ -298,6 +298,17 @@ final class BoundROMUpdateTests: XCTestCase {
         XCTAssertThrowsError(try BoundROMUpdateContent(data: data, expectedSHA256: original.sha256))
     }
 
+    func testEveryRetainedExactProfileIsPreservedByCandidateEnrollment() throws {
+        let incoming = try profileContent(BoundGameProfiles.current)
+        let (unrelated, _) = try content(2)
+        for profile in BoundGameProfiles.all where profile != BoundGameProfiles.current {
+            let previous = try profileContent(profile)
+            XCTAssertTrue(BoundROMUpdateContent.preservesPrevious(previous, incoming: incoming))
+            XCTAssertEqual(try BoundROMUpdateContent.resetGameIDs(previous: previous, incoming: incoming), [])
+            XCTAssertThrowsError(try BoundROMUpdateContent.resetGameIDs(previous: previous, incoming: unrelated))
+        }
+    }
+
     func testSideBySideUpdatePreservesOriginalFilesAndExistingGenerationFenceAcrossRestart() throws {
         let f = try fixture(), original = try profileContent(BoundGameProfiles.original)
         let data = try Data(contentsOf: XCTUnwrap(Bundle(for: Game.self).url(forResource: "multiplayer", withExtension: "gba")))

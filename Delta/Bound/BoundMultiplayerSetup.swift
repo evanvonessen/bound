@@ -29,7 +29,7 @@ struct BoundMultiplayerSetupOptions {
     var cheats = false
     var nicknames = true
     var debug = false
-    var deleteSaveOnGameOver = false
+    var deleteSaveOnGameOver = true
     var profile: BoundNakamaRunService.PlayerProfile { .init(name: name, gender: gender) }
     var partnerProfile: BoundNakamaRunService.PlayerProfile { .init(name: partnerName, gender: partnerGender) }
     static func nativeName(_ value: String) -> Data {
@@ -48,7 +48,7 @@ struct BoundMultiplayerSetupOptions {
     }
     var settings: Data {
         if debug {
-            var result = Data([5,1,0,0,0,0,0,0,0,0,1,0]) + Self.nativeName("Gary") + Data([1, deleteSaveOnGameOver ? 0 : 1])
+            var result = Data([5,1,1,0,0,0,0,0,0,0,1,0]) + Self.nativeName("Gary") + Data([1, deleteSaveOnGameOver ? 0 : 1])
             result.append(Data(repeating: 0, count: 10)); return result
         }
         var result = Data(repeating: 0, count: 32); result[0] = 5
@@ -131,7 +131,7 @@ struct BoundMultiplayerSetupView: View {
                             Toggle("Random Abilities", isOn: $options.randomAbilities)
                             Toggle("Common Cheats", isOn: $options.cheats)
                             Toggle("Nickname Prompts", isOn: $options.nicknames)
-                            Toggle("Debug Preset", isOn: $options.debug)
+                            Toggle("Debug Mode", isOn: $options.debug)
                             if options.debug {
                                 Toggle("Game Over on Party Wipe", isOn: $options.deleteSaveOnGameOver)
                                     .accessibilityIdentifier("bound.multiplayer.delete-on-game-over")

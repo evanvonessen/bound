@@ -268,6 +268,9 @@ static_assert(GameHostSize==BOUND_SDK_GAME_HOST_BYTE_SIZE && GameSnapshotSize==B
 static_assert(GameCooperativeHostSize==BOUND_SDK_COOPERATIVE_HOST_BYTE_SIZE
               && GameCooperativeSnapshotSize==BOUND_SDK_COOPERATIVE_SNAPSHOT_BYTE_SIZE,
               "SDK cooperative schema differs from cartridge ABI");
+static_assert(BoundStackSafeGame::GameCooperativeSnapshotAddress==GameCooperativeSnapshotAddress
+              && BoundStackSafeGame::GameCooperativeSnapshotSize==GameCooperativeSnapshotSize,
+              "Historical cooperative snapshot requires a separate decoder");
 #endif
 #include "SoulLink/bridge.inc"
 #include "NativeBattle/invitation.inc"
@@ -464,11 +467,13 @@ static uint8_t soulQAScriptBackup[128];
 // All new cooperative gameplay access is through the generated cartridge ABI.
 + (BOOL)installCooperativeDoubles {
 #ifdef BOUND_GAME_COOPERATIVE_DOUBLES
-    if(cooperativeROM==rom&&rom&&multiRedProfile(rom)==&MultiRedCurrentProfile) return YES;
-    if(!rom||!workRAM||!internalRAM||multiRedProfile(rom)!=&MultiRedCurrentProfile
+    const auto *profile=rom ? multiRedProfile(rom):nullptr;
+    if(cooperativeROM==rom&&profile&&profile->cooperative()) return YES;
+    if(!rom||!workRAM||!internalRAM||!profile||!profile->cooperative()
        ||GameCooperativeSnapshotAddress<0x02000000
        ||GameCooperativeSnapshotAddress+GameCooperativeSnapshotSize>0x02040000
-       ||GameCooperativeHostOffset+GameCooperativeHostSize>0x2000000) return NO;
+       ||profile->cooperativeHostSize!=BOUND_SDK_COOPERATIVE_HOST_BYTE_SIZE
+       ||profile->cooperativeHostOffset+profile->cooperativeHostSize>0x2000000) return NO;
     uint8_t digest[32];soulOriginalHash(digest);
     const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
         0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
@@ -480,7 +485,8 @@ static uint8_t soulQAScriptBackup[128];
 }
 + (NSData *)cooperativeSnapshot {
 #ifdef BOUND_GAME_COOPERATIVE_DOUBLES
-    if(cooperativeROM!=rom||!rom||!workRAM||multiRedProfile(rom)!=&MultiRedCurrentProfile) return [NSData data];
+    const auto *profile=rom ? multiRedProfile(rom):nullptr;
+    if(cooperativeROM!=rom||!rom||!workRAM||!profile||!profile->cooperative()) return [NSData data];
     const auto *p=workRAM+GameCooperativeSnapshotAddress-0x02000000;
     const uint32_t sequence=word(p+8);
     if(word(p)!=BOUND_SDK_COOPERATIVE_SNAPSHOT_MAGIC||half(p+4)!=BOUND_SDK_COOPERATIVE_SNAPSHOT_MAJOR
@@ -493,13 +499,14 @@ static uint8_t soulQAScriptBackup[128];
 }
 + (void)setCooperativeHost:(NSData *)data {
 #ifdef BOUND_GAME_COOPERATIVE_DOUBLES
-    if(cooperativeROM!=rom||!rom||multiRedProfile(rom)!=&MultiRedCurrentProfile||data.length!=GameCooperativeHostSize) return;
+    const auto *profile=rom ? multiRedProfile(rom):nullptr;
+    if(cooperativeROM!=rom||!rom||!profile||!profile->cooperative()||data.length!=profile->cooperativeHostSize) return;
     const auto *p=static_cast<const uint8_t *>(data.bytes);const uint32_t sequence=word(p+8);
     if(word(p)!=BOUND_SDK_COOPERATIVE_HOST_MAGIC||half(p+4)!=BOUND_SDK_COOPERATIVE_HOST_MAJOR
        ||half(p+6)!=BOUND_SDK_COOPERATIVE_HOST_MINOR||BOUND_SDK_UNCOMMITTED_SEQUENCE(sequence)
        ||(word(p+12)&~15u)||word(p+16)>180||word(p+20)>1) return;
-    auto *out=rom+GameCooperativeHostOffset;bound_sdk_store_le32(out+8,sequence-1);
-    memcpy(out,p,8);memcpy(out+12,p+12,GameCooperativeHostSize-12);bound_sdk_store_le32(out+8,sequence);
+    auto *out=rom+profile->cooperativeHostOffset;bound_sdk_store_le32(out+8,sequence-1);
+    memcpy(out,p,8);memcpy(out+12,p+12,profile->cooperativeHostSize-12);bound_sdk_store_le32(out+8,sequence);
 #endif
 }
 + (BOOL)prepareCooperativeCableForPlayer:(NSUInteger)player {

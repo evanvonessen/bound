@@ -18,7 +18,7 @@ enum BoundDebugCatalog {
     static let points: [BoundDebugPoint] = [
         .init(id: "01", title: "Pallet Town — Paired Start", location: "Outside Oak’s lab",
               prerequisites: "Native starter and setup completion.",
-              mechanics: "Distinct trainer identities and starter teams; Infinite Repel enabled.", format: "Independent field play",
+              mechanics: "Distinct trainer identities and starter teams; native Infinite Repel skill unlocked in the L-button menu.", format: "Independent field play",
               purpose: "Pairing, movement, transitions, encounters, acquisitions, saving and reconnecting.",
               nativeSteps: "Walk independently, enter a building, or approach a nearby encounter."),
         .init(id: "02", title: "Brock", location: "Pewter Gym, before Brock",

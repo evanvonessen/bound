@@ -35,8 +35,8 @@ struct BoundROMUpdateContent: Equatable, Codable {
 
     /// Metadata lookup does not admit ROM bytes. It only prevents the updater
     /// from merging two separately supported exact-ROM storage identities.
-    private var isOriginalProfile: Bool {
-        gameID == BoundGameProfiles.original.gameID && sha256 == BoundGameProfiles.original.romSHA256
+    private var isHistoricalProfile: Bool {
+        BoundGameProfiles.all.contains { $0 != BoundGameProfiles.current && $0.gameID == gameID && $0.romSHA256 == sha256 }
     }
     func validateKnownProfileIdentity() throws {
         if let profile = MultiRedAdapter.profile(gameID: gameID), profile.romSHA256 != sha256 {
@@ -47,7 +47,7 @@ struct BoundROMUpdateContent: Equatable, Codable {
         }
     }
     static func preservesPrevious(_ previous: Self?, incoming: Self) -> Bool {
-        previous?.isOriginalProfile == true && incoming.gameID == BoundGameProfiles.current.gameID &&
+        previous?.isHistoricalProfile == true && incoming.gameID == BoundGameProfiles.current.gameID &&
         incoming.sha256 == BoundGameProfiles.current.romSHA256
     }
     static func resetGameIDs(previous: Self?, incoming: Self) throws -> Set<String> {
@@ -55,7 +55,7 @@ struct BoundROMUpdateContent: Equatable, Codable {
         guard let previous, previous != incoming else { return [] }
         if preservesPrevious(previous, incoming: incoming) { return [] }
         // A recognized original cannot be retired by an unrelated cartridge.
-        guard !previous.isOriginalProfile else { throw BoundROMUpdateError.incompatibleROM }
+        guard !previous.isHistoricalProfile else { throw BoundROMUpdateError.incompatibleROM }
         return [previous.gameID, incoming.gameID]
     }
 }
@@ -322,10 +322,11 @@ final class BoundROMUpdateStorage {
     /// them and their backups for recovery instead of replaying that reset.
     private func validateOriginalPreservation(_ transaction: Transaction) throws {
         try transaction.content.validateKnownProfileIdentity()
-        let originalID = BoundGameProfiles.original.gameID
-        guard !transaction.resetGameIDs.contains(originalID) else { throw BoundROMUpdateError.incompatibleROM }
-        if transaction.nextState.retiredGameIDs.contains(originalID), !(try state()).retiredGameIDs.contains(originalID) {
-            throw BoundROMUpdateError.incompatibleROM
+        for profile in BoundGameProfiles.all where profile != BoundGameProfiles.current {
+            guard !transaction.resetGameIDs.contains(profile.gameID) else { throw BoundROMUpdateError.incompatibleROM }
+            if transaction.nextState.retiredGameIDs.contains(profile.gameID), !(try state()).retiredGameIDs.contains(profile.gameID) {
+                throw BoundROMUpdateError.incompatibleROM
+            }
         }
     }
     func makeBackup(_ transaction: inout Transaction) throws {

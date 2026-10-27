@@ -79,6 +79,12 @@ class BundledROMTests(unittest.TestCase):
         redirected = bundler.PrivateReleaseRedirect().redirect_request(request, None, 302, 'Found', {}, 'https://release-assets.githubusercontent.com/file')
         self.assertIsNone(redirected.get_header('Authorization'))
 
+    def test_unpublished_candidate_never_attempts_a_release_download(self):
+        with patch.dict(os.environ, {}, clear=True), patch.object(bundler.subprocess, 'run') as run:
+            with self.assertRaisesRegex(SystemExit, 'Unpublished ROM candidate'):
+                bundler.download_private_release({'localOnly': True}, self.root / 'download.gba')
+        run.assert_not_called()
+
     def test_incomplete_resource_refuses_to_embed(self):
         (self.root / 'private-source.gba').write_bytes(b'partial')
         with self.assertRaises(SystemExit):

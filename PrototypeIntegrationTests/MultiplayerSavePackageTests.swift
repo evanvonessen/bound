@@ -113,12 +113,16 @@ final class MultiplayerSavePackageTests: XCTestCase {
     }
     @MainActor func testGameOverDeletionChoiceIsSharedAndOnlyDebugCanDisableIt() {
         var options = BoundMultiplayerSetupOptions()
-        XCTAssertFalse(options.deleteSaveOnGameOver, "The debug control defaults off")
+        XCTAssertTrue(options.deleteSaveOnGameOver, "New Debug games default to Game Over on party wipe")
         XCTAssertEqual(options.settings[0], 5)
         XCTAssertEqual(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: options.settings), true)
 
         options.debug = true
+        XCTAssertEqual(options.settings[2], 1, "Debug defaults to native Easy difficulty")
         XCTAssertEqual(options.settings[20], 1)
+        XCTAssertEqual(options.settings[21], 0)
+        XCTAssertEqual(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: options.settings), true)
+        options.deleteSaveOnGameOver = false
         XCTAssertEqual(options.settings[21], 1)
         XCTAssertEqual(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: options.settings), false)
         let shared = options.settings
@@ -146,6 +150,20 @@ final class MultiplayerSavePackageTests: XCTestCase {
         invalid = shared; invalid[0] = 6
         XCTAssertNil(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: invalid))
         XCTAssertNil(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: Data()))
+    }
+    @MainActor func testNewDebugDefaultsDoNotRewriteSavedNormalDebugSettings() throws {
+        var options = BoundMultiplayerSetupOptions(); options.debug = true
+        var saved = options.settings
+        saved[2] = 0; saved[21] = 1 // Existing Normal Debug run opted out of Game Over.
+        let encoded = try BoundMultiplayerSaveStore.encode(saved)
+        let reopened = try JSONDecoder().decode(Data.self, from: encoded)
+        XCTAssertEqual(reopened, saved)
+        XCTAssertTrue(BoundROMMultiplayerCoordinator.validSettings(reopened))
+        XCTAssertEqual(BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: reopened), false)
+        XCTAssertEqual(options.settings[2], 1)
+        XCTAssertEqual(options.settings[21], 0)
+        options.debug = false
+        XCTAssertEqual(options.settings[2], 0, "Ordinary New Game still defaults to Normal")
     }
     @MainActor func testLegacyGameOverSettingsDefaultToDeletionWithoutAcceptingAnOverride() {
         for version in UInt8(1)...3 {

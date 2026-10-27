@@ -2898,6 +2898,9 @@ extension BoundROMMultiplayerCoordinator {
     }
     func createServerRun(room: FriendRoom, options: BoundMultiplayerSetupOptions, requestID: UUID) async {
         guard debugInstalledManifest == nil else { serverMenuError = "Return through DEBUG to open ordinary runs."; return }
+        guard !options.debug || admittedProfile == BoundGameProfiles.current else {
+            serverMenuError = "Open the matching bundled ROM to create a Debug Mode game."; return
+        }
         guard serverOnly, verified, !serverMenuBusy, !holdForObservationRecoveryIfNeeded(), options.valid, let game, let session = account.session else { return }
         serverMenuBusy = true; serverMenuError = nil
         var selection = serverSelection

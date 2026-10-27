@@ -5,6 +5,9 @@
 namespace BoundOriginalGame {
 #include "BoundOriginalGameABI.h"
 }
+namespace BoundStackSafeGame {
+#include "BoundStackSafeGameABI.h"
+}
 
 // Each admitted cartridge keeps its complete descriptor, dynamic ranges, and
 // base hook restoration table. No profile is inferred from ABI versions alone.
@@ -70,8 +73,20 @@ static const MultiRedNativeProfile MultiRedOriginalProfile=[] {
         [](uint8_t *p) { for(const auto &entry:BoundOriginalGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); }
     };
 }();
+static const MultiRedNativeProfile MultiRedStackSafeProfile={
+    BoundStackSafeGame::GameDescriptor,BoundStackSafeGame::GameCanonicalSHA256,BoundStackSafeGame::GameRulesetID,
+    BoundStackSafeGame::GameDescriptorOffset,sizeof(BoundStackSafeGame::GameDescriptor),BoundStackSafeGame::GameHostOffset,BoundStackSafeGame::GameHostSize,
+    BoundStackSafeGame::GameSnapshotAddress,BoundStackSafeGame::GameSnapshotSize,BoundStackSafeGame::GameSnapshotRegionSize,
+    BoundStackSafeGame::GameABIMajor,BoundStackSafeGame::GameABIMinor,BoundStackSafeGame::GameSaveStateLayout,
+    BoundStackSafeGame::GameUIHostOffset,BoundStackSafeGame::GameUIHostSize,BoundStackSafeGame::GameUIRequestAddress,BoundStackSafeGame::GameUIRequestSize,
+    BoundStackSafeGame::GameCodeStart,BoundStackSafeGame::GameCodeEnd,
+    BoundStackSafeGame::GameCooperativeHostOffset,BoundStackSafeGame::GameCooperativeHostSize,
+    BoundStackSafeGame::GameCooperativeCodeStart,BoundStackSafeGame::GameCooperativeCodeEnd,
+    [](uint8_t *p) { for(const auto &entry:BoundStackSafeGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); }
+};
 static const MultiRedNativeProfile *multiRedProfile(const uint8_t *p) {
     if(MultiRedCurrentProfile.matches(p)) return &MultiRedCurrentProfile;
+    if(MultiRedStackSafeProfile.matches(p)) return &MultiRedStackSafeProfile;
     if(MultiRedOriginalProfile.matches(p)) return &MultiRedOriginalProfile;
     return nullptr;
 }

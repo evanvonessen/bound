@@ -9,6 +9,19 @@ const gameOverSettings = (debug = false, keep = false) => {
   const bytes = Buffer.from(settings(), 'base64'); bytes[0] = 5; bytes[20] = Number(debug); bytes[21] = Number(keep);
   return bytes.toString('base64');
 };
+test('new Easy Debug settings enable Game Over while saved Normal Debug opt-outs remain unchanged', () => {
+  const { create, get, rpc } = setup();
+  const bytes = Buffer.from(gameOverSettings(true, false), 'base64'); bytes[1] = bytes[2] = 1;
+  const freshSettings = bytes.toString('base64');
+  const fresh = create({ settings: freshSettings });
+  assert.equal(get(peer, fresh).identity.settings, freshSettings);
+  assert.ok(rpc(owner, 'gameOver', { save_id: fresh.save_id, eventID: uuid(801) }).id);
+  const retainedSettings = gameOverSettings(true, true);
+  const retained = create({ request_id: uuid(2), settings: retainedSettings });
+  assert.equal(get(owner, retained).identity.settings, retainedSettings);
+  assert.throws(() => rpc(owner, 'gameOver', { save_id: retained.save_id, eventID: uuid(802) }));
+  assert.equal(get(peer, retained).identity.settings, retainedSettings);
+});
 function setup() {
   const f = fixture(); let serial = 100, now = 1000;
   f.nk.uuidv4 = () => uuid(++serial);

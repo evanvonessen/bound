@@ -35,6 +35,8 @@ def download_private_release(manifest, destination):
     if manifest.get('local_only'):
         raise SystemExit('Supply BOUND_DEVELOPMENT_ROM pointing to the exact pinned cartridge for this build.')
     asset_name = manifest.get('asset', 'rrbin-integrated.gba')
+    if manifest.get('localOnly'):
+        raise SystemExit('Unpublished ROM candidate: set BOUND_DEVELOPMENT_ROM to the exact locally validated cartridge.')
     if token := os.environ.get('BOUND_ROM_GITHUB_TOKEN'):
         opener = urllib.request.build_opener(PrivateReleaseRedirect())
         headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'}
