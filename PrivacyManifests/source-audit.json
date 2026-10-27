@@ -31,7 +31,7 @@
     "Cores/DeltaCore/DeltaCore/DeltaCore.h": "96074f2ed358fd30afbef6c8e042adb0db5e8ff807b586c55a36a3ded2ec83c8",
     "Cores/DeltaCore/DeltaCore/DeltaTypes.h": "6e19512b937c72a8764a662e7428852e1d85b69a9b2b6101427e62df79324d90",
     "Cores/DeltaCore/DeltaCore/DeltaTypes.m": "cd0301df450b02d99c609fc1cb13dc84f193527fe374b8e2132f1fe18901574e",
-    "Cores/DeltaCore/DeltaCore/Emulator Core/Audio/AudioManager.swift": "7fb01d2f0076918975c527e9db5c361b25936e57602b1f25898c0a8ae32507a5",
+    "Cores/DeltaCore/DeltaCore/Emulator Core/Audio/AudioManager.swift": "af0d4c9f726d3effe3f575d55fb194f3cb0a93316d3a610797bf0e56ef4402cb",
     "Cores/DeltaCore/DeltaCore/Emulator Core/Audio/DLTAMuteSwitchMonitor.h": "e0642dffb0314effcc592a184b047204f9b8a02ff5272863f54851ca4b990875",
     "Cores/DeltaCore/DeltaCore/Emulator Core/Audio/DLTAMuteSwitchMonitor.m": "13585abcec503f856d03fc3eb8ebe939f784595d517bff6fd274f7f9243f1817",
     "Cores/DeltaCore/DeltaCore/Emulator Core/Audio/RingBuffer.swift": "697a45372af32b4f88fe4cf4d2d98697b67470db1b431b15abf2043d8cb58787",
