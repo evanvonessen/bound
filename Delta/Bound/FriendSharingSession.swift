@@ -231,6 +231,8 @@ final class FriendSharingSession: ObservableObject {
     }
     private func attachScreenSharing(_ session: FriendSharingSession) {
         mediaSession = session
+        session.connectionFeed.service = .screenShare
+        session.connectionFeed.onEntry = { [weak self] entry in self?.connectionFeed.append(entry) }
         mediaObservation = session.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         session.setRemotePresentationEnabled(remotePresentationEnabled)
     }
@@ -431,6 +433,7 @@ final class FriendSharingSession: ObservableObject {
         // enables presentation; temporary local QA transports retain their canvas.
         self.remotePresentationEnabled = !authenticatedMode && configuration != nil && !mediaOnly
         self.connectionFeed = connectionFeed ?? BoundConnectionFeed()
+        self.connectionFeed.service = mediaOnly ? .screenShare : .multiplayer
         self.applicationIsBackgrounded = applicationIsBackgrounded
         self.authenticatedMode = authenticatedMode
         self.roomProvider = roomProvider; self.tokenFetcher = tokenFetcher
@@ -596,10 +599,11 @@ final class FriendSharingSession: ObservableObject {
 
     /// Entering the UI-owned authenticated flow permanently leaves temporary
     /// mode for this owner. Sign-out cannot silently restore a retained RTC token.
-    func configureAuthenticatedRoom(_ room: String?, disconnectReason: BoundConnectionFeed.DisconnectReason = .sessionChanged,
+    func configureAuthenticatedRoom(_ room: String?, friendUsername: String? = nil, disconnectReason: BoundConnectionFeed.DisconnectReason = .sessionChanged,
                                     identity: @escaping () -> AppCloudSession?) {
         automaticMultiplayerConnection = false; startedForMultiplayer = false
         stopLane(reason: disconnectReason)
+        connectionFeed.username = friendUsername
         authenticatedMode = true; configuration = nil
         roomProvider = { room }; authenticatedSession = identity
         status = room == nil ? "Add a friend to share" : "Game sharing ready"

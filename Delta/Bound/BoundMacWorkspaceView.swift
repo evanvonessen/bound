@@ -263,9 +263,8 @@ struct BoundMacWorkspaceView: View {
             HStack(spacing: 3) {
                 referenceButton(.notes, icon: "note.text", label: "Notes", id: "bound.mac-notes")
                 referenceButton(.types, icon: "circle.hexagongrid", label: "Types", id: "bound.mac-types")
-                referenceButton(.connections, icon: "network", label: "Log", id: "bound.mac-connections")
-                if state.configuration.debugAvailable {
-                    referenceButton(.debug, icon: "ladybug", label: "DEBUG", id: "bound.mac-debug")
+                if state.configuration.historyAvailable {
+                    referenceButton(.connections, icon: "clock.arrow.circlepath", label: "History", id: "bound.mac-connections")
                 }
             }.padding(3).background(panel)
             ZStack {
@@ -279,17 +278,14 @@ struct BoundMacWorkspaceView: View {
                     .opacity(state.macBottomReference == .types ? 1 : 0)
                     .allowsHitTesting(referenceIsVisible && state.macBottomReference == .types)
                     .accessibilityHidden(!referenceIsVisible || state.macBottomReference != .types)
-                BoundConnectionsView(feed: sharing.connectionFeed, gameID: gameID,
-                                     isActive: referenceIsVisible && state.macBottomReference == .connections)
-                    .opacity(state.macBottomReference == .connections ? 1 : 0)
-                    .allowsHitTesting(referenceIsVisible && state.macBottomReference == .connections)
-                    .accessibilityHidden(!referenceIsVisible || state.macBottomReference != .connections)
-                if state.configuration.debugAvailable, let debug {
-                    BoundDebugView(session: debug, gameID: gameID,
-                                   isActive: referenceIsVisible && state.macBottomReference == .debug, settings: debugSettings)
-                        .opacity(state.macBottomReference == .debug ? 1 : 0)
-                        .allowsHitTesting(referenceIsVisible && state.macBottomReference == .debug)
-                        .accessibilityHidden(!referenceIsVisible || state.macBottomReference != .debug)
+                if state.configuration.historyAvailable {
+                    BoundHistoryView(feed: sharing.connectionFeed, timeline: sharing.soulLink.probe.timeline,
+                        connectionsAllowed: state.configuration.connectionsAvailable,
+                        timelineAllowed: state.configuration.timelineAvailable, gameID: gameID,
+                        isActive: referenceIsVisible && state.macBottomReference == .connections)
+                        .opacity(state.macBottomReference == .connections ? 1 : 0)
+                        .allowsHitTesting(referenceIsVisible && state.macBottomReference == .connections)
+                        .accessibilityHidden(!referenceIsVisible || state.macBottomReference != .connections)
                 }
             }.id(gameID).frame(maxWidth: .infinity, maxHeight: .infinity)
         }

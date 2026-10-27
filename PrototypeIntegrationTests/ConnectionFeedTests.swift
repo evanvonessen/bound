@@ -24,6 +24,25 @@ import UIKit
 
 @MainActor
 final class ConnectionFeedTests: XCTestCase {
+
+    func testIdentityAndServiceAreCapturedBeforeDisconnectAndFriendReplacement() {
+        let gameplay = BoundConnectionFeed(), video = BoundConnectionFeed()
+        video.service = .screenShare
+        video.onEntry = { gameplay.append($0) }
+        gameplay.username = "evanator3000"; video.username = "otherfriend"
+        gameplay.beginConnection(); gameplay.connected(); gameplay.friendJoined()
+        video.beginConnection(); video.connected(); video.friendJoined()
+        gameplay.disconnect(.manual); gameplay.username = "replacement"
+        video.disconnect(.manual); video.username = nil
+        XCTAssertTrue(gameplay.entries.contains { $0.title == "evanator3000 connected · Multiplayer" })
+        XCTAssertTrue(gameplay.entries.contains { $0.title == "otherfriend connected · Screen Share" })
+        XCTAssertTrue(gameplay.entries.contains { $0.title == "Disconnected from evanator3000 by you · Multiplayer" })
+        XCTAssertEqual(gameplay.entries.first?.title, "Disconnected from otherfriend by you · Screen Share")
+        XCTAssertFalse(gameplay.entries.contains { $0.title.contains("replacement") })
+        gameplay.clear(); video.beginConnection()
+        XCTAssertEqual(gameplay.entries.count, 1, "Cleared media events must not reappear")
+    }
+
     private func configuration() -> FriendSharingConfiguration {
         .init(appID: String(repeating: "0", count: 32), channel: "private-fixture-room", uid: 1,
               remoteUID: 2, token: "private-fixture-token")
@@ -99,7 +118,7 @@ final class ConnectionFeedTests: XCTestCase {
         transport.callback?(.remoteGone)
         session.livePresence.peerWithdrew?(); session.livePresence.peerWithdrew?()
         XCTAssertEqual(Array(feed.entries.prefix(2)).map(\.kind), [.friendDisconnected, .friendConnectionLost])
-        XCTAssertEqual(feed.entries.first?.title, "Friend left multiplayer",
+        XCTAssertEqual(feed.entries.first?.title, "Friend disconnected · Multiplayer",
             "Presence withdrawal can disable multiplayer while friend video remains connected")
         XCTAssertEqual(feed.entries.filter { $0.kind == .friendDisconnected }.count, 1)
         transport.callback?(.remoteJoined)

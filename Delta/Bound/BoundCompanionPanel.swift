@@ -15,7 +15,9 @@ final class BoundCompanionSettingsModel: ObservableObject {
         let assignments: [[BoundPiPContent]]
         let enabled: [Bool]
         let opacities: [Double]
-        let debugAvailable: Bool
+        let connectionsAvailable: Bool
+        let timelineAvailable: Bool
+        var historyAvailable: Bool { connectionsAvailable || timelineAvailable }
     }
     let preferences: BoundPiPPreferences
     @Published private(set) var configuration: Configuration
@@ -43,30 +45,29 @@ final class BoundCompanionSettingsModel: ObservableObject {
         var available = buttonType.splitButtonCount > 0
             ? preferences.orderedContents.filter(assigned.contains)
             : preferences.enabledContents(uiVersion: preferences.uiVersion)
-        let debugAvailable = debugGame || preferences.developerFeaturesEnabled
-        available.removeAll { $0 == .debug }
-        if debugAvailable {
-            available.removeAll { $0 == .connections }
+        let historyAvailable = debugGame || preferences.developerFeaturesEnabled
+        available.removeAll { $0 == .debug || $0 == .connections }
+        assignments = assignments.map { $0.filter { $0 != .debug && $0 != .connections } }
+        if historyAvailable {
+            // Reuse the saved Connections identity; availability never rewrites preferences.
             available.insert(.connections, at: min(3, available.count))
             if !assignments.isEmpty {
+                let saved = (0..<buttonType.splitButtonCount).map {
+                    preferences.assignedContents(for: $0, buttonType: buttonType)
+                }
+                for index in assignments.indices where saved[index].contains(.connections) {
+                    assignments[index].append(.connections)
+                }
                 if !assignments.contains(where: { $0.contains(.connections) }) {
                     assignments[assignments.count - 1].append(.connections)
                 }
-                assignments = assignments.map { choices in
-                    available.filter(choices.contains) + (choices.contains(.debug) ? [.debug] : [])
-                }
+                assignments = assignments.map { choices in available.filter(choices.contains) }
             }
-            available.insert(.debug, at: (available.firstIndex(of: .connections) ?? available.count - 1) + 1)
-            if !assignments.isEmpty, !assignments.contains(where: { $0.contains(.debug) }) {
-                assignments[assignments.count - 1].append(.debug)
-            }
-        } else {
-            assignments = assignments.map { $0.filter { $0 != .debug } }
         }
         return Configuration(uiVersion: preferences.uiVersion, buttonType: buttonType,
             availableContents: available, orderedContents: preferences.orderedContents,
             assignments: assignments, enabled: BoundPiPContent.allCases.map(preferences.isEnabled),
-            opacities: BoundPiPContent.allCases.map(preferences.opacity), debugAvailable: debugAvailable)
+            opacities: BoundPiPContent.allCases.map(preferences.opacity), connectionsAvailable: debugGame, timelineAvailable: preferences.developerFeaturesEnabled)
     }
     func refresh() {
         let next = Self.read(preferences, debugGame: debugGame)
@@ -173,8 +174,13 @@ final class BoundCompanionState: ObservableObject {
                 nextContent = remembered
             }
             self.reconcileSelection(previousContent: nextContent)
-            if !configuration.debugAvailable, self.macReference == .debug { self.macReference = .connections; self.macControllerFocused = false }
-            if !configuration.debugAvailable, self.macBottomReference == .debug { self.macBottomReference = .connections }
+            if self.macReference == .debug || (!configuration.historyAvailable && self.macReference == .connections) {
+                self.macReference = configuration.historyAvailable ? .connections : .types
+                self.macControllerFocused = false
+            }
+            if self.macBottomReference == .debug || (!configuration.historyAvailable && self.macBottomReference == .connections) {
+                self.macBottomReference = configuration.historyAvailable ? .connections : .types
+            }
             self.refresh()
         }
     }
@@ -288,7 +294,7 @@ final class BoundOverlayView: UIView {
 enum BoundMacControllerActionRouting {
     static let referenceContents: [BoundPiPContent] = [.dex, .bosses, .notes, .types, .connections]
     static func referenceContents(for state: BoundCompanionState) -> [BoundPiPContent] {
-        referenceContents + (state.configuration.debugAvailable ? [.debug] : [])
+        referenceContents.filter { $0 != .connections || state.configuration.historyAvailable }
     }
 
     static func inputMapping(_ mapping: BoundControllerInputMapping) -> BoundControllerInputMapping {
@@ -932,7 +938,7 @@ final class BoundCompanionCoordinator {
                 controllerModeLayout: controllerModeLayout)
         }
         landscapeArrangement.setActive(usesLandscapeArrangement)
-        landscapeCompanion.setDebugAvailable(state.configuration.debugAvailable)
+        landscapeCompanion.setHistoryAvailable(state.configuration.historyAvailable)
         if usesLandscapeArrangement { landscapeArrangement.setContents(state.availableContents) }
         gestures?.setEnabled(!landscapeCompanion.active && !landscapeArrangement.active)
         let referenceTopInset = screenLayout == .bound && !landscape ? safeArea.top : 0
@@ -1437,7 +1443,7 @@ final class BoundCompanionCoordinator {
                 else if landscapeCompanion.active { landscapeCompanion.hideReference() }
                 return
             }
-            guard [.dex, .bosses, .connections, .debug].contains(content) else { return }
+            guard [.dex, .bosses, .connections].contains(content) else { return }
             BoundControllerNavigationEvent.post(command: command, gameID: gameID, content: content)
             return
         }
@@ -1762,9 +1768,9 @@ struct BoundCompanionPanel: View {
                         editingChanged(editing)
                     }).id(gameID)
                 } else if shows(.connections) {
-                    BoundConnectionsView(feed: sharing.connectionFeed, gameID: gameID)
-                } else if shows(.debug), let debug {
-                    BoundDebugView(session: debug, gameID: gameID, isActive: shows(.debug), settings: debugSettings)
+                    BoundHistoryView(feed: sharing.connectionFeed, timeline: sharing.soulLink.probe.timeline,
+                        connectionsAllowed: state.configuration.connectionsAvailable,
+                        timelineAllowed: state.configuration.timelineAvailable, gameID: gameID)
                 } else if shows(.types) {
                     if state.landscape {
                         Image("PokemonTypeChart").resizable().scaledToFit()

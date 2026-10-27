@@ -228,6 +228,11 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
         await settle { video.joined }
         XCTAssertEqual(video.configuredRoomID, videoFriend.roomID)
         XCTAssertEqual(sharing.configuredRoomID, partner.roomID)
+        media.callbacks.last?(.remoteJoined)
+        wire.deliver(roster(peerOnline: true))
+        await settle { sharing.peerConnected }
+        XCTAssertTrue(sharing.connectionFeed.entries.contains { $0.title == "Video Friend connected · Screen Share" })
+        XCTAssertTrue(sharing.connectionFeed.entries.contains { $0.title == "Run Partner connected · Multiplayer" })
         XCTAssertTrue(sharing.sendMultiplayerPacket(Data("BRM1fixture".utf8)))
         onboarding.toggleMultiplayer(videoFriend)
         XCTAssertEqual(sharing.configuredRoomID, partner.roomID, "Video selection cannot replace the persisted multiplayer partner")
@@ -241,6 +246,10 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
         current = nil; onboarding.synchronizeAccount()
         XCTAssertFalse(sharing.connectionRequested); XCTAssertFalse(video.connectionRequested)
         XCTAssertNil(sharing.configuredRoomID); XCTAssertNil(video.configuredRoomID)
+        XCTAssertTrue(sharing.connectionFeed.entries.contains { $0.title == "Disconnected from Video Friend · Screen Share" })
+        XCTAssertTrue(sharing.connectionFeed.entries.contains { $0.title == "Disconnected from Run Partner · Multiplayer" })
+        XCTAssertTrue(sharing.connectionFeed.entries.contains { $0.title == "Disconnected from Run Partner · Screen Share" })
+        XCTAssertFalse(sharing.connectionFeed.entries.contains { $0.username == nil })
     }
 
     func testAgoraMediaHasNoGameplayChannel() {

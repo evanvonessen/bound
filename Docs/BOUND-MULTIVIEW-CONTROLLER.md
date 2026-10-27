@@ -42,3 +42,11 @@ Validation covers an unsigned Release iPhone build, hosted Dex/Docs views,
 controller mapping and repeat behavior, settings reset/export, and the live
 emulator input path through a virtual controller. Physical controller and
 on-device behavior still require device testing.
+
+History uses the former Connections screen identity. Its Connections tab requires
+game Debug Mode; Run Timeline requires Enable Developer Tools independently.
+D-pad Left/Right switches allowed history tabs, and the right stick scrolls the
+visible feed or timeline. Back leaves the reference view as before. When a tab
+becomes unavailable, the remaining allowed tab is selected. With neither allowed,
+History is omitted from cycles and the current view falls back without rewriting
+its saved placement. The DEBUG statepoints page is not a navigation choice.

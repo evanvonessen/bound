@@ -197,6 +197,7 @@ final class MacWorkspaceControllerRoutingTests: XCTestCase {
 
     func testMappedActionsShowHideAndCycleMacReferenceAndFriend() {
         let state = BoundCompanionState()
+        state.settings.setDebugGame(true)
         state.macReference = .bosses
         state.macReferenceVisible = false
         state.macFriendVisible = true

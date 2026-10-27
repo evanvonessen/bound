@@ -1,10 +1,18 @@
 # Run timeline
 
-The Friends and cartridge Run Timeline entry points were retired on October 26,
-2026. Existing history remains saved per library game alongside its Soul Link
-journal and survives closing Bound and reconnecting. Durable events, recovery
-and old protocol command numbers remain intact; this removal does not erase data.
-The following describes retained history behavior and its original validation.
+Run Timeline now lives in the **History** multiview screen and is visible only
+when **Enable Developer Tools** is on. The screen's separate **Connections** tab
+requires the current game's Debug Mode. Either allowed tab keeps History
+available; disabling a selected tab falls back to the other. With neither allowed,
+History is removed from portrait, landscape and Mac navigation.
+
+The old Friends and cartridge Timeline entry points remain retired. The same
+per-game journal and existing filters are used in multiview; visibility and tab
+switches never clear or migrate stored events. Durable events, recovery and old
+protocol command numbers remain intact. The former Connections placement key
+now identifies History, so saved placement and controller preferences survive.
+The DEBUG statepoints page is no longer a navigation choice; its unfinished
+implementation, backend, fixtures and tests remain preserved.
 
 The verified completed-frame probe records newly acquired Pokémon (including
 gifts, eggs and boxed catches) after its initial baseline. Existing Pokémon are

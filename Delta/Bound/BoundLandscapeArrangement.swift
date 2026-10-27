@@ -192,7 +192,7 @@ final class BoundLandscapeArrangementModel: ObservableObject {
 
     private static let multiviewContents: [BoundPiPContent] = [.dex, .bosses, .types, .connections]
     private var availableMultiviewContents: [BoundPiPContent] {
-        Self.multiviewContents + (configuredContents.contains(.debug) ? [.debug] : [])
+        Self.multiviewContents.filter { $0 != .connections || configuredContents.contains(.connections) }
     }
 
     init(defaults: UserDefaults? = nil, namespace: String = "bound.landscape") {
@@ -384,19 +384,26 @@ final class BoundLandscapeArrangementModel: ObservableObject {
     }
 
     func setContents(_ values: [BoundPiPContent]) {
-        configuredContents = Self.nonFriend(values)
+        configuredContents = Self.nonFriend(values.filter { $0 != .debug })
         let normalized = multiview ? availableMultiviewContents : configuredContents
         guard contents != normalized else { return }
         let referenceWasRemoved = !normalized.contains(referenceContent)
+        let gatedSelection = referenceWasRemoved && [.connections, .debug].contains(referenceContent)
         if referenceWasRemoved && active { beforeSwitch?() }
         contents = normalized
         if !normalized.contains(selected) { selected = normalized.first ?? .notes }
-        let unavailableDebug = referenceContent == .debug && !normalized.contains(.debug)
         if !normalized.contains(referenceContent) { referenceContent = normalized.first ?? .notes }
-        if normalized.contains(.debug), defaults.string(forKey: key("reference-content")) == BoundPiPContent.debug.rawValue {
-            referenceContent = .debug; selected = .debug
+        if normalized.contains(.connections), defaults.string(forKey: key("reference-content")) == BoundPiPContent.connections.rawValue {
+            referenceContent = .connections; selected = .connections
         }
-        if !unavailableDebug { defaults.set(referenceContent.rawValue, forKey: key("reference-content")) }
+        // A temporary gate must not replace the saved History/retired DEBUG selection.
+        // Ordinary content edits still persist their valid fallback as before.
+        let savedPage = defaults.string(forKey: key("reference-content"))
+        let savedPageIsGated = savedPage == BoundPiPContent.debug.rawValue ||
+            (savedPage == BoundPiPContent.connections.rawValue && !normalized.contains(.connections))
+        if !gatedSelection && !savedPageIsGated && savedPage != referenceContent.rawValue {
+            defaults.set(referenceContent.rawValue, forKey: key("reference-content"))
+        }
         needsLayout?()
     }
 

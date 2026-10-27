@@ -172,7 +172,7 @@ final class FriendOnboarding: ObservableObject {
               let room = rooms.first(where: { $0.roomID == roomID }), currentIdentity() != nil else { return }
         if selected?.roomID != roomID || sharing?.configuredRoomID != roomID {
             selected = room
-            sharing?.configureAuthenticatedRoom(roomID, identity: { [weak self] in self?.sharingIdentity() })
+            sharing?.configureAuthenticatedRoom(roomID, friendUsername: room.displayName, identity: { [weak self] in self?.sharingIdentity() })
         }
         sharing?.setAutomaticMultiplayerConnection(true)
     }
@@ -268,7 +268,7 @@ final class FriendOnboarding: ObservableObject {
         cancelPendingJiggle()
         screenSelected = room
         if video.configuredRoomID != room.roomID {
-            video.configureAuthenticatedRoom(room.roomID, identity: { [weak self] in self?.sharingIdentity() })
+            video.configureAuthenticatedRoom(room.roomID, friendUsername: room.displayName, identity: { [weak self] in self?.sharingIdentity() })
         }
         message = ""
         if startSharing && permitsRTC {

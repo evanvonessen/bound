@@ -513,7 +513,7 @@ final class LandscapeArrangementTests: XCTestCase {
 
         model.useOption(.option6)
         XCTAssertTrue(model.multiview)
-        XCTAssertEqual(model.contents, [.dex, .bosses, .types, .connections])
+        XCTAssertEqual(model.contents, [.dex, .bosses, .types])
         XCTAssertEqual(model.referenceContent, expectedInitialPage)
         for page in model.contents { XCTAssertEqual(model.placement(for: page), optionThreeSource) }
 
@@ -550,7 +550,7 @@ final class LandscapeArrangementTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: namespace) }
         model.setContents([])
         model.useOption(.option6)
-        XCTAssertEqual(model.contents, [.dex, .bosses, .types, .connections])
+        XCTAssertEqual(model.contents, [.dex, .bosses, .types])
         XCTAssertTrue(model.multiview)
 
         model.setActive(true)
@@ -586,7 +586,7 @@ final class LandscapeArrangementTests: XCTestCase {
         model.useOption(.option7)
         XCTAssertTrue(model.multiview)
         XCTAssertTrue(model.tabbedMultiview)
-        XCTAssertEqual(model.contents, [.dex, .bosses, .types, .connections])
+        XCTAssertEqual(model.contents, [.dex, .bosses, .types])
         XCTAssertEqual(model.referenceContent, .bosses)
         XCTAssertEqual(model.placement(for: .types), optionSixReference)
         XCTAssertEqual(model.placement(for: .friend), optionSixFriend)
@@ -632,8 +632,8 @@ final class LandscapeArrangementTests: XCTestCase {
         XCTAssertFalse(defaults.bool(forKey: namespace + ".option6.initialized"),
                         "Creating Option 7 must not initialize or rewrite Option 6.")
         XCTAssertTrue(model.tabbedMultiview)
-        XCTAssertEqual(model.contents, [.dex, .bosses, .types, .connections],
-                       "Fixed Option 7 tabs remain available when global content selection is empty.")
+        XCTAssertEqual(model.contents, [.dex, .bosses, .types],
+                       "Ordinary tabs remain available; gated History is absent when not admitted.")
         XCTAssertEqual(model.placement(for: .dex), tinyOptionThree)
 
         model.setActive(true)

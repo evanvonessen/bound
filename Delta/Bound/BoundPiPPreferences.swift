@@ -7,8 +7,10 @@ enum BoundPiPCorner: String, CaseIterable, Sendable {
 }
 enum BoundPiPContent: String, CaseIterable, Sendable {
     case friend, types, notes, bosses, dex, connections, debug
-    var title: String { self == .dex ? "RR Dex" : self == .debug ? "DEBUG" : rawValue.capitalized }
-    static let cycleOrder: [Self] = [.friend, .notes, .types, .bosses, .dex, .connections, .debug]
+    // Keep the retired raw value decodable for saved preferences and future fixtures.
+    static let allCases: [Self] = [.friend, .types, .notes, .bosses, .dex, .connections]
+    var title: String { self == .dex ? "RR Dex" : self == .connections ? "History" : self == .debug ? "DEBUG" : rawValue.capitalized }
+    static let cycleOrder: [Self] = [.friend, .notes, .types, .bosses, .dex, .connections]
 }
 enum BoundPiPHiddenSide: String, Sendable { case left, right }
 
@@ -193,7 +195,7 @@ final class BoundPiPPreferences {
     }
     private static func normalizedOrder(_ contents: [BoundPiPContent]) -> [BoundPiPContent] {
         var result: [BoundPiPContent] = []
-        for content in contents + BoundPiPContent.cycleOrder where !result.contains(content) {
+        for content in contents + BoundPiPContent.cycleOrder where content != .debug && !result.contains(content) {
             result.append(content)
         }
         return result

@@ -5,6 +5,57 @@ import SwiftUI
 
 @MainActor
 final class ConnectionsViewTests: XCTestCase {
+    func testHistoryTabsRenderIndependentGatesAndPreserveTimeline() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        let feed = BoundConnectionFeed(); feed.username = "evanator3000"
+        feed.beginConnection(); feed.connected(); feed.friendJoined(); feed.disconnect(.manual)
+        let timeline = BoundRunTimeline()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("HistoryQA-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("timeline.json")
+        timeline.configure(url: url)
+        timeline.append(id: "old-event", kind: .victory, title: "Trainer battle won")
+        for index in 0..<30 { timeline.append(id: "retained-\(index)", kind: .victory, title: "Trainer battle \(index + 1) won") }
+        let original = try Data(contentsOf: url)
+        let gameID = "History-" + UUID().uuidString
+        func view(_ debug: Bool, _ developer: Bool) -> BoundHistoryView {
+            BoundHistoryView(feed: feed, timeline: timeline, connectionsAllowed: debug,
+                             timelineAllowed: developer, gameID: gameID)
+        }
+        let host = UIHostingController(rootView: view(false, true))
+        host.safeAreaRegions = []; host.overrideUserInterfaceStyle = .dark
+        window.rootViewController = host; window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil; previous?.makeKeyAndVisible() }
+        host.view.frame = CGRect(x: 0, y: 0, width: 393, height: 263)
+        await settle(host.view); try capture(host.view, name: "history-initial-timeline")
+        host.rootView = view(true, true)
+        await settle(host.view); try capture(host.view, name: "history-both-retains-timeline")
+        BoundControllerNavigationEvent.post(command: .focusLeft, gameID: gameID, content: .connections)
+        await settle(host.view); try capture(host.view, name: "history-both-connections")
+        BoundControllerNavigationEvent.post(command: .focusRight, gameID: gameID, content: .connections)
+        await settle(host.view)
+        let timelineScroll = try XCTUnwrap(scrollViews(in: host.view).first { $0.contentSize.height > $0.bounds.height + 1 })
+        let offset = timelineScroll.contentOffset.y
+        BoundControllerNavigationEvent.post(command: .scrollDown, gameID: gameID, content: .connections)
+        for _ in 0..<20 where timelineScroll.contentOffset.y <= offset + 16 { await settle(host.view) }
+        XCTAssertGreaterThan(timelineScroll.contentOffset.y, offset + 16, "History controller scrolling reaches the existing timeline")
+        try capture(host.view, name: "history-both-timeline")
+        host.rootView = view(true, false)
+        await settle(host.view); try capture(host.view, name: "history-debug-only-fallback")
+        host.rootView = view(false, true)
+        await settle(host.view); try capture(host.view, name: "history-developer-only-fallback")
+        host.rootView = view(false, false)
+        await settle(host.view); try capture(host.view, name: "history-neither")
+        XCTAssertEqual(try Data(contentsOf: url), original, "Visibility never rewrites the existing journal")
+        let reopened = BoundRunTimeline(); reopened.configure(url: url)
+        XCTAssertEqual(reopened.read().events.map(\.id), ["old-event"] + (0..<30).map { "retained-\($0)" })
+        XCTAssertEqual(BoundHistoryTab.selection(.timeline, allowed: [.connections]), .connections)
+        XCTAssertEqual(BoundHistoryTab.selection(.connections, allowed: [.timeline]), .timeline)
+        XCTAssertNil(BoundHistoryTab.selection(.connections, allowed: []))
+    }
+
     func testCompactPortraitShowsLiveRowsAndScrollsHistory() async throws {
         try await verify(size: CGSize(width: 393, height: 263), name: "portrait")
     }

@@ -97,7 +97,7 @@ final class BoundLandscapeCompanionModel: ObservableObject {
     var beginArrangement: (() -> Bool)?
     var endArrangement: ((_ resume: Bool) -> Void)?
     private var observation: AnyCancellable?
-    private var debugAvailable = false
+    private var historyAvailable = false
     private var friendDragStart: CGRect?
     private var referenceDragStart: CGRect?
     private var liveReferenceCenter: CGPoint?
@@ -117,22 +117,22 @@ final class BoundLandscapeCompanionModel: ObservableObject {
         friendVisible = preferences.friendVisible
         referenceVisible = preferences.referenceVisible
         referenceContent = preferences.referenceContent
-        referenceContents = preferences.referenceContents.filter { $0 != .debug }
-        if referenceContent == .debug { referenceContent = referenceContents.first ?? .notes }
+        referenceContents = preferences.referenceContents.filter { $0 != .debug && $0 != .connections }
+        if !referenceContents.contains(referenceContent) { referenceContent = referenceContents.first ?? .notes }
         observation = NotificationCenter.default.publisher(for: BoundLandscapePreferences.didChangeNotification)
             .receive(on: DispatchQueue.main).sink { [weak self] _ in self?.reload() }
     }
     func reload() {
         if !editing { draft = preferences.friendPlacement; friendVisible = preferences.friendVisible }
         referenceVisible = preferences.referenceVisible
-        referenceContents = preferences.referenceContents.filter { $0 != .debug }
-        if debugAvailable { referenceContents.append(.debug) }
+        referenceContents = preferences.referenceContents.filter { $0 != .debug && ($0 != .connections || historyAvailable) }
+        if historyAvailable, !referenceContents.contains(.connections) { referenceContents.append(.connections) }
         referenceContent = referenceContents.contains(preferences.referenceContent) ? preferences.referenceContent : referenceContents.first ?? .notes
         refreshLayout()
     }
-    func setDebugAvailable(_ value: Bool) {
-        guard debugAvailable != value else { return }
-        debugAvailable = value; reload()
+    func setHistoryAvailable(_ value: Bool) {
+        guard historyAvailable != value else { return }
+        historyAvailable = value; reload()
     }
     func setActive(_ value: Bool) {
         guard active != value else { return }
@@ -532,8 +532,7 @@ struct BoundCompanionPresentation: View {
             multiviewTab("DEX", content: .dex)
             multiviewTab("DOCS", content: .bosses)
             multiviewTab("TYPES", content: .types)
-            multiviewTab("LOG", content: .connections)
-            if arrangement.contents.contains(.debug) { multiviewTab("DEBUG", content: .debug) }
+            if arrangement.contents.contains(.connections) { multiviewTab("HISTORY", content: .connections) }
         }
         .background(Color(uiColor: .systemBackground))
         .clipShape(UnevenRoundedRectangle(topLeadingRadius: 8, topTrailingRadius: 8))
@@ -556,7 +555,7 @@ struct BoundCompanionPresentation: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(content == .connections ? "Connections" : title)
+        .accessibilityLabel(content == .connections ? "History" : title)
         .accessibilityValue(selected ? "Selected" : "Not selected")
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityHint(content == .bosses ? "Shows Boss View" : "Shows \(content.title)")

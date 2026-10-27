@@ -1783,6 +1783,8 @@ final class BoundRunTimeline: @unchecked Sendable {
 
 struct BoundRunTimelineView: View {
     let timeline: BoundRunTimeline
+    var gameID = ""
+    var isActive = true
     @State private var events: [BoundRunEvent] = []
     @State private var error: String?
     @State private var filter: BoundRunEvent.Kind?
@@ -1810,6 +1812,8 @@ struct BoundRunTimelineView: View {
                 } icon: { Image(systemName: event.symbol) }
             }
         }
+        .listStyle(.plain).font(.footnote)
+        .boundControllerScroll(gameID: gameID, content: .connections, active: isActive)
         .navigationTitle("Run Timeline")
         .accessibilityIdentifier("bound.run-timeline")
         .onAppear { load() }

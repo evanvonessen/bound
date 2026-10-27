@@ -15,7 +15,7 @@ final class LandscapeCompanionTests: XCTestCase {
     func testConnectionsIsSelectableWithoutOverwritingSavedReferenceChoices() throws {
         let (model, defaults, suite) = try makeModel()
         defer { defaults.removePersistentDomain(forName: suite) }
-        XCTAssertTrue(model.referenceContents.contains(.connections))
+        XCTAssertFalse(model.referenceContents.contains(.connections))
         model.preferences.referenceContents = [.bosses, .types]
         model.preferences.referenceContent = .types
         model.reload()
@@ -23,8 +23,10 @@ final class LandscapeCompanionTests: XCTestCase {
         XCTAssertEqual(model.referenceContent, .types)
         model.preferences.referenceContents = [.bosses, .types, .connections]
         model.reload()
+        model.setHistoryAvailable(true)
         model.selectReference(.connections)
         let restored = BoundLandscapeCompanionModel(preferences: BoundLandscapePreferences(defaults: defaults, namespace: suite))
+        restored.setHistoryAvailable(true)
         XCTAssertEqual(restored.referenceContents, [.bosses, .types, .connections])
         XCTAssertEqual(restored.referenceContent, .connections)
     }

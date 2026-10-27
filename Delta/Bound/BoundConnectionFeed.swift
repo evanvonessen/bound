@@ -45,11 +45,30 @@ final class BoundConnectionFeed: ObservableObject {
             }
         }
     }
+    enum Service: String { case multiplayer = "Multiplayer", screenShare = "Screen Share" }
     struct Entry: Identifiable, Equatable {
         let id: UUID
         let timestamp: Date
         let kind: Kind
-        var title: String { kind.title }
+        let username: String?
+        let service: Service
+        var title: String {
+            let name = username ?? "Friend"
+            let event: String
+            switch kind {
+            case .connecting: event = "Connecting to \(name)"
+            case .connected: event = "Connection ready for \(name)"
+            case .reconnected: event = "Connection restored for \(name)"
+            case .friendJoined: event = "\(name) connected"
+            case .friendReconnected: event = "\(name) reconnected"
+            case .friendDisconnected: event = "\(name) disconnected"
+            case .friendConnectionLost: event = "\(name) connection lost"
+            case .manuallyDisconnected: event = "Disconnected from \(name) by you"
+            case .disconnected, .sessionChanged: event = "Disconnected from \(name)"
+            default: event = "\(name): \(kind.title)"
+            }
+            return event + " · " + service.rawValue
+        }
         var symbolName: String { kind.symbolName }
     }
     enum DisconnectReason { case stopped, manual, sessionChanged, unavailable }
@@ -57,6 +76,10 @@ final class BoundConnectionFeed: ObservableObject {
     private enum FriendState { case absent, present, interrupted }
 
     @Published private(set) var entries: [Entry] = []
+    // Snapshot identity into each event before a room is cleared or replaced.
+    var username: String?
+    var service: Service = .multiplayer
+    var onEntry: ((Entry) -> Void)?
     private let now: () -> Date
     private let capacity: Int
     private var phase: Phase = .idle
@@ -71,7 +94,13 @@ final class BoundConnectionFeed: ObservableObject {
     }
 
     func record(_ kind: Kind) {
-        entries.insert(.init(id: UUID(), timestamp: now(), kind: kind), at: 0)
+        let entry = Entry(id: UUID(), timestamp: now(), kind: kind, username: username, service: service)
+        append(entry)
+        onEntry?(entry)
+    }
+
+    func append(_ entry: Entry) {
+        entries.insert(entry, at: 0)
         if entries.count > capacity { entries.removeLast(entries.count - capacity) }
     }
 
