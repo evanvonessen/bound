@@ -220,7 +220,7 @@ namespace BoundDebug {
             if(source){const prior=read(source,op.runID+"/"+id,"bound_events_v2");if(!prior||!equal(normalizedEvent(prior.value),event))fail("source_event");}
             if(event.id.origin===owner){seeded.push(event);largest=Math.max(largest,event.id.sequence);}}
         if(!equal({origins:received},d.received)||!integer(journal.nextSequence)||journal.nextSequence<=largest)fail("journal_cursor");
-        if(!op.cut&&seeded.length>2304)fail("history_too_large");
+        if(!op.cut&&seeded.length>BoundSaveLibrary.soulSlotCount)fail("history_too_large");
         return seeded;
     }
 }

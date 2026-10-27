@@ -55,6 +55,7 @@ enum BoundDebugFixtureStore {
         var ledger = BoundSoulLedger(run: identity.run,
             binding: BoundMultiplayerSaveStore.hash(Data((owner.uuidString + ":" + identity.roomID).utf8)))
         ledger.records = source.records; ledger.nextEgg = source.nextEgg
+        ledger.nextGift = source.nextGift; ledger.nextStatic = source.nextStatic
         ledger.partnerAcquisitions = source.partnerAcquisitions; ledger.partnerNames = source.partnerNames
         ledger.consumedSlots = source.consumedSlots
         let ledgerBytes = try BoundMultiplayerSaveStore.encode(ledger)

@@ -3,6 +3,9 @@
 // This is a directory and authorization layer over independent.ts, not another
 // snapshot store. Every permanent save_id is the existing version-two run key.
 namespace BoundSaveLibrary {
+    // Ordinary areas plus independent Egg, Gift and Static ordinal pairs.
+    // Legacy 864-byte history and the ROM/world ABI retain their own bounds.
+    export const soulSlotCount = 256 + 3 * 2048;
     const collection = "bound_independent_v2", requests = "bound_save_requests_v1";
     const system = "00000000-0000-0000-0000-000000000000";
     const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -26,7 +29,7 @@ namespace BoundSaveLibrary {
         if (event.kind === "soul") {
             if (value.version !== 1 || String(value.run).toLowerCase() !== runID || ["acquired", "death", "ended"].indexOf(value.kind) < 0) return false;
             if (value.kind === "ended") return value.slot == null;
-            if (typeof value.slot !== "string" || !/^(area|egg):(0|[1-9][0-9]{0,3})$/.test(value.slot)) return false;
+            if (typeof value.slot !== "string" || !/^(area|egg|gift|static):(0|[1-9][0-9]{0,3})$/.test(value.slot)) return false;
             const parts = value.slot.split(":"), slot = Number(parts[1]);
             return parts[0] === "area" ? slot <= 255 : slot >= 1 && slot <= 2048;
         }

@@ -4,12 +4,18 @@ namespace {
 constexpr size_t SoulStart=0x1FF8000,SoulEnd=0x1FFF800,SoulPolicy=0x1FFA000;
 uint8_t *soulROM=nullptr;
 uint8_t soulOriginalGet[8],soulOriginalSet[8],soulGetThunk[8],soulSetThunk[8];
+uint8_t soulOriginalGive[8],soulOriginalCatch[8],soulGiveThunk[8],soulCatchThunk[8];
+uint8_t soulOriginalPrize[8],soulPrizeThunk[8];
 bool soulHooked() {
-    return soulROM==rom && rom && memcmp(rom+0x3FBE8,soulGetThunk,8)==0 && memcmp(rom+0x4037C,soulSetThunk,8)==0;
+    return soulROM==rom && rom && memcmp(rom+0x3FBE8,soulGetThunk,8)==0 && memcmp(rom+0x4037C,soulSetThunk,8)==0
+        && memcmp(rom+0x40B14,soulGiveThunk,8)==0 && memcmp(rom+0x107DF6C,soulCatchThunk,8)==0
+        && memcmp(rom+0x104575D,soulPrizeThunk,8)==0;
 }
 bool soulResident() {
     return soulROM==rom && rom && memcmp(rom+SoulStart,BoundSoulCode,sizeof(BoundSoulCode))==0
-        && memcmp(rom+0x3FBE8,soulOriginalGet,8)==0 && memcmp(rom+0x4037C,soulOriginalSet,8)==0;
+        && memcmp(rom+0x3FBE8,soulOriginalGet,8)==0 && memcmp(rom+0x4037C,soulOriginalSet,8)==0
+        && memcmp(rom+0x40B14,soulOriginalGive,8)==0 && memcmp(rom+0x107DF6C,soulOriginalCatch,8)==0
+        && memcmp(rom+0x104575D,soulOriginalPrize,8)==0;
 }
 bool soulOriginalHash(uint8_t digest[32]) {
     if(!rom) return false;
@@ -20,6 +26,8 @@ bool soulOriginalHash(uint8_t digest[32]) {
     auto *p=(uint8_t *)base.mutableBytes;
     if(soulHooked()||soulResident()) {
         memcpy(p+0x3FBE8,soulOriginalGet,8); memcpy(p+0x4037C,soulOriginalSet,8);
+        memcpy(p+0x40B14,soulOriginalGive,8);memcpy(p+0x107DF6C,soulOriginalCatch,8);
+        memcpy(p+0x104575D,soulOriginalPrize,8);
         memset(p+SoulStart,0xFF,SoulEnd-SoulStart);
     }
     worldRestoreBase(p);

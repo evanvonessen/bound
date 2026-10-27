@@ -281,6 +281,75 @@ test('idle event polling and identical save acknowledgements do not churn revisi
 const acquiredEvent = (run, sequence = 1, slot = 'area:100') => ({ run: run.save_id, id: { origin: owner, sequence }, kind: 'soul',
   payload: Buffer.from(JSON.stringify({ version: 1, run: run.save_id, kind: 'acquired', slot })).toString('base64') });
 
+for (const slot of ['gift:1', 'gift:2048', 'static:1', 'static:2048']) {
+  test(`${slot} acquisition retains native checkpoint, owner fencing and retry authority`, () => {
+    const { create, get, upload, rpc } = setup(), run = create();
+    upload(owner, run, uuid(10)).seal();
+    const acquired = acquiredEvent(run, 1, slot), state = Buffer.from([1, 7, 42]);
+    const pending = upload(owner, run, uuid(11), uuid(10), [acquired], state);
+    assert.throws(() => rpc(owner, 'events', { save_id: run.save_id, events: [acquired], after: {}, checkpointAcquisitions: true }));
+    assert.equal(get(owner, run).saves[owner].receipt.checkpoint, uuid(10));
+    assert.equal(rpc(peer, 'events', { save_id: run.save_id, events: [], after: {} }).events.length, 0);
+    assert.throws(() => rpc(peer, 'events', { save_id: run.save_id, events: [acquired], after: {} }), 'A partner cannot forge the acquiring owner');
+    assert.throws(() => get(third, run), 'A third account cannot reopen this run');
+    assert.equal(pending.seal().cursors[owner].contiguous, 1);
+    const recovered = JSON.parse(Buffer.from(rpc(owner, 'saveDownload', { save_id: run.save_id, checkpoint: uuid(11), index: 0 }).data, 'base64'));
+    assert.deepEqual(Buffer.from(recovered.files['checkpoint.state'].data, 'base64'), state);
+    assert.deepEqual(JSON.parse(Buffer.from(recovered.files['shared-events.json'].data, 'base64')).events, [acquired]);
+    assert.equal(pending.seal().cursors[owner].contiguous, 1, 'A lost save response cannot duplicate the acquisition');
+    const death = { ...acquired, id: { origin: peer, sequence: 1 },
+      payload: Buffer.from(JSON.stringify({ version: 1, run: run.save_id, kind: 'death', slot })).toString('base64') };
+    rpc(peer, 'events', { save_id: run.save_id, events: [death], after: {} });
+    assert.deepEqual(rpc(owner, 'events', { save_id: run.save_id, events: [], after: {} }).events, [acquired, death]);
+    assert.equal(rpc(peer, 'events', { save_id: run.save_id, events: [death], after: {} }).cursors[peer].contiguous, 1);
+  });
+}
+
+test('gift/static slot validation rejects malformed aliases and preserves the authoritative cursor', () => {
+  const { create, get, rpc } = setup(), run = create();
+  const invalid = ['gift:0', 'static:0', 'gift:2049', 'static:2049', 'gift:-1', 'static:+1',
+    'gift:01', 'static:001', 'gift:1.0', 'static:1e0', 'gift:1 ', 'static:1\n',
+    'Gift:1', 'STATIC:1', 'gift:1:2', 'static:', 'gift:10000', 'static:NaN', 'gift:１'];
+  for (const slot of invalid) {
+    assert.throws(() => rpc(owner, 'events', { save_id: run.save_id, events: [acquiredEvent(run, 1, slot)], after: {} }), slot);
+    assert.equal(get(owner, run).cursors[owner], undefined, slot);
+  }
+  assert.equal(rpc(peer, 'events', { save_id: run.save_id, events: [], after: {} }).events.length, 0);
+});
+
+for (const slot of ['gift:1', 'static:1']) {
+  test(`${slot} interrupted atomic seal cannot spend a slot ahead of its native state`, () => {
+    const { f, create, get, upload, rpc } = setup(), run = create();
+    upload(owner, run, uuid(10)).seal();
+    const acquired = acquiredEvent(run, 1, slot), pending = upload(owner, run, uuid(11), uuid(10), [acquired]);
+    const write = f.nk.storageWrite;
+    f.nk.storageWrite = rows => {
+      if (rows.some(row => row.collection === 'bound_events_v2')) throw Error('interrupted atomic commit');
+      return write(rows);
+    };
+    assert.throws(pending.seal);
+    assert.equal(get(owner, run).saves[owner].receipt.checkpoint, uuid(10));
+    assert.equal(get(owner, run).cursors[owner], undefined);
+    assert.equal(rpc(peer, 'events', { save_id: run.save_id, events: [], after: {} }).events.length, 0);
+    f.nk.storageWrite = write;
+    assert.equal(pending.seal().cursors[owner].contiguous, 1);
+    assert.equal([...f.stored.values()].filter(row => row.collection === 'bound_events_v2').length, 1);
+  });
+}
+
+test('one native checkpoint supports all 6400 area/egg/gift/static slots and rejects a larger acquisition batch', () => {
+  const { create, get, upload } = setup();
+  const slots = Array.from({ length: 256 }, (_, n) => `area:${n}`);
+  for (const kind of ['egg', 'gift', 'static']) for (let n = 1; n <= 2048; n++) slots.push(`${kind}:${n}`);
+  const run = create(), events = slots.map((slot, n) => acquiredEvent(run, n + 1, slot));
+  assert.equal(upload(owner, run, uuid(10), null, events).seal().cursors[owner].contiguous, 6400);
+  const other = create({ request_id: uuid(2) });
+  const oversized = [...events.map(event => acquiredEvent(other, event.id.sequence, JSON.parse(Buffer.from(event.payload, 'base64')).slot)), acquiredEvent(other, 6401, 'gift:1')];
+  assert.throws(upload(owner, other, uuid(11), null, oversized).seal);
+  assert.equal(get(owner, other).saves[owner], undefined, 'The native head must remain uncommitted');
+  assert.equal(get(owner, other).cursors[owner], undefined, 'The oversized batch must publish no acquisitions');
+});
+
 test('starter acquisition becomes visible only with its complete post-starter checkpoint', () => {
   const { create, get, upload, rpc } = setup(), run = create();
   upload(owner, run, uuid(10)).seal(); // Last idle field before choosing a starter.

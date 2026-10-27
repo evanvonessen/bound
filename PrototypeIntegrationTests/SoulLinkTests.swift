@@ -373,7 +373,7 @@ final class SoulLinkTests: XCTestCase {
     func testLossBitmapIncludesEveryAreaAndEggInEverySyncPacket() throws {
         var ledger = makeLedger(); ledger.dead = ["area:0", "area:255", "egg:1", "egg:2048"]
         XCTAssertEqual(BoundSoulLedger.losses(ledger.lossBits), ledger.dead)
-        let packet = BoundSoulPacket(version: 2, run: ledger.run, kind: .state,
+        let packet = BoundSoulPacket(version: 3, run: ledger.run, kind: .state,
             rows: (1...3).map { .init(slot: "egg:\($0)", name: "ABCDEFGHIJ", dead: false) }, losses: ledger.lossBits)
         let data = try XCTUnwrap(packet.encoded()); XCTAssertLessThanOrEqual(data.count, 1024)
         XCTAssertEqual(BoundSoulLedger.losses(try XCTUnwrap(BoundSoulPacket.decode(data)).losses), ledger.dead)
@@ -519,7 +519,7 @@ final class SoulLinkTests: XCTestCase {
         session.connected={ online };session.qaPermitIncomingInvitation()
         var replies:[BoundSoulPacket]=[]
         session.send={ data in if let packet=BoundSoulPacket.decode(data) { replies.append(packet) };return online }
-        let offer=try XCTUnwrap(BoundSoulPacket(version:2,run:run,kind:.offer,rows:[],sender:sender).encoded())
+        let offer=try XCTUnwrap(BoundSoulPacket(version:3,run:run,kind:.offer,rows:[],sender:sender).encoded())
         session.receive(offer)
         XCTAssertEqual(session.incoming,run)
         for _ in 0..<3 { session.receive(offer) }
@@ -534,10 +534,10 @@ final class SoulLinkTests: XCTestCase {
         // Deliberate sender cancellation also closes a prompt before the pose
         // challenge has finished, while an unrelated run cannot close it.
         let next=UUID();session.qaPermitIncomingInvitation()
-        session.receive(try XCTUnwrap(BoundSoulPacket(version:2,run:next,kind:.offer,rows:[],sender:sender).encoded()))
-        session.receive(try XCTUnwrap(BoundSoulPacket(version:2,run:UUID(),kind:.decline,rows:[],sender:sender).encoded()))
+        session.receive(try XCTUnwrap(BoundSoulPacket(version:3,run:next,kind:.offer,rows:[],sender:sender).encoded()))
+        session.receive(try XCTUnwrap(BoundSoulPacket(version:3,run:UUID(),kind:.decline,rows:[],sender:sender).encoded()))
         XCTAssertEqual(session.incoming,next)
-        session.receive(try XCTUnwrap(BoundSoulPacket(version:2,run:next,kind:.decline,rows:[],sender:sender).encoded()))
+        session.receive(try XCTUnwrap(BoundSoulPacket(version:3,run:next,kind:.decline,rows:[],sender:sender).encoded()))
         XCTAssertNil(session.incoming)
     }
     @MainActor
@@ -563,10 +563,10 @@ final class SoulLinkTests: XCTestCase {
         XCTAssertEqual(probe.sharedEvents().map(\.id), value.sharedEvents.map(\.id))
     }
     func testMalformedOrWrongVersionNetworkRowsAreRejected() throws {
-        let valid = BoundSoulPacket(version: 2, run: UUID(), kind: .state, rows: [.init(slot: "egg:1", name: "Egg", dead: true)])
+        let valid = BoundSoulPacket(version: 3, run: UUID(), kind: .state, rows: [.init(slot: "egg:1", name: "Egg", dead: true)])
         XCTAssertNotNil(BoundSoulPacket.decode(try XCTUnwrap(valid.encoded())))
         for slot in ["area:-1", "area:256", "egg:0", "egg:9000", "area:001", "route:1"] {
-            let bad = BoundSoulPacket(version: 2, run: UUID(), kind: .state, rows: [.init(slot: slot, name: "Mon", dead: true)])
+            let bad = BoundSoulPacket(version: 3, run: UUID(), kind: .state, rows: [.init(slot: slot, name: "Mon", dead: true)])
             XCTAssertNil(bad.encoded())
         }
         XCTAssertNil(BoundSoulPacket.decode(Data(repeating: 1, count: 1025)))
@@ -689,7 +689,7 @@ final class SoulLinkTests: XCTestCase {
     func testCompleteAcquisitionsFitAlongsideLossesAndUnicodeNames() throws {
         let slots = Set((0..<2304).map { $0 < 256 ? "area:\($0)" : "egg:\($0 - 255)" })
         let bits = BoundSoulLedger.bits(slots)
-        let packet = BoundSoulPacket(version: 2, run: UUID(), kind: .state,
+        let packet = BoundSoulPacket(version: 3, run: UUID(), kind: .state,
             rows: ["area:0", "area:255", "egg:2048"].map { .init(slot: $0, name: String(repeating: "🐉", count: 20), dead: true) },
             losses: bits, acquired: bits, receiver: UUID())
         let data = try XCTUnwrap(packet.encoded())
@@ -700,12 +700,12 @@ final class SoulLinkTests: XCTestCase {
         XCTAssertEqual(decoded.run, packet.run); XCTAssertEqual(decoded.sender, packet.sender)
         XCTAssertEqual(BoundSoulLedger.losses(decoded.acquired), slots)
         for kind in BoundSoulPacket.Kind.allCases {
-            let empty = BoundSoulPacket(version: 2, run: packet.run, kind: kind)
+            let empty = BoundSoulPacket(version: 3, run: packet.run, kind: kind)
             XCTAssertEqual(BoundSoulPacket.decode(try XCTUnwrap(empty.encoded()))?.kind, kind)
         }
     }
     func testTruncatedMalformedAndLegacyPacketsCannotBecomeCatchEvidence() throws {
-        let packet = BoundSoulPacket(version: 2, run: UUID(), kind: .state,
+        let packet = BoundSoulPacket(version: 3, run: UUID(), kind: .state,
             rows: [.init(slot: "area:100", name: "Catch", dead: false)])
         let data = try XCTUnwrap(packet.encoded())
         for count in 0..<data.count { XCTAssertNil(BoundSoulPacket.decode(Data(data.prefix(count)))) }
@@ -1242,4 +1242,131 @@ extension SoulLinkTests {
         XCTAssertFalse(pipeline.status().drained);XCTAssertTrue(fixture.read().committed.isEmpty)
         XCTAssertEqual(fixture.read().writes,0);XCTAssertEqual(fixture.read().values,[7])
     }
+}
+
+
+/// Source receipts, rather than species or encounter location guesses, decide
+/// which successful acquisitions share a route/city allowance.
+final class EncounterAllowanceTests: XCTestCase {
+    private func ledger() -> BoundSoulLedger { .init(run: UUID(), binding: String(repeating: "a", count: 64)) }
+    private func receipt(_ id: UInt32, kind: UInt32, area: UInt32 = 100) -> Data {
+        var data = BoundSoulIdentity(personality: id, trainer: 42).bytes
+        var source = (kind | area << 8).littleEndian
+        withUnsafeBytes(of: &source) { data.append(contentsOf: $0) }
+        return data
+    }
+    private func mon(_ id: UInt32, area: Int = 100, trainer: UInt32 = 42, hp: Int = 30) -> BoundSoulMon {
+        .init(identity: .init(personality: id, trainer: trainer), species: 1, name: "Mon", area: area,
+              eggOrigin: false, isEgg: false, hp: hp)
+    }
+    func testGiftsAndStaticUseIndependentPairsAndDeaths() throws {
+        var value = ledger()
+        try value.registerAcquisitions(receipt(1, kind: 1) + receipt(2, kind: 0) + receipt(3, kind: 4))
+        try value.observe([mon(1), mon(2), mon(3)], registering: true, fainted: [])
+        XCTAssertEqual(value.acquired, ["gift:1", "area:100", "static:1"])
+        XCTAssertEqual(value.records.map(\.slot), ["gift:1", "area:100", "static:1"])
+        XCTAssertTrue(value.denied.isEmpty)
+        try value.observe([mon(1, hp: 0)], registering: false, fainted: [mon(1).identity])
+        XCTAssertEqual(value.dead, ["gift:1"], "Gift death leaves the route and static pair alive")
+        XCTAssertTrue(value.denied.contains(mon(1).identity))
+        XCTAssertFalse(value.denied.contains(mon(2).identity))
+        XCTAssertFalse(value.denied.contains(mon(3).identity))
+        try value.registerAcquisitions(receipt(4, kind: 0))
+        XCTAssertTrue(value.denied.contains(mon(4).identity), "Defense against a duplicate receipt or older native policy")
+        XCTAssertEqual(value.records.filter(\.eligible).count, 3)
+    }
+    func testOnlyOneCeladonPrizeAcrossSpeciesAndSeparateFromCity() throws {
+        var value = ledger()
+        try value.registerAcquisitions(receipt(1, kind: 2) + receipt(2, kind: 2) + receipt(3, kind: 0))
+        XCTAssertEqual(value.acquired, ["area:0", "area:100"])
+        XCTAssertEqual(value.records.filter(\.eligible).count, 2)
+        XCTAssertTrue(value.denied.contains(mon(2).identity))
+        let saved = try JSONEncoder().encode(value)
+        value = try JSONDecoder().decode(BoundSoulLedger.self, from: saved)
+        try value.observe([], registering: true, fainted: [])
+        XCTAssertEqual(value.acquisitionBits[0] & 1, 1, "Releasing/boxing does not restore the prize")
+        XCTAssertTrue(value.valid)
+    }
+    func testPlayerEggOrdinalsLinkSeparatelyAcrossDifferentAreasAndHatching() throws {
+        var first = ledger(), second = ledger()
+        try first.registerAcquisitions(receipt(1, kind: 0) + receipt(2, kind: 3) + receipt(3, kind: 3))
+        try second.registerAcquisitions(receipt(10, kind: 3, area: 105) + receipt(11, kind: 0) + receipt(12, kind: 3, area: 107))
+        XCTAssertEqual(first.records.map(\.slot), ["area:100", "egg:1", "egg:2"])
+        XCTAssertEqual(second.records.map(\.slot), ["egg:1", "area:100", "egg:2"])
+        try first.observe([mon(2, area: 108, trainer: 99)], registering: true, fainted: [])
+        XCTAssertEqual(first.records.count, 3)
+        XCTAssertTrue(first.records[1].identities.contains(mon(2, trainer: 99).identity))
+        XCTAssertEqual(first.records[1].slot, "egg:1")
+        try first.observe([mon(2, area: 108, trainer: 99, hp: 0)], registering: false, fainted: [])
+        second.dead.formUnion(first.dead)
+        XCTAssertTrue(second.denied.contains(mon(10).identity))
+        XCTAssertFalse(second.denied.contains(mon(11).identity))
+        XCTAssertFalse(second.denied.contains(mon(12).identity))
+        XCTAssertEqual(first.dead, ["egg:1"])
+        XCTAssertEqual(second.acquired, ["area:100", "egg:1", "egg:2"])
+    }
+    func testReceiptsAreIdempotentAndRestoreCannotFreeSlotsOrRewindOrdinals() throws {
+        var value = ledger()
+        let baseline = try JSONEncoder().encode(value)
+        let receipts = receipt(1, kind: 3) + receipt(2, kind: 1) + receipt(3, kind: 2)
+        try value.registerAcquisitions(receipts)
+        let before = value
+        try value.registerAcquisitions(receipts)
+        XCTAssertEqual(value, before)
+        let restored = try JSONDecoder().decode(BoundSoulLedger.self, from:
+            BoundSoulLedger.mergeForIndependentRestore(current: JSONEncoder().encode(value), incoming: baseline))
+        XCTAssertEqual(restored.acquired, ["egg:1", "area:0", "gift:1"])
+        XCTAssertTrue(restored.denied.isEmpty)
+        XCTAssertEqual(restored.nextEgg, 2)
+        XCTAssertEqual(restored.nextGift, 2)
+    }
+    func testMalformedReceiptsFailClosedAndLegacyRecordsKeepTheirRules() throws {
+        var value = ledger()
+        XCTAssertThrowsError(try value.registerAcquisitions(Data([0])))
+        XCTAssertThrowsError(try value.registerAcquisitions(receipt(1, kind: 5)))
+        XCTAssertThrowsError(try value.registerAcquisitions(receipt(1, kind: 0, area: 256)))
+        try value.observe([mon(1)], registering: true, fainted: [])
+        try value.registerAcquisitions(receipt(1, kind: 1))
+        XCTAssertEqual(value.acquired, ["area:100"], "Existing run history is never silently reclassified")
+        XCTAssertEqual(value.records[0].slot, "area:100")
+    }
+    func testGiftAndStaticOrdinalsAreIndependentAcrossPlayersAndRestore() throws {
+        var first=ledger(), second=ledger()
+        try first.registerAcquisitions(receipt(1,kind:1) + receipt(2,kind:4) + receipt(3,kind:3) + receipt(4,kind:1))
+        try second.registerAcquisitions(receipt(10,kind:4) + receipt(11,kind:1) + receipt(12,kind:1) + receipt(13,kind:3))
+        XCTAssertEqual(first.records.map(\.slot), ["gift:1","static:1","egg:1","gift:2"])
+        XCTAssertEqual(second.records.map(\.slot), ["static:1","gift:1","gift:2","egg:1"])
+        try first.observe([mon(1,hp:0),mon(2,hp:0)],registering:false,fainted:[])
+        for category in ["gift","static"] {
+            second.dead.formUnion(BoundSoulExtrasPacket.slots(BoundSoulExtrasPacket.bits(first.dead,category:category),category:category))
+        }
+        XCTAssertTrue(second.denied.contains(mon(10).identity))
+        XCTAssertTrue(second.denied.contains(mon(11).identity))
+        XCTAssertFalse(second.denied.contains(mon(12).identity))
+        XCTAssertFalse(second.denied.contains(mon(13).identity))
+        let older=try JSONEncoder().encode(first)
+        try first.registerAcquisitions(receipt(5,kind:4))
+        first=try JSONDecoder().decode(BoundSoulLedger.self,from:BoundSoulLedger.mergeForIndependentRestore(current:JSONEncoder().encode(first),incoming:older))
+        try first.registerAcquisitions(receipt(6,kind:4))
+        XCTAssertEqual(first.records.last?.slot,"static:3")
+        XCTAssertEqual(first.dead,["gift:1","static:1"])
+        XCTAssertEqual(first.acquisitionBits.prefix(32),Data(repeating:0,count:32),"Extra pairs do not spend native catch bits")
+    }
+    func testAdditionalPairsRoundTripThroughStatePartyAndDurableEvents() throws {
+        var value=ledger()
+        try value.registerAcquisitions(receipt(1,kind:1) + receipt(2,kind:4))
+        let rows=value.records.map { BoundSoulRow(slot:$0.slot,name:$0.name,dead:false) }
+        let packet=BoundSoulPacket(version:3,run:value.run,kind:.state,rows:rows)
+        XCTAssertEqual(BoundSoulPacket.decode(try XCTUnwrap(packet.encoded()))?.rows,rows)
+        XCTAssertTrue(value.sharedEvents.allSatisfy { $0.valid })
+        for event in value.sharedEvents { XCTAssertEqual(try JSONDecoder().decode(BoundSoulSharedEvent.self,from:XCTUnwrap(event.payload)),event) }
+        var gift=mon(1), fixed=mon(2);gift.inParty=true;fixed.inParty=true;gift.maxHP=30;fixed.maxHP=30
+        let team=try XCTUnwrap(BoundSoulTeam.capture(mons:[gift,fixed],ledger:value))
+        let teamPacket=BoundSoulTeamPacket(run:value.run,sender:UUID(),receiver:UUID(),sequence:1,team:team)
+        XCTAssertEqual(BoundSoulTeamPacket.decode(try XCTUnwrap(teamPacket.encoded()))?.team.party.map(\.slot),["gift:1","static:1"])
+        gift.inParty=false;fixed.inParty=false
+        XCTAssertEqual(BoundSoulTeam.capture(mons:[gift,fixed],ledger:value)?.extraBoxed,["gift:1","static:1"])
+        XCTAssertNil(BoundSoulPacket.decode(BoundSoulPacket.previousPrefix + Data(repeating:0,count:628)),"Older peers cannot silently miss extra losses")
+    }
+
 }

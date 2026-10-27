@@ -1308,19 +1308,21 @@ final class NativeBattleRuntimeTests:XCTestCase {
             let result = BoundVBABattleBridge.qaSoulCheckResult().map(\.intValue)
             XCTAssertEqual(result.count, 3)
             if mode == 1 {
-                XCTAssertEqual(record.slot, starter.slot); XCTAssertFalse(record.eligible)
-                XCTAssertEqual(BoundVBABattleBridge.playerHP().last?.intValue, 0, "Second catch in the same area is unusable")
+                // This fixture calls GiveMonToPlayer from a field script with a
+                // stack-owned mon: it is a gift, not a native wild capture.
+                XCTAssertEqual(record.slot, "gift:1"); XCTAssertTrue(record.eligible)
+                XCTAssertGreaterThan(BoundVBABattleBridge.playerHP().last?.intValue ?? 0, 0, "A gift remains usable after the area pair is lost")
             } else if mode == 2 {
                 XCTAssertEqual(record.slot, "egg:1"); XCTAssertTrue(record.eligible)
                 XCTAssertEqual(result[2], 0, "A zero-HP write to an unhatched egg does not emit a native faint")
                 XCTAssertFalse(reopened.read().ledger?.dead.contains("egg:1") == true)
             } else {
                 XCTAssertEqual(result[0], 1, "Actual native GiveMonToPlayer sent the catch to a PC box")
-                XCTAssertTrue(record.slot.hasPrefix("area:")); XCTAssertNotEqual(record.slot, starter.slot)
-                XCTAssertTrue(record.eligible)
+                XCTAssertEqual(record.slot, "gift:2"); XCTAssertTrue(record.eligible)
                 let boxed = try XCTUnwrap(reopened.read().mons.first { $0.identity == record.identity })
-                XCTAssertNil(boxed.hp, "Read the real native 58-byte compressed PC catch")
-                XCTAssertTrue(BoundSoulLedger.losses(try XCTUnwrap(reopened.read().team).boxed).contains(record.slot), "The dashboard identifies the actual native PC catch")
+                XCTAssertNil(boxed.hp, "Read the real native 58-byte compressed PC gift")
+                XCTAssertFalse(reopened.read().ledger?.denied.contains(record.identity) == true,
+                               "Sending a gift to the PC does not turn it into a route catch")
             }
             BoundVBABattleBridge.qaFinishSoulCheck()
         }

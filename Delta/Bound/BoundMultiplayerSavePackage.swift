@@ -1453,7 +1453,9 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable, BoundSDKEventPersist
                       old["partnerAcquisitions"] == nil || old["partnerAcquisitions"] is [String],
                       new["partnerAcquisitions"] == nil || new["partnerAcquisitions"] is [String],
                       Set(old["partnerAcquisitions"] as? [String] ?? []).isSubset(of: Set(new["partnerAcquisitions"] as? [String] ?? [])),
-                      (old["nextEgg"] as? Int ?? 1) <= (new["nextEgg"] as? Int ?? 1) else { throw Failure.conflict }
+                      (old["nextEgg"] as? Int ?? 1) <= (new["nextEgg"] as? Int ?? 1),
+                      (old["nextGift"] as? Int ?? 1) <= (new["nextGift"] as? Int ?? 1),
+                      (old["nextStatic"] as? Int ?? 1) <= (new["nextStatic"] as? Int ?? 1) else { throw Failure.conflict }
             } else {
                 guard let previous = old[field] as? [[String: Any]], let current = new[field] as? [[String: Any]] else { throw Failure.conflict }
                 let ids = Set(current.compactMap { $0["id"] as? String })

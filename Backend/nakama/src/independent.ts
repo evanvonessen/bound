@@ -163,7 +163,7 @@ namespace BoundIndependent {
                 const key = runID + "/" + owner + "/" + event.id.sequence, previous = read(nk, key, eventCollection);
                 if (previous && canonical(previous.value) !== canonical(stored)) fail("Immutable event conflict");
                 if (!previous && checkpoint) {
-                    if (checkpointEvents.length >= 2304) fail("Too many checkpoint acquisitions");
+                    if (checkpointEvents.length >= BoundSaveLibrary.soulSlotCount) fail("Too many checkpoint acquisitions");
                     checkpointEvents.push({ collection: eventCollection, key: key, userId: system, value: stored,
                         version: "*", permissionRead: 0, permissionWrite: 0 });
                 } else if (!previous) {

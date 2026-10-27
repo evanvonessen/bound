@@ -64,9 +64,11 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)close;
 + (BOOL)installSoulLink;
 + (BOOL)setSoulLinkDenied:(NSData *)identities;
++ (BOOL)setSoulLinkAcquired:(NSData *)bits;
 + (NSDictionary<NSString *,id> *)soulLinkSnapshot;
 + (void)acknowledgeSoulLinkFaints;
 + (BOOL)acknowledgeSoulLinkFaintsMatching:(NSData *)identities;
++ (BOOL)acknowledgeSoulLinkAcquisitionsMatching:(NSData *)receipts;
 /// Bound-owned admission fence. Load epochs prevent a stale owner from fencing
 /// a replacement cartridge even when native allocations reuse an address.
 + (NSUInteger)claimSoulFrameOwner:(NSString *)owner gameURL:(NSURL *)url;

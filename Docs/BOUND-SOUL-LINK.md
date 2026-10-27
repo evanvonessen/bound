@@ -34,8 +34,8 @@ Unobserved partner data shows **Syncing partner**, never an assumed free catch.
 Available areas come from the verified game's met-location name table; the list
 is not a promise that every listed location has a catchable encounter.
 
-The first successful acquisition on each side pairs automatically by area;
-eggs pair by ordinal. No manual matching is needed. Catch records, partner names,
+The first successful ordinary wild or raid acquisition on each side pairs automatically by area;
+eggs, gifts and static encounters each pair by their own acquisition ordinal. No manual matching is needed. Catch records, partner names,
 and permanent losses survive reconnects, app restarts, boxing, release and save
 rollback. Both players need this app version. Existing run journals load with
 all their original eligibility/deaths and acquire partner metadata on reconnect.
@@ -63,16 +63,15 @@ never written into either player's game or rule journal.
 
 The optional **BST1** channel carries a complete party and a 288-byte bitmap of
 currently boxed eligible slots at most once per second. It has its own increasing
-sequence and must match the active BSL2 run, both fresh challenges and the local
+sequence and must match the active BSL3 run, both fresh challenges and the local
 room binding. Its maximum valid six-member packet is 897 bytes, within the
 existing 1,024-byte reliable mailbox limit. The header is `BST1` at 0, version 1
 at 4, run UUID at 5, sender UUID at 21, receiver UUID at 37, 64-bit little-endian
 sequence at 53, field-current byte at 61, party count at 62, boxed bits at 63,
 and member records at 351. Each member has 16-bit slot (65535 means unlinked),
 16-bit species, level byte, 16-bit HP/maxHP, egg/barred flag byte, UTF-8 name
-length and bounded name. BSL2 encounter and death bits remain the authority;
-BST1 never acquires slots or changes deaths. An older BSL2 peer remains usable
-and simply has no shared-team feed. No new ROM or game ABI is needed.
+length and bounded name. BSL3 area/egg bits, BSE1 category bits and durable shared events remain the authority;
+BST1 never acquires slots or changes deaths. An older BSL2 peer requires an update before the updated Soul Link session can pair. No new ROM or game ABI is needed.
 
 ## Death moments and graveyard
 
@@ -95,20 +94,34 @@ and the time this device first recorded the loss. That time is not a synchronize
 server death time; historical losses have no invented date. Names freeze when
 known; a delayed partner name or later catch can fill a missing one. The graveyard
 remains accessible after ending the run and is preserved in its finished-run
-archive. No new ROM, native rules or wire version is needed; existing BSL2 losses
-remain the shared authority. All memorial metadata stays in the local journal.
+archive. No new ROM is required; the updated peers use BSL3 plus complete BSE1
+gift/static facts. Existing area/egg loss meanings remain unchanged. All memorial metadata stays in the local journal.
 
 ## Encounter and egg rules
 
 - An area is the game's native **met location**, such as Route 2 or Viridian
   Forest, rather than all of Kanto. Floors or encounter methods sharing that
   location share one slot. Display names are read from the user's verified ROM.
-- The first Pokémon acquired in that area is eligible and links to the partner's
-  eligible Pokémon from the same area. Grass, fishing, surfing, static encounters,
-  non-egg gifts, and **raid-den catches** share this slot. Choose a den or another
-  encounter method; there is no extra raid allowance.
-- Further catches from an occupied area remain owned, but cannot battle or
-  replace the original eligible catch. Releasing, boxing or trading away a
+- The first ordinary wild Pokémon caught in that area is eligible and links to
+  the partner's ordinary wild Pokémon from the same area. Grass, fishing,
+  surfing, caves, and **raid-den catches** share this slot. Choose a den or
+  another encounter method; there is no extra raid allowance. All dens in the
+  same native named area share the allowance. Failed/fled encounters spend none.
+- Fixed scripted overworld encounters (such as Zapdos) and non-egg gifts (such as
+  Eevee, Magikarp, and gifted shiny Magikarp) do not consume or replace an area
+  pair. They form their own pairs: **Gift 1 ↔ Gift 1**, **Gift 2 ↔ Gift 2**,
+  and separately **Static 1 ↔ Static 1**, **Static 2 ↔ Static 2**. A faint
+  permanently disables that separate pair, never the area or egg pair. Their original one-time availability is unchanged. Ordinary
+  wild shinies use the ordinary allowance.
+- The Celadon prize room allows **one Pokémon total**, across its entire species
+  selection, separately from city catches. It appears as **Celadon Prize Pokémon**
+  in paired encounters and links to the partner's one prize selection. Item/TM
+  prizes remain native. Releasing, boxing, fainting or restoring an older save
+  never makes another prize selection available.
+- Occupied-area catches are blocked by the native bag and quick-ball eligibility
+  checks before spending a ball. A defensive acquisition gate also refuses a
+  second catch or prize. Pre-existing extra catches remain owned but cannot
+  battle or replace the original eligible catch. Releasing, boxing or trading away a
   Pokémon does not release its slot. This implementation limits successful
   acquisitions; it does not automatically consume a slot for a fled or failed
   encounter or add species/gender/duplicate-species clauses.
@@ -133,11 +146,21 @@ not enrolled while battle/script scenes are running. Party/box movements,
 evolution, nickname changes and hatching retain the recorded identity/slot.
 Day-care Pokémon retain their prior record when temporarily absent from party/PC.
 
-Two original 8-byte entry thunks wrap native `GetMonData` and `SetMonData` in the
-loaded ROM. The wrappers preserve the native ABI and forward unrelated fields;
+Runtime entry thunks wrap native `GetMonData`, `SetMonData`, successful acquisition,
+and catch eligibility in the loaded ROM. The wrappers preserve the native ABI and forward unrelated fields;
 barred Pokémon always report zero battle HP and native healing cannot restore
 it. The frame owner also clamps party HP and any already-active battle Pokémon
 matching a barred identity. The native attack-canceler rejects zero-HP attackers.
+An additional identity/source receipt ring records successful party/PC placement,
+including acquisitions during scripts. The worker persists those receipts before
+acknowledging their exact bytes and releasing the frame fence. The area bitmap
+is applied outside save-state RAM, so a rollback cannot reopen an allowance.
+Egg receipts allocate ordinals in actual acquisition order rather than party/PC
+scan order. Existing journals keep their prior catches and losses; the new rule
+never retrospectively frees a slot or reclassifies an old catch whose source was
+not recorded. The three ordinal counters advance independently and cannot be
+rewound by loading an older native save. Both participants should use the updated app.
+
 A bounded native faint latch catches zero-HP writes even when a raid or healing
 routine restores HP during the same frame. Only owned, eligible identities can
 kill a pair; enemy/NPC Pokémon and ineligible extra catches cannot.
@@ -156,7 +179,7 @@ save state does not remove a death or free an encounter slot. A damaged/unwritab
 journal pauses play and is preserved.
 
 The existing authenticated, ordered/reliable Agora control stream carries a
-separate bounded `BSL2` protocol. Every state carries **two complete 288-byte
+separate bounded `BSL3` protocol. Every state carries **two complete 288-byte
 bitmaps**: successful acquisitions and permanent losses (all 256 areas and up to
 2,048 egg ordinals), plus up to three rotating names. A catch becomes occupied
 immediately after a fresh challenge, independent of name rotation. Both sets
@@ -171,18 +194,18 @@ The ledger bounds the total identity/alias set at 2,048. Overflow or a native
 faint-latch overrun pauses with a preserved record rather than dropping events.
 It is a local challenge record, not a server anti-cheat service.
 
-## BSL2 wire format
+## BSL3 wire format
 
-Packets are binary and at most 1,024 bytes. Offsets: `BSL2` magic at 0, version
-2 at 4, kind byte at 5 (offer/accept/confirm/decline/state/end = 0..5), run UUID at
+Packets are binary and at most 1,024 bytes. Offsets: `BSL3` magic at 0, version
+3 at 4, kind byte at 5 (offer/accept/confirm/decline/state/end = 0..5), run UUID at
 6, sender challenge UUID at 22, receiver-present byte at 38, receiver UUID at 39,
 loss bits at 55, acquisition bits at 343, row count at 631, rows at 632.
 UUIDs use their 16 RFC-order bytes. Each row has a little-endian 16-bit slot
-(areas 0..255; eggs 256..2303), dead byte, UTF-8 byte count, then the name (at most
+(areas 0..255; eggs 256..2303; gifts 2304..4351; statics 4352..6399), dead byte, UTF-8 byte count, then the name (at most
 20 characters/80 bytes). Unknown versions, duplicate/invalid slots, malformed
 UTF-8, truncated fields and trailing data are rejected. Three worst-case names
 with both complete bitmaps occupy 884 bytes. Identities and Pokémon data stay local.
-BSL1 is recognized only to explain the required app update, never as BSL2 state.
+BSL1 is recognized only to explain the required app update, never as BSL3 state.
 
 ## Verification
 
@@ -254,3 +277,22 @@ The upstream [CFRU party structures](https://github.com/Skeli789/Complete-Fire-R
 and [attack-canceler](https://github.com/Skeli789/Complete-Fire-Red-Upgrade/blob/b637a27898b14e25dd24d0f69a3e302f0069deb8/src/attackcanceler.c)
 are reference contracts. Compatibility is admitted by the exact local ROM hash
 and the targeted runtime checks; upstream source alone is not RR runtime proof.
+
+## Additional gift/static facts
+
+BSL3 retains the existing 288-byte area/egg bitmaps and advertises the updated
+peer capability. Older BSL1/BSL2 peers require an app update, so neither client
+can report a complete link while silently missing gift/static deaths. BSE1
+supplements each BSL3 state with a separate packet for each category. Each has
+complete acquisition, loss and boxed-status bitmaps for up to 2,048 ordinals,
+plus at most two rotating names. Maximum packet size is 990 bytes. Egg ordinals
+keep all 2,048 existing positions. The existing total owned identity bound remains.
+
+BSE1 facts require the current run, room binding and fresh peer challenges.
+Both category baselines must arrive durably before the session reports paired.
+Acquisitions and losses merge monotonically; party/boxed data is presentation
+only. Losses still apply when received after offline play. Reconnect clears
+transient team status and requires fresh baselines. The existing authenticated
+server event journal carries every gift/static acquisition and death, including
+checkpoint dependencies and owner-specific restore. The 864-byte legacy history
+anchor remains unchanged for migration; it is not the new categories' authority.
