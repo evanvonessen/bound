@@ -1140,6 +1140,19 @@ extension GameViewController
         
         guard let rawValue = change?[.oldKey] as? Int, let previousState = EmulatorCore.State(rawValue: rawValue) else { return }
 
+        guard let observedCore = object as? EmulatorCore else { return }
+        let apply = { [weak self, weak observedCore] in
+            guard let self, let observedCore, self.emulatorCore === observedCore else { return }
+            self.emulatorStateDidChange(previousState)
+        }
+        if Thread.isMainThread { apply() }
+        else { DispatchQueue.main.async(execute: apply) }
+    }
+
+    /// Native lifecycle transitions may originate on the emulation owner.
+    /// Handoff, presentation state and managed-object identity belong to the UI.
+    private func emulatorStateDidChange(_ previousState: EmulatorCore.State)
+    {
         if let activity = viewIfLoaded?.window?.windowScene?.userActivity, activity.activityType == NSUserActivity.playGameActivityType {
             activity.isEligibleForHandoff = boundAllowsHandoff
             activity.userInfo?[NSUserActivity.isSaveStateAvailable] = boundAllowsHandoff
@@ -1170,12 +1183,10 @@ extension GameViewController
             self.emulatorCore?.updateCheats()
         }
         
-        if self.emulatorCore?.state == .running
+        if self.emulatorCore?.state == .running, let gameID = (self.game as? Game)?.objectID
         {
             DatabaseManager.shared.performBackgroundTask { (context) in
-                guard let game = self.game as? Game else { return }
-                
-                let backgroundGame = context.object(with: game.objectID) as! Game
+                let backgroundGame = context.object(with: gameID) as! Game
                 backgroundGame.playedDate = Date()
                 
                 context.saveWithErrorLogging()

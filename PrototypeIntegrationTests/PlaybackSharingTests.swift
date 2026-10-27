@@ -130,6 +130,29 @@ private final class TransitionCount: @unchecked Sendable {
 }
 
 @MainActor final class PlaybackSharingTests: XCTestCase {
+    func testNativeStateChangesDoNotReadControllerUIOffMainThread() async throws {
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let owner = NativeStateUIThreadProbe()
+        owner.loadViewIfNeeded()
+        owner.game = FixtureGame(fileURL: fixture, gameSaveURL: directory.appendingPathComponent("fixture.sav"))
+        defer { owner.game = nil }
+        let core = try XCTUnwrap(owner.emulatorCore)
+        if core.state == .stopped { XCTAssertTrue(core.start()) }
+        if core.state == .paused { XCTAssertTrue(core.resume()) }
+        owner.clearBackgroundViewReads()
+        let paused = await Task.detached { core.pause() }.value
+        XCTAssertTrue(paused)
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(owner.backgroundViewReads, 0, "Native pause callbacks must return to MainActor before reading UIKit")
+        let resumed = await Task.detached { core.resume() }.value
+        XCTAssertTrue(resumed)
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(owner.backgroundViewReads, 0, "Native resume callbacks must return to MainActor before reading UIKit")
+    }
+
     func testPlaybackMuteAllowsOtherAudioAtStartupAndWhenToggled() throws {
         let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatInt16,
             sampleRate: 44100, channels: 2, interleaved: true))
@@ -1761,5 +1784,18 @@ extension PlaybackSharingTests {
         let data = try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])
         let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
         attachment.name = "actual-app-native-controller-pacing"; attachment.lifetime = .keepAlways; add(attachment)
+    }
+}
+
+private final class NativeStateUIThreadProbe: GameViewController {
+    private let viewReadLock = NSLock()
+    private var offMainViewReads = 0
+    var backgroundViewReads: Int { viewReadLock.lock(); defer { viewReadLock.unlock() }; return offMainViewReads }
+    func clearBackgroundViewReads() { viewReadLock.lock(); offMainViewReads = 0; viewReadLock.unlock() }
+    override var viewIfLoaded: UIView? {
+        viewReadLock.lock()
+        if !Thread.isMainThread { offMainViewReads += 1 }
+        viewReadLock.unlock()
+        return super.viewIfLoaded
     }
 }

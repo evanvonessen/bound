@@ -11,6 +11,7 @@
   <p><time datetime="2026-10-27">October 27, 2026</time></p>
   <p>Bound</p>
   <ul>
+    <li>Native pause/resume updates Handoff and controller UI on the main thread and ignores callbacks from a replaced game.</li>
     <li>Removed Export All Config and the redundant cloud backup Provider label.</li>
     <li>Added Mute All Audio in Audio settings, preserved through pause, resume and relaunch.</li>
     <li>Muted games allow other apps’ audio to continue, including when muting during playback.</li>
@@ -21,6 +22,8 @@
   </ul>
   <p>Radical Red multiplayer</p>
   <ul>
+    <li>Server-save operations reject late responses after switching accounts; cancelled setup cannot leave usable save authorization.</li>
+    <li>New Game retains the selected friend when server-save access refreshes after browsing saves.</li>
     <li>Friend sprites use the emulator’s displayed palette, including nighttime colors.</li>
   </ul>
   <p><time datetime="2026-10-27">October 27, 2026</time></p>

@@ -55,15 +55,116 @@ private final class NakamaSocketFixture: BoundNakamaSocket, @unchecked Sendable 
 private actor NakamaRPCRecordingFixture {
     private var captured: [URLRequest] = []
     private var authorizationCount = 0
-    private let response: Data
+    private var response: Data
     init(response: Data) { self.response = response }
     func perform(_ request: URLRequest) -> Data { captured.append(request); return response }
+    func setResponse(_ response: Data) { self.response = response }
     func requests() -> [URLRequest] { captured }
     func authorize() { authorizationCount += 1 }
     func authorizations() -> Int { authorizationCount }
 }
 
 final class BoundNakamaClientTests: XCTestCase {
+    private func saveSession(owner: UUID) throws -> AppCloudSession {
+        let bytes = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
+        let token = bytes.base64EncodedString().replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        return try AppCloudSession(owner: owner, key: "fixture", token: "e30.\(token).fixture",
+            backend: .init(kind: .legacy, origin: "https://bound.example"))
+    }
+
+    func testDelayedSaveConfigurationCannotReplaceNewerAccount() async throws {
+        let started = expectation(description: "first account authorization held")
+        let authorization = SaveAuthorizationRegressionFixture(heldOwner: owner, heldCall: 1, started: started)
+        let rpc = NakamaRPCRecordingFixture(response: Data(#"{"payload":"{\"runs\":[]}"}"#.utf8))
+        let service = BoundNakamaRunService(authorizeSaves: { try await authorization.authorize($0, room: $1) },
+            perform: { await rpc.perform($0) })
+        let firstSession = try saveSession(owner: owner), secondSession = try saveSession(owner: peer)
+        let first = Task { try await service.configureSaves(session: firstSession) }
+        await fulfillment(of: [started], timeout: 2)
+        _ = try await service.configureSaves(session: secondSession)
+        await authorization.complete()
+        do { _ = try await first.value; XCTFail("A superseded authorization must be rejected") } catch {}
+        _ = try await service.listSaves(gameID: "fixture")
+        let requests = await rpc.requests()
+        XCTAssertEqual(requests.last?.value(forHTTPHeaderField: "Authorization"), "Bearer token-" + peer.uuidString.lowercased())
+    }
+
+    func testDelayedSaveRenewalCannotSendOldCredentialsAfterAccountChange() async throws {
+        let started = expectation(description: "old account renewal held")
+        let authorization = SaveAuthorizationRegressionFixture(heldOwner: owner, heldCall: 2, started: started, initialLifetime: 10)
+        let rpc = NakamaRPCRecordingFixture(response: Data(#"{"payload":"{\"runs\":[]}"}"#.utf8))
+        let service = BoundNakamaRunService(authorizeSaves: { try await authorization.authorize($0, room: $1) },
+            perform: { await rpc.perform($0) })
+        _ = try await service.configureSaves(session: saveSession(owner: owner))
+        let first = Task { try await service.listSaves(gameID: "fixture") }
+        await fulfillment(of: [started], timeout: 2)
+        _ = try await service.configureSaves(session: saveSession(owner: peer))
+        await authorization.complete()
+        do { _ = try await first.value; XCTFail("An old account request must not continue after renewal") } catch {}
+        let staleRequests = await rpc.requests()
+        XCTAssertTrue(staleRequests.isEmpty, "The delayed renewal must never send old credentials")
+        _ = try await service.listSaves(gameID: "fixture")
+        let requests = await rpc.requests()
+        XCTAssertEqual(requests.last?.value(forHTTPHeaderField: "Authorization"), "Bearer token-" + peer.uuidString.lowercased())
+    }
+
+    func testSaveResponseFromPreviousAccountCannotCompleteAfterReconfiguration() async throws {
+        let started = expectation(description: "old account list response held")
+        let authorization = SaveAuthorizationRegressionFixture()
+        let rpc = SaveResponseRegressionFixture(started: started)
+        let service = BoundNakamaRunService(authorizeSaves: { try await authorization.authorize($0, room: $1) },
+            perform: { await rpc.perform($0) })
+        _ = try await service.configureSaves(session: saveSession(owner: owner))
+        let oldList = Task { try await service.listSaves(gameID: "fixture") }
+        await fulfillment(of: [started], timeout: 2)
+        _ = try await service.configureSaves(session: saveSession(owner: peer))
+        await rpc.complete()
+        do { _ = try await oldList.value; XCTFail("An old account response must not publish into the new context") } catch {}
+        _ = try await service.listSaves(gameID: "fixture")
+    }
+
+    func testCanceledSaveAuthorizationCannotInstallItsCredentials() async throws {
+        let started = expectation(description: "cancelled authorization held")
+        let authorization = SaveAuthorizationRegressionFixture(heldOwner: owner, heldCall: 1, started: started)
+        let rpc = NakamaRPCRecordingFixture(response: Data(#"{"payload":"{\"runs\":[]}"}"#.utf8))
+        let service = BoundNakamaRunService(authorizeSaves: { try await authorization.authorize($0, room: $1) },
+            perform: { await rpc.perform($0) })
+        let session = try saveSession(owner: owner)
+        let task = Task { try await service.configureSaves(session: session) }
+        await fulfillment(of: [started], timeout: 2)
+        task.cancel(); await authorization.complete()
+        do { _ = try await task.value; XCTFail("Cancelled authorization must not install credentials") } catch {}
+        do { _ = try await service.listSaves(gameID: "fixture"); XCTFail("Cancelled configuration must remain unusable") } catch {}
+        let requests = await rpc.requests()
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testSaveListRefreshPreservesSelectedFriendForLaterCreation() async throws {
+        let authorization = SaveAuthorizationRegressionFixture(initialLifetime: 10)
+        let identity = independentIdentity()
+        let rpc = NakamaRPCRecordingFixture(response: Data(#"{"payload":"{\"runs\":[]}"}"#.utf8))
+        let service = BoundNakamaRunService(authorizeSaves: { try await authorization.authorize($0, room: $1) },
+            perform: { await rpc.perform($0) })
+        _ = try await service.configureSaves(session: saveSession(owner: owner), room: room.uuidString.lowercased())
+        _ = try await service.listSaves(gameID: identity.gameID)
+        await rpc.setResponse(try independentResponse(identity: identity))
+        let result = try await service.createSave(gameID: identity.gameID, romSHA256: identity.romSHA256,
+            settings: identity.settings, profile: .init(name: "RED", gender: 0),
+            partnerProfile: .init(name: "LEAF", gender: 1), requestID: UUID())
+        XCTAssertEqual(result.identity, identity)
+        let scopes = await authorization.scopes()
+        XCTAssertEqual(scopes, [room.uuidString.lowercased(), nil, room.uuidString.lowercased()])
+        let requests = await rpc.requests()
+        let request = try XCTUnwrap(requests.last)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer token-" + owner.uuidString.lowercased())
+        let text = try JSONDecoder().decode(String.self, from: XCTUnwrap(request.httpBody))
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        XCTAssertEqual(body["action"] as? String, "create")
+        XCTAssertEqual(body["partnerID"] as? String, peer.uuidString.lowercased())
+    }
+
+
     func testStalledSendFailsDespiteReceivingSocketPongsAndLateCompletionCannotReviveIt() async throws {
         let clock = NakamaTestClock(), socket = NakamaSocketFixture(matchID: match)
         let client = BoundNakamaClient(socketFactory: { _ in socket }, clock: { clock.read() })
@@ -601,4 +702,57 @@ final class BoundNakamaClientTests: XCTestCase {
         XCTAssertFalse(client.sendPresence(Data([1])))
         XCTAssertFalse(client.renewTicket("ticket", expiresAt: Date().timeIntervalSince1970 + 90))
     }
+}
+
+private actor SaveAuthorizationRegressionFixture {
+    private let heldOwner: UUID?
+    private let heldCall: Int
+    private let started: XCTestExpectation?
+    private let initialLifetime: TimeInterval
+    private var calls: [UUID: Int] = [:]
+    private var requestedScopes: [String?] = []
+    private var pending: CheckedContinuation<BoundNakamaAuthorization.SaveConfiguration, Error>?
+    private var pendingValue: BoundNakamaAuthorization.SaveConfiguration?
+    init(heldOwner: UUID? = nil, heldCall: Int = 0, started: XCTestExpectation? = nil, initialLifetime: TimeInterval = 90) {
+        self.heldOwner = heldOwner; self.heldCall = heldCall; self.started = started; self.initialLifetime = initialLifetime
+    }
+    func authorize(_ session: AppCloudSession, room: String?) async throws -> BoundNakamaAuthorization.SaveConfiguration {
+        calls[session.owner, default: 0] += 1
+        requestedScopes.append(room)
+        let count = calls[session.owner]!
+        let roomID = room.flatMap(UUID.init(uuidString:))
+        let value = BoundNakamaAuthorization.SaveConfiguration(httpEndpoint: URL(string: "https://bound.example")!,
+            accessToken: "token-" + session.owner.uuidString.lowercased(), ownerID: session.owner,
+            expiresAt: Date().timeIntervalSince1970 + (count == 1 ? initialLifetime : 90),
+            saveTicket: "fixture-ticket", partnerID: roomID == nil ? nil : UUID(uuidString: "22222222-2222-4222-8222-222222222222"), roomID: roomID)
+        if session.owner == heldOwner, count == heldCall {
+            return try await withCheckedThrowingContinuation { continuation in
+                pending = continuation; pendingValue = value; started?.fulfill()
+            }
+        }
+        return value
+    }
+    func complete() {
+        let continuation = pending; pending = nil
+        if let value = pendingValue { pendingValue = nil; continuation?.resume(returning: value) }
+    }
+    func scopes() -> [String?] { requestedScopes }
+}
+
+private actor SaveResponseRegressionFixture {
+    private let started: XCTestExpectation
+    private var calls = 0
+    private var pending: CheckedContinuation<Data, Never>?
+    private let response = Data(#"{"payload":"{\"runs\":[]}"}"#.utf8)
+    init(started: XCTestExpectation) { self.started = started }
+    func perform(_ request: URLRequest) async -> Data {
+        calls += 1
+        if calls == 1 {
+            return await withCheckedContinuation { continuation in
+                pending = continuation; started.fulfill()
+            }
+        }
+        return response
+    }
+    func complete() { let callback = pending; pending = nil; callback?.resume(returning: response) }
 }

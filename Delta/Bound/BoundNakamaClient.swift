@@ -442,6 +442,8 @@ actor BoundNakamaRunService {
     private var configuration: BoundNakamaConfiguration?
     private var saveConfiguration: BoundNakamaAuthorization.SaveConfiguration?
     private var saveSession: AppCloudSession?
+    private var saveGeneration: UUID?
+    private var saveCreationRoom: UUID?
     private struct DebugRoute:Sendable {
         let identity:BoundMultiplayerRunIdentity,sessionID:UUID,generation:Int
         let perform:@Sendable ([String:BoundDebugJSON]) async throws -> Data
@@ -487,7 +489,8 @@ actor BoundNakamaRunService {
             guard rpc=="bound_independent_v2",identity==debugRoute.identity else { throw Failure.conflict }
             return try await debugRequest(action,fields:fields)
         }
-        if rpc == "bound_independent_v2", let saveSession {
+        if rpc == "bound_independent_v2", saveGeneration != nil {
+            guard let saveSession else { throw Failure.unavailable }
             guard saveSession.owner == identity.owner else { throw Failure.conflict }
             try saveSession.credentials()
             var fields = fields; fields["save_id"] = identity.run.uuidString.lowercased()
@@ -529,17 +532,44 @@ actor BoundNakamaRunService {
         var id: UUID { save_id }
     }
     func configureSaves(session: AppCloudSession, room: String? = nil) async throws -> BoundNakamaAuthorization.SaveConfiguration {
-        guard debugRoute==nil else { throw Failure.conflict }
+        guard debugRoute == nil else { throw Failure.conflict }
+        let requestedRoom = room.flatMap(UUID.init(uuidString:))
+        guard room == nil || requestedRoom != nil else { throw Failure.conflict }
+        try Task.checkCancellation()
+        try session.credentials()
+        let generation = UUID()
+        saveGeneration = generation
+        saveSession = nil; saveConfiguration = nil; saveCreationRoom = requestedRoom
         let value = try await authorizeSaves(session, room)
+        try Task.checkCancellation()
+        guard saveGeneration == generation else { throw Failure.conflict }
+        try session.credentials()
+        try validateSaveAuthorization(value, session: session, room: requestedRoom)
         saveSession = session; saveConfiguration = value
         return value
     }
-    private func refreshSaveAuthorization(preserveCreationScope: Bool = false) async throws {
-        guard let session = saveSession else { throw Failure.unavailable }
+    private func validateSaveAuthorization(_ value: BoundNakamaAuthorization.SaveConfiguration,
+                                           session: AppCloudSession, room: UUID?) throws {
+        guard value.valid, value.ownerID == session.owner,
+              room == nil || value.roomID == room else { throw Failure.conflict }
+    }
+    private func validateSaveContext(_ generation: UUID, session: AppCloudSession) throws {
+        try Task.checkCancellation()
+        guard saveGeneration == generation, session.isSameSession(as: saveSession) else { throw Failure.conflict }
         try session.credentials()
+    }
+    private func refreshSaveAuthorization(preserveCreationScope: Bool = false) async throws -> BoundNakamaAuthorization.SaveConfiguration {
+        guard let generation = saveGeneration, let session = saveSession else { throw Failure.unavailable }
+        try validateSaveContext(generation, session: session)
+        let room = preserveCreationScope ? saveCreationRoom : nil
         if let value = saveConfiguration, value.valid, value.ownerID == session.owner,
-           value.expiresAt > Date().timeIntervalSince1970 + 25 { return }
-        saveConfiguration = try await authorizeSaves(session, preserveCreationScope ? saveConfiguration?.roomID?.uuidString : nil)
+           (!preserveCreationScope || value.roomID == room),
+           value.expiresAt > Date().timeIntervalSince1970 + 25 { return value }
+        let value = try await authorizeSaves(session, room?.uuidString.lowercased())
+        try validateSaveContext(generation, session: session)
+        try validateSaveAuthorization(value, session: session, room: room)
+        saveConfiguration = value
+        return value
     }
     private func saveRequest(_ action: String, fields: [String: Any] = [:]) async throws -> Data {
         if let debugRoute {
@@ -549,8 +579,9 @@ actor BoundNakamaRunService {
             }
             return try await debugRequest(action,fields:scoped)
         }
-        try await refreshSaveAuthorization(preserveCreationScope: action == "create")
-        guard let value = saveConfiguration, value.valid else { throw Failure.unavailable }
+        guard let generation = saveGeneration, let session = saveSession else { throw Failure.unavailable }
+        let value = try await refreshSaveAuthorization(preserveCreationScope: action == "create")
+        try validateSaveContext(generation, session: session)
         var body = fields; body["action"] = action; body["saveTicket"] = value.saveTicket
         let json = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         var request = URLRequest(url: value.httpEndpoint.appendingPathComponent("v2/rpc/bound_independent_v2"))
@@ -560,8 +591,10 @@ actor BoundNakamaRunService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer " + value.accessToken, forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode(String(decoding: json, as: UTF8.self))
+        let data = try await perform(request)
+        try validateSaveContext(generation, session: session)
         struct Envelope: Decodable { let payload: String }
-        return Data(try JSONDecoder().decode(Envelope.self, from: await perform(request)).payload.utf8)
+        return Data(try JSONDecoder().decode(Envelope.self, from: data).payload.utf8)
     }
     func listSaves(gameID: String) async throws -> [ServerRun] {
         struct Page: Decodable { let runs: [ServerRun]; let cursor: String? }
@@ -575,7 +608,10 @@ actor BoundNakamaRunService {
         return runs.sorted { $0.updated_at > $1.updated_at }
     }
     func createSave(gameID: String, romSHA256: String, settings: Data, profile: PlayerProfile, partnerProfile: PlayerProfile, requestID: UUID) async throws -> IndependentState {
-        guard let partner = saveConfiguration?.partnerID, profile.valid, partnerProfile.valid else { throw Failure.unavailable }
+        guard let generation = saveGeneration, let session = saveSession, profile.valid, partnerProfile.valid else { throw Failure.unavailable }
+        let authorization = try await refreshSaveAuthorization(preserveCreationScope: true)
+        try validateSaveContext(generation, session: session)
+        guard let partner = authorization.partnerID else { throw Failure.unavailable }
         let fields: [String: Any] = ["request_id": requestID.uuidString.lowercased(), "partnerID": partner.uuidString.lowercased(),
             "gameID": gameID, "romSHA256": romSHA256, "settings": settings.base64EncodedString(),
             "profile": ["name": profile.name, "gender": profile.gender],
@@ -719,7 +755,7 @@ actor BoundNakamaRunService {
             guard identity==debugRoute.identity,session==nil || session?.owner==identity.owner else { throw Failure.conflict }
             try await debugRoute.revalidate();return
         }
-        if saveSession != nil { try await refreshSaveAuthorization(); return }
+        if saveGeneration != nil { _ = try await refreshSaveAuthorization(); return }
         guard let session else { return }
         guard session.owner == identity.owner else { throw Failure.conflict }
         if let configuration, configuration.ownerID == identity.owner,
