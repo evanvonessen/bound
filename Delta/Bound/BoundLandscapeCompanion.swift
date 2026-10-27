@@ -574,7 +574,7 @@ struct BoundCompanionPresentation: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("bound.portrait-connect-stream")
-                    .accessibilityHint("Connect screen sharing or open Friends")
+                    .accessibilityHint("Retry the screen sharing connection")
                 } else {
                     Text(sharing.screenSharing.active ? "Waiting for friend" : "Connect a friend").foregroundStyle(.white).font(.callout)
                 }
