@@ -74,8 +74,7 @@ private final class BoundGitHubNoRedirect: NSObject, URLSessionTaskDelegate, @un
 /// It is deliberately independent of ROM distribution and the Bound account session.
 @MainActor
 final class BoundGitHubAccount: ObservableObject {
-    // Settings creates this even while Debugging Features is off. Its UI starts
-    // refresh only after that opt-in; initialization must not contact GitHub.
+    // Retained credentials must not initiate network activity on initialization.
     static let shared = BoundGitHubAccount(automaticRefresh: false)
     @Published private(set) var username: String?
     @Published private(set) var isSigningIn = false

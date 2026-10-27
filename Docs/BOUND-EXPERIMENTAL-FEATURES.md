@@ -1,11 +1,25 @@
 # Bound feature baseline
 
 Settings now includes **Enable Experimental Multiplayer** directly below **Enable
-Developer Features**, independently of that switch. It defaults to off and
+Developer Tools**, independently of that switch. It defaults to off and
 persists across launches. It gates the merged `multiplayer` branch: live map
 sprites, NPC-style Battle/Trade invitations, native friend battles, the local
 player-state HUD and recorded-player replay controls. Enable it on both players'
 devices, then connect in Friends and turn on **Show friend on map**.
+
+**Enable Developer Tools** is the single app developer preference. Export All
+Config and the existing developer reader, replay and companion controls use it.
+The game’s Debug Mode remains separate. During preference registration, the
+existing `bound.developer-features.enabled.v1` value is retained, an enabled
+`bound.debugging-features.enabled.v1` is carried into it, and the retired key is
+removed. Either previous opt-in therefore stays enabled; later opt-outs and
+Reset Settings to Default stay off across launches. Fresh installs default off.
+
+Settings no longer offers GitHub sign-in or the Account, Friends, & Sync ROM
+Updates section. Removing these views does not read or delete GitHub credentials,
+sign anyone out, change folder enrollment, or erase backups. The app lifecycle
+still installs the exact matching bundled ROM and resumes interrupted update
+journals through the existing recovery validation.
 
 Turning it off removes these controls, stops presence/invitation/check channels,
 hides sprites and restores an active battle's pre-battle snapshot before closing

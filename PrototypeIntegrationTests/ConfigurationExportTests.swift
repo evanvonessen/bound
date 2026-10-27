@@ -88,7 +88,7 @@ final class ConfigurationExportTests: XCTestCase {
             "bound.rom-updates.enabled.v1": true,
             "bound.rom-updates.enrollment-game.v1": "private-enrollment-game",
             (Bundle.main.bundleIdentifier ?? "Bound") + ".github.signed-out": true,
-            BoundDebuggingFeatures.key: true,
+            BoundDeveloperFeatures.legacyDebuggingKey: true,
             BoundDeveloperFeatures.key: true
         ]
         for (key, value) in protectedValues { defaults.set(value, forKey: key) }
@@ -274,12 +274,24 @@ final class ConfigurationExportTests: XCTestCase {
         XCTAssertFalse(jsonText.contains("deltaCoreInputMapping"))
     }
 
+    func testDeveloperToolsMigrationRunsDuringPreferenceRegistrationAndResetStaysOff() throws {
+        let (defaults, suite) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: BoundDeveloperFeatures.legacyDebuggingKey)
+        Settings.registerPreferenceDefaults(in: defaults)
+        XCTAssertTrue(defaults.bool(forKey: BoundDeveloperFeatures.key))
+        XCTAssertNil(defaults.object(forKey: BoundDeveloperFeatures.legacyDebuggingKey))
+        Settings.resetPreferenceValues(in: defaults)
+        Settings.registerPreferenceDefaults(in: defaults)
+        XCTAssertFalse(defaults.bool(forKey: BoundDeveloperFeatures.key))
+    }
+
     func testPreferenceResetTurnsOffDeveloperFeaturesAndPreservesAccountsAndLibraryData() throws {
         let (defaults, suite) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(true, forKey: BoundDeveloperFeatures.key)
-        XCTAssertFalse(defaults.bool(forKey: BoundDebuggingFeatures.key))
-        defaults.set(true, forKey: BoundDebuggingFeatures.key)
+        XCTAssertFalse(defaults.bool(forKey: BoundDeveloperFeatures.legacyDebuggingKey))
+        defaults.set(true, forKey: BoundDeveloperFeatures.legacyDebuggingKey)
         let protected: [String: Any] = [
             "com.evanvonessen.bound.friend-account.signed-out.fixture": true,
             "syncingService": "boundCloud",
@@ -292,7 +304,7 @@ final class ConfigurationExportTests: XCTestCase {
         Settings.resetPreferenceValues(in: defaults)
 
         XCTAssertFalse(defaults.bool(forKey: BoundDeveloperFeatures.key))
-        XCTAssertFalse(defaults.bool(forKey: BoundDebuggingFeatures.key))
+        XCTAssertFalse(defaults.bool(forKey: BoundDeveloperFeatures.legacyDebuggingKey))
         for (key, value) in protected {
             XCTAssertEqual(defaults.object(forKey: key) as? NSObject, value as? NSObject,
                            "Reset must preserve protected user data at \(key).")

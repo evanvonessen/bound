@@ -243,7 +243,7 @@ struct SettingsView: View {
                         .disabled(resetting)
                         .accessibilityIdentifier("bound.settings-reset-defaults")
 
-                        Toggle("Enable Developer Features", isOn: $developerFeaturesEnabled)
+                        Toggle("Enable Developer Tools", isOn: $developerFeaturesEnabled)
                             .accessibilityIdentifier("bound.settings-developer-features")
                             .onChange(of: developerFeaturesEnabled) { _, _ in
                                 NotificationCenter.default.post(name: BoundDeveloperFeatures.didChange, object: nil)
@@ -254,8 +254,6 @@ struct SettingsView: View {
                             .onChange(of: experimentalFeaturesEnabled) { _, enabled in
                                 BoundMultiplayerFeatures.setEnabled(enabled)
                             }
-
-                        BoundDebuggingSettingsRows()
 
                         if developerFeaturesEnabled {
                             Button("Export All Config") {
@@ -490,7 +488,6 @@ struct BoundAccountFriendsSyncSettings: View {
                 BoundFriendsListSections(sharing: context.sharing, onboarding: context.onboarding, account: context.account)
             }
             DeltaSyncSettingsSection()
-            BoundROMUpdateSettingsSection()
             if let username = context.signedInUsername {
                 Section {} footer: {
                     Text("Signed in to \(username)")
@@ -503,7 +500,6 @@ struct BoundAccountFriendsSyncSettings: View {
                 }
             }
         }
-        .boundROMUpdateSettingsPresentation()
         .navigationTitle("Account, Friends, & Sync")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { context.open() }

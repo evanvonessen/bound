@@ -100,6 +100,7 @@ struct Settings
     }
 
     static func registerPreferenceDefaults(in defaults: UserDefaults) {
+        BoundDeveloperFeatures.migrate(in: defaults)
         let values = preferenceDefaults(in: defaults)
         if BoundDefaultConfiguration.usesBundledLayouts(in: defaults) {
             // Keep using this profile after lazy layout migrations write keys.

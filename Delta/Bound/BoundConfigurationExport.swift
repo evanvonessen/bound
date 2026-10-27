@@ -6,6 +6,18 @@ import SwiftUI
 enum BoundDeveloperFeatures {
     static let key = "bound.developer-features.enabled.v1"
     static let didChange = Notification.Name("BoundDeveloperFeaturesChanged")
+    static let legacyDebuggingKey = "bound.debugging-features.enabled.v1"
+
+    /// Developer Tools retains the developer key and either previous opt-in.
+    /// Consume the retired key once so a later opt-out survives relaunch.
+    /// Game Debug Mode and account credentials are independent of this preference.
+    static func migrate(in defaults: UserDefaults) {
+        guard defaults.object(forKey: legacyDebuggingKey) != nil else { return }
+        if defaults.bool(forKey: legacyDebuggingKey) {
+            defaults.set(true, forKey: key)
+        }
+        defaults.removeObject(forKey: legacyDebuggingKey)
+    }
 }
 
 struct BoundConfigurationDocument {

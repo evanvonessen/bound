@@ -20,7 +20,7 @@ extension Settings {
             "gameScreenOffsetPortrait", "gameScreenOffsetLandscape",
             "preferredSaveStatesSorting", "prefersDescendingSaveStatesSorting",
             BoundUIVersionPreferences.key, BoundExperimentalSettingsPreferences.key, BoundDeveloperFeatures.key,
-            BoundDebuggingFeatures.key,
+            BoundDeveloperFeatures.legacyDebuggingKey,
             BoundAppearancePreferences.screenLayoutKey, BoundAppearancePreferences.themeKey,
             BoundControllerModePreferences.key, BoundControllerModePreferences.layoutKey,
             BoundControllerNavigationPreferences.key, BoundControllerMultiviewPreferences.key,
@@ -81,8 +81,6 @@ extension Settings {
             try context.save()
         }
         resetPreferenceValues()
-        BoundGitHubAccount.shared.cancelSignIn()
-        NotificationCenter.default.post(name: BoundDebuggingFeatures.didChangeNotification, object: nil)
         UIApplication.shared.shortcutItems = nil
         // Refresh cached models even when the chosen layout hasn't changed.
         NotificationCenter.default.post(name: didResetNotification, object: nil)
