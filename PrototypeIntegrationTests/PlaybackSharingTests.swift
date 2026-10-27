@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 import UIKit
 import SwiftUI
 import CoreVideo
@@ -129,6 +130,61 @@ private final class TransitionCount: @unchecked Sendable {
 }
 
 @MainActor final class PlaybackSharingTests: XCTestCase {
+    func testPlaybackMuteAllowsOtherAudioAtStartupAndWhenToggled() throws {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatInt16,
+            sampleRate: 44100, channels: 2, interleaved: true))
+        let audio = AudioManager(audioFormat: format)
+        audio.respectsSilentMode = false
+        audio.mixesWithOtherAudio = false
+        audio.pausesOtherAudio = true
+        audio.isPlaybackMuted = true
+        audio.start()
+        defer { audio.stop() }
+        XCTAssertTrue(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers),
+                      "A muted game must not interrupt another app's audio")
+        audio.isPlaybackMuted = false
+        XCTAssertFalse(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers))
+        audio.isPlaybackMuted = true
+        XCTAssertTrue(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers),
+                      "Muting an active game must release its non-mixing category")
+    }
+
+    func testMuteChangedWhilePausedUpdatesMixingOnResume() throws {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatInt16,
+            sampleRate: 44100, channels: 2, interleaved: true))
+        let audio = AudioManager(audioFormat: format)
+        audio.respectsSilentMode = false
+        audio.mixesWithOtherAudio = false
+        audio.pausesOtherAudio = true
+        audio.start()
+        defer { audio.stop() }
+        XCTAssertFalse(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers))
+        audio.isEnabled = false
+        audio.isPlaybackMuted = true
+        audio.isEnabled = true
+        XCTAssertTrue(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers),
+                      "Muting in a paused game's settings must take effect when gameplay resumes")
+        audio.isEnabled = false
+        audio.isPlaybackMuted = false
+        audio.isEnabled = true
+        XCTAssertFalse(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers))
+    }
+
+    func testAudioRouteResetKeepsPausedBufferDisabled() throws {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatInt16,
+            sampleRate: 44100, channels: 2, interleaved: true))
+        let audio = AudioManager(audioFormat: format)
+        audio.start()
+        defer { audio.stop() }
+        audio.isEnabled = false
+        XCTAssertFalse(audio.audioBuffer.isEnabled)
+        _ = audio.perform(NSSelectorFromString("resetAudioEngine"))
+        XCTAssertFalse(audio.audioBuffer.isEnabled,
+                       "An audio-route reset must not enable a paused game's new buffer")
+        audio.isEnabled = true
+        XCTAssertTrue(audio.audioBuffer.isEnabled)
+    }
+
     private let fastForwardRenderer = AppPacingNativeDelegate(metal: true)
     private func configuration() -> FriendSharingConfiguration {
         .init(appID: String(repeating: "0", count: 32), channel: "offline-fixture", uid: 1, remoteUID: 2, token: "offline-not-an-RTC-token")

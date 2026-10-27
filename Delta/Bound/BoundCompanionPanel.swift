@@ -646,13 +646,7 @@ final class BoundCompanionCoordinator {
                 self.notesEditing($0)
             }, connectFriend: { [weak self] in
                 guard let self else { return }
-                let video = self.sharing.screenSharing
-                if video.isConfigured {
-                    video.stop(reason: .manual)
-                    video.start()
-                } else if let room = self.onboarding.screenSelected ?? self.onboarding.selected {
-                    self.onboarding.select(room, startSharing: true)
-                }
+                self.onboarding.retryScreenSharing()
             }, textEditingChanged: { [weak self] in self?.textEditing($0) }, currentSave: { [weak self] gameID in
                 guard let self else { throw BoundRRDexSave.ImportError.currentGameUnavailable }
                 return try self.importCurrentRRDexSave(gameID: gameID)
