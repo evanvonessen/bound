@@ -254,6 +254,7 @@ final class AccountPersistenceIntegrationTests: XCTestCase {
                 BoundUIVersionPreferences().version = version
                 for experimental in [false, true] {
                     BoundMultiplayerFeatures.setEnabled(experimental)
+                    onboarding.setMultiplayerPartner(roomID: experimental ? room.roomID : nil)
                     host.rootView = BoundFriendsSheet(sharing: sharing, onboarding: onboarding, account: account)
                     try attach("Friends-\(layout)-option\(version.rawValue)-multiplayer-\(experimental ? "on" : "off")", size: size)
                     XCTAssertEqual(BoundUIVersionPreferences().version, version,
@@ -568,37 +569,37 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         XCTAssertEqual(sharing.interactions.phase, .choosing)
     }
 
-    func testManualMultiplayerCanSwitchFriendsUntilCartridgeOwnsPartner() async throws {
+    func testOnlyROMServerSelectionStartsGameplayAndLeavingStopsIt() async throws {
         let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
         BoundMultiplayerFeatures.setEnabled(true)
         defer { UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key) }
         let identity = try makeIdentity(owner: UUID())
         let first = FriendRoom(roomID: UUID().uuidString, displayName: "First")
         let second = FriendRoom(roomID: UUID().uuidString, displayName: "Second")
+        var requestedRooms: [String] = []
         let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
-            tokenFetcher: { room, identity in self.makeLease(room: room, owner: identity.owner, request: 1) })
+            tokenFetcher: { room, identity in
+                requestedRooms.append(room)
+                return self.makeLease(room: room, owner: identity.owner, request: requestedRooms.count)
+            })
         let onboarding = FriendOnboarding(call: { _, _, _ in .init(ok: true, rooms: [first, second]) },
-            sendJiggle: { _, _ in XCTFail("Multiplayer must not send sharing notifications"); return "" },
+            sendJiggle: { _, _ in XCTFail("Joining a server must not send sharing notifications"); return "" },
             observeAccount: { OnboardingObservation($0) })
         defer { onboarding.close(); sharing.stop() }
-        onboarding.open(sharing: sharing, existing: { identity })
+        onboarding.setMultiplayerServiceActive(true, sharing: sharing, existing: { identity })
         await waitUntil { !onboarding.busy }
-        onboarding.toggleMultiplayer(first)
+        XCTAssertFalse(sharing.connectionRequested, "An account and friend list alone cannot select a game server")
+        onboarding.setMultiplayerPartner(roomID: first.roomID)
         await waitUntil { sharing.joined }
-        XCTAssertNil(onboarding.multiplayerPartnerRoomID, "A button is not a persisted run")
+        XCTAssertTrue(sharing.livePresence.enabled)
+        XCTAssertTrue(sharing.livePresence.connected, "Joining enables friend sprites without another control")
+        for _ in 0..<3 { onboarding.setMultiplayerPartner(roomID: first.roomID) }
+        XCTAssertEqual(requestedRooms, [first.roomID])
         onboarding.setMultiplayerPartner(roomID: nil)
-        XCTAssertTrue(sharing.joined, "An idle cartridge cannot undo an explicit manual choice")
-        onboarding.toggleMultiplayer(second)
-        await waitUntil { sharing.joined && sharing.configuredRoomID == second.roomID }
-        XCTAssertEqual(sharing.configuredRoomID, second.roomID)
-        onboarding.setMultiplayerPartner(roomID: second.roomID, userInitiated: true)
+        XCTAssertFalse(sharing.connectionRequested, "Leaving the server stops its connection and retries")
+        onboarding.setMultiplayerPartner(roomID: second.roomID)
         await waitUntil { sharing.joined }
-        onboarding.disconnectMultiplayer()
-        onboarding.toggleMultiplayer(first)
-        XCTAssertFalse(sharing.connectionRequested)
-        XCTAssertEqual(onboarding.multiplayerPartnerRoomID, second.roomID)
-        onboarding.toggleMultiplayer(second)
-        await waitUntil { sharing.joined }
+        XCTAssertEqual(requestedRooms, [first.roomID, second.roomID])
         XCTAssertEqual(sharing.configuredRoomID, second.roomID)
     }
 
@@ -649,7 +650,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         transport.emit(.rejoined)
         transport.emit(.remoteJoined)
         XCTAssertEqual(row(), .connected)
-        onboarding.disconnect()
+        onboarding.disconnectScreenSharing()
         XCTAssertEqual(row(), .inactive)
         XCTAssertEqual(row().title, "Disconnected")
         XCTAssertFalse(sharing.connectionRequested)
@@ -660,7 +661,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         XCTAssertEqual(row(), .inactive)
     }
 
-    func testStopDuringROMConnectionRetryClearsRowAndCancelsRetry() async throws {
+    func testLeavingROMServerDuringConnectionRetryClearsRowAndCancelsRetry() async throws {
         let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
         BoundMultiplayerFeatures.setEnabled(true)
         defer {
@@ -678,12 +679,12 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         XCTAssertTrue(onboarding.selectMultiplayerPartner(roomID: room.roomID, sharing: sharing, existing: { identity }))
         await waitUntil { requests == 1 && !sharing.active }
         let pending = BoundFriendRowConnection(roomID: room.roomID, selectedRoomID: onboarding.selected?.roomID, sharing: sharing)
-        XCTAssertEqual(pending, .failed, "Stop remains available during retry backoff")
+        XCTAssertEqual(pending, .failed, "The selected server retains its connection request during retry backoff")
         XCTAssertTrue(sharing.connectionRequested)
-        onboarding.disconnect()
-        for _ in 0..<3 { onboarding.setMultiplayerPartner(roomID: room.roomID) }
+        onboarding.setMultiplayerPartner(roomID: nil)
+        for _ in 0..<3 { onboarding.setMultiplayerPartner(roomID: nil) }
         try await Task.sleep(nanoseconds: 1_100_000_000)
-        XCTAssertEqual(requests, 1, "Stop cancels the scheduled retry and suppresses ROM demand")
+        XCTAssertEqual(requests, 1, "Leaving cancels the scheduled retry")
         XCTAssertFalse(sharing.connectionRequested)
         XCTAssertEqual(BoundFriendRowConnection(roomID: room.roomID,
             selectedRoomID: onboarding.selected?.roomID, sharing: sharing), .inactive)
@@ -953,19 +954,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         onboarding.close(); sharing.stop()
     }
 
-    func testExplicitDisconnectSurvivesROMTicksRefreshAndForegroundUntilFriendTap() async throws {
-        try await assertExplicitDisconnectSurvivesRestoration(useMacSidebar: false)
-    }
-
-    func testMacSidebarDisconnectSurvivesROMTicksRefreshAndForegroundUntilFriendTap() async throws {
-        try await assertExplicitDisconnectSurvivesRestoration(useMacSidebar: true)
-    }
-
-    func testMacSidebarCanCancelAutomaticReconnectDuringRetryDelay() async throws {
-        try await assertExplicitDisconnectSurvivesRestoration(useMacSidebar: true, duringRetry: true)
-    }
-
-    private func assertExplicitDisconnectSurvivesRestoration(useMacSidebar: Bool, duringRetry: Bool = false) async throws {
+    func testServerConnectionRecoversWithoutFriendTapAfterSocketLossAndForeground() async throws {
         let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
         BoundMultiplayerFeatures.setEnabled(true)
         defer {
@@ -981,42 +970,34 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
                 requests += 1
                 return self.makeLease(room: room, owner: identity.owner, request: requests)
             })
-        var observation: OnboardingObservation?
-        let onboarding = FriendOnboarding(call: { _, _, _ in FriendResponse(ok: true, rooms: [room]) },
-            sendJiggle: { _, _ in "" }, observeAccount: { observation = OnboardingObservation($0); return observation! })
-        onboarding.setMultiplayerServiceActive(true, sharing: sharing, existing: { identity })
-        await waitUntil { !onboarding.busy }
-        onboarding.setMultiplayerPartner(roomID: room.roomID)
+        let onboarding = FriendOnboarding(call: { _, _, _ in .init(ok: true, rooms: [room]) },
+            sendJiggle: { _, _ in XCTFail("Reconnecting must not send notifications"); return "" },
+            observeAccount: { OnboardingObservation($0) })
+        defer { onboarding.close(); sharing.stop() }
+        XCTAssertTrue(onboarding.selectMultiplayerPartner(roomID: room.roomID, sharing: sharing, existing: { identity }))
         await waitUntil { sharing.joined }
-        if duringRetry {
-            transport.emit(.failed(.init(.connectionLost)))
-            XCTAssertFalse(sharing.active); XCTAssertFalse(sharing.joined)
-            XCTAssertTrue(sharing.connectionRequested, "The retry delay still belongs to the selected connection")
-        }
-        if useMacSidebar { onboarding.toggleMultiplayer(room) }
-        else { onboarding.disconnect() }
-        XCTAssertFalse(sharing.active)
-        XCTAssertFalse(sharing.joined)
-        XCTAssertFalse(sharing.connectionRequested)
-        XCTAssertNil(sharing.connectedRoomID)
-        XCTAssertEqual(onboarding.selected?.roomID, room.roomID)
-        for _ in 0..<5 { onboarding.setMultiplayerPartner(roomID: room.roomID); observation?.fire() }
-        sharing.background(); sharing.foreground()
-        onboarding.open(sharing: sharing, existing: { identity })
-        await waitUntil { !onboarding.busy }
-        await settle()
-        if duringRetry { try await Task.sleep(for: .milliseconds(1200)) }
-        XCTAssertEqual(requests, 1, "Manual Stop must block background reconnection")
-        XCTAssertEqual(onboarding.selected?.roomID, room.roomID, "Manual disconnect retains the gameplay partner")
-        onboarding.toggleMultiplayer(room)
+        onboarding.close()
+        transport.emit(.failed(.init(.connectionLost)))
+        XCTAssertTrue(sharing.connectionRequested)
+        // Screen sharing cannot revoke the selected server, even during backoff.
+        onboarding.disconnectScreenSharing()
+        for _ in 0..<5 { onboarding.setMultiplayerPartner(roomID: room.roomID) }
+        XCTAssertEqual(requests, 1, "Server demand respects reconnect backoff")
+        try await Task.sleep(for: .milliseconds(1200))
         await waitUntil { sharing.joined }
         XCTAssertEqual(requests, 2)
-        onboarding.disconnect()
-        onboarding.setMultiplayerPartner(roomID: room.roomID, userInitiated: true)
+        XCTAssertTrue(sharing.livePresence.connected)
+        sharing.background()
+        onboarding.setMultiplayerServiceActive(false, sharing: sharing, existing: { identity }, temporary: true)
+        XCTAssertTrue(sharing.connectionRequested)
+        sharing.foreground()
+        onboarding.setMultiplayerServiceActive(true, sharing: sharing, existing: { identity })
         await waitUntil { sharing.joined }
-        XCTAssertEqual(requests, 3, "An explicit ROM friend choice also reconnects")
-        onboarding.disconnect()
-        onboarding.close()
+        XCTAssertEqual(requests, 3)
+        XCTAssertEqual(sharing.configuredRoomID, room.roomID)
+        XCTAssertTrue(sharing.livePresence.connected)
+        onboarding.setMultiplayerPartner(roomID: nil)
+        XCTAssertFalse(sharing.connectionRequested)
         onboarding.setMultiplayerServiceActive(false, sharing: sharing, existing: { identity })
     }
 

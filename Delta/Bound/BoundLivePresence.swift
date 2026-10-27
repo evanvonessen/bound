@@ -115,7 +115,7 @@ final class BoundLivePresenceSession: ObservableObject {
     static let visibilityGrace: TimeInterval = 60
     @Published private(set) var enabled = false
     @Published private(set) var connected = false
-    @Published private(set) var status = "Connect to a friend, then enable live sprites on both devices."
+    @Published private(set) var status = "Join a ROM server"
     private(set) var epoch = UUID()
     private(set) var receivedPackets = 0
     private(set) var sentPackets = 0
@@ -385,7 +385,7 @@ final class BoundLivePresenceSession: ObservableObject {
         && abs(a.x - b.x) + abs(a.y - b.y) <= 32
     }
     private func updateStatus() {
-        setStatus(!enabled ? "Live sprites are off" : connected ? "Waiting for friend presence" : "Connect to your friend in Friends")
+        setStatus(!enabled ? "Live sprites are off" : connected ? "Waiting for friend presence" : "Join a ROM server")
     }
     private func setStatus(_ value: String) { if status != value { status = value } }
 

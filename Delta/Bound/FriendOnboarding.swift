@@ -62,10 +62,8 @@ final class FriendOnboarding: ObservableObject {
     private var sharingObservation: AnyCancellable?
     private var isOpen = false
     private var multiplayerServiceActive = false
-    private(set) var multiplayerPartnerRoomID: String?
-    private var manualMultiplayerRoomID: String?
+    @Published private(set) var multiplayerPartnerRoomID: String?
     private var hasCurrentFriendList = false
-    private var disconnectedRooms = Set<String>()
     private var lastProfileRefresh = Date.distantPast
     private let observeAccount: @MainActor (@escaping @MainActor () -> Void) -> any SharingCancellation
     private var reusedSession: (() -> AppCloudSession?)?
@@ -137,11 +135,9 @@ final class FriendOnboarding: ObservableObject {
     }
     /// Called with the run's persisted room or a friend selected in the ROM.
     /// A server-refreshed friend list and the current account authorize connection.
-    func setMultiplayerPartner(roomID: String?, userInitiated: Bool = false) {
+    func setMultiplayerPartner(roomID: String?) {
         guard roomID == nil || UUID(uuidString: roomID!) != nil else { return }
-        if userInitiated, let roomID { disconnectedRooms.remove(roomID) }
         if multiplayerPartnerRoomID != roomID {
-            if roomID != nil { manualMultiplayerRoomID = nil }
             sharing?.setAutomaticMultiplayerConnection(false)
             multiplayerPartnerRoomID = roomID
         }
@@ -155,7 +151,7 @@ final class FriendOnboarding: ObservableObject {
         guard BoundMultiplayerFeatures.isEnabled, UUID(uuidString: roomID) != nil,
               let identity = existing(), (try? identity.credentials()) != nil else { return false }
         setMultiplayerServiceActive(true, sharing: sharing, existing: existing)
-        setMultiplayerPartner(roomID: roomID, userInitiated: true)
+        setMultiplayerPartner(roomID: roomID)
         return true
     }
     private func ensureAccountObservation() {
@@ -168,7 +164,7 @@ final class FriendOnboarding: ObservableObject {
     }
     private func synchronizeMultiplayerConnection() {
         guard multiplayerServiceActive, BoundMultiplayerFeatures.isEnabled, permitsRTC,
-              hasCurrentFriendList, let roomID = multiplayerPartnerRoomID ?? manualMultiplayerRoomID, !disconnectedRooms.contains(roomID),
+              hasCurrentFriendList, let roomID = multiplayerPartnerRoomID,
               let room = rooms.first(where: { $0.roomID == roomID }), currentIdentity() != nil else { return }
         if selected?.roomID != roomID || sharing?.configuredRoomID != roomID {
             selected = room
@@ -194,7 +190,7 @@ final class FriendOnboarding: ObservableObject {
         }
         let hadAccount = ownerID != nil
         cancelPendingRequest(); cancelPendingJiggle(); ownerID = nil; signedIn = false; rooms = []; blocks = []; selected = nil; accountUsername = nil
-        hasCurrentFriendList = false; multiplayerPartnerRoomID = nil; manualMultiplayerRoomID = nil; disconnectedRooms.removeAll()
+        hasCurrentFriendList = false; multiplayerPartnerRoomID = nil
         if hadAccount || current != nil || managesFlow {
             managesFlow = true
             sharing?.screenSharing.configureAuthenticatedRoom(nil, identity: { nil }); screenSelected = nil
@@ -257,7 +253,7 @@ final class FriendOnboarding: ObservableObject {
     func signOut() {
         cancelPendingRequest(); cancelPendingJiggle(); ownerID = nil; signedIn = false; managesFlow = true
         rooms = []; blocks = []; selected = nil; accountUsername = nil; message = "Sign in above to add a friend."
-        hasCurrentFriendList = false; multiplayerPartnerRoomID = nil; manualMultiplayerRoomID = nil; disconnectedRooms.removeAll()
+        hasCurrentFriendList = false; multiplayerPartnerRoomID = nil
         sharing?.configureAuthenticatedRoom(nil, identity: { nil })
         sharing?.screenSharing.configureAuthenticatedRoom(nil, identity: { nil }); screenSelected = nil
     }
@@ -285,34 +281,9 @@ final class FriendOnboarding: ObservableObject {
         } else { select(room, startSharing: true) }
     }
 
-    func toggleMultiplayer(_ room: FriendRoom) {
-        guard !busy, permitsRTC, rooms.contains(room), currentIdentity() != nil,
-              BoundMultiplayerFeatures.isEnabled, let sharing else { return }
-        if sharing.configuredRoomID == room.roomID && sharing.connectionRequested {
-            disconnectMultiplayer(); return
-        }
-        // A persisted run retains its partner even while manually disconnected.
-        guard multiplayerPartnerRoomID == nil || multiplayerPartnerRoomID == room.roomID else {
-            message = "End or suspend the linked run before switching multiplayer friends."; return
-        }
-        multiplayerServiceActive = true
-        ensureAccountObservation()
-        if multiplayerPartnerRoomID == nil { manualMultiplayerRoomID = room.roomID }
-        disconnectedRooms.remove(room.roomID)
-        synchronizeMultiplayerConnection()
-        message = ""
-    }
-
-    func disconnectMultiplayer() {
-        if let roomID = sharing?.configuredRoomID { disconnectedRooms.insert(roomID) }
-        sharing?.disconnectMultiplayer()
-        message = ""
-    }
-
-    func disconnect() {
+    func disconnectScreenSharing() {
         cancelPendingJiggle()
         sharing?.screenSharing.stop(reason: .manual)
-        disconnectMultiplayer()
     }
 
     func refresh(completion: ((Bool) -> Void)? = nil) {

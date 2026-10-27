@@ -98,9 +98,7 @@ final class ConnectionFeedTests: XCTestCase {
         session.setRemotePresentationEnabled(true)
         XCTAssertEqual(feed.entries.count, count, "Frame traffic, publication pauses and panel visibility do not create connection events")
         let stale = transport.callback
-        let onboarding = FriendOnboarding()
-        onboarding.setMultiplayerServiceActive(false, sharing: session, existing: { nil }, temporary: true)
-        onboarding.disconnect()
+        session.stop(reason: .manual)
         XCTAssertEqual(feed.entries.first?.kind, .manuallyDisconnected)
         let stoppedCount = feed.entries.count
         stale?(.joined); stale?(.remoteJoined); stale?(.failed(.init(.connectionLost)))

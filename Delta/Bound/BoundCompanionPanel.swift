@@ -2111,11 +2111,23 @@ struct BoundFriendConnectionControls: View {
                 connectionButton("Screen Share", lane: sharing.screenSharing, id: "screen-share") {
                     onboarding.toggleScreenSharing(room)
                 }
-                connectionButton("Multiplayer", lane: sharing, id: "multiplayer") {
-                    onboarding.toggleMultiplayer(room)
-                }.disabled(!multiplayerEnabled)
+                if multiplayerEnabled, onboarding.multiplayerPartnerRoomID == room.roomID {
+                    multiplayerStatus
+                }
             }
         }
+    }
+
+    private var multiplayerStatus: some View {
+        let state = BoundFriendRowConnection(roomID: room.roomID, selectedRoomID: onboarding.multiplayerPartnerRoomID, sharing: sharing)
+        return VStack(spacing: 3) {
+            Text("Multiplayer").font(.subheadline.weight(.semibold))
+            Label(state.title ?? "Disconnected", systemImage: state.symbol).font(.caption)
+        }
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, minHeight: 44)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("bound.friend-multiplayer-status-" + room.roomID)
     }
 
     private func connectionButton(_ title: String, lane: FriendSharingSession, id: String,
