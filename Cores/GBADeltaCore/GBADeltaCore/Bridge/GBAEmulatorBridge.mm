@@ -160,15 +160,23 @@ int  RGB_LOW_BITS_MASK;
     }
     
     void *bytes = NULL;
-    if (address >= 0x8000)
+    // Bound's read-only presentation bank follows the achievement RAM banks.
+    // Read the hardware palette after DNS/weather/fades, not a staging buffer.
+    if (address >= 0x48000 && address <= 0x48400 && size >= 0 && size <= 0x48400 - address)
+    {
+        if (paletteRAM == NULL) return nil;
+        bytes = (void *)(paletteRAM + address - 0x48000);
+    }
+    else if (address >= 0x8000 && address < 0x48000 && size >= 0 && size <= 0x48000 - address)
     {
         bytes = (void *)(workRAM + address - 0x8000);
     }
-    else
+    else if (address >= 0 && address < 0x8000 && size >= 0 && size <= 0x8000 - address)
     {
         bytes = (void *)(internalRAM + address);
     }
     
+    if (bytes == NULL) return nil;
     NSData *data = [NSData dataWithBytesNoCopy:bytes length:size freeWhenDone:NO];
     return data;
 }

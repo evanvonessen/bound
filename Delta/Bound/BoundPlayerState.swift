@@ -75,6 +75,7 @@ final class BoundPlayerROMProfile: Sendable {
 struct BoundGBAMemorySnapshot: Sendable {
     let workRAM: [UInt8]
     let internalRAM: [UInt8]
+    var paletteRAM: [UInt8]? = nil
 
     init?(copyingWorkRAM work: Data, internalRAM internalData: Data) {
         guard work.count == 0x40000, internalData.count == 0x8000 else { return nil }
@@ -89,12 +90,17 @@ struct BoundGBAMemorySnapshot: Sendable {
         // GBADeltaCore's achievement address space: IWRAM first, then EWRAM.
         guard let work = readMemory(0x8000, 0x40000),
               let internalData = readMemory(0, 0x8000) else { return nil }
-        return Self(copyingWorkRAM: work, internalRAM: internalData)
+        guard var snapshot = Self(copyingWorkRAM: work, internalRAM: internalData) else { return nil }
+        if let palette = readMemory(0x48000, 0x400), palette.count == 0x400 {
+            snapshot.paletteRAM = palette.withUnsafeBytes { Array($0) }
+        }
+        return snapshot
     }
 
     func bytes(at address: Int, count: Int) -> [UInt8]? {
         let bank: [UInt8], offset: Int
-        if address >= 0x03000000 { bank = internalRAM; offset = address - 0x03000000 }
+        if address >= 0x05000000, let paletteRAM { bank = paletteRAM; offset = address - 0x05000000 }
+        else if address >= 0x03000000 { bank = internalRAM; offset = address - 0x03000000 }
         else { bank = workRAM; offset = address - 0x02000000 }
         guard count >= 0, offset >= 0, offset <= bank.count, count <= bank.count - offset else { return nil }
         return Array(bank[offset..<offset + count])

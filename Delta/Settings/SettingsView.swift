@@ -96,7 +96,11 @@ private struct BoundSettingsPageModifier: ViewModifier {
     @Environment(\.boundSettingsCloseAction) private var close
 
     func body(content: Content) -> some View {
-        content.toolbar {
+        content
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if BoundMacWorkspacePlatform.isEnabled { Color.clear.frame(height: 32) }
+            }
+            .toolbar {
             if let close {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done", action: close)
@@ -121,10 +125,6 @@ struct SettingsView: View {
     @State private var resetRevision = 0
     @AppStorage(BoundMultiplayerFeatures.key) private var experimentalFeaturesEnabled = false
     @AppStorage(BoundDeveloperFeatures.key) private var developerFeaturesEnabled = false
-    @State private var configurationExportFile: BoundConfigurationFile?
-    @State private var pendingConfigurationExportFile: BoundConfigurationFile?
-    @State private var exportingConfiguration = false
-    @State private var configurationExportFailed = false
     var gameplay: BoundSettingsGameplayContext?
     private let friends: BoundAccountFriendsContext
     var close: () -> Void = {}
@@ -260,23 +260,6 @@ struct SettingsView: View {
                                 BoundMultiplayerFeatures.setEnabled(enabled)
                             }
 
-                        if developerFeaturesEnabled {
-                            Button("Export All Config") {
-                                exportingConfiguration = true
-                                Task { @MainActor in
-                                    do {
-                                        let file = try await BoundConfigurationExport.file()
-                                        pendingConfigurationExportFile = file
-                                        configurationExportFile = file
-                                    } catch {
-                                        exportingConfiguration = false
-                                        configurationExportFailed = true
-                                    }
-                                }
-                            }
-                            .disabled(exportingConfiguration)
-                            .accessibilityIdentifier("bound.settings-export-all-config")
-                        }
                     } footer: {
                         Text(BoundSettingsBuildFooter.text())
                             .font(.caption2)
@@ -297,20 +280,8 @@ struct SettingsView: View {
             .alert("Unable to Reset Settings", isPresented: $resetFailed) {
                 Button("OK", role: .cancel) {}
             }
-            .alert("Unable to Export Configuration", isPresented: $configurationExportFailed) {
-                Button("OK", role: .cancel) {}
-            }
             .sheet(isPresented: Binding(get: { romCleanup.preview != nil }, set: { if !$0 { romCleanup.cancel() } })) {
                 BoundROMCleanupConfirmation(cleanup: romCleanup)
-            }
-            .sheet(item: $configurationExportFile, onDismiss: {
-                pendingConfigurationExportFile?.removeTemporaryFile()
-                pendingConfigurationExportFile = nil
-                exportingConfiguration = false
-            }) { file in
-                BoundConfigurationFilePicker(file: file) {
-                    configurationExportFile = nil
-                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // Let navigation bars and backgrounds fill the side safe areas in landscape.

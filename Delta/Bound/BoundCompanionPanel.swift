@@ -644,6 +644,14 @@ final class BoundCompanionCoordinator {
             let panel = BoundCompanionPresentation(sharing: sharing, state: state, landscape: landscapeCompanion, arrangement: landscapeArrangement, layers: arrangementLayers, debug: romMultiplayer.debugSession, debugSettings: { [weak self] in self?.romMultiplayer.debugSettings }, gameID: (owner.game as? Game)?.identifier ?? "", editingChanged: { [weak self] in
                 guard let self, !self.landscapeCompanion.editing, !self.landscapeArrangement.editing else { return }
                 self.notesEditing($0)
+            }, connectFriend: { [weak self, weak owner] in
+                guard let self, let owner, owner.presentedViewController == nil else { return }
+                let room = self.onboarding.screenSelected ?? self.onboarding.selected
+                if let room, !self.sharing.screenSharing.connectionRequested {
+                    self.onboarding.select(room, startSharing: true)
+                } else {
+                    self.presentFriends(from: owner)
+                }
             }, textEditingChanged: { [weak self] in self?.textEditing($0) }, currentSave: { [weak self] gameID in
                 guard let self else { throw BoundRRDexSave.ImportError.currentGameUnavailable }
                 return try self.importCurrentRRDexSave(gameID: gameID)

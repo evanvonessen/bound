@@ -87,6 +87,11 @@ public class AudioManager: NSObject, AudioRendering
         }
     }
     
+    /// User mute survives core pause/resume and audio route changes.
+    public var isPlaybackMuted = false {
+        didSet { self.updateOutputVolume() }
+    }
+
     public var respectsSilentMode: Bool = true {
         didSet {
             self.updateOutputVolume()
@@ -447,7 +452,7 @@ private extension AudioManager
 
     @objc func updateOutputVolume()
     {
-        if !self.isEnabled
+        if !self.isEnabled || self.isPlaybackMuted
         {
             self.audioEngine.mainMixerNode.outputVolume = 0.0
         }

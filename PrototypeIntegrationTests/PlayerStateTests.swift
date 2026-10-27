@@ -109,20 +109,26 @@ final class PlayerStateTests: XCTestCase {
     func testBorrowedVBAViewsAreCopiedAndAddressTranslationIsBounded() throws {
         let work = UnsafeMutableRawPointer.allocate(byteCount: 0x40000, alignment: 4)
         let internalRAM = UnsafeMutableRawPointer.allocate(byteCount: 0x8000, alignment: 4)
-        defer { work.deallocate(); internalRAM.deallocate() }
+        let palette = UnsafeMutableRawPointer.allocate(byteCount: 0x400, alignment: 4)
+        defer { work.deallocate(); internalRAM.deallocate(); palette.deallocate() }
         work.initializeMemory(as: UInt8.self, repeating: 19, count: 0x40000)
         internalRAM.initializeMemory(as: UInt8.self, repeating: 27, count: 0x8000)
+        palette.initializeMemory(as: UInt8.self, repeating: 43, count: 0x400)
         var requests: [(Int, Int)] = []
         let snapshot = try XCTUnwrap(BoundGBAMemorySnapshot.capture { address, count in
             requests.append((address, count))
+            if address == 0x48000 { return Data(bytesNoCopy: palette, count: count, deallocator: .none) }
             return Data(bytesNoCopy: address == 0x8000 ? work : internalRAM, count: count, deallocator: .none)
         })
         work.storeBytes(of: UInt8(99), as: UInt8.self)
         internalRAM.storeBytes(of: UInt8(88), as: UInt8.self)
-        XCTAssertEqual(requests.map { $0.0 }, [0x8000, 0])
-        XCTAssertEqual(requests.map { $0.1 }, [0x40000, 0x8000])
+        palette.advanced(by: 0x200).storeBytes(of: UInt8(99), as: UInt8.self)
+        XCTAssertEqual(requests.map { $0.0 }, [0x8000, 0, 0x48000])
+        XCTAssertEqual(requests.map { $0.1 }, [0x40000, 0x8000, 0x400])
         XCTAssertEqual(snapshot.bytes(at: 0x02000000, count: 1), [19])
         XCTAssertEqual(snapshot.bytes(at: 0x03000000, count: 1), [27])
+        XCTAssertEqual(snapshot.bytes(at: 0x05000200, count: 32), Array(repeating: 43, count: 32))
+        XCTAssertNil(snapshot.bytes(at: 0x05000400, count: 1))
         for address in [0, 0x02040000, 0x03008000, 0x04000000] {
             XCTAssertNil(snapshot.bytes(at: address, count: 1))
         }

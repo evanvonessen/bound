@@ -30,6 +30,7 @@ extension Settings.Name
     static let isButtonHapticFeedbackEnabled: Settings.Name = "isButtonHapticFeedbackEnabled"
     static let isThumbstickHapticFeedbackEnabled: Settings.Name = "isThumbstickHapticFeedbackEnabled"
     static let isAltJITEnabled: Settings.Name = "isAltJITEnabled"
+    static let muteAllAudio: Settings.Name = "bound.audio.mute-all.v1"
     static let respectSilentMode: Settings.Name = "respectSilentMode"
     static let mixWithOtherAudio: Settings.Name = "mixWithOtherAudio"
     static let pauseOtherAudio: Settings.Name = "pauseOtherAudio"
@@ -280,6 +281,15 @@ extension Settings
         }
     }
     
+    static var muteAllAudio: Bool {
+        get { UserDefaults.standard.bool(forKey: Name.muteAllAudio.rawValue) }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Name.muteAllAudio.rawValue)
+            NotificationCenter.default.post(name: didChangeNotification, object: nil,
+                userInfo: [NotificationUserInfoKey.name: Name.muteAllAudio])
+        }
+    }
+
     static var respectSilentMode: Bool {
         get {
             let respectSilentMode = UserDefaults.standard.respectSilentMode
