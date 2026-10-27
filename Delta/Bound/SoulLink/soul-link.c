@@ -1,6 +1,7 @@
 /* Bound's original ARM7TDMI enforcement shim, exact RR 4.1 ABI only.
  * Policy resides in the loaded ROM's verified unused tail, outside save states.
  * No cartridge file or Pokemon identity/checksum is modified. */
+#include "soul-layout.h"
 typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
@@ -8,17 +9,20 @@ struct Identity { u32 personality, trainer; };
 struct Policy { u32 magic, count; struct Identity denied[2048]; };
 #define POLICY ((volatile const struct Policy *)0x09FFA000)
 struct Events { u32 magic, count, overflow; struct Identity fainted[32]; };
-#define EVENTS ((volatile struct Events *)0x03004500)
+#define EVENTS ((volatile struct Events *)BOUND_SOUL_FAINT_ADDRESS)
+typedef char bound_soul_faint_ring_size[sizeof(struct Events)==BOUND_SOUL_FAINT_BYTES ? 1:-1];
 #define MAGIC 0x314C5342u
 /* Per-owner durable encounter bits live outside state RAM. The receipt ring is
  * drained only after the host durably records its exact identity/source bytes.
- * 0x4620..0x47AC is disjoint from the faint ring and native link mailboxes. */
+ * Shared layout assertions fence the native decision queue and QA storage. */
 #define ACQUIRED ((volatile const u8 *)0x09FFE008)
-struct Acquisition { u32 personality, trainer, source; };
-struct Acquisitions { u32 magic, count, overflow; struct Acquisition rows[32]; };
-#define ACQUISITIONS ((volatile struct Acquisitions *)0x03004620)
+#define ACQUISITIONS ((volatile struct BoundSoulAcquisitionRing *)BOUND_SOUL_ACQUISITION_ADDRESS)
 static u32 read32(const u8 *p) { return p[0]|(u32)p[1]<<8|(u32)p[2]<<16|(u32)p[3]<<24; }
 static u16 read16(const u8 *p) { return p[0]|(u16)p[1]<<8; }
+static unsigned playerPartySlot(const u8 *mon) {
+    for(unsigned i=0;i<6;i++) if(mon==(const u8 *)(0x02024284u+100*i)) return 1;
+    return 0;
+}
 static unsigned encounterArea(void) { return ((u8 (*)(void))0x08056261)(); }
 static unsigned ordinaryBattle(void) {
     u32 flags=*(volatile u32 *)0x02022B4C;
@@ -30,7 +34,7 @@ static unsigned spent(unsigned area) {
     if(ACQUIRED[area/8]&(1u<<(area%8))) return 1;
     if(ACQUISITIONS->magic==MAGIC) {
         unsigned count=ACQUISITIONS->count;
-        if(count>32 || ACQUISITIONS->overflow) return 1;
+        if(count>BOUND_SOUL_ACQUISITION_CAPACITY || ACQUISITIONS->overflow) return 1;
         for(unsigned i=0;i<count;i++) {
             u32 source=ACQUISITIONS->rows[i].source;
             if(((source&255)==0 && (source>>8)==area) || ((source&255)==2 && area==0)) return 1;
@@ -38,7 +42,13 @@ static unsigned spent(unsigned area) {
     }
     return 0;
 }
-void BoundSoulPrizeCheck(void) { *(volatile u16 *)0x020370D0=(u16)spent(0); }
+void BoundSoulPrizeCheck(void) {
+    unsigned result=spent(0);
+    /* RR charges before givemon. Reject a full party AND PC before entering
+     * that transaction, while preserving the original script outside a run. */
+    if(!result && POLICY->magic==MAGIC && ((unsigned (*)(void))0x08040F6D)()) result=2;
+    *(volatile u16 *)0x020370D0=(u16)result;
+}
 /* Gate the exact RR Pokémon clerk's script entry, including cached object
  * templates restored from saves. Replay its displaced lock/face/loadword before
  * checking, then continue after those bytes for the first purchase. */
@@ -46,10 +56,13 @@ static const u8 prizeText[]={0xC9,0xE2,0xD9,0,0xE4,0xE6,0xDD,0xEE,0xD9,0,0xCA,0x
     0xE4,0xD9,0xE6,0,0xCD,0xE3,0xE9,0xE0,0,0xC6,0xDD,0xE2,0xDF,0,0xE6,0xE9,0xE2,0xAD,0xFF};
 const struct __attribute__((packed)) {
     u8 lock,face,load,index;const u8 *opening;
-    u8 call;void (*check)(void);u8 compare;u16 variable,value;u8 branch,condition;const u8 *original;
+    u8 call;void (*check)(void);
+    u8 capacityCompare;u16 capacityVariable,capacityValue;u8 capacityBranch,capacityCondition;const u8 *noRoom;
+    u8 compare;u16 variable,value;u8 branch,condition;const u8 *original;
     u8 message;const u8 *text;u8 wait,button,release,end;
 } BoundSoulPrizeScript={0x69,0x5A,0x0F,0,(const u8 *)0x09102A63,
-    0x23,BoundSoulPrizeCheck,0x21,0x800D,0,0x06,1,(const u8 *)0x09045765,
+    0x23,BoundSoulPrizeCheck,0x21,0x800D,2,0x06,1,(const u8 *)0x0816F8AC,
+    0x21,0x800D,0,0x06,1,(const u8 *)0x09045765,
     0x67,prizeText,0x66,0x6D,0x6B,0x02};
 /* Exact RR CantCatchBecauseFlag entry, used by both the bag and last-ball
  * shortcut. Preserve BOTH original native flag checks before our own rule. */
@@ -57,6 +70,12 @@ u32 BoundSoulCatchBlocked(void) {
     u8 (*flag)(u16)=(u8 (*)(u16))0x0806E6D1;
     if(flag(0x902) || flag(0x904)) return 1;
     return ordinaryBattle() && spent(encounterArea());
+}
+/* Both the vanilla entry and RR's direct internal BL calls arrive at this
+ * owning implementation. Replay its displaced prologue and TryFormRevert BL;
+ * the native continuation restores the saved registers and returns to us. */
+__attribute__((naked,noinline)) u32 BoundSoulOriginalGive(u8 *mon) {
+    __asm__ volatile("push {r4,r5,r6,lr}\nmov r4,r0\nldr r3,=0x09099D8D\nbl 1f\nldr r3,=0x0907D799\nbx r3\n1: bx r3\n.ltorg\n");
 }
 u32 BoundSoulGive(u8 *mon) {
     unsigned active=POLICY->magic==MAGIC;
@@ -75,9 +94,9 @@ u32 BoundSoulGive(u8 *mon) {
             ACQUISITIONS->count=ACQUISITIONS->overflow=0;ACQUISITIONS->magic=MAGIC;
         }
         /* Never create an unjournalled acquisition when receipt capacity ends. */
-        if(ACQUISITIONS->count>=32 || ACQUISITIONS->overflow) { ACQUISITIONS->overflow=1;return 2; }
+        if(ACQUISITIONS->count>=BOUND_SOUL_ACQUISITION_CAPACITY || ACQUISITIONS->overflow) { ACQUISITIONS->overflow=1;return 2; }
     }
-    u32 result=((u8 (*)(u8 *))0x0907D791)(mon);
+    u32 result=BoundSoulOriginalGive(mon);
     if(active && POLICY->magic==MAGIC && result<=1) {
         unsigned n=ACQUISITIONS->count;
         ACQUISITIONS->rows[n].personality=read32(mon);
@@ -112,9 +131,10 @@ u32 BoundSoulGet(const u8 *mon,int field,void *data) {
 void BoundSoulSet(u8 *mon,int field,const void *data) {
     u16 zero=0;
     if(field==57) {
-        /* Native zero-HP writes are latched even if a raid/Pokemon Center heals
-         * again in the same frame. Only owned identities are admitted by host. */
-        if(read16(data)==0 && read16(mon+86)>0 && read16(mon+88)>0
+        /* Latch only physical player-party writes, even if healed this frame.
+         * An enemy's earlier KO must not become an owned loss after capture.
+         * The host further fences borrowed/NPC identities and friendly play. */
+        if(playerPartySlot(mon) && read16(data)==0 && read16(mon+86)>0 && read16(mon+88)>0
            && !(mon[19]&4) && !(mon[75]&0x40)) {
             if(EVENTS->magic!=MAGIC) { EVENTS->count=EVENTS->overflow=0; EVENTS->magic=MAGIC; }
             unsigned i=EVENTS->count;
@@ -129,7 +149,7 @@ void BoundSoulSet(u8 *mon,int field,const void *data) {
 /* Simulator fixture only; never compiled into the Release shim. */
 void BoundSoulQA(void) {
     u8 *mon=(u8 *)0x02024284;
-    volatile u32 *result=(volatile u32 *)0x03004D00;
+    volatile u32 *result=(volatile u32 *)BOUND_SOUL_QA_ADDRESS;
     u16 zero=0,healthy=read16(mon+88);
     result[0]=0;
     result[1]=((u32 (*)(u8 *,int,void *))0x0803FBE9)(mon,11,0);
@@ -143,12 +163,19 @@ void BoundSoulQA(void) {
 #ifdef BOUND_SOUL_QA
 void BoundSoulQACatch(void) {
     u8 *party=(u8 *)0x02024284;
-    volatile u32 *result=(volatile u32 *)0x03004D00;
-    unsigned mode=*(volatile u32 *)0x03004D20,i;
+    volatile u32 *result=(volatile u32 *)BOUND_SOUL_QA_ADDRESS;
+    unsigned mode=*(volatile u32 *)(BOUND_SOUL_QA_ADDRESS+0x20u),i;
     u8 mon[100];
     for(i=0;i<100;i++) mon[i]=party[i];
     *(u32 *)mon=0xD00D0000u+mode;
     mon[19]=(mon[19]|2)&(u8)~4; mon[75]&=(u8)~0x40;
+    /* The owned starter may already be permanently dead. This distinct gift
+     * fixture starts healthy through the native setter; never heal the starter
+     * or reuse its denied identity. Egg mode retains its explicit zero-HP test. */
+    if(mode!=2) {
+        u16 healthy=read16(mon+88);
+        ((void (*)(u8 *,int,const void *))0x0804037D)(mon,57,&healthy);
+    }
     if(mode==2) {
         u16 healthy=read16(mon+88),zero=0;
         mon[19]|=4; mon[75]|=0x40; mon[70]&=0x80; mon[69]=253;

@@ -114,7 +114,9 @@ final class MultiRedAdapterTests: XCTestCase {
         XCTAssertEqual(old.family, current.family)
         XCTAssertNotEqual(old.ruleset, current.ruleset)
         XCTAssertEqual(old.saveStateLayout, 5); XCTAssertEqual(BoundGameProfiles.stackSafe.saveStateLayout, 6)
-        XCTAssertEqual(current.saveStateLayout, 12)
+        XCTAssertEqual(current.saveStateLayout, 13)
+        XCTAssertEqual(BoundGameProfiles.preShinyMagikarp.saveStateLayout,12)
+        XCTAssertNotEqual(BoundGameProfiles.preShinyMagikarp.ruleset,current.ruleset)
         XCTAssertFalse(old.supportsCooperativeDoubles); XCTAssertTrue(current.supportsCooperativeDoubles)
         XCTAssertFalse(old.admits(romSHA256: current.romSHA256, saveStateLayout: old.saveStateLayout))
         XCTAssertFalse(old.admits(romSHA256: old.romSHA256, saveStateLayout: current.saveStateLayout))
@@ -154,13 +156,14 @@ final class MultiRedAdapterTests: XCTestCase {
               FileManager.default.fileExists(atPath: root.appendingPathComponent("stack-safe.gba").path),
               FileManager.default.fileExists(atPath: root.appendingPathComponent("debug-defaults.gba").path),
               FileManager.default.fileExists(atPath: root.appendingPathComponent("friends-multiview.gba").path),
+              FileManager.default.fileExists(atPath: root.appendingPathComponent("pre-shiny-magikarp.gba").path),
               FileManager.default.fileExists(atPath: root.appendingPathComponent("current.gba").path) else {
             throw XCTSkip("Requires both exact owned profile ROM fixtures in MultiRedProfilesQA")
         }
         let output = root.appendingPathComponent("results-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         var states: [String: Data] = [:]
-        let pairs = [("original", BoundGameProfiles.original), ("stack-safe", BoundGameProfiles.stackSafe), ("debug-defaults", BoundGameProfiles.debugDefaults), ("friends-multiview", BoundGameProfiles.friendsMultiview), ("current", BoundGameProfiles.current)]
+        let pairs = [("original", BoundGameProfiles.original), ("stack-safe", BoundGameProfiles.stackSafe), ("debug-defaults", BoundGameProfiles.debugDefaults), ("friends-multiview", BoundGameProfiles.friendsMultiview), ("pre-shiny-magikarp", BoundGameProfiles.preShinyMagikarp), ("current", BoundGameProfiles.current)]
         for (name, expected) in pairs {
             let rom = root.appendingPathComponent(name + ".gba"), bytes = try Data(contentsOf: rom)
             let profile = try BoundPlayerROMProfile(rom: bytes)

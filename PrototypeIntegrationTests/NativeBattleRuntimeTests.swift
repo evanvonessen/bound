@@ -251,6 +251,54 @@ final class NativeBattleRuntimeTests:XCTestCase {
         super.tearDown()
     }
 
+    /// Fresh native debug-preset execution on the exact bundled cartridge.
+    /// This is synthetic fixture preparation, never evidence of a playthrough.
+    func testCreateCurrentEncounterGameplayFixture() async throws {
+        guard ProcessInfo.processInfo.environment["BOUND_ENCOUNTER_GAMEPLAY"] == "1" else {
+            throw XCTSkip("Requires the dedicated encounter-rules simulator")
+        }
+        continueAfterFailure=false
+        let documents=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0]
+        let root=documents.appendingPathComponent("Phase6SoulQA"), full=documents.appendingPathComponent("FullAppGameplayQA")
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        try FileManager.default.createDirectory(at:full,withIntermediateDirectories:true)
+        let bundled=try XCTUnwrap(Bundle.main.url(forResource:"multiplayer",withExtension:"gba"))
+        let image=try Data(contentsOf:bundled), profile=try BoundPlayerROMProfile(rom:image)
+        let rom=root.appendingPathComponent("current.gba"), battery=root.appendingPathComponent("fixture.sav")
+        guard !FileManager.default.fileExists(atPath:root.appendingPathComponent("observer.state").path) else {
+            throw XCTSkip("Preserving the dedicated simulator's existing encounter fixture")
+        }
+        try image.write(to:rom);try image.write(to:full.appendingPathComponent("RadicalRed.gba"))
+        try Data(repeating:0xFF,count:131072).write(to:battery)
+        let core=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
+        let setup=NativePlayerSceneSetup(core:core,debugPlayer:1)
+        let ready=expectation(description:"Current-ROM native debug preset reaches field with one starter"),once=NativeFixtureCompletion()
+        core.audioManager.isEnabled=false
+        core.updateHandler={ core in
+            BoundFrameMemory.perform {
+                setup.receive(core)
+                let native=BoundVBABattleBridge.soulLinkSnapshot()
+                if setup.isReady,native["ready"] as? Bool==true,(native["party"] as? Data)?.count==100,once.claim() { ready.fulfill() }
+            }
+        }
+        defer { _=core.pause();BoundVBABattleBridge.closeSoulLink();_=core.stop() }
+        core.rate=8;XCTAssertTrue(core.start());core.deltaCore.emulatorBridge.audioRenderer=nil
+        await fulfillment(of:[ready],timeout:90)
+        try await Task.sleep(for:.milliseconds(150));XCTAssertTrue(core.pause());core.rate=1
+        let native=BoundVBABattleBridge.soulLinkSnapshot()
+        let party=BoundSoulMon.decode(native["party"] as? Data ?? Data(),stride:100)
+        XCTAssertEqual(party.count,1);XCTAssertGreaterThan(party.first?.hp ?? 0,0)
+        let state=MultiRedAdapter.captureState();XCTAssertFalse(state.isEmpty)
+        let seed=BoundVBABattleBridge.captureServerBattery();XCTAssertEqual(seed.count,131072)
+        try state.write(to:root.appendingPathComponent("observer.state"))
+        try seed.write(to:full.appendingPathComponent("seed.sav"))
+        let evidence:[String:Any]=["provenance":"Synthetic native Debug New Game preset; no prior raw state reused",
+            "romSHA256":SHA256.hash(data:image).map { String(format:"%02x",$0) }.joined(),
+            "core":"com.rileytestut.GBADeltaCore","nativeStateBytes":state.count,"partyCount":party.count,
+            "profile":String(describing:profile)]
+        try JSONSerialization.data(withJSONObject:evidence,options:.prettyPrinted).write(to:root.appendingPathComponent("encounter-fixture.json"))
+    }
+
     private func soulWorkerFixture(_ name:String) throws->(EmulatorCore,URL) {
         let root=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("Phase6SoulQA")
         let rom=root.appendingPathComponent("current.gba"),state=root.appendingPathComponent("observer.state")
@@ -1211,9 +1259,14 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertEqual(probe.read().mons.count, 1, "Only the disposable starter is owned")
         let before = output.appendingPathComponent("before.state"); core.saveSaveState(to: before)
         try probe.start(run: UUID(), binding: String(repeating: "a", count: 64))
-        _ = core.resume(); try await Task.sleep(for: .milliseconds(150)); _ = core.pause()
+        _ = core.resume()
+        for _ in 0..<120 {
+            if probe.read().team != nil || probe.read().error != nil { break }
+            try await Task.sleep(for:.milliseconds(25))
+        }
+        _ = core.pause(); try probe.prepareCheckpoint(core:core)
         let starter = try XCTUnwrap(probe.read().ledger?.records.first)
-        let starterTeam = try XCTUnwrap(probe.read().team)
+        let starterTeam = try XCTUnwrap(probe.read().team,"ready=\(probe.read().ready), mons=\(probe.read().mons.count), error=\(String(describing:probe.read().error))")
         XCTAssertEqual(starterTeam.party.count,1)
         XCTAssertEqual(starterTeam.party.first?.slot,starter.slot)
         XCTAssertGreaterThan(starterTeam.party.first?.level ?? 0,0)
@@ -1301,7 +1354,10 @@ final class NativeBattleRuntimeTests:XCTestCase {
             XCTAssertTrue(BoundVBABattleBridge.qaStartSoulCatch(UInt(mode))); _ = core.resume()
             for _ in 0..<100 {
                 try await Task.sleep(for: .milliseconds(25))
-                if (reopened.read().ledger?.records.count ?? 0) > beforeCount { break }
+                let snapshot=reopened.read()
+                if (snapshot.ledger?.records.count ?? 0)>beforeCount,snapshot.ready,
+                   let acquired=snapshot.ledger?.records.last,
+                   snapshot.mons.contains(where:{ acquired.identities.contains($0.identity) }) { break }
             }
             _ = core.pause()
             let record = try XCTUnwrap(reopened.read().ledger?.records.last)

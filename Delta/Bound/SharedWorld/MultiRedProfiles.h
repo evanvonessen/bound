@@ -5,6 +5,9 @@
 namespace BoundOriginalGame {
 #include "BoundOriginalGameABI.h"
 }
+namespace BoundPreShinyMagikarpGame {
+#include "BoundPreShinyMagikarpGameABI.h"
+}
 namespace BoundFriendsMultiviewGame {
 #include "BoundFriendsMultiviewGameABI.h"
 }
@@ -121,8 +124,20 @@ static const MultiRedNativeProfile MultiRedFriendsMultiviewProfile={
     BoundFriendsMultiviewGame::GameCooperativeCodeStart,BoundFriendsMultiviewGame::GameCooperativeCodeEnd,
     [](uint8_t *p) { for(const auto &entry:BoundFriendsMultiviewGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); }
 };
+static const MultiRedNativeProfile MultiRedPreShinyMagikarpProfile={
+    BoundPreShinyMagikarpGame::GameDescriptor,BoundPreShinyMagikarpGame::GameCanonicalSHA256,BoundPreShinyMagikarpGame::GameRulesetID,
+    BoundPreShinyMagikarpGame::GameDescriptorOffset,sizeof(BoundPreShinyMagikarpGame::GameDescriptor),BoundPreShinyMagikarpGame::GameHostOffset,BoundPreShinyMagikarpGame::GameHostSize,
+    BoundPreShinyMagikarpGame::GameSnapshotAddress,BoundPreShinyMagikarpGame::GameSnapshotSize,BoundPreShinyMagikarpGame::GameSnapshotRegionSize,
+    BoundPreShinyMagikarpGame::GameABIMajor,BoundPreShinyMagikarpGame::GameABIMinor,BoundPreShinyMagikarpGame::GameSaveStateLayout,
+    BoundPreShinyMagikarpGame::GameUIHostOffset,BoundPreShinyMagikarpGame::GameUIHostSize,BoundPreShinyMagikarpGame::GameUIRequestAddress,BoundPreShinyMagikarpGame::GameUIRequestSize,
+    BoundPreShinyMagikarpGame::GameCodeStart,BoundPreShinyMagikarpGame::GameCodeEnd,
+    BoundPreShinyMagikarpGame::GameCooperativeHostOffset,BoundPreShinyMagikarpGame::GameCooperativeHostSize,
+    BoundPreShinyMagikarpGame::GameCooperativeCodeStart,BoundPreShinyMagikarpGame::GameCooperativeCodeEnd,
+    [](uint8_t *p) { for(const auto &entry:BoundPreShinyMagikarpGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); }
+};
 static const MultiRedNativeProfile *multiRedProfile(const uint8_t *p) {
     if(MultiRedCurrentProfile.matches(p)) return &MultiRedCurrentProfile;
+    if(MultiRedPreShinyMagikarpProfile.matches(p)) return &MultiRedPreShinyMagikarpProfile;
     if(MultiRedFriendsMultiviewProfile.matches(p)) return &MultiRedFriendsMultiviewProfile;
     if(MultiRedDebugDefaultsProfile.matches(p)) return &MultiRedDebugDefaultsProfile;
     if(MultiRedStackSafeProfile.matches(p)) return &MultiRedStackSafeProfile;

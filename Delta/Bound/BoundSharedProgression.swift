@@ -3,9 +3,9 @@ import DeltaCore
 
 // BEGIN GENERATED GAME CONTRACT
 enum BoundWorldContract {
-    static let romSHA256 = "fcfaa8a9fb022656994a429be4cba5b9f14ba6c477ec813d2d6a2aa3878edc00"
-    static let compatibility = Data([178,172,101,101,181,172,69,179,183,185,160,229,9,78,42,18,1,0,0,0,1,0,1,0])
-    static let ruleset = Data([178,172,101,101,181,172,69,179,183,185,160,229,9,78,42,18])
+    static let romSHA256 = "d7d9ec63064f9ea8dae75fa2ee05817056769f2cc933f4291414267575885583"
+    static let compatibility = Data([6,108,88,56,178,213,107,110,246,181,219,8,236,23,226,91,1,0,0,0,1,0,1,0])
+    static let ruleset = Data([6,108,88,56,178,213,107,110,246,181,219,8,236,23,226,91])
 }
 // END GENERATED GAME CONTRACT
 

@@ -26,11 +26,17 @@ enum BoundGameProfiles {
         compatibility: Data([224,78,94,243,52,161,224,253,120,114,212,176,204,105,48,70,1,0,0,0,1,0,1,0]), saveStateLayout: 10,
         supportsCooperativeDoubles: true,
         coreIdentifier: "com.rileytestut.GBADeltaCore", coreStateVersion: 10)
-    static let current = BoundGameProfile(
+    static let preShinyMagikarp = BoundGameProfile(
         romSHA256: "fcfaa8a9fb022656994a429be4cba5b9f14ba6c477ec813d2d6a2aa3878edc00", gameID: "51ebbe0108c0c18bb5bfcbef42ed3d19a4cfd606",
         family: Data([104,146,153,102,74,149,76,18,218,214,110,3,194,209,132,70]), ruleset: Data([178,172,101,101,181,172,69,179,183,185,160,229,9,78,42,18]),
         compatibility: Data([178,172,101,101,181,172,69,179,183,185,160,229,9,78,42,18,1,0,0,0,1,0,1,0]), saveStateLayout: 12,
         supportsCooperativeDoubles: true,
         coreIdentifier: "com.rileytestut.GBADeltaCore", coreStateVersion: 10)
-    static let all = [original, stackSafe, debugDefaults, friendsMultiview, current]
+    static let current = BoundGameProfile(
+        romSHA256: "d7d9ec63064f9ea8dae75fa2ee05817056769f2cc933f4291414267575885583", gameID: "eb96749d9ebb8c9e4300885a59b930e94e23eca3",
+        family: Data([104,146,153,102,74,149,76,18,218,214,110,3,194,209,132,70]), ruleset: Data([6,108,88,56,178,213,107,110,246,181,219,8,236,23,226,91]),
+        compatibility: Data([6,108,88,56,178,213,107,110,246,181,219,8,236,23,226,91,1,0,0,0,1,0,1,0]), saveStateLayout: 13,
+        supportsCooperativeDoubles: true,
+        coreIdentifier: "com.rileytestut.GBADeltaCore", coreStateVersion: 10)
+    static let all = [original, stackSafe, debugDefaults, friendsMultiview, preShinyMagikarp, current]
 }

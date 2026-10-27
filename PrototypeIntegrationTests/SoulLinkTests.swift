@@ -1109,7 +1109,8 @@ final class SoulLinkTests: XCTestCase {
         try XCTUnwrap(image.pngData()).write(to:root.appendingPathComponent("shared-team.png"))
         let attachment = XCTAttachment(image:image); attachment.lifetime = .keepAlways; add(attachment)
         window.isHidden = true; previous?.makeKeyAndVisible()
-        XCTAssertEqual(session.localTeam?.party.count,1); XCTAssertEqual(session.encounters.count,2)
+        XCTAssertEqual(session.localTeam?.party.count,1); XCTAssertEqual(session.encounters.count,3)
+        XCTAssertEqual(session.encounters.first { $0.slot == "area:0" }?.state,.available)
         XCTAssertEqual(session.teamLocation(slot:"area:101",partner:false),"Boxed")
     }
     func testPartyAndCompressedBoxFormatsAndEggMetadata() {
@@ -1336,7 +1337,7 @@ final class EncounterAllowanceTests: XCTestCase {
         try second.registerAcquisitions(receipt(10,kind:4) + receipt(11,kind:1) + receipt(12,kind:1) + receipt(13,kind:3))
         XCTAssertEqual(first.records.map(\.slot), ["gift:1","static:1","egg:1","gift:2"])
         XCTAssertEqual(second.records.map(\.slot), ["static:1","gift:1","gift:2","egg:1"])
-        try first.observe([mon(1,hp:0),mon(2,hp:0)],registering:false,fainted:[])
+        try first.observe([mon(1,hp:0),mon(2,hp:0)],registering:false,fainted:[mon(1).identity,mon(2).identity])
         for category in ["gift","static"] {
             second.dead.formUnion(BoundSoulExtrasPacket.slots(BoundSoulExtrasPacket.bits(first.dead,category:category),category:category))
         }
@@ -1367,6 +1368,35 @@ final class EncounterAllowanceTests: XCTestCase {
         gift.inParty=false;fixed.inParty=false
         XCTAssertEqual(BoundSoulTeam.capture(mons:[gift,fixed],ledger:value)?.extraBoxed,["gift:1","static:1"])
         XCTAssertNil(BoundSoulPacket.decode(BoundSoulPacket.previousPrefix + Data(repeating:0,count:628)),"Older peers cannot silently miss extra losses")
+    }
+
+    func testRaidPlacementZeroHPIsNotAnOwnedFaintAndGraceCannotReviveAfterHealth() throws {
+        var value=ledger()
+        try value.registerAcquisitions(receipt(1,kind:0))
+        try value.observe([mon(1,hp:0)],registering:false,fainted:[])
+        XCTAssertTrue(value.dead.isEmpty,"Defeated enemy HP at placement is not a player-owned faint")
+        XCTAssertEqual(value.acquired,["area:100"])
+        var pending=mon(1,hp:0);pending.inParty=true
+        value.dead.insert("area:101")
+        XCTAssertFalse(BoundSoulWipeout.occurred(party:[pending],ledger:value),"Temporary post-capture HP cannot end the run before native cleanup")
+        let placement=try JSONEncoder().encode(value)
+        try value.observe([mon(1,hp:30)],registering:true,fainted:[])
+        XCTAssertNil(value.records[0].awaitingFirstHealth)
+        var replay=try JSONDecoder().decode(BoundSoulLedger.self,from:BoundSoulLedger.mergeForIndependentRestore(current:JSONEncoder().encode(value),incoming:placement))
+        try replay.observe([mon(1,hp:0)],registering:false,fainted:[])
+        XCTAssertEqual(replay.dead,["area:101"],"Restoring a post-placement checkpoint must not invent an owned faint before native cleanup")
+        try replay.observe([mon(1,hp:0)],registering:false,fainted:[mon(1).identity])
+        XCTAssertTrue(replay.dead.contains("area:100"),"Capture transition uncertainty never suppresses a genuine owned-party faint")
+        let healthy=try JSONEncoder().encode(value)
+        try value.observe([mon(1,hp:0)],registering:false,fainted:[])
+        XCTAssertEqual(value.dead,["area:100","area:101"])
+        value=try JSONDecoder().decode(BoundSoulLedger.self,from:BoundSoulLedger.mergeForIndependentRestore(current:JSONEncoder().encode(value),incoming:healthy))
+        XCTAssertEqual(value.dead,["area:100","area:101"])
+        XCTAssertTrue(value.denied.contains(mon(1).identity))
+        var immediate=ledger()
+        try immediate.registerAcquisitions(receipt(2,kind:1))
+        try immediate.observe([mon(2,hp:0)],registering:false,fainted:[mon(2).identity])
+        XCTAssertEqual(immediate.dead,["gift:1"],"A real owned-party native faint is fatal before the first positive observation")
     }
 
 }

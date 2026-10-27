@@ -1,8 +1,8 @@
 {
-  "sha256": "fcfaa8a9fb022656994a429be4cba5b9f14ba6c477ec813d2d6a2aa3878edc00",
+  "sha256": "d7d9ec63064f9ea8dae75fa2ee05817056769f2cc933f4291414267575885583",
   "repository": "evanvonessen/multi_red",
-  "tag": "multiplayer-fcfaa8a9fb02",
+  "tag": "multiplayer-d7d9ec63064f",
   "asset": "multiplayer.gba",
-  "compatibility": "Exact paired Bound multiplayer-isolation build; retained runtime services required.",
-  "localOnly": false
+  "compatibility": "Exact paired Bound single-shiny Magikarp build; layout 13; retained runtime services required.",
+  "localOnly": true
 }

@@ -7,7 +7,7 @@ account, credential or signing changes. Each player keeps their own game and sav
 
 ## Start
 
-1. Both players enable **Settings → Enable Experimental Features**.
+1. Both players enable **Settings → Enable Experimental Multiplayer**.
 2. Start new games and receive your starters. Each save must own exactly one
    healthy non-egg Pokémon, with no boxed Pokémon. Start before catching others.
 3. Open **Friends**, connect to your partner, and choose **Soul Link → Start Soul
@@ -39,9 +39,10 @@ eggs, gifts and static encounters each pair by their own acquisition ordinal. No
 and permanent losses survive reconnects, app restarts, boxing, release and save
 rollback. Both players need this app version. Existing run journals load with
 all their original eligibility/deaths and acquire partner metadata on reconnect.
-A legacy peer triggers a pause and an update message. No new ROM is required: this adds
-tracking through the existing native Soul Link observation/enforcement adapter;
-the integrated game and shared-progression ABI remain unchanged.
+A legacy peer triggers a pause and an update message. The encounter rules use
+the native Soul Link observation/enforcement adapter. The paired layout-13 ROM
+also changes the Route 4 offering to one shiny Magikarp; it preserves the battery
+save format. Earlier exact ROM profiles retain their own state compatibility.
 
 ## Shared team dashboard
 
@@ -108,15 +109,16 @@ gift/static facts. Existing area/egg loss meanings remain unchanged. All memoria
   another encounter method; there is no extra raid allowance. All dens in the
   same native named area share the allowance. Failed/fled encounters spend none.
 - Fixed scripted overworld encounters (such as Zapdos) and non-egg gifts (such as
-  Eevee, Magikarp, and gifted shiny Magikarp) do not consume or replace an area
+  Eevee and the offered shiny Magikarp) do not consume or replace an area
   pair. They form their own pairs: **Gift 1 ↔ Gift 1**, **Gift 2 ↔ Gift 2**,
   and separately **Static 1 ↔ Static 1**, **Static 2 ↔ Static 2**. A faint
-  permanently disables that separate pair, never the area or egg pair. Their original one-time availability is unchanged. Ordinary
-  wild shinies use the ordinary allowance.
+  permanently disables that separate pair, never the area or egg pair. The Route 4 seller offers only the shiny Magikarp for ¥75,000, once; no regular
+  Magikarp is granted first. A declined offer, insufficient money or full storage
+  grants nothing and takes no money. Ordinary wild shinies use the ordinary allowance.
 - The Celadon prize room allows **one Pokémon total**, across its entire species
   selection, separately from city catches. It appears as **Celadon Prize Pokémon**
   in paired encounters and links to the partner's one prize selection. Item/TM
-  prizes remain native. Releasing, boxing, fainting or restoring an older save
+  prizes remain native. Full storage is rejected before payment. Releasing, boxing, fainting or restoring an older save
   never makes another prize selection available.
 - Occupied-area catches are blocked by the native bag and quick-ball eligibility
   checks before spending a ball. A defensive acquisition gate also refuses a

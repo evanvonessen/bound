@@ -90,7 +90,11 @@ enum BoundSoulWipeout {
         guard !members.isEmpty, members.contains(where: { mon in
             ledger.records.contains { $0.eligible && $0.identities.contains(mon.identity) }
         }) else { return false }
-        return members.allSatisfy { ledger.denied.contains($0.identity) || $0.hp == 0 }
+        return members.allSatisfy { mon in
+            if ledger.denied.contains(mon.identity) { return true }
+            if ledger.records.contains(where: { $0.identities.contains(mon.identity) && $0.awaitingFirstHealth == true }) { return false }
+            return mon.hp == 0
+        }
     }
 }
 
@@ -101,6 +105,9 @@ struct BoundSoulRecord: Codable, Equatable, Sendable {
     var eligible: Bool
     var aliases: Set<BoundSoulIdentity> = []
     var pendingHatch = false
+    // Raid rewards may still carry the defeated enemy's zero HP at placement.
+    // A native owned-party faint remains authoritative even during this grace.
+    var awaitingFirstHealth: Bool?
     var identities: Set<BoundSoulIdentity> { aliases.union([identity]) }
 }
 
@@ -213,6 +220,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
                 value.records[index].aliases.formUnion(record.identities.subtracting([value.records[index].identity]))
                 value.records[index].eligible = value.records[index].eligible && record.eligible
                 value.records[index].pendingHatch = value.records[index].pendingHatch && record.pendingHatch
+                value.records[index].awaitingFirstHealth = value.records[index].awaitingFirstHealth == true || record.awaitingFirstHealth == true ? true : nil
             } else {
                 var additional = record
                 // Divergent older saves cannot introduce another eligible catch
@@ -307,7 +315,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
                 if kind == 1 { nextGift = ordinal + 1 } else { nextStatic = ordinal + 1 }
             } else { slot = "area:\(kind == 2 ? 0 : area)" }
             records.append(.init(identity: identity, slot: slot, name: kind == 3 ? "Egg" : "Pokémon",
-                                 eligible: !acquired.contains(slot), pendingHatch: kind == 3))
+                                 eligible: !acquired.contains(slot), pendingHatch: kind == 3, awaitingFirstHealth: kind == 3 ? nil : true))
         }
         guard valid else { throw Error.capacity }
     }
@@ -316,6 +324,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
         for mon in mons {
             if let index = records.firstIndex(where: { $0.identities.contains(mon.identity) }) {
                 records[index].name = mon.name
+                if let hp=mon.hp,hp>0 { records[index].awaitingFirstHealth=nil }
                 if !mon.isEgg { records[index].pendingHatch = false }
             } else if !mon.isEgg,
                       let index = records.firstIndex(where: { $0.pendingHatch && $0.identity.personality == mon.identity.personality }),
@@ -334,7 +343,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
             }
         }
         for record in records where record.eligible {
-            if (!record.pendingHatch && !fainted.isDisjoint(with: record.identities)) || mons.contains(where: { record.identities.contains($0.identity) && !$0.isEgg && $0.hp == 0 }) {
+            if (!record.pendingHatch && !fainted.isDisjoint(with: record.identities)) || mons.contains(where: { record.awaitingFirstHealth != true && record.identities.contains($0.identity) && !$0.isEgg && $0.hp == 0 }) {
                 dead.insert(record.slot)
             }
         }
@@ -982,7 +991,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         }
         needsCandidate=true
     }
-    private func applyReceiptUnlocked() {
+    private func applyReceiptUnlocked(pausedFieldScript:Bool=false) {
         guard let value=receipt,value.generation==owner.generation,!owner.blocked else { return }
         guard owner.installed,value.ledger?.ended==false else { return }
         if owner.criticalGate {
@@ -996,7 +1005,11 @@ final class BoundSoulProbe: @unchecked Sendable {
         if let acquisitions=value.observation?.acquisitions,!acquisitions.isEmpty {
             _=BoundVBABattleBridge.acknowledgeSoulLinkAcquisitions(matching:acquisitions)
         }
-        if Self.mayApplyNativePolicy(ready:current["ready"] as? Bool==true,battle:current["battle"] as? Bool==true) {
+        // At an explicit paused checkpoint, a field script may still own
+        // input. Identity-only loss enforcement is safe before it releases UI;
+        // admitted battles and temporary parties remain excluded.
+        if Self.mayApplyNativePolicy(ready:current["ready"] as? Bool==true,battle:current["battle"] as? Bool==true)
+            || (pausedFieldScript && current["battle"] as? Bool == false) {
             if value.policy != owner.lastPolicy {
                 guard BoundVBABattleBridge.setSoulLinkDenied(value.policy) else {
                     lock.unlock();requestPause("Soul Link native rules couldn’t be applied. Keep the game paused.");lock.lock();return
@@ -1046,7 +1059,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         lock.lock();defer { lock.unlock() }
         guard owner.generation==token,owner.coreID==ObjectIdentifier(core),core.state == .paused else { throw BoundSoulLedger.Error.corrupt }
         owner.blocked=false;published.error=nil
-        if owner.friendly != ObjectIdentifier(core),owner.cooperative != ObjectIdentifier(core) { applyReceiptUnlocked() }
+        if owner.friendly != ObjectIdentifier(core),owner.cooperative != ObjectIdentifier(core) { applyReceiptUnlocked(pausedFieldScript:true) }
         guard !owner.blocked else { throw BoundSoulLedger.Error.corrupt }
         owner.criticalGate=false
         _=BoundVBABattleBridge.setSoulFrameBlocked(false,owner:token.uuidString,generation:owner.nativeGeneration)

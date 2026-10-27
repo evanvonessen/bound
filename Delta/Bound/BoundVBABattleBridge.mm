@@ -12,6 +12,7 @@
 #include <zlib.h>
 #include "NativeBattle/BoundBattleEntryCode.h"
 #include "NativeBattle/BoundBattleDecisionCode.h"
+#include "SoulLink/soul-layout.h"
 #include "SDK/bound_sdk.h"
 #include "SDK/Generated/BoundSDKProtocol.h"
 
@@ -1036,17 +1037,17 @@ static uint8_t soulQAScriptBackup[128];
         0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
     if(memcmp(digest,expected,32)!=0) return NO;
     if(!soulResident()) for(size_t i=SoulStart;i<SoulEnd;i++) if(rom[i]!=0xFF) return NO;
-    const uint8_t expectedGive[8]={0,0x49,8,0x47,0x91,0xD7,7,9};
+    const uint8_t expectedGive[8]={0x70,0xB5,4,0,0x1C,0xF0,0xFA,0xFA};
     const uint8_t expectedCatch[8]={0x10,0xB5,7,0x48,7,0x4C,0,0xF0};
     const uint8_t expectedPrize[8]={0x69,0x5A,0x0F,0,0x63,0x2A,0x10,9};
-    if(memcmp(rom+0x40B14,expectedGive,8)||memcmp(rom+0x107DF6C,expectedCatch,8)||memcmp(rom+0x104575D,expectedPrize,8)) return NO;
+    if(memcmp(rom+0x107D790,expectedGive,8)||memcmp(rom+0x107DF6C,expectedCatch,8)||memcmp(rom+0x104575D,expectedPrize,8)) return NO;
     memcpy(soulOriginalGet,rom+0x3FBE8,8); memcpy(soulOriginalSet,rom+0x4037C,8);
-    memcpy(soulOriginalGive,rom+0x40B14,8);memcpy(soulOriginalCatch,rom+0x107DF6C,8);
+    memcpy(soulOriginalGive,rom+0x107D790,8);memcpy(soulOriginalCatch,rom+0x107DF6C,8);
     memcpy(soulOriginalPrize,rom+0x104575D,8);
     memcpy(rom+SoulStart,BoundSoulCode,sizeof(BoundSoulCode));
     uint8_t *thunks[]={soulGetThunk,soulSetThunk,soulGiveThunk,soulCatchThunk};
     const uint32_t targets[]={BoundSoulGetAddress,BoundSoulSetAddress,BoundSoulGiveAddress,BoundSoulCatchBlockedAddress};
-    const size_t offsets[]={0x3FBE8,0x4037C,0x40B14,0x107DF6C};
+    const size_t offsets[]={0x3FBE8,0x4037C,0x107D790,0x107DF6C};
     for(unsigned i=0;i<4;i++) {
         auto *t=thunks[i]; t[0]=0; t[1]=0x4B; t[2]=0x18; t[3]=0x47; // ldr r3; bx r3 (r0-r2 arguments preserved)
         put32(t+4,targets[i]); memcpy(rom+offsets[i],t,8);
@@ -1056,7 +1057,7 @@ static uint8_t soulQAScriptBackup[128];
     put32(rom+SoulPolicy,0x314C5342); put32(rom+SoulPolicy+4,0);
     memset(rom+0x1FFE008,0,32);
     memset(internalRAM+0x4500,0,12+32*8);
-    memset(internalRAM+0x4620,0,12+32*12);soulROM=rom; return YES;
+    memset(internalRAM+BOUND_SOUL_ACQUISITION_OFFSET,0,sizeof(BoundSoulAcquisitionRing));soulROM=rom; return YES;
 }
 + (BOOL)setSoulLinkDenied:(NSData *)identities {
     if(!soulHooked() || identities.length%8 || identities.length>2048*8) return NO;
@@ -1085,10 +1086,10 @@ static uint8_t soulQAScriptBackup[128];
         overflow=count>32 || word(internalRAM+0x4508)!=0;
         if(count<=32) [faints appendBytes:internalRAM+0x450C length:count*8];
     }
-    if(soulHooked()&&word(internalRAM+0x4620)==0x314C5342) {
-        const unsigned count=word(internalRAM+0x4624);
-        overflow=overflow||count>32||word(internalRAM+0x4628)!=0;
-        if(count<=32) acquisitions=[NSData dataWithBytes:internalRAM+0x462C length:count*12];
+    if(soulHooked()&&word(internalRAM+BOUND_SOUL_ACQUISITION_OFFSET)==0x314C5342) {
+        const unsigned count=word(internalRAM+(BOUND_SOUL_ACQUISITION_OFFSET+4));
+        overflow=overflow||count>32||word(internalRAM+(BOUND_SOUL_ACQUISITION_OFFSET+8))!=0;
+        if(count<=32) acquisitions=[NSData dataWithBytes:internalRAM+(BOUND_SOUL_ACQUISITION_OFFSET+12) length:count*12];
     }
     NSMutableData *active=[NSMutableData data];
     if(internalRAM[0x3529]&2) {
@@ -1113,7 +1114,7 @@ static uint8_t soulQAScriptBackup[128];
 }
 + (BOOL)acknowledgeSoulLinkAcquisitionsMatching:(NSData *)receipts {
     if(!soulHooked()||!internalRAM) return NO;
-    auto *ring=internalRAM+0x4620;
+    auto *ring=internalRAM+BOUND_SOUL_ACQUISITION_OFFSET;
     if(word(ring)!=0x314C5342) return receipts.length==0;
     const unsigned count=word(ring+4);
     if(word(ring+8)||count>32||receipts.length!=count*12
@@ -1173,7 +1174,7 @@ static uint8_t soulQAScriptBackup[128];
     soulBoxCache.bytes=nil;
     if(soulHooked()) {
         memcpy(rom+0x3FBE8,soulOriginalGet,8); memcpy(rom+0x4037C,soulOriginalSet,8);
-        memcpy(rom+0x40B14,soulOriginalGive,8);memcpy(rom+0x107DF6C,soulOriginalCatch,8);
+        memcpy(rom+0x107D790,soulOriginalGive,8);memcpy(rom+0x107DF6C,soulOriginalCatch,8);
         memcpy(rom+0x104575D,soulOriginalPrize,8);
         // A paused CPU can still have a shim return address on its stack.
         // Leave the original tiny body resident and inert until ROM unload;
@@ -1257,10 +1258,10 @@ static uint8_t soulQAScriptBackup[128];
         overflow=count>32 || word(internalRAM+0x4508)!=0;
         if(count<=32) [faints appendBytes:internalRAM+0x450C length:count*8];
     }
-    if(soulHooked()&&word(internalRAM+0x4620)==0x314C5342) {
-        const unsigned count=word(internalRAM+0x4624);
-        overflow=overflow||count>32||word(internalRAM+0x4628)!=0;
-        if(count<=32) acquisitions=[NSData dataWithBytes:internalRAM+0x462C length:count*12];
+    if(soulHooked()&&word(internalRAM+BOUND_SOUL_ACQUISITION_OFFSET)==0x314C5342) {
+        const unsigned count=word(internalRAM+(BOUND_SOUL_ACQUISITION_OFFSET+4));
+        overflow=overflow||count>32||word(internalRAM+(BOUND_SOUL_ACQUISITION_OFFSET+8))!=0;
+        if(count<=32) acquisitions=[NSData dataWithBytes:internalRAM+(BOUND_SOUL_ACQUISITION_OFFSET+12) length:count*12];
     }
     NSMutableData *active=[NSMutableData data];
     if(internalRAM[0x3529]&2) {

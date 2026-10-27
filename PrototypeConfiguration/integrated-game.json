@@ -3,10 +3,10 @@
   "passed": true,
   "kind": "cooperative doubles multiplayer game variant; not byte-identical reconstruction",
   "baseline_sha256": "689299664a954c12dad66e03c2d18446b348cb31bd98b395c87b9b514b288066",
-  "integrated_sha256": "fcfaa8a9fb022656994a429be4cba5b9f14ba6c477ec813d2d6a2aa3878edc00",
+  "integrated_sha256": "d7d9ec63064f9ea8dae75fa2ee05817056769f2cc933f4291414267575885583",
   "rom_size": 33554432,
-  "code_bytes": 14271,
-  "code_sha256": "cf2f6a90cded6c85101bd743cadba463412dd6f4ed48ca1af93cd1a3790e0e29",
+  "code_bytes": 14326,
+  "code_sha256": "56ae354efdb9d45fb54dedaf8251547efad9e5a19d8b0a798df9bd0740723d77",
   "contract": {
     "schema": 1,
     "abi_major": 1,
@@ -14,8 +14,8 @@
     "wire_version": 2,
     "checkpoint_format": 1,
     "battery_save_version": 1,
-    "save_state_layout": 12,
-    "ruleset_id": "b2ac6565b5ac45b3b7b9a0e5094e2a12",
+    "save_state_layout": 13,
+    "ruleset_id": "066c5838b2d56b6ef6b5db08ec17e25b",
     "game_family_id": "689299664a954c12dad66e03c2d18446",
     "descriptor_offset": 33513216,
     "descriptor_size": 128,
@@ -56,21 +56,21 @@
     "external_player_version_offset": 1417
   },
   "symbols": {
-    "BoundWorldCheckTrainer": 167716269,
-    "BoundWorldCollision": 167716217,
-    "BoundWorldCollisionEntry": 167716193,
-    "BoundWorldDoTrainer": 167716249,
-    "BoundWorldFlag": 167716181,
-    "BoundWorldOriginalCollision": 167716197,
-    "BoundWorldOriginalFlag": 167710869,
-    "BoundWorldTrainer": 167716229,
+    "BoundWorldCheckTrainer": 167716297,
+    "BoundWorldCollision": 167716245,
+    "BoundWorldCollisionEntry": 167716221,
+    "BoundWorldDoTrainer": 167716277,
+    "BoundWorldFlag": 167716209,
+    "BoundWorldOriginalCollision": 167716225,
+    "BoundWorldOriginalFlag": 167710897,
+    "BoundWorldTrainer": 167716257,
     "GameAutoNickname": 167706713,
-    "GameBattleAck": 167719825,
-    "GameBattleChooseAction": 167719505,
-    "GameBattleChooseMove": 167719629,
-    "GameBattleComplete": 167719353,
-    "GameBattleReceived": 167719853,
-    "GameBattleTransfer": 167718921,
+    "GameBattleAck": 167719853,
+    "GameBattleChooseAction": 167719533,
+    "GameBattleChooseMove": 167719657,
+    "GameBattleComplete": 167719381,
+    "GameBattleReceived": 167719881,
+    "GameBattleTransfer": 167718949,
     "GameCoopActive": 167577097,
     "GameCoopAfterCallbacks": 167580993,
     "GameCoopBeforeCallbacks": 167579101,
@@ -122,21 +122,23 @@
     "GameCoopXPPayTrainerReward": 167585597,
     "GameCoopXPReceive": 167584229,
     "GameCoopXPReleaseThenEnd": 167585941,
-    "GameFieldFrame": 167716577,
-    "GameInitHeap": 167716289,
-    "GameMainCallbacks": 167718645,
-    "GameNicknameBattlePrint": 167717837,
-    "GameNicknameCallStd": 167717729,
-    "GameNicknameCaught": 167717921,
-    "GameNicknameEggHatch": 167717977,
-    "GameUIFadeScreen": 167718509,
-    "GameUIWaitButton": 167718125,
-    "battleMenuActive": 167707945,
-    "battleMenuSlot": 167709857,
-    "battleNativeComplete": 167707905,
-    "battleNativeReceived": 167707929,
-    "battleNativeTransfer": 167709777,
-    "battleReceiveAck": 167719741,
+    "GameFieldFrame": 167716605,
+    "GameInitHeap": 167716317,
+    "GameMagikarpCapacity": 167706773,
+    "GameMagikarpPurchaseGuard": 167720923,
+    "GameMainCallbacks": 167718673,
+    "GameNicknameBattlePrint": 167717865,
+    "GameNicknameCallStd": 167717757,
+    "GameNicknameCaught": 167717949,
+    "GameNicknameEggHatch": 167718005,
+    "GameUIFadeScreen": 167718537,
+    "GameUIWaitButton": 167718153,
+    "battleMenuActive": 167707973,
+    "battleMenuSlot": 167709885,
+    "battleNativeComplete": 167707933,
+    "battleNativeReceived": 167707957,
+    "battleNativeTransfer": 167709805,
+    "battleReceiveAck": 167719769,
     "bound_sdk_store_le32": 167706653,
     "coopAck": 167577565,
     "coopCopy": 167575553,
@@ -168,38 +170,38 @@
     "coopSessionValid": 167575793,
     "coopZero": 167575577,
     "reserved": 167706669,
-    "uiApplySettings": 167711081,
-    "uiAttribute": 167707125,
-    "uiCheckpointSafe": 167706997,
-    "uiClose": 167708133,
-    "uiCopy": 167706773,
-    "uiCopyWindow": 167707149,
-    "uiDebugParty": 167707733,
-    "uiDebugSettings": 167709661,
-    "uiDisplay": 167707173,
-    "uiDraw": 167709165,
-    "uiEncode": 167708385,
-    "uiFindOak": 167707577,
-    "uiHostValid": 167706807,
-    "uiList": 167708845,
-    "uiNamed": 167708589,
-    "uiNewGameRequested": 167707389,
-    "uiOpen": 167710477,
-    "uiPublish": 167711525,
-    "uiRemoveList": 167708025,
-    "uiRequest": 167707421,
-    "uiRival": 167707685,
-    "uiRivalNameValid": 167707637,
-    "uiRivalValid.constprop.0": 167709937,
-    "uiServiceMessage": 167708693,
-    "uiSetMenu": 167710797,
-    "uiSettingsMatch": 167710885,
-    "uiSettingsValid": 167709993,
-    "uiStartNativeIntro": 167710201,
-    "uiStartNewGame": 167708289,
-    "uiText": 167708497,
-    "uiTick": 167712129,
-    "uiZero": 167706791,
+    "uiApplySettings": 167711109,
+    "uiAttribute": 167707153,
+    "uiCheckpointSafe": 167707025,
+    "uiClose": 167708161,
+    "uiCopy": 167706801,
+    "uiCopyWindow": 167707177,
+    "uiDebugParty": 167707761,
+    "uiDebugSettings": 167709689,
+    "uiDisplay": 167707201,
+    "uiDraw": 167709193,
+    "uiEncode": 167708413,
+    "uiFindOak": 167707605,
+    "uiHostValid": 167706835,
+    "uiList": 167708873,
+    "uiNamed": 167708617,
+    "uiNewGameRequested": 167707417,
+    "uiOpen": 167710505,
+    "uiPublish": 167711553,
+    "uiRemoveList": 167708053,
+    "uiRequest": 167707449,
+    "uiRival": 167707713,
+    "uiRivalNameValid": 167707665,
+    "uiRivalValid.constprop.0": 167709965,
+    "uiServiceMessage": 167708721,
+    "uiSetMenu": 167710825,
+    "uiSettingsMatch": 167710913,
+    "uiSettingsValid": 167710021,
+    "uiStartNativeIntro": 167710229,
+    "uiStartNewGame": 167708317,
+    "uiText": 167708525,
+    "uiTick": 167712157,
+    "uiZero": 167706819,
     "word": 167706625,
     "xpCopy": 167583013,
     "xpCopy.constprop.0": 167583321,
@@ -211,9 +213,10 @@
     "xpZero.constprop.0": 167583297
   },
   "source_sha256": {
-    "game/game_runtime.c": "0a4103e7499bfb912fd5d6dbff7ade722480dcf07df7d57af0f39e799e594c92",
+    "game/game_runtime.c": "35d7913fb20d7e0b3393f7e3633ae7afd78debbb237e2106f22366c3d99e82e4",
     "game/game_ui.c": "4464ecac19295b9709393871c452130a6f0a9552605a2c65bc9a31c2330b7ab9",
     "game/game_nickname.c": "75d50c62e175904164cd348e83e440eef5087e5518510caa8717a4118319e711",
+    "game/game_magikarp.c": "e620a3a5f843b584e8f4ece7095e5932a82f778e30685b9fadeb235e335f7f80",
     "game/game_battle_menu.c": "42189b953e8d8cbe9b3c8e30c224ae8ec1f25f34ce920ee9536cd813642f1b55",
     "shared_world/shared_world.c": "fc009fe8f9c453b6788ffb3731a18d5ec2737b985c4b3195a5673243e4831ca3",
     "sdk/bound_sdk.h": "160d307d1b76a9be5eef6f018995594f5051e8e217b7875a0d4b5bc4961582ef",
@@ -250,161 +253,175 @@
       "offset": 1200,
       "size": 8,
       "original_hex": "00b50af061fe0006",
-      "sha256": "d81ebf014bcd7467d364fe24a74c2359308fe95a7d298156717e18bb5ec37860"
+      "sha256": "d5be477ad66f7b6bc7808d94edc82d5d79f86060ec41825aaea4313efb66c15f"
     },
     {
       "definition": "GameInitHeap",
       "offset": 11136,
       "size": 8,
       "original_hex": "00b5044a1060044a",
-      "sha256": "7b55ed9e76b94effa39cc8dbe138ba8c22e5cc9a6f7e3802a92171bf161a3fad"
+      "sha256": "1896af9d166d23f6ee5522bbc8cc31eb2a394d041edb20df82d37573911f4be5"
     },
     {
       "definition": "GameFieldFrame",
       "offset": 353656,
       "size": 8,
       "original_hex": "00b513f095fa20f0",
-      "sha256": "d80203b1ecb11fa73a3d580308e59c1ced5e56ad2cc0922c344f23f294751b85"
+      "sha256": "16ef50414890d94f0305905dfb45dcdd470041e8505e081f582b5d5f4fb39913"
     },
     {
       "definition": "BoundWorldFlag",
       "offset": 452304,
       "size": 8,
       "original_hex": "10b50004040c201c",
-      "sha256": "d57405b85b1f4978604702352c9f88756e0f35be5a917e6e79304a23ce4a3a83"
+      "sha256": "c73d67856c494044f6a6993ddd9294c7dd4c336742546dc9becde5a4d83960cb"
     },
     {
       "definition": "native player collision",
       "offset": 407212,
       "size": 12,
       "original_hex": "f0b557464e464546e0b4061c",
-      "sha256": "022bc84facaca54fc220916759189e68e26613b49b42200f0e7df8a648eed099"
+      "sha256": "0f097a501152279cb80e828ffd13a872ae392e01904c61e226530b7118ca9026"
     },
     {
       "definition": "BoundWorldTrainer",
       "offset": 1440548,
       "size": 4,
       "original_hex": "c5c20608",
-      "sha256": "26ffb72ddb0e86e1075b655c6d2c3aae986372b6c3caeee85e37ba229708ff7e"
+      "sha256": "5231a3d778504d012f34f56cbdf9e037e0684ad265823dfe6fd2ee4474dda74f"
     },
     {
       "definition": "BoundWorldDoTrainer",
       "offset": 1440552,
       "size": 4,
       "original_hex": "d9c20608",
-      "sha256": "65bf82944537f0e716d08265a476d604e3f7303727fafd7c20384536b132b9b4"
+      "sha256": "dfd317f6abe5c0376a1fad159ede7400b52b9bd483a2672e156e84c308cdd205"
     },
     {
       "definition": "BoundWorldCheckTrainer",
       "offset": 1440564,
       "size": 4,
       "original_hex": "0dc30608",
-      "sha256": "e998d8976a2b447ac24ef7606a47ff2155cc661aea3ac681e3e5c18e96d5a73b"
+      "sha256": "8bfb3c3711c45b156c867e1068b2ba5af121093b4bf10c91d9fb7372fc3d7862"
     },
     {
       "definition": "GameUIWaitButton",
       "offset": 1440616,
       "size": 4,
       "original_hex": "3dba0608",
-      "sha256": "9eead356b1214144134604848fb10e6f44d0aebb349e7df9667333e57bde7de8"
+      "sha256": "8ea9149fe841f161b13f4db45e5d97e5c9a03c2b70d21fae3f0b4fee3fc770dc"
     },
     {
       "definition": "GameUIFadeScreen",
       "offset": 1440784,
       "size": 4,
       "original_hex": "39a90608",
-      "sha256": "a6363299796484b8f412c784e1d1a04903bc196fdd36c9643779425b571e24e0"
+      "sha256": "67fdeea908e00118801daa63d8b10928d29c50462b9ab1bafac5b3d693bbaf35"
     },
     {
       "definition": "GameBattleTransfer",
       "offset": 55472,
       "size": 8,
       "original_hex": "70b50c1c0006030e",
-      "sha256": "c85ef992f16241b6a441c38043634222b770935f63ce8e2f90882a42ad98745e"
+      "sha256": "18d495fea5f9885612497d9c2cc2029703e951071721cca220404d8b8c6a9007"
     },
     {
       "definition": "GameBattleComplete",
       "offset": 189244,
       "size": 8,
       "original_hex": "10b581b00e490f4c",
-      "sha256": "5f58724f367c729ff00f1c2e33c3682e35a7630609f9e8e6d35b09c39221df9e"
+      "sha256": "55f12f73ef7b00195a5755e78d8e790bb1ff32764f6c56861392687d0f08bcc8"
     },
     {
       "definition": "GameBattleReceived",
       "offset": 94872,
       "size": 8,
       "original_hex": "f0b50006070e0024",
-      "sha256": "d848a5fb5e51e2e427b5de685e3d301f7526a06193579762f8bd791dce845ca6"
+      "sha256": "62923112ea0d0d0b53416cc2ecc41371646c13dab0741225dc35d7c3e52f7fc4"
     },
     {
       "definition": "GameBattleAck",
       "offset": 57188,
       "size": 12,
       "original_hex": "1a7a0c4b0c49a00040189200",
-      "sha256": "19e2bd5f41532b1a593b558e42ada8f820d89c1373dbbf76a172536ee5c9e2f1"
+      "sha256": "568166ba7ddbe4483219db9dd61ad458c61aba78ee1fa5ca2bb59acf3fbc8db6"
     },
     {
       "definition": "GameBattleChooseAction",
       "offset": 2427108,
       "size": 4,
       "original_hex": "d52b0308",
-      "sha256": "51c0fcb0864b80406c5e74b5aa095ec67e7c252a5770edf1bd594eb646a5c201"
+      "sha256": "9a621c41ed03910c9eef8036e6c4d8afca55da595de350009e93b16234352151"
     },
     {
       "definition": "GameBattleChooseMove",
       "offset": 2427116,
       "size": 4,
       "original_hex": "912c0308",
-      "sha256": "b3d586df43c8e4eecdec34522241cfe652536f8029aabe9db2563491c2260911"
+      "sha256": "2d2c893e3c5dc8422fc44a131816cb590a14beceefe700e8588f843f8b7767dc"
     },
     {
       "definition": "GameNicknameCallStd",
       "offset": 1440216,
       "size": 4,
       "original_hex": "81a10608",
-      "sha256": "e22533fba19696f842a8bbff2e1128bf946d5ce4bb44b79bda81e5f97ba04fb5"
+      "sha256": "5bb3238402507883555b72f43258ba7048a90dbf13ea9e55672f66c7e1e41d5b"
     },
     {
       "definition": "GameNicknameBattlePrint",
       "offset": 2425180,
       "size": 4,
       "original_hex": "51fd0108",
-      "sha256": "7bd5b5340971059e7c8273b78b12f0873397dc6455595c5391509d15705b6fb0"
+      "sha256": "8c6b86feb34e0962994d7219f4e64f5c2dd427b0d92248a0f49531a538f64be3"
     },
     {
       "definition": "GameNicknameBattlePrint",
       "offset": 17035104,
       "size": 4,
       "original_hex": "51fd0108",
-      "sha256": "7bd5b5340971059e7c8273b78b12f0873397dc6455595c5391509d15705b6fb0"
+      "sha256": "8c6b86feb34e0962994d7219f4e64f5c2dd427b0d92248a0f49531a538f64be3"
     },
     {
       "definition": "GameNicknameCaught",
       "offset": 2426088,
       "size": 4,
       "original_hex": "39dd0208",
-      "sha256": "f1340679e5885a2ccc89f326e568df8da9c643709bb337a47987d3a45f81f3b4"
+      "sha256": "ab13783b179da7ad4e1f47c3d130da95db2b11683eceece1a9ab71f7c66ebd0c"
     },
     {
       "definition": "GameNicknameCaught",
       "offset": 17036012,
       "size": 4,
       "original_hex": "39dd0208",
-      "sha256": "f1340679e5885a2ccc89f326e568df8da9c643709bb337a47987d3a45f81f3b4"
+      "sha256": "ab13783b179da7ad4e1f47c3d130da95db2b11683eceece1a9ab71f7c66ebd0c"
     },
     {
       "definition": "GameNicknameEggHatch",
       "offset": 291480,
       "size": 4,
       "original_hex": "39730408",
-      "sha256": "95d394483c29df0c036f9c047db6f15b60641b18be74ba56f045217be7e54c9a"
+      "sha256": "2edc589bb13b60b21374f6cf8a1596fe444c12ebf8c4f32cdeec90fe34ef9344"
+    },
+    {
+      "definition": "single shiny Magikarp offering",
+      "offset": 17088575,
+      "size": 5,
+      "original_hex": "2b8e090601",
+      "sha256": "6b91dd7b3bcadb96071a588d014a04114b9518483c24434c3be7db62ae5247ce"
+    },
+    {
+      "definition": "shiny Magikarp capacity before payment",
+      "offset": 17088729,
+      "size": 6,
+      "original_hex": "91f824010000",
+      "sha256": "7d8e4efdf29ab518ab0a9bd8a5b6224a802d42fab98c795062492d542ad7c6f4"
     },
     {
       "definition": "compiled multiplayer game code",
       "offset": 33488896,
-      "size": 14271,
+      "size": 14326,
       "original_hex": null,
-      "sha256": "cf2f6a90cded6c85101bd743cadba463412dd6f4ed48ca1af93cd1a3790e0e29"
+      "sha256": "56ae354efdb9d45fb54dedaf8251547efad9e5a19d8b0a798df9bd0740723d77"
     },
     {
       "definition": "host data port",
@@ -418,7 +435,7 @@
       "offset": 33513216,
       "size": 128,
       "original_hex": null,
-      "sha256": "2a70a995c9c13778d587f5f351951c26ffc3c8335a33d6b068ff7c65701c5c72"
+      "sha256": "db754949b2776d84d51fa5e9e23e09cfd366b2d5dafb82862ab4dd80a46f7d7a"
     },
     {
       "definition": "UI service data port",
@@ -610,15 +627,15 @@
       "sha256": "01dcc520d19f7771fb4d62801fd7d391a7eca8aa0b6434d04cbde9da1b1eb56e"
     }
   ],
-  "cache_key": "3d481f6d5a7c44ff35b88f93d91c5d39363309de06697cd2cd0c323258a22216",
+  "cache_key": "4e9bc6e34cc829d072c0ced01787acbe8b40973175f12b037f13396f9af8f404",
   "cache_hit": false,
   "native_binding_scope": "Exact RR4.1 adapter in the game build. Bound uses the exported data ABI only.",
   "save_compatibility": "Battery-save format unchanged. Legacy emulator save states require cold boot; the native allocator rejects the old RAM layout without overwriting it.",
   "cooperative_doubles": true,
   "cooperative_code_bytes": 10448,
   "cooperative_code_sha256": "e23488fb3801bb26e1937a84f37681fef398755da46e98805b7733dc656cfb29",
-  "bound_abi_header_sha256": "516ebde23ec5c0950c3fc344af1c5006eae470c3b212c05da20d12de166ecf78",
-  "contract_sha256": "528811d486b8375706d184f851a7aefc8dd09f7be0a4708d775fa20240faab12",
+  "bound_abi_header_sha256": "02050bd1f651ebbada6b87796503220b3bdce640f4b80236f750fa9466523562",
+  "contract_sha256": "813faec15c8ed3578f46f1a6df14412195abaf2c1eefd1779625594515e29e75",
   "sdk": {
     "generatorSHA256": "582c4115c0aa53ced7e349a76578a0b3c38139018656ffaa2b78d626ff493b19",
     "generatorVersion": 1,
@@ -631,7 +648,7 @@
     },
     "profiles": {
       "contract.json": "2581f41d6a24d7d005891ca2f9d861f9700a1dd4dbe58cc8530e28484b75c35a",
-      "doubles-contract.json": "528811d486b8375706d184f851a7aefc8dd09f7be0a4708d775fa20240faab12"
+      "doubles-contract.json": "813faec15c8ed3578f46f1a6df14412195abaf2c1eefd1779625594515e29e75"
     },
     "schemaOwner": "multi_red/source/multiplayer/sdk/protocol-v1.json",
     "schemaSHA256": "3314fbe6797a8b5d05f3f6267b6eaf01489b7e743c246ae57595e9781400a148",
