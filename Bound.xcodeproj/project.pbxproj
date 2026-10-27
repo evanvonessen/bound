@@ -32,6 +32,8 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		B5E200000000000000000001 /* BoundSoulLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5E200000000000000000002 /* BoundSoulLinks.swift */; };
+		B5E200000000000000000003 /* SoulLinksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5E200000000000000000004 /* SoulLinksTests.swift */; };
 		B5E100000000000000000003 /* SoulExtrasTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5E100000000000000000004 /* SoulExtrasTests.swift */; };
 		B5E100000000000000000001 /* BoundSoulExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5E100000000000000000002 /* BoundSoulExtras.swift */; };
 		F1502CBEAAB0DF1E7734BB70 /* NativeObservationEnduranceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E0D8D3D628E4AB7AE8466F1 /* NativeObservationEnduranceTests.swift */; };
@@ -944,6 +946,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		B5E200000000000000000002 /* BoundSoulLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundSoulLinks.swift; sourceTree = "<group>"; };
+		B5E200000000000000000004 /* SoulLinksTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoulLinksTests.swift; sourceTree = "<group>"; };
 		B5E100000000000000000004 /* SoulExtrasTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoulExtrasTests.swift; sourceTree = "<group>"; };
 		B5E100000000000000000002 /* BoundSoulExtras.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundSoulExtras.swift; sourceTree = "<group>"; };
 		3E0D8D3D628E4AB7AE8466F1 /* NativeObservationEnduranceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeObservationEnduranceTests.swift; sourceTree = "<group>"; };
@@ -1620,6 +1624,7 @@
 				A15F00000000000000000005 /* FriendInteractionTests.swift */,
 				BCD012340000000000000003 /* CooperativeDoublesContractTests.swift */,
 				501100000000000000000004 /* SoulLinkTests.swift */,
+				B5E200000000000000000004 /* SoulLinksTests.swift */,
 				B5E100000000000000000004 /* SoulExtrasTests.swift */,
 				50300000000000000000000A /* ROMMultiplayerContractTests.swift */,
 				784F953E399AA70918F4D1D0 /* SDKPhase4CodecOracle.swift */,
@@ -1791,6 +1796,7 @@
 				B47710000000000000000006 /* BoundNativeBattle.swift */,
 				BCD012340000000000000001 /* BoundCooperativeDoubles.swift */,
 				501100000000000000000002 /* BoundSoulLink.swift */,
+				B5E200000000000000000002 /* BoundSoulLinks.swift */,
 				B5E100000000000000000002 /* BoundSoulExtras.swift */,
 				503000000000000000000006 /* BoundRunLease.swift */,
 				503000000000000000000004 /* BoundMultiplayerSavePackage.swift */,
@@ -3537,6 +3543,7 @@
 				A15F00000000000000000006 /* FriendInteractionTests.swift in Sources */,
 				BCD012340000000000000004 /* CooperativeDoublesContractTests.swift in Sources */,
 				501100000000000000000003 /* SoulLinkTests.swift in Sources */,
+				B5E200000000000000000003 /* SoulLinksTests.swift in Sources */,
 				B5E100000000000000000003 /* SoulExtrasTests.swift in Sources */,
 				503000000000000000000009 /* ROMMultiplayerContractTests.swift in Sources */,
 				F810DFDC54A64E0A8CC8BA5D /* SDKPhase4CodecOracle.swift in Sources */,
@@ -3904,6 +3911,7 @@
 				B47710000000000000000007 /* BoundNativeBattle.swift in Sources */,
 				BCD012340000000000000002 /* BoundCooperativeDoubles.swift in Sources */,
 				501100000000000000000001 /* BoundSoulLink.swift in Sources */,
+				B5E200000000000000000001 /* BoundSoulLinks.swift in Sources */,
 				B5E100000000000000000001 /* BoundSoulExtras.swift in Sources */,
 				503000000000000000000005 /* BoundRunLease.swift in Sources */,
 				503000000000000000000003 /* BoundMultiplayerSavePackage.swift in Sources */,

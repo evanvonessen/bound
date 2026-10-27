@@ -40,9 +40,35 @@ and permanent losses survive reconnects, app restarts, boxing, release and save
 rollback. Both players need this app version. Existing run journals load with
 all their original eligibility/deaths and acquire partner metadata on reconnect.
 A legacy peer triggers a pause and an update message. The encounter rules use
-the native Soul Link observation/enforcement adapter. The paired layout-13 ROM
-also changes the Route 4 offering to one shiny Magikarp; it preserves the battery
-save format. Earlier exact ROM profiles retain their own state compatibility.
+the native Soul Link observation/enforcement adapter. The paired layout-14 ROM
+includes the native Links menu and the Route 4 offering of one shiny Magikarp;
+it preserves the battery save format. Earlier exact ROM profiles retain their own state compatibility.
+
+## In-game Links menu
+
+Open the game's Start menu and choose **Links**. Two centered rows appear per
+page; use Up/Down or Left/Right to scroll and B to return to the field. Each row
+shows its area, your Pokémon on the left, your partner's on the right, and their
+given names beneath the native icons. A pixel chain connects the pair; a red X
+across the chain marks a permanently eliminated link. Eggs use the native egg
+icon and missing partners show Waiting. No catch or save is changed by this view.
+
+Rows follow your successful acquisition history, rather than route numbers.
+If Route 2 was caught before Route 1, Route 2 appears first. A nickname change,
+evolution, boxing, release or reconnect does not reorder rows. Partner-only
+records follow the partner's own acquisition order after known local catches.
+Older history without a retained order or species uses a stable fallback and an
+unknown icon until verified metadata arrives; it does not invent a timestamp or
+species. Gift, static and egg rows keep their separate pair numbers and include
+their found location. Celadon prizes have their own row.
+
+The layout-14 cartridge owns this native pixel interface and uses the game's
+existing font, icon graphics and palettes. Bound publishes a bounded two-row
+viewport only on the emulator's completed-frame owner. Optional journal metadata
+retains species, locations and partner icons even when a Pokémon leaves the party.
+BLP1 cosmetic chunks use the existing authenticated room and fresh challenge
+UUIDs, reject stale sequences, and cannot acquire a slot or change a death.
+The display remains separate from the durable encounter and loss authority.
 
 ## Shared team dashboard
 

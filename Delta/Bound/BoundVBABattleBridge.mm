@@ -630,6 +630,24 @@ static uint8_t soulQAScriptBackup[128];
     memcpy(destination,source,8);memcpy(destination+12,source+12,romUIProfile->uiHostSize-12);
     bound_sdk_store_le32(destination+8,sequence);
 }
++ (NSInteger)linksMenuPageOffset {
+    // Presentation data belongs only to the exact Links-enabled cartridge.
+    // Older profiles retain their own allocations and remain untouched.
+    if(!rom||!workRAM||multiRedProfile(rom)!=&MultiRedCurrentProfile||GameSaveStateLayout<14) return -1;
+    const auto *request=workRAM+GameLinksRequestAddress-0x02000000;
+    if(word(request)!=0x51524C42||request[14]!=1||word(request+4)>4094||word(request+4)%2) return -1;
+    return word(request+4);
+}
++ (void)setLinksMenuHost:(NSData *)data {
+    if([self linksMenuPageOffset]<0||data.length!=GameLinksHostSize) return;
+    const auto *source=static_cast<const uint8_t *>(data.bytes);
+    const uint32_t sequence=word(source+8),total=word(source+12),offset=word(source+16),count=word(source+20);
+    if(word(source)!=0x314E4C42||half(source+4)!=1||half(source+6)!=0||!sequence||(sequence&1)
+       ||total>4096||offset!=unsigned([self linksMenuPageOffset])||count>2||count>total
+       ||(count&&offset+count>total)||word(source+24)>1||word(source+28)) return;
+    auto *destination=rom+GameLinksHostOffset;
+    put32(destination+8,sequence-1);memcpy(destination,source,8);memcpy(destination+12,source+12,GameLinksHostSize-12);put32(destination+8,sequence);
+}
 // Attaches to the game's ABI; never installs/restores gameplay instructions.
 + (BOOL)installSharedWorld {
     if(worldOwnsROM()) return YES;
@@ -1237,6 +1255,10 @@ static uint8_t soulQAScriptBackup[128];
     return @{@"equal":@(equal),@"reused":@(reuse),@"retained":@(retained),@"transitions":@(transitions+1)};
 }
 
++ (NSData *)qaLinksMenuHost {
+    if(!rom||multiRedProfile(rom)!=&MultiRedCurrentProfile||GameSaveStateLayout<14) return [NSData data];
+    return [NSData dataWithBytes:rom+GameLinksHostOffset length:GameLinksHostSize];
+}
 + (NSDictionary<NSString *,id> *)qaUncachedSoulLinkSnapshot {
     if(!rom||!workRAM||!internalRAM || workRAM[0x24029]>6) return @{};
     NSMutableData *boxes=[NSMutableData data];

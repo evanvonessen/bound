@@ -35,19 +35,7 @@ struct BoundSoulMon: Equatable, Sendable {
     var level: Int? = nil
     var maxHP: Int? = nil
     var inParty = false
-    static func text(_ data: Data) -> String {
-        data.prefix(while: { $0 != 255 }).map { b -> String in
-            switch b {
-            case 0: return " "
-            case 161...170: return String(b - 161)
-            case 187...212: return String(UnicodeScalar(Int(b - 187) + 65)!)
-            case 213...238: return String(UnicodeScalar(Int(b - 213) + 97)!)
-            case 173: return "."
-            case 174: return "-"
-            default: return "?"
-            }
-        }.joined()
-    }
+    static func text(_ data: Data) -> String { BoundSoulLinks.decodeNativeText(data) }
     static func areaNames(rom: Data) -> [Int: String] {
         guard rom.count == 0x2000000 else { return [:] }
         var names: [Int: String] = [:]
@@ -108,6 +96,8 @@ struct BoundSoulRecord: Codable, Equatable, Sendable {
     // Raid rewards may still carry the defeated enemy's zero HP at placement.
     // A native owned-party faint remains authoritative even during this grace.
     var awaitingFirstHealth: Bool?
+    var species: Int?
+    var area: Int?
     var identities: Set<BoundSoulIdentity> { aliases.union([identity]) }
 }
 
@@ -140,6 +130,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
     // Optional fields preserve journals written before paired encounter tracking.
     var partnerAcquisitions: Set<String>?
     var partnerNames: [String: String]?
+    var partnerLinks: [String: BoundSoulLinkPresentation]?
     var memorials: [BoundSoulDeath]?
     // An authenticated own-origin catch may outlive an older native snapshot.
     // Preserve the spent slot without assigning it a fabricated mon identity.
@@ -168,11 +159,12 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
         version == Self.version && binding.count == 64 && records.count <= 2048 && dead.count <= 6400
         && (1...2049).contains(nextEgg) && (1...2049).contains(nextGift ?? 1) && (1...2049).contains(nextStatic ?? 1) && Set(records.flatMap(\.identities)).count == records.reduce(0, { $0 + $1.identities.count })
         && records.reduce(0, { $0 + $1.identities.count }) <= 2048
-        && records.allSatisfy { Self.validSlot($0.slot) && $0.name.count <= 20  }
+        && records.allSatisfy { Self.validSlot($0.slot) && $0.name.count <= 20 && ($0.species == nil || (1...4095).contains($0.species!)) && ($0.area == nil || (0...255).contains($0.area!)) }
         && dead.allSatisfy(Self.validSlot)
         && (consumedSlots ?? []).count <= 6400 && (consumedSlots ?? []).allSatisfy(Self.validSlot)
         && partnerSlots.count <= 6400 && partnerSlots.allSatisfy(Self.validSlot)
         && (partnerNames ?? [:]).allSatisfy { partnerSlots.contains($0.key) && $0.value.count <= 20 }
+        && (partnerLinks ?? [:]).count <= 2048 && (partnerLinks ?? [:]).allSatisfy { partnerSlots.contains($0.key) && $0.value.valid }
         && (memorials ?? []).count <= 6400
         && Set((memorials ?? []).map(\.slot)).count == (memorials ?? []).count
         && (memorials ?? []).allSatisfy { dead.contains($0.slot) && ($0.recordedAt?.timeIntervalSince1970.isFinite ?? true) && ($0.localName?.count ?? 0) <= 20 && ($0.partnerName?.count ?? 0) <= 20 }
@@ -221,6 +213,8 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
                 value.records[index].eligible = value.records[index].eligible && record.eligible
                 value.records[index].pendingHatch = value.records[index].pendingHatch && record.pendingHatch
                 value.records[index].awaitingFirstHealth = value.records[index].awaitingFirstHealth == true || record.awaitingFirstHealth == true ? true : nil
+                value.records[index].species = value.records[index].species ?? record.species
+                value.records[index].area = value.records[index].area ?? record.area
             } else {
                 var additional = record
                 // Divergent older saves cannot introduce another eligible catch
@@ -243,6 +237,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
             value.partnerAcquisitions = value.partnerSlots.union(older.partnerSlots)
         }
         value.partnerNames = (older.partnerNames ?? [:]).merging(value.partnerNames ?? [:]) { _, latest in latest }
+        value.partnerLinks = (older.partnerLinks ?? [:]).merging(value.partnerLinks ?? [:]) { _, latest in latest }
         var memorials = value.memorials ?? []
         for memorial in older.memorials ?? [] {
             if let index = memorials.firstIndex(where: { $0.slot == memorial.slot }) {
@@ -315,7 +310,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
                 if kind == 1 { nextGift = ordinal + 1 } else { nextStatic = ordinal + 1 }
             } else { slot = "area:\(kind == 2 ? 0 : area)" }
             records.append(.init(identity: identity, slot: slot, name: kind == 3 ? "Egg" : "Pokémon",
-                                 eligible: !acquired.contains(slot), pendingHatch: kind == 3, awaitingFirstHealth: kind == 3 ? nil : true))
+                                 eligible: !acquired.contains(slot), pendingHatch: kind == 3, awaitingFirstHealth: kind == 3 ? nil : true, area: area))
         }
         guard valid else { throw Error.capacity }
     }
@@ -324,6 +319,8 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
         for mon in mons {
             if let index = records.firstIndex(where: { $0.identities.contains(mon.identity) }) {
                 records[index].name = mon.name
+                records[index].species = mon.species
+                records[index].area = records[index].area ?? mon.area
                 if let hp=mon.hp,hp>0 { records[index].awaitingFirstHealth=nil }
                 if !mon.isEgg { records[index].pendingHatch = false }
             } else if !mon.isEgg,
@@ -333,13 +330,14 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
                 // Preserve the egg ordinal and retain both identity aliases.
                 records[index].aliases.insert(mon.identity)
                 records[index].pendingHatch = false; records[index].name = mon.name
+                records[index].species = mon.species
             } else if registering {
                 guard records.count < 2048, nextEgg <= 2048 else { throw Error.capacity }
                 let slot: String
                 if mon.eggOrigin { slot = "egg:\(nextEgg)"; nextEgg += 1 }
                 else { slot = "area:\(mon.area)" }
                 let eligible = !acquired.contains(slot)
-                records.append(.init(identity: mon.identity, slot: slot, name: mon.name, eligible: eligible, pendingHatch: mon.isEgg))
+                records.append(.init(identity: mon.identity, slot: slot, name: mon.name, eligible: eligible, pendingHatch: mon.isEgg, species: mon.species, area: mon.area))
             }
         }
         for record in records where record.eligible {
@@ -383,7 +381,7 @@ struct BoundSoulPacket: Sendable {
     static let prefix = Data([0x42, 0x53, 0x4C, 0x33])
     static let previousPrefix = Data([0x42, 0x53, 0x4C, 0x32])
     static let legacyPrefix = Data([0x42, 0x53, 0x4C, 0x31])
-    static func recognizes(_ data: Data) -> Bool { data.starts(with: prefix) || data.starts(with: legacyPrefix) || data.starts(with: previousPrefix) || BoundSoulExtrasPacket.recognizes(data) || data.starts(with: BoundSoulTeamPacket.prefix) }
+    static func recognizes(_ data: Data) -> Bool { data.starts(with: prefix) || data.starts(with: legacyPrefix) || data.starts(with: previousPrefix) || BoundSoulExtrasPacket.recognizes(data) || data.starts(with: BoundSoulTeamPacket.prefix) || BoundSoulLinksPacket.recognizes(data) }
     enum Kind: String, CaseIterable { case offer, accept, confirm, decline, state, end }
     let version: Int
     let run: UUID
@@ -591,6 +589,9 @@ final class BoundSoulProbe: @unchecked Sendable {
         var lastPolicy=Data(),lastInput:Observation?
         var replacementVerification:Bool?
         var callbacks:UInt64=0,blockedCallbacks:UInt64=0,criticalCallbacks:UInt64=0
+        var linkAreas:[Int:String]=[:],linksConnected=false,linksDirty=true
+        var linksOffset = -1
+        var linksSequence:UInt32=0
     }
     let timeline=BoundRunTimeline()
     private let lock=NSLock()
@@ -678,6 +679,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         lock.lock();defer { lock.unlock() }
         guard owner.generation==value.generation else { return }
         let error=owner.blocked ? published.error:value.snapshot.error
+        if published.ledger != value.ledger { owner.linksDirty=true }
         receipt=value;published=value.snapshot;published.ledger=value.ledger;published.error=error
     }
     private func requestPause(_ message:String) {
@@ -827,6 +829,16 @@ final class BoundSoulProbe: @unchecked Sendable {
         guard url != nil,value.valid,snapshot.error==nil else { throw BoundSoulLedger.Error.corrupt }
         ledger=value;snapshot.ledger=value;needsCandidate=true
     }
+    func mergeLinks(run:UUID,rows:[BoundSoulLinksPacket.Row]) throws { try durableMutation {
+        guard var value=ledger,value.run==run else { return }
+        var links=value.partnerLinks ?? [:]
+        for row in rows where value.partnerSlots.contains(row.slot) && row.presentation.valid {
+            if let old=links[row.slot],old.ordinal != row.presentation.ordinal { continue }
+            if links.contains(where: { $0.key != row.slot && $0.value.ordinal==row.presentation.ordinal }) { continue }
+            links[row.slot]=row.presentation
+        }
+        if links != (value.partnerLinks ?? [:]) { value.partnerLinks=links;try persist(value) }
+    } }
     func merge(run:UUID,rows:[BoundSoulRow],losses:Data,acquired:Data?=nil) throws { try durableMutation {
         guard var value=ledger,value.run==run else { return }
         guard losses.count==288,rows.allSatisfy(\.valid),acquired==nil || acquired?.count==288 else { throw BoundSoulLedger.Error.corrupt }
@@ -880,6 +892,22 @@ final class BoundSoulProbe: @unchecked Sendable {
         value.memorials?[index].announced=true;try persist(value)
     } }
     func read()->Snapshot { lock.lock();defer { lock.unlock() };return published }
+    func setLinksPresentation(areas:[Int:String],connected:Bool) {
+        lock.lock();defer { lock.unlock() }
+        if owner.linkAreas != areas || owner.linksConnected != connected {
+            owner.linkAreas=areas;owner.linksConnected=connected;owner.linksDirty=true
+        }
+    }
+    private func publishLinksUnlocked() {
+        let offset=BoundVBABattleBridge.linksMenuPageOffset()
+        guard offset>=0 else { owner.linksOffset = -1;return }
+        guard owner.linksDirty || owner.linksOffset != offset else { return }
+        owner.linksSequence = owner.linksSequence >= UInt32.max-2 ? 2 : owner.linksSequence+2
+        guard let page=BoundSoulLinks.page(ledger:published.ledger,areaNames:owner.linkAreas,
+                                          offset:offset,sequence:owner.linksSequence,connected:owner.linksConnected) else { return }
+        BoundVBABattleBridge.setLinksMenuHost(page)
+        owner.linksOffset=offset;owner.linksDirty=false
+    }
     func observationMetrics()->[String:UInt64] {
         var result=pipeline.metrics()
         lock.lock();result["callbacks"]=owner.callbacks;result["blockedCallbacks"]=owner.blockedCallbacks
@@ -909,6 +937,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         lock.lock();defer { lock.unlock() }
         guard owner.coreID==ObjectIdentifier(core),owner.verified,owner.nativeAllowed,
               core.deltaCore.identifier=="com.rileytestut.GBADeltaCore" else { return true }
+        publishLinksUnlocked()
         owner.callbacks &+= 1
         if owner.criticalGate,!owner.blocked,let receipt,receipt.generation==owner.generation,
            receipt.ledger?.ended != false {
@@ -1085,6 +1114,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         owner.criticalGate=false
         if owner.replacementVerification==nil { owner.replacementVerification=owner.verified }
         owner.verified=false;owner.installed=false;owner.nativeGeneration=0
+        owner.linksDirty=true;owner.linksOffset = -1
         owner.lastInput=nil;owner.lastPolicy=Data();receipt=nil
     }
     func refreshAfterNativeMemoryReplacement(core:EmulatorCore) throws {
@@ -1102,6 +1132,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         lock.lock();defer { lock.unlock() }
         guard owner.generation==token else { throw BoundSoulLedger.Error.corrupt }
         owner.installed=false;owner.lastPolicy=Data();owner.lastInput=nil;receipt=nil
+        owner.linksDirty=true;owner.linksOffset = -1
         owner.nativeGeneration=0;owner.verified=active || owner.replacementVerification==true
         owner.replacementVerification=nil
         if active {
@@ -1125,6 +1156,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         guard core.state == .paused else { throw BoundSoulLedger.Error.corrupt }
         try pipeline.flush()
         lock.lock();defer { lock.unlock() }
+        owner.linksDirty=true;owner.linksOffset = -1
         guard owner.coreID==ObjectIdentifier(core),core.deltaCore.identifier=="com.rileytestut.GBADeltaCore",
               owner.friendly != ObjectIdentifier(core),owner.cooperative != ObjectIdentifier(core),
               let value=published.ledger,value.valid,published.error==nil else { throw BoundSoulLedger.Error.corrupt }
@@ -1163,6 +1195,9 @@ final class BoundSoulSession: ObservableObject {
     private var peerTeamAt: TimeInterval?
     private var peerExtraBoxed: Set<String> = []
     private var peerExtraCategories = BoundSoulExtrasReadiness()
+    private var linksSequence:UInt64=0,peerLinksSequence:UInt64=0
+    private var linksCursor=0
+    private var lastLinksSent:TimeInterval = -.infinity
     @Published private(set) var deathMoment: BoundSoulDeath?
     private var deathMomentStarted: TimeInterval?
     var canPresentDeathMoment: (() -> Bool)?
@@ -1332,6 +1367,16 @@ final class BoundSoulSession: ObservableObject {
     }
     func receive(_ data: Data) {
         guard BoundMultiplayerFeatures.isEnabled, connected?() == true, let binding else { return }
+        if BoundSoulLinksPacket.recognizes(data) {
+            guard let packet=BoundSoulLinksPacket.decode(data),let ledger,!ledger.ended,
+                  ledger.run==packet.run,ledger.binding==binding,paired,
+                  packet.receiver==epoch,packet.sender==peerEpoch,packet.sequence>peerLinksSequence else { return }
+            do {
+                try probe.mergeLinks(run:packet.run,rows:packet.rows)
+                self.ledger=probe.read().ledger;peerLinksSequence=packet.sequence
+            } catch { status="Couldn’t preserve your partner’s Soul Link record.";haltForRecovery() }
+            return
+        }
         if BoundSoulExtrasPacket.recognizes(data) {
             guard let packet=BoundSoulExtrasPacket.decode(data),let ledger,!ledger.ended,
                   ledger.run==packet.run,ledger.binding==binding,confirmed,clock()-lastPeer < 3,
@@ -1369,7 +1414,7 @@ final class BoundSoulSession: ObservableObject {
             if let old = peerEpoch, old != packet.sender {
                 retiredEpochs.append(old); if retiredEpochs.count > 16 { retiredEpochs.removeFirst() }
             }
-            if peerEpoch != packet.sender { partnerTeam = nil; peerExtraBoxed = []; peerExtraCategories.reset(); peerTeamAt = nil; peerTeamSequence = 0; partnerTeamCurrent = false }
+            if peerEpoch != packet.sender { partnerTeam = nil; peerExtraBoxed = []; peerExtraCategories.reset(); peerTeamAt = nil; peerTeamSequence = 0; peerLinksSequence=0; partnerTeamCurrent = false }
             peerEpoch = packet.sender; proposedEpoch = nil
         } else if proposedEpoch == nil {
             proposedEpoch = packet.sender; proposalAt = clock()
@@ -1441,6 +1486,7 @@ final class BoundSoulSession: ObservableObject {
     func peerGone() {
         partnerTeam = nil; peerExtraBoxed = []; peerExtraCategories.reset(); peerTeamAt = nil; peerTeamSequence = 0; partnerTeamCurrent = false
         teamSequence = 0; lastTeamSent = -.infinity
+        linksSequence=0;peerLinksSequence=0;linksCursor=0;lastLinksSent = -.infinity
         incompatiblePeer = false; confirmed = false; lastPeer = 0; epoch = UUID(); peerEpoch = nil
         proposedEpoch = nil; retiredEpochs = []
     }
@@ -1455,6 +1501,20 @@ final class BoundSoulSession: ObservableObject {
         team.fieldReady = localTeamCurrent
         teamSequence += 1; lastTeamSent = now
         if let data = BoundSoulTeamPacket(run: run, sender: epoch, receiver: peerEpoch, sequence: teamSequence, team: team).encoded() { _ = send?(data) }
+    }
+    private func updateLinks(at now:TimeInterval) {
+        probe.setLinksPresentation(areas:areaNames,connected:BoundMultiplayerFeatures.isEnabled && active && ledger?.binding==binding && paired && connected?()==true)
+        guard active,let ledger,!ledger.offering,ledger.binding==binding,paired,
+              BoundMultiplayerFeatures.isEnabled,connected?()==true,let peerEpoch,
+              now-lastLinksSent>=0.25,linksSequence<UInt64.max else { return }
+        let rows=BoundSoulLinks.localPresentations(ledger:ledger)
+        let chunk:[BoundSoulLinksPacket.Row]
+        if rows.isEmpty { linksCursor=0;chunk=[] }
+        else { linksCursor %= rows.count;chunk=Array(rows[linksCursor..<min(linksCursor+8,rows.count)]);linksCursor=(linksCursor+chunk.count)%rows.count }
+        let offset=chunk.first.flatMap { first in rows.firstIndex(where: { $0.slot==first.slot }) } ?? 0
+        linksSequence+=1;lastLinksSent=now
+        if let data=BoundSoulLinksPacket(run:ledger.run,sender:epoch,receiver:peerEpoch,sequence:linksSequence,
+                                        offset:offset,total:rows.count,rows:chunk).encoded() { _=send?(data) }
     }
     func teamLocation(slot: String, partner: Bool) -> String {
         guard let ledger else { return "Syncing" }
@@ -1491,7 +1551,7 @@ final class BoundSoulSession: ObservableObject {
         let now = time ?? clock()
         if proposedEpoch != nil, now - proposalAt > 1 { peerGone() }
         probe.setPreviewEnabled(BoundMultiplayerFeatures.isEnabled)
-        defer { updateTeams(at: now); updateDeathMoment(at: now); bannerChanged?(!cartridgeManagesPause && (probe.read().error != nil || recoveryError != nil) ? status : nil) }
+        defer { updateTeams(at: now); updateLinks(at: now); updateDeathMoment(at: now); bannerChanged?(!cartridgeManagesPause && (probe.read().error != nil || recoveryError != nil) ? status : nil) }
         let snapshot = probe.read(); if snapshot.ledger != ledger { ledger = snapshot.ledger }
         if let ledger { probe.timeline.observeSoul(ledger) }
         canStart = BoundMultiplayerFeatures.isEnabled && supported && snapshot.ready && snapshot.mons.count == 1

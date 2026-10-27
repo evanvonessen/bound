@@ -19,7 +19,7 @@ codec = (root / 'Delta/Bound/BoundSoulExtras.swift').read_text()
 tests = (root / 'PrototypeIntegrationTests/SoulExtrasTests.swift').read_text().replace('@testable import Delta\n', '')
 names = re.findall(r'    func (test\w+)\(', tests)
 assert len(names) == 6
-source = 'import Foundation\nimport XCTest\n' + model + codec + tests
+source = 'import Foundation\nimport XCTest\n' + model + codec + (root / 'Delta/Bound/BoundSoulLinks.swift').read_text() + tests
 source += '\nlet suite = XCTestSuite(name: "Soul Link gift/static wire codec")\n'
 source += '\n'.join(f'suite.addTest(SoulExtrasTests(selector: NSSelectorFromString("{name}")))' for name in names)
 source += f'\nsuite.run()\nguard let run = suite.testRun, run.executionCount == {len(names)}, run.hasSucceeded else {{ exit(1) }}\n'

@@ -15,7 +15,7 @@ t = (root/'PrototypeIntegrationTests/SoulLinkTests.swift').read_text()
 tests = t[t.index('final class EncounterAllowanceTests:'):]
 names = re.findall(r'    func (test\w+)\(\) throws', tests)
 assert len(names) >= 5
-source = 'import Foundation\nimport XCTest\n' + model + (root/'Delta/Bound/BoundSoulExtras.swift').read_text() + tests
+source = 'import Foundation\nimport XCTest\n' + model + (root/'Delta/Bound/BoundSoulExtras.swift').read_text() + (root/'Delta/Bound/BoundSoulLinks.swift').read_text() + tests
 source += '\nlet suite = XCTestSuite(name: "Encounter allowances")\n'
 source += '\n'.join(f'suite.addTest(EncounterAllowanceTests(selector: NSSelectorFromString("{n}")))' for n in names)
 source += '\nsuite.run()\nguard let run = suite.testRun, run.executionCount == ' + str(len(names)) + ', run.hasSucceeded else { exit(1) }\n'

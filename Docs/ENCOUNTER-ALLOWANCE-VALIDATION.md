@@ -95,3 +95,43 @@ migration remains unchanged. Both updated apps need BSL3/BSE1. Rollout order is
 server validator then both apps; preserve earlier app/server histories. No live
 activation or remote ROM availability is claimed. The bundle pin is local-only,
 and local builds require the explicit reviewed `BOUND_DEVELOPMENT_ROM` input.
+
+## Native Links menu follow-up
+
+The in-game Links update is delivered as a paired app/game revision with a
+private versioned ROM asset for future builds. The earlier local-only receipt
+above remains historical. The new exact cartridge is
+`13d914106810336badd6762258e5bd1b01ab0d8c8044164cdd5d551a227808d8`,
+SHA-1 `f0cffbdb710c5b64b3afec815c6e2ce2a9e51f09`, layout 14, ruleset
+`4fdca956515e46b3a623e5dc2166afd7`. Battery format 1 and core state version 10
+remain unchanged. The preceding shiny-only layout-13 profile is frozen and
+retained, alongside all five earlier profiles.
+
+The Links viewport uses a verified empty 1,024-byte presentation port at
+`0x09FC6800`, separate compiled code at `0x09FC7000` and a 28-byte request/view
+state at `0x020009E4..0x02000A00`, directly before cooperative memory. Original
+native actions and descriptions are retained in an expanded table. Normal
+Start-menu setup adds Links before Exit without overflowing the original order
+array. Native field palettes, display controls, windows and party bytes are
+restored when the view closes. Invalid icon species are bounded before native
+table access; malformed pages cannot become game authority.
+
+Artifacts for this follow-up are under `artifacts/multiplayer-isolation/links-menu`
+and `links-screen/native`. The final receipt records simulator and Release
+results, exact asset hashes and publication commits after those gates finish.
+The uncached rebuild is byte-identical. Seven frozen/current profile checks
+pass 197 native assertions under C++11, including all 42 cross-profile rejection
+cases and exact base restoration. The final mGBA visual fixture covers native
+Start entry, icons, names, eliminated chains, eggs/waiting, pagination, stale page
+shrink, malformed metadata and return to field. Its cosmetic host data is synthetic;
+normal button inputs drive the actual native menu. Production backend activation
+and physical two-device/WAN limits above remain separate and unverified.
+
+Final local acceptance passed 93 Soul Link/native-menu simulator tests and 120
+compatibility tests, with zero failures or skips. The VBA-M menu test used real
+Start/direction/A/B inputs, verified Route 2 before Route 1, both names/species,
+red-X and waiting flags, a second page, native consumed-page sequence, and return
+to the field with exact party and journal bytes unchanged. Retained screenshots
+were inspected. The unsigned iPhone Release build passed with the exact cartridge
+hash above; uncached reconstruction reproduced every byte. Physical/WAN play
+remains untested. No live backend or Cloud changes are part of this update.

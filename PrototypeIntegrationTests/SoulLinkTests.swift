@@ -1039,17 +1039,33 @@ final class SoulLinkTests: XCTestCase {
         let b = BoundSoulSession(probe:bp,clock:{time},teamSnapshot:{bt})
         a.setConnection(owner:"A",room:room); b.setConnection(owner:"B",room:room)
         a.connected = {true}; b.connected = {true}
-        var ab:[Data] = [],ba:[Data] = [],oldPacket:Data?
+        var ab:[Data] = [],ba:[Data] = [],oldPacket:Data?,oldLinks:Data?
         a.send = {ab.append($0); return true}; b.send = {ba.append($0); return true}
         func pump(_ count:Int) {
             for _ in 0..<count {
                 time += 0.4; at.teamCapturedAt = time; bt.teamCapturedAt = time
                 a.tick(); b.tick(); let aa = ab,bb = ba; ab.removeAll(); ba.removeAll()
                 if let packet = bb.last(where:{$0.starts(with:BoundSoulTeamPacket.prefix)}) {oldPacket = packet}
+                if let packet = bb.last(where:BoundSoulLinksPacket.recognizes) {oldLinks = packet}
                 aa.forEach {b.receive($0)}; bb.forEach {a.receive($0)}
             }
         }
         pump(5)
+        XCTAssertEqual(a.ledger?.partnerLinks?["area:100"]?.name,"Charmander")
+        XCTAssertEqual(a.ledger?.partnerLinks?["area:101"]?.species,1)
+        XCTAssertEqual(a.ledger?.partnerLinks?["area:101"]?.ordinal,2)
+        let cosmetic=try XCTUnwrap(BoundSoulLinksPacket.decode(try XCTUnwrap(oldLinks)))
+        var changed=cosmetic.rows;changed[0].presentation.name="Replay"
+        a.receive(try XCTUnwrap(BoundSoulLinksPacket(run:run,sender:cosmetic.sender,receiver:cosmetic.receiver,
+            sequence:cosmetic.sequence,offset:cosmetic.offset,total:cosmetic.total,rows:changed).encoded()))
+        XCTAssertEqual(a.ledger?.partnerLinks?["area:100"]?.name,"Charmander")
+        for (wrongRun,wrongSender,wrongReceiver) in [(UUID(),cosmetic.sender,cosmetic.receiver),(run,UUID(),cosmetic.receiver),(run,cosmetic.sender,UUID())] {
+            a.receive(try XCTUnwrap(BoundSoulLinksPacket(run:wrongRun,sender:wrongSender,receiver:wrongReceiver,
+                sequence:cosmetic.sequence+1000,offset:cosmetic.offset,total:cosmetic.total,rows:changed).encoded()))
+        }
+        XCTAssertEqual(a.ledger?.partnerLinks?["area:100"]?.name,"Charmander")
+        let reopened=BoundSoulProbe();reopened.configure(core:nil,url:au)
+        XCTAssertEqual(reopened.read().ledger?.partnerLinks,a.ledger?.partnerLinks,"Partner icons and names survive journal reload")
         XCTAssertEqual(a.partnerTeam?.party.first?.name,"Charmander"); XCTAssertTrue(a.partnerTeamCurrent)
         XCTAssertEqual(a.teamLocation(slot:"area:100",partner:true),"In party")
         XCTAssertEqual(a.teamLocation(slot:"area:101",partner:true),"Boxed")

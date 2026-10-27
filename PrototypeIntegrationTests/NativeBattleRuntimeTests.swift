@@ -251,6 +251,11 @@ final class NativeBattleRuntimeTests:XCTestCase {
         super.tearDown()
     }
 
+    private func nativeFixtureURL(_ name:String)->URL {
+        let suffix=ProcessInfo.processInfo.environment["BOUND_ENCOUNTER_GAMEPLAY"]=="1" ? "-"+String(BoundWorldContract.romSHA256.prefix(12)):""
+        return FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent(name+suffix)
+    }
+
     /// Fresh native debug-preset execution on the exact bundled cartridge.
     /// This is synthetic fixture preparation, never evidence of a playthrough.
     func testCreateCurrentEncounterGameplayFixture() async throws {
@@ -259,7 +264,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         }
         continueAfterFailure=false
         let documents=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0]
-        let root=documents.appendingPathComponent("Phase6SoulQA"), full=documents.appendingPathComponent("FullAppGameplayQA")
+        let root=nativeFixtureURL("Phase6SoulQA"), full=nativeFixtureURL("FullAppGameplayQA")
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
         try FileManager.default.createDirectory(at:full,withIntermediateDirectories:true)
         let bundled=try XCTUnwrap(Bundle.main.url(forResource:"multiplayer",withExtension:"gba"))
@@ -300,12 +305,15 @@ final class NativeBattleRuntimeTests:XCTestCase {
     }
 
     private func soulWorkerFixture(_ name:String) throws->(EmulatorCore,URL) {
-        let root=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("Phase6SoulQA")
+        let root=nativeFixtureURL("Phase6SoulQA")
         let rom=root.appendingPathComponent("current.gba"),state=root.appendingPathComponent("observer.state")
         guard FileManager.default.fileExists(atPath:state.path) else { throw XCTSkip("Requires frozen actual VBA Soul observer fixture") }
         let output=root.appendingPathComponent(name+"-"+UUID().uuidString)
         try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
         let battery=output.appendingPathComponent("work.sav");try Data(repeating:0xFF,count:131072).write(to:battery)
+        if ProcessInfo.processInfo.environment["BOUND_ENCOUNTER_GAMEPLAY"]=="1" {
+            XCTAssertEqual(SHA256.hash(data:try Data(contentsOf:rom)).map { String(format:"%02x",$0) }.joined(),BoundWorldContract.romSHA256)
+        }
         let core=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
         core.audioManager.isEnabled=false
         try BoundROMMultiplayerCoordinator.prepareServerCoreForSelection(core)
@@ -315,6 +323,128 @@ final class NativeBattleRuntimeTests:XCTestCase {
     private func soulRAM(_ core:EmulatorCore) throws->Data {
         let memory=try XCTUnwrap(BoundGBAMemorySnapshot.capture(readMemory:{ core.deltaCore.emulatorBridge.readMemory?(at:$0,size:$1) }))
         return Data(memory.workRAM)+Data(memory.internalRAM)
+    }
+    func testActualLinksMenuUsesDurableCatchOrderAndRestoresField() async throws {
+        guard ProcessInfo.processInfo.environment["BOUND_ENCOUNTER_GAMEPLAY"] == "1" else {
+            throw XCTSkip("Requires the dedicated current-ROM encounter gameplay fixture")
+        }
+        continueAfterFailure=false
+        let (core,output)=try soulWorkerFixture("native-links-menu")
+        // These are explicit presentation fixtures, not claims that the real
+        // starter or a native battle acquired these three Pokémon.
+        var ledger=BoundSoulLedger(run:UUID(),binding:String(repeating:"a",count:64))
+        for (index,value) in [("area:102","Sparky",25,102),("area:101","Ember",4,101),("gift:1","Bubbles",7,100)].enumerated() {
+            var record=BoundSoulRecord(identity:.init(personality:UInt32(index+100),trainer:42),slot:value.0,name:value.1,eligible:true)
+            record.species=value.2;record.area=value.3;ledger.records.append(record)
+        }
+        ledger.partnerAcquisitions=["area:102","area:101"]
+        ledger.partnerLinks=[
+            "area:102":.init(species:1,personality:201,name:"Leaf",area:102,ordinal:2),
+            "area:101":.init(species:133,personality:202,name:"Éclair",area:101,ordinal:1)]
+        ledger.dead=["area:102"];ledger.ended=true
+        ledger.recordDeaths(previous:ledger.dead)
+        XCTAssertTrue(ledger.valid)
+        let journal=output.appendingPathComponent("run.json"),journalBytes=try JSONEncoder().encode(ledger)
+        try journalBytes.write(to:journal)
+        let probe=BoundSoulProbe(),hostProbe=BoundROMMultiplayerProbe()
+        XCTAssertTrue(probe.configure(core:core,url:journal));probe.setVerified(true)
+        probe.setLinksPresentation(areas:[102:"Route 2",101:"Route 1",100:"Pewter City"],connected:true)
+        XCTAssertEqual(probe.read().ledger,ledger,"The menu must use the durable journal loaded by the real probe")
+        hostProbe.configure(core:core);hostProbe.setVerified(true)
+        var host=BoundROMHostState();host.enabled=true;host.ended=true;host.status = .complete;hostProbe.publish(host)
+        core.updateHandler={ core in BoundFrameMemory.perform { hostProbe.receive(core);probe.receive(core) } }
+        let scene=try await nativeWindowScene()
+        let previous=scene.windows.first { $0.isKeyWindow },window=UIWindow(windowScene:scene),owner=UIViewController(),view=GameView()
+        window.rootViewController=owner;window.makeKeyAndVisible();owner.view.addSubview(view)
+        view.frame=CGRect(x:0,y:150,width:window.bounds.width,height:window.bounds.width*2/3);core.add(view)
+        defer {
+            for button in [1,2,8,64,128] { core.deltaCore.emulatorBridge.deactivateInput(button,playerIndex:0) }
+            _=core.pause();BoundVBABattleBridge.closeSoulLink();_=core.stop()
+            window.isHidden=true;previous?.makeKeyAndVisible()
+        }
+        func memory() throws->Data {
+            Data(try XCTUnwrap(BoundGBAMemorySnapshot.capture(readMemory:{ core.deltaCore.emulatorBridge.readMemory?(at:$0,size:$1) })).workRAM)
+        }
+        func word(_ data:Data,_ offset:Int,_ size:Int=4)->UInt32 {
+            (0..<size).reduce(0) { $0 | UInt32(data[offset+$1]) << (8*$1) }
+        }
+        // Every read below is made while paused. Menu entry and navigation
+        // happen exclusively through normal controller input and real frames.
+        func wait(_ label:String,_ predicate:() throws->Bool) async throws {
+            for _ in 0..<100 {
+                _=core.pause();let done=try predicate();_=core.resume()
+                if done { return };try await Task.sleep(for:.milliseconds(25))
+            }
+            XCTFail("Actual VBA Links menu timed out: \(label)")
+            throw NSError(domain:"NativeLinksMenuTimeout",code:1,userInfo:[NSLocalizedDescriptionKey:label])
+        }
+        func press(_ button:Int) async throws {
+            core.deltaCore.emulatorBridge.activateInput(button,value:1,playerIndex:0)
+            try await Task.sleep(for:.milliseconds(80))
+            core.deltaCore.emulatorBridge.deactivateInput(button,playerIndex:0)
+            try await Task.sleep(for:.milliseconds(100))
+        }
+        func capture(_ name:String) throws {
+            let image=UIGraphicsImageRenderer(bounds:window.bounds).image { _ in window.drawHierarchy(in:window.bounds,afterScreenUpdates:true) }
+            let attachment=XCTAttachment(image:image);attachment.name=name;attachment.lifetime = .keepAlways;add(attachment)
+            try image.pngData()?.write(to:output.appendingPathComponent(name+".png"))
+        }
+        core.rate=1;XCTAssertTrue(core.resume());core.deltaCore.emulatorBridge.audioRenderer=nil
+        try await wait("initial native field") { BoundVBABattleBridge.verifyBattleReady() }
+        _=core.pause();let partyBefore=BoundVBABattleBridge.qaTradeParty();XCTAssertFalse(partyBefore.isEmpty);_=core.resume()
+        try await press(8)
+        try await wait("Start menu includes native action 13") {
+            let ram=try memory(),count=Int(ram[0x370F5])
+            return (1...9).contains(count) && ram[0x370F6..<0x370F6+count].contains(13)
+        }
+        _=core.pause()
+        let menu=try memory(),count=Int(menu[0x370F5]),order=Array(menu[0x370F6..<0x370F6+count])
+        let target=try XCTUnwrap(order.firstIndex(of:13));XCTAssertEqual(order.filter { $0==13 }.count,1)
+        let cursor=Int(menu[0x370F4]);XCTAssertLessThan(cursor,count)
+        _=core.resume()
+        for _ in 0..<((target-cursor+count)%count) { try await press(128) }
+        _=core.pause();XCTAssertEqual(Int(try memory()[0x370F4]),target);_=core.resume()
+        try await press(1)
+        try await wait("native consumes completed-frame BLN1 page") {
+            let ram=try memory(),page=BoundVBABattleBridge.qaLinksMenuHost()
+            return ram[0x9E4+14]==1 && word(ram,0x9E4)==0x51524C42 && page.count==1024
+                && word(page,0)==0x314E4C42 && word(page,8)>0 && word(ram,0x9E4+8)==word(page,8)
+        }
+        _=core.pause()
+        let first=BoundVBABattleBridge.qaLinksMenuHost(),request=try memory()
+        XCTAssertEqual(word(first,12),3);XCTAssertEqual(word(first,16),0);XCTAssertEqual(word(first,20),2);XCTAssertEqual(word(first,24),1)
+        XCTAssertEqual(word(first,32,2),102);XCTAssertEqual(word(first,96,2),101,"Route 2 was caught first despite its larger area number")
+        XCTAssertEqual(word(first,34,2),1);XCTAssertEqual(word(first,98,2),0)
+        XCTAssertEqual(BoundSoulLinks.decodeNativeText(first.subdata(in:36..<60)),"Route 2")
+        XCTAssertEqual(BoundSoulLinks.decodeNativeText(first.subdata(in:100..<124)),"Route 1")
+        XCTAssertEqual(word(first,60,2),25);XCTAssertEqual(word(first,62,2),1)
+        XCTAssertEqual(word(first,124,2),4);XCTAssertEqual(word(first,126,2),133)
+        XCTAssertEqual(word(first,64),100);XCTAssertEqual(word(first,68),201)
+        XCTAssertEqual(BoundSoulLinks.decodeNativeText(first.subdata(in:72..<83)),"Sparky")
+        XCTAssertEqual(BoundSoulLinks.decodeNativeText(first.subdata(in:83..<94)),"Leaf")
+        XCTAssertEqual(BoundSoulLinks.decodeNativeText(first.subdata(in:136..<147)),"Ember")
+        XCTAssertEqual(BoundSoulLinks.decodeNativeText(first.subdata(in:147..<158)),"Éclair")
+        try first.write(to:output.appendingPathComponent("links-first-page.bin"))
+        try request.subdata(in:0x9E4..<0xA00).write(to:output.appendingPathComponent("links-request.bin"))
+        try capture("links-first-page");_=core.resume()
+        try await press(128)
+        try await wait("second native page") {
+            let ram=try memory(),page=BoundVBABattleBridge.qaLinksMenuHost()
+            return word(ram,0x9E4+4)==2 && word(page,16)==2 && word(page,20)==1 && word(ram,0x9E4+8)==word(page,8)
+        }
+        _=core.pause();let second=BoundVBABattleBridge.qaLinksMenuHost()
+        XCTAssertEqual(word(second,32,2),2304);XCTAssertEqual(word(second,34,2),4)
+        XCTAssertEqual(word(second,60,2),7);XCTAssertEqual(word(second,62,2),0)
+        XCTAssertEqual(BoundSoulLinks.decodeNativeText(second.subdata(in:36..<60)),"Gift 1 - Pewter City")
+        XCTAssertEqual(BoundSoulLinks.decodeNativeText(second.subdata(in:72..<83)),"Bubbles")
+        try second.write(to:output.appendingPathComponent("links-second-page.bin"));try capture("links-second-page");_=core.resume()
+        try await press(2)
+        try await wait("B restores native field") { try memory()[0x9E4+14]==0 && BoundVBABattleBridge.verifyBattleReady() }
+        _=core.pause()
+        XCTAssertEqual(BoundVBABattleBridge.qaTradeParty(),partyBefore,"The native view must preserve the actual party byte for byte")
+        XCTAssertEqual(probe.read().ledger,ledger);XCTAssertEqual(try Data(contentsOf:journal),journalBytes)
+        try capture("links-returned-field")
+        print("NATIVE_LINKS_MENU_EVIDENCE",output.path)
     }
     func testActualSoulFrameFencePreservesRAMCompletesPauseAndRejectsReplacement() async throws {
         continueAfterFailure=false
@@ -455,7 +585,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
 
     func testCreateSoulObservationFixture() async throws {
         continueAfterFailure=false
-        let root=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("Phase6SoulQA")
+        let root=nativeFixtureURL("Phase6SoulQA")
         let rom=root.appendingPathComponent("current.gba"),state=root.appendingPathComponent("field.state")
         guard FileManager.default.fileExists(atPath:state.path) else { throw XCTSkip("Requires owned field-state fixture") }
         guard !FileManager.default.fileExists(atPath:root.appendingPathComponent("observer.state").path) else {
@@ -484,7 +614,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
     }
 
     func testFrozenStackSafeSoulObservationPerformance() async throws {
-        let root=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("Phase6SoulQA")
+        let root=nativeFixtureURL("Phase6SoulQA")
         let rom=root.appendingPathComponent("current.gba"),stateURL=root.appendingPathComponent("observer.state")
         guard FileManager.default.fileExists(atPath:rom.path),FileManager.default.fileExists(atPath:stateURL.path) else {
             throw XCTSkip("Requires exact owned ROM and frozen actual VBA field state in Phase6SoulQA")
@@ -634,7 +764,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         guard ProcessInfo.processInfo.environment["BOUND_FRAME_MEMORY_RUNTIME"] == "1" else {
             throw XCTSkip("Requires the explicit owned-simulator frame memory fixture")
         }
-        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let root = nativeFixtureURL("FullAppGameplayQA")
         let rom = root.appendingPathComponent("RadicalRed.gba")
         let originalROM = try Data(contentsOf: rom), profile = try BoundPlayerROMProfile(rom: originalROM)
         let output = root.appendingPathComponent("frame-memory-" + UUID().uuidString)
@@ -719,7 +849,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
               let relayPort = env["BOUND_NATIVE_BATTLE_RELAY_PORT"].flatMap(UInt16.init) else {
             throw XCTSkip("Requires two dedicated simulators and the --shared-world coordinator")
         }
-        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let root = nativeFixtureURL("FullAppGameplayQA")
         let rom = root.appendingPathComponent("RadicalRed.gba"), seed = root.appendingPathComponent("seed.sav")
         let originalROM = try Data(contentsOf: rom), originalSeed = try Data(contentsOf: seed)
         let output = root.appendingPathComponent("paired-nugget-" + UUID().uuidString)
@@ -917,7 +1047,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         guard ProcessInfo.processInfo.environment["BOUND_WORLD_RUNTIME"] == "1" else {
             throw XCTSkip("Requires the explicit owned-simulator shared world fixture")
         }
-        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let root = nativeFixtureURL("FullAppGameplayQA")
         let rom = root.appendingPathComponent("RadicalRed.gba"), seed = root.appendingPathComponent("seed.sav")
         let originalROM = try Data(contentsOf: rom), originalSeed = try Data(contentsOf: seed)
         let output = root.appendingPathComponent("shared-world-" + UUID().uuidString)
@@ -1008,7 +1138,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         guard ProcessInfo.processInfo.environment["BOUND_INVITATION_RUNTIME"] == "1" else {
             throw XCTSkip("Requires the explicit owned-simulator native invitation fixture")
         }
-        let root=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let root=nativeFixtureURL("FullAppGameplayQA")
         let rom=root.appendingPathComponent("RadicalRed.gba"), seed=root.appendingPathComponent("seed.sav")
         let originalROM=try Data(contentsOf:rom), originalSeed=try Data(contentsOf:seed)
         let output=root.appendingPathComponent("native-invitation-"+UUID().uuidString)
@@ -1086,7 +1216,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         guard ProcessInfo.processInfo.environment["BOUND_ROM_MULTIPLAYER_RUNTIME"] == "1" else {
             throw XCTSkip("Requires the explicit owned-simulator ROM multiplayer fixture")
         }
-        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let root = nativeFixtureURL("FullAppGameplayQA")
         let rom = root.appendingPathComponent("RadicalRed.gba"), seed = root.appendingPathComponent("seed.sav")
         let originalROM = try Data(contentsOf: rom), originalSeed = try Data(contentsOf: seed)
         let profile = try BoundPlayerROMProfile(rom: originalROM)
@@ -1208,11 +1338,11 @@ final class NativeBattleRuntimeTests:XCTestCase {
     func testActualSoulLinkNativeHPAndStateRecovery() async throws {
         continueAfterFailure = false
         let documents=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0]
-        let frozenState=try? Data(contentsOf:documents.appendingPathComponent("Phase6SoulQA/observer.state"))
+        let frozenState=try? Data(contentsOf:nativeFixtureURL("Phase6SoulQA").appendingPathComponent("observer.state"))
         guard ProcessInfo.processInfo.environment["BOUND_SOUL_RUNTIME"] == "1" || frozenState != nil else {
             throw XCTSkip("Requires the explicit owned-simulator Soul Link fixture")
         }
-        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let root = nativeFixtureURL("FullAppGameplayQA")
         let rom = root.appendingPathComponent("RadicalRed.gba"), seed = root.appendingPathComponent("seed.sav")
         let originalROM = try Data(contentsOf: rom), originalSeed = try Data(contentsOf: seed)
         let profile = try BoundPlayerROMProfile(rom: originalROM)
