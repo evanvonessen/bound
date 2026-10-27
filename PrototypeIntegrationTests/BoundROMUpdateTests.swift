@@ -3,6 +3,32 @@ import CryptoKit
 @testable import Delta
 
 final class BoundROMUpdateTests: XCTestCase {
+    func testBackupAtPayloadLimitLeavesRoomForManifestOnRestore() throws {
+        let owner = UUID(), files = ["game.sav": Data(repeating: 0, count: BoundServerBackupPackage.maximumBytes)]
+        let package = BoundServerBackupPackage(manifest: .init(owner: owner, gameID: "fixture", name: "Fixture",
+            gameType: "gba", romSHA256: String(repeating: "a", count: 64), generation: nil, soulLink: false,
+            states: [], files: files.mapValues(BoundServerBackupPackage.Blob.init)), files: files)
+        let restored = try BoundServerBackupPackage.unzip(package.zip(), owner: owner, gameID: "fixture")
+        XCTAssertEqual(restored.files, files)
+    }
+    func testBackupWithManyNamedStatesCanRestoreItsOwnArchive() throws {
+        let owner = UUID()
+        let states: [BoundServerBackupPackage.State] = (0..<128).map { index in
+            .init(identifier: "state_\(index)", filename: "state_\(index)",
+                  name: String(repeating: "\\", count: 1024), type: 2,
+                  coreIdentifier: String(repeating: "c", count: 256),
+                  coreVersion: String(repeating: "v", count: 128),
+                  createdAt: Date(timeIntervalSince1970: 100), modifiedAt: Date(timeIntervalSince1970: 200))
+        }
+        let files = Dictionary(uniqueKeysWithValues: states.map { ("states/" + $0.identifier + ".state", Data([1])) })
+        let package = BoundServerBackupPackage(manifest: .init(owner: owner, gameID: "fixture", name: "Fixture",
+            gameType: "gba", romSHA256: String(repeating: "a", count: 64), generation: nil, soulLink: false,
+            states: states, files: files.mapValues(BoundServerBackupPackage.Blob.init)), files: files)
+        XCTAssertGreaterThan(try package.manifestData().count, 256 * 1024)
+        let restored = try BoundServerBackupPackage.unzip(package.zip(), owner: owner, gameID: "fixture")
+        XCTAssertEqual(restored.manifest, package.manifest)
+        XCTAssertEqual(restored.files, files)
+    }
     private struct Fixture {
         let root: URL
         let storage: BoundROMUpdateStorage
