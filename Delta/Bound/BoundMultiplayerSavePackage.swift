@@ -164,6 +164,10 @@ final class BoundMultiplayerSaveStore: @unchecked Sendable, BoundSDKEventPersist
         lock.lock(); defer { lock.unlock() }
         serverGames.insert(gameID); serverManifests[gameID] = nil; serverJournals[gameID] = nil; serverHeads[gameID] = nil
     }
+    func discardServerSession(gameID: String) {
+        lock.lock(); defer { lock.unlock() }
+        serverManifests[gameID] = nil; serverJournals[gameID] = nil; serverHeads[gameID] = nil
+    }
     func beginServerSession(identity: BoundMultiplayerRunIdentity, package: BoundMultiplayerSavePackage?, target: BoundMultiplayerSharedCursor) throws {
         lock.lock(); defer { lock.unlock() }
         guard serverGames.contains(identity.gameID), identity.valid else { throw Failure.incompatible }

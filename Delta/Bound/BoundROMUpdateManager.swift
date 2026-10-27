@@ -198,6 +198,9 @@ final class BoundROMUpdateManager: ObservableObject {
     }
 
     private func clearSaves(gameID: String, gameName: String, completion: @escaping (Error?) -> Void) {
+        guard !BoundROMCleanupJournal(storage: storage).blocks(gameID) else {
+            completion(BoundROMUpdateError.clearingROMs); return
+        }
         guard !isApplying, !isChecking, !bundledImportInProgress, !clearingSaveGameIDs.contains(gameID) else {
             completion(BoundROMUpdateError.busy); return
         }

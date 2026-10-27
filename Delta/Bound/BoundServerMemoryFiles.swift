@@ -40,6 +40,13 @@ enum BoundServerMemoryFiles {
         storage.lock.lock(); defer { storage.lock.unlock() }
         return storage.files[gameID] ?? [:]
     }
+    /// Confirmed ROM deletion also releases its working RAM copies. Retain the
+    /// server-only storage policy so stale callers cannot fall back to disk.
+    static func discard(gameID: String) {
+        storage.lock.lock(); defer { storage.lock.unlock() }
+        storage.files.removeValue(forKey: gameID)
+        storage.dates.removeValue(forKey: gameID)
+    }
     static func restore(_ files: [String: Data], gameID: String) throws {
         guard files.count <= 256, files.keys.allSatisfy(valid),
               files.values.reduce(0, { $0 + $1.count }) <= maximumBytes else { throw CocoaError(.fileReadCorruptFile) }

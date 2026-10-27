@@ -304,6 +304,17 @@ final class BoundServerBackupManager: ObservableObject {
         guard expectedOwner == nil || context.owner == expectedOwner else { throw Failure.accountChanged }
         try await delete(gameID: gameID, context: context)
     }
+    /// Cleanup previews must use a fresh authorized inventory, never a cached
+    /// list from a previous account or a failed/offline refresh.
+    func cleanupInventory(expectedOwner: UUID) async throws -> [Save] {
+        let context = try await refreshedContext()
+        guard context.owner == expectedOwner else { throw Failure.accountChanged }
+        if provider == .server, approved {
+            try await loadSaves(context)
+            return saves
+        }
+        return []
+    }
     func delete(gameID: String, context: Context) async throws {
         guard BoundServerBackupPackage.safeComponent(gameID) else { throw Failure.invalid }
         _ = try await send(context, path: "/backups/v1/saves/" + gameID, method: "DELETE")

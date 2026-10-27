@@ -41,6 +41,16 @@ class BundledROMTests(unittest.TestCase):
         self.run_build()
         self.assertEqual(self.output.read_bytes(), self.data)
 
+    def test_explicit_empty_cache_embeds_exact_rom_and_leaves_existing_cache_untouched(self):
+        previous = self.root / '.build/bundled-rom' / (self.digest + '.gba')
+        previous.parent.mkdir(parents=True); previous.write_bytes(b'preserved cache sentinel')
+        explicit = self.root / 'isolated-empty-cache'
+        with patch.dict(os.environ, {'BOUND_ROM_CACHE_DIRECTORY': str(explicit)}):
+            self.run_build()
+        self.assertEqual(self.output.read_bytes(), self.data)
+        self.assertEqual((explicit / (self.digest + '.gba')).read_bytes(), self.data)
+        self.assertEqual(previous.read_bytes(), b'preserved cache sentinel')
+
     def test_wrong_contract_refuses_to_embed(self):
         (self.root / 'Delta/Bound/BoundSharedProgression.swift').write_text('romSHA256 = "' + 'f' * 64 + '"')
         with self.assertRaises(SystemExit):

@@ -59,7 +59,10 @@ def main():
     expected = re.search(r'romSHA256 = "([a-f0-9]{64})"', (ROOT / 'Delta/Bound/BoundSharedProgression.swift').read_text())[1]
     if manifest['sha256'] != expected:
         raise SystemExit('Bundled ROM pin must be updated to match the committed Bound contract.')
-    cache = ROOT / '.build/bundled-rom' / (expected + '.gba')
+    cache_directory = Path(os.environ['BOUND_ROM_CACHE_DIRECTORY']) if os.environ.get('BOUND_ROM_CACHE_DIRECTORY') else ROOT / '.build/bundled-rom'
+    if not cache_directory.is_absolute():
+        raise SystemExit('BOUND_ROM_CACHE_DIRECTORY must be an explicit absolute path.')
+    cache = cache_directory / (expected + '.gba')
     cache.parent.mkdir(parents=True, exist_ok=True)
     if not verify(cache, expected):
         with tempfile.TemporaryDirectory(dir=cache.parent) as folder:

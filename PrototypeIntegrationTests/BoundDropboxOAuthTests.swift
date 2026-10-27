@@ -270,6 +270,29 @@ final class BoundDropboxSaveDeletionTests: XCTestCase {
         (try encoded(["entries": values, "cursor": cursor, "has_more": more]), 200)
     }
 
+    func testPermanentCleanupUsesOnlyFrozenIDsAndRejectsChangedRevisionsOrProviderPermissionFailures() async throws {
+        var value = entry("GameSave-" + gameID + "-gameSave"); value["rev"] = "rev-1"
+        let selected = try entries([value])
+        for scenario in ["success", "changed", "permission"] {
+            var routes: [String] = []
+            let deletion = BoundDropboxSaveDeletion(token: "fixture", directory: "Delta Emulator", transport: { request in
+                routes.append(request.url!.lastPathComponent)
+                let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+                XCTAssertEqual(body["path"] as? String, selected[0].id)
+                switch request.url!.lastPathComponent {
+                case "get_metadata":
+                    var current = value; if scenario == "changed" { current["rev"] = "rev-2" }
+                    return (try self.encoded(current), 200)
+                case "permanently_delete": return (Data("{}".utf8), scenario == "permission" ? 403 : 200)
+                default: XCTFail("A retry must not enumerate or perform normal trash deletion"); throw BoundDropboxSaveDeletion.Failure.response
+                }
+            })
+            do { try await deletion.permanentlyDelete(selected); XCTAssertEqual(scenario, "success") }
+            catch { XCTAssertNotEqual(scenario, "success") }
+            XCTAssertEqual(routes, scenario == "changed" ? ["get_metadata"] : ["get_metadata", "permanently_delete"])
+        }
+    }
+
     func testSelectsOnlyExactCartridgeAndCloudSnapshotFiles() throws {
         let values = [entry("Game-" + gameID), entry("GameSave-" + gameID), entry("GameSave-" + gameID + "-gameSave"),
                       entry("GameSave-" + otherGameID + "-gameSave"), record(snapshot, game: gameID),

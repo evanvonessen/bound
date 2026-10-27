@@ -563,6 +563,9 @@
 		93B132D829CA33C365BF1452 /* BoundSDKDotsAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B985D3BBCC46D0EFB0C667A1 /* BoundSDKDotsAdapter.swift */; };
 		73D7A25395592E5E871CBDB2 /* BoundSDKDotsRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BAB1CF0DB26D0C6F2C13378 /* BoundSDKDotsRuntime.swift */; };
 		28E73CF976B321E65D8FA6E3 /* SDKDotsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D32FC57FCE6D050E8356D49 /* SDKDotsTests.swift */; };
+		7518603D03DF50F6DAE373E6 /* BoundROMCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDC096E527F726A67CA3FEB3 /* BoundROMCleanup.swift */; };
+		346EC41896D7E170521992B3 /* BoundRecognizedROMs.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACDD1A71FD5771CD0B3D3502 /* BoundRecognizedROMs.swift */; };
+		4389D648C07362E91F9D6DFF /* BoundROMCleanupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCAAC41710C363D666E6FF5C /* BoundROMCleanupTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1488,6 +1491,9 @@
 		B985D3BBCC46D0EFB0C667A1 /* BoundSDKDotsAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Samples/SDKDots/BoundSDKDotsAdapter.swift; sourceTree = "<group>"; };
 		2BAB1CF0DB26D0C6F2C13378 /* BoundSDKDotsRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Samples/SDKDots/BoundSDKDotsRuntime.swift; sourceTree = "<group>"; };
 		3D32FC57FCE6D050E8356D49 /* SDKDotsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKDotsTests.swift; sourceTree = "<group>"; };
+		EDC096E527F726A67CA3FEB3 /* BoundROMCleanup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMCleanup.swift; sourceTree = "<group>"; };
+		ACDD1A71FD5771CD0B3D3502 /* BoundRecognizedROMs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundRecognizedROMs.swift; sourceTree = "<group>"; };
+		DCAAC41710C363D666E6FF5C /* BoundROMCleanupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMCleanupTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1639,6 +1645,7 @@
 				A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */,
 				C0FEED260000000000000005 /* ConnectionFeedTests.swift */,
 				C0FEED260000000000000007 /* ConnectionsViewTests.swift */,
+				DCAAC41710C363D666E6FF5C /* BoundROMCleanupTests.swift */,
 				A15E00000000000000000005 /* LivePresenceRuntimeTests.swift */,
 				35733EA11CCE9FF25284EFB8 /* AppearanceIntegrationTests.swift */,
 				79BF15AA58C8437992656D10 /* ConfigurationExportTests.swift */,
@@ -1818,6 +1825,8 @@
 				A15E00000000000000000007 /* BoundPresenceConnectionCheck.swift */,
 				C0FEED260000000000000001 /* BoundConnectionFeed.swift */,
 				C0FEED260000000000000003 /* BoundConnectionsView.swift */,
+				ACDD1A71FD5771CD0B3D3502 /* BoundRecognizedROMs.swift */,
+				EDC096E527F726A67CA3FEB3 /* BoundROMCleanup.swift */,
 				A15E0000000000000000000B /* BoundFullAppGameplayQA.swift */,
 				E875C2DEF127D860254648FA /* BoundFrameCaptureGate.swift */,
 				9F35BC570DB6B8BA023B9B53 /* BoundCompanionCycleButton.swift */,
@@ -3551,6 +3560,7 @@
 				A15E0000000000000000000A /* PresenceConnectionCheckTests.swift in Sources */,
 				C0FEED260000000000000006 /* ConnectionFeedTests.swift in Sources */,
 				C0FEED260000000000000008 /* ConnectionsViewTests.swift in Sources */,
+				4389D648C07362E91F9D6DFF /* BoundROMCleanupTests.swift in Sources */,
 				A15E00000000000000000006 /* LivePresenceRuntimeTests.swift in Sources */,
 				273B677E21CFB932EFA82ACD /* AppearanceIntegrationTests.swift in Sources */,
 				0DCC5A17E990440B949F4582 /* ConfigurationExportTests.swift in Sources */,
@@ -3925,6 +3935,8 @@
 				A15E00000000000000000008 /* BoundPresenceConnectionCheck.swift in Sources */,
 				C0FEED260000000000000002 /* BoundConnectionFeed.swift in Sources */,
 				C0FEED260000000000000004 /* BoundConnectionsView.swift in Sources */,
+				346EC41896D7E170521992B3 /* BoundRecognizedROMs.swift in Sources */,
+				7518603D03DF50F6DAE373E6 /* BoundROMCleanup.swift in Sources */,
 				A15E0000000000000000000C /* BoundFullAppGameplayQA.swift in Sources */,
 				A5AAF6B64EA97D56F73A4A9D /* BoundFrameCaptureGate.swift in Sources */,
 				9EE1E66A051751E201D09F44 /* BoundCompanionCycleButton.swift in Sources */,

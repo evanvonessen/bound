@@ -662,6 +662,50 @@ private extension SyncManager
 }
 
 extension SyncManager {
+    @MainActor func withROMCleanupFence<T>(_ operation: @escaping @MainActor () async throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            performROMUpdate { finish in
+                Task { @MainActor in
+                    defer { finish() }
+                    do { continuation.resume(returning: try await operation()) }
+                    catch { continuation.resume(throwing: error) }
+                }
+            }
+        }
+    }
+    @MainActor func prepareROMCleanupCloud(gameIDs: [String], states: [String: [String]]) async throws -> [String: (BoundSaveClearCloudContext, [BoundDropboxSaveDeletion.Entry])] {
+        guard let first = gameIDs.first else { return [:] }
+        let base = try await prepareSaveClearCloudContext(gameID: first)
+        var entries: [String: [BoundDropboxSaveDeletion.Entry]] = [:]
+        if base.includesDropbox {
+            let token = try await saveClearAccessToken()
+            try validateSaveClearContext(base)
+            let deletion = BoundDropboxSaveDeletion(token: token, directory: DropboxService.shared.preferredDirectoryName ?? "Delta Emulator",
+                validate: { try self.validateSaveClearContext(base) })
+            entries = try await deletion.snapshot(gameIDs: gameIDs, localStateIDs: states)
+        }
+        var result: [String: (BoundSaveClearCloudContext, [BoundDropboxSaveDeletion.Entry])] = [:]
+        for gameID in gameIDs {
+            let selected = entries[gameID] ?? []
+            let ids = Set(states[gameID] ?? []).union(selected.compactMap { $0.metadata["harmony_recordedObjectType"] == "SaveState" ? $0.metadata["harmony_recordedObjectIdentifier"] : nil })
+            let context = BoundSaveClearCloudContext(owner: base.owner, connection: base.connection,
+                dropboxAccountID: base.dropboxAccountID, includesDropbox: base.includesDropbox,
+                saveStateIDs: ids.sorted(), serverBackupOwner: base.serverBackupOwner)
+            result[gameID] = (context, selected)
+        }
+        return result
+    }
+    @MainActor func deleteROMCleanupDropbox(entries: [BoundDropboxSaveDeletion.Entry], context: BoundSaveClearCloudContext) async throws {
+        try validateSaveClearContext(context, requireVerifiedConnection: false)
+        guard context.includesDropbox else { guard entries.isEmpty else { throw BoundDropboxOAuth.Failure.changed }; return }
+        let token = try await saveClearAccessToken()
+        guard let expected = context.dropboxAccountID, try await BoundDropboxSaveDeletion.accountID(token: token) == expected else { throw BoundDropboxOAuth.Failure.changed }
+        if let owner = context.owner, let connection = currentSaveClearConnection(owner: owner) { verifiedSaveClearConnections[connection] = expected }
+        try validateSaveClearContext(context)
+        let deletion = BoundDropboxSaveDeletion(token: token, directory: DropboxService.shared.preferredDirectoryName ?? "Delta Emulator",
+            validate: { try self.validateSaveClearContext(context) })
+        try await deletion.permanentlyDelete(entries)
+    }
     /// Run inside performROMUpdate, before writing the deletion receipt. This
     /// only verifies authorization and reads identifiers; no saves are changed.
     @MainActor func prepareSaveClearCloudContext(gameID: String) async throws -> BoundSaveClearCloudContext {
@@ -837,16 +881,17 @@ final class BoundDropboxSaveDeletion {
             }
         }
     }
-    struct Entry: Decodable {
+    struct Entry: Codable, Equatable {
         let tag: String
         let id: String?
         let name: String
         let pathLower: String?
         let propertyGroups: [Group]?
-        struct Group: Decodable { let fields: [Field] }
-        struct Field: Decodable { let name: String; let value: String }
+        var rev: String? = nil
+        struct Group: Codable, Equatable { let fields: [Field] }
+        struct Field: Codable, Equatable { let name: String; let value: String }
         enum CodingKeys: String, CodingKey {
-            case tag = ".tag", id, name, pathLower = "path_lower", propertyGroups = "property_groups"
+            case tag = ".tag", id, name, pathLower = "path_lower", propertyGroups = "property_groups", rev
         }
         var metadata: [String: String] {
             var result = [String: String]()
@@ -964,7 +1009,7 @@ final class BoundDropboxSaveDeletion {
                        Entry.Field(name: "harmony_recordedObjectIdentifier", value: recordID),
                        Entry.Field(name: "gameID", value: gameID)]
             identified.append(Entry(tag: entry.tag, id: entry.id, name: entry.name, pathLower: entry.pathLower,
-                                    propertyGroups: [Entry.Group(fields: fields)]))
+                                    propertyGroups: [Entry.Group(fields: fields)], rev: entry.rev))
         }
         return identified
     }
@@ -1013,6 +1058,30 @@ final class BoundDropboxSaveDeletion {
         }
     }
 
+    func snapshot(gameIDs: [String], localStateIDs: [String: [String]]) async throws -> [String: [Entry]] {
+        let data = try await request("file_properties/templates/list_for_user", body: nil)
+        guard let data, let templates = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let ids = templates["template_ids"] as? [String] else { throw Failure.response }
+        let entries = try await identifySnapshots(inventory(templateIDs: ids))
+        return try Dictionary(uniqueKeysWithValues: gameIDs.map { gameID in
+            (gameID, try Self.selectedEntries(entries, gameID: gameID, localSaveStateIDs: Set(localStateIDs[gameID] ?? []), directory: directory))
+        })
+    }
+    /// Frozen IDs only. Never re-list and grow the confirmed deletion set on retry.
+    func permanentlyDelete(_ entries: [Entry]) async throws {
+        for entry in entries {
+            guard let id = entry.id, id.hasPrefix("id:"), entry.tag == "file", let revision = entry.rev,
+                  !revision.isEmpty, entry.pathLower == "/" + directory.lowercased() + "/" + entry.name.lowercased() else { throw Failure.unsafeRecord }
+            if let data = try await request("files/get_metadata", body: ["path": id, "include_deleted": true]) {
+                let current = try JSONDecoder().decode(Entry.self, from: data)
+                guard (current.id == id && current.rev == revision) ||
+                      (current.tag == "deleted" && current.pathLower == entry.pathLower) else { throw Failure.changed }
+            }
+            // A 409/permission error stays incomplete, including after an uncertain
+            // response. A normal delete is never substituted for permanent purge.
+            _ = try await request("files/permanently_delete", body: ["path": id])
+        }
+    }
     func delete(gameID: String, localSaveStateIDs: Set<String>) async throws {
         let data = try await request("file_properties/templates/list_for_user", body: nil)
         guard let data, let templates = try JSONSerialization.jsonObject(with: data) as? [String: Any],
