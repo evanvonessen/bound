@@ -1,5 +1,9 @@
 # ROM downloads and Clear ROMs — local validation, October 26, 2026
 
+Publication and the final paired checks are recorded in
+[final publication validation](final-publication.md). The local-only release
+status below describes this earlier preparation step.
+
 This step prepares README controls and release assets locally, and adds the
 manual Clear ROMs flow described in [Clear ROMs](../CLEAR-ROMS.md). The prior
 multiview, settings, native interactions, saves and unfinished statepoint work

@@ -64,7 +64,9 @@ struct BoundSoulMon: Equatable, Sendable {
         return Swift.stride(from: 0, to: data.count, by: stride).compactMap { offset in
             func half(_ n: Int) -> Int { Int(data[offset + n]) | Int(data[offset + n + 1]) << 8 }
             let species = half(stride == 100 ? 32 : 28)
-            guard data[offset + 19] & 2 != 0, (1...4095).contains(species), let identity = BoundSoulIdentity.read(data, at: offset) else { return nil }
+            // Native sanity flags: hasSpecies must be set and isBadEgg clear.
+            // Borrowed battle/storage graphics can otherwise resemble a mon.
+            guard data[offset + 19] & 3 == 2, (1...4095).contains(species), let identity = BoundSoulIdentity.read(data, at: offset) else { return nil }
             let misc = stride == 100 ? 68 : 50
             let isEgg = data[offset + 19] & 4 != 0 || data[offset + misc + 7] & 0x40 != 0
             // Native hatch preserves metLevel=0 while changing the displayed met

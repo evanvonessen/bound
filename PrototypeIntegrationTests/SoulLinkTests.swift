@@ -14,6 +14,18 @@ private struct ServerMemoryFixtureGame: GameProtocol {
 }
 
 final class SoulLinkTests: XCTestCase {
+    func testNativeBadEggSanityFlagCannotRegisterTemporaryStorageAsAMon() throws {
+        for stride in [58, 100] {
+            var bytes = Data((0..<stride).map { $0 % 2 == 0 ? UInt8(0xFF) : UInt8(0x03) })
+            XCTAssertTrue(BoundSoulMon.decode(bytes, stride: stride).isEmpty)
+            bytes[19] = 2 // hasSpecies, with native isBadEgg clear.
+            XCTAssertEqual(BoundSoulMon.decode(bytes, stride: stride).count, 1)
+            bytes[19] = 6 // A legitimate unhatched Egg remains visible.
+            XCTAssertEqual(BoundSoulMon.decode(bytes, stride: stride).first?.isEgg, true)
+            bytes[19] = 7
+            XCTAssertTrue(BoundSoulMon.decode(bytes, stride: stride).isEmpty)
+        }
+    }
     @MainActor func testServerManagedSaveStatesRejectRawCloudSyncWithoutTouchingLocalFiles() throws {
         let modelURL = try XCTUnwrap(Bundle(for: DatabaseManager.self).url(forResource: "Delta", withExtension: "momd"))
         let appModel = try XCTUnwrap(NSManagedObjectModel(contentsOf: modelURL))

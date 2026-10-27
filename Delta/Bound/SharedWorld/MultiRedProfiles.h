@@ -26,7 +26,7 @@ struct MultiRedNativeProfile {
     void (*restoreHooks)(uint8_t *);
     bool cooperative() const { return cooperativeHostSize != 0; }
     bool matches(const uint8_t *p) const { return p && !memcmp(p+descriptorOffset,descriptor,descriptorSize); }
-    bool admitsStateRAM(const uint8_t *ram, size_t count) const {
+    bool admitsStateRAM(const uint8_t *ram, size_t count, bool exactCaptureIdentity=false) const {
         auto word=[](const uint8_t *p) { return uint32_t(p[0])|(uint32_t(p[1])<<8)|(uint32_t(p[2])<<16)|(uint32_t(p[3])<<24); };
         auto half=[](const uint8_t *p) { return unsigned(p[0])|(unsigned(p[1])<<8); };
         const size_t offset=snapshotAddress-0x02000000;
@@ -34,6 +34,15 @@ struct MultiRedNativeProfile {
         const auto *control=ram+offset;
         if(word(control)!=0x31434D52||half(control+4)!=major||half(control+6)>minor
            ||word(control+8)!=snapshotRegionSize||word(control+12)>1||word(control+16)!=snapshotSize) return false;
+        // Native battle/trade heap reset clears both published field pages.
+        // Only a capture carrying this exact profile and compressed-state hash
+        // may resume that boundary. Untagged historical states still need the
+        // original complete ruleset/layout page below.
+        if(exactCaptureIdentity && word(control+12)==0) {
+            bool empty=true;
+            for(size_t i=64;i<64+2*snapshotSize;i++) if(control[i]) { empty=false;break; }
+            if(empty) return true;
+        }
         const auto *p=control+64+word(control+12)*snapshotSize;
         return word(p)==0x31534D52&&half(p+4)==major&&half(p+6)<=minor&&word(p+8)==snapshotSize
             &&word(p+12)&&!(word(p+12)&1)&&!memcmp(p+32,ruleset,16)

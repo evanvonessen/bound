@@ -417,12 +417,37 @@ static uint8_t soulQAScriptBackup[128];
     // finalized length after gzip close rather than its pre-close estimate.
     const size_t length=size_t(word(bytes+4))+8;
     if(memcmp(bytes,"VBA ",4)||length<=32||length>data.length) return [NSData data];
-    data.length=length;return data;
+    data.length=length;
+    bytes=static_cast<const uint8_t *>(data.bytes);
+    if(const auto *profile=multiRedProfile(rom)) {
+        // Standard gzip FEXTRA; the pinned v10 reader already skips it. Keep
+        // decompressed core bytes unchanged and bind even an empty field page
+        // after native heap reset to its exact ROM/layout and compressed bytes.
+        if(length<18||bytes[8]!=0x1F||bytes[9]!=0x8B||bytes[10]!=8||bytes[11]!=0||length+74>4*1024*1024) return [NSData data];
+        uint8_t extra[74]={};put16(extra,72);extra[2]='B';extra[3]='R';put16(extra+4,68);
+        memcpy(extra+6,profile->canonicalHash,32);put32(extra+38,profile->layout);
+        CC_SHA256(bytes+18,CC_LONG(length-18),extra+42);
+        NSMutableData *tagged=[NSMutableData dataWithBytes:bytes length:18];
+        static_cast<uint8_t *>(tagged.mutableBytes)[11]|=4;
+        [tagged appendBytes:extra length:sizeof(extra)];[tagged appendBytes:bytes+18 length:length-18];
+        put32(static_cast<uint8_t *>(tagged.mutableBytes)+4,uint32_t(tagged.length-8));
+        return tagged;
+    }
+    return data;
 }
 + (BOOL)restoreServerState:(NSData *)data {
     if(!rom||!workRAM||!internalRAM||data.length<=32||data.length>4*1024*1024) return NO;
     const auto *bytes=static_cast<const uint8_t *>(data.bytes);
     if(memcmp(bytes,"VBA ",4)||size_t(word(bytes+4))+8!=data.length) return NO;
+    const auto *profile=multiRedProfile(rom);
+    bool exactCaptureIdentity=false;
+    if(data.length>=24&&(bytes[11]&4)&&bytes[20]=='B'&&bytes[21]=='R') {
+        if(data.length<=92||half(bytes+18)!=72||half(bytes+22)!=68||!profile
+           ||memcmp(bytes+24,profile->canonicalHash,32)||word(bytes+56)!=profile->layout) return NO;
+        uint8_t digest[32];CC_SHA256(bytes+92,CC_LONG(data.length-92),digest);
+        if(memcmp(digest,bytes+60,32)) return NO;
+        exactCaptureIdentity=true;
+    }
     // The upstream memory reader trusts the embedded size and gzip stream.
     // Validate both before handing it an authenticated but possibly damaged
     // server checkpoint, bounding decompression before any core mutation.
@@ -440,10 +465,10 @@ static uint8_t soulQAScriptBackup[128];
     // saveGameStruct, stop/IRQ, IWRAM and palette precede EWRAM. The profile
     // verifier checks this offset against the pinned source. Managed snapshots
     // must carry their own committed ruleset/layout before any core mutation.
-    if(const auto *profile=multiRedProfile(rom)) {
+    if(profile) {
         constexpr size_t stateWorkRAMOffset=34271;
         if(length<stateWorkRAMOffset+0x40000
-           ||!profile->admitsStateRAM(raw+stateWorkRAMOffset,0x40000)) return NO;
+           ||!profile->admitsStateRAM(raw+stateWorkRAMOffset,0x40000,exactCaptureIdentity)) return NO;
     }
     NSMutableData *owned=[data mutableCopy];
     // Delta's ordinary load reapplies the current cheat configuration. Keep
@@ -949,6 +974,17 @@ static uint8_t soulQAScriptBackup[128];
         }
         if(tradeOpened && callback==0x08053E8D) tradeScene=true;
     }
+    // Before an offer, native initialization/root party selection cannot have
+    // exchanged a mon. Once an exchange starts or completes, never authorize
+    // a battle-style rollback that could duplicate or discard a traded mon.
+    bool tradeUnchanged=false;
+    if(installed&&tradeMode&&tradeOpened&&!tradeScene&&!tradeCount) {
+        tradeUnchanged=callback==0x0804C729||callback==0x0804C719;
+        if(callback==0x0804D639) {
+            const uint32_t menu=word(workRAM+0x39DA8);
+            if(menu>=0x02000000&&menu<=0x02040000-128) tradeUnchanged=workRAM[menu-0x02000000+0x6F]==0;
+        }
+    }
     const bool returned=installed&&(callback==BoundBattleIdleAddress || (tradeMode&&tradeOpened&&overworld()));
     // Battle setup retains its verified linkup tap. Trade setup and all native
     // trade confirmations are strictly user-driven.
@@ -966,7 +1002,7 @@ static uint8_t soulQAScriptBackup[128];
         @"decisionError":@(decisions?decisions->error:0),@"decisionsSent":@(decisions?decisions->sentOrdinal:0),
         @"decisionsReceived":@(decisions?decisions->receivedOrdinal:0),@"decisionFrames":@(decisions?decisions->frames:0),
         @"terminalFingerprint":@(decisions?decisions->terminalFingerprint:0),
-        @"tradeOpened":@(tradeOpened),@"tradeCount":@(tradeCount)};
+        @"tradeOpened":@(tradeOpened),@"tradeCount":@(tradeCount),@"tradeUnchanged":@(tradeUnchanged)};
 }
 + (void)close {
     if(armed||installed||syntheticHeld) [[GBAEmulatorBridge sharedBridge] deactivateInput:1 playerIndex:0];

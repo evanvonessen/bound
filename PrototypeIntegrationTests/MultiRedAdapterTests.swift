@@ -12,12 +12,20 @@ private struct ProfileFixtureGame: GameProtocol {
 @MainActor
 final class MultiRedAdapterTests: XCTestCase {
     func testNativeWildLossFeedsGameOverAndSurvivesBlackoutHealingWithoutOverridingSavedOptOut() throws {
-        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("DebugDefaultsQA")
+        try verifyNativeWildLoss(directory: "DebugDefaultsQA", romSHA256: BoundGameProfiles.debugDefaults.romSHA256)
+    }
+
+    func testCurrentNativeWildLossFeedsGameOverWithoutOverridingSavedOptOut() throws {
+        try verifyNativeWildLoss(directory: "DebugDefaultsCurrentQA", romSHA256: BoundGameProfiles.current.romSHA256)
+    }
+
+    private func verifyNativeWildLoss(directory: String, romSHA256: String) throws {
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(directory)
         guard FileManager.default.fileExists(atPath: root.appendingPathComponent("native-loss-proof.json").path) else {
             throw XCTSkip("Requires the button-only native wild-loss evidence for the exact candidate ROM")
         }
         let proof = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("native-loss-proof.json"))) as? [String: Any])
-        XCTAssertEqual(proof["romSHA256"] as? String, BoundGameProfiles.debugDefaults.romSHA256)
+        XCTAssertEqual(proof["romSHA256"] as? String, romSHA256)
         XCTAssertEqual(proof["nativeBattleOutcome"] as? Int, 2)
         XCTAssertEqual(proof["gameplayMemoryWrites"] as? Int, 0)
         let hashes = try XCTUnwrap(proof["partySHA256"] as? [String: String])
@@ -32,7 +40,7 @@ final class MultiRedAdapterTests: XCTestCase {
         XCTAssertEqual(before.first?.hp, 20); XCTAssertEqual(lost.first?.hp, 0); XCTAssertEqual(healed.first?.hp, 20)
         XCTAssertEqual(before.first?.identity, lost.first?.identity)
         XCTAssertEqual(lost.first?.identity, healed.first?.identity)
-        var ledger = BoundSoulLedger(run: UUID(), binding: BoundGameProfiles.debugDefaults.romSHA256)
+        var ledger = BoundSoulLedger(run: UUID(), binding: romSHA256)
         try ledger.observe(before, registering: true, fainted: [])
         XCTAssertFalse(BoundSoulWipeout.occurred(party: before, ledger: ledger))
         try ledger.observe(lost, registering: false, fainted: [])
@@ -190,6 +198,12 @@ final class MultiRedAdapterTests: XCTestCase {
             let state = BoundVBABattleBridge.captureServerState()
             XCTAssertGreaterThan(state.count, 1024)
             XCTAssertTrue(BoundVBABattleBridge.restoreServerState(state))
+            var legacy = state
+            XCTAssertEqual(legacy[11] & 4, 4)
+            legacy.removeSubrange(18..<92); legacy[11] &= ~4
+            let compressedSize = UInt32(legacy.count - 8)
+            for byte in 0..<4 { legacy[4 + byte] = UInt8(truncatingIfNeeded: compressedSize >> (8 * byte)) }
+            XCTAssertTrue(BoundVBABattleBridge.restoreServerState(legacy), "Historical untagged states retain complete field-profile admission")
             let restored = try XCTUnwrap(BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }))
             XCTAssertEqual(restored.bytes(at: 0x02000828, count: 32), Array(settings), "Raw restore must retain the saved difficulty and Game Over choice")
             states[name] = state; try state.write(to: output.appendingPathComponent(name + ".state"))

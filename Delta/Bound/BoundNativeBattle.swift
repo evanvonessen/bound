@@ -1082,10 +1082,12 @@ final class BoundNativeBattleSession {
         if core.state == .running { _=core.pause() }
         // Inspect on the fenced frame owner before close clears the observation.
         // Even a delayed UI timer cannot roll back an already opened trade.
-        let tradeWasOpened=activity == .trade && (played || BoundVBABattleBridge.advanceAndObserve()["tradeOpened"] as? Bool == true)
+        let nativeState=BoundVBABattleBridge.advanceAndObserve()
+        let tradeWasOpened=activity == .trade && (played || nativeState["tradeOpened"] as? Bool == true)
+        let tradeUnchanged=activity == .trade && nativeState["tradeUnchanged"] as? Bool == true
         probe.configure(core:nil)
         BoundVBABattleBridge.close()
-        if tradeWasOpened {
+        if tradeWasOpened && !tradeUnchanged {
             finishTrade(core:core,message:message,resume:resume, tradeID: finishedID)
             return
         }

@@ -4,5 +4,5 @@
   "tag": "multiplayer-fcfaa8a9fb02",
   "asset": "multiplayer.gba",
   "compatibility": "Exact paired Bound multiplayer-isolation build; retained runtime services required.",
-  "localOnly": true
+  "localOnly": false
 }

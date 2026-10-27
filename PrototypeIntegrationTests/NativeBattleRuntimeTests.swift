@@ -1339,7 +1339,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
               let id=env["BOUND_NATIVE_BATTLE_RELAY_ID"].flatMap(UUID.init(uuidString:)) else {
             throw XCTSkip("Requires two owned simulators and the native --trade coordinator")
         }
-        let fixtures=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let fixtures=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent(env["BOUND_NATIVE_FIXTURE_NAME"] ?? "FullAppGameplayQA")
         let rom=fixtures.appendingPathComponent("RadicalRed.gba"),seed=fixtures.appendingPathComponent("seed.sav")
         let originalROM=try Data(contentsOf:rom),originalSeed=try Data(contentsOf:seed)
         let cancelMode=env["BOUND_NATIVE_TRADE_CANCEL"]=="1"
@@ -1347,6 +1347,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         let disconnectStage=env["BOUND_NATIVE_DISCONNECT_STAGE"] ?? "menu"
         let silentDisconnect=env["BOUND_NATIVE_SILENT_DISCONNECT"]=="1"
         let profile=try BoundPlayerROMProfile(rom:originalROM)
+        if env["BOUND_NATIVE_FIXTURE_NAME"] != nil { XCTAssertEqual(profile.gameProfile, BoundGameProfiles.current) }
         let output=fixtures.appendingPathComponent("native-trade-"+UUID().uuidString,isDirectory:true)
         try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
         // Admitted New Game owns a fresh battery. A previous trainer's seed
@@ -1424,6 +1425,9 @@ final class NativeBattleRuntimeTests:XCTestCase {
         }
         XCTAssertEqual(native.completedTrades,cancelMode ? 0:1,"Native trade failed: \(native.lastFailure) \(native.lastCableDiagnostic) callback=\(String(native.observation?.callback ?? 0,radix:16)) scriptResult=\(native.observation?.scriptResult ?? -1) returned=\(native.observation?.returned == true) cancellation=\(native.lastCancellation)")
         _=core.pause()
+        if cancelMode {
+            XCTAssertEqual(BoundVBABattleBridge.qaTradeParty(),beforeTrade,"Cancelling before an offer preserves the entire original party")
+        }
         if !cancelMode {
             let received=BoundVBABattleBridge.qaTradeParty()
             XCTAssertEqual(received[8],UInt8(expected),"Native swap must deliver the peer's offered Pokémon")
@@ -1473,9 +1477,10 @@ final class NativeBattleRuntimeTests:XCTestCase {
               let uuid=env["BOUND_NATIVE_BATTLE_RELAY_ID"].flatMap(UUID.init(uuidString:)) else {
             throw XCTSkip("Requires the explicit two-owned-simulator native command coordinator with --relay")
         }
-        let root=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("FullAppGameplayQA")
+        let root=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent(env["BOUND_NATIVE_FIXTURE_NAME"] ?? "FullAppGameplayQA")
         let romURL=root.appendingPathComponent("RadicalRed.gba"),seed=root.appendingPathComponent("seed.sav")
         let rom=try Data(contentsOf:romURL),profile=try BoundPlayerROMProfile(rom:rom),seedBytes=try Data(contentsOf:seed)
+        if env["BOUND_NATIVE_FIXTURE_NAME"] != nil { XCTAssertEqual(profile.gameProfile, BoundGameProfiles.current) }
         let output=root.appendingPathComponent("native-battle-"+UUID().uuidString,isDirectory:true)
         try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
         let battery=output.appendingPathComponent("work.sav"); try Data(repeating:0xFF,count:0x20000).write(to:battery)
@@ -1660,6 +1665,11 @@ final class NativeBattleRuntimeTests:XCTestCase {
         }
         try await Task.sleep(for:.milliseconds(200))
         _=core.pause()
+        if env["BOUND_NATIVE_FIXTURE_NAME"] != nil {
+            let observed=BoundVBABattleBridge.soulLinkSnapshot()
+            try (observed["boxes"] as? Data)?.write(to:output.appendingPathComponent("observed-boxes.bin"))
+            try BoundVBABattleBridge.captureServerState().write(to:output.appendingPathComponent("native-after.vba-state"))
+        }
         XCTAssertEqual(native.restoredBattles,1)
         XCTAssertEqual(BoundVBABattleBridge.playerHP().map(\.intValue),hpBefore,"Friendly completion and cancellation restore the prebattle party")
         XCTAssertEqual(BoundVBABattleBridge.qaTradeParty(),partyBefore,"All original party bytes survive temporary healing and eligibility filtering")
@@ -1730,12 +1740,32 @@ final class NativeBattleRuntimeTests:XCTestCase {
         _=core.pause()
         let checkpoint=BoundVBABattleBridge.captureServerState(),bridge=BoundVBABattleBridge.captureNativeSession()
         XCTAssertFalse(checkpoint.isEmpty);XCTAssertFalse(bridge.isEmpty)
+        let metadata=try XCTUnwrap(JSONSerialization.jsonObject(with:bridge) as? [String:Any])
         let checkpointParty=BoundVBABattleBridge.qaTradeParty()
         BoundVBABattleBridge.close()
-        XCTAssertTrue(BoundVBABattleBridge.restoreServerState(checkpoint))
+        if ProcessInfo.processInfo.environment["BOUND_NATIVE_FIXTURE_NAME"] != nil {
+            XCTAssertEqual(checkpoint[11] & 4, 4)
+            for offset in [24, 56, checkpoint.count - 1] {
+                var damaged=checkpoint; damaged[offset] ^= 1
+                XCTAssertFalse(BoundVBABattleBridge.restoreServerState(damaged), "Wrong ROM, layout or compressed content must fail before core mutation")
+            }
+            if metadata["tradeMode"] as? Bool != true {
+                var untagged=checkpoint;untagged.removeSubrange(18..<92);untagged[11] &= ~4
+                let size=UInt32(untagged.count-8)
+                for byte in 0..<4 { untagged[4+byte]=UInt8(truncatingIfNeeded:size >> (8*byte)) }
+                XCTAssertFalse(BoundVBABattleBridge.restoreServerState(untagged), "An empty native-reset page cannot identify an untagged state")
+            }
+            XCTAssertEqual(BoundVBABattleBridge.qaTradeParty(),checkpointParty)
+        }
+        let restored = BoundVBABattleBridge.restoreServerState(checkpoint)
+        if !restored, ProcessInfo.processInfo.environment["BOUND_NATIVE_FIXTURE_NAME"] != nil {
+            let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent(ProcessInfo.processInfo.environment["BOUND_NATIVE_FIXTURE_NAME"]!)
+            try checkpoint.write(to: root.appendingPathComponent("rejected-" + UUID().uuidString + ".vba-state"))
+        }
+        XCTAssertTrue(restored)
         XCTAssertFalse(BoundVBABattleBridge.restoreNativeSession(Data("{}".utf8)))
         XCTAssertFalse(BoundVBABattleBridge.restoreCooperativeSession(bridge))
-        let metadata=try XCTUnwrap(JSONSerialization.jsonObject(with:bridge) as? [String:Any])
         for (key,value) in [("version",UInt64(1)<<32|1),("installed",UInt64(1)<<32)] {
             var invalid=metadata;invalid[key]=value
             XCTAssertFalse(BoundVBABattleBridge.restoreNativeSession(try JSONSerialization.data(withJSONObject:invalid)))
