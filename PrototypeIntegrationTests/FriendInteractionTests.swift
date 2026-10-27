@@ -427,12 +427,7 @@ final class FriendInteractionTests: XCTestCase {
 
     func testNativeInvitationWaitsReleaseAllMenuOwnershipAndKeepFramesRunning() async throws {
         continueAfterFailure = false
-        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MultiplayerValidation")
-        let rom = root.appendingPathComponent("RadicalRed.gba")
-        guard FileManager.default.fileExists(atPath: rom.path) else {
-            throw XCTSkip("Install the private cartridge in the isolated QA simulator")
-        }
+        let rom = try XCTUnwrap(Bundle(for: Game.self).url(forResource: "multiplayer", withExtension: "gba"))
         let battery = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sav")
         let core = try XCTUnwrap(EmulatorCore(game: FriendDialogueGame(fileURL: rom, gameSaveURL: battery), options: [.metal: true]))
         // The hosted app may still be connecting its first scene after model

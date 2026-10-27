@@ -479,16 +479,15 @@ final class RecordedPlayerTests: XCTestCase {
     func testActualViridianMartDoorEntry() async throws {
         try await runViridianMartDoorEntry(stoppedMusic: false, debugPlayer: 1)
     }
-    func testStoppedMusicMartEntryAndDebugReturn() async throws {
+    func testStoppedMusicMartEntryKeepsNativeRInDebug() async throws {
         try await runViridianMartDoorEntry(stoppedMusic: true, debugPlayer: 1)
     }
-    func testNormalModeRightTriggerDoesNotWarp() async throws {
+    func testNormalModeNativeRDoesNotWarp() async throws {
         try await runViridianMartDoorEntry(stoppedMusic: true, debugPlayer: 0)
     }
     private func runViridianMartDoorEntry(stoppedMusic: Bool, debugPlayer: UInt8) async throws {
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("MultiplayerValidation")
-        let romURL = root.appendingPathComponent("RadicalRed.gba")
-        guard FileManager.default.fileExists(atPath: romURL.path) else { throw XCTSkip("Requires owned ROM fixture") }
+        let romURL = try XCTUnwrap(Bundle(for: Game.self).url(forResource: "multiplayer", withExtension: "gba"))
         let profile = try BoundPlayerROMProfile(rom: Data(contentsOf: romURL))
         let output = root.appendingPathComponent("mart-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
@@ -550,7 +549,7 @@ final class RecordedPlayerTests: XCTestCase {
         XCTAssertNotNil(interior.scene)
         if debugPlayer != 0 {
             // First entry runs the parcel cutscene. R must not replace its
-            // script; finish the ordinary dialogue before testing the warp.
+            // script; finish the ordinary dialogue before testing idle R.
             XCTAssertFalse(setup.isReady)
             core.deltaCore.emulatorBridge.activateInput(256, value: 1, playerIndex: 0)
             XCTAssertTrue(core.resume()); try await Task.sleep(for: .milliseconds(150)); XCTAssertTrue(core.pause())
@@ -565,15 +564,15 @@ final class RecordedPlayerTests: XCTestCase {
             }
             XCTAssertTrue(setup.isReady, "Parcel dialogue must finish without replacing the native script")
             core.deltaCore.emulatorBridge.activateInput(256, value: 1, playerIndex: 0)
-            // Hold through the whole warp: it must act once, then unlock.
+            // Holding R must retain native behavior and never inject a warp.
             XCTAssertTrue(core.resume()); try await Task.sleep(for: .seconds(3)); XCTAssertTrue(core.pause())
-            XCTAssertTrue(setup.isReady, "Holding R must not repeat the return warp")
+            XCTAssertTrue(setup.isReady, "Holding R must leave field controls available")
             core.deltaCore.emulatorBridge.deactivateInput(256, playerIndex: 0)
             XCTAssertTrue(core.resume()); try await Task.sleep(for: .seconds(3)); XCTAssertTrue(core.pause())
             let pallet = try XCTUnwrap(captured.snapshot().last?.player)
-            XCTAssertEqual(pallet.mapGroup, 3); XCTAssertEqual(pallet.mapNumber, 0)
-            XCTAssertEqual(pallet.tile, .init(x: 16, y: 14)); XCTAssertNotNil(pallet.scene)
-            XCTAssertTrue(setup.isReady, "The return warp must release native field controls")
+            XCTAssertEqual(pallet.mapGroup, 5); XCTAssertEqual(pallet.mapNumber, 3)
+            XCTAssertNotNil(pallet.scene)
+            XCTAssertTrue(setup.isReady, "Native R must not inject a Debug return warp")
         }
     }
 

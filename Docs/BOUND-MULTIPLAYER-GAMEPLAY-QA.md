@@ -68,6 +68,11 @@ physical devices and live two-device network checks remain pending.
 
 ## Mart transition and Debug return — October 25, 2026
 
+Historical record: the Debug R warp described below was removed on October 26.
+R now remains native in both Debug and ordinary games. The stopped-music repair
+remains and was retested against the current paired ROM. See
+[nearby-only validation](validation/nearby-only-interactions.md).
+
 The reported build 201 Mac checkpoint reproduced a native door transition
 stalled after its fade to black, with the player hidden. The door task at
 `0x0807E719` was waiting for map music to stop. MP2K's BGM status at

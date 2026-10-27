@@ -88,9 +88,9 @@
           "type": "standard"
         },
         "rightTrigger": {
-          "identifier": "boundNextView",
+          "identifier": "r2",
           "isContinuous": false,
-          "type": "com.rileytestut.Delta.input.action"
+          "type": "standard"
         },
         "select": {
           "identifier": "select",

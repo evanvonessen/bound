@@ -9,8 +9,8 @@
     "BoundSDKProtocol.swift": "498b7d5717545afee5db43233e6b64878eb03b25f88d92201b6f6652523abf24"
   },
   "profiles": {
-    "contract.json": "e6762988db195114092d035454350cef645c7da234a55aeb11cf1b18935b48fa",
-    "doubles-contract.json": "e75a5d08ac0625cbb10d4a10bebb778ec28bd58d3d33537a837336f0d66254c2"
+    "contract.json": "2581f41d6a24d7d005891ca2f9d861f9700a1dd4dbe58cc8530e28484b75c35a",
+    "doubles-contract.json": "528811d486b8375706d184f851a7aefc8dd09f7be0a4708d775fa20240faab12"
   },
   "schemaOwner": "multi_red/source/multiplayer/sdk/protocol-v1.json",
   "schemaSHA256": "3314fbe6797a8b5d05f3f6267b6eaf01489b7e743c246ae57595e9781400a148",

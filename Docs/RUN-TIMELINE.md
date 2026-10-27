@@ -1,9 +1,10 @@
 # Run timeline
 
-Open Friends → Run timeline while a supported Radical Red game is selected.
-History is saved per library game alongside its Soul Link journal, and survives
-closing Bound and reconnecting. Filter by catches, deaths, trades or victories.
-No ROM replacement or TestFlight build is required by this source change.
+The Friends and cartridge Run Timeline entry points were retired on October 26,
+2026. Existing history remains saved per library game alongside its Soul Link
+journal and survives closing Bound and reconnecting. Durable events, recovery
+and old protocol command numbers remain intact; this removal does not erase data.
+The following describes retained history behavior and its original validation.
 
 The verified completed-frame probe records newly acquired Pokémon (including
 gifts, eggs and boxed catches) after its initial baseline. Existing Pokémon are
@@ -35,7 +36,7 @@ Battle-type/outcome constants use the existing FireRed ABI; reference:
 https://github.com/pret/pokefirered/blob/master/include/constants/battle.h.
 Type flags are latched during battle because the game may clear them on return.
 
-## Validation
+## Historical validation
 
 70 silent simulator tests passed: 41 SoulLinkTests (including history baseline,
 restart persistence, duplicate prevention, loss/escape/link/tutorial exclusion,

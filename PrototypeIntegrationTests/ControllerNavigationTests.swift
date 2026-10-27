@@ -47,7 +47,7 @@ final class ControllerNavigationTests: XCTestCase {
         let stock = BoundMultiviewDefaultMapping.mapping(for: controller, enabled: false)
         let automatic = BoundMultiviewDefaultMapping.mapping(for: controller, enabled: true)
         XCTAssertEqual(ActionInput(input: try XCTUnwrap(automatic.input(forControllerInput: MFiGameController.Input.leftTrigger))), .boundPreviousView)
-        XCTAssertEqual(ActionInput(input: try XCTUnwrap(automatic.input(forControllerInput: MFiGameController.Input.rightTrigger))), .boundNextView)
+        XCTAssertEqual(StandardGameControllerInput(input: try XCTUnwrap(automatic.input(forControllerInput: MFiGameController.Input.rightTrigger))), .r2)
         for input in [MFiGameController.Input.leftShoulder, .rightShoulder] {
             XCTAssertEqual(automatic.input(forControllerInput: input).map(AnyInput.init), stock.input(forControllerInput: input).map(AnyInput.init))
         }
@@ -76,6 +76,23 @@ final class ControllerNavigationTests: XCTestCase {
         XCTAssertEqual(ActionInput(input: try XCTUnwrap(customCapture.input(forControllerInput: MFiGameController.Input.b))), .toggleBoundMultiview)
         XCTAssertEqual(StandardGameControllerInput(input: try XCTUnwrap(customCapture.input(forControllerInput: MFiGameController.Input.x))), .menu)
         XCTAssertEqual(ActionInput(input: try XCTUnwrap(customCapture.input(forControllerInput: MFiGameController.Input.leftTrigger))), .boundShowTypes)
+    }
+
+    func testRestoredRightDefaultsPreserveExplicitUserMappings() throws {
+        let controller = MFiGameController(controller: GCController.withExtendedGamepad())
+        let defaults = BoundMultiviewDefaultMapping.mapping(for: controller, gameType: .gba)
+        XCTAssertEqual(StandardGameControllerInput(input: try XCTUnwrap(defaults.input(forControllerInput: MFiGameController.Input.rightTrigger))), .r2)
+        XCTAssertEqual(StandardGameControllerInput(input: try XCTUnwrap(defaults.input(forControllerInput: MFiGameController.Input.rightShoulder))), .r1)
+        XCTAssertEqual(StandardGameControllerInput(input: try XCTUnwrap(defaults.input(forControllerInput: MFiGameController.Input.leftShoulder))), .l1)
+        var saved = defaults
+        saved.set(ActionInput.boundNextView, forControllerInput: MFiGameController.Input.rightTrigger)
+        saved.set(StandardGameControllerInput.b, forControllerInput: MFiGameController.Input.rightShoulder)
+        for focused in [false, true] {
+            let effective = BoundControllerInputMapping(base: saved, multiviewActive: focused)
+            XCTAssertEqual(ActionInput(input: try XCTUnwrap(effective.input(forControllerInput: MFiGameController.Input.rightTrigger))), .boundNextView)
+        }
+        let gameplay = BoundControllerInputMapping(base: saved)
+        XCTAssertEqual(StandardGameControllerInput(input: try XCTUnwrap(gameplay.input(forControllerInput: MFiGameController.Input.rightShoulder))), .b)
     }
 
     func testGBAMFiDefaultMappingMatchesBundledConfigAndLeavesOmittedInputsUnbound() throws {
@@ -112,7 +129,7 @@ final class ControllerNavigationTests: XCTestCase {
                            mapping.input(forControllerInput: physicalInput).map(AnyInput.init), physicalIdentifier)
         }
         XCTAssertEqual(ActionInput(input: try XCTUnwrap(multiviewDisabled.input(forControllerInput: MFiGameController.Input.leftTrigger))), .boundPreviousView)
-        XCTAssertEqual(ActionInput(input: try XCTUnwrap(multiviewDisabled.input(forControllerInput: MFiGameController.Input.rightTrigger))), .boundNextView)
+        XCTAssertEqual(StandardGameControllerInput(input: try XCTUnwrap(multiviewDisabled.input(forControllerInput: MFiGameController.Input.rightTrigger))), .r2)
         XCTAssertEqual(ActionInput(input: try XCTUnwrap(multiviewDisabled.input(forControllerInput: MFiGameController.Input.share))), .toggleBoundFriend)
         XCTAssertEqual(ActionInput(input: try XCTUnwrap(multiviewDisabled.input(forControllerInput: MFiGameController.Input.y))), .toggleBoundMultiview)
     }

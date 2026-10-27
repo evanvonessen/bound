@@ -274,14 +274,15 @@ static_assert(BoundStackSafeGame::GameCooperativeSnapshotAddress==GameCooperativ
 static_assert(BoundDebugDefaultsGame::GameCooperativeSnapshotAddress==GameCooperativeSnapshotAddress
               && BoundDebugDefaultsGame::GameCooperativeSnapshotSize==GameCooperativeSnapshotSize,
               "Historical cooperative snapshot requires a separate decoder");
+static_assert(BoundFriendsMultiviewGame::GameCooperativeSnapshotAddress==GameCooperativeSnapshotAddress
+              && BoundFriendsMultiviewGame::GameCooperativeSnapshotSize==GameCooperativeSnapshotSize,
+              "Historical cooperative snapshot requires a separate decoder");
 #endif
 #include "SoulLink/bridge.inc"
 #include "NativeBattle/invitation.inc"
 namespace {
 uint8_t *romUIOwner=nullptr,*cooperativeROM=nullptr;
 const MultiRedNativeProfile *romUIProfile=nullptr;
-bool romFieldRDown=false;
-bool romFieldTextWasIdle=false;
 bool ownsROMUI() { return romUIOwner==rom && romUIProfile && romUIProfile==multiRedProfile(rom); }
 bool nativeProfileVerified() {
     const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
@@ -553,20 +554,10 @@ static uint8_t soulQAScriptBackup[128];
     if(memcmp(digest,expected,32)) return NO;
     if(profile->uiRequestAddress<0x02000000||profile->uiRequestAddress+profile->uiRequestSize>0x02040000
        ||profile->uiHostOffset+profile->uiHostSize>0x2000000) return NO;
-    romUIOwner=rom;romUIProfile=multiRedProfile(rom);romFieldRDown=romFieldTextWasIdle=false; return YES;
+    romUIOwner=rom;romUIProfile=multiRedProfile(rom); return YES;
 }
 + (void)advanceROMFieldRecovery {
     if(!ownsROMUI()||!workRAM||!internalRAM) return;
-    // Guest scripts can consume newKeys before the emulator frame callback.
-    // Observe the held-key edge instead, including while an action is blocked,
-    // so a held R never queues a warp after a dialogue or link operation ends.
-    const bool rDown=(half(internalRAM+0x311C)&0x100)!=0;
-    const bool rPressed=rDown&&!romFieldRDown;
-    romFieldRDown=rDown;
-    // Native R handling can close text before this completed-frame sample.
-    // A message owned on the preceding frame must still veto this press.
-    const bool previousTextIdle=romFieldTextWasIdle;
-    romFieldTextWasIdle=fieldTextIdle();
     if(armed||inviteActive) return;
     if(word(internalRAM+0x30F0)!=0x08056535||word(internalRAM+0x30F4)!=0x080565B5
        ||(internalRAM[0x3529]&2)) return;
@@ -581,27 +572,8 @@ static uint8_t soulQAScriptBackup[128];
     if(musicState>=5&&musicState<=7&&(musicStatus&0x80000000u)&&(musicStatus&0xFFFF))
         put32(internalRAM+0x7304,musicStatus&0xFFFF0000u);
 
-    const auto *guest=workRAM+romUIProfile->uiRequestAddress-0x02000000;
-    const auto *host=rom+romUIProfile->uiHostOffset;
-    const auto flags=word(guest+80),hostFlags=word(host+12);
-    // Published field/settings/checkpoint bits must all be set; setup/modal
-    // bits must be clear. Pending host invitations, recovery, saves, transfers,
-    // run endings and setup changes also veto a warp before their UI appears.
-    if(!rPressed||!previousTextIdle||!fieldInterruptionReady()
-       ||word(guest)!=0x31525552||word(guest+160)!=1||word(guest+12)||word(guest+76)
-       ||(flags&(1|2|4|32|64))!=(1|32|64)
-       ||word(host)!=0x31495552||!(hostFlags&1)||(hostFlags&(32|64|256|512|1024|2048|4096))
-       ||workRAM[0x3707B]||(workRAM[0x37ABF]&0x80)
-       ||((half(workRAM+0x37ABC)>>6)&31)>=16) return;
-    // Native warp script in idle link scratch, also serialized by core saves.
-    // Battle/trade/dialogue owners above exclude reuse of this region. Using
-    // the native script preserves ordinary fade, map loading and field unlock.
-    const uint8_t script[]={0x39,3,0,255,16,0,14,0,0x27,0x6C,0x02};
-    memcpy(internalRAM+0x4280,script,sizeof(script));
-    memset(internalRAM+0xEB0,0,0x74);internalRAM[0xEB1]=1;put32(internalRAM+0xEB8,0x03004280);
-    put32(internalRAM+0xF0C,0x0815F9B4);put32(internalRAM+0xF10,0x0815FD08);
-    internalRAM[0xEA8]=0;internalRAM[0xF9C]=1;
-    internalRAM[0x311F]&=~1;
+    // Shoulder inputs retain their native cartridge behavior in every mode.
+
 }
 + (NSData *)romMultiplayerSnapshot {
     if(!ownsROMUI()||!workRAM) return [NSData data];

@@ -1,7 +1,7 @@
 {
-  "sha256": "395d8e6b67da9e6f287398cefc39dfc57c3b0b05c7e2b6b083f79a5a8c2b6316",
+  "sha256": "fcfaa8a9fb022656994a429be4cba5b9f14ba6c477ec813d2d6a2aa3878edc00",
   "repository": "evanvonessen/multi_red",
-  "tag": "local-friends-multiview-395d8e6b67da",
+  "tag": "local-nearby-only-fcfaa8a9fb02",
   "asset": "multiplayer.gba",
   "compatibility": "Exact paired Bound multiplayer-isolation build; retained runtime services required.",
   "localOnly": true

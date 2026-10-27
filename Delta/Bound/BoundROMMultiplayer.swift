@@ -2080,12 +2080,17 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                   identity == nil || identity?.roomID == room.roomID else {
                 host.status = .unavailable; host.message = "Choose your connected friend."; return
             }
-            guard selectRoom(room.roomID) else { return }
+            // Legacy cartridges may still expose the remote actions menu.
+            // Admission must already come from facing the connected character;
+            // a menu request must never select/connect a remote friend.
+            guard sharing.connectedRoomID == room.roomID,
+                  let nearby = sharing.interactions.context?(), nearby.local.isFacing(nearby.peer) else {
+                host.status = .unavailable; host.message = "Walk up to your friend and interact."; return
+            }
             pendingAction.enqueue(request.command, at: now); host.status = .complete
         case .timeline, .page:
-            if request.command == .timeline { timelinePage = 0 }
-            else { timelinePage = max(0,timelinePage + (request.argument == 0 ? -1:1)) }
-            host.status = .timeline
+            // Keep wire decoding and durable history; retire only its old UI.
+            host.status = .unavailable; host.message = "This menu is no longer available."
         case .accept: sharing.interactions.accept()
         case .decline:
             pendingAction.clear()

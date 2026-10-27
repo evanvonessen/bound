@@ -665,6 +665,7 @@ extension PlaybackSharingTests {
         for _ in 0..<40 where core.state != .running { try await wait(0.05) }
         XCTAssertEqual(core.state, .running)
         XCTAssertTrue(scene.hasKeyboardFocus)
+        for _ in 0..<40 where !videoTransport.presenter.isVisible { try await wait(0.05) }
         XCTAssertTrue(videoTransport.presenter.isVisible)
         XCTAssertNil(owner.presentedViewController, "Friends video must not open a blocking viewer")
         core.audioManager.isEnabled = false

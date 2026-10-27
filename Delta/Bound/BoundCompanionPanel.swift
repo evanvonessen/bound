@@ -2043,8 +2043,6 @@ struct BoundFriendsSheet: View {
                     BoundFriendsListSections(sharing: sharing, onboarding: onboarding, account: account)
                     if developerFeaturesEnabled {
                         BoundLivePresenceControls(session: sharing.livePresence)
-                        BoundSoulControls(session: sharing.soulLink)
-                        BoundRunTimelineControls(timeline: sharing.soulLink.probe.timeline)
                     }
                 }
             }.navigationTitle("Friends")

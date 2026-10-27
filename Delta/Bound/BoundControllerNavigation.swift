@@ -357,7 +357,6 @@ enum BoundMultiviewDefaultMapping {
             ?? DeltaCore.GameControllerInputMapping(gameControllerInputType: controller.inputType)
         guard enabled, controller.inputType == .mfi else { return mapping }
         mapping.set(ActionInput.boundPreviousView, forControllerInput: MFiGameController.Input.leftTrigger)
-        mapping.set(ActionInput.boundNextView, forControllerInput: MFiGameController.Input.rightTrigger)
         return mapping
     }
 

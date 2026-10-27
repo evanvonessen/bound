@@ -5,6 +5,9 @@
 namespace BoundOriginalGame {
 #include "BoundOriginalGameABI.h"
 }
+namespace BoundFriendsMultiviewGame {
+#include "BoundFriendsMultiviewGameABI.h"
+}
 namespace BoundDebugDefaultsGame {
 #include "BoundDebugDefaultsGameABI.h"
 }
@@ -98,8 +101,20 @@ static const MultiRedNativeProfile MultiRedDebugDefaultsProfile={
     BoundDebugDefaultsGame::GameCooperativeCodeStart,BoundDebugDefaultsGame::GameCooperativeCodeEnd,
     [](uint8_t *p) { for(const auto &entry:BoundDebugDefaultsGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); }
 };
+static const MultiRedNativeProfile MultiRedFriendsMultiviewProfile={
+    BoundFriendsMultiviewGame::GameDescriptor,BoundFriendsMultiviewGame::GameCanonicalSHA256,BoundFriendsMultiviewGame::GameRulesetID,
+    BoundFriendsMultiviewGame::GameDescriptorOffset,sizeof(BoundFriendsMultiviewGame::GameDescriptor),BoundFriendsMultiviewGame::GameHostOffset,BoundFriendsMultiviewGame::GameHostSize,
+    BoundFriendsMultiviewGame::GameSnapshotAddress,BoundFriendsMultiviewGame::GameSnapshotSize,BoundFriendsMultiviewGame::GameSnapshotRegionSize,
+    BoundFriendsMultiviewGame::GameABIMajor,BoundFriendsMultiviewGame::GameABIMinor,BoundFriendsMultiviewGame::GameSaveStateLayout,
+    BoundFriendsMultiviewGame::GameUIHostOffset,BoundFriendsMultiviewGame::GameUIHostSize,BoundFriendsMultiviewGame::GameUIRequestAddress,BoundFriendsMultiviewGame::GameUIRequestSize,
+    BoundFriendsMultiviewGame::GameCodeStart,BoundFriendsMultiviewGame::GameCodeEnd,
+    BoundFriendsMultiviewGame::GameCooperativeHostOffset,BoundFriendsMultiviewGame::GameCooperativeHostSize,
+    BoundFriendsMultiviewGame::GameCooperativeCodeStart,BoundFriendsMultiviewGame::GameCooperativeCodeEnd,
+    [](uint8_t *p) { for(const auto &entry:BoundFriendsMultiviewGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); }
+};
 static const MultiRedNativeProfile *multiRedProfile(const uint8_t *p) {
     if(MultiRedCurrentProfile.matches(p)) return &MultiRedCurrentProfile;
+    if(MultiRedFriendsMultiviewProfile.matches(p)) return &MultiRedFriendsMultiviewProfile;
     if(MultiRedDebugDefaultsProfile.matches(p)) return &MultiRedDebugDefaultsProfile;
     if(MultiRedStackSafeProfile.matches(p)) return &MultiRedStackSafeProfile;
     if(MultiRedOriginalProfile.matches(p)) return &MultiRedOriginalProfile;

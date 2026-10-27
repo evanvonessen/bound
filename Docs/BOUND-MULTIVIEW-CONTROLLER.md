@@ -13,15 +13,18 @@ Portrait, hidden Multiview, and an unchecked switch retain gameplay controls.
 | A | Open focused search or learnset; select a picker entry | Open boss selector or full team; select a picker entry |
 | B | Close picker/search/expanded learnset | Close selector/details/full team |
 | Right stick | Scroll the visible main or expanded view | Scroll the visible main or expanded view |
-| Left/Right trigger | Previous/next Multiview tab, wrapping | Previous/next Multiview tab, wrapping |
+| Left trigger | Previous Multiview tab, wrapping | Previous Multiview tab, wrapping |
 
 The left stick does not navigate Multiview. Held directional input repeats after
 a short delay. Focus outlines follow the active control; Dex scrolls focused
 controls into view. Pickers accept D-pad movement, A to choose, and B to return.
 
-The triggers are supplied by the default mapping while this setting is on and
-Multiview is active. Hiding Multiview restores their stock gameplay bindings.
-Existing saved mappings are preserved. Bumpers keep their existing defaults.
+The left-trigger shortcut is supplied by the default mapping while this setting
+is on and Multiview is active. Hiding Multiview restores its stock gameplay binding.
+The right trigger retains the upstream standard r2 mapping (GBA Start); the right
+bumper retains r1 (GBA R). The left bumper retains l1 (GBA L). Active focus capture
+still routes its owned controls to Multiview. Existing saved mappings, including
+an explicitly assigned Next View shortcut, remain authoritative.
 Explicit None, Menu, and companion shortcuts remain available during capture.
 The mapping editor displays the trigger defaults and can override them.
 
