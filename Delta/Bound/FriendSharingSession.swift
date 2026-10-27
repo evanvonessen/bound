@@ -216,6 +216,25 @@ extension FriendSharingTransport {
 
 @MainActor
 final class FriendSharingSession: ObservableObject {
+    // Independent RTC lifetime: gameplay reconnects and manual pauses cannot
+    // replace its token, channel, capture queue or remote canvas.
+    private let mediaOnly: Bool
+    private var mediaSession: FriendSharingSession?
+    private var mediaObservation: AnyCancellable?
+    var screenSharing: FriendSharingSession {
+        if mediaOnly || (!authenticatedMode && configuration != nil) { return self }
+        if let mediaSession { return mediaSession }
+        let session = FriendSharingSession(configuration: nil, transport: AgoraSharingTransport(),
+            authenticatedMode: true, mediaOnly: true)
+        attachScreenSharing(session)
+        return session
+    }
+    private func attachScreenSharing(_ session: FriendSharingSession) {
+        mediaSession = session
+        mediaObservation = session.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        session.setRemotePresentationEnabled(remotePresentationEnabled)
+    }
+    @Published private(set) var connectionFailed = false
     let connectionFeed: BoundConnectionFeed
     let livePresence = BoundLivePresenceSession()
     let interactions = BoundFriendInteractionSession()
@@ -391,7 +410,9 @@ final class FriendSharingSession: ObservableObject {
     private var recoveryTimeouts = 0
     private var receiverDisplayLink: FriendSharingDisplayLink?
     private var remotePresentationEnabled = true
-    func setRemotePresentationEnabled(_ enabled: Bool) { remotePresentationEnabled = enabled }
+    func setRemotePresentationEnabled(_ enabled: Bool) {
+        remotePresentationEnabled = enabled; mediaSession?.setRemotePresentationEnabled(enabled)
+    }
     private var sequence: UInt64 = 0
     private var captureClock = FriendSharingCaptureClock()
     private var publicationToken: SharingSessionToken?
@@ -409,6 +430,7 @@ final class FriendSharingSession: ObservableObject {
         let owner: UUID
     }
     private var featureObservers: [NSObjectProtocol] = []
+    private var pausedMultiplayerScope: ForegroundReconnectIntent?
     private var foregroundReconnectIntent: ForegroundReconnectIntent?
     private var foregroundReconnectRetry: (any SharingCancellation)?
     private var foregroundReconnectAttempts = 0
@@ -416,11 +438,14 @@ final class FriendSharingSession: ObservableObject {
     init(configuration: FriendSharingConfiguration? = .load(), transport: (any FriendSharingTransport)? = nil,
          scheduler: (any SharingScheduler)? = nil,
          authenticatedMode: Bool = FriendSharingConfiguration.authenticationRequested,
+         mediaOnly: Bool = false,
          roomProvider: @escaping () -> String? = { FriendSharingTokens.room() },
          tokenFetcher: @escaping @MainActor (String, AppCloudSession) async throws -> FriendSharingTokenLease = { try await FriendSharingTokens.fetch(room: $0, session: $1) },
          nakamaFetcher: @escaping @MainActor (String, AppCloudSession) async throws -> BoundNakamaConfiguration = { try await BoundNakamaAuthorization.fetch(room: $0, session: $1) },
          connectionFeed: BoundConnectionFeed? = nil,
+         screenSession: FriendSharingSession? = nil,
          applicationIsBackgrounded: @escaping () -> Bool = { UIApplication.shared.applicationState == .background }) {
+        self.mediaOnly = mediaOnly
         self.connectionFeed = connectionFeed ?? BoundConnectionFeed()
         self.applicationIsBackgrounded = applicationIsBackgrounded
         self.authenticatedMode = authenticatedMode
@@ -451,6 +476,7 @@ final class FriendSharingSession: ObservableObject {
                 if nakama?.videoPublishing != true { self?.invalidateSpectatorVideo() }
             }
         }
+        if let screenSession { attachScreenSharing(screenSession) }
         remoteView.backgroundColor = .black
         nativeBattle.makeChannel = { [weak self] receiver, failed in
             guard let self, self.gameplayTransportAvailable else { return nil }
@@ -472,7 +498,7 @@ final class FriendSharingSession: ObservableObject {
         }
         cooperativeDoubles.connected = { [weak self] in
             guard let self else { return false }
-            return self.active && self.joined && !self.reconnecting && !self.backgrounded && !self.nativeBattle.blocksAutoSave
+            return !self.mediaOnly && self.active && self.joined && !self.reconnecting && !self.backgrounded && !self.nativeBattle.blocksAutoSave
                 && (self.debugActivitiesAllowed || self.debugContinuingCooperative && self.cooperativeDoubles.isActive)
         }
         cooperativeDoubles.context = { [weak livePresence] in
@@ -483,7 +509,7 @@ final class FriendSharingSession: ObservableObject {
         soulLink.send = { [weak self] data in self?.transport.sendInteraction(data) == true }
         soulLink.connected = { [weak self] in
             guard let self else { return false }
-            return self.active && self.joined && !self.reconnecting && !self.backgrounded
+            return !self.mediaOnly && self.active && self.joined && !self.reconnecting && !self.backgrounded
         }
         soulLink.nativeActivity = { [weak self] in self?.nativeBattle.isActive == true || self?.cooperativeDoubles.isActive == true }
         interactions.agreed = { [weak self] activity, id, initiator in
@@ -505,9 +531,9 @@ final class FriendSharingSession: ObservableObject {
                 // Transport gaps retain the authenticated consent scope. The
                 // interaction state machine separately requires fresh presence
                 // and a connected channel before it can admit an activity.
-                guard self.active || self.hasValidForegroundReconnectIntent,
-                      let owner=self.tokenOwner ?? self.foregroundReconnectIntent?.owner,
-                      let room=self.authRoom ?? self.foregroundReconnectIntent?.room,
+                guard self.active || self.hasValidForegroundReconnectIntent || self.pausedMultiplayerScope != nil,
+                      let owner=self.tokenOwner ?? self.foregroundReconnectIntent?.owner ?? self.pausedMultiplayerScope?.owner,
+                      let room=self.authRoom ?? self.foregroundReconnectIntent?.room ?? self.pausedMultiplayerScope?.room,
                       self.authenticatedSession?()?.owner == owner,
                       self.roomProvider() == room else { return nil }
                 if let context, context.owner != owner || context.roomID != room.lowercased() { return nil }
@@ -540,9 +566,10 @@ final class FriendSharingSession: ObservableObject {
     }
 
     private func refreshExperimentalFeatures() {
+        guard !mediaOnly else { return }
         if BoundMultiplayerFeatures.isEnabled {
             if active, authenticatedMode, transport is BoundNakamaSharingTransport {
-                stop(reason: .sessionChanged); beginStart(); return
+                stopLane(reason: .sessionChanged); beginStart(); return
             }
             livePresence.setEnabled(true)
             if active && joined && !reconnecting && !backgrounded { startPresence() }
@@ -558,10 +585,7 @@ final class FriendSharingSession: ObservableObject {
             }
             sharedWorld.stop()
             livePresence.setEnabled(false); livePresence.stop(); livePresence.connectionCheck.stop()
-            setAutomaticMultiplayerConnection(false)
-            if active, authenticatedMode, transport is BoundNakamaSharingTransport {
-                stop(reason: .sessionChanged); beginStart()
-            }
+            disconnectMultiplayer()
         }
     }
 
@@ -590,7 +614,7 @@ final class FriendSharingSession: ObservableObject {
     func configureAuthenticatedRoom(_ room: String?, disconnectReason: BoundConnectionFeed.DisconnectReason = .sessionChanged,
                                     identity: @escaping () -> AppCloudSession?) {
         automaticMultiplayerConnection = false; startedForMultiplayer = false
-        stop(reason: disconnectReason)
+        stopLane(reason: disconnectReason)
         authenticatedMode = true; configuration = nil
         roomProvider = { room }; authenticatedSession = identity
         status = room == nil ? "Add a friend to share" : "Game sharing ready"
@@ -612,7 +636,7 @@ final class FriendSharingSession: ObservableObject {
         guard enabled else {
             if startedForMultiplayer {
                 startedForMultiplayer = false
-                stop()
+                disconnectMultiplayer()
             }
             return
         }
@@ -623,19 +647,33 @@ final class FriendSharingSession: ObservableObject {
         beginStart()
     }
 
+    /// Pause only the realtime gameplay lane. Keep run ownership, consent,
+    /// durable saves and native interrupted-activity recovery for reconnection.
+    func disconnectMultiplayer() {
+        automaticMultiplayerConnection = false; startedForMultiplayer = false
+        connectionFeed.disconnect(.manual)
+        if let room = authRoom ?? foregroundReconnectIntent?.room,
+           let owner = tokenOwner ?? foregroundReconnectIntent?.owner {
+            pausedMultiplayerScope = ForegroundReconnectIntent(room: room, owner: owner)
+        }
+        stop(clearReconnectIntent: false)
+        clearForegroundReconnectIntent()
+        connectionFailed = false
+    }
+
     @discardableResult
     func sendMultiplayerPacket(_ data: Data) -> Bool {
-        guard BoundMultiplayerFeatures.isEnabled, data.starts(with: Data("BRM1".utf8)), data.count <= 1024,
+        guard !mediaOnly, BoundMultiplayerFeatures.isEnabled, data.starts(with: Data("BRM1".utf8)), data.count <= 1024,
               active, joined, !reconnecting, !backgrounded else { return false }
         return transport.sendInteraction(data)
     }
 
     private func beginStart() {
         guard !active, !backgrounded else { return }
-        peerConnected = false
+        peerConnected = false; connectionFailed = false
         if authenticatedMode {
             guard let room = roomProvider(), let identity = authenticatedSession?() else {
-                status = "Sign in to share"; return
+                connectionFailed = true; status = "Sign in to share"; return
             }
             generation = UUID(); active = true; status = "Authorizing sharing"
             connectionFeed.beginConnection()
@@ -665,15 +703,15 @@ final class FriendSharingSession: ObservableObject {
         if let nakama = transport as? BoundNakamaSharingTransport { nakama.setVideoRequired(!startedForMultiplayer) }
         videoPublishing = transport.videoPublishing
         transport.setPresenceReceiver { [weak self] data in
-            guard BoundMultiplayerFeatures.isEnabled, let self, self.generation == run, self.active, self.joined, !self.reconnecting else { return }
+            guard BoundMultiplayerFeatures.isEnabled, let self, !self.mediaOnly, self.generation == run, self.active, self.joined, !self.reconnecting else { return }
             self.livePresence.receive(data)
         }
         transport.setRetainedPresenceReceiver { [weak self] data, age in
-            guard BoundMultiplayerFeatures.isEnabled, let self, self.generation == run, self.active else { return }
+            guard BoundMultiplayerFeatures.isEnabled, let self, !self.mediaOnly, self.generation == run, self.active else { return }
             self.livePresence.restorePresentation(data, age: age)
         }
         transport.setInteractionReceiver { [weak self] data in
-            guard BoundMultiplayerFeatures.isEnabled, let self, self.generation == run, self.active, self.joined, !self.reconnecting else { return }
+            guard BoundMultiplayerFeatures.isEnabled, let self, !self.mediaOnly, self.generation == run, self.active, self.joined, !self.reconnecting else { return }
             if let data {
                 if !self.interactions.connected,
                    BoundBattleControlPacket.decode(data) != nil || BoundCooperativePacket(data: data) != nil {
@@ -699,6 +737,7 @@ final class FriendSharingSession: ObservableObject {
             guard let self, self.generation == run, self.active else { return }
             switch event {
             case .joined:
+                self.connectionFailed = false
                 self.foregroundReconnectAttempts = 0
                 self.joined = true
                 self.connectionFeed.connected()
@@ -732,6 +771,7 @@ final class FriendSharingSession: ObservableObject {
                 guard self.reconnecting else { return }
                 self.recoveryID = nil
                 self.recoveryDeadline?.cancel(); self.recoveryDeadline = nil
+                self.connectionFailed = false
                 self.reconnecting = false; self.joined = true; self.recoveryCompletions += 1
                 self.connectionFeed.connected()
                 self.foregroundReconnectAttempts = 0
@@ -740,7 +780,7 @@ final class FriendSharingSession: ObservableObject {
                 self.beginReceiving(run: run)
             case .tokenNeeded:
                 if self.authenticatedMode { self.requestToken(initial: false) }
-                else { self.stop(reason: .unavailable); self.status = "Sharing unavailable · Retry" }
+                else { self.stopLane(reason: .unavailable); self.status = "Sharing unavailable · Retry" }
             case .connection: break
             case .failed:
                 if self.debugRealtimeScope != nil { self.handleDebugRealtimeFailure(run:run,revision:self.debugRealtimeRevision) }
@@ -755,6 +795,7 @@ final class FriendSharingSession: ObservableObject {
     /// detached GameFrame. SharingSession owns the sole pending outgoing frame;
     /// the source callback creates no queue and no Task per emulator frame.
     func receivePlaybackFrame(_ frame: GameFrame?) {
+        mediaSession?.receivePlaybackFrame(frame)
         guard let frame else {
             publicationToken = nil
             sourceFrameNumber = 0; sourceButtons = 0
@@ -789,7 +830,7 @@ final class FriendSharingSession: ObservableObject {
         }
         guard tokenTask == nil, active, let room = authRoom, let owner = tokenOwner,
               let identity = authenticatedSession?(), identity.owner == owner else {
-            if tokenTask == nil { stop(reason: .sessionChanged); status = "Sign in to share" }
+            if tokenTask == nil { stopLane(reason: .sessionChanged); status = "Sign in to share" }
             return
         }
         let run = generation
@@ -800,7 +841,7 @@ final class FriendSharingSession: ObservableObject {
                 try Task.checkCancellation()
                 guard let self, self.generation == run, self.active else { return }
                 guard lease.valid(room: room, owner: owner), self.authenticatedSession?()?.owner == owner else {
-                    self.tokenTask = nil; self.stop(reason: .sessionChanged); self.status = "Sign in to share"; return
+                    self.tokenTask = nil; self.stopLane(reason: .sessionChanged); self.status = "Sign in to share"; return
                 }
                 self.tokenTask = nil
                 if initial {
@@ -848,7 +889,7 @@ final class FriendSharingSession: ObservableObject {
                       self.authenticatedSession?()?.isSameSession(as: identity) == true else { throw FriendSharingTokenError.unavailable }
                 guard self.reconnectPeerOwner == nil || self.reconnectPeerOwner == lease.peerOwnerID else {
                     if scope == nil {
-                        self.tokenTask = nil; self.stop(reason: .sessionChanged)
+                        self.tokenTask = nil; self.stopLane(reason: .sessionChanged)
                         self.status = "Friend changed · Reopen multiplayer"; return
                     }
                     throw FriendSharingTokenError.unavailable
@@ -891,6 +932,7 @@ final class FriendSharingSession: ObservableObject {
     private func handleDebugRealtimeFailure(run:UUID,revision:UUID) {
         guard generation==run,debugRealtimeRevision==revision,debugRealtimeScope != nil,active,
               let nakama=transport as? BoundNakamaSharingTransport else { return }
+        connectionFailed = true
         nakama.suspendGameplay(); joined=false;peerConnected=false;reconnecting=true
         sharedWorld.peerGone();soulLink.peerGone();interactions.suspend()
         nativeBattle.suspendTransport();cooperativeDoubles.transportInterrupted()
@@ -937,14 +979,14 @@ final class FriendSharingSession: ObservableObject {
             self.lastDisplayTick = timestamp
             #endif
             if self.authenticatedMode && (self.authenticatedSession?()?.owner != self.tokenOwner || self.roomProvider() != self.authRoom) {
-                self.stop(reason: .sessionChanged); self.status = "Sign in to share"; return
+                self.stopLane(reason: .sessionChanged); self.status = "Sign in to share"; return
             }
             if self.authenticatedMode, !(self.debugRealtimeScope != nil && self.tokenExpiry == nil), (self.tokenExpiry ?? 0) <= Date().timeIntervalSince1970 {
                 if self.debugRealtimeScope != nil { self.handleDebugRealtimeFailure(run:run,revision:self.debugRealtimeRevision) }
                 else { self.handleForegroundReconnectFailure(run: run, status: "Restoring connection · Retrying") }
                 return
             }
-            self.sharedWorld.tick(enabled: BoundMultiplayerFeatures.isEnabled && self.livePresence.enabled && self.active, connected: self.joined && !self.reconnecting && !self.backgrounded)
+            self.sharedWorld.tick(enabled: !self.mediaOnly && BoundMultiplayerFeatures.isEnabled && self.livePresence.enabled && self.active, connected: self.joined && !self.reconnecting && !self.backgrounded)
             self.transport.pollPresence()
             self.livePresence.tick()
             // An interaction stream can recover without another roster event.
@@ -974,12 +1016,18 @@ final class FriendSharingSession: ObservableObject {
     }
 
     func stop(reason: BoundConnectionFeed.DisconnectReason = .stopped) {
+        mediaSession?.stop(reason: reason)
+        stopLane(reason: reason)
+    }
+
+    private func stopLane(reason: BoundConnectionFeed.DisconnectReason = .stopped) {
         connectionFeed.disconnect(reason)
+        connectionFailed = reason == .unavailable
         stop(clearReconnectIntent: true)
     }
 
     private func startPresence() {
-        guard BoundMultiplayerFeatures.isEnabled else { return }
+        guard !mediaOnly, BoundMultiplayerFeatures.isEnabled else { return }
         livePresence.setEnabled(true)
         livePresence.start { [weak self] data in
             guard let self, self.active, self.joined, !self.reconnecting, !self.backgrounded else { return false }
@@ -1000,7 +1048,7 @@ final class FriendSharingSession: ObservableObject {
     }
 
     private var gameplayTransportAvailable: Bool {
-        BoundMultiplayerFeatures.isEnabled && active && joined && !reconnecting && !backgrounded
+        !mediaOnly && BoundMultiplayerFeatures.isEnabled && active && joined && !reconnecting && !backgrounded
     }
 
     private func presenceConnectionSample() -> BoundPresenceConnectionSample {
@@ -1020,7 +1068,7 @@ final class FriendSharingSession: ObservableObject {
         invalidateSpectatorVideo()
         BoundMainActorDisposal.drainPending()
         foregroundReconnectRetry?.cancel(); foregroundReconnectRetry = nil
-        if clearReconnectIntent { foregroundReconnectIntent = nil; foregroundReconnectAttempts = 0; reconnectPeerOwner = nil }
+        if clearReconnectIntent { pausedMultiplayerScope = nil; foregroundReconnectIntent = nil; foregroundReconnectAttempts = 0; reconnectPeerOwner = nil }
         if clearReconnectIntent { sharedWorld.stop() } else { sharedWorld.peerGone() }
         soulLink.peerGone()
         if clearReconnectIntent {
@@ -1050,6 +1098,7 @@ final class FriendSharingSession: ObservableObject {
     }
 
     func background() {
+        mediaSession?.background()
         connectionFeed.backgrounded(appInBackground: applicationIsBackgrounded())
         if authenticatedMode && active,
            let room = authRoom, let owner = tokenOwner {
@@ -1064,11 +1113,12 @@ final class FriendSharingSession: ObservableObject {
     }
 
     func foreground() {
+        mediaSession?.foreground()
         let returnedFromBackground = backgrounded
         backgrounded = false; sharing.enterForeground()
         guard returnedFromBackground else { return }
         guard foregroundReconnectIntent != nil else { return }
-        guard hasValidForegroundReconnectIntent else { stop(reason: .sessionChanged); status = "Sign in to share"; return }
+        guard hasValidForegroundReconnectIntent else { stopLane(reason: .sessionChanged); status = "Sign in to share"; return }
         connectionFeed.foregrounded()
         attemptForegroundReconnect()
     }
@@ -1091,7 +1141,7 @@ final class FriendSharingSession: ObservableObject {
         guard !backgrounded, !active, let intent = foregroundReconnectIntent,
               hasValidForegroundReconnectIntent,
               let identity = authenticatedSession?(), identity.owner == intent.owner else {
-            if !hasValidForegroundReconnectIntent { stop(reason: .sessionChanged); status = "Sign in to share" }
+            if !hasValidForegroundReconnectIntent { stopLane(reason: .sessionChanged); status = "Sign in to share" }
             return
         }
         foregroundReconnectRetry?.cancel(); foregroundReconnectRetry = nil
@@ -1103,8 +1153,9 @@ final class FriendSharingSession: ObservableObject {
 
     private func handleForegroundReconnectFailure(run: UUID, status failureStatus: String) {
         guard generation == run, active else { return }
+        connectionFailed = true
         guard foregroundReconnectIntent != nil, !backgrounded, hasValidForegroundReconnectIntent else {
-            stop(reason: .unavailable); status = failureStatus.replacingOccurrences(of: " · Retrying", with: " · Retry"); writeEvidence(); return
+            stopLane(reason: .unavailable); status = failureStatus.replacingOccurrences(of: " · Retrying", with: " · Retry"); writeEvidence(); return
         }
         connectionFeed.recovering()
         sharedWorld.peerGone(); soulLink.peerGone()
@@ -1137,7 +1188,7 @@ final class FriendSharingSession: ObservableObject {
             guard let self, self.generation == retryGeneration,
                   self.foregroundReconnectIntent != nil, !self.backgrounded else { return }
             self.foregroundReconnectRetry = nil
-            guard self.hasValidForegroundReconnectIntent else { self.stop(reason: .sessionChanged); self.status = "Sign in to share"; return }
+            guard self.hasValidForegroundReconnectIntent else { self.stopLane(reason: .sessionChanged); self.status = "Sign in to share"; return }
             self.attemptForegroundReconnect()
         }
     }

@@ -565,9 +565,9 @@ struct BoundCompanionPresentation: View {
     private var friendVideo: some View {
         ZStack {
             Color.black
-            BoundRemoteCanvas(view: sharing.remoteView, hidesAccessibilityChildren: true).opacity(sharing.remoteVisible || state.displaysFixtureVideo ? 1 : 0)
-            if !sharing.remoteVisible && !state.displaysFixtureVideo {
-                Text(sharing.active ? "Waiting for friend" : "Connect a friend").foregroundStyle(.white).font(.callout)
+            BoundRemoteCanvas(view: sharing.screenSharing.remoteView, hidesAccessibilityChildren: true).opacity(sharing.screenSharing.remoteVisible || state.displaysFixtureVideo ? 1 : 0)
+            if !sharing.screenSharing.remoteVisible && !state.displaysFixtureVideo {
+                Text(sharing.screenSharing.active ? "Waiting for friend" : "Connect a friend").foregroundStyle(.white).font(.callout)
             }
         }
     }

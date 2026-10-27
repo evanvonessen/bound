@@ -192,13 +192,13 @@ struct BoundMacWorkspaceView: View {
         VStack(spacing: 4) {
             ZStack {
                 Color.black
-                BoundRemoteCanvas(view: sharing.remoteView)
-                    .opacity(state.macFriendVisible && (sharing.remoteVisible || state.displaysFixtureVideo) ? 1 : 0)
+                BoundRemoteCanvas(view: sharing.screenSharing.remoteView)
+                    .opacity(state.macFriendVisible && (sharing.screenSharing.remoteVisible || state.displaysFixtureVideo) ? 1 : 0)
                 if !state.macFriendVisible {
                     Button("Show Friend Gameplay") { state.macFriendVisible = true }
                         .accessibilityIdentifier("bound.mac-show-friend")
-                } else if !sharing.remoteVisible && !state.displaysFixtureVideo {
-                    Text(sharing.active ? "Waiting for friend" : sharing.connectionRequested ? "Retrying connection…" : "Connect a friend")
+                } else if !sharing.screenSharing.remoteVisible && !state.displaysFixtureVideo {
+                    Text(sharing.screenSharing.active ? "Waiting for friend" : sharing.screenSharing.connectionRequested ? "Retrying connection…" : "Connect a friend")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                         .allowsHitTesting(false)
                 }
@@ -207,24 +207,23 @@ struct BoundMacWorkspaceView: View {
             .clipped()
             .accessibilityElement(children: state.macFriendVisible ? .ignore : .contain)
             .accessibilityLabel("Friend gameplay")
-            .accessibilityValue(sharing.status)
+            .accessibilityValue(sharing.screenSharing.status)
             .accessibilityIdentifier("bound.friend-screen")
             if state.macFriendVisible {
-                Button(action: toggleFriendConnection) {
-                    Text(sharing.connectionRequested ? "Disconnect" : "Connect")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(maxWidth: .infinity).frame(height: 32)
-                        .background(accent, in: RoundedRectangle(cornerRadius: 6))
+                if onboarding.rooms.isEmpty {
+                    Button("Friends", action: showFriends)
+                        .accessibilityIdentifier("bound.mac-friends-open")
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            ForEach(onboarding.rooms) { room in
+                                BoundFriendConnectionControls(room: room, sharing: sharing, onboarding: onboarding)
+                            }
+                        }
+                    }.frame(maxHeight: 160)
                 }
-                .buttonStyle(.plain).foregroundStyle(.white)
-                .accessibilityIdentifier("bound.mac-friends-connect")
             }
         }
-    }
-
-    func toggleFriendConnection() {
-        if sharing.connectionRequested { onboarding.disconnect() }
-        else { showFriends() }
     }
 
     private var midSection: some View {

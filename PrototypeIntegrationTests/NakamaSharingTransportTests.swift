@@ -64,6 +64,7 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
     var starts = 0
     var stops = 0
     var frameSends = 0
+    var failFrameSends = true
     var presenceSends = 0
     var interactionSends = 0
     var battleChannels = 0
@@ -82,12 +83,166 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
         battleChannels += 1; return nil
     }
     func send(_ frame: SharingFrame, completion: @escaping @MainActor (Result<Void, SharingFailure>) -> Void) -> any SharingCancellation {
-        frameSends += 1; completion(.failure(.transport("fixture video outage"))); return NakamaFrameCancellation()
+        frameSends += 1; completion(failFrameSends ? .failure(.transport("fixture video outage")) : .success(())); return NakamaFrameCancellation()
     }
 }
 @MainActor private final class NakamaFrameCancellation: SharingCancellation { func cancel() {} }
 
 @MainActor final class NakamaSharingTransportTests: XCTestCase {
+    func testIndependentFriendButtonsCoverAllFourCombinationsAndFailures() async throws {
+        let identity = try identity(), lease = lease
+        let room = FriendRoom(roomID: self.room.uuidString, displayName: "Friend")
+        let media = NakamaMediaFixture(), unusedMedia = NakamaMediaFixture()
+        media.failFrameSends = false
+        let wire = NakamaTransportWire(match: match)
+        var videoAuthorizations = 0, gameplayAuthorizations = 0, jiggles = 0
+        let video = FriendSharingSession(configuration: nil, transport: media, authenticatedMode: true, mediaOnly: true,
+            tokenFetcher: { room, identity in
+                videoAuthorizations += 1
+                let now = Date().timeIntervalSince1970
+                return FriendSharingTokenLease(roomID: room, ownerID: identity.owner, appID: String(repeating: "0", count: 32),
+                    channel: "independent-video", uid: 1, remoteUID: 2, token: "fixture-video", issuedAt: now, expiresAt: now + 90)
+            }, nakamaFetcher: { _, _ in XCTFail("Video must never authorize gameplay"); return lease })
+        let transport = BoundNakamaSharingTransport(media: unusedMedia, client: BoundNakamaClient(socketFactory: { _ in wire }))
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            tokenFetcher: { _, _ in XCTFail("Gameplay must never authorize video"); throw FriendSharingTokenError.unavailable },
+            nakamaFetcher: { _, _ in gameplayAuthorizations += 1; return lease }, screenSession: video)
+        let onboarding = FriendOnboarding(call: { _, _, _ in .init(ok: true, rooms: [room]) }, sendJiggle: { _, _ in jiggles += 1; return "" })
+        defer { onboarding.close(); sharing.stop() }
+        func state(_ lane: FriendSharingSession) -> BoundFriendRowConnection {
+            .init(roomID: room.roomID, selectedRoomID: lane.configuredRoomID, sharing: lane)
+        }
+        func settle(_ predicate: () -> Bool) async {
+            for _ in 0..<200 { if predicate() { return }; try? await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertTrue(predicate())
+        }
+        onboarding.open(sharing: sharing, existing: { identity })
+        await settle { !onboarding.busy }
+        // Neither enabled.
+        XCTAssertEqual(state(video), .inactive); XCTAssertEqual(state(sharing), .inactive)
+        XCTAssertEqual(videoAuthorizations, 0); XCTAssertEqual(gameplayAuthorizations, 0)
+        // Screen only. A server join without the expected peer is disconnected.
+        onboarding.toggleScreenSharing(room)
+        XCTAssertEqual(state(video), .connecting)
+        await settle { video.joined && jiggles == 1 }
+        XCTAssertEqual(state(video), .disconnected)
+        media.callbacks.last?(.remoteJoined)
+        XCTAssertEqual(state(video), .connected); XCTAssertFalse(sharing.connectionRequested)
+        XCTAssertEqual(gameplayAuthorizations, 0); XCTAssertFalse(video.interactions.connected)
+        sharing.receivePlaybackFrame(GameFrame(rgba: Data(repeating: 0, count: SharingFrame.byteCount), number: 1, buttons: 0))
+        XCTAssertEqual(media.frameSends, 1, "Video-only must receive the displayed emulator frame")
+        // A cartridge run owns this partner; its UI toggle connects that scope.
+        onboarding.setMultiplayerPartner(roomID: room.roomID)
+        // Both enabled, without restarting Agora or sending another Jiggle.
+        onboarding.toggleMultiplayer(room)
+        XCTAssertEqual(state(sharing), .connecting)
+        await settle { sharing.joined }
+        wire.deliver(roster(peerOnline: true))
+        await settle { sharing.peerConnected }
+        XCTAssertEqual(state(sharing), .connected); XCTAssertEqual(state(video), .connected)
+        XCTAssertEqual(videoAuthorizations, 1); XCTAssertEqual(media.starts, 1); XCTAssertEqual(jiggles, 1)
+        let local = try JSONDecoder().decode(BoundFriendWorldPosition.self, from: Data(
+            #"{"mapGroup":4,"mapNumber":1,"elevation":0,"x":6,"y":6,"facing":4}"#.utf8))
+        let peer = try JSONDecoder().decode(BoundFriendWorldPosition.self, from: Data(
+            #"{"mapGroup":4,"mapNumber":1,"elevation":0,"x":7,"y":6,"facing":3}"#.utf8))
+        let context = BoundFriendInteractionSession.Context(localSession: UUID(), peerSession: UUID(), local: local, peer: peer)
+        sharing.interactions.context = { context }
+        XCTAssertTrue(sharing.interactions.open())
+        let consent = sharing.interactions.admissionIdentity?()
+        // Multiplayer only, with invitation and packet routing still live.
+        onboarding.toggleScreenSharing(room)
+        XCTAssertFalse(video.connectionRequested); XCTAssertEqual(state(sharing), .connected)
+        sharing.receivePlaybackFrame(GameFrame(rgba: Data(repeating: 0, count: SharingFrame.byteCount), number: 2, buttons: 0))
+        XCTAssertEqual(media.frameSends, 1, "Video off must stop publication while gameplay stays online")
+        XCTAssertEqual(sharing.interactions.phase, .choosing)
+        XCTAssertTrue(sharing.sendMultiplayerPacket(Data("BRM1fixture".utf8)))
+        XCTAssertEqual(gameplayAuthorizations, 1)
+        media.callbacks.first?(.failed(.init(.connectionLost)))
+        XCTAssertFalse(video.connectionFailed, "Late video callbacks cannot resurrect a stopped lane")
+        XCTAssertEqual(state(sharing), .connected)
+        // Start video again; its failure leaves the gameplay channel intact.
+        onboarding.toggleScreenSharing(room)
+        await settle { video.joined }
+        media.callbacks.last?(.remoteJoined)
+        media.callbacks.last?(.failed(.init(.connectionLost)))
+        XCTAssertEqual(state(video), .failed); XCTAssertEqual(state(sharing), .connected)
+        XCTAssertTrue(sharing.sendMultiplayerPacket(Data("BRM1fixture".utf8)))
+        video.stop()
+        onboarding.toggleScreenSharing(room)
+        await settle { video.joined }
+        media.callbacks.last?(.remoteJoined)
+        let starts = media.starts, stops = media.stops
+        // Manual multiplayer pause keeps video and the invitation, and ROM
+        // polling cannot override the user's switch-off decision.
+        onboarding.toggleMultiplayer(room)
+        XCTAssertEqual(state(sharing), .inactive); XCTAssertEqual(state(video), .connected)
+        XCTAssertEqual(sharing.interactions.phase, .choosing)
+        XCTAssertFalse(sharing.interactions.connected)
+        XCTAssertEqual(sharing.interactions.admissionIdentity?(), consent, "Manual pause retains authenticated invitation ownership")
+        XCTAssertEqual(onboarding.multiplayerPartnerRoomID, room.roomID)
+        for _ in 0..<3 { onboarding.setMultiplayerPartner(roomID: room.roomID) }
+        XCTAssertFalse(sharing.connectionRequested)
+        XCTAssertEqual(media.starts, starts); XCTAssertEqual(media.stops, stops)
+        onboarding.toggleMultiplayer(room)
+        await settle { sharing.joined }
+        XCTAssertEqual(sharing.interactions.phase, .choosing)
+        XCTAssertTrue(sharing.interactions.connected)
+        wire.deliverStaleFailure()
+        await settle { sharing.connectionFailed }
+        XCTAssertEqual(state(sharing), .failed); XCTAssertEqual(state(video), .connected)
+        XCTAssertEqual(media.starts, starts); XCTAssertEqual(media.stops, stops)
+        XCTAssertEqual(unusedMedia.starts, 0)
+        onboarding.disconnectMultiplayer()
+        onboarding.toggleScreenSharing(room)
+        XCTAssertFalse(video.connectionRequested); XCTAssertFalse(sharing.connectionRequested)
+    }
+
+    func testVideoCanSelectAnotherFriendWithoutReplacingRunAndAccountRemovalClosesBoth() async throws {
+        var current: AppCloudSession? = try identity()
+        let lease = lease, wire = NakamaTransportWire(match: match), media = NakamaMediaFixture()
+        let partner = FriendRoom(roomID: room.uuidString, displayName: "Run Partner")
+        let videoFriend = FriendRoom(roomID: UUID().uuidString, displayName: "Video Friend")
+        let video = FriendSharingSession(configuration: nil, transport: media, authenticatedMode: true, mediaOnly: true,
+            tokenFetcher: { room, identity in
+                let now = Date().timeIntervalSince1970
+                return FriendSharingTokenLease(roomID: room, ownerID: identity.owner, appID: String(repeating: "0", count: 32),
+                    channel: room, uid: 1, remoteUID: 2, token: "fixture-video", issuedAt: now, expiresAt: now + 90)
+            })
+        let transport = BoundNakamaSharingTransport(media: NakamaMediaFixture(), client: BoundNakamaClient(socketFactory: { _ in wire }))
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            nakamaFetcher: { _, _ in lease }, screenSession: video)
+        let onboarding = FriendOnboarding(call: { _, action, _ in
+            .init(ok: true, rooms: action == "list" ? [partner, videoFriend] : nil, blocks: [])
+        }, sendJiggle: { _, _ in "" })
+        defer { onboarding.close(); sharing.stop() }
+        func settle(_ predicate: () -> Bool) async {
+            for _ in 0..<200 { if predicate() { return }; try? await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertTrue(predicate())
+        }
+        onboarding.open(sharing: sharing, existing: { current })
+        await settle { !onboarding.busy }
+        onboarding.setMultiplayerPartner(roomID: partner.roomID)
+        onboarding.toggleMultiplayer(partner)
+        await settle { sharing.joined }
+        onboarding.toggleScreenSharing(videoFriend)
+        await settle { video.joined }
+        XCTAssertEqual(video.configuredRoomID, videoFriend.roomID)
+        XCTAssertEqual(sharing.configuredRoomID, partner.roomID)
+        XCTAssertTrue(sharing.sendMultiplayerPacket(Data("BRM1fixture".utf8)))
+        onboarding.toggleMultiplayer(videoFriend)
+        XCTAssertEqual(sharing.configuredRoomID, partner.roomID, "Video selection cannot replace the persisted multiplayer partner")
+        XCTAssertTrue(sharing.joined); XCTAssertTrue(video.joined)
+        onboarding.block(videoFriend)
+        await settle { !onboarding.busy }
+        XCTAssertFalse(video.connectionRequested); XCTAssertTrue(sharing.joined)
+        XCTAssertEqual(onboarding.multiplayerPartnerRoomID, partner.roomID)
+        onboarding.toggleScreenSharing(partner)
+        await settle { video.joined }
+        current = nil; onboarding.synchronizeAccount()
+        XCTAssertFalse(sharing.connectionRequested); XCTAssertFalse(video.connectionRequested)
+        XCTAssertNil(sharing.configuredRoomID); XCTAssertNil(video.configuredRoomID)
+    }
+
     func testAgoraMediaHasNoGameplayChannel() {
         let media: any FriendSharingTransport = AgoraSharingTransport()
         XCTAssertFalse(media.sendPresence(Data([1])))
@@ -585,33 +740,35 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
         XCTAssertEqual(media.starts, 0)
     }
 
-    func testDisablingMultiplayerRestartsManualSharingAsVideoOnly() async throws {
+    func testDisablingMultiplayerLeavesIndependentVideoRunning() async throws {
         let wire = NakamaTransportWire(match: match), media = NakamaMediaFixture()
-        let transport = BoundNakamaSharingTransport(media: media, client: BoundNakamaClient(socketFactory: { _ in wire }))
+        let transport = BoundNakamaSharingTransport(media: NakamaMediaFixture(), client: BoundNakamaClient(socketFactory: { _ in wire }))
         let identity = try identity(), lease = lease, room = room.uuidString
-        var nakamaAuthorizations = 0, videoAuthorizations = 0
-        let initialVideo = expectation(description: "initial optional video"), resumedVideo = expectation(description: "manual video resumes")
-        media.started = { if media.starts == 1 { initialVideo.fulfill() } else if media.starts == 2 { resumedVideo.fulfill() } }
-        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+        var videoAuthorizations = 0
+        let video = FriendSharingSession(configuration: nil, transport: media, authenticatedMode: true, mediaOnly: true,
             tokenFetcher: { _, _ in
                 videoAuthorizations += 1
                 return FriendSharingTokenLease(roomID: room, ownerID: identity.owner, appID: String(repeating: "0", count: 32),
                     channel: "fixture-video", uid: 1, remoteUID: 2, token: "fixture-video-token",
                     issuedAt: Date().timeIntervalSince1970, expiresAt: Date().timeIntervalSince1970 + 90)
-            }, nakamaFetcher: { _, _ in nakamaAuthorizations += 1; return lease })
-        defer { sharing.stop(); media.started = nil }
+            })
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+            nakamaFetcher: { _, _ in lease }, screenSession: video)
+        defer { sharing.stop() }
         sharing.configureAuthenticatedRoom(room, identity: { identity })
-        let joined = expectation(description: "manual gameplay joined")
-        let observation = sharing.$joined.dropFirst().filter { $0 }.prefix(1).sink { _ in joined.fulfill() }
-        sharing.start()
-        await fulfillment(of: [joined, initialVideo], timeout: 2)
-        withExtendedLifetime(observation) {}
-        XCTAssertTrue(sharing.active); XCTAssertTrue(transport.presenceConnectionCheck.streamCreated)
+        video.configureAuthenticatedRoom(room, identity: { identity })
+        video.start(); sharing.setAutomaticMultiplayerConnection(true)
+        for _ in 0..<200 { if sharing.joined && video.joined { break }; try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(sharing.joined); XCTAssertTrue(video.joined)
+        let stops = media.stops
         BoundMultiplayerFeatures.setEnabled(false)
-        await fulfillment(of: [resumedVideo], timeout: 2)
-        XCTAssertTrue(sharing.active); XCTAssertTrue(sharing.joined); XCTAssertTrue(sharing.videoPublishing)
+        XCTAssertFalse(sharing.connectionRequested)
         XCTAssertFalse(transport.presenceConnectionCheck.streamCreated)
-        XCTAssertFalse(transport.sendPresence(Data([1]))); XCTAssertNil(transport.makeBattleChannel(receiver: { _ in }, failed: {}))
-        XCTAssertEqual(nakamaAuthorizations, 1); XCTAssertGreaterThanOrEqual(videoAuthorizations, 2)
+        XCTAssertNil(transport.makeBattleChannel(receiver: { _ in }, failed: {}))
+        XCTAssertTrue(video.joined); XCTAssertTrue(video.active)
+        XCTAssertEqual(media.starts, 1); XCTAssertEqual(media.stops, stops); XCTAssertEqual(videoAuthorizations, 1)
+        BoundMultiplayerFeatures.setEnabled(true)
+        XCTAssertFalse(sharing.connectionRequested, "Enabling the experiment alone cannot start either lane")
+        XCTAssertTrue(video.joined); XCTAssertEqual(media.starts, 1)
     }
 }

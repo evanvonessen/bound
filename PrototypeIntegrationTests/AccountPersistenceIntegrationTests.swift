@@ -426,15 +426,15 @@ final class FriendModerationIntegrationTests: XCTestCase {
         let sharing = FriendSharingSession(configuration: nil, authenticatedMode: true)
         model.open(sharing: sharing, existing: { identity })
         for _ in 0..<1000 { if !model.busy { break }; await Task.yield() }
-        XCTAssertEqual(model.rooms, [room]); model.select(room); XCTAssertNotNil(model.selected)
+        XCTAssertEqual(model.rooms, [room]); model.select(room); XCTAssertNotNil(model.screenSelected)
         model.block(room)
-        XCTAssertNil(model.selected); XCTAssertFalse(sharing.active)
+        XCTAssertNil(model.screenSelected); XCTAssertFalse(sharing.active)
         for _ in 0..<1000 { if !model.busy { break }; await Task.yield() }
         XCTAssertEqual(model.rooms, []); XCTAssertEqual(model.blocks, [block])
         XCTAssertTrue(calls.contains { $0.0 == "block" && $0.1 == ["roomID": room.roomID] })
         model.unblock(block)
         for _ in 0..<1000 { if !model.busy { break }; await Task.yield() }
-        XCTAssertEqual(model.blocks, []); XCTAssertNil(model.selected); XCTAssertEqual(model.rooms, [])
+        XCTAssertEqual(model.blocks, []); XCTAssertNil(model.screenSelected); XCTAssertEqual(model.rooms, [])
         model.close()
     }
     func testReportUsesOnlyRoomAndCategoryAndDoesNotClaimReceiptOnDenial() async throws {
@@ -480,7 +480,7 @@ final class FriendModerationIntegrationTests: XCTestCase {
         XCTAssertEqual(model.accountUsername, "River")
         model.select(room)
         model.remove(room)
-        XCTAssertNil(model.selected)
+        XCTAssertNil(model.screenSelected)
         XCTAssertFalse(sharing.active)
         for _ in 0..<1000 { if !model.busy { break }; await Task.yield() }
         XCTAssertEqual(model.rooms, [room], "A rejected remove must retain the friend")
@@ -565,7 +565,41 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         XCTAssertTrue(sharing.interactions.connected)
         onboarding.setMultiplayerServiceActive(false, sharing: sharing, existing: { identity })
         XCTAssertFalse(sharing.connectionRequested, "Deliberate disable still clears the connection")
-        XCTAssertEqual(sharing.interactions.phase, .ended)
+        XCTAssertEqual(sharing.interactions.phase, .choosing)
+    }
+
+    func testManualMultiplayerCanSwitchFriendsUntilCartridgeOwnsPartner() async throws {
+        let previous = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        BoundMultiplayerFeatures.setEnabled(true)
+        defer { UserDefaults.standard.set(previous, forKey: BoundMultiplayerFeatures.key) }
+        let identity = try makeIdentity(owner: UUID())
+        let first = FriendRoom(roomID: UUID().uuidString, displayName: "First")
+        let second = FriendRoom(roomID: UUID().uuidString, displayName: "Second")
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+            tokenFetcher: { room, identity in self.makeLease(room: room, owner: identity.owner, request: 1) })
+        let onboarding = FriendOnboarding(call: { _, _, _ in .init(ok: true, rooms: [first, second]) },
+            sendJiggle: { _, _ in XCTFail("Multiplayer must not send sharing notifications"); return "" },
+            observeAccount: { OnboardingObservation($0) })
+        defer { onboarding.close(); sharing.stop() }
+        onboarding.open(sharing: sharing, existing: { identity })
+        await waitUntil { !onboarding.busy }
+        onboarding.toggleMultiplayer(first)
+        await waitUntil { sharing.joined }
+        XCTAssertNil(onboarding.multiplayerPartnerRoomID, "A button is not a persisted run")
+        onboarding.setMultiplayerPartner(roomID: nil)
+        XCTAssertTrue(sharing.joined, "An idle cartridge cannot undo an explicit manual choice")
+        onboarding.toggleMultiplayer(second)
+        await waitUntil { sharing.joined && sharing.configuredRoomID == second.roomID }
+        XCTAssertEqual(sharing.configuredRoomID, second.roomID)
+        onboarding.setMultiplayerPartner(roomID: second.roomID, userInitiated: true)
+        await waitUntil { sharing.joined }
+        onboarding.disconnectMultiplayer()
+        onboarding.toggleMultiplayer(first)
+        XCTAssertFalse(sharing.connectionRequested)
+        XCTAssertEqual(onboarding.multiplayerPartnerRoomID, second.roomID)
+        onboarding.toggleMultiplayer(second)
+        await waitUntil { sharing.joined }
+        XCTAssertEqual(sharing.configuredRoomID, second.roomID)
     }
 
     func testFriendRowHighlightsOnlyConnectedPeerAndStopRemovesItsBadge() async throws {
@@ -573,23 +607,23 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         let room = FriendRoom(roomID: UUID().uuidString, displayName: "Friend")
         let otherRoom = UUID().uuidString
         let transport = FriendTapSharingTransport()
-        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true, mediaOnly: true,
             tokenFetcher: { room, session in self.makeLease(room: room, owner: session.owner, request: 1) })
         let onboarding = FriendOnboarding(call: { _, _, _ in .init(ok: true, rooms: [room]) },
             sendJiggle: { _, _ in "" }, observeAccount: { OnboardingObservation($0) })
         func row(_ roomID: String? = nil) -> BoundFriendRowConnection {
-            .init(roomID: roomID ?? room.roomID, selectedRoomID: onboarding.selected?.roomID, sharing: sharing)
+            .init(roomID: roomID ?? room.roomID, selectedRoomID: onboarding.screenSelected?.roomID, sharing: sharing)
         }
         defer { onboarding.close(); sharing.stop() }
         onboarding.open(sharing: sharing, existing: { identity })
         await waitUntil { !onboarding.busy }
         onboarding.select(room)
         XCTAssertEqual(row(), .inactive, "Remembering a friend does not highlight their row")
-        XCTAssertNil(row().title, "An idle row has no Not sharing badge")
+        XCTAssertEqual(row().title, "Disconnected", "An idle row has no Not sharing badge")
         onboarding.select(room, startSharing: true)
         await waitUntil { sharing.joined }
         XCTAssertTrue(sharing.joined)
-        XCTAssertEqual(row(), .connecting, "Joining locally is not proof that both friends are connected")
+        XCTAssertEqual(row(), .disconnected, "Joining locally is not proof that both friends are connected")
         XCTAssertEqual(row(otherRoom), .inactive)
         transport.emit(.remoteJoined)
         XCTAssertTrue(sharing.peerConnected)
@@ -597,15 +631,15 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         XCTAssertEqual(row(), .connected)
         XCTAssertEqual(row().title, "Connected")
         sharing.stop()
-        XCTAssertNotNil(onboarding.selected, "A cached row may remain after a transport stops")
+        XCTAssertNotNil(onboarding.screenSelected, "A cached row may remain after a transport stops")
         XCTAssertEqual(row(), .inactive, "A stopped selection loses its purple box and badge")
-        XCTAssertNil(row().title)
+        XCTAssertEqual(row().title, "Disconnected")
         onboarding.select(room, startSharing: true)
         await waitUntil { sharing.joined }
         transport.emit(.remoteJoined)
         XCTAssertEqual(row(), .connected)
         transport.emit(.remoteGone)
-        XCTAssertEqual(row(), .connecting)
+        XCTAssertEqual(row(), .disconnected)
         transport.emit(.remoteJoined)
         XCTAssertEqual(row(), .connected)
         transport.emit(.reconnecting)
@@ -617,7 +651,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         XCTAssertEqual(row(), .connected)
         onboarding.disconnect()
         XCTAssertEqual(row(), .inactive)
-        XCTAssertNil(row().title)
+        XCTAssertEqual(row().title, "Disconnected")
         XCTAssertFalse(sharing.connectionRequested)
         XCTAssertFalse(sharing.peerConnected)
         XCTAssertFalse(sharing.active)
@@ -644,7 +678,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         XCTAssertTrue(onboarding.selectMultiplayerPartner(roomID: room.roomID, sharing: sharing, existing: { identity }))
         await waitUntil { requests == 1 && !sharing.active }
         let pending = BoundFriendRowConnection(roomID: room.roomID, selectedRoomID: onboarding.selected?.roomID, sharing: sharing)
-        XCTAssertEqual(pending, .connecting, "Stop remains available during retry backoff")
+        XCTAssertEqual(pending, .failed, "Stop remains available during retry backoff")
         XCTAssertTrue(sharing.connectionRequested)
         onboarding.disconnect()
         for _ in 0..<3 { onboarding.setMultiplayerPartner(roomID: room.roomID) }
@@ -833,7 +867,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         XCTAssertEqual(host.acknowledgedRequest, 1)
         XCTAssertEqual(host.friends.map(\.name), ["First"])
         XCTAssertTrue(host.message.contains("Refresh"))
-        XCTAssertEqual(onboarding.selected, first)
+        XCTAssertEqual(onboarding.screenSelected, first)
         response = .init(ok: true, rooms: [added])
         refresh.begin(requestID: 2, onboarding: onboarding)
         await waitUntil { !onboarding.busy }
@@ -954,24 +988,18 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         await waitUntil { !onboarding.busy }
         onboarding.setMultiplayerPartner(roomID: room.roomID)
         await waitUntil { sharing.joined }
-        var friendsOpened = 0
-        let workspace = BoundMacWorkspaceView(sharing: sharing, onboarding: onboarding,
-            state: BoundCompanionState(), geometry: .init(bounds: CGRect(x: 0, y: 0, width: 1200, height: 800)),
-            gameID: "mac-disconnect-fixture", gameTitle: "Fixture", editingChanged: { _ in },
-            textEditingChanged: { _ in }, currentSave: { _ in throw BoundRRDexSave.ImportError.currentGameUnavailable },
-            showLibrary: {}, showMenu: {}, showFriends: { friendsOpened += 1 }, showSettings: {})
         if duringRetry {
             transport.emit(.failed(.init(.connectionLost)))
             XCTAssertFalse(sharing.active); XCTAssertFalse(sharing.joined)
             XCTAssertTrue(sharing.connectionRequested, "The retry delay still belongs to the selected connection")
         }
-        if useMacSidebar { workspace.toggleFriendConnection() }
+        if useMacSidebar { onboarding.toggleMultiplayer(room) }
         else { onboarding.disconnect() }
         XCTAssertFalse(sharing.active)
         XCTAssertFalse(sharing.joined)
         XCTAssertFalse(sharing.connectionRequested)
         XCTAssertNil(sharing.connectedRoomID)
-        XCTAssertNil(onboarding.selected)
+        XCTAssertEqual(onboarding.selected?.roomID, room.roomID)
         for _ in 0..<5 { onboarding.setMultiplayerPartner(roomID: room.roomID); observation?.fire() }
         sharing.background(); sharing.foreground()
         onboarding.open(sharing: sharing, existing: { identity })
@@ -979,14 +1007,8 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         await settle()
         if duringRetry { try await Task.sleep(for: .milliseconds(1200)) }
         XCTAssertEqual(requests, 1, "Manual Stop must block background reconnection")
-        XCTAssertNil(onboarding.selected, "Stopped friends have no paused/not-sharing badge")
-        if useMacSidebar {
-            XCTAssertEqual(friendsOpened, 0, "Disconnect must not open Friends")
-            workspace.toggleFriendConnection()
-            XCTAssertEqual(friendsOpened, 1, "Connect must return to Friends for an explicit selection")
-            XCTAssertEqual(requests, 1, "Opening Friends must not silently reconnect")
-        }
-        onboarding.select(room, startSharing: true)
+        XCTAssertEqual(onboarding.selected?.roomID, room.roomID, "Manual disconnect retains the gameplay partner")
+        onboarding.toggleMultiplayer(room)
         await waitUntil { sharing.joined }
         XCTAssertEqual(requests, 2)
         onboarding.disconnect()
@@ -1007,8 +1029,10 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         }
         let identity = try makeIdentity(owner: UUID())
         let room = FriendRoom(roomID: UUID().uuidString, displayName: "Video Friend")
-        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+        let video = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true, mediaOnly: true,
             tokenFetcher: { room, identity in self.makeLease(room: room, owner: identity.owner, request: 1) })
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+            tokenFetcher: { room, identity in self.makeLease(room: room, owner: identity.owner, request: 1) }, screenSession: video)
         let onboarding = FriendOnboarding(call: { _, _, _ in FriendResponse(ok: true, rooms: [room]) },
             sendJiggle: { _, _ in "" }, observeAccount: { OnboardingObservation($0) })
         onboarding.setMultiplayerServiceActive(true, sharing: sharing, existing: { identity })
@@ -1016,9 +1040,10 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         onboarding.setMultiplayerPartner(roomID: room.roomID)
         await waitUntil { sharing.joined }
         onboarding.select(room, startSharing: true)
+        await waitUntil { video.joined }
         BoundMultiplayerFeatures.setEnabled(false)
         onboarding.setMultiplayerServiceActive(false, sharing: sharing, existing: { identity })
-        XCTAssertTrue(sharing.joined, "Explicit friend video remains available when multiplayer is disabled")
+        XCTAssertTrue(video.joined, "Explicit friend video remains available when multiplayer is disabled")
         XCTAssertFalse(sharing.livePresence.connected)
         XCTAssertFalse(sharing.interactions.connected)
         sharing.stop(); onboarding.close()
@@ -1032,7 +1057,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         let transport = FriendTapSharingTransport()
         var requestedRooms: [String] = []
         var jiggleRooms: [String] = []
-        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true, mediaOnly: true,
             tokenFetcher: { room, session in
                 requestedRooms.append(room)
                 return self.makeLease(room: room, owner: session.owner, request: requestedRooms.count)
@@ -1064,7 +1089,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         await waitUntil { transport.configurations.count == 2 }
         XCTAssertEqual(requestedRooms, [first.roomID, second.roomID])
         XCTAssertEqual(transport.configurations.last?.channel, "friend-tap-2")
-        XCTAssertEqual(onboarding.selected, second)
+        XCTAssertEqual(onboarding.screenSelected, second)
         await waitUntil { jiggleRooms.count == 2 }
         XCTAssertEqual(jiggleRooms, [first.roomID, second.roomID])
 
@@ -1086,7 +1111,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
         let transport = FriendTapSharingTransport()
         var tokenRequests = 0
-        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true, mediaOnly: true,
             tokenFetcher: { room, session in
                 tokenRequests += 1
                 return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
@@ -1102,7 +1127,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
 
         onboarding.select(friend)
         await settle()
-        XCTAssertEqual(onboarding.selected, friend, "Selection remains available without starting sharing")
+        XCTAssertEqual(onboarding.screenSelected, friend, "Selection remains available without starting sharing")
         XCTAssertFalse(sharing.active)
         XCTAssertEqual(tokenRequests, 0)
         XCTAssertTrue(transport.configurations.isEmpty)
@@ -1119,7 +1144,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         let transport = FriendTapSharingTransport()
         var tokenRequests = 0
         var holdReport = false
-        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true, mediaOnly: true,
             tokenFetcher: { room, session in
                 tokenRequests += 1
                 return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
@@ -1142,7 +1167,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
 
         onboarding.select(invalid, startSharing: true)
         onboarding.select(unlisted, startSharing: true)
-        XCTAssertNil(onboarding.selected)
+        XCTAssertNil(onboarding.screenSelected)
         XCTAssertEqual(tokenRequests, 0)
         XCTAssertTrue(transport.configurations.isEmpty)
 
@@ -1150,22 +1175,22 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         onboarding.report(friend, reason: .other)
         XCTAssertTrue(onboarding.busy)
         onboarding.select(friend, startSharing: true)
-        XCTAssertNil(onboarding.selected)
+        XCTAssertNil(onboarding.screenSelected)
         XCTAssertEqual(tokenRequests, 0, "A busy onboarding action blocks tap-to-share")
         await waitUntil { !onboarding.busy }
 
         identity = nil
         onboarding.synchronizeAccount()
         onboarding.select(friend, startSharing: true)
-        XCTAssertNil(onboarding.selected)
+        XCTAssertNil(onboarding.screenSelected)
         XCTAssertEqual(tokenRequests, 0, "A signed-out account cannot start sharing")
         identity = try makeIdentity(owner: owner)
         onboarding.synchronizeAccount()
         await waitUntil { !onboarding.busy }
 
         onboarding.accept(code: "0123456789ABCDEF", name: "Invited Friend")
-        await waitUntil { !onboarding.busy && onboarding.selected == accepted }
-        XCTAssertEqual(onboarding.selected, accepted)
+        await waitUntil { !onboarding.busy && onboarding.screenSelected == accepted }
+        XCTAssertEqual(onboarding.screenSelected, accepted)
         XCTAssertFalse(sharing.active)
         XCTAssertEqual(tokenRequests, 0, "Accepting an invitation selects the room without starting a share")
         XCTAssertTrue(transport.configurations.isEmpty)
@@ -1178,7 +1203,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         let second = FriendRoom(roomID: UUID().uuidString, displayName: "Second Friend")
         let transport = FriendTapSharingTransport()
         var tokenRequests = 0
-        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true, mediaOnly: true,
             tokenFetcher: { room, session in
                 tokenRequests += 1
                 return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
@@ -1223,7 +1248,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         let firstOwner = UUID(), secondOwner = UUID()
         var identity: AppCloudSession? = try makeIdentity(owner: firstOwner)
         let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
-        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true, mediaOnly: true,
             tokenFetcher: { room, session in
                 self.makeLease(room: room, owner: session.owner, request: 1)
             })
@@ -1251,7 +1276,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         await waitUntil { canceledJiggles == 1 && !onboarding.busy }
         XCTAssertEqual(canceledJiggles, 1, "An account switch cancels the old account's notification")
         XCTAssertFalse(sharing.active, "Changing accounts must stop the previous account's share")
-        XCTAssertNil(onboarding.selected)
+        XCTAssertNil(onboarding.screenSelected)
         XCTAssertNotEqual(onboarding.message, "Jiggle sent.", "The previous account's pending result must not replace the new account state")
         XCTAssertEqual(jiggleStarts, 1, "Account synchronization must not resend a pending Jiggle")
 
@@ -1273,7 +1298,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
     func testStoppingShareCancelsPendingJiggleWithoutStaleMessage() async throws {
         let identity = try makeIdentity(owner: UUID())
         let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
-        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true, mediaOnly: true,
             tokenFetcher: { room, session in
                 self.makeLease(room: room, owner: session.owner, request: 1)
             })
@@ -1310,7 +1335,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
         let transport = FriendTapSharingTransport()
         var tokenRequests = 0
-        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true, mediaOnly: true,
             tokenFetcher: { room, session in
                 tokenRequests += 1
                 return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
@@ -1353,7 +1378,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
         let transport = FriendTapSharingTransport()
         var tokenRequests = 0
-        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true, mediaOnly: true,
             tokenFetcher: { room, session in
                 tokenRequests += 1
                 return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
@@ -1384,7 +1409,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         let friend = FriendRoom(roomID: UUID().uuidString, displayName: "Fixture Friend")
         let transport = FriendTapSharingTransport()
         var tokenRequests = 0
-        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true, mediaOnly: true,
             tokenFetcher: { room, session in
                 tokenRequests += 1
                 return self.makeLease(room: room, owner: session.owner, request: tokenRequests)
@@ -1424,7 +1449,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
             XCTFail("Adding a friend must not send a Jiggle")
             return ""
         }, observeAccount: { OnboardingObservation($0) })
-        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true, mediaOnly: true,
             tokenFetcher: { _, _ in XCTFail("Adding a friend must not start sharing"); throw BoundFriendError.unavailable })
         onboarding.open(sharing: sharing, existing: { identity })
         await waitUntil { !onboarding.busy }
@@ -1432,7 +1457,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         await waitUntil { !onboarding.busy }
         XCTAssertEqual(additions, [["username": "nAvI"]])
         XCTAssertEqual(onboarding.rooms, [room])
-        XCTAssertEqual(onboarding.selected, room)
+        XCTAssertEqual(onboarding.screenSelected, room)
         XCTAssertEqual(onboarding.accountUsername, "River")
         XCTAssertEqual(onboarding.message, "Friend added.")
         XCTAssertFalse(sharing.active)
@@ -1458,7 +1483,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         XCTAssertEqual(additions, 1)
         XCTAssertEqual(onboarding.message, "No friend found with that username.")
         XCTAssertTrue(onboarding.rooms.isEmpty)
-        XCTAssertNil(onboarding.selected)
+        XCTAssertNil(onboarding.screenSelected)
         onboarding.add(username: " ")
         XCTAssertEqual(additions, 1)
         let legacyKey = BoundLegacyPreferences.experimentalFeaturesKey
@@ -1479,7 +1504,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         let room = FriendRoom(roomID: UUID().uuidString, displayName: "Navi")
         let transport = FriendTapSharingTransport()
         var leaseRequests = 0
-        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true,
+        let sharing = FriendSharingSession(configuration: nil, transport: transport, authenticatedMode: true, mediaOnly: true,
             tokenFetcher: { room, identity in
                 leaseRequests += 1
                 return self.makeLease(room: room, owner: identity.owner, request: leaseRequests)
@@ -1516,7 +1541,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
         account.signOut()
         XCTAssertFalse(sharing.active)
         XCTAssertFalse(sharing.joined)
-        XCTAssertNil(onboarding.selected)
+        XCTAssertNil(onboarding.screenSelected)
         XCTAssertNil(reopened.signedInUsername)
         reopened.close()
     }
@@ -1561,7 +1586,7 @@ final class FriendTapToShareIntegrationTests: XCTestCase {
             XCTAssertEqual(action, "list")
             return FriendResponse(ok: true, rooms: [room], username: username)
         }, observeAccount: { OnboardingObservation($0) })
-        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true,
+        let sharing = FriendSharingSession(configuration: nil, transport: FriendTapSharingTransport(), authenticatedMode: true, mediaOnly: true,
             tokenFetcher: { _, _ in XCTFail("Rendering Account must not start a share"); throw BoundFriendError.unavailable })
         let context = BoundAccountFriendsContext(sharing: sharing, onboarding: onboarding, account: account)
         let host = UIHostingController(rootView: NavigationStack { BoundAccountFriendsSyncSettings(context: context) })

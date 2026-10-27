@@ -1,0 +1,11 @@
+# Independent friend connections
+
+Friends and Account, Friends, & Sync use the same name and two-button row. Screen Share owns an Agora-only session, authorization renewal, frame capture and presentation. Multiplayer owns the existing Nakama room, Soul Link, native activities, and recovery. The Mac friend panel uses the same controls. Each lane reports connecting, connected (expected peer present), disconnected, or failed. A local server join alone does not claim that the friend is connected. Failed requested lanes retry independently; tapping their button cancels the request.
+
+Shared account identity still authorizes both lanes. Sign-out, account replacement, removal or blocking revokes the affected ownership scope. Merely toggling one lane never signs out or deletes credentials. Video may target a different listed friend without changing a linked run's partner. Multiplayer cannot replace an existing run's partner through either button. A manual multiplayer connection without a linked run can switch between listed friends; idle cartridge polling cannot cancel that explicit request.
+
+Multiplayer disconnect suspends native transport and cooperative recovery, preserves invitation consent and durable saves, and suppresses automatic ROM reconnection until an explicit Multiplayer button or cartridge friend selection. It does not end the server run, release ownership, delete a checkpoint, or cancel the invitation. Existing invitation expiry and revalidation rules still apply. Screen Share off stops only RTC, its capture queue and video presentation. Re-enabling video sends the existing explicit-share Jiggle; multiplayer never sends one.
+
+The Experimental Multiplayer preference remains required and default off. Game Debug Mode and developer tools remain separate. ROM bytes, exact profiles, save formats, statepoints and backend behavior are unchanged.
+
+Validation uses injected Agora events and a real Nakama client with an isolated socket fixture for all four combinations, independent failure/retry, stale callbacks, consent preservation, and manual-disconnect suppression. Hosted phone/Mac views and account lifecycle tests cover both UI surfaces. Native recovery tests supplement this; they do not certify physical-device, live Agora/Nakama, WAN, or unfinished statepoint behavior.

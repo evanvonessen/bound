@@ -51,6 +51,7 @@ final class FriendOnboarding: ObservableObject {
     @Published private(set) var message = "Sign in to add a friend."
     @Published private(set) var rooms: [FriendRoom] = []
     @Published private(set) var blocks: [FriendBlock] = []
+    @Published private(set) var screenSelected: FriendRoom?
     @Published private(set) var selected: FriendRoom?
     @Published private(set) var inviteCode: String?
     @Published private(set) var accountUsername: String?
@@ -62,6 +63,7 @@ final class FriendOnboarding: ObservableObject {
     private var isOpen = false
     private var multiplayerServiceActive = false
     private(set) var multiplayerPartnerRoomID: String?
+    private var manualMultiplayerRoomID: String?
     private var hasCurrentFriendList = false
     private var disconnectedRooms = Set<String>()
     private var lastProfileRefresh = Date.distantPast
@@ -139,6 +141,7 @@ final class FriendOnboarding: ObservableObject {
         guard roomID == nil || UUID(uuidString: roomID!) != nil else { return }
         if userInitiated, let roomID { disconnectedRooms.remove(roomID) }
         if multiplayerPartnerRoomID != roomID {
+            if roomID != nil { manualMultiplayerRoomID = nil }
             sharing?.setAutomaticMultiplayerConnection(false)
             multiplayerPartnerRoomID = roomID
         }
@@ -165,10 +168,10 @@ final class FriendOnboarding: ObservableObject {
     }
     private func synchronizeMultiplayerConnection() {
         guard multiplayerServiceActive, BoundMultiplayerFeatures.isEnabled, permitsRTC,
-              hasCurrentFriendList, let roomID = multiplayerPartnerRoomID, !disconnectedRooms.contains(roomID),
+              hasCurrentFriendList, let roomID = multiplayerPartnerRoomID ?? manualMultiplayerRoomID, !disconnectedRooms.contains(roomID),
               let room = rooms.first(where: { $0.roomID == roomID }), currentIdentity() != nil else { return }
         if selected?.roomID != roomID || sharing?.configuredRoomID != roomID {
-            cancelPendingJiggle(); selected = room
+            selected = room
             sharing?.configureAuthenticatedRoom(roomID, identity: { [weak self] in self?.sharingIdentity() })
         }
         sharing?.setAutomaticMultiplayerConnection(true)
@@ -191,9 +194,10 @@ final class FriendOnboarding: ObservableObject {
         }
         let hadAccount = ownerID != nil
         cancelPendingRequest(); cancelPendingJiggle(); ownerID = nil; signedIn = false; rooms = []; blocks = []; selected = nil; accountUsername = nil
-        hasCurrentFriendList = false; multiplayerPartnerRoomID = nil; disconnectedRooms.removeAll()
+        hasCurrentFriendList = false; multiplayerPartnerRoomID = nil; manualMultiplayerRoomID = nil; disconnectedRooms.removeAll()
         if hadAccount || current != nil || managesFlow {
             managesFlow = true
+            sharing?.screenSharing.configureAuthenticatedRoom(nil, identity: { nil }); screenSelected = nil
             sharing?.configureAuthenticatedRoom(nil, identity: { [weak self] in self?.sharingIdentity() })
         }
         guard let current else { message = "Sign in above to add a friend."; return }
@@ -253,45 +257,64 @@ final class FriendOnboarding: ObservableObject {
     func signOut() {
         cancelPendingRequest(); cancelPendingJiggle(); ownerID = nil; signedIn = false; managesFlow = true
         rooms = []; blocks = []; selected = nil; accountUsername = nil; message = "Sign in above to add a friend."
-        hasCurrentFriendList = false; multiplayerPartnerRoomID = nil; disconnectedRooms.removeAll()
+        hasCurrentFriendList = false; multiplayerPartnerRoomID = nil; manualMultiplayerRoomID = nil; disconnectedRooms.removeAll()
         sharing?.configureAuthenticatedRoom(nil, identity: { nil })
+        sharing?.screenSharing.configureAuthenticatedRoom(nil, identity: { nil }); screenSelected = nil
     }
     func select(_ room: FriendRoom, startSharing: Bool = false) {
-        guard !busy, room.valid, rooms.contains(room), let identity = currentIdentity() else { return }
-        // An active ROM run owns its authenticated partner. A different video
-        // friend cannot silently replace the linked gameplay connection.
-        guard multiplayerPartnerRoomID == nil || !multiplayerServiceActive || multiplayerPartnerRoomID == room.roomID else {
-            message = "End or suspend the linked run before switching friends."
-            return
-        }
-        disconnectedRooms.remove(room.roomID)
-        let startsImmediately = startSharing
-        // Repeated taps on the current friend must not interrupt a live session.
-        if startsImmediately, selected?.roomID == room.roomID, sharing?.active == true {
-            sharing?.start()
-            message = ""
-            return
-        }
+        guard !busy, room.valid, rooms.contains(room), let identity = currentIdentity(), let sharing else { return }
+        let video = sharing.screenSharing
+        if startSharing, video.active, video.configuredRoomID == room.roomID { return }
         cancelPendingJiggle()
-        selected = room
-        sharing?.configureAuthenticatedRoom(room.roomID, identity: { [weak self] in self?.sharingIdentity() })
-        message = startsImmediately ? "" : "Ready to share with \(room.displayName)."
-        if startsImmediately && permitsRTC, let sharing {
-            sharing.start()
-            if sharing.active { notifyFriendOfSharing(room, identity: identity) }
+        screenSelected = room
+        if video.configuredRoomID != room.roomID {
+            video.configureAuthenticatedRoom(room.roomID, identity: { [weak self] in self?.sharingIdentity() })
+        }
+        message = ""
+        if startSharing && permitsRTC {
+            let alreadyRequested = video.connectionRequested
+            video.start()
+            if !alreadyRequested && video.active { notifyFriendOfSharing(room, identity: identity) }
         }
     }
-    /// An explicit Stop clears the row and transport and blocks background room
-    /// restoration until the user selects this friend again. Linked-run recovery
-    /// continues to use the transport's existing safe disconnect path.
-    func disconnect() {
-        if let roomID = selected?.roomID { disconnectedRooms.insert(roomID) }
-        if let roomID = multiplayerPartnerRoomID { disconnectedRooms.insert(roomID) }
-        cancelPendingJiggle()
-        selected = nil
-        sharing?.configureAuthenticatedRoom(nil, disconnectReason: .manual, identity: { [weak self] in self?.sharingIdentity() })
+
+    func toggleScreenSharing(_ room: FriendRoom) {
+        guard let video = sharing?.screenSharing else { return }
+        if video.configuredRoomID == room.roomID && video.connectionRequested {
+            cancelPendingJiggle(); video.stop(reason: .manual)
+        } else { select(room, startSharing: true) }
+    }
+
+    func toggleMultiplayer(_ room: FriendRoom) {
+        guard !busy, permitsRTC, rooms.contains(room), currentIdentity() != nil,
+              BoundMultiplayerFeatures.isEnabled, let sharing else { return }
+        if sharing.configuredRoomID == room.roomID && sharing.connectionRequested {
+            disconnectMultiplayer(); return
+        }
+        // A persisted run retains its partner even while manually disconnected.
+        guard multiplayerPartnerRoomID == nil || multiplayerPartnerRoomID == room.roomID else {
+            message = "End or suspend the linked run before switching multiplayer friends."; return
+        }
+        multiplayerServiceActive = true
+        ensureAccountObservation()
+        if multiplayerPartnerRoomID == nil { manualMultiplayerRoomID = room.roomID }
+        disconnectedRooms.remove(room.roomID)
+        synchronizeMultiplayerConnection()
         message = ""
     }
+
+    func disconnectMultiplayer() {
+        if let roomID = sharing?.configuredRoomID { disconnectedRooms.insert(roomID) }
+        sharing?.disconnectMultiplayer()
+        message = ""
+    }
+
+    func disconnect() {
+        cancelPendingJiggle()
+        sharing?.screenSharing.stop(reason: .manual)
+        disconnectMultiplayer()
+    }
+
     func refresh(completion: ((Bool) -> Void)? = nil) {
         // The ROM can join an initial/profile refresh already in flight. Its
         // acknowledgement must describe the fetched list, not cached rows.
@@ -319,11 +342,19 @@ final class FriendOnboarding: ObservableObject {
     }
     func remove(_ room: FriendRoom) {
         guard !busy, rooms.contains(where: { $0.roomID == room.roomID }) else { return }
+        if screenSelected?.roomID == room.roomID {
+            cancelPendingJiggle(); screenSelected = nil
+            sharing?.screenSharing.configureAuthenticatedRoom(nil, identity: { nil })
+        }
         if selected?.roomID == room.roomID { cancelPendingJiggle(); selected = nil; sharing?.configureAuthenticatedRoom(nil, identity: { [weak self] in self?.sharingIdentity() }) }
         request("remove", payload: ["roomID": room.roomID])
     }
     func block(_ room: FriendRoom) {
         guard !busy, rooms.contains(room) else { return }
+        if screenSelected?.roomID == room.roomID {
+            cancelPendingJiggle(); screenSelected = nil
+            sharing?.screenSharing.configureAuthenticatedRoom(nil, identity: { nil })
+        }
         if selected?.roomID == room.roomID {
             cancelPendingJiggle()
             selected = nil
@@ -342,7 +373,7 @@ final class FriendOnboarding: ObservableObject {
     private func notifyFriendOfSharing(_ room: FriendRoom, identity: AppCloudSession) {
         let run = jiggleGeneration
         let sendJiggle = sendJiggle
-        if let sharing {
+        if let sharing = sharing?.screenSharing {
             sharingObservation?.cancel()
             sharingObservation = sharing.$active.dropFirst().sink { [weak self] active in
                 guard !active, let self, self.jiggleGeneration == run else { return }
@@ -359,8 +390,8 @@ final class FriendOnboarding: ObservableObject {
                 }
             }
             guard !Task.isCancelled,
-                  self?.jiggleGeneration == run, self?.selected?.roomID == room.roomID,
-                  self?.sharing?.active == true,
+                  self?.jiggleGeneration == run, self?.screenSelected?.roomID == room.roomID,
+                  self?.sharing?.screenSharing.active == true,
                   identity.isSameSession(as: self?.currentIdentity()) else { return }
             let result: String
             do {
@@ -370,7 +401,7 @@ final class FriendOnboarding: ObservableObject {
             }
             guard let self, !Task.isCancelled, self.jiggleGeneration == run,
                   identity.isSameSession(as: self.currentIdentity()),
-                  self.selected?.roomID == room.roomID, self.sharing?.active == true,
+                  self.screenSelected?.roomID == room.roomID, self.sharing?.screenSharing.active == true,
                   !self.busy else { return }
             self.message = result
         }
@@ -417,6 +448,13 @@ final class FriendOnboarding: ObservableObject {
                     guard let rooms = response.rooms, rooms.count <= 20, rooms.allSatisfy(\.valid), Set(rooms.map(\.roomID)).count == rooms.count else { throw FriendSharingTokenError.unavailable }
                     if let blocks = response.blocks {
                         guard blocks.count <= 100, blocks.allSatisfy(\.valid), Set(blocks.map(\.blockID)).count == blocks.count else { throw FriendSharingTokenError.unavailable }
+                    }
+                    if let videoRoom = self.screenSelected {
+                        if let refreshed = rooms.first(where: { $0.roomID == videoRoom.roomID }) { self.screenSelected = refreshed }
+                        else {
+                            self.cancelPendingJiggle(); self.screenSelected = nil
+                            self.sharing?.screenSharing.configureAuthenticatedRoom(nil, identity: { nil })
+                        }
                     }
                     self.rooms = rooms
                     self.hasCurrentFriendList = true

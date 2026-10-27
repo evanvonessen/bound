@@ -224,7 +224,7 @@ final class MacWorkspaceUITests: XCTestCase {
         XCTAssertTrue(middle.waitForExistence(timeout: 5))
         XCTAssertTrue(bottom.waitForExistence(timeout: 5))
         XCTAssertTrue(game.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["bound.mac-friends-connect"].exists,
+        XCTAssertTrue(app.buttons["bound.mac-friends-open"].exists,
                       "The friend connection control must remain available below the video.")
 
         app.buttons["bound.mac-types"].tap()
@@ -241,7 +241,7 @@ final class MacWorkspaceUITests: XCTestCase {
         friendVisibility.tap()
         XCTAssertTrue(app.buttons["bound.mac-show-friend"].waitForExistence(timeout: 5),
                       "The workspace menu must hide Friend gameplay independently.")
-        XCTAssertFalse(app.buttons["bound.mac-friends-connect"].exists)
+        XCTAssertFalse(app.buttons["bound.mac-friends-open"].exists)
         XCTAssertTrue(app.buttons["bound.mac-dex"].isHittable)
         XCTAssertTrue(app.buttons["bound.mac-types"].isHittable)
         assertContained(chart, in: bottom, context: "with Friend gameplay hidden")
@@ -249,7 +249,7 @@ final class MacWorkspaceUITests: XCTestCase {
 
         openWorkspaceActions(in: app)
         element("bound.mac-friend-visible", in: app).tap()
-        XCTAssertTrue(app.buttons["bound.mac-friends-connect"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["bound.mac-friends-open"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["bound.mac-show-friend"].exists)
         XCTAssertEqual(friend.frame.height, visibleFriendFrame.height, accuracy: 1)
 
@@ -261,7 +261,7 @@ final class MacWorkspaceUITests: XCTestCase {
                       "The workspace menu must hide Multiview independently.")
         XCTAssertFalse(app.buttons["bound.mac-dex"].isHittable)
         XCTAssertFalse(app.buttons["bound.mac-types"].isHittable)
-        XCTAssertTrue(app.buttons["bound.mac-friends-connect"].exists)
+        XCTAssertTrue(app.buttons["bound.mac-friends-open"].exists)
         XCTAssertGreaterThan(friend.frame.height, visibleFriendFrame.height)
         assertGameplayContinues(game, context: "with Multiview hidden")
 

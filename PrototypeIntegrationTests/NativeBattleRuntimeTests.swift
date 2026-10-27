@@ -435,7 +435,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         try captured.write(to:root.appendingPathComponent("observer.state"))
     }
 
-    func testActualSoulObservationPerformance() async throws {
+    func testFrozenStackSafeSoulObservationPerformance() async throws {
         let root=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("Phase6SoulQA")
         let rom=root.appendingPathComponent("current.gba"),stateURL=root.appendingPathComponent("observer.state")
         guard FileManager.default.fileExists(atPath:rom.path),FileManager.default.fileExists(atPath:stateURL.path) else {
@@ -443,7 +443,8 @@ final class NativeBattleRuntimeTests:XCTestCase {
         }
         let romBytes=try Data(contentsOf:rom),state=try Data(contentsOf:stateURL)
         let profile=try MultiRedAdapter(rom:romBytes).profile
-        XCTAssertEqual(profile,BoundGameProfiles.current)
+        // This preserved Phase 6 state belongs to the exact historical layout 6 ROM.
+        XCTAssertEqual(profile,BoundGameProfiles.stackSafe)
         let label=(try? String(contentsOf:root.appendingPathComponent("label.txt"),encoding:.utf8))?.trimmingCharacters(in:.whitespacesAndNewlines) ?? "measurement"
         let output=root.appendingPathComponent(label+"-"+UUID().uuidString)
         try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)

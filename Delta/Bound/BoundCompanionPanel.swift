@@ -698,7 +698,7 @@ final class BoundCompanionCoordinator {
             }
             owner.view.addSubview(controls); self.controls = controls
         }
-        sharing.$joined.combineLatest(sharing.$active, sharing.$videoPublishing).sink { [weak self] joined, active, video in
+        sharing.screenSharing.$joined.combineLatest(sharing.screenSharing.$active, sharing.screenSharing.$videoPublishing).sink { [weak self] joined, active, video in
             self?.tap.setEnabled(joined && active && video)
         }.store(in: &subscriptions)
         if macHost == nil {
@@ -726,7 +726,7 @@ final class BoundCompanionCoordinator {
                     p[i + 2] = x >= 160 ? 255 : 0; p[i + 3] = 255
                 } }
             }
-            fixturePresenter.present(bytes, in: sharing.remoteView); state.fixtureVideo = true
+            fixturePresenter.present(bytes, in: sharing.screenSharing.remoteView); state.fixtureVideo = true
         }
         #endif
     }
@@ -796,9 +796,9 @@ final class BoundCompanionCoordinator {
         state.settings.setDebugGame(core == nil ? nil : romMultiplayer.probe.read()?.debugSetup)
         romMultiplayer.watch = { [weak self, weak owner] in
             guard let self, let owner, owner.presentedViewController == nil else { return }
-            self.sharing.watchPartner()
-            guard self.sharing.watchingPartner else { return }
-            owner.present(UIHostingController(rootView: BoundPartnerSpectatorView(sharing: self.sharing)), animated: true)
+            self.sharing.screenSharing.watchPartner()
+            guard self.sharing.screenSharing.watchingPartner else { return }
+            owner.present(UIHostingController(rootView: BoundPartnerSpectatorView(sharing: self.sharing.screenSharing)), animated: true)
         }
         romMultiplayer.didRestoreSnapshot = { [weak owner] in
             guard let owner, let core = owner.emulatorCore else { return }
@@ -1758,8 +1758,8 @@ struct BoundCompanionPanel: View {
                     if rendersFriend {
                     ZStack {
                         Color.black
-                        BoundRemoteCanvas(view: sharing.remoteView).opacity(sharing.remoteVisible || state.displaysFixtureVideo ? 1 : 0)
-                        if !sharing.remoteVisible && !state.displaysFixtureVideo { Text(sharing.active ? "Waiting for friend" : sharing.connectionRequested ? "Retrying connection…" : "Connect a friend").foregroundStyle(.white).font(.callout) }
+                        BoundRemoteCanvas(view: sharing.screenSharing.remoteView).opacity(sharing.screenSharing.remoteVisible || state.displaysFixtureVideo ? 1 : 0)
+                        if !sharing.screenSharing.remoteVisible && !state.displaysFixtureVideo { Text(sharing.screenSharing.active ? "Waiting for friend" : sharing.screenSharing.connectionRequested ? "Retrying connection…" : "Connect a friend").foregroundStyle(.white).font(.callout) }
                     }.accessibilityIdentifier("bound.friend-screen")
                     }
                 } else if shows(.notes) {
@@ -2071,24 +2071,80 @@ struct BoundFriendsSheet: View {
 }
 
 enum BoundFriendRowConnection: Equatable {
-    case inactive, connecting, connected
+    case inactive, connecting, connected, disconnected, failed
 
     @MainActor
     init(roomID: String, selectedRoomID: String?, sharing: FriendSharingSession) {
-        guard selectedRoomID == roomID, sharing.configuredRoomID == roomID,
-              sharing.connectionRequested else { self = .inactive; return }
-        self = sharing.active && sharing.joined && !sharing.reconnecting && sharing.peerConnected
-            ? .connected : .connecting
+        guard selectedRoomID == roomID, sharing.configuredRoomID == roomID else { self = .inactive; return }
+        if sharing.connectionFailed { self = .failed; return }
+        guard sharing.connectionRequested else { self = .inactive; return }
+        if sharing.active && sharing.joined && !sharing.reconnecting {
+            self = sharing.peerConnected ? .connected : .disconnected
+        } else { self = .connecting }
     }
 
     var title: String? {
         switch self {
-        case .inactive: return nil
+        case .inactive, .disconnected: return "Disconnected"
         case .connecting: return "Connecting"
         case .connected: return "Connected"
+        case .failed: return "Failed"
         }
     }
-    var symbol: String { self == .connected ? "checkmark.circle.fill" : "arrow.triangle.2.circlepath" }
+    var symbol: String {
+        switch self {
+        case .connected: return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.triangle"
+        case .connecting: return "arrow.triangle.2.circlepath"
+        case .inactive, .disconnected: return "circle"
+        }
+    }
+}
+
+struct BoundFriendConnectionControls: View {
+    let room: FriendRoom
+    @ObservedObject var sharing: FriendSharingSession
+    @ObservedObject var onboarding: FriendOnboarding
+    @AppStorage(BoundMultiplayerFeatures.key) private var multiplayerEnabled = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(room.displayName).font(.headline).lineLimit(1)
+            HStack(spacing: 8) {
+                connectionButton("Screen Share", lane: sharing.screenSharing, id: "screen-share") {
+                    onboarding.toggleScreenSharing(room)
+                }
+                connectionButton("Multiplayer", lane: sharing, id: "multiplayer") {
+                    onboarding.toggleMultiplayer(room)
+                }.disabled(!multiplayerEnabled)
+            }
+        }
+    }
+
+    private func connectionButton(_ title: String, lane: FriendSharingSession, id: String,
+                                  action: @escaping () -> Void) -> some View {
+        let state = BoundFriendRowConnection(roomID: room.roomID, selectedRoomID: lane.configuredRoomID, sharing: lane)
+        let requested = lane.configuredRoomID == room.roomID && lane.connectionRequested
+        return Button(action: action) {
+            VStack(spacing: 3) {
+                Text(title).font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                HStack(spacing: 4) {
+                    Image(systemName: state.symbol)
+                    Text(state.title ?? "Disconnected")
+                }.font(.caption).lineLimit(1).minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.bordered)
+        .tint(requested ? .accentColor : .secondary)
+        .disabled(onboarding.busy)
+        .accessibilityLabel(title)
+        .accessibilityValue((state.title ?? "Disconnected") + (requested ? ", On" : ", Off"))
+        .accessibilityAddTraits(requested ? .isSelected : [])
+        .accessibilityHint(requested ? "Disconnect \(title) from \(room.displayName)" : "Connect \(title) to \(room.displayName)")
+        .accessibilityIdentifier("bound.friend-" + id + "-" + room.roomID)
+    }
 }
 
 /// The Friends tile and Account settings use identical rows and actions.
@@ -2165,41 +2221,8 @@ struct BoundFriendsListSections: View {
 
     @ViewBuilder
     private func friendRow(_ room: FriendRoom) -> some View {
-        let connection = BoundFriendRowConnection(roomID: room.roomID,
-            selectedRoomID: onboarding.selected?.roomID, sharing: sharing)
-        let connected = connection == .connected
-        HStack(spacing: 10) {
-            Button {
-                onboarding.select(room, startSharing: true)
-            } label: {
-                HStack(spacing: 8) {
-                    Text(room.displayName).fontWeight(connected ? .semibold : .regular)
-                        .lineLimit(1).truncationMode(.tail)
-                    Spacer(minLength: 8)
-                    if let title = connection.title {
-                        Label(title, systemImage: connection.symbol)
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(connected ? Color.accentColor : Color.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(onboarding.busy)
-            .accessibilityHint("Starts sharing your game and sends this friend a notification")
-            if connection != .inactive {
-                Button("Stop") {
-                    onboarding.disconnect()
-                }
-                    .font(.caption.weight(.semibold))
-                    .buttonStyle(.borderless)
-                    .frame(minWidth: 44, minHeight: 44)
-                    .contentShape(Rectangle())
-                    .accessibilityIdentifier("bound.stop-sharing-selected")
-            }
+        HStack(alignment: .top, spacing: 8) {
+            BoundFriendConnectionControls(room: room, sharing: sharing, onboarding: onboarding)
             Menu {
                 Button("Remove Friend", systemImage: "person.badge.minus", role: .destructive) { removingRoom = room }
                 Button("Report") { reportingRoom = room }
@@ -2212,9 +2235,7 @@ struct BoundFriendsListSections: View {
         }
         .padding(.horizontal, 8)
         .frame(minHeight: 44)
-        .background(connected ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(connected ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1))
-        .accessibilityIdentifier(connected ? "bound.friend-row-selected" : "bound.friend-row")
+        .accessibilityIdentifier("bound.friend-row")
     }
 
 }
@@ -2588,14 +2609,14 @@ struct BoundPartnerSpectatorControls: View {
     var body: some View {
         Section("Partner Battle") {
             Button("Watch partner", systemImage: "play.rectangle") {
-                sharing.watchPartner()
-                showing = sharing.watchingPartner
+                sharing.screenSharing.watchPartner()
+                showing = sharing.screenSharing.watchingPartner
             }
-            .disabled(!sharing.active || !sharing.joined || sharing.reconnecting)
+            .disabled(!sharing.screenSharing.active || !sharing.screenSharing.joined || sharing.screenSharing.reconnecting)
             .accessibilityIdentifier("bound.watch-partner")
         }
-        .fullScreenCover(isPresented: $showing, onDismiss: { sharing.stopWatchingPartner() }) {
-            BoundPartnerSpectatorView(sharing: sharing)
+        .fullScreenCover(isPresented: $showing, onDismiss: { sharing.screenSharing.stopWatchingPartner() }) {
+            BoundPartnerSpectatorView(sharing: sharing.screenSharing)
         }
     }
 }
