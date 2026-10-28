@@ -107,3 +107,32 @@ provides no server-side authentication diagnosis. Verify the intended team and
 Bound app access in App Store Connect; upload roles are Account Holder, Admin,
 App Manager, or Developer (see Apple's [upload documentation](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds)).
 Do not remove accounts, clear credentials, or revoke certificates to investigate.
+
+### Explicit team API-key authentication
+
+Create a Team Key in App Store Connect → Users and Access → Integrations →
+App Store Connect API → Team Keys. Select the Developer role for build uploads.
+Team keys apply across the team's apps. These shared ASC_API_* settings can be
+used by other app delivery scripts once configured to read them.
+Save the downloaded .p8 outside all repositories with owner-only permissions.
+Never paste its contents into chat, commit it, or put its contents in shell config.
+
+Set these in your Terminal before invoking beta (or in your personal shell config
+if you want your testlane alias to inherit them):
+
+```sh
+export ASC_API_KEY_PATH="$HOME/.config/app-store-connect/AuthKey_YOURKEYID.p8"
+export ASC_API_KEY_ID="YOURKEYID"
+export ASC_API_ISSUER_ID="YOUR-ISSUER-UUID"
+```
+
+Replace the placeholders with your Team Key's ID, Issuer ID and actual path.
+The uploader passes these to xcodebuild's authenticationKeyPath,
+authenticationKeyID and authenticationKeyIssuerID options during export/upload.
+It never reads/copies the private-key contents or imports them into Keychain.
+Missing, partial, malformed or insecure configuration fails before archiving.
+API-key authentication is required for beta; there is no Apple-account fallback. `verify` and
+archive-only do not use this key. Signing still uses the installed certificates
+and profiles, and existing upload receipts/build-number management are preserved.
+Live key authentication must be verified by a user-run upload; offline tests
+cannot establish API permissions or Apple acceptance.

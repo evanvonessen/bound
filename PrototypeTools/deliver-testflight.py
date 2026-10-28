@@ -154,13 +154,35 @@ def failure_diagnosis(text):
     return "The command did not finish successfully; no accepted upload is confirmed."
 
 
-def export_command(archive, options, output, upload=False):
+def api_key_arguments(environ=None, root=ROOT):
+    """Validate explicit team-key metadata without reading or copying the secret."""
+    environ = os.environ if environ is None else environ
+    names = ('ASC_API_KEY_PATH', 'ASC_API_KEY_ID', 'ASC_API_ISSUER_ID')
+    values = [environ.get(name, '').strip() for name in names]
+    if not all(values):
+        raise ValueError('Set all three ASC_API_KEY_PATH, ASC_API_KEY_ID, and ASC_API_ISSUER_ID; no account fallback attempted')
+    path, key_id, issuer = values
+    if not re.fullmatch(r'[A-Z0-9]{10}', key_id) or not re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', issuer):
+        raise ValueError('API authentication requires a 10-character Key ID and team Issuer UUID; use a Team Key')
+    path = Path(path).expanduser().resolve()
+    if path.is_relative_to(Path(root).resolve()):
+        raise ValueError('Store the API private key outside the Bound repository')
+    if not path.is_file() or not os.access(path, os.R_OK):
+        raise ValueError('API private key file is missing or unreadable; no account fallback attempted')
+    if path.stat().st_mode & 0o077:
+        raise ValueError('API private key must be owner-only: chmod 600 the .p8 file')
+    return ['-authenticationKeyPath', str(path), '-authenticationKeyID', key_id,
+            '-authenticationKeyIssuerID', issuer]
+
+
+def export_command(archive, options, output, upload=False, authentication=()):
     command = ["xcodebuild", "-exportArchive", "-archivePath", str(archive),
                "-exportOptionsPlist", str(options), "-exportPath", str(output)]
     # Local validation uses only already installed signing material. Only the
     # explicitly requested upload may let Xcode manage provisioning assets.
     if upload:
         command.append("-allowProvisioningUpdates")
+        command.extend(authentication)
     return command
 
 
@@ -228,6 +250,7 @@ def archive_info(archive, source):
 
 
 def deliver(root, commit, upload):
+    authentication = api_key_arguments(root=root) if upload else []
     base = root / ".build/testflight-delivery"
     base.mkdir(parents=True, exist_ok=True)
     with (base / "delivery.lock").open("w") as lock:
@@ -273,7 +296,7 @@ def deliver(root, commit, upload):
             with local_options.open("wb") as stream:
                 plistlib.dump(export_options("export"), stream)
             local_export = attempt / "local-export"
-            run_logged(export_command(archive, local_options, local_export, upload=upload), source, attempt / "local-export.log")
+            run_logged(export_command(archive, local_options, local_export, upload=upload, authentication=authentication), source, attempt / "local-export.log")
             exported = distribution_info(local_export / "Bound.ipa", source)
             write_json(attempt / "local-export.json", {"commit": commit, "upload_performed": False, **exported})
             if not upload:
@@ -285,7 +308,7 @@ def deliver(root, commit, upload):
             options = attempt / "ExportOptions.plist"
             with options.open("wb") as stream:
                 plistlib.dump(export_options(), stream)
-            run_logged(export_command(archive, options, attempt / "export", upload=True), source, attempt / "upload.log")
+            run_logged(export_command(archive, options, attempt / "export", upload=True, authentication=authentication), source, attempt / "upload.log")
             summary_path = attempt / "export/DistributionSummary.plist"
             uploaded_build = None
             if summary_path.exists():

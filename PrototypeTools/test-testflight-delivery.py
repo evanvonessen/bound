@@ -64,12 +64,46 @@ class DeliveryTests(unittest.TestCase):
             self.assertEqual(environment['DEVELOPER_DIR'],
                              '/Applications/Developer/Xcode.app/Contents/Developer')
 
+    def test_api_key_configuration_and_export_arguments(self):
+        key = self.base / 'private.p8'
+        key.write_text('fixture only')
+        key.chmod(0o600)
+        env = {'ASC_API_KEY_PATH': str(key), 'ASC_API_KEY_ID': 'ABCDEFGHIJ',
+               'ASC_API_ISSUER_ID': '12345678-1234-1234-1234-123456789abc'}
+        args = delivery.api_key_arguments(env, root=self.root)
+        self.assertEqual(args[1], str(key.resolve()))
+        self.assertNotIn('fixture only', str(args))
+        command = delivery.export_command('archive', 'options', 'out', upload=True, authentication=args)
+        self.assertEqual(command[-6:], args)
+        self.assertNotIn('-authenticationKeyPath', delivery.export_command('a', 'b', 'c', authentication=args))
+        with self.assertRaisesRegex(ValueError, "Set all three"):
+            delivery.api_key_arguments({}, root=self.root)
+        for broken in [dict(env, ASC_API_KEY_ID=''), dict(env, ASC_API_ISSUER_ID='bad'),
+                       dict(env, ASC_API_KEY_PATH=str(self.base / 'missing'))]:
+            with self.assertRaises(ValueError):
+                delivery.api_key_arguments(broken, root=self.root)
+        key.chmod(0o644)
+        with self.assertRaisesRegex(ValueError, 'owner-only'):
+            delivery.api_key_arguments(env, root=self.root)
+        key.chmod(0o600)
+        with self.assertRaisesRegex(ValueError, 'outside'):
+            delivery.api_key_arguments(env, root=self.base)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name)
         self.root = self.base / "repo"
         self.root.mkdir()
+        fixture_key = self.base / 'fixture.p8'
+        fixture_key.write_text('not a real key')
+        fixture_key.chmod(0o600)
+        environment = patch.dict(os.environ, {
+            'ASC_API_KEY_PATH': str(fixture_key), 'ASC_API_KEY_ID': 'ABCDEFGHIJ',
+            'ASC_API_ISSUER_ID': '12345678-1234-1234-1234-123456789abc'})
+        environment.start()
+        self.addCleanup(environment.stop)
+
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.email", "test@example.invalid")
         self.git("config", "user.name", "Offline Test")
@@ -180,6 +214,27 @@ class DeliveryTests(unittest.TestCase):
             local_call = next(call for call in run.call_args_list if Path(call.args[2]).name == "local-export.log")
             options = plistlib.loads(Path(local_call.args[0][local_call.args[0].index("-exportOptionsPlist") + 1]).read_bytes())
             self.assertEqual(options["destination"], "export")
+
+    def test_upload_passes_explicit_key_and_missing_key_stops_before_build(self):
+        with patch.dict(os.environ, {'ASC_API_KEY_PATH': '', 'ASC_API_KEY_ID': '', 'ASC_API_ISSUER_ID': ''}), \
+             patch.object(delivery, 'run_logged') as run:
+            with self.assertRaisesRegex(ValueError, 'Set all three'):
+                delivery.deliver(self.root, self.commit, upload=True)
+            run.assert_not_called()
+        @contextmanager
+        def snapshot(*_):
+            yield self.root
+        with patch.object(delivery, 'source_snapshot', snapshot), \
+             patch.object(delivery, 'run_logged') as run, \
+             patch.object(delivery, 'archive_info', return_value={}), \
+             patch.object(delivery, 'distribution_info', return_value={}), \
+             patch.object(delivery, 'published_revision'):
+            delivery.deliver(self.root, self.commit, upload=True)
+            exports = [call.args[0] for call in run.call_args_list
+                       if Path(call.args[2]).name in ('upload.log', 'local-export.log')]
+            self.assertEqual(len(exports), 2)
+            for command in exports:
+                self.assertEqual(command[-6:], delivery.api_key_arguments(root=self.root))
 
     def test_archive_only_rechecks_distribution_without_uploading_or_discarding_receipt(self):
         @contextmanager
