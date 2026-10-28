@@ -19,7 +19,10 @@ PrototypeTools/fastlane-local ios verify
 ```
 
 This builds `Bound.xcodeproj` / `Bound` in Release for a generic arm64 iPhone.
-Build products remain in `.build/ReleaseDerivedData`; raw Xcode logs are saved
+Build products use `.build/fastlane/DerivedData/<location-key>`; the key includes
+the real checkout and Xcode developer paths so relocated caches are not reused.
+Existing `.build/ReleaseDerivedData` is preserved but no longer used by `verify`.
+Raw Xcode logs are saved
 under `.build/fastlane/logs`. Swift package versions stay pinned to
 `Package.resolved`. The lane does not sign, install, archive, or upload the app,
 and does not require Apple credentials.
@@ -88,3 +91,19 @@ Inspect App Store Connect before retrying an uncertain upload. Do not delete
 receipts to force a retry. See [delivery details](../Docs/TESTFLIGHT-DELIVERY.md).
 
 Both lanes default to `/Applications/Developer/Xcode.app/Contents/Developer` without changing global Xcode selection. An explicit `DEVELOPER_DIR` overrides that default. Account preferences are not read as authentication proof; Xcode determines account access during export/upload.
+
+### Diagnosing upload account selection
+
+`Failed to Use Accounts` means Xcode could not select an account with App Store
+Connect access for the requested team. A successful local export verifies signing,
+but does not verify that upload account selection works. The error alone cannot
+distinguish an account session issue from team/app access or an Xcode account
+mapping issue. Do not infer sign-out from private Xcode preference keys.
+
+The distribution log bundle path is printed in the attempt's `upload.log`.
+Inspect `IDEDistribution.standard.log` for the failing step and
+`DVTITunesSoftwareService.log` for any service response. An empty service log
+provides no server-side authentication diagnosis. Verify the intended team and
+Bound app access in App Store Connect; upload roles are Account Holder, Admin,
+App Manager, or Developer (see Apple's [upload documentation](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds)).
+Do not remove accounts, clear credentials, or revoke certificates to investigate.

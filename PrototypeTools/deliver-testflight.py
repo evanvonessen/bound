@@ -144,9 +144,9 @@ def run_logged(command, cwd, log):
 
 def failure_diagnosis(text):
     if "Failed to Use Accounts" in text or "App Store Connect access for" in text:
-        return ("Xcode could not authenticate the existing App Store Connect account. "
+        return ("Xcode could not select an account with App Store Connect access for the Bound team. "
                 "This is an account-access failure, not an Apple binary rejection. "
-                "Verify access in Xcode Accounts without removing accounts or saved credentials.")
+                "This error alone does not establish sign-out, an expired session, or missing permissions. Inspect the IDEDistribution logs and verify team/app access without removing accounts or saved credentials.")
     if "No profiles for" in text or "requires a provisioning profile" in text:
         return "Xcode could not find a matching signing profile; no accepted upload is confirmed."
     if "Validation failed" in text or "ERROR ITMS-" in text:

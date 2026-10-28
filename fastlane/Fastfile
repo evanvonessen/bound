@@ -1,4 +1,5 @@
 require "fileutils"
+require_relative "build_paths"
 
 # Select Xcode per process; never change global selection or account settings.
 ENV["DEVELOPER_DIR"] ||= "/Applications/Developer/Xcode.app/Contents/Developer"
@@ -19,7 +20,7 @@ platform :ios do
       configuration: "Release",
       sdk: "iphoneos",
       destination: "generic/platform=iOS",
-      derived_data_path: File.join(root, ".build", "ReleaseDerivedData"),
+      derived_data_path: BoundBuildPaths.verify_derived_data(root, ENV.fetch("DEVELOPER_DIR")),
       buildlog_path: logs,
       skip_archive: true,
       skip_codesigning: true,
