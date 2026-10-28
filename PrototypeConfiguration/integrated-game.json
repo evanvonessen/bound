@@ -2,8 +2,15 @@
   "schema": 1,
   "passed": true,
   "kind": "cooperative doubles multiplayer game variant; not byte-identical reconstruction",
+  "input_sha256": "679d112cdfe699c2793d82c7e7999ac9dfca9e222ad5a85d4f8f1e457cd0283f",
   "baseline_sha256": "689299664a954c12dad66e03c2d18446b348cb31bd98b395c87b9b514b288066",
-  "integrated_sha256": "723924890b6f912e7f8cf6bca72773fb5bea3d449caefd5abb9d82d22c2144f6",
+  "damage_preference": {
+    "ui_host_offset": 1420,
+    "magic": "DMC1",
+    "value_offset": 1424,
+    "default_enabled": true
+  },
+  "integrated_sha256": "961747cac29f351ea62162ef1e819d655738f460e3884e4f41834219b40d10ab",
   "rom_size": 33554432,
   "code_bytes": 14634,
   "code_sha256": "5ddea7ebcd8771ff5bafc55107841944bb77e56505c8c95e227b874b5cf6092e",
@@ -381,6 +388,97 @@
     "game/game_doubles_xp.h": "8f96f792c4aa1c747ede29c3242a8af8ecf1622eca4ca5e9da70e36e4f5b3845"
   },
   "definitions": [
+    {
+      "definition": "damage preference gate",
+      "offset": 20317184,
+      "size": 16,
+      "original_hex": "ffffffffffffffffffffffffffffffff",
+      "sha256": "d6addabf1a2cf6db1c3bdfbfa1d80096f16f63a11c0186d54fe1657dc431c875"
+    },
+    {
+      "definition": "damage preference gate",
+      "offset": 20317200,
+      "size": 16,
+      "original_hex": "ffffffffffffffffffffffffffffffff",
+      "sha256": "4db00e3d275fde60969801ebd0f6d53162c30b57e6bd0db663766d78804fdf40"
+    },
+    {
+      "definition": "damage preference gate",
+      "offset": 20317216,
+      "size": 16,
+      "original_hex": "ffffffffffffffffffffffffffffffff",
+      "sha256": "d5e22e550d253e83447943ce11de683d73cf4a136b9c58f4b51b5a1e5915834d"
+    },
+    {
+      "definition": "damage preference gate",
+      "offset": 20317232,
+      "size": 16,
+      "original_hex": "ffffffffffffffffffffffffffffffff",
+      "sha256": "a7fe8fdee7d0e4902a40fc623e3e6e4af185c9931beff24f9d8d1a77a50b501f"
+    },
+    {
+      "definition": "damage preference gate",
+      "offset": 20317248,
+      "size": 16,
+      "original_hex": "ffffffffffffffffffffffffffffffff",
+      "sha256": "4cf526d83f733fd0c728fc97096e3374769bca7651db4dd1a9e24b4c63c00bd5"
+    },
+    {
+      "definition": "damage preference gate",
+      "offset": 20317264,
+      "size": 16,
+      "original_hex": "ffffffffffffffffffffffffffffffff",
+      "sha256": "0eeb3be290d780ef72e3ab3c88981e5b7cb208bdb6b08dcccbecc66c85998640"
+    },
+    {
+      "definition": "damage preference gate",
+      "offset": 20317280,
+      "size": 16,
+      "original_hex": "ffffffffffffffffffffffffffffffff",
+      "sha256": "1dfa2c97cb2f03cc7aae93e7915addad6adb1683e1cb049068cdb410a896d98b"
+    },
+    {
+      "definition": "damage preference gate",
+      "offset": 20317296,
+      "size": 16,
+      "original_hex": "ffffffffffffffffffffffffffffffff",
+      "sha256": "0b911154506758a8a3b2dc42034e81957b5da6b0657798bf72d95925b0d1b2b5"
+    },
+    {
+      "definition": "damage preference gate",
+      "offset": 20317312,
+      "size": 16,
+      "original_hex": "ffffffffffffffffffffffffffffffff",
+      "sha256": "fac69577621ded57bcc6946baa59ef9bc753a03b54ee6dada61b32e233732a32"
+    },
+    {
+      "definition": "damage preference gate",
+      "offset": 20317328,
+      "size": 16,
+      "original_hex": "ffffffffffffffffffffffffffffffff",
+      "sha256": "cfe6c9641d88cc67b8349aada208099f3d303c89e55d5d2582325f76d4bddb3b"
+    },
+    {
+      "definition": "damage preference gate",
+      "offset": 20317344,
+      "size": 8,
+      "original_hex": "ffffffffffffffff",
+      "sha256": "49a9e20397acd5c96dc4bc508e92201cafc8cb3d930fed3ee5d96f00c01c3402"
+    },
+    {
+      "definition": "DamageCalc_TargetGate",
+      "offset": 17478374,
+      "size": 6,
+      "original_hex": "b4f28bfec046",
+      "sha256": "8f6cc12231c4882d21bb6b41ea2d48b5b198535eb62c8e949bf4f1d943e648e7"
+    },
+    {
+      "definition": "DamageCalc_MoveGate",
+      "offset": 17484086,
+      "size": 6,
+      "original_hex": "b3f27cfbc046",
+      "sha256": "1258aa6a7991783303add854776eb9b14ebe1c74807104dac504afece6b1f207"
+    },
     {
       "definition": "reserved save relocation scratch",
       "offset": 311652,
@@ -1110,14 +1208,14 @@
       "sha256": "072080a87886bbf148a60748e929db510d1e1899d6e5abaa1da7d9f44595a743"
     }
   ],
-  "cache_key": "795e5887613e2cdce70fbad7a39617facf15f1721392e62fd044172c9956aac8",
+  "cache_key": "0978447b0f31f6bc93dcffbc22806a29cbdc7693555f9690b265a272c87884f0",
   "cache_hit": false,
   "native_binding_scope": "Exact RR4.1 adapter in the game build. Bound uses the exported data ABI only.",
   "save_compatibility": "Battery-save format unchanged. Legacy emulator save states require cold boot; the native allocator rejects the old RAM layout without overwriting it.",
   "cooperative_doubles": true,
   "cooperative_code_bytes": 12732,
   "cooperative_code_sha256": "fc2ae903821617a973bcaba76c493505ebcfe053556d4cb692237a3bd5d61293",
-  "bound_abi_header_sha256": "b76864eb1ac8a9d89ac8051e5a548fa290af9f606d730a48ab29b1f3ea7d5a67",
+  "bound_abi_header_sha256": "81ebcfc44bafcdeffbbfbfc210c399ca468487629b928a229186b2ebd5de5523",
   "contract_sha256": "9a5ace164e8597eefdd3c6b6b88a650298bd64ccc950422f77c42d03dfca2fb1",
   "sdk": {
     "generatorSHA256": "582c4115c0aa53ced7e349a76578a0b3c38139018656ffaa2b78d626ff493b19",

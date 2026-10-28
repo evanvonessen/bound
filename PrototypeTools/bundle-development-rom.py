@@ -79,6 +79,7 @@ def main():
     # An incremental build can retain the former generated resource. Remove
     # only that app-bundle copy after the new canonical copy is verified.
     (destination.parent / 'rrbin-integrated.gba').unlink(missing_ok=True)
+    shutil.copyfile(ROOT / 'PrototypeResources/firered-cover.png', destination.parent / 'firered-cover.png')
     print('Embedded matching Multi Red cartridge: ' + expected)
 
 if __name__ == '__main__':

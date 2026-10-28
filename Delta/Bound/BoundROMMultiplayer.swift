@@ -179,10 +179,12 @@ struct BoundROMHostState: Equatable, Sendable {
             return .init(name: BoundMultiplayerSetupOptions.nativeName($0.name),
                          gender: UInt8($0.gender), debugPlayer: debugPlayer)
         }
-        return BoundSDKUIHostFrame(flags: flags, acknowledgedRequest: acknowledgedRequest, status: status.rawValue,
+        var frame = BoundSDKUIHostFrame(flags: flags, acknowledgedRequest: acknowledgedRequest, status: status.rawValue,
             run: run, localSeed: localSeed, partnerSeed: partnerSeed, settings: settings, partnerName: partnerName,
             message: message, entries: friends.prefix(BoundSDKProtocol.UIHost.friendCapacity).map { .init(identifier: $0.room, name: $0.name, status: $0.status) },
             peerLocation: location, playerIdentity: identity, page: page).encoded(sequence: sequence)
+        BoundDamageCalculations.apply(to: &frame)
+        return frame
     }
 }
 
@@ -2617,6 +2619,8 @@ extension BoundROMMultiplayerCoordinator {
         if core.state == .stopped, !core.start() { throw ServerCoreFailure.startup }
         guard core.state == .paused || core.pause() else { throw ServerCoreFailure.startup }
     }
+    func refreshROMPreferences() { probe.publish(host) }
+
     func beginServerGameSetup() {
         guard !observationRecoveryRequired else { return }
         if !hasUnconfirmedServerSave { serverMenuError = nil }

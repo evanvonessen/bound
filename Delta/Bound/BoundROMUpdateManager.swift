@@ -107,19 +107,33 @@ final class BoundROMUpdateManager: ObservableObject {
         status = "Automatic updates are off."
     }
     static func bundledROMName(buildNumber: String?) -> String {
-        guard let buildNumber, !buildNumber.isEmpty else { return "Multi Red" }
-        return "Multi Red — Build " + buildNumber
+        guard let buildNumber, !buildNumber.isEmpty else { return "0" }
+        return buildNumber
     }
-    static func isAutomaticBundledROMName(_ name: String, sha256: String) -> Bool {
-        name == "Multi Red " + String(sha256.prefix(8)) ||
+    static func isAutomaticBundledROMName(_ name: String, sha256: String, previousAutomaticName: String? = nil) -> Bool {
+        name == previousAutomaticName || name == "Multi Red" || name == "Multi Red " + String(sha256.prefix(8)) ||
         name.range(of: #"^Multi Red — Build [0-9]+(?:\.[0-9]+){0,2}$"#, options: .regularExpression) != nil
     }
-    private func refreshBundledROMName(_ content: BoundROMUpdateContent, name: String) throws {
+    private func refreshBundledROMName(_ content: BoundROMUpdateContent, name: String, imported: Bool = false) throws {
         let context = DatabaseManager.shared.newBackgroundContext()
         try context.performAndWait {
-            for game in try self.games(matching: [content.gameID], context: context)
-                where game.name != name && Self.isAutomaticBundledROMName(game.name, sha256: content.sha256) {
-                game.name = name
+            for game in try self.games(matching: [content.gameID], context: context) {
+                var settings = (game.gameSettings as? [String: Any]) ?? [:]
+                let key = "bound.bundled-rom.automatic-name.v1"
+                let previous = settings[key] as? String
+                if Self.isAutomaticBundledROMName(game.name, sha256: content.sha256, previousAutomaticName: previous)
+                    || (imported && game.name == name) {
+                    game.name = name
+                    settings[key] = name
+                    game.gameSettings = settings as NSDictionary
+                }
+            }
+            if let cover = Bundle.main.url(forResource: "firered-cover", withExtension: "png") {
+                for game in try self.games(matching: [content.gameID], context: context) where game.artworkURL == nil {
+                    let destination = DatabaseManager.gamesDirectoryURL.appendingPathComponent(content.gameID + "-firered.png")
+                    try Data(contentsOf: cover).write(to: destination, options: .atomic)
+                    game.artworkURL = destination
+                }
             }
             if context.hasChanges { try context.save() }
         }
@@ -187,6 +201,7 @@ final class BoundROMUpdateManager: ObservableObject {
             }
         }
         guard succeeded else { throw BoundROMUpdateError.storage }
+        try refreshBundledROMName(content, name: name, imported: true)
     }
 
     func hasPendingSaveClear(for gameID: String) -> Bool {

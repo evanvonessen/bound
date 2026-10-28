@@ -7828,7 +7828,7 @@
     "Cores/MelonDSDeltaCore/MelonDSDeltaCore.xcodeproj/xcshareddata/xcschemes/MelonDSDeltaCore.xcscheme": "8033ad7aeb83d580c37100606830528912e0aa0d8906741bc4bb431c2cd02ebd",
     "Cores/MelonDSDeltaCore/MelonDSDeltaCore.xcodeproj/xcshareddata/xcschemes/libMelonDS.xcscheme": "74ea11e89097e9bc3d4968fc31d5c05b596cd5940e604024ae13e19dc8efd99b",
     "Cores/MelonDSDeltaCore/MelonDSDeltaCore/Bridge/MelonDSEmulatorBridge.h": "647c78a8eba70e78e53870d813a9d8cee270f2c5b9a5b0a02d373a9dc56c260a",
-    "Cores/MelonDSDeltaCore/MelonDSDeltaCore/Bridge/MelonDSEmulatorBridge.mm": "7317b9f7476275908e8bce277c35c27ccdf674f934bf2e0d2208e130a2b78600",
+    "Cores/MelonDSDeltaCore/MelonDSDeltaCore/Bridge/MelonDSEmulatorBridge.mm": "42ec69ebaf4659fe59ecf8b9bbfc9445df4651835092b77295073aa1712357f9",
     "Cores/MelonDSDeltaCore/MelonDSDeltaCore/Controller Skin/Standard.deltaskin": "72af14bd9693138d4637ca0a1ef9c9ce5f830c17657c5a0be8019e6ae82ca5ad",
     "Cores/MelonDSDeltaCore/MelonDSDeltaCore/Controller Skin/info.json": "ea4b3e5c4a78b4c7125f25c05384b9b8c1454043e91707b6866d7faa388f0e8c",
     "Cores/MelonDSDeltaCore/MelonDSDeltaCore/Controller Skin/ipad_landscape_large.png": "15d4ddf461a179ce5e865ef6597ba44733b3f2d6cdd26ef1207313e0369fd73e",

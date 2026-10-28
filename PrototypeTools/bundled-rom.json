@@ -1,8 +1,8 @@
 {
-  "sha256": "723924890b6f912e7f8cf6bca72773fb5bea3d449caefd5abb9d82d22c2144f6",
+  "sha256": "961747cac29f351ea62162ef1e819d655738f460e3884e4f41834219b40d10ab",
   "repository": "evanvonessen/multi_red",
-  "tag": "multiplayer-723924890b6f",
+  "tag": "squirrels-local-candidate",
   "asset": "multiplayer.gba",
-  "compatibility": "Exact paired leased world-presence and follower build; layout 16; native runtime services required.",
-  "localOnly": false
+  "compatibility": "Clean RR4.1 combined damage/multiplayer cartridge; layout 16; exact paired Bound required.",
+  "localOnly": true
 }

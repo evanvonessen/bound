@@ -22,8 +22,8 @@ ELIMINATION_ROOT = ROOT / 'PrototypeConfiguration/game-profiles/native-eliminati
 ELIMINATION_MANIFEST = 'f629e5ecdf167290a3b4871ec2c4be3b2f42b1bcf93d758356cc95660d19230a'
 ELIMINATION_HEADER = '909b6fe2f8c877c878a82cbd3f8ac4c703010fc6f9e9495760b47aeb0b1f23a0'
 # Reviewed together when importing a new exact ROM; never infer its library ID.
-CURRENT_ROM = '723924890b6f912e7f8cf6bca72773fb5bea3d449caefd5abb9d82d22c2144f6'
-CURRENT_GAME_ID = 'c4e2da049c40d9a5ac9b5c31cdb87d3e8aae76f1'
+CURRENT_ROM = '961747cac29f351ea62162ef1e819d655738f460e3884e4f41834219b40d10ab'
+CURRENT_GAME_ID = 'b3d909ad22352fbcb28c89fc6cf88dab1bc0bbe1'
 
 def generate():
     original_manifest = (OLD / 'manifest.json').read_bytes()

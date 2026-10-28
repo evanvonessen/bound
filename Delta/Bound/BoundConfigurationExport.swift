@@ -27,6 +27,19 @@ enum BoundDirectionalFriendArrow {
     static func isEnabled(in defaults: UserDefaults) -> Bool { defaults.object(forKey: key) as? Bool ?? true }
 }
 
+enum BoundDamageCalculations {
+    static let key = "bound.damage-calculations.enabled.v1"
+    static func isEnabled(in defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: key) as? Bool ?? true
+    }
+    /// Personal ROM-port data; excluded from shared settings, saves and raw states.
+    static func apply(to frame: inout Data, in defaults: UserDefaults = .standard) {
+        guard frame.count == 2048 else { return }
+        frame.replaceSubrange(1420..<1424, with: Data("DMC1".utf8))
+        frame[1424] = isEnabled(in: defaults) ? 1 : 0
+    }
+}
+
 struct BoundConfigurationDocument {
     let data: Data
 }

@@ -22,12 +22,13 @@ class BundledROMTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.data = bytes(33554432)
         self.digest = hashlib.sha256(self.data).hexdigest()
-        for name in ('PrototypeTools', 'Delta/Bound'):
+        for name in ('PrototypeTools', 'Delta/Bound', 'PrototypeResources'):
             (self.root / name).mkdir(parents=True)
         (self.root / 'PrototypeTools/bundled-rom.json').write_text(json.dumps({'sha256': self.digest,
             'repository': 'evanvonessen/multi_red', 'tag': 'multiplayer-' + self.digest[:12], 'asset': 'multiplayer.gba'}))
         (self.root / 'private-source.gba').write_bytes(self.data)
         (self.root / 'Delta/Bound/BoundSharedProgression.swift').write_text('romSHA256 = "' + self.digest + '"')
+        (self.root / 'PrototypeResources/firered-cover.png').write_bytes(b'cover-test-fixture')
         self.output = self.root / 'output/Bound.app/multiplayer.gba'
 
     def run_build(self):
@@ -37,6 +38,7 @@ class BundledROMTests(unittest.TestCase):
     def test_empty_cache_and_cached_build_embed_verified_cartridge(self):
         self.run_build()
         self.assertEqual(self.output.read_bytes(), self.data)
+        self.assertEqual((self.output.parent / "firered-cover.png").read_bytes(), b"cover-test-fixture")
         self.output.unlink()
         self.run_build()
         self.assertEqual(self.output.read_bytes(), self.data)

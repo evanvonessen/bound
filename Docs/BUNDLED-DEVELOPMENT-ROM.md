@@ -1,6 +1,6 @@
 # Bundled development cartridge
 
-The shared Bound target embeds `rrbin-integrated.gba` for iPhone and Designed for iPad on Mac.
+The shared Bound target embeds `multiplayer.gba` for iPhone and Designed for iPad on Mac.
 `PrototypeTools/bundled-rom.json` pins the verified private release and its hash.
 The ROM is deliberately absent from the public Bound source repository. The build
 uses its ignored SHA256 cache, `BOUND_DEVELOPMENT_ROM` pointing to a private local
@@ -17,7 +17,10 @@ private release. The app itself requires no GitHub credentials.
 On launch after the library starts, Bound verifies the included cartridge and
 imports it if that content-addressed game is absent. Existing imports are not
 replaced, and older cartridges and saves remain in the library. The latest
-included entry is named `Multi Red <hash>`. No network access is needed on the
+included entry is named only with the runtime app build number, for example `210`.
+Its default artwork is the bundled original FireRed GBA cover; custom names and
+user-selected artwork remain. On the squirrels branch the cartridge is an
+unpublished candidate, so supply the exact local `BOUND_DEVELOPMENT_ROM`. No network access is needed on the
 phone or Mac to install it. Removing the included game causes it to be imported
 again on the next app launch. This is the private development distribution path.
 
@@ -53,3 +56,12 @@ cached builds, incompatible pins and incomplete resources. The integration suite
 BoundROMUpdateTests and BoundROMUpdateLifecycleTests cover the bundled cartridge,
 automatic import without duplicates, isolated save clearing, rollback and sync
 serialization. Builds use the same iOS target on iPhone and Designed for iPad on Mac.
+
+
+Squirrels ROM Settings includes Enable Damage Calculations immediately below
+Enable Directional Friend Arrow. The damage switch persists independently of
+Experimental Multiplayer, defaulting on to preserve earlier calculator behavior.
+The exact clean-v4.1 combined cartridge is pinned by the generated game metadata.
+The Nintendo DS core now creates microphone capture on its first emulated mic
+read instead of starting capture during `startWithGameURL:`. Core identity and
+state version are unchanged; Mac permission UI still needs manual launch testing.

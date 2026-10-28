@@ -51,7 +51,7 @@ enum BoundGameProfiles {
         supportsCooperativeDoubles: true,
         coreIdentifier: "com.rileytestut.GBADeltaCore", coreStateVersion: 10)
     static let current = BoundGameProfile(
-        romSHA256: "723924890b6f912e7f8cf6bca72773fb5bea3d449caefd5abb9d82d22c2144f6", gameID: "c4e2da049c40d9a5ac9b5c31cdb87d3e8aae76f1",
+        romSHA256: "961747cac29f351ea62162ef1e819d655738f460e3884e4f41834219b40d10ab", gameID: "b3d909ad22352fbcb28c89fc6cf88dab1bc0bbe1",
         family: Data([104,146,153,102,74,149,76,18,218,214,110,3,194,209,132,70]), ruleset: Data([26,114,44,204,155,246,172,229,59,199,46,206,91,242,43,225]),
         compatibility: Data([26,114,44,204,155,246,172,229,59,199,46,206,91,242,43,225,1,0,0,0,1,0,1,0]), saveStateLayout: 16,
         supportsCooperativeDoubles: true,

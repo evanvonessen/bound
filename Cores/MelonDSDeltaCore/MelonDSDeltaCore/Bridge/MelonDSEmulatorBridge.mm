@@ -238,7 +238,7 @@ void ParseTextCode(char* text, int tlen, u32* code, int clen) // or whatever thi
         GPU::InitRenderer(0);
     }
     
-    [self prepareAudioEngine];
+    // Microphone capture is initialized only when the emulated DS reads it.
     
     NDS::SetConsoleType((int)self.systemType);
     
@@ -1215,6 +1215,10 @@ namespace Platform
 
     void Mic_Prepare()
     {
+        if (!MelonDSEmulatorBridge.sharedBridge.audioEngine)
+        {
+            [MelonDSEmulatorBridge.sharedBridge prepareAudioEngine];
+        }
         if (![MelonDSEmulatorBridge.sharedBridge isMicrophoneEnabled] || [MelonDSEmulatorBridge.sharedBridge.audioEngine isRunning])
         {
             return;

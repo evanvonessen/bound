@@ -33,6 +33,14 @@ final class BoundROMUpdateLifecycleTests: XCTestCase {
         XCTAssertFalse(BoundROMUpdateManager.shared.hasPendingSaveClear(for: "unrelated-" + game.identifier))
     }
 
+    func testBundledNameUsesOnlyBuildNumber() {
+        XCTAssertEqual(BoundROMUpdateManager.bundledROMName(buildNumber: "210"), "210")
+        XCTAssertTrue(BoundROMUpdateManager.isAutomaticBundledROMName("Multi Red — Build 209", sha256: "abc"))
+        XCTAssertTrue(BoundROMUpdateManager.isAutomaticBundledROMName("210", sha256: "abc", previousAutomaticName: "210"))
+        XCTAssertFalse(BoundROMUpdateManager.isAutomaticBundledROMName("210", sha256: "abc"))
+        XCTAssertFalse(BoundROMUpdateManager.isAutomaticBundledROMName("My Kanto Run", sha256: "abc"))
+    }
+
     func testBundledROMIsImportedWithoutDuplicatingExistingGame() async throws {
         let url = try XCTUnwrap(Bundle(for: Game.self).url(forResource: "multiplayer", withExtension: "gba"))
         let content = try BoundROMUpdateContent(data: Data(contentsOf: url), expectedSHA256: BoundPlayerROMProfile.supportedSHA256)

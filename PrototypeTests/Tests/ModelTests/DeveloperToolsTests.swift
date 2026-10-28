@@ -17,6 +17,22 @@ final class DeveloperToolsTests: XCTestCase {
             }
         }
     }
+    func testDamagePreferenceSurvivesRelaunchAndChangesPersonalROMPort() throws {
+        let suite = "DamagePreferences." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertTrue(BoundDamageCalculations.isEnabled(in: defaults))
+        for enabled in [false, true, false] {
+            defaults.set(enabled, forKey: BoundDamageCalculations.key)
+            let relaunched = try XCTUnwrap(UserDefaults(suiteName: suite))
+            var frame = Data(repeating: 0x55, count: 2048)
+            BoundDamageCalculations.apply(to: &frame, in: relaunched)
+            XCTAssertEqual(frame[1424], enabled ? 1 : 0)
+            XCTAssertEqual(frame.subdata(in: 1420..<1424), Data("DMC1".utf8))
+            XCTAssertEqual(frame.prefix(1420), Data(repeating: 0x55, count: 1420))
+            XCTAssertEqual(frame.suffix(623), Data(repeating: 0x55, count: 623))
+        }
+    }
     func testMigrationPreservesEitherOptInAndDoesNotResurrectAfterOptOut() throws {
         for developer in [nil, false, true] as [Bool?] {
             for debugging in [nil, false, true] as [Bool?] {
