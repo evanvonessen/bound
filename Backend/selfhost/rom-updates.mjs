@@ -19,7 +19,7 @@ export function validateROMManifest(value) {
       !value.contract || typeof value.contract !== 'object' || Array.isArray(value.contract)) throw failure(503, 'rom_unavailable');
   // Return only the wire contract. Local publication paths never leave Linode.
   return Object.fromEntries(['schemaVersion', 'buildNumber', 'sha256', 'gameID', 'byteCount',
-    'gameCommit', 'boundABIHeaderSHA256', 'contract'].map(key => [key, value[key]]));
+    'gameCommit', 'boundABIHeaderSHA256', 'contract', ...(value.hostInterface ? ['hostInterface'] : [])].map(key => [key, value[key]]));
 }
 
 export function createROMUpdates({ pool, authenticate, config = process.env }) {

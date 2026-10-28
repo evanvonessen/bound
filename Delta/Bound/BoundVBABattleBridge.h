@@ -26,6 +26,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// Exact paused cable continuation. Restore after the matching core state and cooperative host block.
 + (NSData *)captureCooperativeSession;
 + (BOOL)restoreCooperativeSession:(NSData *)data;
++ (nullable NSData *)compatibleROMDescriptor:(NSData *)image;
 + (BOOL)installROMMultiplayer;
 + (void)advanceROMFieldRecovery;
 + (NSData *)romMultiplayerSnapshot;

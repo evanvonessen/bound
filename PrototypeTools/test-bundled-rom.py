@@ -14,7 +14,7 @@ class ServerROMBuildTests(unittest.TestCase):
             base = Path(folder)
             app = base / 'Bound.app'
             app.mkdir()
-            for name in ['multiplayer.gba', 'rrbin-integrated.gba', 'RRv4.1M.gba', '2048.gba', 'Info.plist']:
+            for name in ['multiplayer.gba', 'rrbin-integrated.gba', 'RRv4.1M.gba', 'firered-cover.png', '2048.gba', 'Info.plist']:
                 (app / name).write_bytes(b'sentinel')
             cache = base / 'multiplayer.gba'
             cache.write_bytes(b'untouched')

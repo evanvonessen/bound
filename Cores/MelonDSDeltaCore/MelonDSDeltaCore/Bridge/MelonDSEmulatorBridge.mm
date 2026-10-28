@@ -238,7 +238,7 @@ void ParseTextCode(char* text, int tlen, u32* code, int clen) // or whatever thi
         GPU::InitRenderer(0);
     }
     
-    [self prepareAudioEngine];
+    // Emulated DS microphone input is disabled.
     
     NDS::SetConsoleType((int)self.systemType);
     
@@ -398,15 +398,10 @@ void ParseTextCode(char* text, int tlen, u32* code, int clen) // or whatever thi
         }
     }
     
-    static int16_t micBuffer[735];
-    NSInteger readBytes = (NSInteger)[self.microphoneBuffer readIntoBuffer:micBuffer preferredSize:735 * sizeof(int16_t)];
-    NSInteger readFrames = readBytes / sizeof(int16_t);
-    
-    if (readFrames > 0)
-    {
-        NDS::MicInputFrame(micBuffer, (int)readFrames);
-    }
-    
+    // Always feed silence, including after a DS state containing old samples.
+    static int16_t micBuffer[735] = {};
+    NDS::MicInputFrame(micBuffer, 735);
+
     if ([self isJITEnabled])
     {
         // Skipping frames with JIT disabled can cause graphical bugs,
@@ -688,70 +683,14 @@ void ParseTextCode(char* text, int tlen, u32* code, int clen) // or whatever thi
 
 - (void)prepareAudioEngine
 {
-    self.audioEngine = [[AVAudioEngine alloc] init];
-    if ([self.audioEngine.inputNode inputFormatForBus:0].sampleRate == 0)
-    {
-        // Microphone is being used by another application.
-        self.microphoneEnabled = NO;
-        return;
-    }
-    
-    self.microphoneEnabled = YES;
-        
-    // Experimentally-determined values. Focuses on ensuring blows are registered correctly.
-    self.audioEQEffect.bands[0].filterType = AVAudioUnitEQFilterTypeLowShelf;
-    self.audioEQEffect.bands[0].frequency = 100;
-    self.audioEQEffect.bands[0].gain = 20;
-    self.audioEQEffect.bands[0].bypass = NO;
-
-    self.audioEQEffect.bands[1].filterType = AVAudioUnitEQFilterTypeHighShelf;
-    self.audioEQEffect.bands[1].frequency = 10000;
-    self.audioEQEffect.bands[1].gain = -30;
-    self.audioEQEffect.bands[1].bypass = NO;
-    
-    self.audioEQEffect.globalGain = 3;
-    
-    [self.audioEngine attachNode:self.audioEQEffect];
-    [self.audioEngine connect:self.audioEngine.inputNode to:self.audioEQEffect format:self.audioConverter.inputFormat];
-    
-    unsigned int bufferSize = 1024 * self.audioConverter.inputFormat.streamDescription->mBytesPerFrame;
-    [self.audioEQEffect installTapOnBus:0 bufferSize:bufferSize format:self.audioConverter.inputFormat block:^(AVAudioPCMBuffer * _Nonnull buffer, AVAudioTime * _Nonnull when) {
-        dispatch_async(self.microphoneQueue, ^{
-            [self processMicrophoneBuffer:buffer];
-        });
-    }];
+    self.microphoneEnabled = NO;
+    [self.audioEngine stop];
+    self.audioEngine = nil;
 }
 
 - (void)processMicrophoneBuffer:(AVAudioPCMBuffer *)inputBuffer
 {
-    static AVAudioPCMBuffer *outputBuffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:self.audioConverter.outputFormat frameCapacity:5000];
-    outputBuffer.frameLength = 5000;
-    
-    __block BOOL didReturnBuffer = NO;
-    
-    NSError *error = nil;
-    AVAudioConverterOutputStatus status = [self.audioConverter convertToBuffer:outputBuffer error:&error
-                                                            withInputFromBlock:^AVAudioBuffer * _Nullable(AVAudioPacketCount packetCount, AVAudioConverterInputStatus * _Nonnull outStatus) {
-        if (didReturnBuffer)
-        {
-            *outStatus = AVAudioConverterInputStatus_NoDataNow;
-            return nil;
-        }
-        else
-        {
-            didReturnBuffer = YES;
-            *outStatus = AVAudioConverterInputStatus_HaveData;
-            return inputBuffer;
-        }
-    }];
-
-    if (status == AVAudioConverterOutputStatus_Error)
-    {
-        NSLog(@"Conversion error: %@", error);
-    }
-    
-    NSInteger outputSize = outputBuffer.frameLength * outputBuffer.format.streamDescription->mBytesPerFrame;
-    [self.microphoneBuffer writeBuffer:outputBuffer.int16ChannelData[0] size:outputSize];
+    // Physical microphone input is intentionally disabled.
 }
 
 - (void)handleAudioSessionInterruption:(NSNotification *)notification
@@ -823,15 +762,7 @@ void ParseTextCode(char* text, int tlen, u32* code, int clen) // or whatever thi
 
 - (AVAudioConverter *)audioConverter
 {
-    if (_audioConverter == nil)
-    {
-        // Lazily initialize so we don't cause microphone permission alert to appear prematurely.
-        AVAudioFormat *inputFormat = [_audioEngine.inputNode inputFormatForBus:0];
-        AVAudioFormat *outputFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:44100 channels:1 interleaved:NO];
-        _audioConverter = [[AVAudioConverter alloc] initFromFormat:inputFormat toFormat:outputFormat];
-    }
-    
-    return _audioConverter;
+    return nil;
 }
 
 @end
@@ -1215,16 +1146,7 @@ namespace Platform
 
     void Mic_Prepare()
     {
-        if (![MelonDSEmulatorBridge.sharedBridge isMicrophoneEnabled] || [MelonDSEmulatorBridge.sharedBridge.audioEngine isRunning])
-        {
-            return;
-        }
-        
-        NSError *error = nil;
-        if (![MelonDSEmulatorBridge.sharedBridge.audioEngine startAndReturnError:&error])
-        {
-            NSLog(@"Failed to start listening to microphone. %@", error);
-        }
+        // DS microphone emulation is disabled. Never instantiate an input node.
     }
 
     void WriteNDSSave(const u8* savebytes, u32 savelen, u32 writeoffset, u32 writelen)

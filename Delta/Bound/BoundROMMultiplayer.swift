@@ -179,10 +179,12 @@ struct BoundROMHostState: Equatable, Sendable {
             return .init(name: BoundMultiplayerSetupOptions.nativeName($0.name),
                          gender: UInt8($0.gender), debugPlayer: debugPlayer)
         }
-        return BoundSDKUIHostFrame(flags: flags, acknowledgedRequest: acknowledgedRequest, status: status.rawValue,
+        var frame = BoundSDKUIHostFrame(flags: flags, acknowledgedRequest: acknowledgedRequest, status: status.rawValue,
             run: run, localSeed: localSeed, partnerSeed: partnerSeed, settings: settings, partnerName: partnerName,
             message: message, entries: friends.prefix(BoundSDKProtocol.UIHost.friendCapacity).map { .init(identifier: $0.room, name: $0.name, status: $0.status) },
             peerLocation: location, playerIdentity: identity, page: page).encoded(sequence: sequence)
+        BoundDamageCalculations.apply(to: &frame)
+        return frame
     }
 }
 
@@ -2618,6 +2620,8 @@ extension BoundROMMultiplayerCoordinator {
         if core.state == .stopped, !core.start() { throw ServerCoreFailure.startup }
         guard core.state == .paused || core.pause() else { throw ServerCoreFailure.startup }
     }
+    func refreshROMPreferences() { probe.publish(host) }
+
     func beginServerGameSetup() {
         guard !observationRecoveryRequired else { return }
         if !hasUnconfirmedServerSave { serverMenuError = nil }
@@ -2912,8 +2916,8 @@ extension BoundROMMultiplayerCoordinator {
     }
     func createServerRun(room: FriendRoom, options: BoundMultiplayerSetupOptions, requestID: UUID) async {
         guard debugInstalledManifest == nil else { serverMenuError = "Return through DEBUG to open ordinary runs."; return }
-        guard !options.debug || admittedProfile == BoundGameProfiles.current else {
-            serverMenuError = "Open the matching bundled ROM to create a Debug Mode game."; return
+        guard !options.debug || admittedProfile?.saveStateLayout == 16 else {
+            serverMenuError = "Open a compatible RRv4.1M ROM to create a Debug Mode game."; return
         }
         guard serverOnly, verified, !serverMenuBusy, !holdForObservationRecoveryIfNeeded(), options.valid, let game, let session = account.session else { return }
         serverMenuBusy = true; serverMenuError = nil

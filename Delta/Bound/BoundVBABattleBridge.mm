@@ -589,6 +589,13 @@ static uint8_t soulQAScriptBackup[128];
     memcpy(internalRAM+Mailbox,saved.bytes,1176);networkRead=half(internalRAM+Mailbox+4);
     return YES;
 }
++ (NSData *)compatibleROMDescriptor:(NSData *)image {
+    if(image.length!=0x2000000)return nil;
+    const auto *p=static_cast<const uint8_t *>(image.bytes);
+    const auto *profile=runtimeProfile(p,true);
+    if(!profile)return nil;
+    return [NSData dataWithBytes:profile->descriptor length:128];
+}
 + (BOOL)installROMMultiplayer {
     if(ownsROMUI()) return YES;
     const auto *profile=multiRedProfile(rom);

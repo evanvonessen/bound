@@ -17,7 +17,7 @@ Latest RRv4.1M Multiplayer Version. Its destructive confirmation precedes the
 download and explains removal of previous multi_red ROMs and their device saves.
 Cancellation does nothing. Authentication and approval are rechecked, the
 requested build/digest must remain current, redirects are refused, and the
-complete downloaded file must match its exact supported SHA-256 and SHA-1.
+complete downloaded file must match its manifest SHA-256 and SHA-1.
 
 Installation requires the library to be idle. It verifies the original FireRed
 cover image before any deletion, then records an owner-bound immutable deletion
@@ -55,11 +55,20 @@ refresh, download, historical test ROM/save deletion, FireRed artwork decoding,
 RRv4.1M naming, build receipt and subsequent up-to-date refresh. TestFlight,
 Xcode Cloud and shared simulators were not used.
 
-Exact-ROM compatibility remains required: an unrecognized new native-address or
-save-layout build requires a matching Bound game profile/runtime update. ABI
-agreement alone never admits a cartridge or converts an old save. This version
-does not implement downloading new native adapters. Unknown historical ROMs and
-orphan files are retained rather than inferred from a filename and deleted.
+Versioned runtime interface v1 admits compatible future cartridges without a
+release-hash allowlist. Required capabilities, descriptor family and save layout,
+all displaced native hook bindings, and the reconstructed native engine digest
+must match supported host functionality. The bounded restoration table and full
+cartridge-owned code allocations permit changed multiplayer code and rulesets.
+Unsupported engine bindings or layouts require a Bound update. The host verifies
+payload bytes before deleting any old installation. Exact download hashes and
+raw-state ROM identity remain mandatory; compatible does not mean interchangeable
+save states. Installed verified identities are recorded for later confirmed
+updates. Unknown historical ROMs and orphan files remain untouched.
+
+The original FireRed cover is fetched through GamesDatabase before cleanup;
+no separate cover is bundled. Standalone cleanup controls are removed, while
+confirmed-install journals and recovery fences remain in use.
 
 For future changes, verify the completed GitHub workflow and Linode counter/hash,
 approved/unapproved/anonymous/revoked access, one-current-file replacement and
@@ -69,3 +78,13 @@ from simulator code-path validation; do not claim them without direct evidence.
 Retired bundling and automatic GitHub ROM publisher instructions have been
 replaced. Historical validation reports and changelog entries remain records of
 what was tested at that time, not current delivery instructions.
+
+Runtime acceptance regression: compile `PrototypeTools/test-runtime-interface.cpp`
+with C++11, `-I Delta/Bound/SharedWorld` and CommonCrypto on macOS, and pass the
+freshly built cartridge path. It uses the production verifier to admit a second
+compatible release, checks distinct exact identities, and rejects unsupported
+interfaces, changed native engine bytes and corrupted payloads. The 2026-10-28
+integration passed this regression, 128 Swift model tests, eight isolated gateway
+tests and the Release iPhone build. Native startup and damage on/off text checks
+passed on the integrated ROM. Physical devices, Mac TCC and app integration-test
+simulators were not exercised in this validation pass.

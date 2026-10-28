@@ -9,6 +9,7 @@ struct BoundROMServerManifest: Codable, Equatable, Sendable {
     let sha256: String
     let gameID: String
     let byteCount: Int
+    var hostInterface: [String: Int]? = nil
 
     func validate() throws {
         func hex(_ value: String, count: Int) -> Bool {
@@ -19,10 +20,15 @@ struct BoundROMServerManifest: Codable, Equatable, Sendable {
     }
     func validateCompatibility() throws {
         try validate()
-        // Host injections and raw states require the exact tested cartridge.
-        // An ABI match alone must never authorize a new set of native addresses.
-        guard sha256 == BoundGameProfiles.current.romSHA256,
-              gameID == BoundGameProfiles.current.gameID else { throw BoundROMUpdateError.incompatibleROM }
+        // Reject unsupported host functionality before downloading. The native
+        // verifier separately proves engine bindings and save layout from bytes.
+        if let hostInterface {
+            guard hostInterface["version"] == 1, hostInterface["required_capabilities"] == 31,
+                  hostInterface["native_binding_version"] == 1 else { throw BoundROMUpdateError.incompatibleROM }
+        }
+        // Discovery is release-independent. The downloaded cartridge must pass
+        // native binding/capability verification before consent can delete data.
+        // Exact hashes still identify this download and every saved raw state.
     }
 }
 

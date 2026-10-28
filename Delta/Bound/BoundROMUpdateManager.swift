@@ -128,11 +128,11 @@ final class BoundROMUpdateManager: ObservableObject {
     func installBundledROM(from url: URL, name: String) async throws {
         let data = try await Task.detached(priority: .utility) {
             let data = try Data(contentsOf: url)
-            _ = try BoundROMUpdateContent(data: data, expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
+            _ = try BoundROMUpdateContent(data: data, expectedSHA256: BoundROMUpdateContent.hash(data))
             _ = try BoundPlayerROMProfile(rom: data)
             return data
         }.value
-        let content = try BoundROMUpdateContent(data: data, expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
+        let content = try BoundROMUpdateContent(data: data, expectedSHA256: BoundROMUpdateContent.hash(data))
         let existing = try games(matching: [content.gameID])
         guard existing.count <= 1 else { throw BoundROMUpdateError.storage }
         if let game = existing.first {

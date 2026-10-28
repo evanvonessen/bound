@@ -225,7 +225,7 @@ final class ROMServerInstallJournalTests: XCTestCase {
         let journal = try fixture(), previous = try target().identity
         let oldManifest = BoundROMServerManifest(schemaVersion: 1, buildNumber: 500, sha256: previous.sha256,
                                                 gameID: previous.gameID, byteCount: 32 * 1024 * 1024)
-        XCTAssertThrowsError(try oldManifest.validateCompatibility())
+        XCTAssertNoThrow(try oldManifest.validateCompatibility())
         let job = BoundROMServerInstallJournal.Job(id: UUID(), owner: UUID(), manifest: oldManifest, targets: [], localTargetsDone: true)
         try journal.write(job, to: journal.pendingURL)
         try journal.write(BoundROMServerInstallJournal.Installed(manifest: oldManifest, revision: job.id, retiredGameIDs: []), to: journal.installedURL)
@@ -254,15 +254,34 @@ final class ROMServerInstallJournalTests: XCTestCase {
         ] { XCTAssertThrowsError(try invalid.validate()) }
     }
 
-    func testManifestCannotAdmitUnknownDigestOrHistoricalPair() throws {
+    func testManifestDiscoveryIsIndependentOfReleaseDigest() throws {
         let current = manifest(), old = try target().identity
         let unknown = BoundROMServerManifest(schemaVersion: 1, buildNumber: 500, sha256: String(repeating: "a", count: 64),
                                             gameID: current.gameID, byteCount: current.byteCount)
         XCTAssertNoThrow(try unknown.validate())
-        XCTAssertThrowsError(try unknown.validateCompatibility())
+        XCTAssertNoThrow(try unknown.validateCompatibility())
         let historical = BoundROMServerManifest(schemaVersion: 1, buildNumber: 501, sha256: old.sha256,
                                                gameID: old.gameID, byteCount: current.byteCount)
         XCTAssertNoThrow(try historical.validate())
-        XCTAssertThrowsError(try historical.validateCompatibility())
+        XCTAssertNoThrow(try historical.validateCompatibility())
+        var unsupported = unknown
+        unsupported.hostInterface = ["version": 2, "required_capabilities": 31, "native_binding_version": 1]
+        XCTAssertThrowsError(try unsupported.validateCompatibility())
+        unsupported.hostInterface = ["version": 1, "required_capabilities": 63, "native_binding_version": 1]
+        XCTAssertThrowsError(try unsupported.validateCompatibility())
     }
+    func testFutureVerifiedReceiptSurvivesAndRejectsMalformedIdentity() throws {
+        let journal = try fixture()
+        let future = BoundROMCleanupIdentity(sha256: String(repeating: "a", count: 64),
+            gameID: String(repeating: "b", count: 40), evidence: "Validated runtime interface")
+        let receipt = BoundROMServerInstallJournal.Installed(manifest: manifest(), revision: UUID(),
+            retiredGameIDs: [future.gameID], verifiedROMs: [future])
+        try journal.write(receipt, to: journal.installedURL)
+        XCTAssertEqual(try journal.installed()?.verifiedROMs, [future])
+        let malformed = BoundROMCleanupIdentity(sha256: future.sha256, gameID: "../outside", evidence: "invalid")
+        try journal.write(BoundROMServerInstallJournal.Installed(manifest: manifest(), revision: UUID(),
+            retiredGameIDs: [], verifiedROMs: [malformed]), to: journal.installedURL)
+        XCTAssertThrowsError(try journal.installed())
+    }
+
 }

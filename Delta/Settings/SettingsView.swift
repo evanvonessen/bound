@@ -119,7 +119,6 @@ extension View {
 
 struct SettingsView: View {
     @StateObject private var model: BoundCompanionSettingsModel
-    @StateObject private var romCleanup = BoundROMCleanupCoordinator.shared
     @State private var resetting = false
     @State private var resetFailed = false
     @State private var resetRevision = 0
@@ -229,10 +228,6 @@ struct SettingsView: View {
                         }.accessibilityIdentifier("bound.settings-about")
                     }
                     Section {
-                        Button("Clear ROMs") { Task { await romCleanup.prepare() } }
-                            .disabled(romCleanup.busy)
-                            .accessibilityIdentifier("bound.settings-clear-roms")
-                        if !romCleanup.status.isEmpty { Text(romCleanup.status).font(.footnote).foregroundStyle(.secondary) }
                         Button("Reset Settings to Default") {
                             resetting = true
                             Task { @MainActor in
@@ -289,9 +284,7 @@ struct SettingsView: View {
             .alert("Unable to Reset Settings", isPresented: $resetFailed) {
                 Button("OK", role: .cancel) {}
             }
-            .sheet(isPresented: Binding(get: { romCleanup.preview != nil }, set: { if !$0 { romCleanup.cancel() } })) {
-                BoundROMCleanupConfirmation(cleanup: romCleanup)
-            }
+
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // Let navigation bars and backgrounds fill the side safe areas in landscape.
             .ignoresSafeArea(.container, edges: .horizontal)

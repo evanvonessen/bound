@@ -69,6 +69,7 @@ struct BoundMultiplayerSetupView: View {
     var close: () -> Void
     @AppStorage(BoundMultiplayerFeatures.key) private var multiplayerEnabled = false
     @AppStorage(BoundDirectionalFriendArrow.key) private var directionalFriendArrow = true
+    @AppStorage(BoundDamageCalculations.key) private var damageCalculations = true
     @State private var stage = 0
     @State private var room: FriendRoom?
     @State private var options = BoundMultiplayerSetupOptions()
@@ -79,12 +80,15 @@ struct BoundMultiplayerSetupView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Friend Guidance") {
+                Section("ROM Settings") {
                     Toggle("Enable Directional Friend Arrow", isOn: $directionalFriendArrow)
                         .accessibilityIdentifier("bound.directional-friend-arrow")
                         .onChange(of: directionalFriendArrow) { _, _ in
                             NotificationCenter.default.post(name: BoundDirectionalFriendArrow.didChange, object: nil)
                         }
+                    Toggle("Enable Damage Calculations", isOn: $damageCalculations)
+                        .accessibilityIdentifier("bound.damage-calculations")
+                        .onChange(of: damageCalculations) { _, _ in coordinator.refreshROMPreferences() }
                 }
                 if let message = coordinator.serverMenuError { Text(message).foregroundStyle(.red) }
                 if coordinator.hasUnconfirmedServerSave && !coordinator.observationRecoveryRequired {

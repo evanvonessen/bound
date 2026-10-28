@@ -2,6 +2,9 @@
 #include <cstdint>
 #include <cstring>
 #include "BoundGameABI.h"
+namespace BoundPreRuntimeGame {
+#include "BoundPreRuntimeGameABI.h"
+}
 namespace BoundOriginalGame {
 #include "BoundOriginalGameABI.h"
 }
@@ -119,6 +122,19 @@ static const MultiRedNativeProfile MultiRedCurrentProfile={
     0,0,0,0,0,0
 #endif
 };
+static const MultiRedNativeProfile MultiRedPreRuntimeProfile={
+    BoundPreRuntimeGame::GameDescriptor,BoundPreRuntimeGame::GameCanonicalSHA256,BoundPreRuntimeGame::GameRulesetID,BoundPreRuntimeGame::GameDescriptorOffset,sizeof(BoundPreRuntimeGame::GameDescriptor),BoundPreRuntimeGame::GameHostOffset,BoundPreRuntimeGame::GameHostSize,
+    BoundPreRuntimeGame::GameSnapshotAddress,BoundPreRuntimeGame::GameSnapshotSize,BoundPreRuntimeGame::GameSnapshotRegionSize,BoundPreRuntimeGame::GameABIMajor,BoundPreRuntimeGame::GameABIMinor,BoundPreRuntimeGame::GameSaveStateLayout,
+    BoundPreRuntimeGame::GameUIHostOffset,BoundPreRuntimeGame::GameUIHostSize,BoundPreRuntimeGame::GameUIRequestAddress,BoundPreRuntimeGame::GameUIRequestSize,BoundPreRuntimeGame::GameCodeStart,BoundPreRuntimeGame::GameCodeEnd,
+    BoundPreRuntimeGame::GameCooperativeHostOffset,BoundPreRuntimeGame::GameCooperativeHostSize,BoundPreRuntimeGame::GameCooperativeCodeStart,BoundPreRuntimeGame::GameCooperativeCodeEnd,
+    [](uint8_t *p) { for(const auto &entry:BoundPreRuntimeGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },
+    BoundPreRuntimeGame::GameLinksHostOffset,BoundPreRuntimeGame::GameLinksHostSize,BoundPreRuntimeGame::GameLinksCodeStart,BoundPreRuntimeGame::GameLinksCodeEnd,BoundPreRuntimeGame::GameEliminationHostOffset,BoundPreRuntimeGame::GameEliminationHostSize,BoundPreRuntimeGame::GameEliminationCodeStart,BoundPreRuntimeGame::GameEliminationCodeEnd,
+#ifdef BOUND_GAME_PRESENCE
+    BoundPreRuntimeGame::GamePresenceHostOffset,BoundPreRuntimeGame::GamePresenceHostSize,BoundPreRuntimeGame::GamePresenceOutputAddress,BoundPreRuntimeGame::GamePresenceOutputSize,BoundPreRuntimeGame::GamePresenceCodeStart,BoundPreRuntimeGame::GamePresenceCodeEnd
+#else
+    0,0,0,0,0,0
+#endif
+};
 static const MultiRedNativeProfile MultiRedNativeEliminationProfile={
     BoundEliminationGame::GameDescriptor,BoundEliminationGame::GameCanonicalSHA256,BoundEliminationGame::GameRulesetID,BoundEliminationGame::GameDescriptorOffset,sizeof(BoundEliminationGame::GameDescriptor),BoundEliminationGame::GameHostOffset,BoundEliminationGame::GameHostSize,
     BoundEliminationGame::GameSnapshotAddress,BoundEliminationGame::GameSnapshotSize,BoundEliminationGame::GameSnapshotRegionSize,BoundEliminationGame::GameABIMajor,BoundEliminationGame::GameABIMinor,BoundEliminationGame::GameSaveStateLayout,
@@ -201,7 +217,10 @@ static const MultiRedNativeProfile MultiRedPreLinksMenuProfile={
     BoundPreLinksMenuGame::GameCooperativeCodeStart,BoundPreLinksMenuGame::GameCooperativeCodeEnd,
     [](uint8_t *p) { for(const auto &entry:BoundPreLinksMenuGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },0,0,0,0,0,0,0,0,0,0,0,0,0,0
 };
+#include "MultiRedRuntime.h"
 static const MultiRedNativeProfile *multiRedProfile(const uint8_t *p) {
+    if(p && !memcmp(p+BoundRuntimeOffset,"BRUNTIME",8))return runtimeProfile(p);
+    if(MultiRedPreRuntimeProfile.matches(p)) return &MultiRedPreRuntimeProfile;
     if(MultiRedCurrentProfile.matches(p)) return &MultiRedCurrentProfile;
     if(MultiRedNativeEliminationProfile.matches(p)) return &MultiRedNativeEliminationProfile;
     if(MultiRedLinksMenuProfile.matches(p)) return &MultiRedLinksMenuProfile;

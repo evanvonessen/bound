@@ -15,7 +15,7 @@ def remove_legacy_resources(build_directory, resources_path):
     resources = build / relative
     if not resources.resolve().is_relative_to(build.resolve()):
         raise ValueError('App resources escaped the build directory')
-    for name in ('multiplayer.gba', 'rrbin-integrated.gba', 'RRv4.1M.gba'):
+    for name in ('multiplayer.gba', 'rrbin-integrated.gba', 'RRv4.1M.gba', 'firered-cover.png'):
         path = resources / name
         if path.is_symlink() or path.is_file():
             path.unlink()

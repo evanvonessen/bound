@@ -1,0 +1,1140 @@
+{
+  "schema": 1,
+  "passed": true,
+  "kind": "cooperative doubles multiplayer game variant; not byte-identical reconstruction",
+  "baseline_sha256": "689299664a954c12dad66e03c2d18446b348cb31bd98b395c87b9b514b288066",
+  "integrated_sha256": "723924890b6f912e7f8cf6bca72773fb5bea3d449caefd5abb9d82d22c2144f6",
+  "rom_size": 33554432,
+  "code_bytes": 14634,
+  "code_sha256": "5ddea7ebcd8771ff5bafc55107841944bb77e56505c8c95e227b874b5cf6092e",
+  "contract": {
+    "schema": 1,
+    "abi_major": 1,
+    "abi_minor": 0,
+    "wire_version": 2,
+    "checkpoint_format": 1,
+    "battery_save_version": 1,
+    "save_state_layout": 16,
+    "ruleset_id": "1a722ccc9bf6ace53bc72ece5bf22be1",
+    "game_family_id": "689299664a954c12dad66e03c2d18446",
+    "descriptor_offset": 33513216,
+    "descriptor_size": 128,
+    "host_port_offset": 33505280,
+    "host_port_size": 1024,
+    "snapshot_address": 33554432,
+    "snapshot_size": 960,
+    "reserved_heap_bytes": 8448,
+    "source_of_truth": "integratedred/source/multiplayer",
+    "snapshot_region_size": 2048,
+    "snapshot_buffer_offset": 64,
+    "snapshot_buffers": 2,
+    "ui_abi_major": 1,
+    "ui_abi_minor": 0,
+    "ui_host_port_offset": 33509376,
+    "ui_host_port_size": 2048,
+    "ui_snapshot_address": 33556480,
+    "ui_snapshot_size": 256,
+    "cooperative_doubles": true,
+    "cooperative_abi_major": 1,
+    "cooperative_abi_minor": 0,
+    "cooperative_code_offset": 33357824,
+    "cooperative_code_limit": 33390592,
+    "cooperative_host_port_offset": 33423360,
+    "cooperative_host_port_size": 16384,
+    "cooperative_snapshot_address": 33560576,
+    "cooperative_snapshot_size": 2048,
+    "cooperative_state_address": 33556992,
+    "cooperative_state_size": 2816,
+    "cooperative_xp_address": 33559808,
+    "cooperative_xp_size": 768,
+    "setup_settings_version": 5,
+    "independent_progression": true,
+    "external_setup_version": 1,
+    "external_setup_flag": 4096,
+    "external_player_name_offset": 1408,
+    "external_player_gender_offset": 1416,
+    "external_player_version_offset": 1417,
+    "links_version": 1,
+    "links_host_port_offset": 33318912,
+    "links_host_port_size": 1024,
+    "links_code_offset": 33320960,
+    "links_code_limit": 33329152,
+    "links_request_address": 33556964,
+    "links_request_size": 28,
+    "elimination_abi_major": 1,
+    "elimination_abi_minor": 0,
+    "elimination_host_port_offset": 33329152,
+    "elimination_host_port_size": 288,
+    "elimination_code_offset": 33333248,
+    "elimination_code_limit": 33357824,
+    "elimination_cooperative_pairs_version": 1,
+    "presence_abi_major": 1,
+    "presence_abi_minor": 0,
+    "presence_host_port_offset": 33329664,
+    "presence_host_port_size": 1024,
+    "presence_output_address": 33562624,
+    "presence_output_size": 256,
+    "presence_code_offset": 33390592,
+    "presence_code_limit": 33423360
+  },
+  "symbols": {
+    "BoundWorldCheckTrainer": 167716345,
+    "BoundWorldCollision": 167716265,
+    "BoundWorldCollisionEntry": 167716241,
+    "BoundWorldDoTrainer": 167716325,
+    "BoundWorldFlag": 167716229,
+    "BoundWorldOriginalCollision": 167716245,
+    "BoundWorldOriginalFlag": 167710913,
+    "BoundWorldTrainer": 167716305,
+    "GameAutoNickname": 167706713,
+    "GameBattleAck": 167720161,
+    "GameBattleChooseAction": 167719841,
+    "GameBattleChooseMove": 167719965,
+    "GameBattleComplete": 167719689,
+    "GameBattleReceived": 167720189,
+    "GameBattleTransfer": 167719257,
+    "GameCoopActive": 167577313,
+    "GameCoopAfterCallbacks": 167583249,
+    "GameCoopBeforeCallbacks": 167579949,
+    "GameCoopBufferStringBattle": 167584489,
+    "GameCoopBuildPartyBody": 167583833,
+    "GameCoopBuildTrainerParty": 167583909,
+    "GameCoopCleanupEntry": 167583225,
+    "GameCoopDrawMultiTrainers": 167584341,
+    "GameCoopDrawOtherTrainers": 167584401,
+    "GameCoopExecuteTurnScript": 167584737,
+    "GameCoopFinishAndEnd": 167584905,
+    "GameCoopGetExp": 167586149,
+    "GameCoopInitControllers": 167583301,
+    "GameCoopInterceptStart": 167578721,
+    "GameCoopLatchFaints": 167583021,
+    "GameCoopLinkOpponentComplete": 167583973,
+    "GameCoopLinkOpponentIntro": 167584693,
+    "GameCoopLinkOpponentSendOutTask": 167584607,
+    "GameCoopLinkPartnerComplete": 167584101,
+    "GameCoopOpponentComplete": 167583929,
+    "GameCoopOpponentIntro": 167584621,
+    "GameCoopOpponentIntroStage": 167578361,
+    "GameCoopOpponentSendOutTask": 167584593,
+    "GameCoopOpponentSendsOut": 167584545,
+    "GameCoopOwnsPrivateState": 167578489,
+    "GameCoopPartyRange": 167584127,
+    "GameCoopPlayerComplete": 167584037,
+    "GameCoopRestoreAfterHeap": 167578629,
+    "GameCoopRestoreCleanupFlags": 167584845,
+    "GameCoopRetainForHeap": 167578533,
+    "GameCoopRole": 167578697,
+    "GameCoopSelectReturn": 167577183,
+    "GameCoopSelectStart": 167576337,
+    "GameCoopSendTask": 167584269,
+    "GameCoopSoulControllerFaint": 167582685,
+    "GameCoopSoulEnforce": 167579657,
+    "GameCoopSoulFaints": 167581889,
+    "GameCoopSoulIdentityEliminated": 167579553,
+    "GameCoopToken": 167578709,
+    "GameCoopValidateTeam": 167579421,
+    "GameCoopXPAcknowledgeFinal": 167587795,
+    "GameCoopXPAfterCallbacks": 167586101,
+    "GameCoopXPBeforeCallbacks": 167585829,
+    "GameCoopXPClientDone": 167585545,
+    "GameCoopXPExport": 167587285,
+    "GameCoopXPFailed": 167587829,
+    "GameCoopXPFinalParty": 167587737,
+    "GameCoopXPFinishIfEnd": 167587697,
+    "GameCoopXPInit": 167585793,
+    "GameCoopXPLatchFinal": 167587533,
+    "GameCoopXPLeveledMask": 167587763,
+    "GameCoopXPLocalCallbacks": 167587853,
+    "GameCoopXPPayTrainerReward": 167587881,
+    "GameCoopXPReceive": 167586513,
+    "GameCoopXPReleaseThenEnd": 167588225,
+    "GameEliminationActive": 167551197,
+    "GameEliminationBattleFaint": 167557501,
+    "GameEliminationBattleFaintExpanded": 167557533,
+    "GameEliminationBattleMapValid": 167557245,
+    "GameEliminationBattlePartnerFaint": 167557609,
+    "GameEliminationBattlePlayerFaint": 167557565,
+    "GameEliminationBattleReviveA": 167557653,
+    "GameEliminationBattleReviveB": 167557681,
+    "GameEliminationHPBarNative": 167554765,
+    "GameEliminationIsIdentity": 167551213,
+    "GameEliminationIsMon": 167551381,
+    "GameEliminationPartyNative": 167554705,
+    "GameEliminationPartyNickname": 167555553,
+    "GameEliminationRecordAcceptedFaints": 167551449,
+    "GameEliminationRefreshNames": 167556093,
+    "GameEliminationRightPaneNative": 167554741,
+    "GameEliminationStorageDeposit": 167552957,
+    "GameEliminationStorageDepositFailure": 167553193,
+    "GameEliminationStorageFull": 167552177,
+    "GameEliminationStorageMessages": 167553228,
+    "GameEliminationStorageMultiPlace": 167552993,
+    "GameEliminationStorageName": 167552717,
+    "GameEliminationStorageNameTask": 167553113,
+    "GameEliminationStoragePlaceTask": 167552865,
+    "GameEliminationStorageSend": 167552249,
+    "GameEliminationStorageSendAt": 167552473,
+    "GameEliminationStorageSet": 167552525,
+    "GameEliminationStorageSetWallpaper": 167552813,
+    "GameEliminationStorageShiftTask": 167552895,
+    "GameEliminationStorageTitleColors": 167553512,
+    "GameEliminationStorageWallpaper": 167552773,
+    "GameEliminationStorageWallpapers": 167553580,
+    "GameEliminationStorageWithdraw": 167552653,
+    "GameEliminationSummaryHPBar": 167555585,
+    "GameEliminationSummaryNative": 167554721,
+    "GameEliminationSummaryNickname": 167555957,
+    "GameEliminationSummaryRightPane": 167556021,
+    "GameFieldFrame": 167716701,
+    "GameInitHeap": 167716365,
+    "GameLinksAcquireView": 167719129,
+    "GameLinksActionTable": 167541432,
+    "GameLinksActive": 167540653,
+    "GameLinksBeforeCallbacks": 167540709,
+    "GameLinksDescriptionTable": 167541376,
+    "GameLinksDisplayView": 167719189,
+    "GameLinksMenuFade": 167541165,
+    "GameLinksMenuSetup": 167541201,
+    "GameLinksReleaseView": 167719157,
+    "GameLinksResetForHeap": 167540681,
+    "GameLinksViewInfo": 167719169,
+    "GameMagikarpCapacity": 167706773,
+    "GameMagikarpPurchaseGuard": 167721231,
+    "GameMainCallbacks": 167718785,
+    "GameNicknameBattlePrint": 167717977,
+    "GameNicknameCallStd": 167717869,
+    "GameNicknameCaught": 167718061,
+    "GameNicknameEggHatch": 167718117,
+    "GamePresenceAfterField": 167612917,
+    "GamePresenceBeforeCallbacks": 167612581,
+    "GamePresenceCollision": 167612985,
+    "GamePresenceCollisionFlags": 167613429,
+    "GamePresenceCollisionFlagsEntry": 167613487,
+    "GamePresenceFollowerGenerationForHeap": 167612441,
+    "GamePresenceGenerationForHeap": 167612341,
+    "GamePresenceObjectCollision": 167613149,
+    "GamePresenceObjectCollisionEntry": 167613405,
+    "GamePresenceOriginalFlags": 167613409,
+    "GamePresenceOriginalObjectCollision": 167613129,
+    "GamePresenceResetForHeap": 167612469,
+    "GameUIFadeScreen": 167718649,
+    "GameUIWaitButton": 167718265,
+    "afterFaint": 167557117,
+    "attribute": 167554781,
+    "battleMenuActive": 167707989,
+    "battleMenuSlot": 167709901,
+    "battleNativeComplete": 167707805,
+    "battleNativeReceived": 167707829,
+    "battleNativeTransfer": 167709821,
+    "battleReceiveAck": 167720077,
+    "bound_sdk_store_le32": 167706653,
+    "canPlace": 167551933,
+    "compare": 167556469,
+    "coopAck": 167578005,
+    "coopCopy": 167575553,
+    "coopFail": 167576313,
+    "coopField": 167576121,
+    "coopHostValid": 167575669,
+    "coopNativeStart": 167576073,
+    "coopOrdinaryIntro": 167578201,
+    "coopOriginalControllers": 167576381,
+    "coopOriginalDraw": 167576517,
+    "coopOriginalLinkOpponentComplete": 167576449,
+    "coopOriginalLinkOpponentIntro": 167576573,
+    "coopOriginalLinkOpponentSendOutTask": 167576557,
+    "coopOriginalLinkPartnerComplete": 167576473,
+    "coopOriginalOpponentComplete": 167576401,
+    "coopOriginalOpponentSendOutTask": 167576541,
+    "coopOriginalPlayerComplete": 167576425,
+    "coopOriginalRange": 167576497,
+    "coopPartyValid.part.0": 167576623,
+    "coopProjection": 167576687,
+    "coopPublish": 167577353,
+    "coopRecordValid": 167575925,
+    "coopReserved": 167575625,
+    "coopRestore": 167576165,
+    "coopSame": 167575593,
+    "coopSame.constprop.0": 167576589,
+    "coopSelection": 167577061,
+    "coopSendOutTask": 167578237,
+    "coopSessionValid": 167575813,
+    "coopSoulLost": 167576901,
+    "coopSoulZero": 167577017,
+    "coopZero": 167575577,
+    "copy": 167538717,
+    "cross": 167555097,
+    "crossPresent": 167554885,
+    "current": 167551683,
+    "decorateParty": 167555337,
+    "deniedTask": 167552129,
+    "deny": 167551865,
+    "depositFailure": 167553147,
+    "depositMon": 167552053,
+    "digest": 167556511,
+    "draw": 167539377,
+    "eliminatedActive": 167557177,
+    "get32": 167538689,
+    "heldAllowed": 167551973,
+    "icon": 167539045,
+    "originalDeposit": 167551813,
+    "originalMenuSetup": 167539025,
+    "originalMulti": 167551829,
+    "originalNameTask": 167551845,
+    "originalPlaceTask": 167551773,
+    "originalReviveA": 167557065,
+    "originalReviveB": 167557089,
+    "originalSend": 167551701,
+    "originalSendAt": 167551725,
+    "originalSet": 167551741,
+    "originalShiftTask": 167551793,
+    "originalWithdraw": 167551757,
+    "pactors": 167610229,
+    "pauthority": 167609961,
+    "pbegin": 167608443,
+    "pclear": 167608509,
+    "pdistance": 167608411,
+    "pend": 167608477,
+    "pfollower": 167608609,
+    "pinput": 167609465,
+    "plain": 167538833,
+    "plocal": 167610457,
+    "pmon": 167608589,
+    "pown": 167610349,
+    "ps": 167608349,
+    "pstep": 167611565,
+    "pw": 167608321,
+    "pzero": 167608389,
+    "rectangle": 167538963,
+    "refreshSummaryHP": 167555641,
+    "reserved": 167706669,
+    "sequence": 167551005,
+    "startView": 167540417,
+    "summary": 167554809,
+    "text": 167538739,
+    "uiApplySettings": 167711125,
+    "uiAttribute": 167707025,
+    "uiCheckpointSafe": 167707845,
+    "uiClose": 167708177,
+    "uiCopy": 167706801,
+    "uiCopyWindow": 167707049,
+    "uiDebugParty": 167707633,
+    "uiDebugSettings": 167709705,
+    "uiDisplay": 167707073,
+    "uiDraw": 167709209,
+    "uiEncode": 167708429,
+    "uiFindOak": 167707477,
+    "uiHostValid": 167706835,
+    "uiList": 167708889,
+    "uiNamed": 167708633,
+    "uiNewGameRequested": 167707289,
+    "uiOpen": 167710521,
+    "uiPublish": 167711569,
+    "uiRemoveList": 167708069,
+    "uiRequest": 167707321,
+    "uiRival": 167707585,
+    "uiRivalNameValid": 167707537,
+    "uiRivalValid.constprop.0": 167709981,
+    "uiServiceMessage": 167708737,
+    "uiSetMenu": 167710841,
+    "uiSettingsMatch": 167710929,
+    "uiSettingsValid": 167710037,
+    "uiStartNativeIntro": 167710245,
+    "uiStartNewGame": 167708333,
+    "uiText": 167708541,
+    "uiTick": 167712173,
+    "uiZero": 167706819,
+    "validString": 167538933,
+    "word": 167706625,
+    "xpCopy": 167585297,
+    "xpCopy.constprop.0": 167585605,
+    "xpLocalExp.isra.0": 167585619,
+    "xpMonMatches": 167585371,
+    "xpSame": 167585317,
+    "xpState": 167585497,
+    "xpWord": 167585349,
+    "xpZero.constprop.0": 167585581
+  },
+  "source_sha256": {
+    "game/game_runtime.c": "12e1d4cb206bb54c87ee577467bfdb92b59a8ca27e74d4a4a9f82ee4b4bf5498",
+    "game/game_ui.c": "243a1f0f507270f125bf207ea45ccb62a98d4d009f1f55541ad13abaf0532769",
+    "game/game_nickname.c": "75d50c62e175904164cd348e83e440eef5087e5518510caa8717a4118319e711",
+    "game/game_magikarp.c": "e620a3a5f843b584e8f4ece7095e5932a82f778e30685b9fadeb235e335f7f80",
+    "game/game_battle_menu.c": "42189b953e8d8cbe9b3c8e30c224ae8ec1f25f34ce920ee9536cd813642f1b55",
+    "shared_world/shared_world.c": "3d0eb455663ae48d283bef441a696dd09304ba00f78ba72909120e2fb3531132",
+    "sdk/bound_sdk.h": "160d307d1b76a9be5eef6f018995594f5051e8e217b7875a0d4b5bc4961582ef",
+    "sdk/generated/BoundSDKProtocol.h": "4c8da36ba3e3456172637138ba2349efb54ab6cd8aeea8673cc57fe4fc8c95dd",
+    "game/game_links.c": "22f01562526e8bac54d6c18e878277e9d34b29eea7f53be1ba45f02873c5a5b2",
+    "game/game_links.h": "cbbe6039b68ffbd44c712aaa2843608ecee5cb37d86bd8f045df706cc8461165",
+    "game/game_elimination.c": "d01a2133f989e6e672e8674f014e2634e3acc6082a110b69e0f5346ecfb883ff",
+    "game/game_elimination.h": "4f6840eeccbdcce17a84da0454a90354d70930a7b174b879ef8aa958a72e8067",
+    "game/game_elimination_storage.c": "eaef2144bc47d6dd888fff874850d8c74ed1e7686eecebe9026dca7ee9c5aef6",
+    "game/game_elimination_storage.h": "a4bc85af2efeb94de76143dcbace167b7e9794d3864aa0359e81319334af22af",
+    "game/game_elimination_marks.c": "5f21d87f42540751cb31268196a65c02d7fbe0f590b7fdd64ace6cc61caafff4",
+    "game/game_elimination_marks.h": "bea9f5d81fff7f188512d7d3c616750a1df558742c288f1a116316e63b39f55a",
+    "game/game_elimination_battle.c": "30cd60ba57cb99e5818291ad9c2025e97c8dad176425aa2654a852945067f29f",
+    "game/game_elimination_battle.h": "ad920e4afe535983d687df37d16049348911d254dc30b49261ce5510d4a84258",
+    "game/game_presence.c": "798613f2e89d4fcad939577b67fa5daf9f491f3126c58cd9b834da3145aa9ee3",
+    "game/game_presence.h": "9b41ae6a84f2ef9dd3dbfc90bfee58ea24a932a7140fe80819a76c13711d3576",
+    "game/game_doubles.c": "5a7b274cf53c28d704ee957baceeb5b29b44f99cedeeaaed6f0dfcf845c7442a",
+    "game/game_doubles.h": "9fe1ecbeb198af2ae507acd0cb293065f138b1ec734b55e4d1a1fee7abbec1fc",
+    "game/game_doubles_xp.c": "66e81d038694361a80115b375c8e125b9f074f941127d410ede4f4e07f76cea0",
+    "game/game_doubles_xp.h": "8f96f792c4aa1c747ede29c3242a8af8ecf1622eca4ca5e9da70e36e4f5b3845"
+  },
+  "definitions": [
+    {
+      "definition": "reserved save relocation scratch",
+      "offset": 311652,
+      "size": 4,
+      "original_hex": "00000002",
+      "sha256": "1789775ba6d0ef4acf30541c9738b1b8b0f1950c7c95fd4049eadf852efa6259"
+    },
+    {
+      "definition": "reserved save relocation scratch",
+      "offset": 311672,
+      "size": 4,
+      "original_hex": "240f0002",
+      "sha256": "dd38bb047631d30ece9f222645fbd763192b94317e1602ee1985c0a9f3d9be12"
+    },
+    {
+      "definition": "reserved save relocation scratch",
+      "offset": 311684,
+      "size": 4,
+      "original_hex": "8c4c0002",
+      "sha256": "e4ff55882571ee2fe9bb222eb123f9d23fd052b062d5147572857a03bdc7c1fd"
+    },
+    {
+      "definition": "GameMainCallbacks",
+      "offset": 1200,
+      "size": 8,
+      "original_hex": "00b50af061fe0006",
+      "sha256": "1ef37e803786b2be3e6f01e7990ac34b91470ac44f68419e360467e7dd9a41cb"
+    },
+    {
+      "definition": "GameInitHeap",
+      "offset": 11136,
+      "size": 8,
+      "original_hex": "00b5044a1060044a",
+      "sha256": "536ca927423a5b9e77701449e17b547bfb88cac52836240d96e1eb496921acd5"
+    },
+    {
+      "definition": "GameFieldFrame",
+      "offset": 353656,
+      "size": 8,
+      "original_hex": "00b513f095fa20f0",
+      "sha256": "b07ceb960a4a897239f80d7e9698091c3eb33145e3b7a98f168b96010a8538f1"
+    },
+    {
+      "definition": "BoundWorldFlag",
+      "offset": 452304,
+      "size": 8,
+      "original_hex": "10b50004040c201c",
+      "sha256": "44d7993a8c7326d18ba77afe8c5a8874b440324e30d6e52db86d0a5b9d7589d3"
+    },
+    {
+      "definition": "native player collision",
+      "offset": 407212,
+      "size": 12,
+      "original_hex": "f0b557464e464546e0b4061c",
+      "sha256": "26748a14c959bb02387ed2b9d0eade6456656c7e4bfdb71f13d5f9680708a9f9"
+    },
+    {
+      "definition": "BoundWorldTrainer",
+      "offset": 1440548,
+      "size": 4,
+      "original_hex": "c5c20608",
+      "sha256": "09e45c624eedc4020f10bda55bb3c61504232abe9f6d94b601a09148c2a0c4cb"
+    },
+    {
+      "definition": "BoundWorldDoTrainer",
+      "offset": 1440552,
+      "size": 4,
+      "original_hex": "d9c20608",
+      "sha256": "62371b218a1eeaef7b8ba14db86399a0f0b9c2945a10dd470607995a70039f73"
+    },
+    {
+      "definition": "BoundWorldCheckTrainer",
+      "offset": 1440564,
+      "size": 4,
+      "original_hex": "0dc30608",
+      "sha256": "d4249dcc73878bf91f2022749bf6ff4c6b6b1df57030f4fccffb598958a3f3db"
+    },
+    {
+      "definition": "GameUIWaitButton",
+      "offset": 1440616,
+      "size": 4,
+      "original_hex": "3dba0608",
+      "sha256": "2d04de53f150eca2568d03bc3f957035482b575602b037829673dd2a25515c82"
+    },
+    {
+      "definition": "GameUIFadeScreen",
+      "offset": 1440784,
+      "size": 4,
+      "original_hex": "39a90608",
+      "sha256": "8a2e612610963f08cbbd4efe9754ed32a001a9ac918ff149b86aefbe7559f722"
+    },
+    {
+      "definition": "GameBattleTransfer",
+      "offset": 55472,
+      "size": 8,
+      "original_hex": "70b50c1c0006030e",
+      "sha256": "a8de4573b6707327e537ff7eb7d054c402cb2b197018b2001f84d911d71e1170"
+    },
+    {
+      "definition": "GameBattleComplete",
+      "offset": 189244,
+      "size": 8,
+      "original_hex": "10b581b00e490f4c",
+      "sha256": "84e1718361e50c01985d5c52631d265c6a79c996fc024ddbc300b47205ed882a"
+    },
+    {
+      "definition": "GameBattleReceived",
+      "offset": 94872,
+      "size": 8,
+      "original_hex": "f0b50006070e0024",
+      "sha256": "893d89021d9c5a3aa372a61f71ea737e99069717a1b6e54c3ed006519ae29d90"
+    },
+    {
+      "definition": "GameBattleAck",
+      "offset": 57188,
+      "size": 12,
+      "original_hex": "1a7a0c4b0c49a00040189200",
+      "sha256": "4c06f471f0fe694e3af73d7920c91fd0a681bb18f91a64d65549c53ce1e37355"
+    },
+    {
+      "definition": "GameBattleChooseAction",
+      "offset": 2427108,
+      "size": 4,
+      "original_hex": "d52b0308",
+      "sha256": "31d794fd3e62fadc84d2a1ca84be059bac9f2b5565b5dd0110b6b6acd02afe7d"
+    },
+    {
+      "definition": "GameBattleChooseMove",
+      "offset": 2427116,
+      "size": 4,
+      "original_hex": "912c0308",
+      "sha256": "749f10f5b12ac4c8d38d11b9f0f12abc82c36cd3764efe40a0206c7ec5ff618d"
+    },
+    {
+      "definition": "GameNicknameCallStd",
+      "offset": 1440216,
+      "size": 4,
+      "original_hex": "81a10608",
+      "sha256": "595481b5a9fb5df7157e21268902fe51b8985783caf8f8d18eca0b51d970a769"
+    },
+    {
+      "definition": "GameNicknameBattlePrint",
+      "offset": 2425180,
+      "size": 4,
+      "original_hex": "51fd0108",
+      "sha256": "95d394483c29df0c036f9c047db6f15b60641b18be74ba56f045217be7e54c9a"
+    },
+    {
+      "definition": "GameNicknameBattlePrint",
+      "offset": 17035104,
+      "size": 4,
+      "original_hex": "51fd0108",
+      "sha256": "95d394483c29df0c036f9c047db6f15b60641b18be74ba56f045217be7e54c9a"
+    },
+    {
+      "definition": "GameNicknameCaught",
+      "offset": 2426088,
+      "size": 4,
+      "original_hex": "39dd0208",
+      "sha256": "ad7d9bace3c438570493da71f6507652842b8e6f5fd6d919952e63c4bdf4ac21"
+    },
+    {
+      "definition": "GameNicknameCaught",
+      "offset": 17036012,
+      "size": 4,
+      "original_hex": "39dd0208",
+      "sha256": "ad7d9bace3c438570493da71f6507652842b8e6f5fd6d919952e63c4bdf4ac21"
+    },
+    {
+      "definition": "GameNicknameEggHatch",
+      "offset": 291480,
+      "size": 4,
+      "original_hex": "39730408",
+      "sha256": "83575aff595d225dd081d7fbb8b076d836ac7ded1c81ca6a91970f36f5a83a43"
+    },
+    {
+      "definition": "single shiny Magikarp offering",
+      "offset": 17088575,
+      "size": 5,
+      "original_hex": "2b8e090601",
+      "sha256": "6b91dd7b3bcadb96071a588d014a04114b9518483c24434c3be7db62ae5247ce"
+    },
+    {
+      "definition": "shiny Magikarp capacity before payment",
+      "offset": 17088729,
+      "size": 6,
+      "original_hex": "91f824010000",
+      "sha256": "e4dc9dca663307eeeb16087a768ad0015f7f299b7baa59f0048f628175fca341"
+    },
+    {
+      "definition": "native Links owning Start-menu setup",
+      "offset": 17555832,
+      "size": 8,
+      "original_hex": "f7b5514b01930023",
+      "sha256": "8a71787c13c0c57e689d02f4ffd8e173cfd7caa97a1d267d07bf7e61e39fc098"
+    },
+    {
+      "definition": "native Start-menu print actions",
+      "offset": 454556,
+      "size": 4,
+      "original_hex": "f08f1409",
+      "sha256": "0f6e10f3ef85cc26627a814e26272e30dd9c2fac2d6929507e95b5ac07918927"
+    },
+    {
+      "definition": "native Start-menu legacy actions",
+      "offset": 455540,
+      "size": 4,
+      "original_hex": "f08f1409",
+      "sha256": "0f6e10f3ef85cc26627a814e26272e30dd9c2fac2d6929507e95b5ac07918927"
+    },
+    {
+      "definition": "native Start-menu legacy descriptions",
+      "offset": 455528,
+      "size": 4,
+      "original_hex": "bc8f1409",
+      "sha256": "bfbf99a40c7a19dd82beb24ae5e2098165403cb11f95693ee5b783555a1af2a0"
+    },
+    {
+      "definition": "RR Start-menu action/description aggregate",
+      "offset": 17555800,
+      "size": 4,
+      "original_hex": "b48f1409",
+      "sha256": "3da512c638c71f6c0fe238715acff2eecd39fd811f64793127c7e20634a21ad8"
+    },
+    {
+      "definition": "RR Start-menu relocated callback displacement",
+      "offset": 17555670,
+      "size": 2,
+      "original_hex": "1b6c",
+      "sha256": "ea8a1aa1c0f6812cd5b95ed8f9e132c15b43d655f141251e42532bd063e728de"
+    },
+    {
+      "definition": "native Links preserves field palette",
+      "offset": 17555820,
+      "size": 4,
+      "original_hex": "95f30608",
+      "sha256": "ff6e5f0beebc5b7fee3eea9ed70e2cfd75f4fdf6ab97ae25f0bbeb0f2644f040"
+    },
+    {
+      "definition": "native GameEliminationStorageFull",
+      "offset": 266144,
+      "size": 8,
+      "original_hex": "70b5002600243506",
+      "sha256": "a15a6444d2341200afb1d34352eb1b2b28a17502d35aabfb82db64fece20fa99"
+    },
+    {
+      "definition": "native GameEliminationStorageSend",
+      "offset": 17526328,
+      "size": 8,
+      "original_hex": "f8b5204b07002048",
+      "sha256": "1434868af1787dd4b1bfa3253680ca1d6b2e8e181a14e466ddcb2ed039871a18"
+    },
+    {
+      "definition": "native GameEliminationStorageSendAt",
+      "offset": 17526500,
+      "size": 8,
+      "original_hex": "70b506000c001500",
+      "sha256": "01ede301dd9584a4ccd13b999c0e781d3eb4c86e705082b2418d5fd6cbdb9dbd"
+    },
+    {
+      "definition": "native GameEliminationStorageSet",
+      "offset": 17525924,
+      "size": 8,
+      "original_hex": "70b5050090b00c00",
+      "sha256": "f7e55dde6e212bc091c7a4c2800100f10123c723928989e74f049b07deda06fb"
+    },
+    {
+      "definition": "native GameEliminationStorageWithdraw",
+      "offset": 17525316,
+      "size": 8,
+      "original_hex": "30b5140095b01828",
+      "sha256": "6e33f143d1ef59e56bd6f3699c2e98065717814f0bd204e7d79fb660158910ef"
+    },
+    {
+      "definition": "native GameEliminationStorageName",
+      "offset": 17526060,
+      "size": 8,
+      "original_hex": "0023182803d8034b",
+      "sha256": "1ee367b7ff1c57f39e667f51c822ed4c6e822f10aeb90205ee57c8116e7d9385"
+    },
+    {
+      "definition": "native GameEliminationStorageWallpaper",
+      "offset": 17526084,
+      "size": 8,
+      "original_hex": "0023182804d8034b",
+      "sha256": "b48e1a320a06488ee0874fc274ab27b3d55fe11d3b9b6b9de40da1200f6220ac"
+    },
+    {
+      "definition": "native GameEliminationStorageSetWallpaper",
+      "offset": 17526108,
+      "size": 8,
+      "original_hex": "182806d80f2904d8",
+      "sha256": "21e57c3db9326eda23e9af7f6caf4e50e724c927b3787889d7cb60c28c6d0f1b"
+    },
+    {
+      "definition": "native GameEliminationStoragePlaceTask",
+      "offset": 580592,
+      "size": 8,
+      "original_hex": "10b5044c20680078",
+      "sha256": "7e8cae9cd66236525c861925725146c683b1946e28833aa905945bcb5d6d80f8"
+    },
+    {
+      "definition": "native GameEliminationStorageShiftTask",
+      "offset": 580688,
+      "size": 8,
+      "original_hex": "10b5044c20680078",
+      "sha256": "9bb99f510d940488d09602cd4435549f801784ded0c1439677e2abb37e2d9c2c"
+    },
+    {
+      "definition": "native GameEliminationStorageDeposit",
+      "offset": 602340,
+      "size": 8,
+      "original_hex": "70b50006060e301c",
+      "sha256": "f7a7b4ddf90cba6d55b3d95d0b1bd7651c061be3270627f1a41de9525650dbf4"
+    },
+    {
+      "definition": "native GameEliminationStorageMultiPlace",
+      "offset": 613052,
+      "size": 8,
+      "original_hex": "f0b557464e464546",
+      "sha256": "2b6e093d11b15b23c32a098140729ac2577521ba66f0fe6fe626907e1efd60a7"
+    },
+    {
+      "definition": "native GameEliminationStorageNameTask",
+      "offset": 584336,
+      "size": 8,
+      "original_hex": "30b581b0034d2868",
+      "sha256": "3b5ea036657e5d6eff9866442e28c1292549c3d5c97311df80e0400b0301b5be"
+    },
+    {
+      "definition": "native GameEliminationStorageDepositFailure",
+      "offset": 581200,
+      "size": 8,
+      "original_hex": "082001f0a7fe0248",
+      "sha256": "04dda63572e33811c7433218003bd65714ebc2993bbb3c9fe29db0924283e0f8"
+    },
+    {
+      "definition": "native GameEliminationStorageWallpapers table",
+      "offset": 596252,
+      "size": 4,
+      "original_hex": "102a3d08",
+      "sha256": "2455824d95a2a4900551923454552e6d33090321359d70d4c7e3642ffcfe42e2"
+    },
+    {
+      "definition": "native GameEliminationStorageTitleColors table",
+      "offset": 597036,
+      "size": 4,
+      "original_hex": "d0293d08",
+      "sha256": "cfc36021ba6a6efd323ac081116e8637cbe739b4faa4122539a220f7c321c853"
+    },
+    {
+      "definition": "native GameEliminationStorageTitleColors table",
+      "offset": 597540,
+      "size": 4,
+      "original_hex": "d0293d08",
+      "sha256": "cfc36021ba6a6efd323ac081116e8637cbe739b4faa4122539a220f7c321c853"
+    },
+    {
+      "definition": "native GameEliminationStorageTitleColors table",
+      "offset": 597808,
+      "size": 4,
+      "original_hex": "d0293d08",
+      "sha256": "cfc36021ba6a6efd323ac081116e8637cbe739b4faa4122539a220f7c321c853"
+    },
+    {
+      "definition": "native GameEliminationStorageTitleColors table",
+      "offset": 597844,
+      "size": 4,
+      "original_hex": "d0293d08",
+      "sha256": "cfc36021ba6a6efd323ac081116e8637cbe739b4faa4122539a220f7c321c853"
+    },
+    {
+      "definition": "native GameEliminationStorageMessages table",
+      "offset": 588744,
+      "size": 4,
+      "original_hex": "b0490409",
+      "sha256": "3534f9ef48a61b41aca352cf0d4cd5ad76a1b253078fdde728542db103677590"
+    },
+    {
+      "definition": "native GameEliminationStorageMessages table",
+      "offset": 589028,
+      "size": 4,
+      "original_hex": "b0490409",
+      "sha256": "3534f9ef48a61b41aca352cf0d4cd5ad76a1b253078fdde728542db103677590"
+    },
+    {
+      "definition": "native party eliminated-name marker",
+      "offset": 1185592,
+      "size": 8,
+      "original_hex": "f0b585b0071c0e1c",
+      "sha256": "80b4c513960bc0be88fdb5cac0a531d9f30573f6c9c0b195ab27517a31e34c8a"
+    },
+    {
+      "definition": "native summary eliminated-name marker",
+      "offset": 1273424,
+      "size": 8,
+      "original_hex": "f0b583b0254e3068",
+      "sha256": "01080b2cb958fed18dee2aaa3669225a6a87beece512a47c1bc6b05dba92a52e"
+    },
+    {
+      "definition": "native egg summary eliminated-name marker",
+      "offset": 1273676,
+      "size": 8,
+      "original_hex": "10b5094c20680949",
+      "sha256": "856312d1b1ab56c258f73767ccd6b51733715c590384b368fb0a7898b6cb82ae"
+    },
+    {
+      "definition": "native eliminated summary empty HP bar",
+      "offset": 1287712,
+      "size": 8,
+      "original_hex": "f0b557464e464546",
+      "sha256": "eed952a1053a8b228fd014d598ddecce10eff5ac34b08168546c8cfe3c4d6c8b"
+    },
+    {
+      "definition": "native leased presence collision flags",
+      "offset": 407408,
+      "size": 12,
+      "original_hex": "f0b557464e464546e0b4071c",
+      "sha256": "2ec33137ded47bcbb894fc9aad461fa91b96f317e011615e6c112fe811ab2f46"
+    },
+    {
+      "definition": "native approved ledge landing collision",
+      "offset": 375720,
+      "size": 12,
+      "original_hex": "f0b557464e464546e0b481b0",
+      "sha256": "b872b8311148cd3462c38d43eb2112875df32cdd032760bacb8dbd56120566c3"
+    },
+    {
+      "definition": "cooperative accepted linked faint command",
+      "offset": 17035140,
+      "size": 4,
+      "original_hex": "bde50909",
+      "sha256": "aa2dc75806a4d368b88b47e67ff9580a7bcc6e574fdb459eba9eb982a69844b0"
+    },
+    {
+      "definition": "GameEliminationBattleFaintExpanded",
+      "offset": 17036204,
+      "size": 4,
+      "original_hex": "e5ee0a09",
+      "sha256": "801adf21c1d0f44fd3ad39ab0e46e22e1d73c08c9bb361571d205b924edfa60f"
+    },
+    {
+      "definition": "GameEliminationBattlePlayerFaint",
+      "offset": 2427076,
+      "size": 4,
+      "original_hex": "51260308",
+      "sha256": "945883578c32dc2a425fa02ee82bc3e67133ed65992d108832cd9a47d4abd58c"
+    },
+    {
+      "definition": "GameEliminationBattlePlayerFaint",
+      "offset": 18120624,
+      "size": 4,
+      "original_hex": "51260308",
+      "sha256": "945883578c32dc2a425fa02ee82bc3e67133ed65992d108832cd9a47d4abd58c"
+    },
+    {
+      "definition": "GameEliminationBattlePartnerFaint",
+      "offset": 4174172,
+      "size": 4,
+      "original_hex": "f5630d08",
+      "sha256": "bf187e171d9b72f690bc1ecd15da34e690b83d3c709b88db55c3a3905f920fc7"
+    },
+    {
+      "definition": "GameEliminationBattleReviveA",
+      "offset": 17425312,
+      "size": 8,
+      "original_hex": "73b50600fcf70afd",
+      "sha256": "a1f0de0a99a7cf66d4046a9a0116990041a46083b3257bbbf6ba2cf30d8598ef"
+    },
+    {
+      "definition": "GameEliminationBattleReviveB",
+      "offset": 17425456,
+      "size": 8,
+      "original_hex": "f0b585b003904f4b",
+      "sha256": "5823f2d4a3a1fd5fcfdb3847cad84144e2c329f16e2e33255b324bfef1ccca95"
+    },
+    {
+      "definition": "compiled multiplayer game code",
+      "offset": 33488896,
+      "size": 14634,
+      "original_hex": null,
+      "sha256": "5ddea7ebcd8771ff5bafc55107841944bb77e56505c8c95e227b874b5cf6092e"
+    },
+    {
+      "definition": "host data port",
+      "offset": 33505280,
+      "size": 1024,
+      "original_hex": null,
+      "sha256": "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+    },
+    {
+      "definition": "versioned game descriptor",
+      "offset": 33513216,
+      "size": 128,
+      "original_hex": null,
+      "sha256": "6f3082a68562bb81f80a75db610bea020df690695c6875c05f7094ee0df2288d"
+    },
+    {
+      "definition": "UI service data port",
+      "offset": 33509376,
+      "size": 2048,
+      "original_hex": null,
+      "sha256": "e5a00aa9991ac8a5ee3109844d84a55583bd20572ad3ffcd42792f3c36b183ad"
+    },
+    {
+      "definition": "compiled Links screen",
+      "offset": 33320960,
+      "size": 2887,
+      "original_hex": null,
+      "sha256": "5a58dbb0e5de5bc2bc3b201363f80adddae43de5fcebd170f18a382507a5b565"
+    },
+    {
+      "definition": "Links presentation data port",
+      "offset": 33318912,
+      "size": 1024,
+      "original_hex": null,
+      "sha256": "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+    },
+    {
+      "definition": "compiled elimination rules",
+      "offset": 33333248,
+      "size": 6992,
+      "original_hex": null,
+      "sha256": "d1f3ac3f619606d2a5b0bc5df0e70bf40b9d7667017b8f4c0f324dacf1b68e8e"
+    },
+    {
+      "definition": "elimination policy data port",
+      "offset": 33329152,
+      "size": 288,
+      "original_hex": null,
+      "sha256": "2d5565fb483d8ea4525a7a9229677d1038ad34b6e22c8d5152e1d7f7b9817597"
+    },
+    {
+      "definition": "compiled world presence rules",
+      "offset": 33390592,
+      "size": 5172,
+      "original_hex": null,
+      "sha256": "6e55d5690e554e7756081bfafc5e9bc5c32ea94cf4ae4b565c78bd6d8a9fdfc5"
+    },
+    {
+      "definition": "presence host data port",
+      "offset": 33329664,
+      "size": 1024,
+      "original_hex": null,
+      "sha256": "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+    },
+    {
+      "definition": "compiled cooperative game code",
+      "offset": 33357824,
+      "size": 12732,
+      "original_hex": null,
+      "sha256": "fc2ae903821617a973bcaba76c493505ebcfe053556d4cb692237a3bd5d61293"
+    },
+    {
+      "definition": "cooperative data port",
+      "offset": 33423360,
+      "size": 16384,
+      "original_hex": null,
+      "sha256": "4fe7b59af6de3b665b67788cc2f99892ab827efae3a467342b3bb4e3bc8e5bfe"
+    },
+    {
+      "definition": "GameCoopInterceptStart",
+      "offset": 522344,
+      "size": 8,
+      "original_hex": "00b500f089fb0006",
+      "sha256": "2af37c2a0843f5605d19aecd978b55ab86b5311fb681b68fbd237fe6d1c57869"
+    },
+    {
+      "definition": "GameCoopInitControllers",
+      "offset": 54028,
+      "size": 8,
+      "original_hex": "30b5044800680221",
+      "sha256": "1104de85beed6e3810901a70f3a23100df1386e0062493451b7ac9188c74dff0"
+    },
+    {
+      "definition": "GameCoopBuildTrainerParty",
+      "offset": 17050508,
+      "size": 8,
+      "original_hex": "39f09efb00480047",
+      "sha256": "7bef5c8c4d31a60a4a40fc95ad691febb9c354bdb28eb3a5b93f177c46c11bc7"
+    },
+    {
+      "definition": "GameCoopOpponentComplete",
+      "offset": 222512,
+      "size": 8,
+      "original_hex": "0849094a10788000",
+      "sha256": "18446ac5500152735ecbb1e2041a6b37064ea2b61d2b70effca9a130dabfecaf"
+    },
+    {
+      "definition": "GameCoopPartyRange",
+      "offset": 17252368,
+      "size": 8,
+      "original_hex": "f7b52b4e05000c00",
+      "sha256": "cc80cb5cf3a9a9804238f1d6275fad1bcdc2e1bce75fc5267e8595ce47b4795c"
+    },
+    {
+      "definition": "GameCoopOpponentIntro",
+      "offset": 220208,
+      "size": 8,
+      "original_hex": "0048004713450409",
+      "sha256": "8a7606f9995a8885ec25b3e18573b822ab55f7ca6dc8461af0cd775ba8a28e55"
+    },
+    {
+      "definition": "GameCoopDrawOtherTrainers",
+      "offset": 17486700,
+      "size": 8,
+      "original_hex": "70b5134c134b2268",
+      "sha256": "f0ec1f99600e76221a12d84952470a3583661bb722509a400964ec06521477f5"
+    },
+    {
+      "definition": "GameCoopLinkOpponentComplete",
+      "offset": 241956,
+      "size": 8,
+      "original_hex": "10b581b00e490f4c",
+      "sha256": "0a3977bb81fc5e89ce9e49749538ebf368e9556d107e9f73a720b1d51ec70384"
+    },
+    {
+      "definition": "GameCoopLinkPartnerComplete",
+      "offset": 870888,
+      "size": 8,
+      "original_hex": "10b581b00e490f4c",
+      "sha256": "8ca58306c81451da4dd3d2c4a8dd3d780b5ab126e669330b9dac53c6c1123bad"
+    },
+    {
+      "definition": "GameCoopValidateTeam",
+      "offset": 1209848,
+      "size": 8,
+      "original_hex": "00480047d94c0b09",
+      "sha256": "555c88a9fb2bcbadd73114739bc78ad94cc17875d2c286766c1227068b02e3a2"
+    },
+    {
+      "definition": "GameCoopRestoreCleanupFlags",
+      "offset": 17369432,
+      "size": 8,
+      "original_hex": "80223b68d2001340",
+      "sha256": "a3aa99f9e9a0625798fa3b1c1ea72cbeefa0566ba59b3e713fb902d171348daa"
+    },
+    {
+      "definition": "GameCoopCleanupEntry",
+      "offset": 17368912,
+      "size": 8,
+      "original_hex": "f7b50024ca4b0093",
+      "sha256": "b7223eeb06943ccbe41eafdc951c8341d8f97488e11a850b102be9a2a8c5d028"
+    },
+    {
+      "definition": "GameCoopDrawMultiTrainers",
+      "offset": 78536,
+      "size": 8,
+      "original_hex": "0840002814d0174c",
+      "sha256": "f975f0cb2d487ae30c9278ba7c686ea7b65d4175a98dc06cb0f4030b10fdb20c"
+    },
+    {
+      "definition": "GameCoopBufferStringBattle",
+      "offset": 881268,
+      "size": 8,
+      "original_hex": "004908475d140709",
+      "sha256": "2afce691deeab15e4d47000dd62909918b4e0ff16a4256ce5532921a9efa917a"
+    },
+    {
+      "definition": "GameCoopOpponentSendsOut",
+      "offset": 79260,
+      "size": 8,
+      "original_hex": "00480047b9d20a09",
+      "sha256": "5780888dd48488435232d55d31e2c96c4e2cfc3a14fcd3bf5a0f4b7867b58edb"
+    },
+    {
+      "definition": "GameCoopOpponentSendOutTask",
+      "offset": 232900,
+      "size": 8,
+      "original_hex": "f0b54f464646c0b4",
+      "sha256": "a31fed174ed19ef950393ab66fce04635dcaba99b10be6b7d0db15ad37cfbe4e"
+    },
+    {
+      "definition": "GameCoopLinkOpponentSendOutTask",
+      "offset": 251236,
+      "size": 8,
+      "original_hex": "f0b54f464646c0b4",
+      "sha256": "d6b9461db9388b4bf5f091d6340586716f422dbefd5bbac5581b5eb370047401"
+    },
+    {
+      "definition": "GameCoopLinkOpponentIntro",
+      "offset": 239588,
+      "size": 8,
+      "original_hex": "f0b5474680b40026",
+      "sha256": "d15d3ed68665e91f6085fff0ab68c5b22fb438798fae15f3bfaaf776df28cd31"
+    },
+    {
+      "definition": "GameCoopSendTask",
+      "offset": 55764,
+      "size": 4,
+      "original_hex": "6ddb0008",
+      "sha256": "ede42eedaad43e52c4b37e60702e060428bb87b17bfd7cf41ff6f15f6550c5a9"
+    },
+    {
+      "definition": "GameCoopExecuteTurnScript",
+      "offset": 17234028,
+      "size": 4,
+      "original_hex": "e5bb0108",
+      "sha256": "139fe30d6f361747b1a677811da76aaa27a76ae7b45e0431e600f4f010a23d21"
+    },
+    {
+      "definition": "GameCoopExecuteTurnScript",
+      "offset": 17235012,
+      "size": 4,
+      "original_hex": "e5bb0108",
+      "sha256": "139fe30d6f361747b1a677811da76aaa27a76ae7b45e0431e600f4f010a23d21"
+    },
+    {
+      "definition": "GameCoopXPReleaseThenEnd",
+      "offset": 211648,
+      "size": 4,
+      "original_hex": "a9f60208",
+      "sha256": "91bae86d0ad365639f617382b3c574752beec9feeddc829894bdf8c9dcf3a4eb"
+    },
+    {
+      "definition": "GameCoopXPReleaseThenEnd",
+      "offset": 881260,
+      "size": 4,
+      "original_hex": "a9f60208",
+      "sha256": "91bae86d0ad365639f617382b3c574752beec9feeddc829894bdf8c9dcf3a4eb"
+    },
+    {
+      "definition": "GameCoopGetExp",
+      "offset": 17035180,
+      "size": 4,
+      "original_hex": "ed460909",
+      "sha256": "072080a87886bbf148a60748e929db510d1e1899d6e5abaa1da7d9f44595a743"
+    }
+  ],
+  "cache_key": "795e5887613e2cdce70fbad7a39617facf15f1721392e62fd044172c9956aac8",
+  "cache_hit": false,
+  "native_binding_scope": "Exact RR4.1 adapter in the game build. Bound uses the exported data ABI only.",
+  "save_compatibility": "Battery-save format unchanged. Legacy emulator save states require cold boot; the native allocator rejects the old RAM layout without overwriting it.",
+  "cooperative_doubles": true,
+  "cooperative_code_bytes": 12732,
+  "cooperative_code_sha256": "fc2ae903821617a973bcaba76c493505ebcfe053556d4cb692237a3bd5d61293",
+  "bound_abi_header_sha256": "b76864eb1ac8a9d89ac8051e5a548fa290af9f606d730a48ab29b1f3ea7d5a67",
+  "contract_sha256": "9a5ace164e8597eefdd3c6b6b88a650298bd64ccc950422f77c42d03dfca2fb1",
+  "sdk": {
+    "generatorSHA256": "582c4115c0aa53ced7e349a76578a0b3c38139018656ffaa2b78d626ff493b19",
+    "generatorVersion": 1,
+    "library": {
+      "bound_sdk.h": "160d307d1b76a9be5eef6f018995594f5051e8e217b7875a0d4b5bc4961582ef"
+    },
+    "outputs": {
+      "BoundSDKProtocol.h": "4c8da36ba3e3456172637138ba2349efb54ab6cd8aeea8673cc57fe4fc8c95dd",
+      "BoundSDKProtocol.swift": "498b7d5717545afee5db43233e6b64878eb03b25f88d92201b6f6652523abf24"
+    },
+    "profiles": {
+      "contract.json": "2581f41d6a24d7d005891ca2f9d861f9700a1dd4dbe58cc8530e28484b75c35a",
+      "doubles-contract.json": "9a5ace164e8597eefdd3c6b6b88a650298bd64ccc950422f77c42d03dfca2fb1"
+    },
+    "schemaOwner": "multi_red/source/multiplayer/sdk/protocol-v1.json",
+    "schemaSHA256": "3314fbe6797a8b5d05f3f6267b6eaf01489b7e743c246ae57595e9781400a148",
+    "schemaVersion": 1
+  }
+}

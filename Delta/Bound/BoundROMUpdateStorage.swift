@@ -76,7 +76,7 @@ enum BoundROMUpdateError: LocalizedError {
         case .syncPending: return "Finish syncing this ROM's current saves before updating."
         case .multiplayerPending: return "Finish multiplayer recovery before updating."
         case .clearingSaves: return "This ROM has an unfinished cleanup. Open its cleanup controls to retry."
-        case .clearingROMs: return "ROM cleanup is incomplete. Open Settings → Clear ROMs to retry the confirmed cleanup."
+        case .clearingROMs: return "ROM cleanup is incomplete. Retry the confirmed installation in Account, Friends, & Sync."
         }
     }
 }

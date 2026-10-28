@@ -1653,7 +1653,7 @@ final class BoundSoulSession: ObservableObject {
         if let pending=ledger?.battleLosses?.pending { battleLossMoment=pending;deathMoment=nil;deathMomentStarted=nil;return }
         battleLossMoment=nil
         guard active else { deathMoment=nil;deathMomentStarted=nil;return }
-        if gameID==BoundGameProfiles.current.gameID && BoundGameProfiles.current.saveStateLayout>=15 {
+        if let profile = MultiRedAdapter.profile(gameID: gameID), profile.saveStateLayout>=15 {
             deathMoment=nil;deathMomentStarted=nil;return
         }
         if deathMoment != nil, let began = deathMomentStarted, now - began >= 7 { dismissDeathMoment() }

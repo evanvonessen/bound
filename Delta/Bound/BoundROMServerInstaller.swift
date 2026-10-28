@@ -26,6 +26,7 @@ struct BoundROMServerInstallJournal {
         let manifest: BoundROMServerManifest
         let revision: UUID
         let retiredGameIDs: Set<String>
+        var verifiedROMs: [BoundROMCleanupIdentity]? = nil
     }
     let storage: BoundROMUpdateStorage
     var directory: URL { storage.root.appendingPathComponent("Server Install", isDirectory: true) }
@@ -38,10 +39,11 @@ struct BoundROMServerInstallJournal {
         guard FileManager.default.fileExists(atPath: pendingURL.path) else { return nil }
         let value = try JSONDecoder().decode(Job.self, from: Data(contentsOf: pendingURL))
         try value.manifest.validate()
+        let recognized = BoundRecognizedROMs.all + (try installed()?.verifiedROMs ?? [])
         let ids = value.targets.map { $0.identity.gameID }
         guard ids.count == Set(ids).count,
               value.targets.allSatisfy({ target in
-                  BoundRecognizedROMs.all.contains(where: { $0.gameID == target.identity.gameID && $0.sha256 == target.identity.sha256 }) &&
+                  recognized.contains(where: { $0.gameID == target.identity.gameID && $0.sha256 == target.identity.sha256 }) &&
                   target.filename == target.identity.gameID + ".gba"
               }) else { throw BoundROMUpdateError.storage }
         return value
@@ -50,8 +52,16 @@ struct BoundROMServerInstallJournal {
         guard FileManager.default.fileExists(atPath: installedURL.path) else { return nil }
         let value = try JSONDecoder().decode(Installed.self, from: Data(contentsOf: installedURL))
         try value.manifest.validate()
+        let verified = value.verifiedROMs ?? []
+        guard Set(verified.map(\.gameID)).count == verified.count else { throw BoundROMUpdateError.storage }
+        for identity in verified {
+            // Persisted receipts can authorize later device-only cleanup, so
+            // validate identities again before using them as file components.
+            try BoundROMServerManifest(schemaVersion: 1, buildNumber: 500, sha256: identity.sha256,
+                gameID: identity.gameID, byteCount: 32 * 1024 * 1024).validate()
+        }
         guard !value.retiredGameIDs.contains(value.manifest.gameID),
-              value.retiredGameIDs.isSubset(of: Set(BoundRecognizedROMs.all.map(\.gameID))) else { throw BoundROMUpdateError.storage }
+              value.retiredGameIDs.isSubset(of: Set((BoundRecognizedROMs.all + (value.verifiedROMs ?? [])).map(\.gameID))) else { throw BoundROMUpdateError.storage }
         return value
     }
     func write<T: Encodable>(_ value: T, to url: URL) throws { try write(JSONEncoder().encode(value), to: url) }
@@ -92,7 +102,7 @@ struct BoundROMServerInstallJournal {
             if let job = try pending(), job.manifest.gameID == gameID || job.targets.contains(where: { $0.identity.gameID == gameID }) { return true }
             return try installed()?.retiredGameIDs.contains(gameID) == true
         } catch {
-            return BoundRecognizedROMs.all.contains { $0.gameID == gameID } || gameID == BoundGameProfiles.current.gameID
+            return BoundRecognizedROMs.all.contains { $0.gameID == gameID } || MultiRedAdapter.profile(gameID: gameID) != nil
         }
     }
 }
@@ -131,6 +141,7 @@ enum BoundROMServerInstaller {
         try manifest.validateCompatibility()
         let content = try BoundROMUpdateContent(data: data, expectedSHA256: manifest.sha256)
         guard content.gameID == manifest.gameID, data.count == manifest.byteCount else { throw BoundROMUpdateError.incompatibleROM }
+        _ = try MultiRedAdapter(rom: data)
         try verify(session)
         let journal = BoundROMServerInstallJournal(storage: .live)
         if let pending = try journal.pending() {
@@ -196,11 +207,12 @@ enum BoundROMServerInstaller {
         let context = DatabaseManager.shared.newBackgroundContext()
         let files = BoundROMCleanupJournal(storage: storage)
         return try context.performAndWait {
+            let verified = try BoundROMServerInstallJournal(storage: storage).installed()?.verifiedROMs ?? []
             var targets: [BoundROMServerInstallJournal.Target] = []
             for game in try context.fetch(Game.fetchRequest()) {
-                // Only the checked-in exact multi_red inventory is eligible.
+                // Only the checked-in inventory or a verified install receipt is eligible.
                 // Unknown cartridges and ordinary FireRed games are untouched.
-                guard let identity = BoundRecognizedROMs.all.first(where: { $0.gameID == game.identifier }) else { continue }
+                guard let identity = (BoundRecognizedROMs.all + verified).first(where: { $0.gameID == game.identifier }) else { continue }
                 guard game.filename == identity.gameID + ".gba" else { throw BoundROMUpdateError.unsafePath }
                 if FileManager.default.fileExists(atPath: game.fileURL.path) {
                     let data = try Data(contentsOf: game.fileURL, options: .mappedIfSafe)
@@ -227,6 +239,7 @@ enum BoundROMServerInstaller {
         }
         let data = try Data(contentsOf: journal.incomingURL)
         let content = try BoundROMUpdateContent(data: data, expectedSHA256: job.manifest.sha256)
+        _ = try MultiRedAdapter(rom: data)
         guard content.gameID == job.manifest.gameID,
               let cover = UIImage(contentsOfFile: journal.artworkURL.path), cover.size.width > 0 else { throw BoundROMUpdateError.storage }
         try await SyncManager.shared.withROMCleanupFence {
@@ -305,8 +318,13 @@ enum BoundROMServerInstaller {
             }
             var retired = try journal.installed()?.retiredGameIDs ?? []
             retired.formUnion(job.targets.map { $0.identity.gameID }); retired.remove(job.manifest.gameID)
+            var verifiedROMs = try journal.installed()?.verifiedROMs ?? []
+            if !verifiedROMs.contains(where: { $0.gameID == job.manifest.gameID }) {
+                verifiedROMs.append(.init(sha256: job.manifest.sha256, gameID: job.manifest.gameID,
+                    evidence: "Validated Linode runtime interface v1"))
+            }
             try journal.write(BoundROMServerInstallJournal.Installed(manifest: job.manifest, revision: job.id,
-                                                                    retiredGameIDs: retired), to: journal.installedURL)
+                retiredGameIDs: retired, verifiedROMs: verifiedROMs), to: journal.installedURL)
             try journal.finishCommittedJob()
         }
     }
