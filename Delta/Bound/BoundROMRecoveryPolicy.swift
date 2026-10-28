@@ -1,6 +1,19 @@
 import Foundation
 import CryptoKit
 
+/// The server splits canonical base64 on 12,000-character boundaries, each
+/// representing 9,000 bytes. Reject damaged pages before requesting more data.
+enum BoundServerSaveChunks {
+    static func valid(_ chunk: String, index: Int, byteCount: Int) -> Bool {
+        guard (1...16_777_216).contains(byteCount), index >= 0,
+              index < (byteCount + 8999) / 9000 else { return false }
+        let expectedBytes = min(9000, byteCount - index * 9000)
+        guard chunk.utf8.count == (expectedBytes + 2) / 3 * 4,
+              let decoded = Data(base64Encoded: chunk), decoded.count == expectedBytes else { return false }
+        return decoded.base64EncodedString() == chunk
+    }
+}
+
 /// A cartridge reset is different from a coordinator-authorized state restore.
 /// UInt32 wraparound is ordinary forward progress, not a reset.
 struct BoundROMFrameClock {

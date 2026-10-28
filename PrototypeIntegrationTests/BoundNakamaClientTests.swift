@@ -81,7 +81,50 @@ private actor CancelledSaveDownloadFixture {
     func release() { waiter?.resume(); waiter = nil }
 }
 
+private actor CancelledSaveUploadFixture {
+    let started: XCTestExpectation
+    let response: Data
+    private var waiter: CheckedContinuation<Void, Never>?
+    private(set) var actions: [String] = []
+    init(started: XCTestExpectation, response: Data) { self.started = started; self.response = response }
+    func perform(_ request: URLRequest) async throws -> Data {
+        let encoded = try JSONDecoder().decode(String.self, from: XCTUnwrap(request.httpBody))
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String: Any])
+        let action = try XCTUnwrap(fields["action"] as? String)
+        actions.append(action)
+        if action == "saveChunk", let index = fields["index"] as? Int, let count = fields["count"] as? Int, index == count - 1 {
+            started.fulfill()
+            await withCheckedContinuation { waiter = $0 }
+        }
+        return response
+    }
+    func release() { waiter?.resume(); waiter = nil }
+}
+
 final class BoundNakamaClientTests: XCTestCase {
+    func testCancelledUploadCannotSealAfterTheFinalChunkCompletesLate() async throws {
+        let identity = independentIdentity()
+        let payload = BoundMultiplayerSavePackage.Payload(version: 2, manifest: .init(identity: identity, deviceOwner: user),
+            checkpoint: UUID(), predecessor: nil, sharedEventDigest: String(repeating: "b", count: 64),
+            files: ["game.sav": .init(Data(repeating: 7, count: 131072)), "checkpoint.state": .init(Data(repeating: 8, count: 2048))])
+        let receipt = BoundMultiplayerCheckpointReceipt(run: identity.run, checkpoint: payload.checkpoint, owner: owner,
+            payloadSHA256: BoundMultiplayerSaveStore.hash(try BoundMultiplayerSaveStore.encode(payload)), sharedEventDigest: payload.sharedEventDigest)
+        let package = BoundMultiplayerSavePackage(payload: payload, receipt: receipt)
+        let started = expectation(description: "last upload chunk held")
+        let fixture = CancelledSaveUploadFixture(started: started, response: try independentResponse(identity: identity))
+        let service = BoundNakamaRunService { try await fixture.perform($0) }
+        await service.configure(configuration())
+        let task = Task { try await service.uploadIndependent(package, expectedHead: nil) }
+        await fulfillment(of: [started], timeout: 3)
+        task.cancel()
+        await fixture.release()
+        do { _ = try await task.value; XCTFail("Cancelled uploads cannot seal their checkpoint") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        let actions = await fixture.actions
+        XCTAssertEqual(actions.first, "save")
+        XCTAssertEqual(actions.last, "saveChunk")
+        XCTAssertFalse(actions.contains("saveSeal"))
+    }
     func testUnsupportedServerRecordsAreDistinctFromOwnershipConflicts() throws {
         let url = URL(string: "https://bound.example/v2/rpc/bound_independent_v2")!
         for message in ["Unsupported shared event", "Too many checkpoint acquisitions"] {

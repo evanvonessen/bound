@@ -496,6 +496,7 @@ actor BoundNakamaRunService {
         self.configuration = configuration
     }
     private func request(_ action: String, identity: BoundMultiplayerRunIdentity, fields: [String: Any] = [:], rpc: String = "bound_run_v1") async throws -> Data {
+        try Task.checkCancellation()
         if let debugRoute {
             guard rpc=="bound_independent_v2",identity==debugRoute.identity else { throw Failure.conflict }
             return try await debugRequest(action,fields:fields)
@@ -583,6 +584,7 @@ actor BoundNakamaRunService {
         return value
     }
     private func saveRequest(_ action: String, fields: [String: Any] = [:]) async throws -> Data {
+        try Task.checkCancellation()
         if let debugRoute {
             var scoped=fields
             if let run=scoped.removeValue(forKey:"save_id") as? String {
@@ -670,7 +672,7 @@ actor BoundNakamaRunService {
             let data = try await request("saveDownload", identity: identity, fields: ["checkpoint": upload.receipt.checkpoint.uuidString.lowercased(), "index": index], rpc: "bound_independent_v2")
             try Task.checkCancellation()
             let chunk = try JSONDecoder().decode(Chunk.self, from: data)
-            guard chunk.data.utf8.count <= 12000 else { throw Failure.conflict }
+            guard BoundServerSaveChunks.valid(chunk.data, index: index, byteCount: upload.bytes) else { throw Failure.conflict }
             encoded += chunk.data
         }
         guard let bytes = Data(base64Encoded: encoded), bytes.count == upload.bytes,
@@ -740,6 +742,7 @@ actor BoundNakamaRunService {
     }
     func uploadIndependent(_ package: BoundMultiplayerSavePackage, expectedHead: UUID?, session: AppCloudSession? = nil,
                            authorize: (@Sendable () async throws -> Void)? = nil) async throws -> IndependentState {
+        try Task.checkCancellation()
         let bytes = try BoundMultiplayerSaveStore.encode(package.payload)
         guard bytes.count <= 16 * 1024 * 1024, package.payload.version == 2 else { throw Failure.tooLarge }
         let encoded = Array(bytes.base64EncodedString().utf8), size = 12000, count = (encoded.count + size - 1) / size
@@ -823,6 +826,7 @@ actor BoundNakamaRunService {
         return try JSONDecoder().decode(State.self, from: data)
     }
     func download(identity: BoundMultiplayerRunIdentity, checkpoint: Checkpoint) async throws -> BoundMultiplayerSavePackage {
+        try Task.checkCancellation()
         guard let own = checkpoint.upload(for: identity.owner), let partner = checkpoint.upload(for: identity.partner),
               own.bytes > 0, own.bytes <= 16 * 1024 * 1024, own.count == ((own.bytes + 2) / 3 * 4 + 11999) / 12000 else { throw Failure.conflict }
         var encoded = ""
@@ -830,8 +834,9 @@ actor BoundNakamaRunService {
         for index in 0..<own.count {
             try Task.checkCancellation()
             let data = try await request("download", identity: identity, fields: ["checkpoint": checkpoint.id.uuidString.lowercased(), "index": index])
+            try Task.checkCancellation()
             let chunk = try JSONDecoder().decode(Chunk.self, from: data)
-            guard chunk.data.utf8.count <= 12000 else { throw Failure.conflict }
+            guard BoundServerSaveChunks.valid(chunk.data, index: index, byteCount: own.bytes) else { throw Failure.conflict }
             encoded += chunk.data
         }
         guard let bytes = Data(base64Encoded: encoded), bytes.count == own.bytes,
