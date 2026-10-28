@@ -2805,12 +2805,15 @@ extension BoundROMMultiplayerCoordinator {
         onboarding.refresh { [weak self] _ in self?.serverFriends = self?.onboarding.rooms ?? [] }
         serverFriends = onboarding.rooms
     }
-    func refreshServerRuns() async {
+    func refreshServerRuns(preservingError: Bool = false) async {
         guard debugInstalledManifest == nil else { serverRuns = []; serverMenuError = "Return through DEBUG to open ordinary runs."; return }
         guard serverOnly, let game, let session = account.session else { serverMenuError = "Sign in to view server saves."; return }
         guard !serverMenuBusy, !observationRecoveryRequired else { return }
         let selection = serverSelection, client = BoundNakamaRunService()
-        serverMenuBusy = true; serverMenuError = nil
+        // Reopening the picker mounts its view again. Its automatic refresh
+        // must not erase the reason gameplay was paused or rejected.
+        let previousError = preservingError ? serverMenuError : nil
+        serverMenuBusy = true; serverMenuError = previousError
         defer { if serverSelection == selection, session.isSameSession(as: account.session) { serverMenuBusy = false } }
         refreshServerFriends()
         do {
@@ -2826,10 +2829,10 @@ extension BoundROMMultiplayerCoordinator {
                 try receiveGameOver(gameOver, identity: local)
             }
             serverRuns.removeAll { pendingGameOvers[$0.save_id]?.returnRequested == true }
-            serverMenuError = BoundServerDisconnectSave.failureMessage(gameID: game.identifier, owner: session.owner)
+            serverMenuError = previousError ?? BoundServerDisconnectSave.failureMessage(gameID: game.identifier, owner: session.owner)
         } catch {
             guard serverSelection == selection, session.isSameSession(as: account.session) else { return }
-            serverMenuError = error.localizedDescription
+            serverMenuError = previousError ?? error.localizedDescription
         }
     }
     private func prepareServerSelection(_ selection: UUID) async throws {

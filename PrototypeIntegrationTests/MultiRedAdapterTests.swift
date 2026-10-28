@@ -11,6 +11,77 @@ private struct ProfileFixtureGame: GameProtocol {
 
 @MainActor
 final class MultiRedAdapterTests: XCTestCase {
+    func testServerCheckpointReopensWithNativeSoulRulesForCurrentROM() async throws {
+        let fixture = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ServerRunResumeQA/current.gba")
+        guard FileManager.default.fileExists(atPath: fixture.path) else {
+            throw XCTSkip("Requires the exact current owned ROM in ServerRunResumeQA/current.gba")
+        }
+        let profile = try MultiRedAdapter(rom: Data(contentsOf: fixture)).profile
+        XCTAssertEqual(profile, BoundGameProfiles.current)
+        BoundServerMemoryFiles.setEnabled(true, for: profile.gameID)
+        try BoundServerMemoryFiles.restore([:], gameID: profile.gameID)
+        defer {
+            BoundServerMemoryFiles.discard(gameID: profile.gameID)
+            BoundServerMemoryFiles.setEnabled(false, for: profile.gameID)
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let batteryURL = root.appendingPathComponent("game.sav")
+        try Data(repeating: 0xFF, count: 0x20000).write(to: batteryURL)
+        let core = try XCTUnwrap(EmulatorCore(game: ProfileFixtureGame(fileURL: fixture, gameSaveURL: batteryURL), options: [.metal: true]))
+        XCTAssertTrue(BoundVBABattleBridge.setServerOnlyGameSave(true, for: batteryURL))
+        let run = UUID(), soul = BoundSoulProbe(), binding = String(repeating: "a", count: 64)
+        let ledgerURL = root.appendingPathComponent("Soul Link/run.json")
+        XCTAssertTrue(soul.configure(core: core, url: ledgerURL, gameID: profile.gameID))
+        soul.setVerified(true)
+        try soul.startPreparedRun(run: run, binding: binding)
+        let setup = NativePlayerSceneSetup(core: core, debugPlayer: 1, run: run)
+        let ready = expectation(description: "Current ROM native field")
+        var fulfilled = false
+        core.updateHandler = { core in
+            setup.receive(core)
+            soul.receive(core)
+            if !fulfilled, setup.isReady || soul.read().error != nil { fulfilled = true; ready.fulfill() }
+        }
+        defer {
+            _ = core.pause(); _ = soul.configure(core: nil, url: nil); core.updateHandler = nil; _ = core.stop()
+            _ = BoundVBABattleBridge.setServerOnlyGameSave(false, for: batteryURL)
+        }
+        core.rate = 8
+        XCTAssertTrue(core.start()); core.deltaCore.emulatorBridge.audioRenderer = nil
+        await fulfillment(of: [ready], timeout: 90)
+        XCTAssertTrue(core.pause())
+        XCTAssertTrue(setup.isReady, soul.read().error ?? "Soul rules blocked startup")
+        XCTAssertNil(soul.read().error)
+        try soul.prepareRestoredState(core)
+        try soul.prepareCheckpoint(core: core)
+        let state = MultiRedAdapter.captureState(), battery = BoundVBABattleBridge.captureServerBattery()
+        let memory = BoundServerMemoryFiles.snapshot(gameID: profile.gameID)
+        XCTAssertGreaterThan(state.count, 1024)
+        XCTAssertEqual(battery.count, 0x20000)
+        let baseline = try XCTUnwrap(soul.read().ledger)
+        XCTAssertTrue(baseline.acquired.contains("gift:1"), "The native Debug starter must survive the first server checkpoint as a gift record")
+        for _ in 0..<3 {
+            XCTAssertTrue(soul.configure(core: nil, url: nil))
+            XCTAssertTrue(BoundVBABattleBridge.restoreServerBattery(battery))
+            XCTAssertTrue(MultiRedAdapter.restoreState(state))
+            try BoundServerMemoryFiles.restore(memory, gameID: profile.gameID)
+            XCTAssertTrue(soul.configure(core: core, url: ledgerURL, gameID: profile.gameID))
+            soul.setVerified(true)
+            try soul.startPreparedRun(run: run, binding: binding)
+            try soul.prepareRestoredState(core)
+            XCTAssertTrue(core.resume())
+            try await Task.sleep(for: .seconds(3))
+            XCTAssertTrue(core.pause())
+            try soul.prepareCheckpoint(core: core)
+            XCTAssertNil(soul.read().error)
+            XCTAssertEqual(soul.read().ledger?.run, baseline.run)
+            XCTAssertEqual(soul.read().ledger?.dead, baseline.dead)
+        }
+    }
+
     func testNativeWildLossFeedsGameOverAndSurvivesBlackoutHealingWithoutOverridingSavedOptOut() throws {
         try verifyNativeWildLoss(directory: "DebugDefaultsQA", romSHA256: BoundGameProfiles.debugDefaults.romSHA256)
     }

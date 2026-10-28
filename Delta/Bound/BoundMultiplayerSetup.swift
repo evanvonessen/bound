@@ -183,6 +183,6 @@ struct BoundMultiplayerSetupView: View {
         .confirmationDialog("Discard unconfirmed progress?", isPresented: $confirmingDiscard, titleVisibility: .visible) {
             Button("Use Last Server Save", role: .destructive) { coordinator.discardUnconfirmedServerSave(); stage = 0 }
         } message: { Text("Progress since the last confirmed server save will be lost.") }
-        .task { await coordinator.refreshServerRuns() }
+        .task { await coordinator.refreshServerRuns(preservingError: true) }
     }
 }
