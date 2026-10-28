@@ -793,7 +793,7 @@ final class BoundNativeBattleSession {
     /// Keep the same cartridge execution, native link queues, consent ID and
     /// trade journal. Only the physical transport is replaced during an outage.
     func suspendTransport() {
-        guard id != nil, let core else { return }
+        guard id != nil, core != nil else { return }
         if !isTransportSuspended {
             if let peerResumeNonce { retiredResumeNonces=Array((retiredResumeNonces+[peerResumeNonce]).suffix(32)) }
             isTransportSuspended=true;resumeNonce=UUID();peerResumeNonce=nil

@@ -32,6 +32,7 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		A0D100000000000000000002 /* AudioRingBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D100000000000000000001 /* AudioRingBufferTests.swift */; };
 		16389583501B94AA3DC5DD53 /* WorldMovementRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80592CCAB31B8A9F8FC9D992 /* WorldMovementRuntimeTests.swift */; };
 		4BC1CBE6A205E7A274C6DD59 /* BoundWorldMovementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472E7C37E90CB08B899AB348 /* BoundWorldMovementTests.swift */; };
 		CAEB5A21E4BC884265002EDA /* FollowerInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 579EC18AF2815D91EA93FA7C /* FollowerInteractionTests.swift */; };
@@ -957,6 +958,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A0D100000000000000000001 /* AudioRingBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRingBufferTests.swift; sourceTree = "<group>"; };
 		80592CCAB31B8A9F8FC9D992 /* WorldMovementRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldMovementRuntimeTests.swift; sourceTree = "<group>"; };
 		472E7C37E90CB08B899AB348 /* BoundWorldMovementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundWorldMovementTests.swift; sourceTree = "<group>"; };
 		579EC18AF2815D91EA93FA7C /* FollowerInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowerInteractionTests.swift; sourceTree = "<group>"; };
@@ -1642,6 +1644,7 @@
 				E519E2BAF174403DB37DB3A5 /* PlaybackSharingTests.swift */,
 				3DB42D13CD4642F59F46B8EE /* PlayerStateTests.swift */,
 				18BC10A8D7EF4D1397B91705 /* RecordedPlayerTests.swift */,
+				A0D100000000000000000001 /* AudioRingBufferTests.swift */,
 				A15E00000000000000000003 /* LivePresenceTests.swift */,
 				A15F00000000000000000005 /* FriendInteractionTests.swift */,
 				BCD012340000000000000003 /* CooperativeDoublesContractTests.swift */,
@@ -3572,6 +3575,7 @@
 				074EAD7F7AE78C628F0977A8 /* PlaybackSharingTests.swift in Sources */,
 				87214F8B08E34E1699AB1A1A /* PlayerStateTests.swift in Sources */,
 				18BC10A8D7EF4D1397B91706 /* RecordedPlayerTests.swift in Sources */,
+				A0D100000000000000000002 /* AudioRingBufferTests.swift in Sources */,
 				A15E00000000000000000004 /* LivePresenceTests.swift in Sources */,
 				A15F00000000000000000006 /* FriendInteractionTests.swift in Sources */,
 				BCD012340000000000000004 /* CooperativeDoublesContractTests.swift in Sources */,

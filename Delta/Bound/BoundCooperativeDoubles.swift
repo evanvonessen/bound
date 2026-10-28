@@ -829,7 +829,7 @@ final class BoundCooperativeDoublesSession {
         return true
     }
     private func prepareCable(recovery:Bool=false)->Bool {
-        guard let core,let peerEncounter else { return false }
+        guard let core,peerEncounter != nil else { return false }
         guard configureCableWire(recovery:recovery) else { return false }
         let channelReady=bindTransportChannel()
         let running=core.state == .running

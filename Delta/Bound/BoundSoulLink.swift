@@ -714,7 +714,9 @@ final class BoundSoulProbe: @unchecked Sendable {
         _=BoundVBABattleBridge.setSoulFrameBlocked(true,owner:token.uuidString,generation:epoch)
         Task { @MainActor [weak self,weak core] in
             guard let self,let core else { return }
-            self.lock.lock();let current=self.owner.generation==token && self.owner.coreID==ObjectIdentifier(core) && self.owner.blocked;self.lock.unlock()
+            let current=self.lock.withLock {
+                self.owner.generation==token && self.owner.coreID==ObjectIdentifier(core) && self.owner.blocked
+            }
             if current,core.state == .running { _=core.pause() }
         }
     }

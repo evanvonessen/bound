@@ -737,7 +737,7 @@ actor BoundDebugDiskStore: BoundDebugIntentStorage {
     func returnToPreviousRun() async {
         await work { context,run in
             if self.local?.phase == .returned { return }
-            guard let host=self.host,let session=self.serverSession,let saved=self.local?.bookmark else { throw BoundDebugFailure.unavailable }
+            guard self.host != nil,let session=self.serverSession,let saved=self.local?.bookmark else { throw BoundDebugFailure.unavailable }
             if session.status == .revoked || self.local?.membershipEnded == true {
                 try await self.returnToOrdinary(context,run);return
             }

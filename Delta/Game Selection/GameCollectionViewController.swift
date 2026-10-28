@@ -1236,7 +1236,7 @@ private extension GameCollectionViewController
         alert.addAction(UIAlertAction(title: "Clear Saves", style: .destructive) { [weak self] _ in
             guard let self else { return }
             let progress = UIAlertController(title: "Clearing Saves…", message: game.name, preferredStyle: .alert)
-            self.present(progress, animated: true) {
+            self.present(progress, animated: true) { [weak self] in
                 BoundROMUpdateManager.shared.clearSaves(for: game) { [weak self] error in
                     progress.dismiss(animated: true) {
                         guard let self, self.view.window != nil else { return }

@@ -6,7 +6,7 @@ import CoreVideo
 import CoreData
 import MetalKit
 import ObjectiveC
-import DeltaCore
+@testable import DeltaCore
 import DeltaFeatures
 @testable import Delta
 @testable import class Delta.Game
@@ -130,6 +130,34 @@ private final class TransitionCount: @unchecked Sendable {
 }
 
 @MainActor final class PlaybackSharingTests: XCTestCase {
+    func testAudioStarvationRendersSilenceAndRecoversWithoutStoppingSource() throws {
+        let ring = try XCTUnwrap(RingBuffer(preferredBufferSize: 4096))
+        var reader = BufferedAudioSource(buffer: ring, frameSize: 4, primingMultiplier: 1)
+        var output = [UInt8](repeating: 0xCC, count: 8)
+        var silent: ObjCBool = false
+        func render() -> OSStatus {
+            output.withUnsafeMutableBytes { bytes in
+                var list = AudioBufferList(mNumberBuffers: 1,
+                    mBuffers: AudioBuffer(mNumberChannels: 2, mDataByteSize: 8, mData: bytes.baseAddress))
+                return withUnsafeMutablePointer(to: &list) {
+                    reader.render(frameCount: 2, buffers: UnsafeMutableAudioBufferListPointer($0), isSilence: &silent)
+                }
+            }
+        }
+        for _ in 0..<40 {
+            XCTAssertEqual(render(), noErr)
+            XCTAssertTrue(silent.boolValue)
+            XCTAssertEqual(output, Array(repeating: 0, count: 8))
+        }
+        let samples: [UInt8] = [1,2,3,4,5,6,7,8]
+        XCTAssertEqual(samples.withUnsafeBytes { ring.write($0.baseAddress!, size: $0.count) }, 8)
+        XCTAssertEqual(render(), noErr)
+        XCTAssertFalse(silent.boolValue)
+        XCTAssertEqual(output, samples)
+        XCTAssertEqual(render(), noErr)
+        XCTAssertTrue(silent.boolValue)
+    }
+
     func testNativeStateChangesDoNotReadControllerUIOffMainThread() async throws {
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -153,7 +181,13 @@ private final class TransitionCount: @unchecked Sendable {
         XCTAssertEqual(owner.backgroundViewReads, 0, "Native resume callbacks must return to MainActor before reading UIKit")
     }
 
-    func testPlaybackMuteAllowsOtherAudioAtStartupAndWhenToggled() throws {
+    private func waitForAudio(_ predicate: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        while !predicate(), ProcessInfo.processInfo.systemUptime < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(predicate(), "Queued audio transition did not finish", file: file, line: line)
+    }
+
+    func testPlaybackMuteAllowsOtherAudioAtStartupAndWhenToggled() async throws {
         let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatInt16,
             sampleRate: 44100, channels: 2, interleaved: true))
         let audio = AudioManager(audioFormat: format)
@@ -163,16 +197,19 @@ private final class TransitionCount: @unchecked Sendable {
         audio.isPlaybackMuted = true
         audio.start()
         defer { audio.stop() }
+        try await waitForAudio { audio.audioBuffer.isEnabled }
         XCTAssertTrue(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers),
                       "A muted game must not interrupt another app's audio")
         audio.isPlaybackMuted = false
+        try await waitForAudio { !AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers) }
         XCTAssertFalse(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers))
         audio.isPlaybackMuted = true
+        try await waitForAudio { AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers) }
         XCTAssertTrue(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers),
                       "Muting an active game must release its non-mixing category")
     }
 
-    func testMuteChangedWhilePausedUpdatesMixingOnResume() throws {
+    func testMuteChangedWhilePausedUpdatesMixingOnResume() async throws {
         let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatInt16,
             sampleRate: 44100, channels: 2, interleaved: true))
         let audio = AudioManager(audioFormat: format)
@@ -181,31 +218,54 @@ private final class TransitionCount: @unchecked Sendable {
         audio.pausesOtherAudio = true
         audio.start()
         defer { audio.stop() }
+        try await waitForAudio { audio.audioBuffer.isEnabled }
         XCTAssertFalse(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers))
         audio.isEnabled = false
         audio.isPlaybackMuted = true
         audio.isEnabled = true
+        try await waitForAudio { audio.audioBuffer.isEnabled && AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers) }
         XCTAssertTrue(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers),
                       "Muting in a paused game's settings must take effect when gameplay resumes")
         audio.isEnabled = false
         audio.isPlaybackMuted = false
         audio.isEnabled = true
+        try await waitForAudio { audio.audioBuffer.isEnabled && !AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers) }
         XCTAssertFalse(AVAudioSession.sharedInstance().categoryOptions.contains(.mixWithOthers))
     }
 
-    func testAudioRouteResetKeepsPausedBufferDisabled() throws {
+    func testAudioRouteResetKeepsPausedBufferDisabled() async throws {
         let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatInt16,
             sampleRate: 44100, channels: 2, interleaved: true))
         let audio = AudioManager(audioFormat: format)
         audio.start()
         defer { audio.stop() }
+        try await waitForAudio { audio.audioBuffer.isEnabled }
         audio.isEnabled = false
         XCTAssertFalse(audio.audioBuffer.isEnabled)
+        let beforeRouteChange = audio.audioBuffer
         _ = audio.perform(NSSelectorFromString("resetAudioEngine"))
+        try await waitForAudio { audio.audioBuffer !== beforeRouteChange }
         XCTAssertFalse(audio.audioBuffer.isEnabled,
                        "An audio-route reset must not enable a paused game's new buffer")
         audio.isEnabled = true
+        try await waitForAudio { audio.audioBuffer.isEnabled }
         XCTAssertTrue(audio.audioBuffer.isEnabled)
+    }
+
+    func testStoppingOneAudioManagerKeepsTheOtherConsumingSamples() async throws {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatInt16,
+            sampleRate: 44100, channels: 2, interleaved: true))
+        let first = AudioManager(audioFormat: format), second = AudioManager(audioFormat: format)
+        first.start(); second.start()
+        defer { first.stop(); second.stop() }
+        try await waitForAudio { first.audioBuffer.isEnabled && second.audioBuffer.isEnabled }
+        first.stop()
+        try await Task.sleep(for: .milliseconds(100))
+        let buffer = second.audioBuffer
+        let samples = [UInt8](repeating: 0, count: 16384)
+        XCTAssertEqual(samples.withUnsafeBytes { buffer.write($0.baseAddress!, size: $0.count) }, samples.count)
+        try await waitForAudio { buffer.availableBytesForReading < samples.count }
+        XCTAssertTrue(second.audioBuffer.isEnabled, "Stopping another core must not deactivate this core's session")
     }
 
     private let fastForwardRenderer = AppPacingNativeDelegate(metal: true)

@@ -409,7 +409,7 @@ final class FriendSharingSession: ObservableObject {
     private var largestDisplayGap: TimeInterval = 0
     private var generation = UUID()
     private var backgrounded = false
-    private let applicationIsBackgrounded: () -> Bool
+    private let applicationIsBackgrounded: @MainActor () -> Bool
     private struct ForegroundReconnectIntent: Equatable {
         let room: String
         let owner: UUID
@@ -429,7 +429,7 @@ final class FriendSharingSession: ObservableObject {
          nakamaFetcher: @escaping @MainActor (String, AppCloudSession) async throws -> BoundNakamaConfiguration = { try await BoundNakamaAuthorization.fetch(room: $0, session: $1) },
          connectionFeed: BoundConnectionFeed? = nil,
          screenSession: FriendSharingSession? = nil,
-         applicationIsBackgrounded: @escaping () -> Bool = { UIApplication.shared.applicationState == .background }) {
+         applicationIsBackgrounded: @escaping @MainActor () -> Bool = { UIApplication.shared.applicationState == .background }) {
         self.mediaOnly = mediaOnly
         // No surface is mounted in Account settings. Only the multiview owner
         // enables presentation; temporary local QA transports retain their canvas.

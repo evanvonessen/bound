@@ -249,7 +249,7 @@ enum BoundROMCleanupLive {
                 NotificationCenter.default.post(name: BoundROMUpdateManager.saveClearBegan, object: target.id)
                 let context = DatabaseManager.shared.newBackgroundContext()
                 try context.performAndWait {
-                    let request = Game.fetchRequest() as! NSFetchRequest<Game>
+                    let request = Game.fetchRequest()
                     request.predicate = NSPredicate(format: "identifier == %@", target.id)
                     let records = try context.fetch(request)
                     guard records.count <= 1 else { throw BoundROMUpdateError.storage }
@@ -294,7 +294,7 @@ enum BoundROMCleanupLive {
                                identities: [BoundROMCleanupIdentity]) throws -> [String: (String, String, [URL], [String])] {
         let context = DatabaseManager.shared.newBackgroundContext()
         return try context.performAndWait { () -> [String: (String, String, [URL], [String])] in
-            let currentRequest = Game.fetchRequest() as! NSFetchRequest<Game>
+            let currentRequest = Game.fetchRequest()
             currentRequest.predicate = NSPredicate(format: "identifier == %@", preserved.gameID)
             let current = try context.fetch(currentRequest)
             guard current.count == 1, let game = current.first,

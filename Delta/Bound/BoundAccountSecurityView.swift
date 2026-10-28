@@ -68,7 +68,7 @@ struct BoundAccountSecurityView: View {
             clearInputs()
             await account.loadAccountSecurity()
         }
-        .onChange(of: verifiedAuthenticators.map(\.id)) { ids in
+        .onChange(of: verifiedAuthenticators.map(\.id)) { _, ids in
             verificationCode = ""
             if let id = selectedFactorID, !ids.contains(id) { selectedFactorID = nil }
         }
@@ -281,11 +281,11 @@ struct BoundAccountSecondFactorSignInView: View {
                     .accessibilityIdentifier("account.signin.second-factor.status")
             }
         }
-        .onChange(of: account.securityIdentityID) { _ in
+        .onChange(of: account.securityIdentityID) {
             operationID = UUID()
             submission?.cancel(); submission = nil; code = ""; selectedFactorID = nil
         }
-        .onChange(of: verifiedAuthenticators.map(\.id)) { ids in
+        .onChange(of: verifiedAuthenticators.map(\.id)) { _, ids in
             code = ""
             if let id = selectedFactorID, !ids.contains(id) { selectedFactorID = nil }
         }
@@ -315,7 +315,7 @@ private struct BoundAuthenticatorCodeField: View {
             .textInputAutocapitalization(.never).autocorrectionDisabled()
             .submitLabel(.done).onSubmit(submitted)
             .privacySensitive()
-            .onChange(of: code) { value in
+            .onChange(of: code) { _, value in
                 let digits = String(value.filter { $0.isASCII && $0.isNumber }.prefix(6))
                 if digits != value { code = digits }
             }

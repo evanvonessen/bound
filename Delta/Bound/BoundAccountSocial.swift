@@ -367,7 +367,8 @@ final class BoundAccountFriendsContext: ObservableObject {
     private var subscriptions: [AnyCancellable] = []
 
     init(sharing: FriendSharingSession? = nil, onboarding: FriendOnboarding? = nil,
-         account: BoundFriendAccount = .shared) {
+         account: BoundFriendAccount? = nil) {
+        let account = account ?? .shared
         ownsSharing = sharing == nil
         self.sharing = sharing ?? FriendSharingSession(authenticatedMode: true)
         self.onboarding = onboarding ?? FriendOnboarding.forUI()
@@ -402,8 +403,8 @@ struct BoundAccountSocialSettings: View {
     @State private var password = ""
     private let prepareFriendsForAccountRemoval: () -> Void
 
-    init(account: BoundFriendAccount = .shared, prepareFriendsForAccountRemoval: @escaping () -> Void = {}) {
-        self.account = account
+    init(account: BoundFriendAccount? = nil, prepareFriendsForAccountRemoval: @escaping () -> Void = {}) {
+        self.account = account ?? .shared
         self.prepareFriendsForAccountRemoval = prepareFriendsForAccountRemoval
     }
 
