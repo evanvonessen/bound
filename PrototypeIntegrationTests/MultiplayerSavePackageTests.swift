@@ -86,8 +86,25 @@ final class MultiplayerSavePackageTests: XCTestCase {
         XCTAssertEqual(next.id.sequence, event.id.sequence + 1)
         XCTAssertEqual(try store.latestComplete(gameID: identity.gameID), package)
     }
+    func testInitialSetupPresetsAndSavedChoicesSurviveReopening() throws {
+        let suite = "SetupDefaults-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var options = BoundMultiplayerSetupOptions.saved(in: defaults)
+        XCTAssertEqual(options.name, "BLUE"); XCTAssertEqual(options.gender, 0)
+        XCTAssertEqual(options.partnerName, "RED"); XCTAssertEqual(options.partnerGender, 1)
+        XCTAssertTrue(options.minimalGrinding && options.cheats && options.debug && options.nicknames && options.deleteSaveOnGameOver)
+        XCTAssertEqual(options.difficulty, 0); XCTAssertEqual(options.species, 0)
+        XCTAssertFalse(options.randomMoves || options.randomAbilities)
+        options.name = "Leaf"; options.debug = false; options.minimalGrinding = false
+        options.cheats = false; options.randomMoves = true
+        options.save(in: defaults)
+        XCTAssertEqual(BoundMultiplayerSetupOptions.saved(in: defaults), options)
+    }
+
     @MainActor func testExternalSetupOptionsEncodeNativeQuestionsAndPersonalIdentity() {
         var options = BoundMultiplayerSetupOptions()
+        options.debug = false // Exercise ordinary custom settings independently of the New Game preset.
         options.name = "Leaf"; options.gender = 1; options.rival = "Gary"; options.difficulty = 2
         options.partnerName = "Ash"; options.partnerGender = 0
         options.cheats = true; options.nicknames = false; options.randomAbilities = true

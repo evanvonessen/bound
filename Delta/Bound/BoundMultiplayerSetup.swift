@@ -15,20 +15,30 @@ extension Game {
     }
 }
 
-struct BoundMultiplayerSetupOptions {
-    var name = "RED"
+struct BoundMultiplayerSetupOptions: Codable, Equatable {
+    static let preferencesKey = "bound.multiplayer.new-game-options.v1"
+    static func saved(in defaults: UserDefaults = .standard) -> Self {
+        guard let data = defaults.data(forKey: preferencesKey),
+              let options = try? JSONDecoder().decode(Self.self, from: data) else { return Self() }
+        return options
+    }
+    func save(in defaults: UserDefaults = .standard) {
+        guard let data = try? JSONEncoder().encode(self) else { return }
+        defaults.set(data, forKey: Self.preferencesKey)
+    }
+    var name = "BLUE"
     var gender = 0
-    var partnerName = "BLUE"
-    var partnerGender = 0
+    var partnerName = "RED"
+    var partnerGender = 1
     var rival = "BLUE"
     var difficulty = 0
-    var minimalGrinding = false
+    var minimalGrinding = true
     var species = 0
     var randomMoves = false
     var randomAbilities = false
-    var cheats = false
+    var cheats = true
     var nicknames = true
-    var debug = false
+    var debug = true
     var deleteSaveOnGameOver = true
     var profile: BoundNakamaRunService.PlayerProfile { .init(name: name, gender: gender) }
     var partnerProfile: BoundNakamaRunService.PlayerProfile { .init(name: partnerName, gender: partnerGender) }
@@ -72,7 +82,7 @@ struct BoundMultiplayerSetupView: View {
     @AppStorage(BoundDamageCalculations.key) private var damageCalculations = true
     @State private var stage = 0
     @State private var room: FriendRoom?
-    @State private var options = BoundMultiplayerSetupOptions()
+    @State private var options = BoundMultiplayerSetupOptions.saved()
     @State private var requestID = UUID()
     @State private var confirmingClear = false
     @State private var confirmingDiscard = false
@@ -176,6 +186,7 @@ struct BoundMultiplayerSetupView: View {
                 }
             }
         }
+        .onChange(of: options) { _, value in value.save() }
         .interactiveDismissDisabled()
         .confirmationDialog("Clear all server saves for this game?", isPresented: $confirmingClear, titleVisibility: .visible) {
             Button("Delete Shared Saves", role: .destructive) { Task { await coordinator.clearServerRuns() } }
