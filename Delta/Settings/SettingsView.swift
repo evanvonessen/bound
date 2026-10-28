@@ -266,7 +266,9 @@ struct SettingsView: View {
                             .onChange(of: experimentalFeaturesEnabled) { _, enabled in
                                 BoundMultiplayerFeatures.setEnabled(enabled)
                             }
-
+                    }
+                    Section {
+                        BoundROMServerUpdateControls()
                     } footer: {
                         Text(BoundSettingsBuildFooter.text())
                             .font(.caption2)
@@ -301,7 +303,7 @@ struct SettingsView: View {
 enum BoundSettingsBuildFooter {
     static func text(bundle: Bundle = .main) -> String {
         let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
-        return "Bound Testflight Build #\(build)"
+        return "Bound TestFlight Build #\(build)"
     }
 }
 

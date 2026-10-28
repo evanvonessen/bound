@@ -33,130 +33,98 @@ final class BoundROMUpdateLifecycleTests: XCTestCase {
         XCTAssertFalse(BoundROMUpdateManager.shared.hasPendingSaveClear(for: "unrelated-" + game.identifier))
     }
 
-    func testBundledROMIsImportedWithoutDuplicatingExistingGame() async throws {
-        let url = try XCTUnwrap(Bundle(for: Game.self).url(forResource: "multiplayer", withExtension: "gba"))
-        let content = try BoundROMUpdateContent(data: Data(contentsOf: url), expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
-        let context = DatabaseManager.shared.viewContext
-        let request = Game.fetchRequest() as! NSFetchRequest<Game>
-        request.predicate = NSPredicate(format: "identifier == %@", content.gameID)
-        for _ in 0..<100 {
-            if try context.count(for: request) == 1 { break }
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
-        XCTAssertEqual(try context.count(for: request), 1)
-        try await BoundROMUpdateManager.shared.installBundledROM(from: url, name: BoundROMUpdateManager.bundledROMName(buildNumber: "999"))
-        XCTAssertEqual(try context.count(for: request), 1)
-    }
-
-    func testBundledInstallAndEnabledFolderPreserveCurrentAndOlderSavesAndCustomNames() async throws {
+    func testReleaseBundleContainsNoMultiplayerROMAndStartupDoesNotImportOne() async throws {
         guard SyncManager.shared.coordinator == nil, BoundROMUpdateActivity.canApply else {
             throw XCTSkip("Requires the isolated signed-out QA library with no active core")
         }
-        let manager = BoundROMUpdateManager.shared
-        let bundle = try XCTUnwrap(Bundle(for: Game.self).url(forResource: "multiplayer", withExtension: "gba"))
-        try await manager.installBundledROM(from: bundle, name: "Multi Red — Build 999")
-        let context = DatabaseManager.shared.viewContext, request = Game.fetchRequest() as! NSFetchRequest<Game>
-        request.predicate = NSPredicate(format: "identifier == %@", BoundGameProfiles.current.gameID)
-        let current = try XCTUnwrap(context.fetch(request).first)
-        let previousName = current.name, currentROM = current.fileURL, battery = current.gameSaveURL
-        let originalROM = try Data(contentsOf: currentROM), previousBattery = try? Data(contentsOf: battery)
-        let state = DatabaseManager.saveStatesDirectoryURL(for: current).appendingPathComponent(UUID().uuidString + ".state")
-        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
-        // Disposable library-only GBA input. It is never admitted to a core.
-        let olderBytes = Data(("Bundled import preservation " + UUID().uuidString).utf8)
-        let olderInput = temporary.appendingPathComponent("Existing cartridge.gba")
-        try olderBytes.write(to: olderInput)
-        let older: Game = try await withCheckedThrowingContinuation { continuation in
-            DatabaseManager.shared.importGames(at: [olderInput]) { games, errors in
-                guard errors.isEmpty, games.count == 1, let game = games.first else {
-                    continuation.resume(throwing: BoundROMUpdateError.storage); return
-                }
-                continuation.resume(returning: game)
-            }
-        }
-        let olderROM = older.fileURL, olderBattery = older.gameSaveURL
-        let olderState = DatabaseManager.saveStatesDirectoryURL(for: older).appendingPathComponent(UUID().uuidString + ".state")
-        defer {
-            current.name = previousName; context.delete(older); try? context.save()
-            try? originalROM.write(to: currentROM, options: .atomic)
-            if let previousBattery { try? previousBattery.write(to: battery, options: .atomic) }
-            else { try? FileManager.default.removeItem(at: battery) }
-            for file in [state, olderROM, olderBattery, olderState, temporary] { try? FileManager.default.removeItem(at: file) }
-        }
-        current.name = "My multiplayer cartridge"; older.name = "My earlier cartridge"; try context.save()
-        let sentinels: [(URL, Data)] = [(battery, Data([1, 2, 3])), (state, Data([4, 5, 6])),
-                                      (olderBattery, Data([7, 8, 9])), (olderState, Data([10, 11, 12]))]
-        for (file, bytes) in sentinels { try bytes.write(to: file, options: .atomic) }
-        try await manager.installBundledROM(from: bundle, name: "Multi Red — Build 1000")
-        // A metadata-only/cloud library row must also receive its missing ROM
-        // without touching any content-addressed battery or state files.
-        try FileManager.default.removeItem(at: currentROM)
-        try await manager.installBundledROM(from: bundle, name: "Multi Red — Build 1001")
-        XCTAssertEqual(try context.count(for: request), 1)
-        XCTAssertEqual(current.name, "My multiplayer cartridge")
-        XCTAssertEqual(older.name, "My earlier cartridge")
-        XCTAssertFalse(older.isDeleted)
-        XCTAssertEqual(try Data(contentsOf: currentROM), originalROM)
-        XCTAssertEqual(try Data(contentsOf: olderROM), olderBytes)
-        for (file, bytes) in sentinels { XCTAssertEqual(try Data(contentsOf: file), bytes) }
-
-        let suite = "BundledFolderPreservation-" + UUID().uuidString
+        let bundle = Bundle(for: Game.self)
+        XCTAssertNil(bundle.url(forResource: "multiplayer", withExtension: "gba"))
+        XCTAssertNil(bundle.url(forResource: "rrbin-integrated", withExtension: "gba"))
+        let context = DatabaseManager.shared.viewContext
+        let before = Set(try context.fetch(Game.fetchRequest()).map(\.identifier))
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("NoBundledROM-" + UUID().uuidString)
+        let suite = "NoBundledROM-" + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: temporary) }
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        let storage = BoundROMUpdateStorage(root: temporary.appendingPathComponent("Updater"), documents: temporary, support: temporary)
+        let manager = BoundROMUpdateManager(defaults: defaults, storage: storage)
+        var attempts = 0
+        manager.canApply = { attempts += 1; return false }
+        manager.start()
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(Set(try context.fetch(Game.fetchRequest()).map(\.identifier)), before)
+        XCTAssertEqual(attempts, 0)
+        XCTAssertNil(try storage.pending())
+    }
+
+    func testLegacyEnabledFolderPreferenceCannotStartAnUpdateOrChangeFilesOrPreferences() async throws {
+        guard SyncManager.shared.coordinator == nil else { throw XCTSkip("Requires the isolated signed-out QA app") }
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("LegacyFolderRetirement-" + UUID().uuidString)
+        let suite = "LegacyFolderRetirement-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: temporary) }
         let folder = temporary.appendingPathComponent("Folder")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try originalROM.write(to: folder.appendingPathComponent("multiplayer.gba"))
+        // A synthetic candidate is sufficient: the retired path must never read
+        // or validate a new candidate, even if a legacy preference remains on.
+        let candidate = folder.appendingPathComponent("multiplayer.gba"), save = temporary.appendingPathComponent("previous.sav")
+        let candidateBytes = Data("unattended candidate must not be read".utf8), saveBytes = Data([1, 2, 3, 4])
+        try candidateBytes.write(to: candidate); try saveBytes.write(to: save)
         defaults.set(try folder.bookmarkData(options: [.minimalBookmark], includingResourceValuesForKeys: nil, relativeTo: nil),
                      forKey: "bound.rom-updates.folder-bookmark.v1")
         defaults.set(true, forKey: "bound.rom-updates.enabled.v1")
         defaults.set("Previous updates", forKey: "bound.rom-updates.folder-name.v1")
-        defaults.set(older.identifier, forKey: "bound.rom-updates.enrollment-game.v1")
-        let storage = BoundROMUpdateStorage(root: temporary.appendingPathComponent("Updater"),
-                                           documents: temporary, support: temporary)
+        defaults.set("previous-enrollment", forKey: "bound.rom-updates.enrollment-game.v1")
+        let storage = BoundROMUpdateStorage(root: temporary.appendingPathComponent("Updater"), documents: temporary, support: temporary)
         try FileManager.default.createDirectory(at: storage.root, withIntermediateDirectories: true)
-        let previous = try BoundROMUpdateContent(data: olderBytes, expectedSHA256: BoundROMUpdateContent.hash(olderBytes),
-                                                expectedByteCount: olderBytes.count)
+        let previous = try BoundROMUpdateContent(data: saveBytes, expectedSHA256: BoundROMUpdateContent.hash(saveBytes), expectedByteCount: saveBytes.count)
         let stateBytes = try JSONEncoder().encode(BoundROMUpdateStorage.State(current: previous, requiresGeneration: true))
         try stateBytes.write(to: storage.stateURL)
         let preferences = defaults.dictionaryRepresentation()
-        let folderManager = BoundROMUpdateManager(defaults: defaults, storage: storage)
+        let manager = BoundROMUpdateManager(defaults: defaults, storage: storage)
+        let previousStatus = manager.status
         var resetAttempts = 0
-        // If the guard regresses, stop before destructive work and fail the
-        // test. The real candidate reader/install path still runs unchanged.
-        folderManager.canApply = { resetAttempts += 1; return false }
-        folderManager.checkNow()
-        for _ in 0..<100 {
-            if folderManager.status == "Included ROM is up to date." || resetAttempts > 0 { break }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        XCTAssertEqual(folderManager.status, "Included ROM is up to date.")
+        manager.canApply = { resetAttempts += 1; return false }
+        manager.checkNow()
+        for _ in 0..<10 { await Task.yield() }
         XCTAssertEqual(resetAttempts, 0)
+        XCTAssertEqual(manager.status, previousStatus)
+        XCTAssertFalse(manager.needsGameSelection)
         XCTAssertNil(try storage.pending())
         XCTAssertEqual(try Data(contentsOf: storage.stateURL), stateBytes)
+        XCTAssertEqual(try Data(contentsOf: candidate), candidateBytes)
+        XCTAssertEqual(try Data(contentsOf: save), saveBytes)
         XCTAssertTrue((defaults.dictionaryRepresentation() as NSDictionary).isEqual(to: preferences))
-        XCTAssertEqual(current.name, "My multiplayer cartridge"); XCTAssertEqual(older.name, "My earlier cartridge")
-        XCTAssertFalse(older.isDeleted)
-        for (file, bytes) in sentinels { XCTAssertEqual(try Data(contentsOf: file), bytes) }
-        XCTAssertEqual(try Data(contentsOf: olderROM), olderBytes)
+    }
 
-        // Already accepted work keeps its original recovery ordering. The
-        // bundled-content bypass must not conceal or clear a pending journal.
-        let incoming = try BoundROMUpdateContent(data: originalROM, expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
-        let pending = try storage.begin(content: incoming, data: originalROM, sources: [], metadata: Data(),
-                                        resetGameIDs: [previous.gameID, incoming.gameID])
+    func testPreviouslyAcceptedTransactionStillResumesItsCapturedJournalWithoutReadingLegacyFolder() async throws {
+        guard SyncManager.shared.coordinator == nil else { throw XCTSkip("Requires the isolated signed-out QA app") }
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("AcceptedROMRecovery-" + UUID().uuidString)
+        let suite = "AcceptedROMRecovery-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: temporary) }
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        let storage = BoundROMUpdateStorage(root: temporary.appendingPathComponent("Updater"), documents: temporary, support: temporary)
+        let bytes = Data("already confirmed synthetic cartridge".utf8)
+        let incoming = try BoundROMUpdateContent(data: bytes, expectedSHA256: BoundROMUpdateContent.hash(bytes), expectedByteCount: bytes.count)
+        let pending = try storage.begin(content: incoming, data: bytes, sources: [], metadata: Data(), resetGameIDs: [])
         let journal = try Data(contentsOf: storage.journalURL)
+        let preferences = defaults.dictionaryRepresentation()
         let recovering = BoundROMUpdateManager(defaults: defaults, storage: storage)
-        recovering.canApply = { resetAttempts += 1; return false }
+        var recoveryAttempts = 0
+        recovering.canApply = { recoveryAttempts += 1; return false }
         recovering.checkNow()
         for _ in 0..<100 {
-            if resetAttempts > 0 { break }
+            if recoveryAttempts > 0 { break }
             try await Task.sleep(for: .milliseconds(25))
         }
-        XCTAssertEqual(resetAttempts, 1)
+        // The recovery path reaches the safe-apply gate, while leaving every
+        // accepted byte intact until the app is able to complete that work.
+        XCTAssertEqual(recoveryAttempts, 1)
         XCTAssertEqual(try storage.pending()?.id, pending.id)
         XCTAssertEqual(try Data(contentsOf: storage.journalURL), journal)
-        XCTAssertEqual(try Data(contentsOf: storage.stateURL), stateBytes)
+        XCTAssertEqual(try Data(contentsOf: storage.incomingURL(pending)), bytes)
         XCTAssertTrue((defaults.dictionaryRepresentation() as NSDictionary).isEqual(to: preferences))
     }
 

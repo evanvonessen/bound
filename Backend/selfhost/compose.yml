@@ -48,7 +48,10 @@ services:
       PORT: "8080"
       TRUST_PROXY: "true"
       FILE_DIRECTORY: /var/lib/bound/files
-    volumes: [files:/var/lib/bound/files]
+      ROM_UPDATES_ROOT: /var/lib/bound/rom-updates
+    volumes:
+      - files:/var/lib/bound/files
+      - ${ROM_UPDATES_HOST_DIRECTORY:-/var/lib/bound/rom-updates}:/var/lib/bound/rom-updates:ro
     depends_on:
       nakama: { condition: service_healthy }
     read_only: true

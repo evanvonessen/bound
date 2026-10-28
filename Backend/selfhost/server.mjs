@@ -14,6 +14,7 @@ import { createBackups } from './backups.mjs';
 import { migrate, verifyMigrations } from './migrate.mjs';
 import { createDebug } from './debug.mjs';
 import { localFixtureDelivery } from './local-fixture.mjs';
+import { createROMUpdates } from './rom-updates.mjs';
 
 const json = (status, error) => new Response(JSON.stringify({ error }), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 const privatePeer = value => /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(value.replace(/^::ffff:/, '')) || value === '::1';
@@ -88,12 +89,13 @@ export async function start(env = process.env) {
   const archive = createArchive({ pool, authenticate: auth.authenticate, rpc: services.rpc, config });
   backups = createBackups({ pool, authenticate: auth.authenticate, rpc: services.rpc, config });
   const deletion = createDeletion({ pool, auth, files, archive, backups });
+  const romUpdates = createROMUpdates({ pool, authenticate: auth.authenticate, config });
   const handle = async request => {
     if (new URL(request.url).pathname === '/healthz' && request.method === 'GET') {
       try { await pool.query('SELECT 1'); return new Response('{"status":"ok"}', { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } }); }
       catch { return json(503, 'unavailable'); }
     }
-    return await debug.handle(request) ?? await deletion.handle(request) ?? await auth.handle(request) ?? await services.handle(request) ?? await backups.handle(request) ?? await files.handle(request) ?? await archive.handle(request) ?? json(404, 'not_found');
+    return await romUpdates.handle(request) ?? await debug.handle(request) ?? await deletion.handle(request) ?? await auth.handle(request) ?? await services.handle(request) ?? await backups.handle(request) ?? await files.handle(request) ?? await archive.handle(request) ?? json(404, 'not_found');
   };
   const server = http.createServer({ maxHeaderSize: 16384, requestTimeout: 60000, headersTimeout: 15000 }, httpHandler({ config, handle }));
   server.maxConnections = 256;

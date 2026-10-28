@@ -48,10 +48,10 @@ PrototypeTools/fastlane-local beta
 `beta` reuses `PrototypeTools/deliver-testflight.py`: it checks the remote,
 archives a clean snapshot of the published commit, verifies pinned sources,
 privacy manifests and signing, then uploads for internal TestFlight testing.
-The archive must also contain the exact `multiplayer.gba` pinned by the source
-revision. Builds download the immutable private game release when a verified
-local cartridge is not supplied. Startup installs that matching cartridge under
-its own content identity, preserving previous cartridges, names and saves.
+Archives and exports must contain no multiplayer cartridge. RRv4.1M uses the
+developer-approved authenticated Linode updater independently of TestFlight;
+see `Docs/SERVER-ROM-DISTRIBUTION.md`. ROM compatibility pins do not add ROM
+payloads to an app release.
 Uncommitted and untracked files are excluded. Xcode uses its existing signed-in
 Apple developer account and automatic distribution signing. No new API key,
 password file, or signing repository is required. Xcode automatically manages

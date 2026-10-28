@@ -155,6 +155,13 @@ struct BoundMultiplayerSetupView: View {
                 }
                 if coordinator.serverMenuBusy { ProgressView() }
             }
+            .safeAreaInset(edge: .bottom) {
+                Text("RRv4.1M Build #\(coordinator.installedROMBuild.map(String.init) ?? "—")")
+                    .font(.caption).foregroundStyle(.gray)
+                    .frame(maxWidth: .infinity).padding(.vertical, 8)
+                    .background(.bar)
+                    .accessibilityIdentifier("bound.multiplayer-rom-build")
+            }
             .disabled(coordinator.serverMenuBusy)
             .navigationTitle(stage == 0 ? "Multiplayer" : stage == 1 ? "Choose a Friend" : "New Game")
             .toolbar {

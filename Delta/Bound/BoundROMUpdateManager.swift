@@ -31,7 +31,6 @@ final class BoundROMUpdateManager: ObservableObject {
     private let defaults: UserDefaults
     private let storage: BoundROMUpdateStorage
     private var bundledImportInProgress = false
-    private var bundledImportStarted = false
     private var started = false
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
@@ -124,31 +123,6 @@ final class BoundROMUpdateManager: ObservableObject {
             if context.hasChanges { try context.save() }
         }
     }
-    /// Each cartridge keeps its content-addressed identity and existing saves.
-    /// Never enroll an older cartridge in the reset-on-update folder workflow.
-    private func installBundledROMIfNeeded() {
-        guard !bundledImportStarted, !isApplying, !isChecking, DatabaseManager.shared.isStarted,
-              UIApplication.shared.applicationState == .active,
-              let url = Bundle.main.url(forResource: "multiplayer", withExtension: "gba") else { return }
-        bundledImportStarted = true
-        bundledImportInProgress = true
-        Task { @MainActor in
-            var installed = false
-            defer { bundledImportInProgress = false; if installed, isEnabled { checkNow() } }
-            do {
-                // Read the installed bundle at runtime: App Store export can renumber the archive.
-                let name = Self.bundledROMName(buildNumber: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
-                try await installBundledROM(from: url, name: name)
-                installed = true
-            } catch {
-                // A transient library/foreground condition retries through the
-                // existing timer, without entering the reset-on-update flow.
-                bundledImportStarted = false
-                status = error.localizedDescription
-            }
-        }
-    }
-
     /// Install the exact bundled cartridge without retiring another identity,
     /// migrating its saves, or changing a user-assigned library name.
     func installBundledROM(from url: URL, name: String) async throws {
@@ -281,7 +255,11 @@ final class BoundROMUpdateManager: ObservableObject {
     func checkNow() {
         guard DatabaseManager.shared.isStarted, UIApplication.shared.applicationState == .active else { return }
         guard !resumePendingSaveClears() else { return }
-        installBundledROMIfNeeded()
+        // Multiplayer cartridges are installed only after an approved server
+        // download and the explicit destructive confirmation in Settings.
+        // Retain recovery for an older durable transaction, but never start a
+        // new unattended folder update from a saved legacy preference.
+        guard FileManager.default.fileExists(atPath: storage.journalURL.path) else { return }
         guard !bundledImportInProgress, !isChecking, !needsGameSelection, UIApplication.shared.applicationState == .active,
               isEnabled || stagedBookmark != nil || FileManager.default.fileExists(atPath: storage.journalURL.path) else { return }
         guard DatabaseManager.shared.isStarted else { status = "Waiting for the game library."; return }

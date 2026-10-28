@@ -87,6 +87,7 @@ extension GameSave: Syncable
     }
     
     public var isSyncingEnabled: Bool {
+        guard !BoundROMServerInstaller.blocks(identifier) else { return false }
         // self.game may be nil if being downloaded, so don't enforce it.
         // guard let identifier = self.game?.identifier else { return false }
         

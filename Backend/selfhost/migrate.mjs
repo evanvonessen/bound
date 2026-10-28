@@ -14,7 +14,7 @@ export const migrations = [
   '../multiplayer/supabase/migrations/20261022093123_bound_run_lease_anchors_v1.sql',
   '../multiplayer/supabase/migrations/20261022095012_bound_run_lease_end_v1.sql',
   '../dropbox-link/contract.sql', '../nakama-session/contract.sql', './deletion.sql', './archive.sql',
-  './archive-deletions.sql', './backups.sql', './game-notifications.sql',
+  './archive-deletions.sql', './backups.sql', './game-notifications.sql', './rom-updates.sql',
 ];
 
 export function adaptContract(sql) {

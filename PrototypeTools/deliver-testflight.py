@@ -207,16 +207,11 @@ def distribution_info(ipa, source=None):
                 or entitlements.get("get-task-allow") is not False
                 or entitlements.get("aps-environment") != "production"):
             raise ValueError("Exported IPA must have Bound distribution entitlements: production APNs and get-task-allow=false")
-        rom = package.read(prefix + "multiplayer.gba")
-        if len(rom) != 32 * 1024 * 1024:
-            raise ValueError("Exported IPA is missing the complete multiplayer.gba resource")
-        digest = hashlib.sha256(rom).hexdigest()
-        if source is not None:
-            pin = json.loads((source / "PrototypeTools/bundled-rom.json").read_text())
-            if digest != pin.get("sha256"):
-                raise ValueError("Exported IPA ROM differs from the published source pin")
+        if any(name.startswith(prefix) and Path(name).name in {"multiplayer.gba", "rrbin-integrated.gba", "RRv4.1M.gba"}
+               for name in package.namelist()):
+            raise ValueError("Exported IPA contains a multiplayer ROM; distribute it through the approved server updater")
     return {"version": info["CFBundleShortVersionString"], "archive_build": info["CFBundleVersion"],
-            "rom_sha256": digest, "rom_bytes": len(rom), "distribution_entitlements_verified": True}
+            "rom_distribution": "developer-approved-server", "distribution_entitlements_verified": True}
 
 
 def write_json(path, data):
@@ -233,20 +228,10 @@ def archive_info(archive, source):
         properties = plistlib.load(stream)["ApplicationProperties"]
     if info.get("CFBundleIdentifier") != BUNDLE_ID or properties.get("Team") != TEAM_ID:
         raise ValueError("Archive does not match Bound's approved bundle ID and signing team")
-    pin = json.loads((source / "PrototypeTools/bundled-rom.json").read_text())
-    contract = re.search(r'romSHA256 = "([a-f0-9]{64})"',
-                         (source / "Delta/Bound/BoundSharedProgression.swift").read_text())
-    if not contract or pin.get("sha256") != contract[1]:
-        raise ValueError("Archived ROM pin does not match the published source contract")
-    rom = app / "multiplayer.gba"
-    if rom.is_symlink() or not rom.is_file() or rom.stat().st_size != 32 * 1024 * 1024:
-        raise ValueError("Archive is missing the complete multiplayer.gba resource")
-    digest = hashlib.sha256(rom.read_bytes()).hexdigest()
-    if digest != pin["sha256"]:
-        raise ValueError("Archived multiplayer.gba does not match the published source pin")
+    if any(path.name in {"multiplayer.gba", "rrbin-integrated.gba", "RRv4.1M.gba"} for path in app.rglob("*.gba")):
+        raise ValueError("Archive contains a multiplayer ROM; distribute it through the approved server updater")
     return {"version": info["CFBundleShortVersionString"], "archive_build": info["CFBundleVersion"],
-            "rom_resource": rom.name, "rom_sha256": digest, "rom_bytes": rom.stat().st_size,
-            "rom_release_tag": pin.get("tag")}
+            "rom_distribution": "developer-approved-server"}
 
 
 def deliver(root, commit, upload):

@@ -2,7 +2,17 @@
 import Foundation
 
 enum BoundRecognizedROMs {
-    static let all: [BoundROMCleanupIdentity] = [
+    static let all: [BoundROMCleanupIdentity] = {
+        var identities = verifiedReleases
+        // Generated exact game profiles are source-verified identities too.
+        // They can advance before a historical release inventory is refreshed.
+        for profile in BoundGameProfiles.all where !identities.contains(where: { $0.gameID == profile.gameID && $0.sha256 == profile.romSHA256 }) {
+            identities.append(.init(sha256: profile.romSHA256, gameID: profile.gameID,
+                                    evidence: "SDK/Generated/BoundGameProfiles.swift"))
+        }
+        return identities
+    }()
+    private static let verifiedReleases: [BoundROMCleanupIdentity] = [
         .init(sha256: "02f97ffa88f71015d2da5df114c0bf48d7c80f37f64d10075a81fef2dc6d8a79", gameID: "4b792d8f8b86e1a65b27965bb523fe0a48a20190", evidence: "https://github.com/evanvonessen/multi_red/releases/download/multiplayer-02f97ffa88f7/multiplayer.gba"),
         .init(sha256: "15f7be08ae295828ae95e2b7ede00e553ac5cbbea2b2e5789ad9a98494fe7707", gameID: "d07afd119bc1abfc499fe3a6c7eb7aaa629bfd18", evidence: "https://github.com/evanvonessen/multi_red/releases/download/rom-2e4ec6774a50-faf71208a1e4/rrbin-integrated.gba"),
         .init(sha256: "1abad2893274693299c4d79ecfc1952a4b0c5c96e3070470d4e64b6c28d38047", gameID: "b60454b7b94d4f31f8c75a4e0bf04114b8698e6e", evidence: "https://github.com/evanvonessen/multi_red/releases/download/rom-ccf628d8fce4-c16c194dba3f/rrbin-integrated.gba"),

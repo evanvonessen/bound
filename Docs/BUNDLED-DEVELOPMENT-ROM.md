@@ -1,5 +1,10 @@
 # Bundled development cartridge
 
+Historical workflow; do not execute these bundling instructions. The local
+server-distribution implementation supersedes them. See
+[RRv4.1M server updates](SERVER-ROM-DISTRIBUTION.md). This historical document is
+retained pending the requested live acceptance and final instruction cleanup.
+
 The shared Bound target embeds `rrbin-integrated.gba` for iPhone and Designed for iPad on Mac.
 `PrototypeTools/bundled-rom.json` pins the verified private release and its hash.
 The ROM is deliberately absent from the public Bound source repository. The build

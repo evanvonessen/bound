@@ -557,6 +557,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     private var leaseOperation = UUID()
     private var leaseRetryAt: TimeInterval = 0
     private var verification: Task<Void, Never>?
+    var installedROMBuild: Int? { game.flatMap { BoundROMServerInstaller.installedBuild(gameID: $0.identifier) } }
     private var game: Game?
     private var timer: Timer?
     private var admittedProfile: BoundGameProfile?

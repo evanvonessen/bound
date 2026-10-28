@@ -225,6 +225,18 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
         result.setValue("Bearer " + (try validToken()), forHTTPHeaderField: "Authorization")
         return result
     }
+    func romUpdateRequest(resource: String, build: Int? = nil, sha256: String? = nil) throws -> URLRequest {
+        guard backend.kind == .selfhost, ["access", "latest", "download"].contains(resource) else { throw BoundFriendError.unavailable }
+        var path = "/rom-updates/" + resource
+        if resource == "download" {
+            guard let build, build >= 500, let sha256, sha256.count == 64,
+                  sha256.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { throw BoundFriendError.unavailable }
+            path += "?build=\(build)&sha256=\(sha256)"
+        }
+        var result = URLRequest(url: try backend.url(path: path), cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 120)
+        result.setValue("Bearer " + (try validToken()), forHTTPHeaderField: "Authorization")
+        return result
+    }
     func accountUserRequest() throws -> URLRequest {
         var result = try request(path: "/auth/v1/user", body: [:])
         result.httpMethod = "GET"; result.httpBody = nil

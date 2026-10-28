@@ -2,6 +2,32 @@ import XCTest
 import CryptoKit
 @testable import Delta
 
+enum BoundROMTestFixture {
+    static func currentURL() throws -> URL {
+        let url: URL
+        if let path = ProcessInfo.processInfo.environment["BOUND_QA_ROM_FIXTURE"], !path.isEmpty {
+            guard path.hasPrefix("/") else { throw BoundROMUpdateError.unsafePath }
+            url = URL(fileURLWithPath: path)
+        } else if let resource = Bundle(for: BoundROMUpdateTests.self).url(forResource: "RRv4.1M-fixture", withExtension: "gba") {
+            url = resource
+        } else {
+            throw XCTSkip("Requires an explicit exact current cartridge via BOUND_QA_ROM_FIXTURE or private RRv4.1M-fixture.gba in the test bundle; Bound embeds no multiplayer ROM")
+        }
+        let values = try url.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
+        guard values.isSymbolicLink != true, values.isRegularFile == true else {
+            throw BoundROMUpdateError.unsafePath
+        }
+        return url
+    }
+    static func currentData() throws -> Data {
+        let data = try Data(contentsOf: currentURL())
+        let content = try BoundROMUpdateContent(data: data, expectedSHA256: BoundGameProfiles.current.romSHA256)
+        guard content.gameID == BoundGameProfiles.current.gameID else { throw BoundROMUpdateError.incompatibleROM }
+        _ = try BoundPlayerROMProfile(rom: data)
+        return data
+    }
+}
+
 final class BoundROMUpdateTests: XCTestCase {
     func testBackupAtPayloadLimitLeavesRoomForManifestOnRestore() throws {
         let owner = UUID(), files = ["game.sav": Data(repeating: 0, count: BoundServerBackupPackage.maximumBytes)]
@@ -180,12 +206,18 @@ final class BoundROMUpdateTests: XCTestCase {
         XCTAssertFalse(f.storage.hasPendingSaveClear(gameID: "other"))
     }
 
-    func testBundledCartridgeMatchesCommittedContract() throws {
+    func testNoMultiplayerCartridgeIsBundledAndExactCurrentContractRemainsPinned() throws {
         let bundle = Bundle(for: Game.self)
-        let url = try XCTUnwrap(bundle.url(forResource: "multiplayer", withExtension: "gba"))
-        let data = try Data(contentsOf: url)
-        _ = try BoundROMUpdateContent(data: data, expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
-        _ = try BoundPlayerROMProfile(rom: data)
+        XCTAssertNil(bundle.url(forResource: "multiplayer", withExtension: "gba"))
+        XCTAssertNil(bundle.url(forResource: "rrbin-integrated", withExtension: "gba"))
+        let manifest = BoundROMServerManifest(schemaVersion: 1, buildNumber: 500,
+            sha256: BoundGameProfiles.current.romSHA256, gameID: BoundGameProfiles.current.gameID,
+            byteCount: 32 * 1024 * 1024)
+        XCTAssertNoThrow(try manifest.validateCompatibility())
+    }
+
+    func testExplicitCurrentCartridgeFixtureMatchesCommittedContract() throws {
+        _ = try BoundROMTestFixture.currentData()
     }
 
     func testROMCandidateRejectsPartialAndWrongContentWithoutTouchingOriginals() throws {
@@ -317,8 +349,11 @@ final class BoundROMUpdateTests: XCTestCase {
             XCTAssertThrowsError(try BoundROMUpdateContent.resetGameIDs(previous: wrong, incoming: current))
             XCTAssertThrowsError(try BoundROMUpdateContent.resetGameIDs(previous: ordinary, incoming: wrong))
         }
-        let bundle = Bundle(for: Game.self)
-        let data = try Data(contentsOf: XCTUnwrap(bundle.url(forResource: "multiplayer", withExtension: "gba")))
+    }
+
+    func testExplicitCurrentCartridgeEnrollmentRejectsHistoricalIdentity() throws {
+        let original = try profileContent(BoundGameProfiles.original), current = try profileContent(BoundGameProfiles.current)
+        let data = try BoundROMTestFixture.currentData()
         XCTAssertEqual(try BoundROMUpdateContent.enrollment(data: data, gameID: current.gameID), current)
         XCTAssertThrowsError(try BoundROMUpdateContent.enrollment(data: data, gameID: original.gameID))
         XCTAssertThrowsError(try BoundROMUpdateContent(data: data, expectedSHA256: original.sha256))
@@ -337,7 +372,7 @@ final class BoundROMUpdateTests: XCTestCase {
 
     func testSideBySideUpdatePreservesOriginalFilesAndExistingGenerationFenceAcrossRestart() throws {
         let f = try fixture(), original = try profileContent(BoundGameProfiles.original)
-        let data = try Data(contentsOf: XCTUnwrap(Bundle(for: Game.self).url(forResource: "multiplayer", withExtension: "gba")))
+        let data = try BoundROMTestFixture.currentData()
         let current = try BoundROMUpdateContent(data: data, expectedSHA256: BoundGameProfiles.current.romSHA256)
         let oldState = BoundROMUpdateStorage.State(current: original, requiresGeneration: true)
         try FileManager.default.createDirectory(at: f.storage.root, withIntermediateDirectories: true)

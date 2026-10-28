@@ -52,7 +52,7 @@ struct BoundROMCleanupPlan: Codable, Equatable, Identifiable {
     let targets: [Target]
     var bytes: Int64 { targets.flatMap(\.files).reduce(0) { $0 + $1.bytes } }
     var summary: String {
-        let header = "Keep the current bundled ROM and all its saves (" + preserved.sha256 + ").\n\nPermanently remove:"
+        let header = "Keep the current supported ROM and all its saves (" + preserved.sha256 + ").\n\nPermanently remove:"
         let rows = targets.map { target in
             let runs = target.runs.map { $0.id.uuidString }.joined(separator: ", ")
             let files = target.files.map(\.path).joined(separator: "\n")
@@ -189,10 +189,12 @@ struct BoundROMCleanupJournal {
 @MainActor
 enum BoundROMCleanupLive {
     static func latest() throws -> BoundROMCleanupIdentity {
-        guard let url = Bundle.main.url(forResource: "multiplayer", withExtension: "gba") else { throw BoundROMUpdateError.incompatibleROM }
-        let content = try BoundROMUpdateContent(data: Data(contentsOf: url), expectedSHA256: BoundPlayerROMProfile.supportedSHA256)
-        guard content.gameID == BoundGameProfiles.current.gameID,
-              let identity = BoundRecognizedROMs.all.first(where: { $0.gameID == content.gameID && $0.sha256 == content.sha256 }) else { throw BoundROMUpdateError.incompatibleROM }
+        let url = DatabaseManager.gamesDirectoryURL.appendingPathComponent(BoundGameProfiles.current.gameID + ".gba")
+        guard let identity = BoundRecognizedROMs.all.first(where: { $0.gameID == BoundGameProfiles.current.gameID && $0.sha256 == BoundGameProfiles.current.romSHA256 }) else { throw BoundROMUpdateError.incompatibleROM }
+        if FileManager.default.fileExists(atPath: url.path) {
+            let content = try BoundROMUpdateContent(data: Data(contentsOf: url), expectedSHA256: identity.sha256)
+            guard content.gameID == identity.gameID else { throw BoundROMUpdateError.incompatibleROM }
+        }
         return identity
     }
     static var idle: Bool {
@@ -297,8 +299,10 @@ enum BoundROMCleanupLive {
             let currentRequest = Game.fetchRequest()
             currentRequest.predicate = NSPredicate(format: "identifier == %@", preserved.gameID)
             let current = try context.fetch(currentRequest)
-            guard current.count == 1, let game = current.first,
-                  try BoundROMUpdateContent.hash(Data(contentsOf: game.fileURL)) == preserved.sha256 else { throw BoundROMUpdateError.incompatibleROM }
+            guard current.count <= 1 else { throw BoundROMUpdateError.incompatibleROM }
+            if let game = current.first {
+                guard try BoundROMUpdateContent.hash(Data(contentsOf: game.fileURL)) == preserved.sha256 else { throw BoundROMUpdateError.incompatibleROM }
+            }
             var result: [String: (String, String, [URL], [String])] = [:]
             for game in try context.fetch(Game.fetchRequest()) {
                 guard let identity = identities.first(where: { $0.gameID == game.identifier }) else { continue }
@@ -315,7 +319,7 @@ enum BoundROMCleanupLive {
             return result
         }
     }
-    private static func localRoots(game: Game, storage: BoundROMUpdateStorage) throws -> [URL] {
+    static func localRoots(game: Game, storage: BoundROMUpdateStorage) throws -> [URL] {
         let fm = FileManager.default, store = BoundMultiplayerSaveStore.shared
         let stem = BoundMultiplayerSaveStore.hash(Data(game.identifier.utf8))
         var paths = [game.fileURL, game.gameSaveURL, game.gameSaveURL.deletingPathExtension().appendingPathExtension("rtc"),

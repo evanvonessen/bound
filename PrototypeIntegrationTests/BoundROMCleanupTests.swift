@@ -192,27 +192,42 @@ final class BoundROMCleanupTests: XCTestCase {
         do { _ = try await BoundROMCleanupLive.operations(storage: .live).prepare(); XCTFail("Cloud ownership must be established before confirmation") }
         catch { XCTAssertTrue(error is BoundROMCleanupError); XCTAssertEqual(error.localizedDescription, BoundROMCleanupError.signIn.localizedDescription) }
     }
-    func testActualLibraryDeletionPreservesBundledROMEntryLatestSavesAndUnrelatedGame() async throws {
+    func testActualLibraryDeletionPreservesInstalledCurrentROMEntryLatestSavesAndUnrelatedGame() async throws {
         guard SyncManager.shared.coordinator == nil, BoundROMUpdateActivity.canApply else { throw XCTSkip("Requires the isolated signed-out QA app") }
-        let latestURL = try XCTUnwrap(Bundle(for: Game.self).url(forResource: "multiplayer", withExtension: "gba"))
-        try await BoundROMUpdateManager.shared.installBundledROM(from: latestURL, name: "Multi Red — Build 999")
+        let fixtures = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MultiRedProfilesQA")
+        let latestURL = try BoundROMTestFixture.currentURL()
+        _ = try BoundROMTestFixture.currentData()
+        let historical = ProcessInfo.processInfo.environment["BOUND_QA_ORIGINAL_ROM_FIXTURE"].map { URL(fileURLWithPath: $0) }
+            ?? fixtures.appendingPathComponent("original.gba")
+        guard FileManager.default.fileExists(atPath: historical.path) else {
+            throw XCTSkip("Exact real-cartridge cleanup requires the verified original profile cartridge via BOUND_QA_ORIGINAL_ROM_FIXTURE or isolated MultiRedProfilesQA/original.gba; it is not bundled")
+        }
+        let identity = try XCTUnwrap(BoundRecognizedROMs.all.first { $0.gameID == BoundGameProfiles.original.gameID })
+        let bytes = try Data(contentsOf: historical)
+        let verifiedHistorical = try BoundROMUpdateContent(data: bytes, expectedSHA256: identity.sha256)
+        guard verifiedHistorical.gameID == identity.gameID else { throw BoundROMUpdateError.incompatibleROM }
         let context = DatabaseManager.shared.viewContext
         func game(_ id: String) throws -> Game? {
             let request = Game.fetchRequest() as! NSFetchRequest<Game>; request.predicate = NSPredicate(format: "identifier == %@", id)
             return try context.fetch(request).first
         }
+        guard try game(identity.gameID) == nil else { throw XCTSkip("Requires an isolated QA library without a pre-existing historical entry") }
+        let existing = try game(BoundGameProfiles.current.gameID), previousName = existing?.name
+        try await BoundROMUpdateManager.shared.installBundledROM(from: latestURL, name: "RRv4.1M")
         let current = try XCTUnwrap(game(BoundGameProfiles.current.gameID)), originalROM = try Data(contentsOf: current.fileURL)
         let previousSave = try? Data(contentsOf: current.gameSaveURL)
         let currentSave = Data("LATEST SAVE MUST SURVIVE CLEANUP".utf8)
         try currentSave.write(to: current.gameSaveURL)
-        defer { if let previousSave { try? previousSave.write(to: current.gameSaveURL) } else { try? FileManager.default.removeItem(at: current.gameSaveURL) } }
-        let identity = try XCTUnwrap(BoundRecognizedROMs.all.first { $0.gameID == BoundGameProfiles.original.gameID })
-        XCTAssertNil(try game(identity.gameID), "The QA fixture must not replace an existing historical library entry")
-        let historical = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MultiRedProfilesQA/original.gba")
-        guard FileManager.default.fileExists(atPath: historical.path) else { throw XCTSkip("Requires the verified historical ROM in the isolated MultiRedProfilesQA fixture directory") }
-        let bytes = try Data(contentsOf: historical)
-        XCTAssertEqual(BoundROMUpdateContent.hash(bytes), identity.sha256)
+        defer {
+            if existing == nil {
+                if !current.isDeleted { context.delete(current); try? context.save() }
+            } else {
+                if let previousName { current.name = previousName; try? context.save() }
+                if let previousSave { try? previousSave.write(to: current.gameSaveURL) }
+                else { try? FileManager.default.removeItem(at: current.gameSaveURL) }
+            }
+        }
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("CleanupImports-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
         let oldInput = temporary.appendingPathComponent("Manually imported.gba"), otherInput = temporary.appendingPathComponent("Multi Red unrelated.gba")

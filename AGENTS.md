@@ -68,3 +68,29 @@ refreshes the named main iPhone 17 simulator when booted. Preserve earlier ROMs
 and saves; report incompatible game/app commits or service failures accurately.
 See `../multi_red/docs/main-simulator.md`. This does not replace the existing
 Bound validation or the manual-only TestFlight workflow and prohibition on Cloud usage checks.
+
+## RRv4.1M server distribution
+
+This section supersedes the Latest integrated ROM delivery instructions above.
+Bound releases must not bundle or automatically import a multiplayer cartridge.
+Archives and exports reject leftover multiplayer ROM resources. The existing
+ROM pins and generated game profiles establish exact compatibility only.
+
+multi_red owns its independent build counter (first publication 500) and the
+main-triggered GitHub Actions workflow that compiles maintained game sources,
+verifies the result, and replaces the private Linode ROM. Bound release numbers
+and app-only updates must not publish a game build. Never invoke the legacy
+latest-ROM publisher or main-simulator refresher as a delivery step.
+
+Only server-recognized developer-approved accounts may refresh release metadata
+or download through the authenticated gateway. A device toggle is not approval.
+Installation requires explicit confirmation of device-only old ROM/save removal;
+preserve shared server runs, cloud saves, exact-ROM checks and interrupted-job
+recovery. Install as RRv4.1M with original FireRed artwork and the independent
+game build footer. See `Docs/SERVER-ROM-DISTRIBUTION.md` and
+`Backend/selfhost/ROM-UPDATES.md`.
+
+The implementation is a local candidate pending live acceptance. Active
+task-specific no-push/no-deploy/no-publication restrictions always take
+precedence; do not activate workflows, migrations or delivery while they apply.
+Historical distribution documents are retained until live verification passes.

@@ -32,6 +32,9 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		B0CD28000000000000000013 /* ROMServerInstallJournalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0CD28000000000000000003 /* ROMServerInstallJournalTests.swift */; };
+		B0CD28000000000000000012 /* BoundROMServerInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0CD28000000000000000002 /* BoundROMServerInstaller.swift */; };
+		B0CD28000000000000000011 /* BoundROMServerUpdates.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0CD28000000000000000001 /* BoundROMServerUpdates.swift */; };
 		A0D100000000000000000002 /* AudioRingBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0D100000000000000000001 /* AudioRingBufferTests.swift */; };
 		16389583501B94AA3DC5DD53 /* WorldMovementRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80592CCAB31B8A9F8FC9D992 /* WorldMovementRuntimeTests.swift */; };
 		4BC1CBE6A205E7A274C6DD59 /* BoundWorldMovementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472E7C37E90CB08B899AB348 /* BoundWorldMovementTests.swift */; };
@@ -958,6 +961,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		B0CD28000000000000000003 /* ROMServerInstallJournalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ROMServerInstallJournalTests.swift; sourceTree = "<group>"; };
+		B0CD28000000000000000002 /* BoundROMServerInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMServerInstaller.swift; sourceTree = "<group>"; };
+		B0CD28000000000000000001 /* BoundROMServerUpdates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundROMServerUpdates.swift; sourceTree = "<group>"; };
 		A0D100000000000000000001 /* AudioRingBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRingBufferTests.swift; sourceTree = "<group>"; };
 		80592CCAB31B8A9F8FC9D992 /* WorldMovementRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldMovementRuntimeTests.swift; sourceTree = "<group>"; };
 		472E7C37E90CB08B899AB348 /* BoundWorldMovementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundWorldMovementTests.swift; sourceTree = "<group>"; };
@@ -1686,6 +1692,7 @@
 				A15E00000000000000000009 /* PresenceConnectionCheckTests.swift */,
 				C0FEED260000000000000005 /* ConnectionFeedTests.swift */,
 				C0FEED260000000000000007 /* ConnectionsViewTests.swift */,
+				B0CD28000000000000000003 /* ROMServerInstallJournalTests.swift */,
 				DCAAC41710C363D666E6FF5C /* BoundROMCleanupTests.swift */,
 				A15E00000000000000000005 /* LivePresenceRuntimeTests.swift */,
 				35733EA11CCE9FF25284EFB8 /* AppearanceIntegrationTests.swift */,
@@ -1837,6 +1844,8 @@
 				503000000000000000000006 /* BoundRunLease.swift */,
 				503000000000000000000004 /* BoundMultiplayerSavePackage.swift */,
 				D3BFA93C4603920FA85C227F /* BoundROMUpdateActivity.swift */,
+				B0CD28000000000000000001 /* BoundROMServerUpdates.swift */,
+				B0CD28000000000000000002 /* BoundROMServerInstaller.swift */,
 				8DADB04F2BCDA6A197AA7F7F /* BoundROMUpdateManager.swift */,
 				A9231483D777DADAFDDAE6D0 /* BoundROMUpdateStorage.swift */,
 				5C0E4F6CC6BABCBBDC9229AD /* BoundGitHubAccount.swift */,
@@ -2934,7 +2943,7 @@
 				BFFA71D31AAC406100EE9DD1 /* Sources */,
 				BFFA71D41AAC406100EE9DD1 /* Frameworks */,
 				BFFA71D51AAC406100EE9DD1 /* Resources */,
-				B0CD23000000000000000001 /* Bundle Development ROM */,
+				B0CD23000000000000000001 /* Remove Legacy Bundled ROM */,
 				0E0279E4F38215820BB0C9A0 /* [CP] Copy Pods Resources */,
 				BF08DC3325CE07C3007A9CF4 /* Embed Frameworks */,
 			);
@@ -3427,17 +3436,17 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-        B0CD23000000000000000001 /* Bundle Development ROM */ = {
+        B0CD23000000000000000001 /* Remove Legacy Bundled ROM */ = {
             isa = PBXShellScriptBuildPhase;
             alwaysOutOfDate = 1;
             buildActionMask = 2147483647;
             files = ();
             inputPaths = ();
-            outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/multiplayer.gba");
-            name = "Bundle Development ROM";
+            outputPaths = ();
+            name = "Remove Legacy Bundled ROM";
             runOnlyForDeploymentPostprocessing = 0;
             shellPath = /bin/sh;
-            shellScript = "python3 \"$SRCROOT/PrototypeTools/bundle-development-rom.py\"";
+            shellScript = "python3 \"$SRCROOT/PrototypeTools/remove-legacy-bundled-rom.py\"";
             showEnvVarsInLog = 0;
         };
 
@@ -3617,6 +3626,7 @@
 				A15E0000000000000000000A /* PresenceConnectionCheckTests.swift in Sources */,
 				C0FEED260000000000000006 /* ConnectionFeedTests.swift in Sources */,
 				C0FEED260000000000000008 /* ConnectionsViewTests.swift in Sources */,
+				B0CD28000000000000000013 /* ROMServerInstallJournalTests.swift in Sources */,
 				4389D648C07362E91F9D6DFF /* BoundROMCleanupTests.swift in Sources */,
 				A15E00000000000000000006 /* LivePresenceRuntimeTests.swift in Sources */,
 				273B677E21CFB932EFA82ACD /* AppearanceIntegrationTests.swift in Sources */,
@@ -3964,6 +3974,8 @@
 				503000000000000000000005 /* BoundRunLease.swift in Sources */,
 				503000000000000000000003 /* BoundMultiplayerSavePackage.swift in Sources */,
 				9CE8C4BB68D6CDA7F659BBE8 /* BoundROMUpdateActivity.swift in Sources */,
+				B0CD28000000000000000011 /* BoundROMServerUpdates.swift in Sources */,
+				B0CD28000000000000000012 /* BoundROMServerInstaller.swift in Sources */,
 				9474CB7B24B808266C5DAACB /* BoundROMUpdateManager.swift in Sources */,
 				0FC606D95C2C74C3A1BA8474 /* BoundROMUpdateStorage.swift in Sources */,
 				9AF18DFBD985AD5D4468DAD9 /* BoundGitHubAccount.swift in Sources */,

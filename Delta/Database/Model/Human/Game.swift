@@ -215,6 +215,8 @@ extension Game
 
 extension Game: Syncable
 {
+    public var isSyncingEnabled: Bool { !BoundROMServerInstaller.blocks(identifier) }
+
     public static var syncablePrimaryKey: AnyKeyPath {
         return \Game.identifier
     }

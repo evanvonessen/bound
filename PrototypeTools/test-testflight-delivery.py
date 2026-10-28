@@ -172,18 +172,17 @@ class DeliveryTests(unittest.TestCase):
         with zipfile.ZipFile(ipa, "w") as package:
             package.writestr("Payload/Bound.app/Info.plist", plistlib.dumps(info))
             package.writestr("Payload/Bound.app/Bound", b"fixture-binary")
-            package.writestr("Payload/Bound.app/multiplayer.gba", data)
         entitlements = {"application-identifier": delivery.TEAM_ID + "." + delivery.BUNDLE_ID,
                         "com.apple.developer.team-identifier": delivery.TEAM_ID,
                         "get-task-allow": False, "aps-environment": "production"}
         return ipa, source, entitlements, digest
 
-    def test_export_inspects_distribution_entitlements_and_actual_rom(self):
+    def test_export_inspects_distribution_entitlements_and_server_distribution(self):
         ipa, source, entitlements, digest = self.exported_fixture()
         result = subprocess.CompletedProcess([], 0, stdout=plistlib.dumps(entitlements), stderr=b"")
         with patch.object(delivery.subprocess, "run", return_value=result) as run:
             info = delivery.distribution_info(ipa, source)
-            self.assertEqual(info["rom_sha256"], digest)
+            self.assertEqual(info["rom_distribution"], "developer-approved-server")
             self.assertTrue(info["distribution_entitlements_verified"])
             self.assertEqual(run.call_args.args[0][:4], ["codesign", "-d", "--entitlements", ":-"])
 
@@ -298,33 +297,29 @@ class DeliveryTests(unittest.TestCase):
         (source / 'Delta/Bound/BoundSharedProgression.swift').write_text('romSHA256 = "' + digest + '"')
         return archive, app, source, data, digest
 
-    def test_archive_records_exact_rom_from_snapshot_pin(self):
-        archive, app, source, data, digest = self.archive_fixture()
-        (app / 'multiplayer.gba').write_bytes(data)
+    def test_archive_accepts_no_rom_and_records_server_distribution(self):
+        archive, app, source, _, _ = self.archive_fixture()
         info = delivery.archive_info(archive, source)
-        self.assertEqual(info['rom_resource'], 'multiplayer.gba')
-        self.assertEqual(info['rom_sha256'], digest)
-        self.assertEqual(info['rom_bytes'], len(data))
-        self.assertEqual(info['rom_release_tag'], 'immutable-test-tag')
+        self.assertEqual(info['rom_distribution'], 'developer-approved-server')
 
-    def test_archive_refuses_missing_partial_and_wrong_rom(self):
-        archive, app, source, data, _ = self.archive_fixture()
-        (app / 'rrbin-integrated.gba').write_bytes(data)
-        with self.assertRaisesRegex(ValueError, 'missing the complete'):
-            delivery.archive_info(archive, source)
-        (app / 'multiplayer.gba').write_bytes(b'partial')
-        with self.assertRaisesRegex(ValueError, 'missing the complete'):
-            delivery.archive_info(archive, source)
-        (app / 'multiplayer.gba').write_bytes(b'\x01' * len(data))
-        with self.assertRaisesRegex(ValueError, 'does not match'):
-            delivery.archive_info(archive, source)
+    def test_archive_rejects_every_stale_multiplayer_resource(self):
+        archive, app, source, _, _ = self.archive_fixture()
+        for name in ['multiplayer.gba', 'rrbin-integrated.gba', 'RRv4.1M.gba']:
+            with self.subTest(name=name):
+                resource = app / name
+                resource.write_bytes(b'partial cartridge is forbidden too')
+                with self.assertRaisesRegex(ValueError, 'contains a multiplayer ROM'):
+                    delivery.archive_info(archive, source)
+                resource.unlink()
 
-    def test_archive_refuses_source_contract_pin_drift(self):
-        archive, app, source, data, _ = self.archive_fixture()
-        (app / 'multiplayer.gba').write_bytes(data)
-        (source / 'Delta/Bound/BoundSharedProgression.swift').write_text('romSHA256 = "' + 'f' * 64 + '"')
-        with self.assertRaisesRegex(ValueError, 'source contract'):
-            delivery.archive_info(archive, source)
+    def test_export_rejects_multiplayer_resource(self):
+        ipa, source, entitlements, _ = self.exported_fixture()
+        with zipfile.ZipFile(ipa, 'a') as package:
+            package.writestr('Payload/Bound.app/multiplayer.gba', b'partial')
+        result = subprocess.CompletedProcess([], 0, stdout=plistlib.dumps(entitlements), stderr=b'')
+        with patch.object(delivery.subprocess, 'run', return_value=result):
+            with self.assertRaisesRegex(ValueError, 'contains a multiplayer ROM'):
+                delivery.distribution_info(ipa, source)
 
 
 if __name__ == "__main__":
