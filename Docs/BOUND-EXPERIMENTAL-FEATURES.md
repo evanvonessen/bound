@@ -17,9 +17,9 @@ Reset Settings to Default stay off across launches. Fresh installs default off.
 
 Settings no longer offers GitHub sign-in or the Account, Friends, & Sync ROM
 Updates section. Removing these views does not read or delete GitHub credentials,
-sign anyone out, change folder enrollment, or erase backups. The app lifecycle
-still installs the exact matching bundled ROM and resumes interrupted update
-journals through the existing recovery validation.
+sign anyone out, change folder enrollment, or erase backups. The app resumes previously confirmed interrupted update journals through existing
+recovery validation. New RRv4.1M versions are available only through the separate
+developer-approved server update controls in main Settings, with confirmation.
 
 Turning it off removes these controls, stops presence/invitation/check channels,
 hides sprites and restores an active battle's pre-battle snapshot before closing

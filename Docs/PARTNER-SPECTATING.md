@@ -6,7 +6,7 @@ local game. **Multiplayer** independently controls Nakama/Soul Link. Shared
 account authentication does not couple the two connection switches.
 
 The full-screen Watch Partner presentation and its buttons are removed. New
-bundled cartridges omit its native action row. Historical exact ROM profiles
+server-distributed cartridges omit its native action row. Historical exact ROM profiles
 remain supported; command 11 stays reserved and receives an unavailable response
 without connecting either session or presenting a modal.
 

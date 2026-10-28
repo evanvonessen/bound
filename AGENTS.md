@@ -57,21 +57,8 @@ use bare system/Homebrew Python for emulator checks. If validation fails, run
 `python3 ../multi_red/tools/setup_qa_python.py`; never bypass the guard or suppress
 crash reporting. `BOUND_GAME_SOURCE` can select another game checkout.
 
-## Latest integrated ROM
-
-After pushing completed changes to `origin/main`, run
-`python3 ../multi_red/tools/publish_latest_rom.py --bound-repo .` and verify
-`../multi_red/build/latest-rom/status.json`. The installed Mac login service also
-checks both repositories' remote main heads every minute. It publishes the
-matching integrated ROM to multi_red's permanent first-README download link and
-refreshes the named main iPhone 17 simulator when booted. Preserve earlier ROMs
-and saves; report incompatible game/app commits or service failures accurately.
-See `../multi_red/docs/main-simulator.md`. This does not replace the existing
-Bound validation or the manual-only TestFlight workflow and prohibition on Cloud usage checks.
-
 ## RRv4.1M server distribution
 
-This section supersedes the Latest integrated ROM delivery instructions above.
 Bound releases must not bundle or automatically import a multiplayer cartridge.
 Archives and exports reject leftover multiplayer ROM resources. The existing
 ROM pins and generated game profiles establish exact compatibility only.
@@ -90,7 +77,6 @@ recovery. Install as RRv4.1M with original FireRed artwork and the independent
 game build footer. See `Docs/SERVER-ROM-DISTRIBUTION.md` and
 `Backend/selfhost/ROM-UPDATES.md`.
 
-The implementation is a local candidate pending live acceptance. Active
-task-specific no-push/no-deploy/no-publication restrictions always take
-precedence; do not activate workflows, migrations or delivery while they apply.
-Historical distribution documents are retained until live verification passes.
+Live Linode publication and simulator installation were verified on 2026-10-28.
+Active task-specific restrictions always take precedence. Never infer permission
+for TestFlight or Xcode Cloud from a ROM publication request.

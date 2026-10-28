@@ -43,13 +43,13 @@ version10. Layout equality alone is insufficient: the exact ROM hash, generated
 contract and native core must match. The frozen layout15 elimination profile is
 retained separately; old saves are not relabeled as current saves.
 
-This local-only checkout pins SHA-256
+The exact paired profile pins SHA-256
 `723924890b6f912e7f8cf6bca72773fb5bea3d449caefd5abb9d82d22c2144f6`.
-For local builds set `BOUND_GAME_SOURCE` to the isolated game checkout and
-`BOUND_DEVELOPMENT_ROM` to the reviewed `candidate-05/multiplayer.gba` in
-`artifacts/multiplayer-isolation/follower-collision`. The bundler verifies and
-embeds that exact image. The candidate is not published, and ROM bytes are not
-committed. Keep local generated output and QA fixtures outside tracked source.
+For local QA set `BOUND_GAME_SOURCE` to the isolated game checkout and supply an
+explicit `--rom-fixture` / `BOUND_QA_ROM_FIXTURE` to the test harness. Keep fixtures
+outside tracked source. App builds do not embed a multiplayer cartridge.
+Production users install developer-approved updates through Bound Settings;
+see [server distribution](SERVER-ROM-DISTRIBUTION.md).
 
 Validation evidence is kept in the same isolated artifact directory and in
 `follower-presence`. Controlled coordinator tests cover transport loss,

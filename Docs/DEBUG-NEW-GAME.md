@@ -16,7 +16,7 @@ disable it through the original skills menu. No separate app control is added.
 Only the fresh-game continuation applies this unlock. Continue/restoration does
 not reapply defaults, enable repel, or rewrite saved settings. Existing Normal
 Debug runs and saved Game Over opt-outs remain valid with their original ROM.
-New Debug games require the matching bundled candidate ROM; older cartridges
+New Debug games require the matching installed candidate ROM; older cartridges
 remain usable for their existing runs.
 
 ## Preserved Debug-defaults profile
@@ -30,7 +30,7 @@ remain usable for their existing runs.
   Updater enrollment must not reset either historical profile.
 
 This historical layout-8 profile remains admitted for its existing runs. The
-current bundled ROM is `fcfaa8a9fb022656994a429be4cba5b9f14ba6c477ec813d2d6a2aa3878edc00`
+historically validated ROM was `fcfaa8a9fb022656994a429be4cba5b9f14ba6c477ec813d2d6a2aa3878edc00`
 (SHA-1 `51ebbe0108c0c18bb5bfcbef42ed3d19a4cfd606`, combined layout 12), release
 `multiplayer-fcfaa8a9fb02`. It preserves the same fresh Debug defaults and native
 L-menu behavior. The app pin, generated contract and release package agree on

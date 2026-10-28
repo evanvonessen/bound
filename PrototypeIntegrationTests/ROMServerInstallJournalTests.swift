@@ -1,7 +1,116 @@
 import XCTest
+import CoreData
+import UIKit
 @testable import Delta
 
 final class ROMServerInstallJournalTests: XCTestCase {
+    @MainActor func testOptInLiveDeniedAccountCannotSeeOrStartUpdate() async throws {
+        let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("rom-live-denied-qa.json")
+        guard FileManager.default.fileExists(atPath: file.path) else { throw XCTSkip("Requires revoked disposable live QA account") }
+        struct Credentials: Decodable { let email: String; let password: String }
+        let value = try JSONDecoder().decode(Credentials.self, from: Data(contentsOf: file))
+        guard value.email.hasPrefix("qa-rom-"), value.email.hasSuffix("@bound.invalid"), BoundFriendAccount.shared.session == nil else {
+            XCTFail("Requires signed-out disposable QA identity"); return
+        }
+        await BoundFriendAccount.shared.signIn(email: value.email, password: value.password)
+        let session = try XCTUnwrap(BoundFriendAccount.shared.session)
+        defer { BoundFriendAccount.shared.signOut() }
+        let updates = BoundROMServerUpdates.shared
+        updates.sessionChanged(session)
+        for _ in 0..<120 {
+            if !updates.busy { break }
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+        XCTAssertFalse(updates.busy)
+        XCTAssertFalse(updates.approved) // The Settings section uses this same visibility gate.
+        XCTAssertNil(updates.latest)
+        let journal = BoundROMServerInstallJournal(storage: .live)
+        let installed = try XCTUnwrap(journal.installed())
+        updates.downloadConfirmed(installed.manifest)
+        XCTAssertFalse(updates.busy)
+        XCTAssertNil(try journal.pending())
+        XCTAssertEqual(try journal.installed()?.revision, installed.revision)
+    }
+    /// Explicit opt-in only: provision this file solely in the task-owned QA
+    /// simulator. Never use an ordinary user's library or account for this test.
+    @MainActor func testOptInLiveRefreshDownloadAndInstall() async throws {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let credentials = documents.appendingPathComponent("rom-live-qa.json")
+        guard FileManager.default.fileExists(atPath: credentials.path) else { throw XCTSkip("Requires an explicitly provisioned live QA account in the task simulator") }
+        struct Credentials: Decodable { let email: String; let password: String }
+        let value = try JSONDecoder().decode(Credentials.self, from: Data(contentsOf: credentials))
+        guard value.email.hasPrefix("qa-rom-"), value.email.hasSuffix("@bound.invalid"),
+              BoundFriendAccount.shared.session == nil, SyncManager.shared.coordinator == nil else {
+            XCTFail("Requires disposable QA identity and isolated signed-out library"); return
+        }
+        await BoundFriendAccount.shared.signIn(email: value.email, password: value.password)
+        let session = try XCTUnwrap(BoundFriendAccount.shared.session)
+        defer { BoundFriendAccount.shared.signOut() }
+        let updates = BoundROMServerUpdates.shared
+        func settle() async throws {
+            for _ in 0..<600 {
+                if !updates.busy { return }
+                try await Task.sleep(nanoseconds: 500_000_000)
+            }
+            XCTFail("Live update did not settle within five minutes")
+        }
+        updates.sessionChanged(session)
+        try await settle()
+        XCTAssertTrue(updates.approved)
+        let release = try XCTUnwrap(updates.latest, updates.message ?? "No manifest")
+        try release.validateCompatibility()
+        let context = DatabaseManager.shared.viewContext
+        func game(_ id: String) throws -> Game? {
+            let request = Game.fetchRequest() as! NSFetchRequest<Game>
+            request.predicate = NSPredicate(format: "identifier == %@", id)
+            return try context.fetch(request).first
+        }
+        let original = documents.appendingPathComponent("MultiRedProfilesQA/original.gba")
+        let historicalID = BoundGameProfiles.original.gameID
+        let old: Game
+        if let installed = try game(release.gameID), BoundROMServerInstaller.installedBuild(gameID: release.gameID) != nil {
+            old = installed // Subsequent publication may have identical cartridge bytes.
+        } else {
+            guard try game(historicalID) == nil, FileManager.default.fileExists(atPath: original.path) else {
+                throw XCTSkip("Requires isolated library and the exact historical ROM fixture")
+            }
+            let input = FileManager.default.temporaryDirectory.appendingPathComponent("Old QA cartridge.gba")
+            try Data(contentsOf: original).write(to: input)
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                DatabaseManager.shared.importGames(at: [input]) { games, errors in
+                    if errors.isEmpty && games.contains(where: { $0.identifier == historicalID }) { continuation.resume() }
+                    else { continuation.resume(throwing: BoundROMUpdateError.storage) }
+                }
+            }
+            old = try XCTUnwrap(game(historicalID))
+        }
+        let oldFile = old.fileURL, oldSave = old.gameSaveURL, oldID = old.identifier
+        let sentinel = Data("DISPOSABLE OLD SAVE".utf8)
+        try sentinel.write(to: oldSave)
+        // Refresh without confirmation must preserve the cartridge and save.
+        updates.refresh(); try await settle()
+        XCTAssertEqual(try Data(contentsOf: oldSave), sentinel)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: oldFile.path))
+        updates.downloadConfirmed(release)
+        try await settle()
+        XCTAssertNil(updates.message)
+        XCTAssertTrue(updates.upToDate)
+        if oldID != release.gameID {
+            XCTAssertNil(try game(oldID))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: oldFile.path))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldSave.path))
+        let installed = try XCTUnwrap(game(release.gameID))
+        XCTAssertEqual(installed.name, "RRv4.1M")
+        XCTAssertEqual(BoundROMUpdateContent.hash(try Data(contentsOf: installed.fileURL)), release.sha256)
+        XCTAssertEqual(BoundROMServerInstaller.installedBuild(gameID: release.gameID), release.buildNumber)
+        let artwork = try XCTUnwrap(installed.artworkURL)
+        XCTAssertNotNil(UIImage(contentsOfFile: artwork.path))
+        updates.refresh(); try await settle()
+        XCTAssertTrue(updates.upToDate)
+        XCTAssertEqual(updates.latest, release)
+    }
     private func fixture() throws -> BoundROMServerInstallJournal {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ServerROMInstall-" + UUID().uuidString)
         let documents = directory.appendingPathComponent("Documents"), support = directory.appendingPathComponent("Support")

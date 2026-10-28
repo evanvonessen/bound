@@ -2,7 +2,7 @@
 """Run native encounter tests on an explicitly owned, freshly prepared simulator.
 
 No account/service configuration, ordinary player data, or shared simulator is
-modified. The app and exact bundled ROM are verified before the test invocation.
+modified. The app and explicit private ROM fixture are verified before testing.
 """
 import argparse, hashlib, json, plistlib, subprocess
 from pathlib import Path
@@ -11,6 +11,7 @@ p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--xctestrun',type=Path,required=True)
 p.add_argument('--simulator',required=True)
 p.add_argument('--expected-rom-sha256',required=True)
+p.add_argument('--rom-fixture',type=Path,required=True)
 p.add_argument('--output',type=Path,required=True)
 p.add_argument('--fixture-only',action='store_true')
 p.add_argument('--compatibility-only',action='store_true')
@@ -22,10 +23,10 @@ devices=[d for ds in state['devices'].values() for d in ds if d['udid']==a.simul
 if len(devices)!=1 or not devices[0]['name'].startswith('Bound Encounter Rules QA'):
     p.error('Use only a dedicated Bound Encounter Rules QA simulator')
 source=a.xctestrun.resolve(strict=True); products=source.parent
-app=products/'Debug-iphonesimulator/Bound.app'; image=app/'multiplayer.gba'
+app=products/'Debug-iphonesimulator/Bound.app'; image=a.rom_fixture.resolve(strict=True)
 actual=hashlib.sha256(image.read_bytes()).hexdigest()
 if actual!=a.expected_rom_sha256 or image.stat().st_size!=33554432:
-    p.error('Test app does not contain the exact reviewed paired ROM')
+    p.error('The explicit fixture is not the exact reviewed paired ROM')
 if a.output.exists(): p.error('Preserve previous results; use a new output directory')
 a.output.mkdir(parents=True)
 selected=['NativeBattleRuntimeTests/testCreateCurrentEncounterGameplayFixture'] if a.fixture_only else [
@@ -53,7 +54,7 @@ def configure(value):
  if isinstance(value,dict):
   result={k:configure(v) for k,v in value.items()}
   if result.get('BlueprintName')=='BoundIntegrationTests':
-   result.setdefault('EnvironmentVariables',{}).update(BOUND_ENCOUNTER_GAMEPLAY='1',BOUND_SOUL_RUNTIME='1')
+   result.setdefault('EnvironmentVariables',{}).update(BOUND_ENCOUNTER_GAMEPLAY='1',BOUND_SOUL_RUNTIME='1',BOUND_QA_ROM_FIXTURE=str(image))
    result['OnlyTestIdentifiers']=selected; matched.append(True)
   return result
  if isinstance(value,list):return [configure(v) for v in value]

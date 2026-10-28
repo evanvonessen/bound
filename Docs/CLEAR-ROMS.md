@@ -1,8 +1,8 @@
 # Clear ROMs
 
 Main Settings → **Clear ROMs** prepares one itemized confirmation. It is a manual
-action and never runs as automatic cartridge cleanup. The app first verifies its
-bundled ROM and installed current library entry against the current exact hash.
+action and never runs as automatic cartridge cleanup. The app verifies the installed current library entry, when present, against the
+current exact supported hash; no bundled cartridge is required.
 It preserves that cartridge, its entry, saves/states and working memory.
 
 Recognition uses SHA-256 and the corresponding verified SHA-1 library identity

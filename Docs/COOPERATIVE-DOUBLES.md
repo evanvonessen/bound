@@ -19,13 +19,13 @@ unsettled consumed records remain recovery fences until a matching completed
 world checkpoint is confirmed. Unexpected loss without an available paused
 continuation still follows the checkpoint-recovery rules above.
 
-The default bundled cartridge does not enable the co-op ABI. Co-op continuation
+The historical standard cartridge does not enable the co-op ABI. Co-op continuation
 has model/contract coverage; a full paired runtime check needs the separate
 co-op cartridge and app build. Physical-device acceptance remains pending.
 
 ## Build
 
-Build the cartridge using `python3 tools/build_doubles_game.py` from the game worktree. Import its export here with `python3 PrototypeTools/build-shared-world.py --from-game /Users/evandev/dev/doubles/build/doubles-contract`, and update `PrototypeTools/bundled-rom.json` to the exact generated ROM SHA-256. Supply the cartridge as `BOUND_DEVELOPMENT_ROM` for the normal `Bound.xcodeproj` / `Bound` build. This variant uses a local development ROM pin to avoid replacing the permanent main download.
+Build the cartridge using `python3 tools/build_doubles_game.py` from the game worktree. Import its export here with `python3 PrototypeTools/build-shared-world.py --from-game /Users/evandev/dev/doubles/build/doubles-contract`, and update `PrototypeTools/bundled-rom.json` to the exact generated ROM SHA-256. Import the exact cartridge explicitly into an isolated QA library. Never supply it as a bundled app resource. Production distribution follows `SERVER-ROM-DISTRIBUTION.md`.
 
 The ABI has a distinct ruleset and raw-state layout. Existing battery saves retain the native format; cold boot is required when switching cartridges, and arbitrary old emulator save states are not compatible. The default integrated cartridge remains a separate, unchanged build.
 

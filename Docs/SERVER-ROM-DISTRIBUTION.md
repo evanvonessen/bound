@@ -47,10 +47,13 @@ restricted SSH helper, pinned host-key, and counter-recovery requirements.
 
 ## Acceptance boundary
 
-This is local implementation, not a live rollout. Active workspace instructions
-prohibit pushing, backend deployment, production approval changes, ROM
-publication, TestFlight jobs and shared-simulator refreshes. None are required
-for the local tests and none have been performed.
+The user authorized the live rollout on October 28, 2026. The gateway-only
+migration approved both existing accounts. GitHub Actions compiled and published
+build 500; authenticated WAN checks verified its bytes/build, and unapproved and
+anonymous requests were denied. The opt-in Bound simulator test passed real
+refresh, download, historical test ROM/save deletion, FireRed artwork decoding,
+RRv4.1M naming, build receipt and subsequent up-to-date refresh. TestFlight,
+Xcode Cloud and shared simulators were not used.
 
 Exact-ROM compatibility remains required: an unrecognized new native-address or
 save-layout build requires a matching Bound game profile/runtime update. ABI
@@ -58,16 +61,11 @@ agreement alone never admits a cartridge or converts an old save. This version
 does not implement downloading new native adapters. Unknown historical ROMs and
 orphan files are retained rather than inferred from a filename and deleted.
 
-Before live activation: provision the dedicated GitHub runner and restricted
-Linode publisher; review and deploy the approval migration and read-only ROM
-mount; run the main workflow; verify build 500 and exact downloaded hashes; test
-approved, unapproved, anonymous and revoked sessions; test confirmation cancel,
-device cleanup, same-hash reinstall, interrupted recovery, artwork, footer,
-refresh/up-to-date status and next build 501 on a physical device. Preserve
-ordinary games and cloud/shared progress throughout. Physical-device and WAN
-acceptance are separate from simulator checks.
-
-Final removal of historical bundling/public-download instructions is deferred
-until the requested live acceptance passes. The new AGENTS distribution sections
-already supersede those delivery commands so future agents cannot accidentally
-invoke the retired path. Historical changelog entries remain historical records.
+For future changes, verify the completed GitHub workflow and Linode counter/hash,
+approved/unapproved/anonymous/revoked access, one-current-file replacement and
+Bound's opt-in simulator flow. Record actual outcomes in the rollout receipt.
+Physical-device tests and manual confirmation/footer presentation remain separate
+from simulator code-path validation; do not claim them without direct evidence.
+Retired bundling and automatic GitHub ROM publisher instructions have been
+replaced. Historical validation reports and changelog entries remain records of
+what was tested at that time, not current delivery instructions.

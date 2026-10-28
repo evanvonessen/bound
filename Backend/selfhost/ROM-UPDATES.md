@@ -1,8 +1,9 @@
 # Approved RRv4.1M distribution
 
-This is a local candidate. The active multiplayer-isolation task prohibits
-deploying the gateway, changing live account approvals, or publishing a ROM.
-Those operations have not been performed.
+Deployed and verified on October 28, 2026 with explicit user authorization.
+The one-time migration approved both existing non-system accounts. Future
+accounts remain denied until separately approved. TestFlight and Xcode Cloud
+remain outside this task.
 
 The existing Nakama account gateway serves ROM metadata and bytes. Caddy only
 reverse proxies these requests; never add a `file_server`, public object URL,
