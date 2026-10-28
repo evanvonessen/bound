@@ -283,10 +283,10 @@ final class BoundPlayerStateDisplay {
         let friendInstance: UInt64?
         let friendTile: BoundPlayerState.Point
         func sharesScope(with other: Self) -> Bool {
-            let sameProgression: Bool
-            if let access, let next = other.access { sameProgression = access.hasSameProgression(as: next) }
-            else { sameProgression = access == other.access }
-            return sameProgression && mapGroup == other.mapGroup && mapNumber == other.mapNumber && instance == other.instance
+            // Script variables (including facing) and object occupancy change
+            // during movement. They trigger a fresh query without blanking its
+            // advisory presentation. Only spatial identity invalidates it.
+            return mapGroup == other.mapGroup && mapNumber == other.mapNumber && instance == other.instance
                 && dynamicWarp == other.dynamicWarp
                 && friendGroup == other.friendGroup && friendNumber == other.friendNumber && friendInstance == other.friendInstance
         }
@@ -295,6 +295,7 @@ final class BoundPlayerStateDisplay {
     private var directionEpoch = UUID()
     private var directionRequest: FriendRouteRequest?
     private var directionTarget: BoundPlayerState.Point?
+    private var directionRouteResolved = false
     private var directionQueryAt: TimeInterval = -.infinity
 
     init() {
@@ -471,7 +472,7 @@ final class BoundPlayerStateDisplay {
                 offscreenName: target == nil ? nil : friendName(),
                 drawsSprite: false, directionTarget: target)
             if BoundDirectionalFriendArrow.isEnabled, pose != nil, target == nil,
-               directionRequest != nil, directionTask == nil {
+               directionRequest != nil, directionRouteResolved {
                 livePlayerOverlay.showUnavailableRoute(friendName: friendName())
             }
             presence.observePresentation(pose: pose, viewer: viewer, frameResolved: rendered != nil,
@@ -486,7 +487,7 @@ final class BoundPlayerStateDisplay {
     private func clearDirectionRoute() {
         guard directionTask != nil || directionRequest != nil || directionTarget != nil else { return }
         directionTask?.cancel(); directionTask = nil; directionEpoch = UUID()
-        directionRequest = nil; directionTarget = nil; directionQueryAt = -.infinity
+        directionRequest = nil; directionTarget = nil; directionRouteResolved = false; directionQueryAt = -.infinity
     }
 
     private func directionalTarget(viewer: BoundPlayerState, friend: BoundPresencePose?,
@@ -503,7 +504,8 @@ final class BoundPlayerStateDisplay {
             friendTile: .init(x: Int(floor((friend.x - 8) / 16)), y: Int(floor((friend.y - 16) / 16))))
         if let previous = directionRequest, !previous.sharesScope(with: query) { clearDirectionRoute() }
         if directionTask == nil, directionRequest != query, now - directionQueryAt >= 0.2 {
-            if directionRequest?.access != query.access { directionTarget = nil }
+            // Retain the resolved presentation while moving-NPC occupancy is refreshed.
+            // Spatial scope changes above still invalidate it immediately.
             directionRequest = query; directionQueryAt = now
             let epoch = directionEpoch
             // Immutable captured RAM is evaluated away from both the frame callback
@@ -520,7 +522,7 @@ final class BoundPlayerStateDisplay {
                     worker.cancel()
                 }
                 guard let self, !Task.isCancelled, self.directionEpoch == epoch else { return }
-                self.directionTarget = target; self.directionTask = nil
+                self.directionTarget = target; self.directionRouteResolved = true; self.directionTask = nil
             }
         }
         return directionTarget

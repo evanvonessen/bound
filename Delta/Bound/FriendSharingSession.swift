@@ -1025,9 +1025,10 @@ final class FriendSharingSession: ObservableObject {
             self.sharedWorld.tick(enabled: !self.mediaOnly && BoundMultiplayerFeatures.isEnabled && self.livePresence.enabled && self.active, connected: self.joined && !self.reconnecting && !self.backgrounded)
             self.transport.pollPresence()
             self.livePresence.tick()
-            self.followerInteractions.canLetPass=self.gameplayTransportAvailable && self.livePresence.movementContext(at:timestamp).map { c in
+            let canLetPass=self.gameplayTransportAvailable && self.livePresence.movementContext(at:ProcessInfo.processInfo.systemUptime).map { c in
                 guard let own=c.own.first,let other=c.other.first else{return false};return own.current.distance(other.current)<=2
             } == true && self.interactions.canPresent?() != false && !self.interactions.blocksGameplay && !self.interactions.nativeDialogueBusy
+            if self.followerInteractions.canLetPass != canLetPass { self.followerInteractions.canLetPass=canLetPass }
             if self.followerInteractions.isPresented,self.followerInteractions.context?()==nil {self.followerInteractions.dismiss()}
             self.interactions.inputGate.updateSocial(available:self.followerInteractions.canInteract,blocked:self.followerInteractions.blocksGameplay)
             // An interaction stream can recover without another roster event.

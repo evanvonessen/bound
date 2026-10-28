@@ -110,13 +110,25 @@ final class BoundPlayerSceneAssets: @unchecked Sendable {
             if tiles.count <= 500_000 { floods[key] = tiles; retainedTiles += tiles.count }
             return (value, tiles)
         }
-        return graph.target(viewer: viewer, friendGroup: friendGroup, friendNumber: friendNumber,
+        let resolved = graph.target(viewer: viewer, friendGroup: friendGroup, friendNumber: friendNumber,
             friendInstance: friendInstance, friendX: friendX, friendY: friendY,
             canArrive: { map, entry, elevation in
                 guard let (value, tiles) = reachable(map, entry, elevation) else { return false }
                 let tile = BoundPlayerState.Point(x: Int(floor((friendX - 8) / 16)), y: Int(floor((friendY - 16) / 16)))
                 return value.canReachTarget(tile, reachable: tiles)
             }, canTraverse: { map, entry, edge in
+                guard let (value, tiles) = reachable(map, entry, edge.sourceElevation) else { return false }
+                return value.canReachTarget(edge.waypoint(from: entry), reachable: tiles, doorway: edge.direction == 0)
+            })
+        if let resolved { return resolved }
+        // Remote entry scripts may depend on native effects that cannot be
+        // projected from this map. Give directions to a reachable local exit;
+        // recompute from actual terrain after crossing it. This is advisory UI,
+        // never movement permission or a promise that every later door is open.
+        return graph.target(viewer: viewer, friendGroup: friendGroup, friendNumber: friendNumber,
+            friendInstance: friendInstance, friendX: friendX, friendY: friendY,
+            canTraverse: { map, entry, edge in
+                guard map == .init(group: viewer.mapGroup, number: viewer.mapNumber) else { return true }
                 guard let (value, tiles) = reachable(map, entry, edge.sourceElevation) else { return false }
                 return value.canReachTarget(edge.waypoint(from: entry), reachable: tiles, doorway: edge.direction == 0)
             })

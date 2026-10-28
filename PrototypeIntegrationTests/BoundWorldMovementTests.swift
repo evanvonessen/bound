@@ -69,6 +69,21 @@ final class BoundWorldMovementTests:XCTestCase {
         func grantB() {br=step(2,1);ticks(6);XCTAssertEqual(permit(b),1)}
     }
 
+    func testPendingCollisionSurvivesInterveningNativeFrameWithoutAuthorizingStaleStep() {
+        let pair=Pair();pair.ar=pair.step(0,1)
+        var bytes=pair.snapshot(true).bytes
+        BoundMovementSnapshot.put(7,&bytes,20)
+        XCTAssertEqual(BoundMovementSnapshot(bytes)?.request,pair.ar)
+        var stale=bytes;BoundMovementSnapshot.put(13,&stale,12)
+        XCTAssertNil(BoundMovementSnapshot(stale)?.request)
+        var completed=bytes;BoundMovementSnapshot.put(1,&completed,72)
+        XCTAssertNil(BoundMovementSnapshot(completed)?.request)
+        var moved=bytes;BoundMovementSnapshot.putTile(.init(x:1,y:0),&moved,36)
+        XCTAssertNil(BoundMovementSnapshot(moved)?.request)
+        var blocked=bytes;BoundMovementSnapshot.put(23,&blocked,20)
+        XCTAssertNil(BoundMovementSnapshot(blocked)?.request)
+    }
+
     func testSnapshotRejectsUncommittedAndWrongEnvelope() {
         let pair=Pair(),value=pair.snapshot(true)
         var bytes=value.bytes;BoundMovementSnapshot.put(3,&bytes,8);XCTAssertNil(BoundMovementSnapshot(bytes))

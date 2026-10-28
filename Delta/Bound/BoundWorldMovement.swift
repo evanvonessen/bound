@@ -54,7 +54,11 @@ struct BoundMovementSnapshot: Equatable, Sendable {
         let step=BoundMovementStep(nonce:Self.word(d,52),generation:generation,instance:instance,
             group:group,number:number,elevation:elevation,from:Self.tile(d,56),to:Self.tile(d,60),kind:Int(d[67]))
         let age=frame &- Self.word(d,68)
-        request=flags&8 != 0 && flags&1 != 0 && age<=12 && step.valid ? step:nil
+        // BeforeCallbacks clears the transient PENDING bit between collision
+        // queries. Keep the exact recent request through those frames so a
+        // network grant can reach the next native collision query.
+        request=flags&7 == 7 && flags&16 == 0 && age<=12 && step.valid
+            && current==step.from && completed != step.nonce ? step:nil
     }
     static func word(_ d:Data,_ n:Int)->UInt32 { (0..<4).reduce(0){$0|UInt32(d[n+$1])<<(8*$1)} }
     static func tile(_ d:Data,_ n:Int)->BoundMovementTile {
