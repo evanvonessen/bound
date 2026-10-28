@@ -4,5 +4,5 @@
   "tag": "multiplayer-723924890b6f",
   "asset": "multiplayer.gba",
   "compatibility": "Exact paired leased world-presence and follower build; layout 16; native runtime services required.",
-  "localOnly": true
+  "localOnly": false
 }
