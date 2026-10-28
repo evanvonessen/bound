@@ -119,7 +119,7 @@ function validDispatch(value, sender) {
   if (value.ok === false && typeof value.error === 'string' && Object.hasOwn(errorStatus, value.error)) {
     return { kind: 'error', error: value.error };
   }
-  if (value.ok === true && value.duplicate === true && ['queued', 'sent', 'failed'].includes(value.status)) {
+  if (value.ok === true && value.duplicate === true && ['queued', 'sent', 'failed', 'suppressed'].includes(value.status)) {
     return { kind: 'duplicate', status: value.status };
   }
   const username = typeof value.username === 'string' ? value.username.trim() : '';
@@ -239,7 +239,10 @@ export function createJiggleHandler({ publishableKey, serviceRoleKey, apnsKeyID,
     catch { return response(400, { ok: false, error: 'invalid_request' }); }
     const isStatus = exactKeys(body, ['operation']) && body.operation === 'status';
     const isDispatch = exactKeys(body, ['roomID', 'requestID']) && uuid.test(body.roomID ?? '') && requestIDPattern.test(body.requestID ?? '');
-    if (!isStatus && !isDispatch) return response(400, { ok: false, error: 'invalid_request' });
+    const isGameEvent = exactKeys(body, ['roomID', 'requestID', 'runID', 'kind', 'installationID']) &&
+      uuid.test(body.roomID ?? '') && requestIDPattern.test(body.requestID ?? '') && uuid.test(body.runID ?? '') &&
+      uuid.test(body.installationID ?? '') && ['shared-join', 'shared-start', 'shared-invite'].includes(body.kind);
+    if (!isStatus && !isDispatch && !isGameEvent) return response(400, { ok: false, error: 'invalid_request' });
 
     let user;
     try {
@@ -260,16 +263,22 @@ export function createJiggleHandler({ publishableKey, serviceRoleKey, apnsKeyID,
     if (!apnsConfigured) return response(503, { ok: false, error: 'not_configured' });
 
     let raw;
-    try { raw = await rpc('bound_jiggle_dispatch', { sender: user.id, room: body.roomID, request: body.requestID }); }
+    try { raw = await rpc('bound_game_notification_dispatch', { sender: user.id, room: body.roomID, request: body.requestID,
+      kind: isGameEvent ? body.kind : 'bound-jiggle', run: isGameEvent ? body.runID : null,
+      installation: isGameEvent ? body.installationID : null }); }
     catch { return response(503, { ok: false, error: 'unavailable' }); }
     const dispatch = validDispatch(raw, user.id);
     if (!dispatch) return response(503, { ok: false, error: 'unavailable' });
     if (dispatch.kind === 'error') return response(errorStatus[dispatch.error], { ok: false, error: dispatch.error });
     if (dispatch.kind === 'duplicate') return response(200, { ok: true, duplicate: true, status: dispatch.status });
 
+    const kind = isGameEvent ? body.kind : 'bound-jiggle';
+    const message = { 'shared-join': 'joined your shared game.', 'shared-start': 'started a shared server.',
+      'shared-invite': 'invited you to a shared game.', 'bound-jiggle': 'wants to play Pokémon!' }[kind];
     const payload = {
-      aps: { alert: { title: 'Bound', body: `${dispatch.username} wants to play Pokémon!` }, sound: 'default', category: 'BOUND_JIGGLE' },
-      kind: 'bound-jiggle', recipientID: dispatch.recipientID, roomID: body.roomID.toLowerCase(),
+      aps: { alert: { title: 'Bound', body: `${dispatch.username} ${message}` }, sound: 'default', category: 'BOUND_JIGGLE' },
+      kind, recipientID: dispatch.recipientID, roomID: body.roomID.toLowerCase(),
+      ...(isGameEvent ? { runID: body.runID.toLowerCase() } : {}),
     };
     const results = await Promise.all(dispatch.devices.map(device => sendToAPNs({ device, payload, jwtProviders, fetchImpl, now, timeoutMs: requestTimeoutMs })));
     const invalidTokens = [...new Set(dispatch.devices.filter((_, index) => results[index] === 'invalid').map(device => device.token))];

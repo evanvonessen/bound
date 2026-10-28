@@ -275,7 +275,7 @@ final class BoundPlayerStateDisplay {
     private var suspended = false
 
     init() {
-        for name in [BoundPlayerStatePreferences.didChange, BoundMultiplayerFeatures.didChange, BoundDeveloperFeatures.didChange, Settings.didResetNotification] {
+        for name in [BoundPlayerStatePreferences.didChange, BoundMultiplayerFeatures.didChange, BoundDeveloperFeatures.didChange, BoundDirectionalFriendArrow.didChange, Settings.didResetNotification] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
                     if name == Settings.didResetNotification || !BoundMultiplayerFeatures.isEnabled {
@@ -364,7 +364,9 @@ final class BoundPlayerStateDisplay {
             let result = await Task.detached(priority: .utility) { () -> (BoundPlayerROMProfile?, BoundPlayerStateReading.Status, String) in
                 do {
                     let rom = try Data(contentsOf: url, options: .mappedIfSafe)
-                    return (try BoundPlayerROMProfile(rom: rom), .waiting, "Waiting for the overworld")
+                    let profile = try BoundPlayerROMProfile(rom: rom)
+                    profile.sceneAssets.prepareFriendRoutes(rom: profile.bytes)
+                    return (profile, .waiting, "Waiting for the overworld")
                 } catch BoundPlayerROMProfile.ProfileError.unsupportedROM {
                     return (nil, .unsupportedROM, "Requires the validated Radical Red 4.1 ROM")
                 } catch { return (nil, .unavailable, "Cannot read the loaded ROM") }
@@ -439,7 +441,13 @@ final class BoundPlayerStateDisplay {
         if let presence, let reading = currentReading, reading.status == .live,
            let lastFrameAt, now - lastFrameAt < BoundLivePresenceSession.visibilityGrace, let profile, let viewer = reading.player {
             let pose = presence.pose(at: now), rendered = pose?.rendered(profile: profile, viewer: viewer)
-            livePlayerOverlay.show(pose: rendered, scene: viewer.scene, offscreenName: friendName(), drawsSprite: false)
+            let target = BoundDirectionalFriendArrow.isEnabled ? pose.flatMap {
+                profile.sceneAssets.friendRouteTarget(viewer: viewer, friendGroup: $0.mapGroup,
+                    friendNumber: $0.mapNumber, friendInstance: $0.mapInstance, friendX: $0.x, friendY: $0.y)
+            } : nil
+            livePlayerOverlay.show(pose: rendered, scene: viewer.scene,
+                offscreenName: target == nil ? nil : friendName(),
+                drawsSprite: false, directionTarget: target)
             presence.observePresentation(pose: pose, viewer: viewer, frameResolved: rendered != nil,
                                          visiblePixels: livePlayerOverlay.visiblePixels, at: now)
         } else {

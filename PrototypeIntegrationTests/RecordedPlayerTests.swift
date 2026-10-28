@@ -976,3 +976,27 @@ final class RecordedPlayerTests: XCTestCase {
             .write(to: root.appendingPathComponent("vbam-recorded-player-report.json"), options: .atomic)
     }
 }
+
+@MainActor
+final class DirectionalFriendRouteTests: XCTestCase {
+    func testDirectionalOverridePointsFromLocalPlayerEvenWhenOnscreenOrAcrossRooms() throws {
+        let appearance = BoundPlayerSprite(width: 16, height: 32, tiles: Data(repeating: 0x11, count: 256),
+            palette: Data(repeating: 0, count: 32), flipX: false, flipY: false, priority: 2)
+        // At a camera boundary the local player is far from viewport center.
+        let scene = BoundPlayerScene(worldFoot: .init(x: 24, y: 32), camera: .init(x: 0, y: 0), appearance: appearance,
+            background: .init(tiles: Data(repeating: 0, count: 32768), layers: []), objects: [])
+        let pose = BoundRecordedPlayerPose(mapGroup: 4, mapNumber: 0, elevation: 0, x: 40, y: 32, appearance: appearance)
+        let overlay = BoundRecordedPlayerOverlay(frame: CGRect(x: 0, y: 0, width: 240, height: 160))
+        overlay.show(pose: pose, scene: scene, offscreenName: "Friend", drawsSprite: false, directionTarget: .init(x: 40, y: 32))
+        XCTAssertFalse(overlay.isHidden)
+        XCTAssertEqual(try XCTUnwrap(overlay.offscreenIndicator).angle, 0, accuracy: 0.001)
+        XCTAssertEqual(overlay.offscreenIndicator?.distanceInTiles, 1)
+        XCTAssertGreaterThan(overlay.visiblePixels, 0, "Direction UI preserves sprite visibility diagnostics")
+        // A route waypoint remains visible without compositing a friend through walls.
+        overlay.show(pose: nil, scene: scene, offscreenName: "Friend", drawsSprite: false, directionTarget: .init(x: 24, y: 16))
+        XCTAssertFalse(overlay.isHidden)
+        XCTAssertEqual(try XCTUnwrap(overlay.offscreenIndicator).angle, -.pi / 2, accuracy: 0.001)
+        overlay.show(pose: pose, scene: scene, offscreenName: nil, drawsSprite: false)
+        XCTAssertNil(overlay.offscreenIndicator, "Turning the arrow off does not create a fallback indicator")
+    }
+}

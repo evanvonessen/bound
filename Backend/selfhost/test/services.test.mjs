@@ -33,6 +33,20 @@ test('service-only database operations have no public HTTP route', async () => {
   const response = await services.handle(request('/rest/v1/rpc/bound_dropbox_grant', { action: 'snapshot', payload: { owner: peer, session } }));
   assert.equal(response.status, 404);
   assert.equal(pool.calls.length, 0);
+  assert.equal((await services.handle(request('/rest/v1/rpc/bound_game_notification_dispatch', {
+    sender: owner, room, request: file, kind: 'shared-join', run: file, installation: file,
+  }))).status,404);
+  assert.equal(pool.calls.length,0);
+});
+
+test('notification settings and atomic device registration use authenticated parameterized RPCs', async () => {
+  for (const name of ['bound_notification_preferences','bound_notification_device']) {
+    const pool=db({ok:true});
+    const services=createServices({pool,authenticate:async()=>identity});
+    const payload={installationID:file,revision:'123',sendJoin:'true',receiveInvites:'false'};
+    assert.equal((await services.handle(request('/rest/v1/rpc/'+name,{payload}))).status,200);
+    assert.deepEqual(pool.calls.find(call=>call.sql.startsWith('SELECT public.'+name)).args,[JSON.stringify(payload)]);
+  }
 });
 
 test('RPC claims derive from verified identity and statement arguments stay parameterized', async () => {

@@ -168,6 +168,17 @@ struct AppCloudSession: Sendable, CustomStringConvertible, CustomDebugStringConv
     func friendJiggleRequest(roomID: String, requestID: String) throws -> URLRequest {
         try request(path: "/functions/v1/bound-jiggle", body: ["roomID": roomID, "requestID": requestID])
     }
+    func friendGameNotificationRequest(roomID: String, runID: UUID, requestID: UUID, kind: String, installationID: String) throws -> URLRequest {
+        try request(path: "/functions/v1/bound-jiggle", body: ["roomID": roomID.lowercased(),
+            "runID": runID.uuidString.lowercased(), "requestID": requestID.uuidString.lowercased(), "kind": kind,
+            "installationID": installationID])
+    }
+    func friendNotificationPreferencesRequest(payload: [String: String]) throws -> URLRequest {
+        try request(path: "/rest/v1/rpc/bound_notification_preferences", body: ["payload": payload])
+    }
+    func friendNotificationDeviceRequest(payload: [String: String]) throws -> URLRequest {
+        try request(path: "/rest/v1/rpc/bound_notification_device", body: ["payload": payload])
+    }
     func friendSharingRequest(roomID: String) throws -> URLRequest {
         try request(path: "/functions/v1/agora-token", body: ["roomID": roomID])
     }

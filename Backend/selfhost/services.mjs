@@ -36,6 +36,8 @@ const statements = {
   cup050_friends: ['SELECT public.cup050_friends($1,$2::jsonb) AS result', ['action', 'payload']],
   bound_social_v1: ['SELECT public.bound_social_v1($1,$2::jsonb) AS result', ['action', 'payload']],
   bound_social_v2: ['SELECT public.bound_social_v2($1,$2::jsonb) AS result', ['action', 'payload']],
+  bound_notification_preferences: ['SELECT public.bound_notification_preferences($1::jsonb) AS result', ['payload']],
+  bound_notification_device: ['SELECT public.bound_notification_device($1::jsonb) AS result', ['payload']],
   bound_run_lease_v1: ['SELECT public.bound_run_lease_v1($1,$2::jsonb) AS result', ['action', 'payload']],
   bound_username_available: ['SELECT public.bound_username_available($1) AS result', ['username']],
   bound_nakama_room_v1: ['SELECT public.bound_nakama_room_v1($1::jsonb) AS result', ['payload']],
@@ -43,9 +45,10 @@ const statements = {
   bound_account_mfa_allowed: ['SELECT public.bound_account_mfa_allowed() AS result', []],
   bound_dropbox_grant: ['SELECT public.bound_dropbox_grant($1,$2::jsonb) AS result', ['action', 'payload']],
   bound_jiggle_dispatch: ['SELECT public.bound_jiggle_dispatch($1::uuid,$2::uuid,$3::uuid) AS result', ['sender', 'room', 'request']],
+  bound_game_notification_dispatch: ['SELECT public.bound_game_notification_dispatch($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid) AS result', ['sender', 'room', 'request', 'kind', 'run', 'installation']],
   bound_jiggle_finish: ['SELECT public.bound_jiggle_finish($1::uuid,$2::boolean,$3::text[]) AS result', ['job', 'delivered', 'invalid_tokens']],
 };
-const privileged = new Set(['bound_dropbox_grant', 'bound_jiggle_dispatch', 'bound_jiggle_finish']);
+const privileged = new Set(['bound_dropbox_grant', 'bound_jiggle_dispatch', 'bound_jiggle_finish', 'bound_game_notification_dispatch']);
 function claimsFor(identity) {
   if (!identity || !uuid.test(identity.ownerID ?? identity.id ?? '') || !uuid.test(identity.sessionID ?? identity.session_id ?? '')) throw Error('unauthorized');
   return { ...identity.claims, sub: identity.ownerID ?? identity.id,
@@ -80,7 +83,7 @@ export function createServices({ pool, authenticate, config = process.env, fetch
     const claims = anonymous ? { role: 'anon' } : claimsFor(identity);
     if (service) {
       if (name === 'bound_dropbox_grant' && (args.payload?.owner !== claims.sub || args.payload?.session !== claims.session_id)) throw Error('unauthorized');
-      if (name === 'bound_jiggle_dispatch' && args.sender !== claims.sub) throw Error('unauthorized');
+      if (['bound_jiggle_dispatch', 'bound_game_notification_dispatch'].includes(name) && args.sender !== claims.sub) throw Error('unauthorized');
       claims.role = 'service_role';
     }
     const client = await pool.connect();

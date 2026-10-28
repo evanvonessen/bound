@@ -2932,6 +2932,10 @@ extension BoundROMMultiplayerCoordinator {
                 settings: options.settings, profile: options.profile, partnerProfile: options.partnerProfile, requestID: requestID)
             guard serverSelection == selection, session.isSameSession(as: account.session) else { return }
             try await activateServerRun(state, profile: options.profile, selection: selection, client: client, session: session)
+            if serverSelection == selection, session.isSameSession(as: account.session),
+               workingStateAuthorized, serverRegisteredRun == state.identity.run, finishedRun != state.identity.run {
+                BoundJiggleNotifications.shared.sharedGameJoined(roomID: state.identity.roomID, runID: state.identity.run, started: true)
+            }
         } catch {
             guard serverSelection == selection, session.isSameSession(as: account.session) else { return }
             core?.pause()
@@ -2976,6 +2980,10 @@ extension BoundROMMultiplayerCoordinator {
                 serverMenuBusy = false; return false
             }
             try await activateServerRun(state, profile: selectedProfile, selection: selection, client: client, session: session)
+            if serverSelection == selection, session.isSameSession(as: account.session),
+               workingStateAuthorized, serverRegisteredRun == state.identity.run, finishedRun != state.identity.run {
+                BoundJiggleNotifications.shared.sharedGameJoined(roomID: state.identity.roomID, runID: state.identity.run, started: false)
+            }
         } catch {
             guard serverSelection == selection, session.isSameSession(as: account.session) else { return true }
             core?.pause()

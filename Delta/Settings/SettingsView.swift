@@ -125,6 +125,7 @@ struct SettingsView: View {
     @State private var resetRevision = 0
     @AppStorage(BoundMultiplayerFeatures.key) private var experimentalFeaturesEnabled = false
     @AppStorage(BoundDeveloperFeatures.key) private var developerFeaturesEnabled = false
+    @AppStorage(BoundDirectionalFriendArrow.key) private var directionalFriendArrow = true
     var gameplay: BoundSettingsGameplayContext?
     private let friends: BoundAccountFriendsContext
     var close: () -> Void = {}
@@ -252,6 +253,12 @@ struct SettingsView: View {
                             .accessibilityIdentifier("bound.settings-developer-features")
                             .onChange(of: developerFeaturesEnabled) { _, _ in
                                 NotificationCenter.default.post(name: BoundDeveloperFeatures.didChange, object: nil)
+                            }
+
+                        Toggle("Enable Directional Friend Arrow", isOn: $directionalFriendArrow)
+                            .accessibilityIdentifier("bound.settings-directional-friend-arrow")
+                            .onChange(of: directionalFriendArrow) { _, _ in
+                                NotificationCenter.default.post(name: BoundDirectionalFriendArrow.didChange, object: nil)
                             }
 
                         Toggle("Enable Experimental Multiplayer", isOn: $experimentalFeaturesEnabled)

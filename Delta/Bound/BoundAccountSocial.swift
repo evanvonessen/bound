@@ -103,6 +103,8 @@ final class BoundAccountProfile: ObservableObject {
 final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     static let shared = BoundJiggleNotifications()
     @Published private(set) var enabled = false
+    @Published private(set) var notifyFriendOnJoin = true
+    @Published private(set) var notifyMeOfInvites = true
     @Published private(set) var busy = false
     @Published private(set) var status = ""
     private let account = BoundFriendAccount.shared
@@ -116,6 +118,14 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
     private var upload: Task<Void, Never>?
     private var started = false
     private var registeredIdentity: AppCloudSession?
+    private var registrationReady = false
+    private struct PendingGameEvent {
+        let roomID: String
+        let runID: UUID
+        let requestID: UUID
+        let kind: String
+    }
+    private var pendingGameEvents: [PendingGameEvent] = []
     private var preferenceKey: String? { owner.map { "bound.jiggles.enabled.v1." + $0.uuidString.lowercased() } }
     private var installation: String {
         let key = "bound.jiggles.installation.v1"
@@ -147,6 +157,8 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
         generation = UUID(); upload?.cancel(); upload = nil
         token = nil; owner = identity?.owner
         enabled = preferenceKey.map { defaults.bool(forKey: $0) } ?? false
+        notifyFriendOnJoin = preferenceKey.map { defaults.object(forKey: $0 + ".send-join") as? Bool ?? true } ?? true
+        notifyMeOfInvites = preferenceKey.map { defaults.object(forKey: $0 + ".receive-invites") as? Bool ?? true } ?? true
         status = ""
         if started { Task { await reconcile() } }
     }
@@ -156,7 +168,7 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
             revokeRegistration()
             enabled = false
             if let preferenceKey { defaults.set(false, forKey: preferenceKey) }
-            status = "Jiggles are off on this device."
+            status = "Notifications are off on this device."
             return
         }
         let run = generation; busy = true
@@ -181,6 +193,78 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
         }
         UIApplication.shared.registerForRemoteNotifications()
     }
+    func setNotifyFriendOnJoin(_ value: Bool) {
+        notifyFriendOnJoin = value
+        if !value { pendingGameEvents.removeAll { $0.kind != "shared-invite" } }
+        if let preferenceKey { defaults.set(value, forKey: preferenceKey + ".send-join") }
+        synchronizePreferences()
+    }
+    func setNotifyMeOfInvites(_ value: Bool) {
+        notifyMeOfInvites = value
+        if let preferenceKey { defaults.set(value, forKey: preferenceKey + ".receive-invites") }
+        synchronizePreferences()
+    }
+    private func preferenceRequest(_ identity: AppCloudSession) throws -> URLRequest {
+        try identity.friendNotificationPreferencesRequest(payload: ["installationID": installation,
+            "revision": nextRegistrationRevision(), "sendJoin": notifyFriendOnJoin ? "true" : "false",
+            "receiveInvites": notifyMeOfInvites ? "true" : "false"])
+    }
+    private func synchronizePreferences() {
+        guard enabled, let identity = account.session, identity.owner == owner,
+              let request = try? preferenceRequest(identity) else { return }
+        let generation = generation
+        Task { [weak self] in
+            do {
+                let data = try await FriendSharingTokens.perform(request)
+                guard let response = try? JSONDecoder().decode(BoundSocialResponse.self, from: data), response.ok else {
+                    throw BoundSocialError.rejected("unavailable")
+                }
+            } catch {
+                guard let self, self.generation == generation else { return }
+                self.status = "Couldn't save notification settings. Try again when connected."
+            }
+        }
+    }
+    func sharedGameJoined(roomID: String, runID: UUID, started: Bool) {
+        sendGameEvent(roomID: roomID, runID: runID, requestID: UUID(), kind: started ? "shared-start" : "shared-join")
+    }
+    func sharedGameInvited(roomID: String, runID: UUID, requestID: UUID) {
+        sendGameEvent(roomID: roomID, runID: runID, requestID: requestID, kind: "shared-invite")
+    }
+    private func sendGameEvent(roomID: String, runID: UUID, requestID: UUID, kind: String) {
+        guard enabled, kind == "shared-invite" || notifyFriendOnJoin,
+              let identity = account.session, identity.owner == owner else { return }
+        guard registrationReady else {
+            // Admission may beat APNs registration after launch. Keep a bounded
+            // account-scoped outbox until registration succeeds.
+            if pendingGameEvents.count < 8, !pendingGameEvents.contains(where: { $0.requestID == requestID }) {
+                pendingGameEvents.append(.init(roomID: roomID, runID: runID, requestID: requestID, kind: kind))
+            }
+            return
+        }
+        guard
+              let preferences = try? preferenceRequest(identity),
+              let request = try? identity.friendGameNotificationRequest(roomID: roomID, runID: runID, requestID: requestID, kind: kind, installationID: installation) else { return }
+        // Notification delivery never owns gameplay or delays admission.
+        Task { [weak self] in
+            do {
+                let data = try await FriendSharingTokens.perform(preferences)
+                guard (try? JSONDecoder().decode(BoundSocialResponse.self, from: data))?.ok == true else {
+                    throw BoundSocialError.rejected("unavailable")
+                }
+                guard let self, self.enabled, identity.isSameSession(as: self.account.session),
+                      kind == "shared-invite" || self.notifyFriendOnJoin else { return }
+                let result = try await BoundAuthTransport.perform(request)
+                guard (200..<300).contains(result.status),
+                      (try? JSONDecoder().decode(BoundSocialResponse.self, from: result.data))?.ok == true else {
+                    throw BoundSocialError.rejected("unavailable")
+                }
+            } catch {
+                guard let self, identity.isSameSession(as: self.account.session), self.enabled else { return }
+                self.status = "Couldn't notify your friend."
+            }
+        }
+    }
     func registered(token: Data) {
         guard token.count >= 16, token.count <= 256,
               enabled, let identity = account.session, identity.owner == owner else { return }
@@ -195,13 +279,29 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
         #else
         let environment = "production"
         #endif
+        let deviceRequest: URLRequest
+        do {
+            deviceRequest = try identity.friendNotificationDeviceRequest(payload: ["installationID": installation, "revision": revision,
+                "token": tokenString, "environment": environment, "sendJoin": notifyFriendOnJoin ? "true" : "false",
+                "receiveInvites": notifyMeOfInvites ? "true" : "false"])
+        } catch { return }
         registeredIdentity = identity
         upload = Task { [weak self] in
             do {
-                _ = try await BoundSocialAPI.call(identity, action: "device", payload: ["installationID": installation, "revision": revision, "token": tokenString, "environment": environment])
+                let data = try await FriendSharingTokens.perform(deviceRequest)
+                guard (try? JSONDecoder().decode(BoundSocialResponse.self, from: data))?.ok == true else {
+                    throw BoundSocialError.rejected("unavailable")
+                }
                 guard let self, !Task.isCancelled, self.generation == run, identity.isSameSession(as: self.account.session),
                       self.enabled else { return }
                 self.status = ""
+                self.registrationReady = true
+                self.synchronizePreferences()
+                let pending = self.pendingGameEvents
+                self.pendingGameEvents.removeAll()
+                for event in pending {
+                    self.sendGameEvent(roomID: event.roomID, runID: event.runID, requestID: event.requestID, kind: event.kind)
+                }
             } catch {
                 guard let self, !Task.isCancelled, self.generation == run else { return }
                 self.status = "Couldn't register this device for Jiggles. Try again when connected."
@@ -213,6 +313,7 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
         status = "Push registration failed. Try again on a device with notifications enabled."
     }
     private func revokeRegistration() {
+        registrationReady = false; pendingGameEvents.removeAll()
         generation = UUID(); upload?.cancel(); upload = nil; busy = false
         token = nil
         UIApplication.shared.unregisterForRemoteNotifications()
@@ -244,7 +345,8 @@ final class BoundJiggleNotifications: NSObject, ObservableObject, UNUserNotifica
         Task { @MainActor in
             let info = notification.request.content.userInfo
             guard self.enabled,
-                  info["kind"] as? String == "bound-jiggle",
+                  ["bound-jiggle", "shared-join", "shared-start", "shared-invite"].contains(info["kind"] as? String ?? ""),
+                  (info["kind"] as? String == "shared-join" || self.notifyMeOfInvites),
                   info["recipientID"] as? String == self.account.session?.owner.uuidString.lowercased() else {
                 completionHandler([]); return
             }
@@ -316,9 +418,15 @@ struct BoundAccountSocialSettings: View {
                     BoundAccountSecurityView(account: account) { email = $0 }
                 }
                     .accessibilityIdentifier("bound.account-security")
-                Toggle("Receive Notifications", isOn: Binding(get: { notifications.enabled }, set: { value in
+                Toggle("Allow Notifications", isOn: Binding(get: { notifications.enabled }, set: { value in
                     Task { await notifications.setEnabled(value) }
                 })).disabled(notifications.busy).accessibilityIdentifier("bound.jiggles-enabled")
+                if notifications.enabled {
+                    notificationCheckbox("Notify my friend when I join a shared game.", selected: notifications.notifyFriendOnJoin,
+                                         identifier: "bound.notifications.send-join", action: notifications.setNotifyFriendOnJoin)
+                    notificationCheckbox("Notify me when a friend invites me to a game or starts a shared server.", selected: notifications.notifyMeOfInvites,
+                                         identifier: "bound.notifications.receive-invites", action: notifications.setNotifyMeOfInvites)
+                }
                 if !notifications.status.isEmpty { Text(notifications.status).font(.caption) }
                 Button("Sign out", role: .destructive) { signOut() }
                     .disabled(account.busy || account.deletionPending)
@@ -337,6 +445,18 @@ struct BoundAccountSocialSettings: View {
             }
         }
         .onDisappear { password = "" }
+    }
+
+    private func notificationCheckbox(_ title: String, selected: Bool, identifier: String, action: @escaping (Bool) -> Void) -> some View {
+        Button { action(!selected) } label: {
+            HStack(alignment: .top) {
+                Image(systemName: selected ? "checkmark.square.fill" : "square")
+                Text(title).foregroundStyle(.primary)
+            }
+        }
+        .accessibilityIdentifier(identifier)
+        .accessibilityValue(selected ? "On" : "Off")
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 
     private func signOut() {

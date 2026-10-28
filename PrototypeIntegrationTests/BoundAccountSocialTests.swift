@@ -89,6 +89,17 @@ final class BoundAccountSocialTests: XCTestCase {
         XCTAssertEqual(jiggle.httpMethod, "POST")
         XCTAssertEqual(try JSONSerialization.jsonObject(with: XCTUnwrap(jiggle.httpBody)) as? [String: String],
                        ["roomID": roomID, "requestID": requestID])
+        let run = UUID(), event = UUID(), installation = UUID().uuidString.lowercased()
+        let joined = try original.friendGameNotificationRequest(roomID: roomID, runID: run, requestID: event,
+                                                                kind: "shared-join", installationID: installation)
+        XCTAssertEqual(joined.value(forHTTPHeaderField: "Authorization"), originalAuthorization)
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: XCTUnwrap(joined.httpBody)) as? [String: String],
+                       ["roomID": roomID, "runID": run.uuidString.lowercased(), "requestID": event.uuidString.lowercased(),
+                        "kind": "shared-join", "installationID": installation])
+        let preferences = try original.friendNotificationPreferencesRequest(payload: ["installationID": installation,
+            "revision": "123", "sendJoin": "false", "receiveInvites": "true"])
+        XCTAssertEqual(preferences.url?.path, "/rest/v1/rpc/bound_notification_preferences")
+        XCTAssertEqual(preferences.value(forHTTPHeaderField: "Authorization"), originalAuthorization)
 
         let secondOwner = UUID()
         storage.ownerForSignIn = secondOwner

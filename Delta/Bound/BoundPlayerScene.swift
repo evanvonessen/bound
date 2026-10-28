@@ -70,6 +70,29 @@ struct BoundPlayerBackground: Equatable, Sendable {
 final class BoundPlayerSceneAssets: @unchecked Sendable {
     private let lock = NSLock()
     private var maps: [Int: Data] = [:]
+    private var friendRoutes: BoundFriendRouteGraph?
+    private var friendDistances: [BoundPlayerMapConnections.Map: [BoundPlayerMapConnections.Map: Int]] = [:]
+
+    /// Call while loading the ROM profile on its utility task, never per frame.
+    func prepareFriendRoutes(rom: (Int, Int) -> [UInt8]?) {
+        let graph = BoundFriendRouteGraph(rom: rom)
+        lock.lock(); defer { lock.unlock() }
+        friendRoutes = graph; friendDistances.removeAll()
+    }
+
+    func friendRouteTarget(viewer: BoundPlayerState, friendGroup: Int, friendNumber: Int,
+                           friendInstance: UInt64?, friendX: Double, friendY: Double) -> BoundPlayerState.Point? {
+        lock.lock(); defer { lock.unlock() }
+        guard let graph = friendRoutes else { return nil }
+        let destination = BoundPlayerMapConnections.Map(group: friendGroup, number: friendNumber)
+        if friendDistances[destination] == nil {
+            if friendDistances.count >= 8 { friendDistances.removeAll() }
+            friendDistances[destination] = graph.distances(to: destination)
+        }
+        return graph.target(viewer: viewer, friendGroup: friendGroup, friendNumber: friendNumber,
+            friendInstance: friendInstance, friendX: friendX, friendY: friendY, distances: friendDistances[destination] ?? [:])
+    }
+
     private var connections: [BoundPlayerMapConnections.Map: BoundPlayerMapConnections.Projection] = [:]
 
     func mapOffset(fromGroup: Int, number: Int, toGroup: Int, number targetNumber: Int,
@@ -144,13 +167,169 @@ final class BoundPlayerSceneAssets: @unchecked Sendable {
     }
 }
 
+/// Read-only navigation over the verified cartridge's native map headers.
+/// A portal is a hint, never permission to enter a map or bypass a story gate.
+struct BoundFriendRouteGraph: Sendable {
+    typealias Map = BoundPlayerMapConnections.Map
+    struct Edge: Sendable {
+        let destination: Map
+        let tile: BoundPlayerState.Point
+        // Cardinal exits track the player's position along the shared seam.
+        var direction: Int = 0
+        var lower: Int = 0
+        var upper: Int = 0
+        func waypoint(from tile: BoundPlayerState.Point) -> BoundPlayerState.Point {
+            switch direction {
+            case 1, 2: return .init(x: min(upper, max(lower, tile.x)), y: self.tile.y)
+            case 3, 4: return .init(x: self.tile.x, y: min(upper, max(lower, tile.y)))
+            default: return self.tile
+            }
+        }
+    }
+    struct Node: Sendable {
+        let instance: UInt64
+        let width: Int
+        let height: Int
+        var edges: [Edge]
+    }
+    private struct Warp {
+        let tile: BoundPlayerState.Point
+        let destination: Map
+        let index: Int
+        let slot: Int
+    }
+    let nodes: [Map: Node]
+    private let reverse: [Map: [Map]]
+
+    init(rom: (Int, Int) -> [UInt8]?) {
+        var nodes: [Map: Node] = [:], warps: [Map: [Warp]] = [:], connections: [Map: [UInt8]] = [:]
+        // Bound contiguous tables at the next group's pointer (or the group
+        // table itself). Relocated extended tables stop at their first invalid
+        // header. Never let one group's index alias the next group's maps.
+        let tableAddress = 0x083526A8
+        let tableStarts = (0..<43).compactMap { group in
+            rom(tableAddress + group * 4, 4).map { BoundSceneBytes.word($0) }
+        } + [tableAddress]
+        for group in 0..<43 {
+            guard let groupPointer = rom(0x083526A8 + group * 4, 4) else { continue }
+            let base = BoundSceneBytes.word(groupPointer)
+            guard (0x08000000..<0x0A000000).contains(base), base & 3 == 0 else { continue }
+            let end = tableStarts.filter { $0 > base }.min() ?? base + 256 * 4
+            let count = min(256, (end - base) / 4)
+            for number in 0..<count {
+                guard let pointer = rom(base + number * 4, 4) else { break }
+                let address = BoundSceneBytes.word(pointer)
+                guard address & 3 == 0, (0x08000000..<0x0A000000).contains(address),
+                      let header = rom(address, 28) else { break }
+                let layoutAddress = BoundSceneBytes.word(header)
+                guard let layout = rom(layoutAddress, 24) else { break }
+                let width = BoundSceneBytes.word(layout), height = BoundSceneBytes.word(layout, 4)
+                guard (1...1024).contains(width), (1...1024).contains(height),
+                      let events = rom(BoundSceneBytes.word(header, 4), 20) else { break }
+                let rows: [UInt8]
+                if events[1] == 0 { rows = [] }
+                else if let bytes = rom(BoundSceneBytes.word(events, 8), Int(events[1]) * 8) { rows = bytes }
+                else { break }
+                let map = Map(group: group, number: number)
+                nodes[map] = .init(instance: UInt64(address) << 32 | UInt64(layoutAddress), width: width, height: height, edges: [])
+                warps[map] = stride(from: 0, to: rows.count, by: 8).compactMap { index in
+                    let x = BoundSceneBytes.signed(rows, index), y = BoundSceneBytes.signed(rows, index + 2)
+                    guard (0..<width).contains(x), (0..<height).contains(y) else { return nil }
+                    return Warp(tile: .init(x: x, y: y), destination: .init(group: Int(rows[index + 7]), number: Int(rows[index + 6])), index: Int(rows[index + 5]), slot: index / 8)
+                }
+                let connectionAddress = BoundSceneBytes.word(header, 12)
+                if connectionAddress != 0, let table = rom(connectionAddress, 8) {
+                    let count = BoundSceneBytes.word(table)
+                    if (0...16).contains(count) { connections[map] = rom(BoundSceneBytes.word(table, 4), count * 12) }
+                }
+            }
+        }
+        // Resolve only native fixed destinations with a valid arrival warp.
+        for (map, values) in warps {
+            for warp in values {
+                guard warp.destination.number != 127, let target = warps[warp.destination], target.contains(where: { $0.slot == warp.index }) else { continue }
+                nodes[map]?.edges.append(.init(destination: warp.destination, tile: warp.tile))
+            }
+        }
+        // Native dynamic return doors can be resolved from a unique fixed
+        // incoming destination. Shared/multiple return maps remain unknown.
+        for (map, values) in warps {
+            for warp in values where warp.destination.number == 127 {
+                let incoming = warps.compactMap { source, portals -> Map? in
+                    portals.contains { $0.destination == map && $0.index == warp.slot } ? source : nil
+                }
+                if incoming.count == 1, let destination = incoming.first {
+                    nodes[map]?.edges.append(.init(destination: destination, tile: warp.tile))
+                }
+            }
+        }
+        for (map, rows) in connections {
+            guard let node = nodes[map] else { continue }
+            for index in stride(from: 0, to: rows.count, by: 12) {
+                let direction = BoundSceneBytes.word(rows, index)
+                let offset = Int(Int32(bitPattern: UInt32(BoundSceneBytes.word(rows, index + 4))))
+                let destination = Map(group: Int(rows[index + 8]), number: Int(rows[index + 9]))
+                guard let target = nodes[destination], (-1024...1024).contains(offset) else { continue }
+                let extent = direction <= 2 ? node.width : node.height
+                let otherExtent = direction <= 2 ? target.width : target.height
+                let lower = max(0, offset), upper = min(extent - 1, offset + otherExtent - 1)
+                guard (1...4).contains(direction), lower <= upper else { continue }
+                let tile: BoundPlayerState.Point
+                switch direction {
+                case 1: tile = .init(x: 0, y: node.height)
+                case 2: tile = .init(x: 0, y: -1)
+                case 3: tile = .init(x: -1, y: 0)
+                default: tile = .init(x: node.width, y: 0)
+                }
+                nodes[map]?.edges.append(.init(destination: destination, tile: tile, direction: direction, lower: lower, upper: upper))
+            }
+        }
+        self.nodes = nodes
+        var reverse: [Map: [Map]] = [:]
+        for (source, node) in nodes { for edge in node.edges { reverse[edge.destination, default: []].append(source) } }
+        self.reverse = reverse
+    }
+
+    func distances(to target: Map) -> [Map: Int] {
+        guard nodes[target] != nil else { return [:] }
+        var result = [target: 0], queue = [target], cursor = 0
+        while cursor < queue.count {
+            let current = queue[cursor]; cursor += 1
+            for predecessor in reverse[current] ?? [] where result[predecessor] == nil {
+                result[predecessor] = result[current]! + 1; queue.append(predecessor)
+            }
+        }
+        return result
+    }
+
+    func target(viewer: BoundPlayerState, friendGroup: Int, friendNumber: Int, friendInstance: UInt64?,
+                friendX: Double, friendY: Double, distances: [Map: Int]) -> BoundPlayerState.Point? {
+        let source = Map(group: viewer.mapGroup, number: viewer.mapNumber), destination = Map(group: friendGroup, number: friendNumber)
+        guard let node = nodes[source], node.instance == viewer.mapInstance,
+              let target = nodes[destination], target.instance == friendInstance,
+              friendX.isFinite, friendY.isFinite,
+              (-104...Double(target.width * 16 + 40)).contains(friendX),
+              (-96...Double(target.height * 16 + 48)).contains(friendY) else { return nil }
+        if source == destination {
+            return .init(x: Int(friendX.rounded()), y: Int(friendY.rounded()))
+        }
+        guard let distance = distances[source], distance > 0 else { return nil }
+        let next = node.edges.filter { distances[$0.destination] == distance - 1 }.map { $0.waypoint(from: viewer.tile) }
+            .min { a, b in
+                let da = abs(a.x - viewer.tile.x) + abs(a.y - viewer.tile.y), db = abs(b.x - viewer.tile.x) + abs(b.y - viewer.tile.y)
+                return da == db ? (a.y == b.y ? a.x < b.x : a.y < b.y) : da < db
+            }
+        return next.map { .init(x: $0.x * 16 + 8, y: $0.y * 16 + 16) }
+    }
+}
+
 /// Native cardinal connections define where adjoining maps are drawn. These
 /// are viewer-relative translations, not a fabricated global coordinate grid:
 /// some cartridge loops have inconsistent offsets, so nearer connections win
 /// and equally short conflicting paths are withheld. Doors/dive/warps never
 /// connect unrelated rooms for presentation or interaction authority.
 enum BoundPlayerMapConnections {
-    struct Map: Hashable { let group: Int; let number: Int }
+    struct Map: Hashable, Sendable { let group: Int; let number: Int }
     struct Projection { let offsets: [Map: BoundPlayerState.Point]; let ambiguous: Set<Map> }
     private struct Header { let width: Int; let height: Int; let edges: [(Int, Int, Map)] }
 

@@ -32,7 +32,7 @@ async function fixture({ dispatch, auth = identity, authStatus = 200, apns = () 
       const body = options.body ? JSON.parse(options.body) : undefined;
       calls.push({ url: String(url), options, body });
       if (String(url).endsWith('/auth/v1/user')) return json(auth, authStatus);
-      if (String(url).endsWith('/rest/v1/rpc/bound_jiggle_dispatch')) return json(dispatch ?? {
+      if (String(url).endsWith('/rest/v1/rpc/bound_game_notification_dispatch')) return json(dispatch ?? {
         ok: true, jobID: job, username: 'River', recipientID: recipient,
         devices: [{ token, environment: 'sandbox' }],
       });
@@ -65,8 +65,8 @@ test('verified identity dispatches only RPC-owned recipient data and sends bound
   const result = await f.request({ roomID: room, requestID });
   assert.equal(result.status, 200);
   assert.deepEqual(await result.json(), { ok: true, status: 'sent' });
-  const dispatch = f.calls.find(call => call.url.endsWith('/bound_jiggle_dispatch'));
-  assert.deepEqual(dispatch.body, { sender, room, request: requestID });
+  const dispatch = f.calls.find(call => call.url.endsWith('/bound_game_notification_dispatch'));
+  assert.deepEqual(dispatch.body, { sender, room, request: requestID, kind: 'bound-jiggle', run: null, installation: null });
   assert.equal(dispatch.options.headers.apikey, 'synthetic-server-key');
   const push = f.calls.find(call => call.url.includes('.push.apple.com/'));
   assert.equal(push.url, `https://api.sandbox.push.apple.com/3/device/${token}`);
@@ -78,6 +78,26 @@ test('verified identity dispatches only RPC-owned recipient data and sends bound
   });
   const finish = f.calls.find(call => call.url.endsWith('/bound_jiggle_finish'));
   assert.deepEqual(finish.body, { job, delivered: true, invalid_tokens: [] });
+});
+
+test('shared join, server start and game invitation use server-authenticated context and distinct native alerts', async () => {
+  const run = '66666666-6666-4666-8666-666666666666';
+  const installation = '77777777-7777-4777-8777-777777777777';
+  for (const [kind, message] of [['shared-join','joined your shared game.'], ['shared-start','started a shared server.'], ['shared-invite','invited you to a shared game.']]) {
+    const f=await fixture();
+    assert.equal((await f.request({roomID:room,requestID,runID:run,installationID:installation,kind})).status,200);
+    assert.deepEqual(f.calls.find(call=>call.url.endsWith('/bound_game_notification_dispatch')).body,
+      {sender,room,request:requestID,run,installation,kind});
+    const push=f.calls.find(call=>call.url.includes('.push.apple.com/'));
+    assert.equal(push.body.aps.alert.body,'River '+message);
+    assert.equal(push.body.kind,kind); assert.equal(push.body.runID,run);
+  }
+});
+
+test('suppressed child preference produces no APNs request', async () => {
+  const f=await fixture({dispatch:{ok:true,duplicate:true,status:'suppressed'}});
+  assert.deepEqual(await (await f.request({roomID:room,requestID})).json(),{ok:true,duplicate:true,status:'suppressed'});
+  assert.equal(f.calls.some(call=>call.url.includes('.push.apple.com/')),false);
 });
 
 test('production-only credentials sign pushes to production devices', async () => {
@@ -256,7 +276,7 @@ test('invalid APNs configuration is observable as unavailable without exposing s
   const result = await f.request({ roomID: room, requestID });
   assert.equal(result.status, 503);
   assert.deepEqual(await result.json(), { ok: false, error: 'not_configured' });
-  assert.equal(f.calls.some(call => call.url.endsWith('/bound_jiggle_dispatch')), false);
+  assert.equal(f.calls.some(call => call.url.endsWith('/bound_game_notification_dispatch')), false);
 });
 
 
@@ -272,5 +292,5 @@ test('MFA enrolled AAL2 caller retains Jiggle dispatch',async()=>{
   const f=await fixture({auth:{...identity,factors:[{status:'verified',factor_type:'totp'}]}});
   const token=`header.${Buffer.from(JSON.stringify({sub:sender,aal:'aal2'})).toString('base64url')}.signature`;
   assert.equal((await f.request({roomID:room,requestID},{authorization:`Bearer ${token}`})).status,200);
-  assert.ok(f.calls.some(call=>call.url.endsWith('/bound_jiggle_dispatch')));
+  assert.ok(f.calls.some(call=>call.url.endsWith('/bound_game_notification_dispatch')));
 });

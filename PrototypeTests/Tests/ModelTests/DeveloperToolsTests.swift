@@ -3,6 +3,20 @@ import XCTest
 @testable import Models
 
 final class DeveloperToolsTests: XCTestCase {
+    func testFriendArrowPreferenceIsIndependentOfDeveloperModeAndPersists() throws {
+        let suite = "FriendArrowTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for developer in [false, true] {
+            defaults.set(developer, forKey: BoundDeveloperFeatures.key)
+            defaults.removeObject(forKey: BoundDirectionalFriendArrow.key)
+            XCTAssertTrue(BoundDirectionalFriendArrow.isEnabled(in: defaults))
+            for enabled in [false, true] {
+                defaults.set(enabled, forKey: BoundDirectionalFriendArrow.key)
+                XCTAssertEqual(BoundDirectionalFriendArrow.isEnabled(in: try XCTUnwrap(UserDefaults(suiteName: suite))), enabled)
+            }
+        }
+    }
     func testMigrationPreservesEitherOptInAndDoesNotResurrectAfterOptOut() throws {
         for developer in [nil, false, true] as [Bool?] {
             for debugging in [nil, false, true] as [Bool?] {

@@ -290,11 +290,17 @@ final class BoundRecordedPlayerOverlay: UIView {
         addSubview(imageView); addSubview(indicatorView); isHidden = true
     }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("Use init(frame:)") }
-    func show(pose: BoundRecordedPlayerPose?, scene: BoundPlayerScene?, offscreenName: String? = nil, drawsSprite: Bool = true) {
+    func show(pose: BoundRecordedPlayerPose?, scene: BoundPlayerScene?, offscreenName: String? = nil, drawsSprite: Bool = true, directionTarget: BoundPlayerState.Point? = nil) {
         imageView.isHidden = !drawsSprite
         offscreenIndicator = nil; offscreenText = nil; indicatorView.isHidden = true
-        guard let pose, let scene else { isHidden = true; imageView.image = nil; visiblePixels = 0; return }
-        if let offscreenName, let indicator = BoundPlayerViewport.indicator(pose: pose, scene: scene) {
+        guard let scene else { isHidden = true; imageView.image = nil; visiblePixels = 0; return }
+        let directional = directionTarget.map { target in
+            BoundOffscreenPlayerIndicator(target: CGPoint(x: BoundPlayerViewport.bounds.midX + CGFloat(target.x - scene.worldFoot.x),
+                y: BoundPlayerViewport.bounds.midY + CGFloat(target.y - scene.worldFoot.y)),
+                distanceInTiles: max(0, Int((hypot(Double(target.x - scene.worldFoot.x), Double(target.y - scene.worldFoot.y)) / 16).rounded())))
+        }
+        let indicator = directional ?? pose.flatMap { BoundPlayerViewport.indicator(pose: $0, scene: scene) }
+        if let offscreenName, let indicator {
             offscreenIndicator = indicator
             let name = String(offscreenName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(24))
             offscreenText = "\(name.isEmpty ? "Friend" : name) · \(indicator.distanceInTiles) tiles"
@@ -302,10 +308,15 @@ final class BoundRecordedPlayerOverlay: UIView {
             indicatorDistanceLabel.text = "· \(indicator.distanceInTiles) tiles"
             indicatorView.accessibilityLabel = offscreenText
             indicatorView.isHidden = false; imageView.image = nil; visiblePixels = 0; isHidden = false
-            accessibilityValue = "offscreen-player map=\(pose.mapGroup):\(pose.mapNumber) distance=\(indicator.distanceInTiles)"
+            if directional != nil, let pose {
+                let (rgba, _) = BoundRecordedPlayerRasterizer.rgba(pose: pose, scene: scene)
+                visiblePixels = stride(from: 3, to: rgba.count, by: 4).filter { rgba[$0] != 0 }.count
+            }
+            accessibilityValue = "directional-friend distance=\(indicator.distanceInTiles)"
             setNeedsLayout()
             return
         }
+        guard let pose else { isHidden = true; imageView.image = nil; visiblePixels = 0; return }
         let (rgba, origin) = BoundRecordedPlayerRasterizer.rgba(pose: pose, scene: scene)
         let sprite = pose.appearance
         if !drawsSprite {

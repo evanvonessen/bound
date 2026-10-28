@@ -18,3 +18,10 @@ enum BoundDeveloperFeatures {
         defaults.removeObject(forKey: legacyDebuggingKey)
     }
 }
+
+enum BoundDirectionalFriendArrow {
+    static let key = "bound.directional-friend-arrow.enabled.v1"
+    static let didChange = Notification.Name("BoundDirectionalFriendArrowChanged")
+    static var isEnabled: Bool { isEnabled(in: .standard) }
+    static func isEnabled(in defaults: UserDefaults) -> Bool { defaults.object(forKey: key) as? Bool ?? true }
+}
