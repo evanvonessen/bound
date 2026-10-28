@@ -267,6 +267,7 @@ final class BoundRecordedPlayerOverlay: UIView {
     private let indicatorArrow = UIImageView(image: UIImage(systemName: "chevron.right"))
     private let indicatorLabel = UILabel()
     private let indicatorDistanceLabel = UILabel()
+    private let routeStatusLabel = UILabel()
     private var origin = BoundPlayerState.Point(x: 0, y: 0)
     private var nativeSize = CGSize.zero
     private(set) var visiblePixels = 0
@@ -287,10 +288,16 @@ final class BoundRecordedPlayerOverlay: UIView {
         indicatorLabel.lineBreakMode = .byTruncatingTail
         indicatorDistanceLabel.textColor = .white
         indicatorView.addSubview(indicatorArrow); indicatorView.addSubview(indicatorLabel); indicatorView.addSubview(indicatorDistanceLabel)
-        addSubview(imageView); addSubview(indicatorView); isHidden = true
+        routeStatusLabel.textColor = .white
+        routeStatusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.72)
+        routeStatusLabel.textAlignment = .center
+        routeStatusLabel.isHidden = true
+        routeStatusLabel.accessibilityIdentifier = "bound.friend-route-unavailable"
+        addSubview(imageView); addSubview(indicatorView); addSubview(routeStatusLabel); isHidden = true
     }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError("Use init(frame:)") }
     func show(pose: BoundRecordedPlayerPose?, scene: BoundPlayerScene?, offscreenName: String? = nil, drawsSprite: Bool = true, directionTarget: BoundPlayerState.Point? = nil) {
+        routeStatusLabel.isHidden = true
         imageView.isHidden = !drawsSprite
         offscreenIndicator = nil; offscreenText = nil; indicatorView.isHidden = true
         guard let scene else { isHidden = true; imageView.image = nil; visiblePixels = 0; return }
@@ -337,8 +344,18 @@ final class BoundRecordedPlayerOverlay: UIView {
         accessibilityValue = "recorded-player map=\(pose.mapGroup):\(pose.mapNumber) pixels=\(origin.x),\(origin.y)"
         setNeedsLayout()
     }
+    func showUnavailableRoute(friendName: String) {
+        let name = String(friendName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(24))
+        routeStatusLabel.text = "\(name.isEmpty ? "Friend" : name) · Route unavailable"
+        routeStatusLabel.isHidden = false
+        indicatorView.isHidden = true; offscreenIndicator = nil
+        isHidden = false; setNeedsLayout()
+    }
     override func layoutSubviews() {
         super.layoutSubviews()
+        let statusScale = min(bounds.width / 240, bounds.height / 160)
+        routeStatusLabel.font = .systemFont(ofSize: 8 * statusScale, weight: .medium)
+        routeStatusLabel.frame = CGRect(x: 8 * statusScale, y: 4 * statusScale, width: max(0, bounds.width - 16 * statusScale), height: 14 * statusScale)
         imageView.frame = CGRect(x: CGFloat(origin.x) * bounds.width / 240, y: CGFloat(origin.y) * bounds.height / 160,
                                  width: nativeSize.width * bounds.width / 240, height: nativeSize.height * bounds.height / 160)
         guard let indicator = offscreenIndicator, bounds.width > 0, bounds.height > 0 else { return }

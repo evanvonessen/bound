@@ -56,6 +56,22 @@ private final class ReaderRecorder: @unchecked Sendable {
 
 @MainActor
 final class PlayerStateTests: XCTestCase {
+    func testDynamicReturnUsesCurrentOwnerSaveAndSignedWarpCoordinates() throws {
+        var fixture = ReaderFixture()
+        let warp = 0x0202552C + 0x14
+        fixture.put(3, at: warp, count: 1)
+        fixture.put(7, at: warp + 1, count: 1)
+        fixture.put(-1, at: warp + 2, count: 1)
+        fixture.put(-1, at: warp + 4, count: 2)
+        fixture.put(12, at: warp + 6, count: 2)
+        let player = try XCTUnwrap(fixture.decode().player)
+        XCTAssertEqual(player.dynamicWarp, .init(mapGroup: 3, mapNumber: 7, warpID: -1, x: -1, y: 12))
+        fixture.put(127, at: warp + 1, count: 1)
+        XCTAssertNil(fixture.decode().player?.dynamicWarp, "A native dynamic sentinel is not a resolved destination")
+        fixture.put(7, at: warp + 1, count: 1)
+        fixture.put(-2, at: warp + 2, count: 1)
+        XCTAssertNil(fixture.decode().player?.dynamicWarp)
+    }
     func testROMIdentityAndNormalizedLiveCoordinates() throws {
         XCTAssertThrowsError(try BoundPlayerROMProfile(rom: Data(repeating: 0, count: 512)))
         let reading = ReaderFixture().decode()

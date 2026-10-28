@@ -28,6 +28,12 @@ declarations+=cut(state,'struct BoundGBAMemorySnapshot:','enum BoundPlayerStateD
 scene=read('Delta/Bound/BoundPlayerScene.swift')
 declarations+=cut(scene,'struct BoundPlayerScene:','/// Small bounded ROM-only cache')
 if a.rom:
+    declarations+=read('Delta/Bound/BoundFriendRouteAccess.swift')
+else:
+    # This follower-only harness never queries route policy. The full ROM mode
+    # below compiles the actual navigation access implementation instead.
+    declarations+='struct BoundFriendRouteAccess: Equatable, Sendable {}\n'
+if a.rom:
     adapter=scene[scene.index('/// Small bounded ROM-only cache'):]
     start=adapter.index('    static func read(player: BoundPlayerState, memory: BoundGBAMemorySnapshot, profile:')
     end=adapter.index('    static func read(player: BoundPlayerState, memory: BoundGBAMemorySnapshot,\n',start+1)

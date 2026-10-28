@@ -5,6 +5,13 @@ import CryptoKit
 /// or alternate emulator is involved in Bound's player-state reader.
 struct BoundPlayerState: Equatable, Sendable {
     struct Point: Equatable, Sendable { let x: Int; let y: Int }
+    struct DynamicWarp: Equatable, Hashable, Sendable {
+        let mapGroup: Int
+        let mapNumber: Int
+        let warpID: Int
+        let x: Int
+        let y: Int
+    }
     let mapGroup: Int
     let mapNumber: Int
     let tile: Point
@@ -19,6 +26,8 @@ struct BoundPlayerState: Equatable, Sendable {
     // the save coordinate. This anchor never grants interaction authority.
     var cameraTile: Point? = nil
     var mapInstance: UInt64? = nil
+    var dynamicWarp: DynamicWarp? = nil
+    var routeAccess: BoundFriendRouteAccess? = nil
 }
 
 struct BoundPlayerStateReading: Equatable, Sendable {
@@ -124,6 +133,10 @@ enum BoundPlayerStateDecoder {
                      includeScene: Bool = false, presentationOnly: Bool = false) -> BoundPlayerStateReading {
         let reading = decode(memory: memory, frame: frame, romBytes: profile.bytes, presentationOnly: presentationOnly)
         guard includeScene, var player = reading.player else { return reading }
+        if let pointer = memory.bytes(at: 0x03005008, count: 4) {
+            player.routeAccess = BoundFriendRouteAccess.capture(memory: memory, save: word(pointer),
+                currentMap: .init(group: player.mapGroup, number: player.mapNumber), rom: profile.bytes)
+        }
         player.scene = BoundPlayerSceneDecoder.read(player: player, memory: memory, profile: profile)
         return .init(frame: frame, status: reading.status, detail: reading.detail, player: player)
     }
@@ -196,6 +209,12 @@ enum BoundPlayerStateDecoder {
         guard let facing = directions[Int(object[0x18] & 15)], directions[Int(object[0x18] >> 4)] != nil else {
             return invalid("Invalid facing direction")
         }
+        let dynamicWarp = memory.bytes(at: pointer + 0x14, count: 8).flatMap { bytes -> BoundPlayerState.DynamicWarp? in
+            let group = Int(bytes[0]), number = Int(bytes[1]), warp = Int(Int8(bitPattern: bytes[2]))
+            guard group < 43, number < 127, warp >= -1 else { return nil }
+            return .init(mapGroup: group, mapNumber: number, warpID: warp,
+                         x: coordinate(bytes, 4), y: coordinate(bytes, 6))
+        }
         return BoundPlayerStateReading(frame: frame, status: .live, detail: "RR 4.1 · local reader",
             player: BoundPlayerState(mapGroup: group, mapNumber: number, tile: tile, previousTile: previous,
                 facing: facing, elevation: Int(object[11] & 15), graphicsID: Int(object[5]),
@@ -203,7 +222,7 @@ enum BoundPlayerStateDecoder {
                 // Boundary camera residuals already belong to the new map's
                 // destination tile, even while the saved tile is still behind.
                 cameraTile: pendingCameraStep && !rebasedAtBoundary ? cameraTile : nil,
-                mapInstance: UInt64(word(headerPointer))<<32 | UInt64(word(header))))
+                mapInstance: UInt64(word(headerPointer))<<32 | UInt64(word(header)), dynamicWarp: dynamicWarp))
     }
 }
 

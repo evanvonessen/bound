@@ -273,6 +273,29 @@ final class BoundPlayerStateDisplay {
     private var timer: Timer?
     private var lastFrameAt: TimeInterval?
     private var suspended = false
+    private struct FriendRouteRequest: Equatable {
+        let mapGroup: Int, mapNumber: Int
+        let instance: UInt64?
+        let tile: BoundPlayerState.Point
+        let dynamicWarp: BoundPlayerState.DynamicWarp?
+        let access: BoundFriendRouteAccess?
+        let friendGroup: Int, friendNumber: Int
+        let friendInstance: UInt64?
+        let friendTile: BoundPlayerState.Point
+        func sharesScope(with other: Self) -> Bool {
+            let sameProgression: Bool
+            if let access, let next = other.access { sameProgression = access.hasSameProgression(as: next) }
+            else { sameProgression = access == other.access }
+            return sameProgression && mapGroup == other.mapGroup && mapNumber == other.mapNumber && instance == other.instance
+                && dynamicWarp == other.dynamicWarp
+                && friendGroup == other.friendGroup && friendNumber == other.friendNumber && friendInstance == other.friendInstance
+        }
+    }
+    private var directionTask: Task<Void, Never>?
+    private var directionEpoch = UUID()
+    private var directionRequest: FriendRouteRequest?
+    private var directionTarget: BoundPlayerState.Point?
+    private var directionQueryAt: TimeInterval = -.infinity
 
     init() {
         for name in [BoundPlayerStatePreferences.didChange, BoundMultiplayerFeatures.didChange, BoundDeveloperFeatures.didChange, BoundDirectionalFriendArrow.didChange, Settings.didResetNotification] {
@@ -297,7 +320,7 @@ final class BoundPlayerStateDisplay {
         livePlayerOverlay.accessibilityIdentifier = "bound.live-player"
     }
     deinit {
-        timer?.invalidate(); loadTask?.cancel()
+        timer?.invalidate(); loadTask?.cancel(); directionTask?.cancel()
         observers.forEach(NotificationCenter.default.removeObserver)
     }
 
@@ -317,6 +340,7 @@ final class BoundPlayerStateDisplay {
     }
     func bind(core: EmulatorCore?) {
         guard self.core !== core else { return }
+        clearDirectionRoute()
         loadTask?.cancel(); loadTask = nil; stateObservation = nil
         self.core = core; profile = nil; profileStatus = .checkingROM
         presence?.setROMVerified(false)
@@ -402,6 +426,7 @@ final class BoundPlayerStateDisplay {
     }
 
     func didLoadSaveState() {
+        clearDirectionRoute()
         recordingSession.suspend(); recordingSession.stop(); presence?.invalidateLocal(); refreshState()
     }
 
@@ -441,19 +466,64 @@ final class BoundPlayerStateDisplay {
         if let presence, let reading = currentReading, reading.status == .live,
            let lastFrameAt, now - lastFrameAt < BoundLivePresenceSession.visibilityGrace, let profile, let viewer = reading.player {
             let pose = presence.pose(at: now), rendered = pose?.rendered(profile: profile, viewer: viewer)
-            let target = BoundDirectionalFriendArrow.isEnabled ? pose.flatMap {
-                profile.sceneAssets.friendRouteTarget(viewer: viewer, friendGroup: $0.mapGroup,
-                    friendNumber: $0.mapNumber, friendInstance: $0.mapInstance, friendX: $0.x, friendY: $0.y)
-            } : nil
+            let target = directionalTarget(viewer: viewer, friend: pose, profile: profile, at: now)
             livePlayerOverlay.show(pose: rendered, scene: viewer.scene,
                 offscreenName: target == nil ? nil : friendName(),
                 drawsSprite: false, directionTarget: target)
+            if BoundDirectionalFriendArrow.isEnabled, pose != nil, target == nil,
+               directionRequest != nil, directionTask == nil {
+                livePlayerOverlay.showUnavailableRoute(friendName: friendName())
+            }
             presence.observePresentation(pose: pose, viewer: viewer, frameResolved: rendered != nil,
                                          visiblePixels: livePlayerOverlay.visiblePixels, at: now)
         } else {
+            clearDirectionRoute()
             livePlayerOverlay.show(pose: nil, scene: nil)
             presence?.observePresentation(pose: nil, viewer: nil, frameResolved: false, visiblePixels: 0, at: now)
         }
+    }
+
+    private func clearDirectionRoute() {
+        guard directionTask != nil || directionRequest != nil || directionTarget != nil else { return }
+        directionTask?.cancel(); directionTask = nil; directionEpoch = UUID()
+        directionRequest = nil; directionTarget = nil; directionQueryAt = -.infinity
+    }
+
+    private func directionalTarget(viewer: BoundPlayerState, friend: BoundPresencePose?,
+                                   profile: BoundPlayerROMProfile, at now: TimeInterval) -> BoundPlayerState.Point? {
+        guard BoundDirectionalFriendArrow.isEnabled, let friend else { clearDirectionRoute(); return nil }
+        if viewer.mapGroup == friend.mapGroup, viewer.mapNumber == friend.mapNumber {
+            clearDirectionRoute()
+            guard let instance = viewer.mapInstance, instance == friend.mapInstance else { return nil }
+            return .init(x: Int(friend.x.rounded()), y: Int(friend.y.rounded()))
+        }
+        let query = FriendRouteRequest(mapGroup: viewer.mapGroup, mapNumber: viewer.mapNumber,
+            instance: viewer.mapInstance, tile: viewer.tile, dynamicWarp: viewer.dynamicWarp, access: viewer.routeAccess,
+            friendGroup: friend.mapGroup, friendNumber: friend.mapNumber, friendInstance: friend.mapInstance,
+            friendTile: .init(x: Int(floor((friend.x - 8) / 16)), y: Int(floor((friend.y - 16) / 16))))
+        if let previous = directionRequest, !previous.sharesScope(with: query) { clearDirectionRoute() }
+        if directionTask == nil, directionRequest != query, now - directionQueryAt >= 0.2 {
+            if directionRequest?.access != query.access { directionTarget = nil }
+            directionRequest = query; directionQueryAt = now
+            let epoch = directionEpoch
+            // Immutable captured RAM is evaluated away from both the frame callback
+            // and UI. Moving the arrow toward its cached waypoint stays local.
+            directionTask = Task { [weak self] in
+                let worker = Task.detached(priority: .utility) {
+                    profile.sceneAssets.friendRouteTarget(viewer: viewer, friendGroup: friend.mapGroup,
+                        friendNumber: friend.mapNumber, friendInstance: friend.mapInstance, friendX: friend.x, friendY: friend.y,
+                        rom: profile.bytes)
+                }
+                let target = await withTaskCancellationHandler {
+                    await worker.value
+                } onCancel: {
+                    worker.cancel()
+                }
+                guard let self, !Task.isCancelled, self.directionEpoch == epoch else { return }
+                self.directionTarget = target; self.directionTask = nil
+            }
+        }
+        return directionTarget
     }
 
     func layout(in owner: UIViewController, gameView: UIView) {

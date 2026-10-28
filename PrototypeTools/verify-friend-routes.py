@@ -12,7 +12,7 @@ a = p.parse_args()
 root = Path(__file__).resolve().parents[1]
 scene = (root / 'Delta/Bound/BoundPlayerScene.swift').read_text()
 state = (root / 'Delta/Bound/BoundPlayerState.swift').read_text()
-source = 'import Foundation\nstruct BoundPlayerScene: Equatable, Sendable {}\n'
+source = 'import Foundation\nstruct BoundPlayerScene: Equatable, Sendable {}\nstruct BoundFriendRouteAccess: Equatable, Sendable {}\n'
 source += state[state.index('struct BoundPlayerState:'):state.index('struct BoundPlayerStateReading:')]
 source += scene[scene.index('struct BoundFriendRouteGraph:'):scene.index('enum BoundPlayerSceneDecoder {')]
 source += r'''
@@ -55,7 +55,7 @@ assert(graph.nodes.count == 5)
 func instance(_ map: Int) -> UInt64 { UInt64(0x08002000 + map * 256) << 32 | UInt64(0x08002000 + map * 256 + 32) }
 func player(_ map: Int, x: Int = 4, y: Int = 5, key: UInt64? = nil) -> BoundPlayerState {
     .init(mapGroup: 0, mapNumber: map, tile: .init(x: x, y: y), previousTile: .init(x: x, y: y),
-        facing: "North", elevation: 0, graphicsID: 0, runningState: 0, tileTransitionState: 0, mapInstance: key ?? instance(map))
+        facing: "North", elevation: 0, graphicsID: 0, runningState: 0, tileTransitionState: 0, mapInstance: key ?? instance(map), dynamicWarp: .init(mapGroup: 0, mapNumber: 0, warpID: 0, x: 0, y: 0))
 }
 func target(_ viewer: BoundPlayerState, _ friend: Int, x: Double = 80, y: Double = 80, key: UInt64? = nil) -> BoundPlayerState.Point? {
     graph.target(viewer: viewer, friendGroup: 0, friendNumber: friend, friendInstance: key ?? instance(friend),
@@ -68,6 +68,9 @@ assert(target(player(1), 0) == .init(x: 24, y: 160), "Unique dynamic return sele
 assert(target(player(0), 0, x: 31, y: 42) == .init(x: 31, y: 42), "Same map points directly at friend")
 assert(target(player(0), 0, x: 46, y: 42) == .init(x: 46, y: 42), "Friend movement refreshes direction")
 assert(target(player(0, y: 7), 4) == .init(x: 168, y: 128), "Cardinal exit follows local movement")
+let narrowGap = graph.target(viewer: player(0, y: 7), friendGroup: 0, friendNumber: 4, friendInstance: instance(4),
+    friendX: 80, friendY: 80, canTraverse: { _, from, edge in edge.direction == 0 || edge.waypoint(from: from).y == 2 })
+assert(narrowGap == .init(x: 168, y: 48), "Cardinal guidance finds the actual opening instead of the nearest wall")
 assert(target(player(0), 3) == nil, "Disconnected map has no invented direction")
 assert(target(player(0), 0, key: 1) == nil, "Different native map instance cannot provide direct coordinates")
 assert(target(player(0, key: 1), 1) == nil, "Stale viewer instance is rejected")
@@ -75,7 +78,36 @@ assert(target(player(0), 0, x: .infinity) == nil)
 // Two outdoor maps sharing a return room cannot resolve its dynamic exit.
 warps(4, [(3, 3, 1, 0)])
 let ambiguous = BoundFriendRouteGraph(rom: read)
-assert(!ambiguous.nodes[.init(group: 0, number: 1)]!.edges.contains { $0.destination.number == 0 })
+assert(ambiguous.nodes[.init(group: 0, number: 1)]!.edges.contains { $0.dynamicExit })
+var inside = player(1)
+inside.dynamicWarp = .init(mapGroup: 0, mapNumber: 4, warpID: 0, x: -1, y: -1)
+let friend4 = ambiguous.target(viewer: inside, friendGroup: 0, friendNumber: 4, friendInstance: instance(4), friendX: 48, friendY: 64)
+assert(friend4 == .init(x: 24, y: 160), "Shared room exit resolves the actual saved return, not incoming-map guesses")
+inside.dynamicWarp = .init(mapGroup: 0, mapNumber: 3, warpID: -1, x: 4, y: 5)
+assert(ambiguous.target(viewer: inside, friendGroup: 0, friendNumber: 3, friendInstance: instance(3), friendX: 48, friendY: 64) == .init(x: 24, y: 160), "Coordinate dynamic return is supported")
+inside.dynamicWarp = .init(mapGroup: 0, mapNumber: 3, warpID: 100, x: 4, y: 5)
+assert(ambiguous.target(viewer: inside, friendGroup: 0, friendNumber: 3, friendInstance: instance(3), friendX: 48, friendY: 64) == nil, "Invalid warp ID is not replaced with guessed coordinates")
+// Reaching a map through a different doorway may reach a different wall region.
+warps(0, [(5, 5, 1, 0), (9, 9, 1, 1)])
+let regions = BoundFriendRouteGraph(rom: read)
+let regionalTarget = regions.target(viewer: player(0), friendGroup: 0, friendNumber: 2, friendInstance: instance(2), friendX: 80, friendY: 80, canTraverse: { map, from, edge in
+    map.number != 1 || edge.destination.number != 2 || from.x == 8
+})
+assert(regionalTarget == .init(x: 152, y: 160), "Search retains separate native arrival regions")
+let arrivalTarget = regions.target(viewer: player(0), friendGroup: 0, friendNumber: 1, friendInstance: instance(1),
+    friendX: 136, friendY: 32, canArrive: { _, entry, _ in entry.x == 8 })
+assert(arrivalTarget == .init(x: 152, y: 160), "Destination map must also arrive in the friend's reachable region")
+assert(regions.target(viewer: player(0), friendGroup: 0, friendNumber: 1, friendInstance: instance(1),
+    friendX: 136, friendY: 32, canArrive: { _, _, _ in false }) == nil, "No map-only success through a wall")
+assert(regions.target(viewer: player(0), friendGroup: 0, friendNumber: 2, friendInstance: instance(2), friendX: 80, friendY: 80, canTraverse: { _,_,_ in false }) == nil, "Closed story/path gates withhold every inaccessible route")
+warps(0, [(5, 5, 1, 0)])
+warps(4, [(3, 3, 1, 1)])
+let detourGraph = BoundFriendRouteGraph(rom: read)
+let detour = detourGraph.target(viewer: player(0), friendGroup: 0, friendNumber: 2, friendInstance: instance(2),
+    friendX: 80, friendY: 80, canTraverse: { map, entry, edge in
+        map.number != 1 || edge.destination.number != 2 || entry.x == 8
+    })
+assert(detour == .init(x: 168, y: 96), "A locked shorter branch does not hide an accessible longer route")
 print("PASS: native entrances, exits, stairs, multiple rooms, movement, map identity, disconnected/ambiguous routes")
 '''
 if a.rom:
@@ -89,7 +121,7 @@ func actualRead(_ at: Int, _ count: Int) -> [UInt8]? {
 let start = Date()
 let actual = BoundFriendRouteGraph(rom: actualRead)
 let count = actual.nodes.values.reduce(0) { $0 + $1.edges.count }
-assert(actual.nodes.count == 437 && count == 1511, "Pinned cartridge topology changed")
+assert(actual.nodes.count == 437 && count == 1530, "Pinned cartridge topology changed")
 func nativeViewer(_ map: BoundPlayerMapConnections.Map) -> BoundPlayerState {
     .init(mapGroup: map.group, mapNumber: map.number, tile: .init(x: 4, y: 5), previousTile: .init(x: 4, y: 5),
         facing: "North", elevation: 0, graphicsID: 0, runningState: 0, tileTransitionState: 0, mapInstance: actual.nodes[map]!.instance)
@@ -106,6 +138,22 @@ assert(nativeTarget(downstairs, upstairs) == .init(x: 10 * 16 + 8, y: 2 * 16 + 1
 assert(nativeTarget(upstairs, pallet) == .init(x: 10 * 16 + 8, y: 2 * 16 + 16), "Actual return via downstairs")
 let exit = nativeTarget(downstairs, pallet)
 assert(exit == .init(x: 4 * 16 + 8, y: 8 * 16 + 16), "Actual nearest house exit")
+// Celadon's shared elevator has several fixed incoming floors. The saved
+// native dynamic warp, rather than those incoming edges, determines its exit.
+let elevator = BoundPlayerMapConnections.Map(group: 10, number: 6)
+for floorNumber in [0, 2] {
+    let floor = BoundPlayerMapConnections.Map(group: 10, number: floorNumber)
+    guard let incoming = actual.nodes[floor]?.edges.first(where: { $0.destination == elevator }) else { fatalError("Missing pinned elevator portal") }
+    var local = nativeViewer(elevator)
+    local.dynamicWarp = .init(mapGroup: floor.group, mapNumber: floor.number, warpID: incoming.sourceWarpID, x: -1, y: -1)
+    var observedDynamicDestination: BoundPlayerMapConnections.Map?
+    let hint = actual.target(viewer: local, friendGroup: floor.group, friendNumber: floor.number,
+        friendInstance: actual.nodes[floor]!.instance, friendX: 80, friendY: 80, canTraverse: { _, _, edge in
+            if edge.dynamicExit { observedDynamicDestination = edge.destination }
+            return true
+        })
+    assert(hint != nil && observedDynamicDestination == floor, "Actual elevator resolves the selected native return floor")
+}
 print("PASS: actual verified-ROM table extraction", actual.nodes.count, "maps", count, "portals; seconds", Date().timeIntervalSince(start))
 '''
 a.output.mkdir(parents=True, exist_ok=True)

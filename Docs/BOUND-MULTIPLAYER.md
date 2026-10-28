@@ -407,3 +407,28 @@ four fast-forward preference tests, native Debug and ordinary cold starts for
 both roles, native menu/ACK checks, source/privacy checks and unsigned Release
 iPhone build passed. Local output is in ignored `.build/paired-boundary-verified/`
 and `.build/paired-regression-verified.xcresult`.
+
+## Directional friend guidance
+
+Enable Directional Friend Arrow is a personal preference available before play,
+independently of Developer Mode. Same-instance guidance points directly at the
+friend. Cross-map queries preserve native dynamic return destinations and each
+room's arrival tile, so shared interiors, staircases and separate room regions
+do not collapse into one guessed map-level route.
+
+Route access reads an immutable native snapshot: progression flags/variables,
+live map collision and object positions. Future-map scripts are evaluated with
+bounded, verified read-only operations against local projected state. The search
+checks reachable portal tiles, destination regions and alternative boundary
+openings. Unsupported native/script effects cannot authorize passage; a failed
+query displays Route unavailable. This is not a claim that every Radical Red
+native story action has a navigation implementation.
+
+Searches run on a utility task with bounded caches and cancellation. Movement
+refreshes queries at most five times per second; progression, map, owner/core
+replacement and state restoration invalidate old results. No gameplay RAM,
+save, ROM bytes or server state are changed by navigation. Physical-device and
+WAN navigation remain untested. The exact-ROM graph and access verifiers are
+`PrototypeTools/verify-friend-routes.py` and
+`PrototypeTools/verify-friend-route-access.py`; use the approved QA launcher and
+explicit owned ROM/state/output paths.

@@ -550,6 +550,7 @@
 		DC679C3395174FE38794C79A /* BoundPlayerStateDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 604D0B88F2BD4127A7AC9266 /* BoundPlayerStateDisplay.swift */; };
 		87214F8B08E34E1699AB1A1A /* PlayerStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DB42D13CD4642F59F46B8EE /* PlayerStateTests.swift */; };
 		18BC10A8D7EF4D1397B91702 /* BoundPlayerScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BC10A8D7EF4D1397B91701 /* BoundPlayerScene.swift */; };
+		C10F43D3D8904F21B1C30A02 /* BoundFriendRouteAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10F43D3D8904F21B1C30A01 /* BoundFriendRouteAccess.swift */; };
 		18BC10A8D7EF4D1397B91704 /* BoundRecordedPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BC10A8D7EF4D1397B91703 /* BoundRecordedPlayer.swift */; };
 		A15E00000000000000000002 /* BoundLivePresence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15E00000000000000000001 /* BoundLivePresence.swift */; };
 		A15F00000000000000000002 /* BoundFriendInteraction.swift in Sources */ = {isa = PBXBuildFile; fileRef = A15F00000000000000000001 /* BoundFriendInteraction.swift */; };
@@ -1490,6 +1491,7 @@
 		604D0B88F2BD4127A7AC9266 /* BoundPlayerStateDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPlayerStateDisplay.swift; sourceTree = "<group>"; };
 		3DB42D13CD4642F59F46B8EE /* PlayerStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerStateTests.swift; sourceTree = "<group>"; };
 		18BC10A8D7EF4D1397B91701 /* BoundPlayerScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPlayerScene.swift; sourceTree = "<group>"; };
+		C10F43D3D8904F21B1C30A01 /* BoundFriendRouteAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundFriendRouteAccess.swift; sourceTree = "<group>"; };
 		18BC10A8D7EF4D1397B91703 /* BoundRecordedPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundRecordedPlayer.swift; sourceTree = "<group>"; };
 		A15E00000000000000000001 /* BoundLivePresence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundLivePresence.swift; sourceTree = "<group>"; };
 		A15F00000000000000000001 /* BoundFriendInteraction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundFriendInteraction.swift; sourceTree = "<group>"; };
@@ -1814,6 +1816,7 @@
 				604D0B88F2BD4127A7AC9266 /* BoundPlayerStateDisplay.swift */,
 				E11EC3B5F0FA4653A65DA9F6 /* BoundPlayerState.swift */,
 				18BC10A8D7EF4D1397B91701 /* BoundPlayerScene.swift */,
+				C10F43D3D8904F21B1C30A01 /* BoundFriendRouteAccess.swift */,
 				18BC10A8D7EF4D1397B91703 /* BoundRecordedPlayer.swift */,
 				A15E00000000000000000001 /* BoundLivePresence.swift */,
 				A15F00000000000000000001 /* BoundFriendInteraction.swift */,
@@ -3940,6 +3943,7 @@
 				DC679C3395174FE38794C79A /* BoundPlayerStateDisplay.swift in Sources */,
 				92A220783C5444D8894C0EFC /* BoundPlayerState.swift in Sources */,
 				18BC10A8D7EF4D1397B91702 /* BoundPlayerScene.swift in Sources */,
+				C10F43D3D8904F21B1C30A02 /* BoundFriendRouteAccess.swift in Sources */,
 				18BC10A8D7EF4D1397B91704 /* BoundRecordedPlayer.swift in Sources */,
 				A15E00000000000000000002 /* BoundLivePresence.swift in Sources */,
 				A15F00000000000000000002 /* BoundFriendInteraction.swift in Sources */,

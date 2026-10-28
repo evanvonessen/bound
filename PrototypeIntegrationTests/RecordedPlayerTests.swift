@@ -998,5 +998,11 @@ final class DirectionalFriendRouteTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(overlay.offscreenIndicator).angle, -.pi / 2, accuracy: 0.001)
         overlay.show(pose: pose, scene: scene, offscreenName: nil, drawsSprite: false)
         XCTAssertNil(overlay.offscreenIndicator, "Turning the arrow off does not create a fallback indicator")
+        overlay.showUnavailableRoute(friendName: "Friend")
+        XCTAssertFalse(overlay.isHidden)
+        XCTAssertNil(overlay.offscreenIndicator, "An unavailable route never invents a direction")
+        XCTAssertTrue(overlay.subviews.compactMap { $0 as? UILabel }.contains { $0.text == "Friend · Route unavailable" && !$0.isHidden })
+        overlay.show(pose: nil, scene: nil)
+        XCTAssertTrue(overlay.isHidden, "No stale route status survives a disabled or missing scene")
     }
 }
