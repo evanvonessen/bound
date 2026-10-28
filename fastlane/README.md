@@ -56,6 +56,19 @@ upload numbering with `manageAppVersionAndBuildNumber: true`; each new TestFligh
 upload must have a higher build number than the previous upload. The local
 project/archive number does not need a manual bump for each upload.
 
+Before archiving, delivery selects a full Xcode installation for its subprocesses
+and checks that Xcode has a registered Apple Account, a usable distribution
+private key for the Bound team, and an unexpired App Store profile containing
+that certificate and the production push entitlement. Command Line Tools alone
+cannot export the app. An explicit invalid `DEVELOPER_DIR` is rejected.
+
+If signing checks fail, sign in through Xcode Settings → Accounts and refresh
+the matching profile using automatic provisioning. Keep existing accounts,
+credentials, certificates and profiles; do not sign out, clear the keychain or
+revoke certificates to resolve a profile mismatch. These checks inspect local
+registration and public signing metadata; Apple can still require renewed
+authentication or account agreements at export/upload time.
+
 To validate signing without uploading:
 
 ```sh

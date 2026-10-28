@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 import plistlib
 import re
@@ -25,6 +26,75 @@ BUNDLE_ID = "com.evanvonessen.bound"
 TEAM_ID = "3N83BX5M9G"
 GROUP_ID = "165fa14a-3c1a-4c4c-ae90-0189de227adc"
 GROUP_NAME = "Evan Only Internal Testing"
+
+
+def configure_xcode(environ=None, selected=None):
+    """Use a full Xcode installation without changing global tool selection."""
+    environ = os.environ if environ is None else environ
+    explicit = environ.get("DEVELOPER_DIR")
+    if explicit:
+        if not (Path(explicit) / "usr/bin/xcodebuild").is_file():
+            raise ValueError("DEVELOPER_DIR must point to a full Xcode installation")
+        return explicit
+    if selected is None:
+        selected = subprocess.check_output(["xcode-select", "-p"], text=True).strip()
+    for candidate in [selected, "/Applications/Xcode.app/Contents/Developer",
+                      "/Applications/Developer/Xcode.app/Contents/Developer"]:
+        if (Path(candidate) / "usr/bin/xcodebuild").is_file():
+            environ["DEVELOPER_DIR"] = candidate
+            return candidate
+    raise ValueError("Install Xcode and select its developer directory; Command Line Tools cannot export this app")
+
+
+def signing_preflight():
+    """Inspect account registration and public identity metadata, never secrets."""
+    configure_xcode()
+    result = subprocess.run(["defaults", "export", "com.apple.dt.Xcode", "-"], capture_output=True)
+    try:
+        preferences = plistlib.loads(result.stdout) if result.returncode == 0 else {}
+    except plistlib.InvalidFileException:
+        preferences = {}
+    accounts = preferences.get("DVTDeveloperAccountManagerAppleIDLists", {})
+    count = sum(len(rows) for rows in accounts.values() if isinstance(rows, list)) if isinstance(accounts, dict) else 0
+    if count == 0:
+        raise ValueError("Xcode has no registered Apple Account. Sign in through Xcode Settings > Accounts, "
+                         "then retry. Do not remove accounts, clear credentials, or revoke certificates.")
+    identities = subprocess.check_output(["security", "find-identity", "-v", "-p", "codesigning"], text=True)
+    fingerprints = set(re.findall(r'[0-9]+\)\s+([A-Fa-f0-9]{40})\s+"Apple Distribution: [^"\n]+ \(' + re.escape(TEAM_ID) + r'\)"', identities))
+    if not fingerprints:
+        raise ValueError("No usable Apple Distribution identity/private key exists for the Bound team. "
+                         "Use Xcode Manage Certificates to install an authorized identity; preserve existing certificates.")
+    folders = [Path.home() / "Library/Developer/Xcode/UserData/Provisioning Profiles",
+               Path.home() / "Library/MobileDevice/Provisioning Profiles"]
+    for folder in folders:
+        for path in folder.glob("*.mobileprovision"):
+            result = subprocess.run(["security", "cms", "-D", "-i", str(path)], capture_output=True)
+            if result.returncode:
+                continue
+            try:
+                if profile_can_sign(plistlib.loads(result.stdout), fingerprints):
+                    return
+            except (ValueError, TypeError, plistlib.InvalidFileException):
+                continue
+    raise ValueError("No unexpired App Store provisioning profile includes an installed Bound distribution private key "
+                     "and production push entitlement. Refresh the profile in Xcode before archiving; "
+                     "do not revoke certificates or delete saved credentials.")
+
+
+def profile_can_sign(profile, fingerprints, now=None):
+    entitlements = profile.get("Entitlements", {})
+    expiry = profile.get("ExpirationDate")
+    now = now or datetime.now(timezone.utc)
+    if not isinstance(expiry, datetime):
+        return False
+    return (expiry.replace(tzinfo=timezone.utc) > now
+            and TEAM_ID in profile.get("TeamIdentifier", [])
+            and entitlements.get("application-identifier") == TEAM_ID + "." + BUNDLE_ID
+            and entitlements.get("get-task-allow") is False
+            and entitlements.get("aps-environment") == "production"
+            and not profile.get("ProvisionedDevices") and not profile.get("ProvisionsAllDevices")
+            and bool({hashlib.sha1(cert).hexdigest().upper() for cert in profile.get("DeveloperCertificates", [])}
+                     & {fingerprint.upper() for fingerprint in fingerprints}))
 
 
 def git(root, *args):
@@ -259,6 +329,7 @@ def main():
         if args.check:
             print(f"Verified origin/main: {commit}. No build, signing update or upload performed.")
         else:
+            signing_preflight()
             deliver(ROOT, commit, args.upload)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"TestFlight delivery incomplete: {error}", file=sys.stderr)

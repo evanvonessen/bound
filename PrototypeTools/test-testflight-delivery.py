@@ -20,6 +20,49 @@ spec.loader.exec_module(delivery)
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_profile_must_match_private_key_push_scope_team_and_validity(self):
+        from datetime import datetime, timezone
+        certificate = b'fixture public DER certificate'
+        fingerprint = hashlib.sha1(certificate).hexdigest().upper()
+        profile = {'TeamIdentifier':[delivery.TEAM_ID], 'ExpirationDate':datetime(2099,1,1),
+            'DeveloperCertificates':[certificate], 'Entitlements':{
+                'application-identifier':delivery.TEAM_ID+'.'+delivery.BUNDLE_ID,
+                'get-task-allow':False, 'aps-environment':'production'}}
+        self.assertTrue(delivery.profile_can_sign(profile, {fingerprint}))
+        self.assertFalse(delivery.profile_can_sign(profile, {'0'*40}))
+        self.assertFalse(delivery.profile_can_sign(dict(profile, ExpirationDate=datetime(2000,1,1)), {fingerprint}))
+        self.assertFalse(delivery.profile_can_sign(dict(profile, ProvisionedDevices=['fixture-device']), {fingerprint}))
+        for field,value in [('aps-environment','development'),('application-identifier','OTHER.fixture'),('get-task-allow',True)]:
+            changed=dict(profile,Entitlements=dict(profile['Entitlements'],**{field:value}))
+            self.assertFalse(delivery.profile_can_sign(changed,{fingerprint}))
+
+    def test_xcode_selection_rejects_command_line_tools_and_preserves_explicit_full_xcode(self):
+        with tempfile.TemporaryDirectory() as folder:
+            developer = Path(folder) / 'Xcode.app/Contents/Developer'
+            (developer / 'usr/bin').mkdir(parents=True)
+            (developer / 'usr/bin/xcodebuild').touch()
+            environment = {'DEVELOPER_DIR': str(developer)}
+            self.assertEqual(delivery.configure_xcode(environment), str(developer))
+            with self.assertRaisesRegex(ValueError, 'full Xcode'):
+                delivery.configure_xcode({'DEVELOPER_DIR': folder})
+
+    def test_missing_xcode_account_stops_before_keychain_identity_or_archive_access(self):
+        result = subprocess.CompletedProcess([], 0, stdout=plistlib.dumps({
+            'DVTDeveloperAccountManagerAppleIDLists': {'IDE.Identifiers.Prod': []}}))
+        with patch.object(delivery, 'configure_xcode'), patch.object(delivery.subprocess, 'run', return_value=result), \
+             patch.object(delivery.subprocess, 'check_output') as identity:
+            with self.assertRaisesRegex(ValueError, 'no registered Apple Account'):
+                delivery.signing_preflight()
+            identity.assert_not_called()
+
+    def test_registered_account_still_requires_distribution_private_key_for_the_correct_team(self):
+        result = subprocess.CompletedProcess([], 0, stdout=plistlib.dumps({
+            'DVTDeveloperAccountManagerAppleIDLists': {'IDE.Identifiers.Prod': [{'identifier':'fixture'}]}}))
+        with patch.object(delivery, 'configure_xcode'), patch.object(delivery.subprocess, 'run', return_value=result), \
+             patch.object(delivery.subprocess, 'check_output', return_value='Apple Development: fixture'):
+            with self.assertRaisesRegex(ValueError, 'No usable Apple Distribution'):
+                delivery.signing_preflight()
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
