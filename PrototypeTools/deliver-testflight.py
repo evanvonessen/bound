@@ -38,8 +38,8 @@ def configure_xcode(environ=None, selected=None):
         return explicit
     if selected is None:
         selected = subprocess.check_output(["xcode-select", "-p"], text=True).strip()
-    for candidate in [selected, "/Applications/Xcode.app/Contents/Developer",
-                      "/Applications/Developer/Xcode.app/Contents/Developer"]:
+    for candidate in ["/Applications/Developer/Xcode.app/Contents/Developer",
+                      selected, "/Applications/Xcode.app/Contents/Developer"]:
         if (Path(candidate) / "usr/bin/xcodebuild").is_file():
             environ["DEVELOPER_DIR"] = candidate
             return candidate
@@ -47,18 +47,8 @@ def configure_xcode(environ=None, selected=None):
 
 
 def signing_preflight():
-    """Inspect account registration and public identity metadata, never secrets."""
+    """Inspect public signing metadata; let Xcode establish account access at upload."""
     configure_xcode()
-    result = subprocess.run(["defaults", "export", "com.apple.dt.Xcode", "-"], capture_output=True)
-    try:
-        preferences = plistlib.loads(result.stdout) if result.returncode == 0 else {}
-    except plistlib.InvalidFileException:
-        preferences = {}
-    accounts = preferences.get("DVTDeveloperAccountManagerAppleIDLists", {})
-    count = sum(len(rows) for rows in accounts.values() if isinstance(rows, list)) if isinstance(accounts, dict) else 0
-    if count == 0:
-        raise ValueError("Xcode has no registered Apple Account. Sign in through Xcode Settings > Accounts, "
-                         "then retry. Do not remove accounts, clear credentials, or revoke certificates.")
     identities = subprocess.check_output(["security", "find-identity", "-v", "-p", "codesigning"], text=True)
     fingerprints = set(re.findall(r'[0-9]+\)\s+([A-Fa-f0-9]{40})\s+"Apple Distribution: [^"\n]+ \(' + re.escape(TEAM_ID) + r'\)"', identities))
     if not fingerprints:

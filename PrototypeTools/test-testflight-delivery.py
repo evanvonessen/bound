@@ -46,22 +46,23 @@ class DeliveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'full Xcode'):
                 delivery.configure_xcode({'DEVELOPER_DIR': folder})
 
-    def test_missing_xcode_account_stops_before_keychain_identity_or_archive_access(self):
-        result = subprocess.CompletedProcess([], 0, stdout=plistlib.dumps({
-            'DVTDeveloperAccountManagerAppleIDLists': {'IDE.Identifiers.Prod': []}}))
-        with patch.object(delivery, 'configure_xcode'), patch.object(delivery.subprocess, 'run', return_value=result), \
-             patch.object(delivery.subprocess, 'check_output') as identity:
-            with self.assertRaisesRegex(ValueError, 'no registered Apple Account'):
-                delivery.signing_preflight()
-            identity.assert_not_called()
-
-    def test_registered_account_still_requires_distribution_private_key_for_the_correct_team(self):
-        result = subprocess.CompletedProcess([], 0, stdout=plistlib.dumps({
-            'DVTDeveloperAccountManagerAppleIDLists': {'IDE.Identifiers.Prod': [{'identifier':'fixture'}]}}))
-        with patch.object(delivery, 'configure_xcode'), patch.object(delivery.subprocess, 'run', return_value=result), \
-             patch.object(delivery.subprocess, 'check_output', return_value='Apple Development: fixture'):
+    def test_preflight_does_not_read_account_preferences(self):
+        with patch.object(delivery, 'configure_xcode'), \
+             patch.object(delivery.subprocess, 'run') as run, \
+             patch.object(delivery.subprocess, 'check_output', return_value='Apple Development: fixture') as identity:
             with self.assertRaisesRegex(ValueError, 'No usable Apple Distribution'):
                 delivery.signing_preflight()
+            run.assert_not_called()
+            self.assertEqual(identity.call_args.args[0],
+                             ['security', 'find-identity', '-v', '-p', 'codesigning'])
+
+    def test_relocated_xcode_is_preferred_without_global_selection_changes(self):
+        with patch.object(Path, 'is_file', return_value=True):
+            environment = {}
+            self.assertEqual(delivery.configure_xcode(environment, selected='/old/Xcode'),
+                             '/Applications/Developer/Xcode.app/Contents/Developer')
+            self.assertEqual(environment['DEVELOPER_DIR'],
+                             '/Applications/Developer/Xcode.app/Contents/Developer')
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

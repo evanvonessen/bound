@@ -1,5 +1,8 @@
 require "fileutils"
 
+# Select Xcode per process; never change global selection or account settings.
+ENV["DEVELOPER_DIR"] ||= "/Applications/Developer/Xcode.app/Contents/Developer"
+
 opt_out_usage
 default_platform(:ios)
 
