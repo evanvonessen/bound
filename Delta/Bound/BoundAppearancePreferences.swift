@@ -43,6 +43,12 @@ enum BoundMultiplayerFeatures {
     }
 }
 
+/// Presentation only; this preference never controls native movement.
+enum BoundLetPassButton {
+    static let key = "bound.multiplayer.show-let-pass.v1"
+    static var isShown: Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+}
+
 /// Retired customization-visibility preference kept for upgrade/reset compatibility.
 /// It no longer exposes settings or gates saved choices at runtime.
 final class BoundExperimentalSettingsPreferences {

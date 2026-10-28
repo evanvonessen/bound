@@ -36,7 +36,9 @@ enum BoundVBABattleBridge {
     static func requestWorldMovementRevocation(){}
 }
 '''
-source=model.replace('import DeltaCore','')+adapters+tests.replace('import XCTest','').replace('@testable import Delta','')
+preferences=(ROOT/'Delta/Bound/BoundAppearancePreferences.swift').read_text()
+preferences=preferences[preferences.index('enum BoundLetPassButton {'):preferences.index('/// Retired customization-visibility')]
+source=model.replace('import DeltaCore','')+preferences+adapters+tests.replace('import XCTest','').replace('@testable import Delta','')
 source+='\nMainActor.assumeIsolated {let tests=BoundWorldMovementTests()\n'
 source+='\n'.join('print("'+name+'");fflush(stdout);tests.'+name+'()' for name in names)
 source+='\n}\nprint("PASS")\n'

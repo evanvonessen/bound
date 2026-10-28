@@ -69,6 +69,33 @@ final class BoundWorldMovementTests:XCTestCase {
         func grantB() {br=step(2,1);ticks(6);XCTAssertEqual(permit(b),1)}
     }
 
+    func testPassThroughDoesNotDependOnLetPassVisibilityOrMovementGrants() {
+        let previous = UserDefaults.standard.object(forKey: BoundLetPassButton.key)
+        defer { UserDefaults.standard.set(previous, forKey: BoundLetPassButton.key) }
+        UserDefaults.standard.set(false, forKey: BoundLetPassButton.key)
+        for delta in [BoundMovementTile(x: 1, y: 0), .init(x: -1, y: 0), .init(x: 0, y: 1), .init(x: 0, y: -1)] {
+            let pair = Pair()
+            pair.bc = pair.ac; pair.bp = pair.ap
+            pair.af = [pair.actor(pair.ac, pair.ap, kind: 1, id: 10)]
+            pair.bf = [pair.actor(pair.bc, pair.bp, kind: 1, id: 20)]
+            pair.connect()
+            // Spawn overlap, both sides of every cardinal crossing, and
+            // the former one-tile buffer, including stale departure tiles.
+            for offset in [0, 1, 2, 1, 0, -1, -2] {
+                pair.bp = pair.bc
+                pair.bc = .init(x: delta.x * offset, y: delta.y * offset)
+                pair.tick()
+                for session in [pair.a, pair.b] {
+                    let host = session.probe.hostInput()!
+                    XCTAssertEqual(BoundMovementSnapshot.word(host, 12), 1, "Proximity negotiation must stay disabled")
+                    XCTAssertEqual(BoundMovementSnapshot.word(host, 68), 0, "Neither peer nor follower is an obstacle")
+                    XCTAssertTrue(host[128..<192].allSatisfy { $0 == 0 })
+                    XCTAssertFalse(session.passing, "No Let Pass request is needed")
+                }
+            }
+        }
+    }
+
     func testPendingCollisionSurvivesInterveningNativeFrameWithoutAuthorizingStaleStep() {
         let pair=Pair();pair.ar=pair.step(0,1)
         var bytes=pair.snapshot(true).bytes
@@ -144,11 +171,11 @@ final class BoundWorldMovementTests:XCTestCase {
         pair.br=pair.step(2,1);pair.ticks(5);XCTAssertEqual(pair.permit(pair.b),0)
         pair.af=[];pair.ticks(4);XCTAssertEqual(pair.permit(pair.b),1)
     }
-    func testExistingOverlapPublishesBothFootprintsWithoutMovingOrSnapping() {
+    func testExistingOverlapPublishesNoCollisionFootprintsWithoutMovingOrSnapping() {
         let pair=Pair();pair.bc=pair.ac;pair.bp=pair.ap;pair.connect();pair.ar=pair.step(0,-1)
         pair.ticks(3);let host=pair.a.probe.hostInput()!
-        XCTAssertEqual(BoundMovementSnapshot.word(host,68),1)
-        XCTAssertEqual(BoundMovementSnapshot.tile(host,132),pair.bc)
+        XCTAssertEqual(BoundMovementSnapshot.word(host,68),0)
+        XCTAssertEqual(BoundMovementSnapshot.word(host,12),1)
         XCTAssertEqual(pair.ac,.init(x:0,y:0));XCTAssertEqual(pair.bc,.init(x:0,y:0))
     }
     func testStaleControlStreamRevokesAuthorityWhilePresenceRemainsFresh() {
@@ -172,6 +199,11 @@ final class BoundWorldMovementTests:XCTestCase {
         pair.bg=3;pair.br=pair.step(2,1,nonce:1,generation:3);pair.tick()
         pair.b.receive(old.encoded()!,at:pair.now);XCTAssertEqual(pair.permit(pair.b),0)
         pair.ticks(5);XCTAssertFalse(pair.b.reconnecting)
+    }
+    func testLetPassRemainsUsableAtVisibleHysteresisBoundary() {
+        let pair = Pair(); pair.bc = .init(x: 3, y: 0); pair.bp = pair.bc
+        pair.connect(); pair.a.letPass(at: pair.now); pair.drain(); pair.ticks(3)
+        XCTAssertTrue(pair.a.passing); XCTAssertTrue(pair.b.passing)
     }
     func testLetPassRequiresAcknowledgementAndRetriesLostAcknowledgement() {
         let pair=Pair();pair.connect();pair.drop=[.passAck];pair.a.letPass(at:pair.now);pair.drain();pair.ticks(3)

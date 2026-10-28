@@ -287,7 +287,7 @@ final class BoundWorldMovementSession:ObservableObject {
     }
     private func nearAndStationary(_ c:Context)->Bool {
         guard let own=c.own.first,let other=c.other.first else{return false}
-        return own.current==own.previous && other.current==other.previous && own.current.distance(other.current)<=2
+        return own.current==own.previous && other.current==other.previous && own.current.distance(other.current)<=3
     }
     func letPass(at now:TimeInterval=ProcessInfo.processInfo.systemUptime) {
         guard now.isFinite,now>=clock,let c=context,ready(at:now),nearAndStationary(c),pass==nil,let token=nextToken() else{return}
@@ -471,20 +471,18 @@ final class BoundWorldMovementSession:ObservableObject {
     private func publish(native:BoundMovementSnapshot,context c:Context,at now:TimeInterval) {
         var out=Data(repeating:0,count:1024);nativeSequence &+= 2;if nativeSequence==0 {nativeSequence=2}
         let put=BoundMovementSnapshot.put
-        put(0x31574C42,&out,0);put(1,&out,4);put(nativeSequence,&out,8);put(passing ? 1:3,&out,12);put(15,&out,16)
+        put(0x31574C42,&out,0);put(1,&out,4);put(nativeSequence,&out,8);put(1,&out,12);put(15,&out,16)
         put(native.generation,&out,20);put(Self.epoch(c.local),&out,24);put(Self.epoch(c.peer),&out,28)
         for n in [32,48] {put(UInt32(truncatingIfNeeded:c.instance),&out,n);put(UInt32(c.instance>>32),&out,n+4)}
         out[64]=UInt8(c.group);out[65]=UInt8(c.number);out[66]=UInt8(c.elevation)
-        let actors=passing ? []:Array(c.other.prefix(2));put(UInt32(actors.count),&out,68)
+        // Remote trainers and followers are presentation, never native obstacles.
+        // Disable both occupancy and proximity negotiation, independently of
+        // Let Pass. This also works with previously installed BLW1 cartridges.
+        put(0,&out,68)
         let permit=passing ? native.request:attempt.flatMap{$0.phase == .committed && !$0.started && now<$0.deadline ? $0.step:nil}
         if let permit,permit==native.request {
             put(permit.nonce,&out,72);put(permit.generation,&out,76)
             BoundMovementSnapshot.putTile(permit.from,&out,80);BoundMovementSnapshot.putTile(permit.to,&out,84);put(passing ? 3:0,&out,88)
-        }
-        for (i,a) in actors.enumerated() {
-            let n=128+i*32;put(1,&out,n);BoundMovementSnapshot.putTile(a.current,&out,n+4);BoundMovementSnapshot.putTile(a.previous,&out,n+8)
-            out[n+12]=UInt8(a.elevation);out[n+13]=UInt8(a.kind)
-            put(UInt32(truncatingIfNeeded:a.identity),&out,n+20);put(UInt32(a.identity>>32),&out,n+24)
         }
         probe.publish(out,epoch:probeEpoch)
     }

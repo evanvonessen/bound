@@ -403,8 +403,9 @@ final class BoundLivePresenceSession: ObservableObject {
         return last.pose
     }
     func collision(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundPresenceCollision? {
-        guard movementContext(at:now) != nil,!movement.passing,!movement.reconnecting,let pose=samples.last?.pose else{return nil}
-        return BoundPresenceCollision(pose:pose)
+        // The legacy UI port must not reintroduce solid peer footprints.
+        // Presence rendering and social targeting still use movementContext.
+        return nil
     }
 
     /// Retained/interpolated images never supply collision or social authority.

@@ -47,6 +47,25 @@ struct BoundFollowerInteractionPacket: Equatable, Sendable {
     }
 }
 
+/// Smooth presentation only. Actions still validate fresh movement context.
+struct BoundLetPassVisibility {
+    private(set) var visible = false
+    private var lastNearby: TimeInterval = -.infinity
+    mutating func update(enabled: Bool, distance: Int?, at now: TimeInterval) -> Bool {
+        guard enabled, now.isFinite, now >= lastNearby else { reset(); return false }
+        if let distance {
+            // Enter at two tiles, leave beyond three; moving samples can
+            // alternate between adjacent tiles without blinking the button.
+            visible = distance <= (visible ? 3 : 2)
+            if visible { lastNearby = now }
+        } else if now - lastNearby > 0.5 {
+            visible = false
+        }
+        return visible
+    }
+    mutating func reset() { visible = false; lastNearby = -.infinity }
+}
+
 @MainActor
 final class BoundFollowerInteractionSession: ObservableObject {
     struct Context: Equatable {
@@ -70,6 +89,11 @@ final class BoundFollowerInteractionSession: ObservableObject {
     var onReaction: ((UInt64) -> Void)?
     var letPass: (() -> Void)?
     @Published var canLetPass=false
+    private var letPassVisibility = BoundLetPassVisibility()
+    func updateLetPass(available: Bool, distance: Int?, at now: TimeInterval) {
+        let visible = letPassVisibility.update(enabled: available && BoundLetPassButton.isShown, distance: distance, at: now)
+        if canLetPass != visible { canLetPass = visible }
+    }
     @Published private(set) var isPresented=false
     @Published private(set) var reaction=""
     private var anchor: Context?
@@ -107,8 +131,8 @@ final class BoundFollowerInteractionSession: ObservableObject {
         recent.append(packet.id);if recent.count>64 { recent.removeFirst(recent.count-64) }
         show("♥ Your friend offered a berry!");onReaction?(value.followerID)
     }
-    func requestLetPass() { guard canLetPass else { return };dismiss();letPass?();show("Letting your friend pass.") }
-    func suspend() { dismiss();reactionTask?.cancel();reaction="";canLetPass=false }
+    func requestLetPass() { guard canLetPass, BoundLetPassButton.isShown else { return };dismiss();letPass?();show("Letting your friend pass.") }
+    func suspend() { dismiss();reactionTask?.cancel();reaction="";canLetPass=false;letPassVisibility.reset() }
     private func show(_ text:String) {
         reactionTask?.cancel();reaction=text;changed?()
         reactionTask=Task { [weak self] in
