@@ -19,10 +19,38 @@ user instructions for all chats and supersede older delivery guidance in this
 repository. Normal local validation, commits, and pushes remain authorized.
 Keep the existing Cloud workflow manual-only; do not enable automatic triggers.
 
-For every Bound prompt, finish the requested work and required validation, then
-start `bundle exec fastlane beta` as a detached process. Do not wait for or poll
-the beta job; report only that it was started and where its log is saved. This
-is the user's standing delivery instruction. Preserve existing upload receipts.
+## Manual Fastlane delivery and Apple account preservation
+
+The user runs delivery manually. Agents must not launch `testlane`, Fastlane
+`beta`, or any TestFlight upload unless the user explicitly authorizes that run.
+A code change, commit, push, ROM publication, or request to diagnose a failure
+is not upload authorization. Preserve existing upload receipts.
+
+In the user's Terminal, `source ~/.zshrc` loads the `testlane` alias and shared
+`ASC_API_KEY_PATH`, `ASC_API_KEY_ID`, and `ASC_API_ISSUER_ID` settings. The alias
+uses `/Users/evandev/dev/bound_multiplayer/bound` and runs `bundle exec fastlane
+beta && bundle exec fastlane verify`; verify runs only after beta succeeds.
+Verify the local checkout and alias definition when needed; do not execute the
+alias to inspect it. The older `/Users/evandev/dev/bound-multiplayer` checkout
+(with a hyphen) is a different checkout and must not be mistaken for this one.
+
+Use Xcode at `/Applications/Developer/Xcode.app`; delivery defaults its process
+`DEVELOPER_DIR` to that app's `Contents/Developer` directory. Do not change global
+Xcode selection or Apple account settings as a build troubleshooting shortcut.
+
+Never sign the user out of an Apple account, remove an account, clear/delete
+saved credentials, revoke signing certificates, or delete provisioning profiles.
+The API private key is outside Git in `~/.config/app-store-connect/`. Never print,
+copy into chat, or commit its contents or any signing assets. Shared ASC_API_*
+settings are reusable by other app upload scripts configured to consume them;
+Bound beta requires explicit API-key authentication with no account fallback.
+Do not infer sign-out from private Xcode preference lists.
+
+Diagnose failures read-only from `.build/testflight-delivery/<commit>/attempt-*/`
+(including `upload.log`) and `.build/fastlane/logs/Bound-Bound.log`. Inspect the
+Xcode distribution log bundle referenced by upload.log when necessary. Distinguish
+upload acceptance, Apple processing, and TestFlight availability; claim only
+stages confirmed by evidence. See `fastlane/README.md` for configuration details.
 
 Every new TestFlight upload must automatically receive a build number higher
 than the previously uploaded build. Keep Xcode-managed upload numbering enabled
