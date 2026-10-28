@@ -40,9 +40,11 @@ and permanent losses survive reconnects, app restarts, boxing, release and save
 rollback. Both players need this app version. Existing run journals load with
 all their original eligibility/deaths and acquire partner metadata on reconnect.
 A legacy peer triggers a pause and an update message. The encounter rules use
-the native Soul Link observation/enforcement adapter. The paired layout-14 ROM
-includes the native Links menu and the Route 4 offering of one shiny Magikarp;
-it preserves the battery save format. Earlier exact ROM profiles retain their own state compatibility.
+the native Soul Link observation/enforcement adapter. The paired layout-15 ROM
+includes the native Links menu, permanent elimination markers and storage rules,
+and the Route 4 offering of one shiny Magikarp. The battery save format remains
+version 1; raw emulator states require their exact ROM and layout. Earlier exact
+ROM profiles retain their own state compatibility and original behavior.
 
 ## In-game Links menu
 
@@ -66,8 +68,10 @@ The layout-14 cartridge owns this native pixel interface and uses the game's
 existing font, icon graphics and palettes. Bound publishes a bounded two-row
 viewport only on the emulator's completed-frame owner. Optional journal metadata
 retains species, locations and partner icons even when a Pokémon leaves the party.
-BLP1 cosmetic chunks use the existing authenticated room and fresh challenge
+BLP2 cosmetic chunks use the existing authenticated room and fresh challenge
 UUIDs, reject stale sequences, and cannot acquire a slot or change a death.
+They retain full personality/trainer identities for cooperative admission;
+legacy BLP1 presentation chunks remain readable.
 The display remains separate from the durable encounter and loss authority.
 
 ## Shared team dashboard
@@ -100,9 +104,43 @@ and member records at 351. Each member has 16-bit slot (65535 means unlinked),
 length and bounded name. BSL3 area/egg bits, BSE1 category bits and durable shared events remain the authority;
 BST1 never acquires slots or changes deaths. An older BSL2 peer requires an update before the updated Soul Link session can pair. No new ROM or game ABI is needed.
 
-## Death moments and graveyard
+## Elimination and reserved boxes
 
-A newly committed local or partner loss queues a silent **SOUL LINK BROKEN**
+During an active Soul Link run, an accepted owned faint permanently eliminates
+the encounter pair on both players' games. Radical Red's native revival checks
+run before a new faint is accepted. An eliminated Pokémon remains at zero HP:
+healing, battle entry, PC deposit/withdrawal, reconnects and older checkpoints
+cannot revive it. The native party list and all summary pages display a small
+red pixel X beside its nickname. A normally fainted Pokémon or an ineligible
+extra catch does not receive this elimination marker.
+
+The last eight boxes, **Boxes 18–25**, display **Eliminated** on the same black
+wallpaper while these rules are active. Deposit eliminated Pokémon manually;
+the game never relocates them. Living and normally fainted Pokémon cannot be
+deposited, swapped or moved as part of a mixed selection into these boxes.
+Existing occupants are preserved and can be withdrawn or moved out. Automatic
+wild, raid, gift and prize placement searches only Boxes 1–17. When those boxes
+and the party are full, the acquisition is rejected before payment or a ball is
+spent, even if a reserved box is empty. Outside an active run, the original 25
+boxes and their saved names/wallpapers retain normal behavior.
+
+## Battle losses and graveyard
+
+The current cartridge groups newly eliminated pairs from one battle into a
+single **BATTLE LOSSES** graphic after the battle ends. Each player's own
+Pokémon appears on the left and their partner's on the right, using the bundled
+Radical Red species sprites, nicknames and a broken pixel link. Multiple losses
+scroll within the card. Close it to acknowledge that battle; a terminal party
+wipe preserves the card before returning to the run menu.
+
+The durable journal retains unfinished battle groups through reconnects and
+restarts. Cosmetic BLB1 packets carry completed groups only after authenticated
+loss facts arrive; they cannot eliminate a Pokémon. Acknowledged groups remain
+acknowledged after checkpoint rollback. Losses from friendly battles and borrowed
+teams remain excluded. Cooperative battles agree on a full-identity pair map
+before READY and apply accepted linked faints through the native battle flow.
+
+Earlier cartridge profiles retain the individual silent **SOUL LINK BROKEN**
 card over gameplay with both linked names and their encounter area. It fades in,
 can be dismissed, and clears after seven visible seconds. Gameplay and controller
 inputs continue. Reduced Motion removes the transition, and VoiceOver receives
@@ -110,7 +148,7 @@ an announcement. Cards wait while Friends/settings/text editing obscure the game
 or the app loses focus; hidden time never consumes their display time.
 
 Each device acknowledges its own presentation in the existing atomic run journal.
-Multiple losses queue separately. An unseen moment survives restart; dismissal,
+An unseen moment survives restart; dismissal,
 repeated packets, healing and old emulator states cannot replay an acknowledged
 loss or revive the pair. A failed journal write pauses the run and keeps the
 moment pending. Existing pre-feature losses enter the graveyard quietly rather

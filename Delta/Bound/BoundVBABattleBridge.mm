@@ -633,20 +633,22 @@ static uint8_t soulQAScriptBackup[128];
 + (NSInteger)linksMenuPageOffset {
     // Presentation data belongs only to the exact Links-enabled cartridge.
     // Older profiles retain their own allocations and remain untouched.
-    if(!rom||!workRAM||multiRedProfile(rom)!=&MultiRedCurrentProfile||GameSaveStateLayout<14) return -1;
+    const auto *profile=multiRedProfile(rom);
+    if(!rom||!workRAM||!profile||!profile->linksHostSize) return -1;
     const auto *request=workRAM+GameLinksRequestAddress-0x02000000;
     if(word(request)!=0x51524C42||request[14]!=1||word(request+4)>4094||word(request+4)%2) return -1;
     return word(request+4);
 }
 + (void)setLinksMenuHost:(NSData *)data {
-    if([self linksMenuPageOffset]<0||data.length!=GameLinksHostSize) return;
+    const auto *profile=multiRedProfile(rom);
+    if([self linksMenuPageOffset]<0||!profile||data.length!=profile->linksHostSize) return;
     const auto *source=static_cast<const uint8_t *>(data.bytes);
     const uint32_t sequence=word(source+8),total=word(source+12),offset=word(source+16),count=word(source+20);
     if(word(source)!=0x314E4C42||half(source+4)!=1||half(source+6)!=0||!sequence||(sequence&1)
        ||total>4096||offset!=unsigned([self linksMenuPageOffset])||count>2||count>total
        ||(count&&offset+count>total)||word(source+24)>1||word(source+28)) return;
-    auto *destination=rom+GameLinksHostOffset;
-    put32(destination+8,sequence-1);memcpy(destination,source,8);memcpy(destination+12,source+12,GameLinksHostSize-12);put32(destination+8,sequence);
+    auto *destination=rom+profile->linksHostOffset;
+    put32(destination+8,sequence-1);memcpy(destination,source,8);memcpy(destination+12,source+12,profile->linksHostSize-12);put32(destination+8,sequence);
 }
 // Attaches to the game's ABI; never installs/restores gameplay instructions.
 + (BOOL)installSharedWorld {
@@ -1079,8 +1081,29 @@ static uint8_t soulQAScriptBackup[128];
 }
 + (BOOL)setSoulLinkDenied:(NSData *)identities {
     if(!soulHooked() || identities.length%8 || identities.length>2048*8) return NO;
+    const auto *profile=multiRedProfile(rom);
+    if(profile&&profile->eliminationHostSize && (word(rom+SoulPolicy+4)!=identities.length/8
+       ||memcmp(rom+SoulPolicy+8,identities.bytes,identities.length))) put32(rom+profile->eliminationHostOffset+16,0);
     memcpy(rom+SoulPolicy+8,identities.bytes,identities.length);
     put32(rom+SoulPolicy+4,unsigned(identities.length/8)); return YES;
+}
++ (BOOL)setSoulLinkEliminated:(NSData *)bits {
+    if(!soulHooked()||bits.length!=256) return NO;
+    const auto *profile=multiRedProfile(rom);if(!profile)return NO;
+    if(!profile->eliminationHostSize)return YES; // Frozen earlier cartridges have no elimination UI/storage ABI.
+    if(profile->eliminationHostSize!=288)return NO;
+    auto *out=rom+profile->eliminationHostOffset;const unsigned count=word(rom+SoulPolicy+4);
+    if(count>2048)return NO;
+    const auto *mask=static_cast<const uint8_t *>(bits.bytes);
+    for(unsigned i=count;i<2048;i++)if(mask[i/8]&(1u<<(i%8)))return NO;
+    if(word(out)==0x31584C42&&word(out+4)==1&&word(out+12)==count&&word(out+16)==1
+       &&!word(out+20)&&!word(out+24)&&!word(out+28)&&word(out+8)&&!(word(out+8)&1)&&!memcmp(out+32,bits.bytes,256))return YES;
+    uint32_t sequence=word(out+8);sequence=sequence>=0xFFFFFFFC?2:(sequence&~1u)+2;
+    put32(out+8,sequence-1);put32(out,0x31584C42);put32(out+4,1);put32(out+12,count);put32(out+16,1);
+    memset(out+20,0,12);memcpy(out+32,bits.bytes,256);put32(out+8,sequence);return YES;
+}
++ (BOOL)usesAcceptedSoulFaints {
+    const auto *profile=multiRedProfile(rom);return profile&&profile->eliminationHostSize;
 }
 + (BOOL)setSoulLinkAcquired:(NSData *)bits {
     if(!soulHooked()||bits.length!=288) return NO;
@@ -1110,7 +1133,10 @@ static uint8_t soulQAScriptBackup[128];
         if(count<=32) acquisitions=[NSData dataWithBytes:internalRAM+(BOUND_SOUL_ACQUISITION_OFFSET+12) length:count*12];
     }
     NSMutableData *active=[NSMutableData data];
-    if(internalRAM[0x3529]&2) {
+    const auto *faintProfile=multiRedProfile(rom);
+    // Current cartridges latch the native accepted-faint command after RR's
+    // revival checks. Raw BattleMon zero HP is only legacy evidence.
+    if((internalRAM[0x3529]&2) && !(faintProfile&&faintProfile->eliminationHostSize)) {
         unsigned count=workRAM[0x23BCC];
         if(count<=4) for(unsigned i=0;i<count;i++) {
             const auto *b=workRAM+0x23BE4+i*88;
@@ -1179,7 +1205,7 @@ static uint8_t soulQAScriptBackup[128];
     }
     if(internalRAM[0x3529]&2) {
         unsigned n=workRAM[0x23BCC];
-        if(n<=4) for(unsigned i=0;i<n;i++) {
+        if(n<=4) for(unsigned i=0;i<n;i+=2) {
             auto *b=workRAM+0x23BE4+i*88;
             uint8_t identity[8]; memcpy(identity,b+0x48,4); memcpy(identity+4,b+0x54,4);
             // Native attack-canceler rejects a zero-HP attacker. Also cover
@@ -1199,6 +1225,8 @@ static uint8_t soulQAScriptBackup[128];
         // restore entry bytes and clear policy instead of erasing live code.
         put32(rom+SoulPolicy+4,0);
         put32(rom+SoulPolicy,0);memset(rom+0x1FFE008,0,32);
+        const auto *profile=multiRedProfile(rom);
+        if(profile&&profile->eliminationHostSize)memset(rom+profile->eliminationHostOffset,0,profile->eliminationHostSize);
     }
 }
 
@@ -1255,9 +1283,15 @@ static uint8_t soulQAScriptBackup[128];
     return @{@"equal":@(equal),@"reused":@(reuse),@"retained":@(retained),@"transitions":@(transitions+1)};
 }
 
++ (NSData *)qaEliminationPolicy {
+    const auto *profile=multiRedProfile(rom);
+    return rom&&profile&&profile->eliminationHostSize==288
+        ? [NSData dataWithBytes:rom+profile->eliminationHostOffset length:288] : [NSData data];
+}
 + (NSData *)qaLinksMenuHost {
-    if(!rom||multiRedProfile(rom)!=&MultiRedCurrentProfile||GameSaveStateLayout<14) return [NSData data];
-    return [NSData dataWithBytes:rom+GameLinksHostOffset length:GameLinksHostSize];
+    const auto *profile=multiRedProfile(rom);
+    if(!rom||!profile||!profile->linksHostSize) return [NSData data];
+    return [NSData dataWithBytes:rom+profile->linksHostOffset length:profile->linksHostSize];
 }
 + (NSDictionary<NSString *,id> *)qaUncachedSoulLinkSnapshot {
     if(!rom||!workRAM||!internalRAM || workRAM[0x24029]>6) return @{};

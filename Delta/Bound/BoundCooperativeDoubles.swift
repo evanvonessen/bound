@@ -16,6 +16,101 @@ private func coopID(_ bytes: Data, _ offset: Int) -> UUID {
 private func coopHash(_ bytes: Data) -> Data { Data(SHA256.hash(data: bytes)) }
 private func coopFNV(_ bytes: Data) -> UInt32 { bytes.reduce(UInt32(2166136261)) { ($0 ^ UInt32($1)) &* 16777619 } }
 
+/// SLP1 is an immutable, hash-agreed map of actual PID+OT identities. Names,
+/// map numbers, packet arrival order and party positions never identify a pair.
+struct BoundCooperativeSoulPairs: Equatable, Sendable {
+    static let offset = 2568, size = 136
+    let data: Data
+    static var empty: Self { Self(pairs: [], enabled: false)! }
+    var count: Int { Int(coopWord(data,4)&255) }
+    init?(data source: Data) {
+        let bytes=Data(source)
+        guard bytes.count==Self.size,coopWord(bytes,0)==0x31504C53 else { return nil }
+        let raw=coopWord(bytes,4),count=Int(raw&255)
+        guard raw&0x7FFFFF00==0,count<=6,raw&0x80000000 != 0 || count==0,
+              bytes[(40+count*16)..<136].allSatisfy({$0==0}),
+              bytes.subdata(in:8..<40)==coopHash(bytes.subdata(in:4..<8)+bytes.subdata(in:40..<136)) else { return nil }
+        var identities=Set<Data>(),previous=Data()
+        for index in 0..<count {
+            let pair=bytes.subdata(in:40+16*index..<56+16*index),first=pair.prefix(8),second=pair.suffix(8)
+            guard first.lexicographicallyPrecedes(second),index==0 || previous.lexicographicallyPrecedes(pair),
+                  identities.insert(Data(first)).inserted,identities.insert(Data(second)).inserted else { return nil }
+            previous=pair
+        }
+        data=bytes
+    }
+    init?(pairs: [(BoundSoulIdentity,BoundSoulIdentity)], enabled: Bool) {
+        guard pairs.count<=6,enabled || pairs.isEmpty else { return nil }
+        let values=pairs.map { a,b -> Data in a.bytes.lexicographicallyPrecedes(b.bytes) ? a.bytes+b.bytes:b.bytes+a.bytes }.sorted { $0.lexicographicallyPrecedes($1) }
+        var bytes=Data(repeating:0,count:Self.size);coopPut(0x31504C53,in:&bytes,at:0)
+        coopPut(UInt32(values.count)|(enabled ? 0x80000000:0),in:&bytes,at:4)
+        for (index,pair) in values.enumerated() {bytes.replaceSubrange(40+16*index..<56+16*index,with:pair)}
+        bytes.replaceSubrange(8..<40,with:coopHash(bytes.subdata(in:4..<8)+bytes.subdata(in:40..<136)))
+        self.init(data:bytes)
+    }
+    var identities:Set<BoundSoulIdentity> {
+        Set((0..<count).flatMap { index in [BoundSoulIdentity.read(data,at:40+16*index),BoundSoulIdentity.read(data,at:48+16*index)].compactMap{$0} })
+    }
+    func accepts(_ snapshot:BoundCooperativeSnapshot)->Bool {
+        guard snapshot.hasSoulFaints else{return false}
+        // Before native READY the map is not yet installed in private RAM.
+        if snapshot.phase<4 {return snapshot.soulFaints.isEmpty && snapshot.soulLostMask==0}
+        let validMask:UInt32=count==0 ? 0:(1<<UInt32(count))-1
+        guard snapshot.soulMapDigest==data.subdata(in:8..<40),snapshot.soulLostMask & ~validMask==0 else{return false}
+        var expected=Data()
+        for index in 0..<count where snapshot.soulLostMask & (1<<UInt32(index)) != 0 {
+            expected.append(data.subdata(in:40+16*index..<56+16*index))
+        }
+        return expected==snapshot.soulFaints
+    }
+    func permitsRecovery(snapshot:BoundCooperativeSnapshot,ledger:BoundSoulLedger?)->Bool {
+        guard accepts(snapshot) else{return false}
+        if coopWord(data,4)&0x80000000==0 {
+            return ledger==nil || ledger?.ended==true || ledger?.offering==true
+        }
+        guard let ledger,ledger.valid,let selected=Self.selected(party:snapshot.party,order:snapshot.order,count:Int(snapshot.selectedCount)) else{return false}
+        // Never recreate an earlier canonical battle that lacks a permanent
+        // loss already retained by the owner. Reapplying one peer's mask to
+        // old battle RAM asynchronously would break native link agreement.
+        let domain=identities.union(selected)
+        let required=Set(ledger.records.filter{$0.eligible && ledger.dead.contains($0.slot)}.flatMap(\.identities)).intersection(domain)
+        var accepted=Set(stride(from:0,to:snapshot.soulFaints.count,by:8).compactMap{BoundSoulIdentity.read(snapshot.soulFaints,at:$0)})
+        for index in 0..<Int(snapshot.count) where snapshot.faintedMask & (1<<index) != 0 {
+            if let id=BoundSoulIdentity.read(snapshot.party,at:index*100) {accepted.insert(id)}
+        }
+        return required.isSubset(of:accepted)
+    }
+    static func selected(party:Data,order:Data,count:Int)->[BoundSoulIdentity]? {
+        guard party.count==600,order.count==3,(1...3).contains(count),Set(order.prefix(count)).count==count else { return nil }
+        let values=order.prefix(count).compactMap { index -> BoundSoulIdentity? in
+            guard (1...6).contains(index) else { return nil };return BoundSoulIdentity.read(party,at:(Int(index)-1)*100)
+        }
+        return values.count==count && Set(values).count==count ? values:nil
+    }
+    static func make(ledger:BoundSoulLedger?,own:[BoundSoulIdentity],peer:[BoundSoulIdentity])->Self? {
+        guard (1...3).contains(own.count),(1...3).contains(peer.count),Set(own+peer).count==own.count+peer.count else { return nil }
+        guard let ledger,!ledger.ended,!ledger.offering else { return .empty }
+        guard ledger.valid else { return nil }
+        let records=ledger.records.filter(\.eligible)
+        var pairs:[String:(BoundSoulIdentity,BoundSoulIdentity)]=[:]
+        func local(_ slot:String)->BoundSoulIdentity? {records.first(where:{$0.slot==slot}).map{$0.currentIdentity ?? $0.identity}}
+        func remote(_ slot:String)->BoundSoulIdentity? {
+            guard let value=ledger.partnerLinks?[slot],let trainer=value.trainerID else { return nil }
+            return .init(personality:value.personality,trainer:trainer)
+        }
+        for identity in own {
+            guard let record=records.first(where:{($0.currentIdentity ?? $0.identity)==identity}),!ledger.dead.contains(record.slot) else { return nil }
+            if ledger.partnerSlots.contains(record.slot) {guard let other=remote(record.slot) else{return nil};pairs[record.slot]=(identity,other)}
+        }
+        for identity in peer {
+            let matches=(ledger.partnerLinks ?? [:]).filter{$0.value.personality==identity.personality && $0.value.trainerID==identity.trainer && ledger.partnerSlots.contains($0.key)}
+            guard matches.count==1,let slot=matches.first?.key,!ledger.dead.contains(slot) else { return nil }
+            if ledger.acquired.contains(slot) {guard let other=local(slot) else{return nil};pairs[slot]=(other,identity)}
+        }
+        return Self(pairs:Array(pairs.values),enabled:true)
+    }
+}
+
 /// Exact device-local execution; unlike a recovery cut this never rewinds a
 /// peer that remained in the same encounter while this app was closed.
 struct BoundCooperativeContinuation:BoundActivityContinuation {
@@ -25,6 +120,7 @@ struct BoundCooperativeContinuation:BoundActivityContinuation {
     let heads:BoundContinuationHeads?
     let snapshot:Data,capture:Data?,local:UUID?,peer:UUID?,encounter:UUID,peerEncounter:UUID?
     let peerTeam:Data?,enemy:Data,proof:Data
+    var soulPairs:Data?=nil
     let peerReady:Bool,readySent:Bool,started:Bool,prepared:Bool,peerCableReady:Bool,peerResultsReady:Bool,peerFinished:Bool
     let fixedRole:UInt32?,lastXP:Data,incomingXP:Data,sequence:UInt32,controlCursor:Int
     let checkpointName:String?,journalName:String?,checkpoint:Data?,journal:Data?,agreement:Data,branch:Data
@@ -39,6 +135,7 @@ struct BoundCooperativeContinuation:BoundActivityContinuation {
             && memoryFiles.count<=256 && memoryFiles.values.reduce(0,{ $0+$1.count })<=16_777_216
             && BoundCooperativeSnapshot(snapshot).map({ (1...7).contains($0.phase) || $0.phase==9 }) == true && (capture==nil || BoundCooperativeSnapshot(capture!) != nil)
             && (peerTeam==nil || BoundCooperativePacket(data:peerTeam!)?.kind == .team)
+            && (soulPairs==nil || BoundCooperativeSoulPairs(data:soulPairs!) != nil)
             && [0,600].contains(enemy.count) && [0,32].contains(proof.count)
             && [0,192,404].contains(lastXP.count) && [0,192,404].contains(incomingXP.count)
             && (fixedRole==nil || fixedRole!<=1) && controlCursor>=0
@@ -63,6 +160,10 @@ struct BoundCooperativeSnapshot: Sendable {
     let order: Data, party: Data, enemy: Data, owned: Data, proof: Data, xp: Data
     let xpPhase:UInt32,xpToken:UInt32
     let faintedMask:UInt8
+    let soulFaints:Data
+    let hasSoulFaints:Bool
+    let soulMapDigest:Data
+    let soulLostMask:UInt32
     init?(_ source: Data) {
         let data = Data(source)
         guard data.count == 2048, coopWord(data,0) == 0x31474443, data[4] == 1, data[5...7].allSatisfy({ $0 == 0 }),
@@ -73,6 +174,16 @@ struct BoundCooperativeSnapshot: Sendable {
         order=data.subdata(in:72..<75);faintedMask=data[75]; partyHash=coopWord(data,80); enemyHash=coopWord(data,84)
         proof=data.subdata(in:88..<120); party=data.subdata(in:128..<728); enemy=data.subdata(in:728..<1328)
         owned=party;xpPhase=coopWord(data,1328);xpToken=coopWord(data,1332)
+        hasSoulFaints=coopWord(data,1336)==0x31464C53
+        soulMapDigest=data.subdata(in:1440..<1472);soulLostMask=coopWord(data,1472)
+        if hasSoulFaints {
+            let n=coopWord(data,1340);guard n<=12,n&1==0 else{return nil}
+            let faintBytes=data.subdata(in:1344..<1344+Int(n)*8)
+            soulFaints=faintBytes
+            let ids=stride(from:0,to:faintBytes.count,by:8).compactMap{BoundSoulIdentity.read(faintBytes,at:$0)}
+            guard Set(ids).count==Int(n),data[(1344+Int(n)*8)..<1440].allSatisfy({$0==0}),
+                  data[1476..<1528].allSatisfy({$0==0}) else{return nil}
+        } else {soulFaints=Data()}
         let kind=coopWord(data,1528), size=coopWord(data,1532)
         guard kind <= 2, (kind == 0 && size == 0) || (kind == 1 && size == 184) || (kind == 2 && size == 396) else { return nil }
         xp=kind == 0 ? Data() : data.subdata(in:1528..<1536 + Int(size))
@@ -126,9 +237,10 @@ struct BoundCooperativePacket: Sendable {
 /// separate fields: choosing three records does not shrink the owner's party.
 struct BoundCooperativeHost {
     static func transaction(sequence:UInt32,flags:UInt32,role:UInt32,capture:BoundCooperativeSnapshot?,
-                            peerTeam:BoundCooperativePacket?,proof:Data,enemy:Data,xp:Data)->Data {
+                            peerTeam:BoundCooperativePacket?,proof:Data,enemy:Data,xp:Data,soulPairs:Data?=nil)->Data {
         var out=Data(repeating:0,count:16384);coopPut(0x31484443,in:&out,at:0);out[4]=1
         coopPut(sequence,in:&out,at:8);coopPut(flags,in:&out,at:12);coopPut(flags == 0 ? 0:180,in:&out,at:16);coopPut(role,in:&out,at:20)
+        if let soulPairs,BoundCooperativeSoulPairs(data:soulPairs) != nil {out.replaceSubrange(2568..<2704,with:soulPairs)}
         if let value=capture,let peerTeam,proof.count==32,enemy.count==600 {
             coopPut(max(1,coopWord(proof,0)),in:&out,at:24);out.replaceSubrange(28..<44,with:proof.prefix(16))
             coopPut(peerTeam.count,in:&out,at:44);out.replaceSubrange(48..<51,with:peerTeam.order);out[51]=UInt8(value.count)
@@ -208,6 +320,7 @@ private struct BoundCooperativeRecovery:Codable {
     let enemy:Data
     let role:UInt32
     let peerTeam:Data
+    var soulPairs:Data?=nil
 }
 
 /// The completed-frame owner performs all port access and durable checkpoints.
@@ -240,6 +353,12 @@ final class BoundCooperativeProbe: @unchecked Sendable {
         guard gameProfile?.supportsCooperativeDoubles == true,coreID == ObjectIdentifier(core),core.deltaCore.identifier == "com.rileytestut.GBADeltaCore",BoundVBABattleBridge.installCooperativeDoubles() else { return }
         if host.count == 16384 { BoundVBABattleBridge.setCooperativeHost(host) }
         guard let value=BoundCooperativeSnapshot(BoundVBABattleBridge.cooperativeSnapshot()) else { return }
+        if (gameProfile?.saveStateLayout ?? 0)>=15,!value.hasSoulFaints {lastError="Cooperative Soul Link results are unavailable";return}
+        if (gameProfile?.saveStateLayout ?? 0)>=15,(4...7).contains(value.phase) || value.phase==9 {
+            guard host.count==16384,let map=BoundCooperativeSoulPairs(data:host.subdata(in:2568..<2704)),map.accepts(value) else {
+                lastError="Cooperative Soul Link results do not match this battle";return
+            }
+        }
         latest=value
         let active=(4...7).contains(value.phase) || value.phase == 9
         soul?.setCooperativeBattleActive(active,for:core)
@@ -247,6 +366,11 @@ final class BoundCooperativeProbe: @unchecked Sendable {
             var fainted:Set<BoundSoulIdentity>=[]
             for index in 0..<6 where value.faintedMask & (1 << index) != 0 {
                 if let identity=BoundSoulIdentity.read(value.party,at:index*100) { fainted.insert(identity) }
+            }
+            if (gameProfile?.saveStateLayout ?? 0)>=15 {
+                for offset in stride(from:0,to:value.soulFaints.count,by:8) {
+                    if let identity=BoundSoulIdentity.read(value.soulFaints,at:offset) {fainted.insert(identity)}
+                }
             }
             let soulDurable=soul?.observeCooperativeParty(value.owned,fainted:fainted,for:core) ?? true
             if let state=soul?.read(),state.ledger?.ended == false,let error=state.error { lastError=error;return }
@@ -258,6 +382,7 @@ final class BoundCooperativeProbe: @unchecked Sendable {
         // Full emulator checkpoints occur at phase/XP/faint boundaries, never
         // for every damage tick. Soul Link commits small owned-only tombstones.
         var identity=Data(value.xp.prefix(12));identity.append(value.faintedMask)
+        if (gameProfile?.saveStateLayout ?? 0)>=15 {identity.append(value.soulFaints);identity.append(value.soulMapDigest);var mask=Data(repeating:0,count:4);coopPut(value.soulLostMask,in:&mask,at:0);identity.append(mask)}
         for index in 0..<6 where value.owned[index*100+86] == 0 && value.owned[index*100+87] == 0 {
             identity.append(value.owned.subdata(in:index*100..<index*100+8))
         }
@@ -321,6 +446,7 @@ final class BoundCooperativeDoublesSession {
     private var gameID="",timer:Timer?,snapshot:BoundCooperativeSnapshot?,capture:BoundCooperativeSnapshot?
     private var local:UUID?,peer:UUID?,encounter=UUID(),peerEncounter:UUID?
     private var peerTeam:BoundCooperativePacket?,enemy=Data(),proof=Data(),peerReady=false,readySent=false,started=false
+    private var soulPairs:Data?
     private var prepared=false,peerCableReady=false,peerResultsReady=false,peerFinished=false,cancellingBeforeEntry=false,fixedRole:UInt32?
     private var recoveryNonce=UUID(),peerRecoveryNonce:UUID?,recoveryPeerReady=false,recoveryReadySent=false
     private var recoveryCable=Data(),recoveryDigest="",recoveryAgreement=Data(),recoveryLoaded=false
@@ -363,7 +489,7 @@ final class BoundCooperativeDoublesSession {
         }
         continuationTicket=nil;continuationWriteBlocked=false;activeContinuationContext=nil
         snapshot=nil;capture=nil;local=nil;peer=nil;peerEncounter=nil;peerTeam=nil
-        enemy=Data();proof=Data();started=false;prepared=false;fixedRole=nil;cancellingBeforeEntry=false
+        enemy=Data();proof=Data();soulPairs=nil;started=false;prepared=false;fixedRole=nil;cancellingBeforeEntry=false
         peerReady=false;readySent=false;peerCableReady=false;peerResultsReady=false;peerFinished=false
         recoveryPending=false;recoveryLoaded=false;recoveryPeerReady=false;recoveryReadySent=false
         recoveryCut=nil;recoveryBranch=Data();recoveryCable=Data();recoveryDigest="";recoveryAgreement=Data();peerRecoveryNonce=nil
@@ -407,7 +533,7 @@ final class BoundCooperativeDoublesSession {
     private func resetEncounter(_ value:BoundCooperativeSnapshot,local:UUID,peer:UUID) {
         activeContinuationContext=continuationContext
         self.local=local;self.peer=peer;capture=value;encounter=UUID();peerEncounter=nil;peerTeam=nil;enemy=isHost ? value.enemy:Data()
-        proof=Data();peerReady=false;readySent=false;started=false;prepared=false;peerCableReady=false;peerResultsReady=false;peerFinished=false;fixedRole=isHost ? 0:1;lastXP=Data();incomingXP=Data();lastPeer=clock();lastSent=0;lastXPSent=0;controlCursor=0
+        proof=Data();soulPairs=nil;peerReady=false;readySent=false;started=false;prepared=false;peerCableReady=false;peerResultsReady=false;peerFinished=false;fixedRole=isHost ? 0:1;lastXP=Data();incomingXP=Data();lastPeer=clock();lastSent=0;lastXPSent=0;controlCursor=0
         transportNonce=UUID();peerTransportNonce=nil;peerTransportReady=false;sentTransportReady=false
         retiredTransportNonces=[]
     }
@@ -475,6 +601,18 @@ final class BoundCooperativeDoublesSession {
         for n in [peerTeam.count,peerTeam.token] { var b=Data(repeating:0,count:4);coopPut(n,in:&b,at:0);other.append(b) }
         bytes.append(isHost ? own+other:other+own);bytes.append(coopHash(enemy))
         bytes.append(Data((gameProfile?.romSHA256 ?? "").utf8))
+        if (gameProfile?.saveStateLayout ?? 0)>=15 {
+            if soulPairs==nil {
+                guard let own=BoundCooperativeSoulPairs.selected(party:value.party,order:value.order,count:Int(value.selectedCount)),
+                      let other=BoundCooperativeSoulPairs.selected(party:peerTeam.payload,order:peerTeam.order,count:Int(peerTeam.data[143])),
+                      let state=soul?.read(),state.error==nil,state.ledger != nil || state.ready,
+                      let map=BoundCooperativeSoulPairs.make(ledger:state.ledger,own:own,peer:other) else { return nil }
+                soulPairs=map.data
+            }
+            guard let soulPairs,BoundCooperativeSoulPairs(data:soulPairs) != nil else { return nil }
+            if let ledger=soul?.read().ledger,!ledger.ended,!ledger.offering {bytes.append(coopUUID(ledger.run))}
+            bytes.append(coopHash(soulPairs))
+        }
         return coopHash(bytes)
     }
     private func transmit(_ kind:BoundCooperativePacket.Kind,payload:Data=Data())->Bool {
@@ -710,7 +848,8 @@ final class BoundCooperativeDoublesSession {
     private func publish(flags:UInt32) {
         sequence &+= 2;if sequence == 0 { sequence=2 }
         probe.setHost(BoundCooperativeHost.transaction(sequence:sequence,flags:flags,role:isHost ? 0:1,
-            capture:capture,peerTeam:peerTeam,proof:proof,enemy:enemy,xp:incomingXP))
+            capture:capture,peerTeam:peerTeam,proof:proof,enemy:enemy,xp:incomingXP,
+            soulPairs:(gameProfile?.saveStateLayout ?? 0)>=15 ? soulPairs ?? BoundCooperativeSoulPairs.empty.data:nil))
     }
     private func protect(core:EmulatorCore) throws {
         let folder=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("Cooperative Battles",isDirectory:true)
@@ -724,7 +863,7 @@ final class BoundCooperativeDoublesSession {
         try BoundServerMemoryFiles.saveState(core:core,to:checkpoint,gameID:gameID)
         let saved=try BoundServerMemoryFiles.read(checkpoint,gameID:gameID);guard saved.count > 1024 else { throw CocoaError(.fileReadCorruptFile) }
         guard let capture,let peerTeam,proof.count==32,enemy.count==600 else { throw CocoaError(.fileReadCorruptFile) }
-        let agreement=try JSONEncoder().encode(BoundCooperativeRecovery(capture:capture.bytes,proof:proof,enemy:enemy,role:isHost ? 0:1,peerTeam:peerTeam.data))
+        let agreement=try JSONEncoder().encode(BoundCooperativeRecovery(capture:capture.bytes,proof:proof,enemy:enemy,role:isHost ? 0:1,peerTeam:peerTeam.data,soulPairs:soulPairs))
         recoveryAgreement=agreement;recoveryBranch=BoundCooperativeRecoveryBranch.initial(proof:proof)
         let entry:[String:String]=["gameID":gameID,"state":checkpoint.lastPathComponent,"rom":(gameProfile?.romSHA256 ?? ""),"sha256":coopHash(saved).map { String(format:"%02x",$0) }.joined(),"agreement":agreement.base64EncodedString(),"branch":recoveryBranch.base64EncodedString(),"snapshot":capture.bytes.base64EncodedString(),"cable":cable.recoveryData().base64EncodedString()]
         try BoundServerMemoryFiles.write(JSONSerialization.data(withJSONObject:entry,options:[.sortedKeys]),to:journal,gameID:gameID)
@@ -760,7 +899,7 @@ final class BoundCooperativeDoublesSession {
                 state:MultiRedAdapter.captureState(),battery:BoundVBABattleBridge.captureServerBattery(),
                 bridge:prepared ? BoundVBABattleBridge.captureCooperativeSession():Data(),host:probe.continuationHost(),probe:cable.recoveryData(),wire:transport,
                 memoryFiles:BoundServerMemoryFiles.snapshot(gameID:gameID),heads:continuationHeadsProvider?(context),snapshot:snapshot.bytes,capture:capture?.bytes,
-                local:local,peer:peer,encounter:encounter,peerEncounter:peerEncounter,peerTeam:peerTeam?.data,enemy:enemy,proof:proof,
+                local:local,peer:peer,encounter:encounter,peerEncounter:peerEncounter,peerTeam:peerTeam?.data,enemy:enemy,proof:proof,soulPairs:soulPairs,
                 peerReady:peerReady,readySent:readySent,started:started,prepared:prepared,peerCableReady:peerCableReady,
                 peerResultsReady:peerResultsReady,peerFinished:peerFinished,fixedRole:fixedRole,lastXP:lastXP,incomingXP:incomingXP,
                 sequence:sequence,controlCursor:controlCursor,checkpointName:stateURL?.lastPathComponent,journalName:journalURL?.lastPathComponent,
@@ -780,7 +919,16 @@ final class BoundCooperativeDoublesSession {
         guard context.runID==nil || value.heads?.permits(serverHead)==true else { throw BoundContinuationError.serverChanged }
         let admitted=try MultiRedAdapter(rom:Data(contentsOf:core.game.fileURL,options:.mappedIfSafe)).profile
         guard admitted.supportsCooperativeDoubles,value.cartridge==admitted.romSHA256,
-              let savedSnapshot=BoundCooperativeSnapshot(value.snapshot) else { throw CocoaError(.fileReadCorruptFile) }
+              let savedSnapshot=BoundCooperativeSnapshot(value.snapshot),
+              admitted.saveStateLayout<15 || value.soulPairs.flatMap(BoundCooperativeSoulPairs.init(data:)) != nil
+                || (!value.prepared && savedSnapshot.phase<=3 && value.proof.isEmpty) else { throw CocoaError(.fileReadCorruptFile) }
+        try soul?.drainBeforeMemoryReplacement(core:core)
+        if admitted.saveStateLayout>=15,let mapBytes=value.soulPairs {
+            guard let map=BoundCooperativeSoulPairs(data:mapBytes),map.permitsRecovery(snapshot:savedSnapshot,ledger:soul?.read().ledger) else {
+                status="Recovery would undo a permanent loss. The checkpoint was kept."
+                throw CocoaError(.fileReadCorruptFile)
+            }
+        }
         try soul?.prepareForNativeMemoryReplacement(core:core)
         // Restore is already holding the paused core. Keep this exact admission
         // through the operation and prevent a late bind task rescanning recovery.
@@ -793,7 +941,7 @@ final class BoundCooperativeDoublesSession {
             if BoundServerMemoryFiles.isEnabled(for:gameID) { try BoundServerMemoryFiles.restore(value.memoryFiles,gameID:gameID) }
             snapshot=savedSnapshot;capture=value.capture.flatMap(BoundCooperativeSnapshot.init)
             local=value.local;peer=value.peer;encounter=value.encounter;peerEncounter=value.peerEncounter;peerTeam=value.peerTeam.flatMap { BoundCooperativePacket(data:$0) }
-            enemy=value.enemy;proof=value.proof;peerReady=value.peerReady;readySent=value.readySent;started=value.started;prepared=value.prepared
+            enemy=value.enemy;proof=value.proof;soulPairs=value.soulPairs;peerReady=value.peerReady;readySent=value.readySent;started=value.started;prepared=value.prepared
             peerCableReady=value.peerCableReady;peerResultsReady=value.peerResultsReady;peerFinished=value.peerFinished
             fixedRole=value.fixedRole;lastXP=value.lastXP;incomingXP=value.incomingXP;sequence=value.sequence;controlCursor=value.controlCursor
             recoveryAgreement=value.agreement;recoveryBranch=value.branch;recoveryPending=false;recoveryLoaded=false;cancellingBeforeEntry=false
@@ -937,6 +1085,7 @@ final class BoundCooperativeDoublesSession {
               let encoded=entry["agreement"] as? String,let agreement=Data(base64Encoded:encoded),
               let record=try? JSONDecoder().decode(BoundCooperativeRecovery.self,from:agreement),record.proof.count==32,record.enemy.count==600,record.role<=1,
               expectedProof==nil || expectedProof==record.proof,
+              (gameProfile?.saveStateLayout ?? 0)<15 || record.soulPairs.flatMap(BoundCooperativeSoulPairs.init(data:)) != nil,
               let capture=BoundCooperativeSnapshot(record.capture),capture.selected,
               let team=BoundCooperativePacket(data:record.peerTeam),team.kind == .team,team.encounter==capture.encounter,
               let name=entry["state"] as? String,name==URL(fileURLWithPath:name).lastPathComponent,
@@ -951,7 +1100,7 @@ final class BoundCooperativeDoublesSession {
             status="This local battle needs recovery. Its saved continuation was kept."
             return true
         }
-        self.capture=capture;peerTeam=team;proof=record.proof;enemy=record.enemy;fixedRole=record.role;snapshot=savedSnapshot
+        self.capture=capture;peerTeam=team;proof=record.proof;enemy=record.enemy;soulPairs=record.soulPairs;fixedRole=record.role;snapshot=savedSnapshot
         journal=url;checkpoint=folder.appendingPathComponent(name);recoveryAgreement=agreement;recoveryCable=cable;recoveryDigest=digest;recoveryBranch=branch
         if savedSnapshot.phase==3 { recoveryCut=BoundCooperativeCableCut(admissionPhase:3) }
         else if let encoded=entry["nativeCable"] as? String,let raw=Data(base64Encoded:encoded) {
@@ -991,6 +1140,15 @@ final class BoundCooperativeDoublesSession {
         if core.state == .running { _=core.pause() }
         guard BoundMultiplayerFeatures.isEnabled,connected?() == true,let identities=context?() else { return }
         guard recoveryCut != nil else { status="Recovery kept. Compatible cable checkpoint required.";return }
+        if (gameProfile?.saveStateLayout ?? 0)>=15 {
+            do {
+                try soul?.drainBeforeMemoryReplacement(core:core)
+                guard let snapshot,let bytes=soulPairs,let map=BoundCooperativeSoulPairs(data:bytes),
+                      map.permitsRecovery(snapshot:snapshot,ledger:soul?.read().ledger) else {
+                    status="Recovery would undo a permanent loss. The checkpoint was kept.";return
+                }
+            } catch {status="Cooperative recovery is waiting for the permanent loss record.";return}
+        }
         if local != identities.0 || peer != identities.1 {
             channel?.close();wire?.close();channel=nil;wire=nil;cable.configure(core:nil)
             local=identities.0;peer=identities.1;recoveryNonce=UUID();peerRecoveryNonce=nil

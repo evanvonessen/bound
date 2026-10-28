@@ -27,7 +27,9 @@ if actual!=a.expected_rom_sha256 or image.stat().st_size!=33554432:
 if a.output.exists(): p.error('Preserve previous results; use a new output directory')
 a.output.mkdir(parents=True)
 selected=['NativeBattleRuntimeTests/testCreateCurrentEncounterGameplayFixture'] if a.fixture_only else [
- 'SoulLinkTests','EncounterAllowanceTests','SoulExtrasTests','SoulLinksTests','SoulProbeOwnershipTests',
+ 'SoulLinkTests','EncounterAllowanceTests','SoulExtrasTests','SoulLinksTests','SoulProbeOwnershipTests','BattleLossTests','CooperativeSoulPairTests',
+ 'NativeBattleRuntimeTests/testActualEliminationPolicyPublishesAtomicallyAndRejectsOutOfRangeBits',
+ 'NativeBattleRuntimeTests/testBattleLossGraphicRendersOwnAndPartnerSides',
  'NativeBattleRuntimeTests/testActualLinksMenuUsesDurableCatchOrderAndRestoresField',
  'NativeBattleRuntimeTests/testActualSoulLinkNativeHPAndStateRecovery',
  'NativeBattleRuntimeTests/testActualSoulFrameFencePreservesRAMCompletesPauseAndRejectsReplacement',

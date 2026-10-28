@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """Build/check Bound's original exact-ROM Soul Link Thumb shim (no ROM input)."""
 from pathlib import Path
-import argparse, subprocess, tempfile
+import argparse, re, subprocess, tempfile
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--check',action='store_true')
 p.add_argument('--qa',action='store_true')
 p.add_argument('--tool-prefix',default='/opt/devkitpro/devkitARM/bin/arm-none-eabi-')
 a=p.parse_args(); root=Path(__file__).resolve().parents[1]
+binding=re.search(r'GameEliminationQueryAddress=(\d+)u;', (root/'Delta/Bound/SharedWorld/BoundGameABI.h').read_text())
+game_flags=[]
+if binding:
+    address=int(binding[1]);assert address&1 and 0x09FCA000<=address<0x09FD0000
+    game_flags=['-DBOUND_GAME_ELIMINATION_QUERY_ADDRESS='+str(address)]
 with tempfile.TemporaryDirectory(prefix='bound-soul-link-') as t:
     out=Path(t); ld=out/'entry.ld'
     ld.write_text('SECTIONS { .text 0x09FF8000 : { *(.text*) *(.rodata*) } /DISCARD/ : { *(.comment) *(.ARM.attributes) *(.ARM.exidx*) } }')
-    subprocess.run([a.tool_prefix+'gcc', *(['-DBOUND_SOUL_QA=1'] if a.qa else []), '-mcpu=arm7tdmi','-mthumb','-Os','-ffreestanding','-fno-builtin','-nostdlib','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Wl,--build-id=none','-Wl,-T,'+str(ld),'-o',str(out/'entry.elf'),str(root/'Delta/Bound/SoulLink/soul-link.c')],check=True,capture_output=True)
+    subprocess.run([a.tool_prefix+'gcc', *game_flags,*(['-DBOUND_SOUL_QA=1'] if a.qa else []), '-mcpu=arm7tdmi','-mthumb','-Os','-ffreestanding','-fno-builtin','-nostdlib','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Wl,--build-id=none','-Wl,-T,'+str(ld),'-o',str(out/'entry.elf'),str(root/'Delta/Bound/SoulLink/soul-link.c')],check=True,capture_output=True)
     subprocess.run([a.tool_prefix+'objcopy','-O','binary',str(out/'entry.elf'),str(out/'entry.bin')],check=True)
     code=(out/'entry.bin').read_bytes(); assert 0<len(code)<0x2000
     symbols={('BoundSoulQAPrizeScript' if a.qa and c[2]=='BoundSoulPrizeScript' else c[2]):int(c[0],16)|(0 if c[2]=='BoundSoulPrizeScript' else 1) for l in subprocess.check_output([a.tool_prefix+'nm','-n',str(out/'entry.elf')],text=True).splitlines() if len(c:=l.split())==3 and c[2] in (['BoundSoulQA','BoundSoulQACatch','BoundSoulPrizeScript'] if a.qa else ['BoundSoulGet','BoundSoulSet','BoundSoulGive','BoundSoulOriginalGive','BoundSoulCatchBlocked','BoundSoulPrizeScript'])}

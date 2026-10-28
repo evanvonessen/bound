@@ -98,6 +98,7 @@ struct BoundSoulRecord: Codable, Equatable, Sendable {
     var awaitingFirstHealth: Bool?
     var species: Int?
     var area: Int?
+    var currentIdentity:BoundSoulIdentity?
     var identities: Set<BoundSoulIdentity> { aliases.union([identity]) }
 }
 
@@ -131,6 +132,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
     var partnerAcquisitions: Set<String>?
     var partnerNames: [String: String]?
     var partnerLinks: [String: BoundSoulLinkPresentation]?
+    var battleLosses: BoundBattleLossJournal?
     var memorials: [BoundSoulDeath]?
     // An authenticated own-origin catch may outlive an older native snapshot.
     // Preserve the spent slot without assigning it a fabricated mon identity.
@@ -159,12 +161,15 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
         version == Self.version && binding.count == 64 && records.count <= 2048 && dead.count <= 6400
         && (1...2049).contains(nextEgg) && (1...2049).contains(nextGift ?? 1) && (1...2049).contains(nextStatic ?? 1) && Set(records.flatMap(\.identities)).count == records.reduce(0, { $0 + $1.identities.count })
         && records.reduce(0, { $0 + $1.identities.count }) <= 2048
-        && records.allSatisfy { Self.validSlot($0.slot) && $0.name.count <= 20 && ($0.species == nil || (1...4095).contains($0.species!)) && ($0.area == nil || (0...255).contains($0.area!)) }
+        && records.allSatisfy { Self.validSlot($0.slot) && $0.name.count <= 20 && ($0.species == nil || (1...4095).contains($0.species!)) && ($0.area == nil || (0...255).contains($0.area!)) && ($0.currentIdentity == nil || $0.identities.contains($0.currentIdentity!)) }
         && dead.allSatisfy(Self.validSlot)
         && (consumedSlots ?? []).count <= 6400 && (consumedSlots ?? []).allSatisfy(Self.validSlot)
         && partnerSlots.count <= 6400 && partnerSlots.allSatisfy(Self.validSlot)
         && (partnerNames ?? [:]).allSatisfy { partnerSlots.contains($0.key) && $0.value.count <= 20 }
         && (partnerLinks ?? [:]).count <= 2048 && (partnerLinks ?? [:]).allSatisfy { partnerSlots.contains($0.key) && $0.value.valid }
+        && (battleLosses?.valid ?? true)
+        && Set(battleLosses?.notices.flatMap(\.slots) ?? []).isSubset(of:dead)
+        && (battleLosses?.battle?.slots.isSubset(of:dead) ?? true)
         && (memorials ?? []).count <= 6400
         && Set((memorials ?? []).map(\.slot)).count == (memorials ?? []).count
         && (memorials ?? []).allSatisfy { dead.contains($0.slot) && ($0.recordedAt?.timeIntervalSince1970.isFinite ?? true) && ($0.localName?.count ?? 0) <= 20 && ($0.partnerName?.count ?? 0) <= 20 }
@@ -189,6 +194,15 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
     }
     var denied: Set<BoundSoulIdentity> {
         Set(records.filter { !$0.eligible || dead.contains($0.slot) }.flatMap(\.identities))
+    }
+    var eliminated: Set<BoundSoulIdentity> {
+        Set(records.filter { $0.eligible && dead.contains($0.slot) }.flatMap(\.identities))
+    }
+    var eliminationBits:Data {
+        let deaths=eliminated
+        var bits=Data(repeating:0,count:256)
+        for (index,id) in denied.sorted().enumerated() where deaths.contains(id) { bits[index/8] |= 1 << (index%8) }
+        return bits
     }
     /// These facts come only from the durable ledger. Names are presentation,
     /// so a nickname change cannot mutate an event already in the outbox.
@@ -215,6 +229,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
                 value.records[index].awaitingFirstHealth = value.records[index].awaitingFirstHealth == true || record.awaitingFirstHealth == true ? true : nil
                 value.records[index].species = value.records[index].species ?? record.species
                 value.records[index].area = value.records[index].area ?? record.area
+                value.records[index].currentIdentity = value.records[index].currentIdentity ?? record.currentIdentity
             } else {
                 var additional = record
                 // Divergent older saves cannot introduce another eligible catch
@@ -238,6 +253,9 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
         }
         value.partnerNames = (older.partnerNames ?? [:]).merging(value.partnerNames ?? [:]) { _, latest in latest }
         value.partnerLinks = (older.partnerLinks ?? [:]).merging(value.partnerLinks ?? [:]) { _, latest in latest }
+        if let history=older.battleLosses {
+            var losses=value.battleLosses ?? BoundBattleLossJournal();try losses.retain(history);value.battleLosses=losses
+        }
         var memorials = value.memorials ?? []
         for memorial in older.memorials ?? [] {
             if let index = memorials.firstIndex(where: { $0.slot == memorial.slot }) {
@@ -319,6 +337,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
         for mon in mons {
             if let index = records.firstIndex(where: { $0.identities.contains(mon.identity) }) {
                 records[index].name = mon.name
+                records[index].currentIdentity = mon.identity
                 records[index].species = mon.species
                 records[index].area = records[index].area ?? mon.area
                 if let hp=mon.hp,hp>0 { records[index].awaitingFirstHealth=nil }
@@ -329,6 +348,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
                 // Native hatching can replace an egg's OT with this trainer.
                 // Preserve the egg ordinal and retain both identity aliases.
                 records[index].aliases.insert(mon.identity)
+                records[index].currentIdentity = mon.identity
                 records[index].pendingHatch = false; records[index].name = mon.name
                 records[index].species = mon.species
             } else if registering {
@@ -337,7 +357,7 @@ struct BoundSoulLedger: Codable, Equatable, Sendable {
                 if mon.eggOrigin { slot = "egg:\(nextEgg)"; nextEgg += 1 }
                 else { slot = "area:\(mon.area)" }
                 let eligible = !acquired.contains(slot)
-                records.append(.init(identity: mon.identity, slot: slot, name: mon.name, eligible: eligible, pendingHatch: mon.isEgg, species: mon.species, area: mon.area))
+                records.append(.init(identity: mon.identity, slot: slot, name: mon.name, eligible: eligible, pendingHatch: mon.isEgg, species: mon.species, area: mon.area,currentIdentity:mon.identity))
             }
         }
         for record in records where record.eligible {
@@ -381,7 +401,7 @@ struct BoundSoulPacket: Sendable {
     static let prefix = Data([0x42, 0x53, 0x4C, 0x33])
     static let previousPrefix = Data([0x42, 0x53, 0x4C, 0x32])
     static let legacyPrefix = Data([0x42, 0x53, 0x4C, 0x31])
-    static func recognizes(_ data: Data) -> Bool { data.starts(with: prefix) || data.starts(with: legacyPrefix) || data.starts(with: previousPrefix) || BoundSoulExtrasPacket.recognizes(data) || data.starts(with: BoundSoulTeamPacket.prefix) || BoundSoulLinksPacket.recognizes(data) }
+    static func recognizes(_ data: Data) -> Bool { data.starts(with: prefix) || data.starts(with: legacyPrefix) || data.starts(with: previousPrefix) || BoundSoulExtrasPacket.recognizes(data) || data.starts(with: BoundSoulTeamPacket.prefix) || BoundSoulLinksPacket.recognizes(data) || BoundBattleLossPacket.recognizes(data) }
     enum Kind: String, CaseIterable { case offer, accept, confirm, decline, state, end }
     let version: Int
     let run: UUID
@@ -552,6 +572,8 @@ struct BoundSoulEncounter: Identifiable, Equatable {
 final class BoundSoulProbe: @unchecked Sendable {
     struct Snapshot: Sendable {
         var ready=false
+        var inBattle=false
+        var terminalBattleEnded=false
         var mons:[BoundSoulMon]=[]
         var team:BoundSoulTeam?
         var teamCapturedAt:TimeInterval?
@@ -567,10 +589,12 @@ final class BoundSoulProbe: @unchecked Sendable {
         let party:Data,boxes:Data,faints:Data,battleFaints:Data,nativeRing:Data
         let outcome:Int,flags:UInt32
         var acquisitions=Data()
+        var battleID:UUID?
+        var acceptedFaintsOnly=false
         func sameContents(as other:Self)->Bool {
             generation==other.generation && ready==other.ready && battle==other.battle && overflow==other.overflow
                 && cooperative==other.cooperative && party==other.party && boxes==other.boxes && faints==other.faints
-                && battleFaints==other.battleFaints && nativeRing==other.nativeRing && acquisitions==other.acquisitions && outcome==other.outcome && flags==other.flags
+                && battleFaints==other.battleFaints && nativeRing==other.nativeRing && acquisitions==other.acquisitions && outcome==other.outcome && flags==other.flags && battleID==other.battleID && acceptedFaintsOnly==other.acceptedFaintsOnly
         }
     }
     private struct FileAction: Sendable {
@@ -578,7 +602,7 @@ final class BoundSoulProbe: @unchecked Sendable {
     }
     private struct Candidate: Sendable {
         let generation:UUID,url:URL?,gameID:String,ledger:BoundSoulLedger?,timeline:Data
-        let snapshot:Snapshot,ring:Data?,policy:Data,actions:[FileAction],writeLedger:Bool,writeTimeline:Bool,observation:Observation?
+        let snapshot:Snapshot,ring:Data?,policy:Data,elimination:Data,actions:[FileAction],writeLedger:Bool,writeTimeline:Bool,observation:Observation?
     }
     private struct Owner {
         var generation=UUID(),coreID:ObjectIdentifier?
@@ -592,6 +616,8 @@ final class BoundSoulProbe: @unchecked Sendable {
         var linkAreas:[Int:String]=[:],linksConnected=false,linksDirty=true
         var linksOffset = -1
         var linksSequence:UInt32=0
+        var observedBattle=false,battleID:UUID?
+        var resumeBattleID:UUID?
     }
     let timeline=BoundRunTimeline()
     private let lock=NSLock()
@@ -639,7 +665,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         guard needsCandidate || stagedTimeline != bytes else { return nil }
         needsCandidate=false;stagedTimeline=bytes
         return .init(generation:generation,url:url,gameID:gameID,ledger:ledger,timeline:bytes,
-                     snapshot:snapshot,ring:ring,policy:ledger.map { policyBytes(for:$0) } ?? Data(),actions:actions,
+                     snapshot:snapshot,ring:ring,policy:ledger.map { policyBytes(for:$0) } ?? Data(),elimination:ledger?.eliminationBits ?? Data(repeating:0,count:256),actions:actions,
                      writeLedger:ledger != durableLedger,writeTimeline:bytes != durableTimeline,observation:observation)
     }
     private static func write(_ value:Candidate) throws {
@@ -728,7 +754,7 @@ final class BoundSoulProbe: @unchecked Sendable {
                 } catch { snapshot.error="Soul Link record couldn’t be read. Your run is paused." }
             }
             durableLedger=ledger;durableTimeline=(try? timeline.pendingBytes()) ?? Data();stagedTimeline=durableTimeline
-            lock.lock();published=snapshot;lock.unlock()
+            lock.lock();published=snapshot;owner.resumeBattleID=ledger?.battleLosses?.battle?.id;lock.unlock()
         }
         return true
     }
@@ -769,11 +795,12 @@ final class BoundSoulProbe: @unchecked Sendable {
             }
         }
         owner.frame+=1
+        if !owner.observedBattle { owner.battleID=owner.resumeBattleID ?? UUID();owner.resumeBattleID=nil };owner.observedBattle=true
         let native=BoundVBABattleBridge.soulLinkSnapshot()
         let input=Observation(generation:owner.generation,frame:owner.frame,ready:false,battle:true,overflow:native["overflow"] as? Bool==true,
             cooperative:true,party:party,boxes:Data(),faints:fainted.sorted().reduce(into:Data()) { $0.append($1.bytes) },
             battleFaints:Data(),nativeRing:native["faints"] as? Data ?? Data(),outcome:0,flags:0,
-            acquisitions:native["acquisitions"] as? Data ?? Data())
+            acquisitions:native["acquisitions"] as? Data ?? Data(),battleID:owner.battleID,acceptedFaintsOnly:BoundVBABattleBridge.usesAcceptedSoulFaints())
         let saved=receipt?.observation
         let durable=saved?.generation==input.generation && saved?.cooperative==true && saved?.party==party && saved?.faints==input.faints && saved?.acquisitions==input.acquisitions
         if durable,!owner.blocked,let receipt,let ledger=receipt.ledger {
@@ -814,7 +841,15 @@ final class BoundSoulProbe: @unchecked Sendable {
         }
     }
     func endRun() throws { try durableMutation {
-        guard var value=ledger else { return };value.ended=true;value.offering=false;try persist(value)
+        guard var value=ledger else { return }
+        if var history=value.battleLosses { try history.observe(inBattle:false,eligible:true,previousDead:value.dead,dead:value.dead);value.battleLosses=history }
+        value.ended=true;value.offering=false;try persist(value)
+    } }
+    func finalizeTerminalBattle() throws { try durableMutation {
+        guard var value=ledger else { return }
+        if var history=value.battleLosses { try history.observe(inBattle:false,eligible:true,previousDead:value.dead,dead:value.dead);value.battleLosses=history }
+        snapshot.terminalBattleEnded=true;needsCandidate=true
+        if value != ledger { try persist(value) }
     } }
     func markAccepted() throws { try durableMutation {
         guard var value=ledger,value.offering else { return };value.offering=false;try persist(value)
@@ -835,9 +870,22 @@ final class BoundSoulProbe: @unchecked Sendable {
         for row in rows where value.partnerSlots.contains(row.slot) && row.presentation.valid {
             if let old=links[row.slot],old.ordinal != row.presentation.ordinal { continue }
             if links.contains(where: { $0.key != row.slot && $0.value.ordinal==row.presentation.ordinal }) { continue }
-            links[row.slot]=row.presentation
+            var presentation=row.presentation
+            presentation.trainerID=presentation.trainerID ?? links[row.slot]?.trainerID
+            links[row.slot]=presentation
         }
         if links != (value.partnerLinks ?? [:]) { value.partnerLinks=links;try persist(value) }
+    } }
+    func mergeBattleLoss(run:UUID,notice:BoundBattleLossNotice) throws { try durableMutation {
+        guard var value=ledger,value.run==run,notice.valid,Set(notice.slots).isSubset(of:value.dead) else { return }
+        var history=value.battleLosses ?? BoundBattleLossJournal()
+        if try history.admit(notice,dead:value.dead) { value.battleLosses=history;try persist(value) }
+    } }
+    func acknowledgeBattleLoss(run:UUID,id:UUID) throws { try durableMutation {
+        guard var value=ledger,value.run==run,let notice=value.battleLosses?.notices.first(where:{$0.id==id}),!notice.announced else { return }
+        value.battleLosses?.markAnnounced(id)
+        for index in (value.memorials ?? []).indices where notice.slots.contains(value.memorials![index].slot) { value.memorials![index].announced=true }
+        try persist(value)
     } }
     func merge(run:UUID,rows:[BoundSoulRow],losses:Data,acquired:Data?=nil) throws { try durableMutation {
         guard var value=ledger,value.run==run else { return }
@@ -885,7 +933,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         value.recordDeaths(previous:previous.dead)
         if value != previous { try persist(value) }
     } }
-    static func mayApplyNativePolicy(ready:Bool,battle:Bool)->Bool { ready && !battle }
+    static func mayApplyNativePolicy(excluded:Bool)->Bool { !excluded }
     func acknowledgeDeath(run:UUID,slot:String) throws { try durableMutation {
         guard var value=ledger,value.run==run,let index=value.memorials?.firstIndex(where:{$0.slot==slot}),
               value.memorials?[index].announced==false else { return }
@@ -970,13 +1018,16 @@ final class BoundSoulProbe: @unchecked Sendable {
         }
         applyReceiptUnlocked()
         let native=BoundVBABattleBridge.soulLinkSnapshot()
+        let inBattle=native["battle"] as? Bool==true
+        if inBattle && !owner.observedBattle { owner.battleID=owner.resumeBattleID ?? UUID();owner.resumeBattleID=nil }
+        owner.observedBattle=inBattle;if !inBattle { owner.battleID=nil;owner.resumeBattleID=nil }
         let input=Observation(generation:owner.generation,frame:owner.frame,ready:native["ready"] as? Bool==true,
             battle:native["battle"] as? Bool==true,overflow:native["overflow"] as? Bool==true,cooperative:false,
             party:native["party"] as? Data ?? Data(),boxes:native["boxes"] as? Data ?? Data(),
             faints:native["faints"] as? Data ?? Data(),battleFaints:native["battleFaints"] as? Data ?? Data(),
             nativeRing:native["faints"] as? Data ?? Data(),
             outcome:native["outcome"] as? Int ?? 0,flags:native["battleFlags"] as? UInt32 ?? 0,
-            acquisitions:native["acquisitions"] as? Data ?? Data())
+            acquisitions:native["acquisitions"] as? Data ?? Data(),battleID:owner.battleID,acceptedFaintsOnly:BoundVBABattleBridge.usesAcceptedSoulFaints())
         if force { owner.lastInput=nil }
         return submitUnlocked(input)
     }
@@ -989,16 +1040,28 @@ final class BoundSoulProbe: @unchecked Sendable {
             if value != ledger { try persist(value) }
         }
         let party=BoundSoulMon.decode(input.party,stride:100)
+        snapshot.inBattle=input.battle
         var fainted:Set<BoundSoulIdentity>=[]
         for data in [input.faints,input.battleFaints] {
             guard data.count%8==0 else { throw BoundSoulLedger.Error.corrupt }
             for offset in stride(from:0,to:data.count,by:8) { if let id=BoundSoulIdentity.read(data,at:offset) { fainted.insert(id) } }
         }
+        let observedParty=party.map { mon->BoundSoulMon in
+            guard input.battle,input.acceptedFaintsOnly,mon.hp==0,!fainted.contains(mon.identity) else { return mon }
+            // RR may revive a transient zero before accepting its native faint
+            // command. The new ROM publishes accepted events explicitly.
+            return .init(identity:mon.identity,species:mon.species,name:mon.name,area:mon.area,eggOrigin:mon.eggOrigin,
+                         isEgg:mon.isEgg,hp:nil,level:mon.level,maxHP:mon.maxHP,inParty:mon.inParty)
+        }
         if input.cooperative {
             guard var value=ledger,!value.ended else { return }
-            try value.observe(party,registering:false,fainted:fainted,at:input.date)
+            let before=value.dead
+            try value.observe(observedParty,registering:false,fainted:fainted,at:input.date)
+            var losses=value.battleLosses ?? BoundBattleLossJournal()
+            try losses.observe(inBattle:true,eligible:true,previousDead:before,dead:value.dead,at:input.date,battleID:input.battleID)
+            value.battleLosses=losses
             if value != ledger { try persist(value) }
-            snapshot.partyWipedOut=snapshot.partyWipedOut || BoundSoulWipeout.occurred(party:party,ledger:value)
+            snapshot.partyWipedOut=snapshot.partyWipedOut || BoundSoulWipeout.occurred(party:observedParty,ledger:value)
             ring=input.nativeRing;needsCandidate=true;return
         }
         reachedField=reachedField || input.ready
@@ -1009,9 +1072,16 @@ final class BoundSoulProbe: @unchecked Sendable {
         snapshot.ready=input.ready;if input.ready { snapshot.mons=mons }
         if reachedField,var value=ledger,!value.ended {
             let previous=value
-            try value.observe(input.ready && boxesChanged ? mons:party,registering:input.ready,fainted:fainted,at:input.date)
+            try value.observe(input.ready && boxesChanged ? mons:observedParty,registering:input.ready,fainted:fainted,at:input.date)
+            var losses=value.battleLosses ?? BoundBattleLossJournal()
+            try losses.observe(inBattle:input.battle,eligible:true,previousDead:previous.dead,dead:value.dead,at:input.date,battleID:input.battleID)
+            if !input.battle,previous.battleLosses?.battle==nil {
+                let slots=value.dead.subtracting(previous.dead).sorted { (BoundSoulLedger.wireIndex($0) ?? 0)<(BoundSoulLedger.wireIndex($1) ?? 0) }
+                if !slots.isEmpty { _=try losses.admit(.init(id:UUID(),slots:slots,completedAt:input.date),dead:value.dead) }
+            }
+            value.battleLosses=losses
             if value != previous { try persist(value) }
-            snapshot.partyWipedOut=snapshot.partyWipedOut || BoundSoulWipeout.occurred(party:party,ledger:value)
+            snapshot.partyWipedOut=snapshot.partyWipedOut || BoundSoulWipeout.occurred(party:observedParty,ledger:value)
             if input.ready && (snapshot.team==nil || input.frame%15==0 || boxesChanged || value != previous) {
                 snapshot.team=BoundSoulTeam.capture(mons:snapshot.mons,ledger:value)
                 snapshot.teamCapturedAt=input.uptime
@@ -1020,13 +1090,12 @@ final class BoundSoulProbe: @unchecked Sendable {
         }
         needsCandidate=true
     }
-    private func applyReceiptUnlocked(pausedFieldScript:Bool=false) {
+    private func applyReceiptUnlocked() {
         guard let value=receipt,value.generation==owner.generation,!owner.blocked else { return }
         guard owner.installed,value.ledger?.ended==false else { return }
         if owner.criticalGate {
             guard let latest=owner.lastInput,value.observation?.sameContents(as:latest)==true else { return }
         }
-        let current=BoundVBABattleBridge.soulLinkSnapshot()
         if let ring=value.ring { _=BoundVBABattleBridge.acknowledgeSoulLinkFaints(matching:ring) }
         guard let ledger=value.ledger,BoundVBABattleBridge.setSoulLinkAcquired(ledger.acquisitionBits) else {
             lock.unlock();requestPause("Soul Link catch rules couldn’t be applied. Keep the game paused.");lock.lock();return
@@ -1034,16 +1103,19 @@ final class BoundSoulProbe: @unchecked Sendable {
         if let acquisitions=value.observation?.acquisitions,!acquisitions.isEmpty {
             _=BoundVBABattleBridge.acknowledgeSoulLinkAcquisitions(matching:acquisitions)
         }
-        // At an explicit paused checkpoint, a field script may still own
-        // input. Identity-only loss enforcement is safe before it releases UI;
-        // admitted battles and temporary parties remain excluded.
-        if Self.mayApplyNativePolicy(ready:current["ready"] as? Bool==true,battle:current["battle"] as? Bool==true)
-            || (pausedFieldScript && current["battle"] as? Bool == false) {
+        // Durable identity policy applies during ordinary battles, PC screens
+        // and field scripts too. Borrowed/friendly contexts retain their own
+        // admission fences; matching owned identities alone are clamped.
+        let excluded=owner.coreID != nil && (owner.friendly==owner.coreID || owner.cooperative==owner.coreID)
+        if Self.mayApplyNativePolicy(excluded:excluded) {
             if value.policy != owner.lastPolicy {
                 guard BoundVBABattleBridge.setSoulLinkDenied(value.policy) else {
                     lock.unlock();requestPause("Soul Link native rules couldn’t be applied. Keep the game paused.");lock.lock();return
                 }
                 owner.lastPolicy=value.policy
+            }
+            guard BoundVBABattleBridge.setSoulLinkEliminated(value.elimination) else {
+                lock.unlock();requestPause("Soul Link elimination rules couldn’t be applied. Keep the game paused.");lock.lock();return
             }
             BoundVBABattleBridge.enforceSoulLink()
         }
@@ -1088,7 +1160,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         lock.lock();defer { lock.unlock() }
         guard owner.generation==token,owner.coreID==ObjectIdentifier(core),core.state == .paused else { throw BoundSoulLedger.Error.corrupt }
         owner.blocked=false;published.error=nil
-        if owner.friendly != ObjectIdentifier(core),owner.cooperative != ObjectIdentifier(core) { applyReceiptUnlocked(pausedFieldScript:true) }
+        if owner.friendly != ObjectIdentifier(core),owner.cooperative != ObjectIdentifier(core) { applyReceiptUnlocked() }
         guard !owner.blocked else { throw BoundSoulLedger.Error.corrupt }
         owner.criticalGate=false
         _=BoundVBABattleBridge.setSoulFrameBlocked(false,owner:token.uuidString,generation:owner.nativeGeneration)
@@ -1116,6 +1188,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         owner.verified=false;owner.installed=false;owner.nativeGeneration=0
         owner.linksDirty=true;owner.linksOffset = -1
         owner.lastInput=nil;owner.lastPolicy=Data();receipt=nil
+        owner.observedBattle=false;owner.battleID=nil;owner.resumeBattleID=published.ledger?.battleLosses?.battle?.id
     }
     func refreshAfterNativeMemoryReplacement(core:EmulatorCore) throws {
         guard core.state == .paused else { throw BoundSoulLedger.Error.corrupt }
@@ -1143,7 +1216,7 @@ final class BoundSoulProbe: @unchecked Sendable {
             if owner.friendly != ObjectIdentifier(core),owner.cooperative != ObjectIdentifier(core),let value=published.ledger {
                 let policy=value.denied.sorted().reduce(into:Data()) { $0.append($1.bytes) }
                 guard BoundVBABattleBridge.installSoulLink(),BoundVBABattleBridge.setSoulLinkDenied(policy),
-                      BoundVBABattleBridge.setSoulLinkAcquired(value.acquisitionBits) else {
+                      BoundVBABattleBridge.setSoulLinkAcquired(value.acquisitionBits),BoundVBABattleBridge.setSoulLinkEliminated(value.eliminationBits) else {
                     lock.unlock();requestPause("Soul Link couldn’t restore its native rules. Keep the game paused.");lock.lock();throw BoundSoulLedger.Error.corrupt
                 }
                 owner.installed=true;owner.lastPolicy=policy;BoundVBABattleBridge.enforceSoulLink()
@@ -1160,6 +1233,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         guard owner.coreID==ObjectIdentifier(core),core.deltaCore.identifier=="com.rileytestut.GBADeltaCore",
               owner.friendly != ObjectIdentifier(core),owner.cooperative != ObjectIdentifier(core),
               let value=published.ledger,value.valid,published.error==nil else { throw BoundSoulLedger.Error.corrupt }
+        owner.observedBattle=false;owner.battleID=nil;owner.resumeBattleID=value.battleLosses?.battle?.id
         if value.ended {
             BoundVBABattleBridge.closeSoulLink();owner.installed=false;owner.lastPolicy=Data();owner.criticalGate=false
             _=BoundVBABattleBridge.setSoulFrameBlocked(false,owner:owner.generation.uuidString,generation:owner.nativeGeneration)
@@ -1167,7 +1241,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         }
         guard BoundVBABattleBridge.installSoulLink() else { throw BoundSoulLedger.Error.corrupt }
         let policy=value.denied.sorted().reduce(into:Data()) { $0.append($1.bytes) }
-        guard BoundVBABattleBridge.setSoulLinkDenied(policy),BoundVBABattleBridge.setSoulLinkAcquired(value.acquisitionBits) else { throw BoundSoulLedger.Error.corrupt }
+        guard BoundVBABattleBridge.setSoulLinkDenied(policy),BoundVBABattleBridge.setSoulLinkAcquired(value.acquisitionBits),BoundVBABattleBridge.setSoulLinkEliminated(value.eliminationBits) else { throw BoundSoulLedger.Error.corrupt }
         owner.installed=true;owner.lastPolicy=policy;owner.verified=true
         owner.nativeGeneration=claimNativeFrameOwnerUnlocked()
         guard owner.nativeGeneration != 0 else { throw BoundSoulLedger.Error.corrupt }
@@ -1198,6 +1272,11 @@ final class BoundSoulSession: ObservableObject {
     private var linksSequence:UInt64=0,peerLinksSequence:UInt64=0
     private var linksCursor=0
     private var lastLinksSent:TimeInterval = -.infinity
+    private var lossSequence:UInt64=0,peerLossSequence:UInt64=0
+    private var lossCursor=0
+    private var lastLossSent:TimeInterval = -.infinity
+    private var lastLossNoticeID:UUID?
+    @Published private(set) var battleLossMoment:BoundBattleLossNotice?
     @Published private(set) var deathMoment: BoundSoulDeath?
     private var deathMomentStarted: TimeInterval?
     var canPresentDeathMoment: (() -> Bool)?
@@ -1293,7 +1372,7 @@ final class BoundSoulSession: ObservableObject {
             recoveryError=probe.read().error;status=recoveryError ?? "Soul Link still has unsaved rules."
             return
         }
-        deathMoment = nil; deathMomentStarted = nil; recoveryError = nil
+        deathMoment = nil; battleLossMoment=nil;deathMomentStarted = nil; recoveryError = nil
         peerGone(); localTeam = nil; localTeamCurrent = false
         self.core = core; self.gameID = gameID; supported = false
         confirmed = false; lastPeer = 0; offered = nil; incoming = nil; cursor = 0
@@ -1368,7 +1447,7 @@ final class BoundSoulSession: ObservableObject {
     func receive(_ data: Data) {
         guard BoundMultiplayerFeatures.isEnabled, connected?() == true, let binding else { return }
         if BoundSoulLinksPacket.recognizes(data) {
-            guard let packet=BoundSoulLinksPacket.decode(data),let ledger,!ledger.ended,
+            guard let packet=BoundSoulLinksPacket.decode(data),let ledger,
                   ledger.run==packet.run,ledger.binding==binding,paired,
                   packet.receiver==epoch,packet.sender==peerEpoch,packet.sequence>peerLinksSequence else { return }
             do {
@@ -1377,8 +1456,16 @@ final class BoundSoulSession: ObservableObject {
             } catch { status="Couldn’t preserve your partner’s Soul Link record.";haltForRecovery() }
             return
         }
+        if BoundBattleLossPacket.recognizes(data) {
+            guard let packet=BoundBattleLossPacket.decode(data),let ledger,ledger.run==packet.run,ledger.binding==binding,
+                  confirmed,clock()-lastPeer<3,packet.receiver==epoch,packet.sender==peerEpoch,
+                  packet.sequence>peerLossSequence,Set(packet.notice.slots).isSubset(of:ledger.dead) else { return }
+            do { try probe.mergeBattleLoss(run:packet.run,notice:packet.notice);self.ledger=probe.read().ledger;peerLossSequence=packet.sequence }
+            catch { status="Couldn’t preserve the battle-loss graphic.";haltForRecovery() }
+            return
+        }
         if BoundSoulExtrasPacket.recognizes(data) {
-            guard let packet=BoundSoulExtrasPacket.decode(data),let ledger,!ledger.ended,
+            guard let packet=BoundSoulExtrasPacket.decode(data),let ledger,
                   ledger.run==packet.run,ledger.binding==binding,confirmed,clock()-lastPeer < 3,
                   packet.receiver==epoch,packet.sender==peerEpoch else { return }
             do {
@@ -1414,7 +1501,7 @@ final class BoundSoulSession: ObservableObject {
             if let old = peerEpoch, old != packet.sender {
                 retiredEpochs.append(old); if retiredEpochs.count > 16 { retiredEpochs.removeFirst() }
             }
-            if peerEpoch != packet.sender { partnerTeam = nil; peerExtraBoxed = []; peerExtraCategories.reset(); peerTeamAt = nil; peerTeamSequence = 0; peerLinksSequence=0; partnerTeamCurrent = false }
+            if peerEpoch != packet.sender { partnerTeam = nil; peerExtraBoxed = []; peerExtraCategories.reset(); peerTeamAt = nil; peerTeamSequence = 0; peerLinksSequence=0;peerLossSequence=0; partnerTeamCurrent = false }
             peerEpoch = packet.sender; proposedEpoch = nil
         } else if proposedEpoch == nil {
             proposedEpoch = packet.sender; proposalAt = clock()
@@ -1429,6 +1516,8 @@ final class BoundSoulSession: ObservableObject {
         switch packet.kind {
         case .end:
             guard let ledger, ledger.run == packet.run, ledger.binding == binding else { return }
+            do { try probe.merge(run:packet.run,rows:packet.rows,losses:packet.losses,acquired:packet.acquired);self.ledger=probe.read().ledger }
+            catch { status="Couldn’t preserve final Soul Link losses.";haltForRecovery();return }
             if !ledger.ended { endRun() }
             confirmed = true; lastPeer = clock()
         case .offer:
@@ -1487,6 +1576,7 @@ final class BoundSoulSession: ObservableObject {
         partnerTeam = nil; peerExtraBoxed = []; peerExtraCategories.reset(); peerTeamAt = nil; peerTeamSequence = 0; partnerTeamCurrent = false
         teamSequence = 0; lastTeamSent = -.infinity
         linksSequence=0;peerLinksSequence=0;linksCursor=0;lastLinksSent = -.infinity
+        lossSequence=0;peerLossSequence=0;lossCursor=0;lastLossSent = -.infinity;lastLossNoticeID=nil
         incompatiblePeer = false; confirmed = false; lastPeer = 0; epoch = UUID(); peerEpoch = nil
         proposedEpoch = nil; retiredEpochs = []
     }
@@ -1504,7 +1594,7 @@ final class BoundSoulSession: ObservableObject {
     }
     private func updateLinks(at now:TimeInterval) {
         probe.setLinksPresentation(areas:areaNames,connected:BoundMultiplayerFeatures.isEnabled && active && ledger?.binding==binding && paired && connected?()==true)
-        guard active,let ledger,!ledger.offering,ledger.binding==binding,paired,
+        guard let ledger,!ledger.offering,ledger.binding==binding,paired,
               BoundMultiplayerFeatures.isEnabled,connected?()==true,let peerEpoch,
               now-lastLinksSent>=0.25,linksSequence<UInt64.max else { return }
         let rows=BoundSoulLinks.localPresentations(ledger:ledger)
@@ -1515,6 +1605,23 @@ final class BoundSoulSession: ObservableObject {
         linksSequence+=1;lastLinksSent=now
         if let data=BoundSoulLinksPacket(run:ledger.run,sender:epoch,receiver:peerEpoch,sequence:linksSequence,
                                         offset:offset,total:rows.count,rows:chunk).encoded() { _=send?(data) }
+        if let data=BoundSoulLinksPacket(run:ledger.run,sender:epoch,receiver:peerEpoch,sequence:linksSequence,
+                                        offset:offset,total:rows.count,rows:chunk).encoded(legacy:true) { _=send?(data) }
+    }
+    private func updateBattleLosses(at now:TimeInterval) {
+        guard let ledger,!ledger.offering,ledger.binding==binding,confirmed,now-lastPeer<3,
+              BoundMultiplayerFeatures.isEnabled,connected?()==true,let peerEpoch,
+              now-lastLossSent>=0.25,lossSequence<UInt64.max,let notices=ledger.battleLosses?.notices,!notices.isEmpty else { return }
+        let notice:BoundBattleLossNotice
+        if let latest=notices.last,latest.id != lastLossNoticeID { notice=latest;lastLossNoticeID=latest.id }
+        else { lossCursor %= notices.count;notice=notices[lossCursor];lossCursor=(lossCursor+1)%notices.count }
+        lossSequence+=1;lastLossSent=now
+        if let data=BoundBattleLossPacket(run:ledger.run,sender:epoch,receiver:peerEpoch,sequence:lossSequence,notice:notice).encoded() { _=send?(data) }
+    }
+    func dismissBattleLoss() {
+        guard let ledger,let notice=battleLossMoment ?? ledger.battleLosses?.pending else { return }
+        do { try probe.acknowledgeBattleLoss(run:ledger.run,id:notice.id);self.ledger=probe.read().ledger;battleLossMoment=nil }
+        catch { status="Couldn’t preserve this battle-loss graphic.";haltForRecovery() }
     }
     func teamLocation(slot: String, partner: Bool) -> String {
         guard let ledger else { return "Syncing" }
@@ -1535,10 +1642,17 @@ final class BoundSoulSession: ObservableObject {
         } catch { status = "Couldn’t preserve this Soul Link moment."; haltForRecovery() }
     }
     private func updateDeathMoment(at now: TimeInterval) {
-        guard BoundMultiplayerFeatures.isEnabled, active, ledger?.offering == false,
-              probe.read().error == nil, canPresentDeathMoment?() == true else {
-            if deathMoment != nil { deathMoment = nil; deathMomentStarted = nil }
+        let snapshot=probe.read()
+        guard BoundMultiplayerFeatures.isEnabled, ledger?.offering == false,
+              snapshot.error == nil, (core==nil || snapshot.terminalBattleEnded || snapshot.ready && !snapshot.inBattle),canPresentDeathMoment?() == true else {
+            if deathMoment != nil { deathMoment = nil; deathMomentStarted = nil };battleLossMoment=nil
             return
+        }
+        if let pending=ledger?.battleLosses?.pending { battleLossMoment=pending;deathMoment=nil;deathMomentStarted=nil;return }
+        battleLossMoment=nil
+        guard active else { deathMoment=nil;deathMomentStarted=nil;return }
+        if gameID==BoundGameProfiles.current.gameID && BoundGameProfiles.current.saveStateLayout>=15 {
+            deathMoment=nil;deathMomentStarted=nil;return
         }
         if deathMoment != nil, let began = deathMomentStarted, now - began >= 7 { dismissDeathMoment() }
         guard probe.read().error == nil else { return }
@@ -1551,7 +1665,7 @@ final class BoundSoulSession: ObservableObject {
         let now = time ?? clock()
         if proposedEpoch != nil, now - proposalAt > 1 { peerGone() }
         probe.setPreviewEnabled(BoundMultiplayerFeatures.isEnabled)
-        defer { updateTeams(at: now); updateLinks(at: now); updateDeathMoment(at: now); bannerChanged?(!cartridgeManagesPause && (probe.read().error != nil || recoveryError != nil) ? status : nil) }
+        defer { updateTeams(at: now); updateLinks(at: now); updateBattleLosses(at:now);updateDeathMoment(at: now); bannerChanged?(!cartridgeManagesPause && (probe.read().error != nil || recoveryError != nil) ? status : nil) }
         let snapshot = probe.read(); if snapshot.ledger != ledger { ledger = snapshot.ledger }
         if let ledger { probe.timeline.observeSoul(ledger) }
         canStart = BoundMultiplayerFeatures.isEnabled && supported && snapshot.ready && snapshot.mons.count == 1
@@ -1793,7 +1907,9 @@ struct BoundSoulDeathNotice: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         Group {
-            if let loss = session.deathMoment {
+            if let notice=session.battleLossMoment,let ledger=session.ledger {
+                BoundBattleLossGraphic(notice:notice,rows:BoundSoulLinks.orderedRows(ledger:ledger,areaNames:session.areaNames) ?? [],dismiss:session.dismissBattleLoss)
+            } else if let loss = session.deathMoment {
                 VStack(spacing: 8) {
                     HStack(alignment: .top) {
                         Image(systemName: "heart.slash.fill").font(.title2).foregroundStyle(.red)

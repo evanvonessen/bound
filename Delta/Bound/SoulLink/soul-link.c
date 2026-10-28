@@ -117,6 +117,21 @@ static int denied(const u8 *mon) {
     }
     return 0;
 }
+static int eliminationHostActive(void) {
+#ifdef BOUND_GAME_ELIMINATION_QUERY_ADDRESS
+    volatile const u32 *header=(volatile const u32 *)0x09FC9000u;
+    if(header[0]==0x31584C42u && header[1]==1 && header[2] && !(header[2]&1)
+       && header[4]==1 && POLICY->magic==MAGIC)
+        return 1;
+#endif
+    return 0;
+}
+static int eliminatedByGame(const u8 *mon) {
+#ifdef BOUND_GAME_ELIMINATION_QUERY_ADDRESS
+    if(eliminationHostActive())return ((int (*)(const void *))BOUND_GAME_ELIMINATION_QUERY_ADDRESS)(mon);
+#endif
+    return 0;
+}
 /* Replay the displaced instructions; both continuations overwrite r1. */
 __attribute__((naked,noinline)) u32 BoundSoulOriginalGet(const u8 *mon,int field,void *data) {
     __asm__ volatile("push {r4,lr}\nmov r4,r0\nmov r3,r1\nmov r0,r3\nldr r1,=0x0803FBF1\nbx r1\n");
@@ -125,7 +140,7 @@ __attribute__((naked,noinline)) void BoundSoulOriginalSet(u8 *mon,int field,cons
     __asm__ volatile("push {r4,lr}\nmov r3,r0\nmov r4,r1\nmov r0,r4\nldr r1,=0x08040385\nbx r1\n");
 }
 u32 BoundSoulGet(const u8 *mon,int field,void *data) {
-    if(field==57 && denied(mon)) return 0;
+    if(field==57 && (denied(mon)||eliminatedByGame(mon))) return 0;
     return BoundSoulOriginalGet(mon,field,data);
 }
 void BoundSoulSet(u8 *mon,int field,const void *data) {
@@ -134,14 +149,15 @@ void BoundSoulSet(u8 *mon,int field,const void *data) {
         /* Latch only physical player-party writes, even if healed this frame.
          * An enemy's earlier KO must not become an owned loss after capture.
          * The host further fences borrowed/NPC identities and friendly play. */
-        if(playerPartySlot(mon) && read16(data)==0 && read16(mon+86)>0 && read16(mon+88)>0
+        if(playerPartySlot(mon) && !((*(volatile u8 *)0x03003529&2) && eliminationHostActive())
+           && read16(data)==0 && read16(mon+86)>0 && read16(mon+88)>0
            && !(mon[19]&4) && !(mon[75]&0x40)) {
             if(EVENTS->magic!=MAGIC) { EVENTS->count=EVENTS->overflow=0; EVENTS->magic=MAGIC; }
             unsigned i=EVENTS->count;
             if(i<32) { EVENTS->fainted[i].personality=read32(mon); EVENTS->fainted[i].trainer=read32(mon+4); EVENTS->count=i+1; }
             else EVENTS->overflow=1;
         }
-        if(denied(mon)) data=&zero;
+        if(denied(mon)||eliminatedByGame(mon)) data=&zero;
     }
     BoundSoulOriginalSet(mon,field,data);
 }

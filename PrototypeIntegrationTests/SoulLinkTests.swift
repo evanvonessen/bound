@@ -14,6 +14,29 @@ private struct ServerMemoryFixtureGame: GameProtocol {
 }
 
 final class SoulLinkTests: XCTestCase {
+    func testTerminalBattleFinalizesDurablyAndDismissalSurvivesReopen() throws {
+        let directory=FileManager.default.temporaryDirectory.appendingPathComponent("soul-terminal-"+UUID().uuidString)
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+        defer { try? FileManager.default.removeItem(at:directory) }
+        let url=directory.appendingPathComponent("run.json"),battleID=UUID()
+        var value=BoundSoulLedger(run:UUID(),binding:String(repeating:"a",count:64))
+        value.records=[.init(identity:.init(personality:1,trainer:2),slot:"area:101",name:"Ember",eligible:true)]
+        value.dead=["area:101"];value.recordDeaths(previous:[])
+        var history=BoundBattleLossJournal()
+        try history.observe(inBattle:true,eligible:true,previousDead:[],dead:value.dead,battleID:battleID)
+        value.battleLosses=history
+        try JSONEncoder().encode(value).write(to:url)
+        let probe=BoundSoulProbe();XCTAssertTrue(probe.configure(core:nil,url:url))
+        try probe.finalizeTerminalBattle()
+        XCTAssertTrue(probe.read().terminalBattleEnded)
+        XCTAssertEqual(probe.read().ledger?.battleLosses?.pending?.id,battleID)
+        XCTAssertEqual(try JSONDecoder().decode(BoundSoulLedger.self,from:Data(contentsOf:url)).battleLosses?.pending?.slots,["area:101"])
+        try probe.acknowledgeBattleLoss(run:value.run,id:battleID)
+        let reopened=BoundSoulProbe();XCTAssertTrue(reopened.configure(core:nil,url:url))
+        XCTAssertNil(reopened.read().ledger?.battleLosses?.pending)
+        XCTAssertEqual(reopened.read().ledger?.memorials?.first?.announced,true)
+        XCTAssertEqual(reopened.read().ledger?.dead,["area:101"])
+    }
     func testNativeBadEggSanityFlagCannotRegisterTemporaryStorageAsAMon() throws {
         for stride in [58, 100] {
             var bytes = Data((0..<stride).map { $0 % 2 == 0 ? UInt8(0xFF) : UInt8(0x03) })
@@ -502,11 +525,9 @@ final class SoulLinkTests: XCTestCase {
         XCTAssertEqual(combined.dead, ["area:100", "area:102"])
         XCTAssertThrowsError(try BoundSoulLedger.mergeForIndependentRestore(current: encoder.encode(current), incoming: encoder.encode(makeLedger())))
     }
-    func testRemoteLossPolicyWaitsForNativeSafeFieldBoundary() {
-        XCTAssertFalse(BoundSoulProbe.mayApplyNativePolicy(ready: false, battle: true))
-        XCTAssertFalse(BoundSoulProbe.mayApplyNativePolicy(ready: false, battle: false))
-        XCTAssertFalse(BoundSoulProbe.mayApplyNativePolicy(ready: true, battle: true))
-        XCTAssertTrue(BoundSoulProbe.mayApplyNativePolicy(ready: true, battle: false))
+    func testRemoteLossPolicyAppliesDuringMenusAndBattleButKeepsTemporaryContextsExcluded() {
+        XCTAssertTrue(BoundSoulProbe.mayApplyNativePolicy(excluded:false))
+        XCTAssertFalse(BoundSoulProbe.mayApplyNativePolicy(excluded:true))
     }
     @MainActor
     func testIncomingInvitationSurvivesRetriesAndDisconnectUntilExplicitAnswer() throws {
@@ -631,6 +652,63 @@ final class SoulLinkTests: XCTestCase {
         XCTAssertThrowsError(try probe.merge(run: value.run, rows: [], losses: peer.lossBits))
         XCTAssertNotNil(probe.read().error, "A later heartbeat must not resume an unsaved remote death")
         XCTAssertEqual(probe.read().ledger, value)
+    }
+    @MainActor
+    func testCompletedBattleGraphicReachesBothPeersAndKeepsTheirOwnSidesAcrossReconnect() throws {
+        let old=UserDefaults.standard.object(forKey:BoundMultiplayerFeatures.key);BoundMultiplayerFeatures.setEnabled(true)
+        defer { UserDefaults.standard.set(old,forKey:BoundMultiplayerFeatures.key) }
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true)
+        defer { try? FileManager.default.removeItem(at:root) }
+        let run=UUID(),room=UUID().uuidString,battle=UUID(),ap=BoundSoulProbe(),bp=BoundSoulProbe()
+        var left=BoundSoulLedger(run:run,binding:BoundSoulSession.hash("A:"+room))
+        var right=BoundSoulLedger(run:run,binding:BoundSoulSession.hash("B:"+room))
+        for (index,slot) in ["area:100","gift:1"].enumerated() {
+            left.records.append(.init(identity:.init(personality:UInt32(index+1),trainer:1),slot:slot,name:["Ember","Gift A"][index],eligible:true,species:4,area:100))
+            right.records.append(.init(identity:.init(personality:UInt32(index+11),trainer:2),slot:slot,name:["Leaf","Gift B"][index],eligible:true,species:1,area:100))
+        }
+        left.dead=["area:100","gift:1"];left.recordDeaths(previous:[])
+        var history=BoundBattleLossJournal()
+        try history.observe(inBattle:true,eligible:true,previousDead:[],dead:left.dead,battleID:battle)
+        try history.observe(inBattle:false,eligible:true,previousDead:left.dead,dead:left.dead)
+        left.battleLosses=history
+        let aURL=root.appendingPathComponent("a.json"),bURL=root.appendingPathComponent("b.json")
+        try JSONEncoder().encode(left).write(to:aURL);try JSONEncoder().encode(right).write(to:bURL)
+        ap.configure(core:nil,url:aURL);bp.configure(core:nil,url:bURL)
+        var time=ProcessInfo.processInfo.systemUptime
+        let a=BoundSoulSession(probe:ap,clock:{ time }),b=BoundSoulSession(probe:bp,clock:{ time })
+        a.canPresentDeathMoment={ true };b.canPresentDeathMoment={ true }
+        a.setConnection(owner:"A",room:room);b.setConnection(owner:"B",room:room)
+        a.connected={ true };b.connected={ true }
+        var ab:[Data]=[],ba:[Data]=[],oldBatch:Data?
+        a.send={ ab.append($0);if BoundBattleLossPacket.recognizes($0) { oldBatch=$0 };return true }
+        b.send={ ba.append($0);return true }
+        func exchange(_ count:Int) {
+            for _ in 0..<count {
+                time+=0.3;a.tick();b.tick()
+                let aa=ab,bb=ba;ab.removeAll();ba.removeAll()
+                aa.forEach { b.receive($0) };bb.forEach { a.receive($0) }
+            }
+            a.tick();b.tick()
+        }
+        a.tick();b.tick();a.endRun() // A terminal result must still carry names and the completed battle batch.
+        exchange(8)
+        XCTAssertEqual(a.battleLossMoment?.id,battle);XCTAssertEqual(b.battleLossMoment?.id,battle)
+        XCTAssertEqual(bp.read().ledger?.dead,left.dead)
+        XCTAssertEqual(bp.read().ledger?.ended,true)
+        XCTAssertEqual(bp.read().ledger?.eliminated,Set(right.records.map(\.identity)))
+        let aRows=try XCTUnwrap(BoundSoulLinks.orderedRows(ledger:XCTUnwrap(a.ledger),areaNames:[:]))
+        let bRows=try XCTUnwrap(BoundSoulLinks.orderedRows(ledger:XCTUnwrap(b.ledger),areaNames:[:]))
+        XCTAssertEqual(aRows.first?.own?.name,"Ember");XCTAssertEqual(aRows.first?.partner?.name,"Leaf")
+        XCTAssertEqual(bRows.first?.own?.name,"Leaf");XCTAssertEqual(bRows.first?.partner?.name,"Ember")
+        a.dismissBattleLoss();b.dismissBattleLoss()
+        let stale=try XCTUnwrap(oldBatch);a.peerGone();b.peerGone();b.receive(stale)
+        exchange(8)
+        XCTAssertNil(a.battleLossMoment);XCTAssertNil(b.battleLossMoment)
+        XCTAssertEqual(bp.read().ledger?.battleLosses?.notices.count,1)
+        let reopened=BoundSoulProbe();reopened.configure(core:nil,url:bURL)
+        XCTAssertNil(reopened.read().ledger?.battleLosses?.pending)
+        XCTAssertEqual(reopened.read().ledger?.dead,left.dead)
     }
     @MainActor
     func testPairedSessionsRequireFreshChallengeAndCarryLossesAcrossReconnect() throws {
@@ -1386,6 +1464,20 @@ final class EncounterAllowanceTests: XCTestCase {
         XCTAssertNil(BoundSoulPacket.decode(BoundSoulPacket.previousPrefix + Data(repeating:0,count:628)),"Older peers cannot silently miss extra losses")
     }
 
+    func testEliminationMaskSeparatesIneligibleCatchesAndCoversLastIdentity() throws {
+        var value=ledger()
+        for index in 0..<2048 {
+            value.records.append(.init(identity:.init(personality:UInt32(index+1),trainer:42),
+                slot:"gift:\(index/2+1)",name:"Mon",eligible:index%2==1))
+        }
+        value.dead=Set((1...1024).map { "gift:\($0)" })
+        XCTAssertTrue(value.valid)
+        XCTAssertEqual(value.denied.count,2048)
+        XCTAssertEqual(value.eliminated.count,1024)
+        XCTAssertEqual(value.eliminationBits,Data(repeating:0xAA,count:256),"Only eligible dead identities, including identity 2048, may enter elimination boxes")
+        let restored=try JSONDecoder().decode(BoundSoulLedger.self,from:JSONEncoder().encode(value))
+        XCTAssertEqual(restored.eliminationBits,value.eliminationBits)
+    }
     func testRaidPlacementZeroHPIsNotAnOwnedFaintAndGraceCannotReviveAfterHealth() throws {
         var value=ledger()
         try value.registerAcquisitions(receipt(1,kind:0))

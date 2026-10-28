@@ -66,6 +66,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)close;
 + (BOOL)installSoulLink;
 + (BOOL)setSoulLinkDenied:(NSData *)identities;
++ (BOOL)setSoulLinkEliminated:(NSData *)bits;
++ (BOOL)usesAcceptedSoulFaints;
 + (BOOL)setSoulLinkAcquired:(NSData *)bits;
 + (NSDictionary<NSString *,id> *)soulLinkSnapshot;
 + (void)acknowledgeSoulLinkFaints;
@@ -80,6 +82,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)closeSoulLink;
 #if DEBUG && TARGET_OS_SIMULATOR
 + (NSData *)qaLinksMenuHost;
++ (NSData *)qaEliminationPolicy;
 + (NSDictionary<NSString *,id> *)qaUncachedSoulLinkSnapshot;
 + (NSDictionary<NSString *,id> *)qaSoulBoxCacheChecks;
 + (NSDictionary<NSString *,id> *)qaSoulFaintAcknowledgementChecks;

@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import SwiftUI
 import CryptoKit
 import DeltaCore
 import Network
@@ -323,6 +324,50 @@ final class NativeBattleRuntimeTests:XCTestCase {
     private func soulRAM(_ core:EmulatorCore) throws->Data {
         let memory=try XCTUnwrap(BoundGBAMemorySnapshot.capture(readMemory:{ core.deltaCore.emulatorBridge.readMemory?(at:$0,size:$1) }))
         return Data(memory.workRAM)+Data(memory.internalRAM)
+    }
+    func testActualEliminationPolicyPublishesAtomicallyAndRejectsOutOfRangeBits() throws {
+        guard ProcessInfo.processInfo.environment["BOUND_ENCOUNTER_GAMEPLAY"] == "1" else { throw XCTSkip("Requires the dedicated current-ROM fixture") }
+        let (core,_)=try soulWorkerFixture("elimination-policy")
+        defer { BoundVBABattleBridge.closeSoulLink(); _=core.stop() }
+        XCTAssertTrue(BoundVBABattleBridge.installSoulLink())
+        var denied=Data()
+        for index in 0..<2048 { denied.append(BoundSoulIdentity(personality:UInt32(index+1),trainer:42).bytes) }
+        XCTAssertTrue(BoundVBABattleBridge.setSoulLinkDenied(denied))
+        var bits=Data(repeating:0,count:256);bits[0]=1;bits[255]=128
+        XCTAssertTrue(BoundVBABattleBridge.setSoulLinkEliminated(bits))
+        let first=BoundVBABattleBridge.qaEliminationPolicy()
+        XCTAssertEqual(first.count,288);XCTAssertEqual(first.prefix(4),Data("BLX1".utf8))
+        XCTAssertEqual(first[12..<16],Data([0,8,0,0]));XCTAssertEqual(first[16],1)
+        XCTAssertEqual(first[8]&1,0);XCTAssertNotEqual(first[8],0)
+        XCTAssertEqual(first.suffix(256),bits)
+        XCTAssertTrue(BoundVBABattleBridge.setSoulLinkEliminated(bits))
+        XCTAssertEqual(BoundVBABattleBridge.qaEliminationPolicy(),first,"Unchanged policy must not churn the native sequence")
+        XCTAssertFalse(BoundVBABattleBridge.setSoulLinkEliminated(Data(repeating:0,count:255)))
+        XCTAssertTrue(BoundVBABattleBridge.setSoulLinkDenied(denied.prefix(8)))
+        XCTAssertEqual(BoundVBABattleBridge.qaEliminationPolicy()[16],0,"Changing the sorted identity table invalidates its old mask")
+        XCTAssertFalse(BoundVBABattleBridge.setSoulLinkEliminated(bits),"Bit 2047 cannot refer to a one-identity table")
+        bits=Data(repeating:0,count:256);bits[0]=1
+        XCTAssertTrue(BoundVBABattleBridge.setSoulLinkEliminated(bits))
+        XCTAssertEqual(BoundVBABattleBridge.qaEliminationPolicy().suffix(256),bits)
+        BoundVBABattleBridge.closeSoulLink()
+        XCTAssertEqual(BoundVBABattleBridge.qaEliminationPolicy(),Data(repeating:0,count:288))
+    }
+    func testBattleLossGraphicRendersOwnAndPartnerSides() async throws {
+        let row=BoundSoulLinks.Row(slot:"area:102",label:"Route 2",
+            own:.init(species:25,personality:1,name:"Sparky",area:102,ordinal:1),
+            partner:.init(species:133,personality:2,name:"Eevee",area:102,ordinal:1),
+            ownCaught:true,partnerCaught:true,dead:true)
+        let scene=try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previous=scene.windows.first { $0.isKeyWindow },window=UIWindow(windowScene:scene)
+        let controller=UIHostingController(rootView:BoundBattleLossGraphic(notice:.init(id:UUID(),slots:[row.slot],completedAt:Date()),rows:[row],dismiss:{}))
+        window.rootViewController=controller;window.makeKeyAndVisible()
+        defer { window.isHidden=true;previous?.makeKeyAndVisible() }
+        controller.view.frame=CGRect(x:0,y:0,width:360,height:380);controller.view.layoutIfNeeded()
+        try await Task.sleep(for:.milliseconds(600))
+        let image=UIGraphicsImageRenderer(size:CGSize(width:360,height:380)).image { _ in controller.view.drawHierarchy(in:CGRect(x:0,y:0,width:360,height:380),afterScreenUpdates:true) }
+        let bytes=try XCTUnwrap(image.pngData());XCTAssertGreaterThan(bytes.count,4000)
+        let attachment=XCTAttachment(image:image);attachment.name="Battle losses — own left, partner right";attachment.lifetime = .keepAlways;add(attachment)
+        try bytes.write(to:FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("elimination-battle-loss-graphic.png"))
     }
     func testActualLinksMenuUsesDurableCatchOrderAndRestoresField() async throws {
         guard ProcessInfo.processInfo.environment["BOUND_ENCOUNTER_GAMEPLAY"] == "1" else {

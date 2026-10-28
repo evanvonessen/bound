@@ -77,7 +77,7 @@ final class SoulLinksTests: XCTestCase {
     func testCosmeticChunksRoundTripWorstCaseNamesAndBoundedOffsets() throws {
         let rows = (1...8).map { BoundSoulLinksPacket.Row(slot:"gift:\($0)",presentation:presentation($0,name:String(repeating:"🐉",count:20))) }
         let value = packet(rows,total:16,offset:8,sequence:UInt64.max)
-        let data = try XCTUnwrap(value.encoded()); XCTAssertEqual(data.count,816); XCTAssertLessThanOrEqual(data.count,1024)
+        let data = try XCTUnwrap(value.encoded()); XCTAssertEqual(data.count,848); XCTAssertLessThanOrEqual(data.count,1024)
         let decoded = try XCTUnwrap(BoundSoulLinksPacket.decode(data))
         XCTAssertEqual(decoded.run,value.run); XCTAssertEqual(decoded.sender,value.sender); XCTAssertEqual(decoded.receiver,value.receiver)
         XCTAssertEqual(decoded.sequence,UInt64.max); XCTAssertEqual(decoded.total,16); XCTAssertEqual(decoded.offset,8); XCTAssertEqual(decoded.rows,rows)
@@ -96,10 +96,10 @@ final class SoulLinksTests: XCTestCase {
         let bytes = try XCTUnwrap(packet([row]).encoded())
         for length in 0..<bytes.count { XCTAssertNil(BoundSoulLinksPacket.decode(bytes.prefix(length))) }
         var bad = bytes; bad.append(0); XCTAssertNil(BoundSoulLinksPacket.decode(bad))
-        bad = bytes; bad[4]=2; XCTAssertNil(BoundSoulLinksPacket.decode(bad))
+        bad = bytes; bad[4]=3; XCTAssertNil(BoundSoulLinksPacket.decode(bad))
         bad = bytes; bad[10]=1; XCTAssertNil(BoundSoulLinksPacket.decode(bad))
         bad = bytes; bad[68]=1; XCTAssertNil(BoundSoulLinksPacket.decode(bad))
-        bad = bytes; bad[79]=2; XCTAssertNil(BoundSoulLinksPacket.decode(bad))
+        bad = bytes; bad[79]=4; XCTAssertNil(BoundSoulLinksPacket.decode(bad))
         bad = bytes; bad[85]=255; XCTAssertNil(BoundSoulLinksPacket.decode(bad))
         bad = bytes; bad[72]=0; bad[73]=25; XCTAssertNil(BoundSoulLinksPacket.decode(bad),"Wire index6400 is outside all categories")
     }
@@ -142,6 +142,28 @@ final class SoulLinksTests: XCTestCase {
         full.partnerAcquisitions=Set((1...2048).map { "static:\($0)" })
         full.dead=["area:100"]
         XCTAssertNil(BoundSoulLinks.orderedRows(ledger:full,areaNames:[:]),"Death-only rows count toward the native4096-row bound")
+    }
+
+    func testFullTrainerIdentityAndLegacyMetadataRemainSeparate() throws {
+        var info=presentation(1);info.trainerID=0xDEADBEEF
+        let row=BoundSoulLinksPacket.Row(slot:"area:100",presentation:info)
+        let current=try XCTUnwrap(packet([row]).encoded())
+        XCTAssertEqual(BoundSoulLinksPacket.decode(current)?.rows.first?.presentation.trainerID,0xDEADBEEF)
+        let legacy=try XCTUnwrap(packet([row]).encoded(legacy:true))
+        XCTAssertTrue(legacy.starts(with:Data("BLP1".utf8)))
+        XCTAssertNil(BoundSoulLinksPacket.decode(legacy)?.rows.first?.presentation.trainerID)
+        XCTAssertEqual(BoundSoulLinksPacket.decode(legacy)?.rows.first?.presentation.personality,info.personality)
+    }
+    func testHatchedPresentationUsesCurrentIdentityWithoutForgettingOriginal() throws {
+        var value=ledger();add("egg:1",to:&value,id:1,egg:true)
+        let hatched=BoundSoulMon(identity:.init(personality:1,trainer:99),species:7,name:"Bubbles",area:101,eggOrigin:true,isEgg:false,hp:40)
+        try value.observe([hatched],registering:false,fainted:[])
+        let shown=try XCTUnwrap(BoundSoulLinks.localPresentations(ledger:value).first)
+        XCTAssertEqual(shown.presentation.trainerID,99)
+        XCTAssertTrue(value.records[0].identities.contains(.init(personality:1,trainer:42)))
+        XCTAssertTrue(value.records[0].identities.contains(hatched.identity))
+        value.dead=["egg:1"]
+        XCTAssertEqual(value.eliminated.count,2);XCTAssertEqual(value.eliminationBits[0],3)
     }
 
 }

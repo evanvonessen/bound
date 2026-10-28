@@ -1,8 +1,8 @@
 {
-  "sha256": "13d914106810336badd6762258e5bd1b01ab0d8c8044164cdd5d551a227808d8",
+  "sha256": "f7e6e912c4e3694ac4816136bd3d6bfc6889d63f15232077642603f0a2d0cabc",
   "repository": "evanvonessen/multi_red",
-  "tag": "multiplayer-13d914106810",
+  "tag": "multiplayer-f7e6e912c4e3",
   "asset": "multiplayer.gba",
-  "compatibility": "Exact paired native Links menu build; layout 14; retained runtime services required.",
+  "compatibility": "Exact paired Soul Link elimination build; layout 15; native runtime services required.",
   "localOnly": false
 }

@@ -9,6 +9,7 @@ struct BoundSoulLinkPresentation: Codable, Equatable, Sendable {
     var area: Int
     var ordinal: Int
     var isEgg = false
+    var trainerID:UInt32?
     var valid: Bool {
         (0...4095).contains(species) && (0...255).contains(area) && (1...2048).contains(ordinal)
         && !name.isEmpty && name.count <= 20 && name.utf8.count <= 80
@@ -24,6 +25,7 @@ struct BoundSoulLinksPacket: Sendable {
         var valid: Bool { BoundSoulLedger.validSlot(slot) && presentation.valid }
     }
     static let prefix = Data("BLP1".utf8)
+    static let currentPrefix = Data("BLP2".utf8)
     let run: UUID
     let sender: UUID
     let receiver: UUID
@@ -31,17 +33,17 @@ struct BoundSoulLinksPacket: Sendable {
     let offset: Int
     let total: Int
     var rows: [Row]
-    static func recognizes(_ data: Data) -> Bool { data.starts(with: prefix) }
+    static func recognizes(_ data: Data) -> Bool { data.starts(with: prefix) || data.starts(with:currentPrefix) }
     private var valid: Bool {
         sequence > 0 && (0...2048).contains(total) && offset >= 0 && rows.count <= 8
         && (total == 0 ? offset == 0 && rows.isEmpty : !rows.isEmpty && offset < total && offset + rows.count <= total)
         && rows.allSatisfy(\.valid) && Set(rows.map(\.slot)).count == rows.count
         && zip(rows, rows.dropFirst()).allSatisfy { $0.presentation.ordinal < $1.presentation.ordinal }
     }
-    func encoded() -> Data? {
+    func encoded(legacy:Bool=false) -> Data? {
         guard valid else { return nil }
         var data = Data(repeating: 0, count: 72)
-        data.replaceSubrange(0..<4, with: Self.prefix); data[4] = 1; data[5] = UInt8(rows.count)
+        data.replaceSubrange(0..<4, with: legacy ? Self.prefix:Self.currentPrefix); data[4] = legacy ? 1:2; data[5] = UInt8(rows.count)
         func put(_ value: UInt64, at offset: Int, size: Int) {
             for n in 0..<size { data[offset+n] = UInt8(truncatingIfNeeded: value >> (8*n)) }
         }
@@ -56,8 +58,9 @@ struct BoundSoulLinksPacket: Sendable {
             for value in [index, p.ordinal, p.species] {
                 data.append(UInt8(truncatingIfNeeded: value)); data.append(UInt8(value >> 8))
             }
-            data.append(UInt8(p.area)); data.append(p.isEgg ? 1 : 0)
+            data.append(UInt8(p.area)); data.append((p.isEgg ? 1:0) | (!legacy && p.trainerID != nil ? 2:0))
             for shift in stride(from: 0, to: 32, by: 8) { data.append(UInt8(truncatingIfNeeded: p.personality >> shift)) }
+            if !legacy { for shift in stride(from:0,to:32,by:8) { data.append(UInt8(truncatingIfNeeded:(p.trainerID ?? 0)>>shift)) } }
             data.append(UInt8(name.count)); data.append(name)
         }
         return data.count <= 1024 ? data : nil
@@ -65,7 +68,8 @@ struct BoundSoulLinksPacket: Sendable {
     static func decode(_ input: Data) -> Self? {
         guard (72...1024).contains(input.count), recognizes(input) else { return nil }
         let data = Data(input)
-        guard data[4] == 1, data[5] <= 8, data[10] == 0, data[11] == 0,
+        let modern=data.starts(with:currentPrefix)
+        guard data[4] == (modern ? 2:1), data[5] <= 8, data[10] == 0, data[11] == 0,
               data[68..<72].allSatisfy({ $0 == 0 }) else { return nil }
         func number(at offset: Int, size: Int) -> UInt64 {
             (0..<size).reduce(0) { $0 | UInt64(data[offset+$1]) << (8*$1) }
@@ -76,16 +80,18 @@ struct BoundSoulLinksPacket: Sendable {
         }
         var position = 72, rows: [Row] = []
         for _ in 0..<Int(data[5]) {
-            guard position + 13 <= data.count else { return nil }
+            let header=modern ? 17:13
+            guard position + header <= data.count else { return nil }
             let index = Int(number(at: position, size: 2)), ordinal = Int(number(at: position+2, size: 2))
             let species = Int(number(at: position+4, size: 2)), area = Int(data[position+6])
             let flags = data[position+7], personality = UInt32(number(at: position+8, size: 4))
-            let length = Int(data[position+12]); position += 13
-            guard let slot = BoundSoulLedger.wireSlot(index), flags <= 1, length <= 80,
+            let trainer=modern ? UInt32(number(at:position+12,size:4)):0
+            let length = Int(data[position+header-1]); position += header
+            guard let slot = BoundSoulLedger.wireSlot(index), flags <= (modern ? 3:1), (flags&2 != 0 || trainer==0), length <= 80,
                   position + length <= data.count,
                   let name = String(data: data[position..<position+length], encoding: .utf8) else { return nil }
             rows.append(.init(slot: slot, presentation: .init(species: species, personality: personality, name: name,
-                                                           area: area, ordinal: ordinal, isEgg: flags == 1)))
+                                                           area: area, ordinal: ordinal, isEgg: flags&1 != 0,trainerID:modern && flags&2 != 0 ? trainer:nil)))
             position += length
         }
         guard position == data.count else { return nil }
@@ -114,8 +120,9 @@ enum BoundSoulLinks {
         return ledger.records.enumerated().compactMap { index, record in
             guard record.eligible else { return nil }
             let area = record.area ?? (record.slot.hasPrefix("area:") ? Int(record.slot.dropFirst(5)) : nil) ?? 0
-            let value = BoundSoulLinkPresentation(species: record.pendingHatch ? 0 : record.species ?? 0, personality: record.identity.personality,
-                name: record.name.isEmpty ? "Pokémon" : record.name, area: area, ordinal: index+1, isEgg: record.pendingHatch)
+            let identity=record.currentIdentity ?? record.identity
+            let value = BoundSoulLinkPresentation(species: record.pendingHatch ? 0 : record.species ?? 0, personality: identity.personality,
+                name: record.name.isEmpty ? "Pokémon" : record.name, area: area, ordinal: index+1, isEgg: record.pendingHatch,trainerID:identity.trainer)
             return value.valid ? .init(slot: record.slot, presentation: value) : nil
         }
     }

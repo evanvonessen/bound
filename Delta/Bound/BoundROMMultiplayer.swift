@@ -2445,6 +2445,8 @@ extension BoundROMMultiplayerCoordinator {
         guard account.session?.owner == record.owner, game?.identifier == record.gameID else { return }
         if gameOverID == record.eventID && !record.returnRequested { return }
         pauseForGameOver()
+        do { try sharing.soulLink.probe.finalizeTerminalBattle() }
+        catch { serverMenuError="Couldn’t preserve final battle losses. Reopen Multiplayer to retry.";return }
         if record.returnRequested { moveGameOverToMenu(record) }
         else { needsServerMenu = false; gameOverMenuRun = nil; gameOverID = record.eventID }
     }
@@ -2455,6 +2457,10 @@ extension BoundROMMultiplayerCoordinator {
         serverRuns.removeAll { $0.save_id == record.run }
     }
     func returnFromGameOver() {
+        if sharing.soulLink.probe.read().ledger?.battleLosses?.pending != nil {
+            if sharing.soulLink.battleLossMoment != nil { sharing.soulLink.dismissBattleLoss() }
+            return
+        }
         guard let gameOverID, var record = pendingGameOvers.values.first(where: { $0.eventID == gameOverID && $0.owner == account.session?.owner }) else { return }
         record.returnRequested = true
         do { try rememberGameOver(record); moveGameOverToMenu(record); gameOverRetryAt = 0 }
