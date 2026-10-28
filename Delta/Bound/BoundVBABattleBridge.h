@@ -30,6 +30,11 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)advanceROMFieldRecovery;
 + (NSData *)romMultiplayerSnapshot;
 + (void)setROMMultiplayerHost:(NSData *)data;
++ (NSData *)worldMovementSnapshot;
++ (BOOL)worldMovementPublicationInProgress;
++ (uint64_t)worldMovementTimeline;
++ (void)requestWorldMovementRevocation;
++ (void)setWorldMovementHost:(NSData *)data;
 + (NSInteger)linksMenuPageOffset;
 + (void)setLinksMenuHost:(NSData *)data;
 + (BOOL)installSharedWorld;
@@ -81,6 +86,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)enforceSoulLink;
 + (void)closeSoulLink;
 #if DEBUG && TARGET_OS_SIMULATOR
++ (NSData *)qaWorldMovementHost;
 + (NSData *)qaLinksMenuHost;
 + (NSData *)qaEliminationPolicy;
 + (NSDictionary<NSString *,id> *)qaUncachedSoulLinkSnapshot;

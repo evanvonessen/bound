@@ -3,11 +3,14 @@
 import importlib.util
 import hashlib
 import json
+import os
 from pathlib import Path
 import plistlib
 import subprocess
 import tempfile
 import unittest
+import zipfile
+from contextlib import contextmanager
 from unittest.mock import patch
 
 
@@ -66,6 +69,119 @@ class DeliveryTests(unittest.TestCase):
         self.assertTrue(options["manageAppVersionAndBuildNumber"])
         self.assertEqual(options["destination"], "upload")
         self.assertEqual(options["teamID"], "3N83BX5M9G")
+
+    def test_local_distribution_export_cannot_upload_or_update_signing_assets(self):
+        options = delivery.export_options("export")
+        self.assertEqual(options["destination"], "export")
+        self.assertTrue(options["manageAppVersionAndBuildNumber"])
+        self.assertTrue(options["testFlightInternalTestingOnly"])
+        command = delivery.export_command("archive", "options", "output")
+        self.assertNotIn("-allowProvisioningUpdates", command)
+        self.assertIn("-allowProvisioningUpdates", delivery.export_command("archive", "options", "output", upload=True))
+        with self.assertRaises(ValueError):
+            delivery.export_options("ad-hoc")
+
+    def test_account_failure_is_distinguished_from_binary_validation_and_uncertain_upload(self):
+        self.assertIn("account-access failure", delivery.failure_diagnosis("error: exportArchive Failed to Use Accounts"))
+        self.assertIn("validation failed", delivery.failure_diagnosis("Validation failed ERROR ITMS-90000"))
+        self.assertIn("no accepted upload is confirmed", delivery.failure_diagnosis("network connection lost"))
+
+    def exported_fixture(self):
+        archive, app, source, data, digest = self.archive_fixture()
+        info = plistlib.loads((app / "Info.plist").read_bytes())
+        info["CFBundleExecutable"] = "Bound"
+        ipa = self.base / "Bound.ipa"
+        with zipfile.ZipFile(ipa, "w") as package:
+            package.writestr("Payload/Bound.app/Info.plist", plistlib.dumps(info))
+            package.writestr("Payload/Bound.app/Bound", b"fixture-binary")
+            package.writestr("Payload/Bound.app/multiplayer.gba", data)
+        entitlements = {"application-identifier": delivery.TEAM_ID + "." + delivery.BUNDLE_ID,
+                        "com.apple.developer.team-identifier": delivery.TEAM_ID,
+                        "get-task-allow": False, "aps-environment": "production"}
+        return ipa, source, entitlements, digest
+
+    def test_export_inspects_distribution_entitlements_and_actual_rom(self):
+        ipa, source, entitlements, digest = self.exported_fixture()
+        result = subprocess.CompletedProcess([], 0, stdout=plistlib.dumps(entitlements), stderr=b"")
+        with patch.object(delivery.subprocess, "run", return_value=result) as run:
+            info = delivery.distribution_info(ipa, source)
+            self.assertEqual(info["rom_sha256"], digest)
+            self.assertTrue(info["distribution_entitlements_verified"])
+            self.assertEqual(run.call_args.args[0][:4], ["codesign", "-d", "--entitlements", ":-"])
+
+    def test_export_refuses_development_or_wrong_team_entitlements(self):
+        ipa, source, entitlements, _ = self.exported_fixture()
+        for key, wrong in [("get-task-allow", True), ("aps-environment", "development"),
+                           ("com.apple.developer.team-identifier", "WRONGTEAM"),
+                           ("application-identifier", "WRONG.app")]:
+            with self.subTest(key=key):
+                result = subprocess.CompletedProcess([], 0, stdout=plistlib.dumps({**entitlements, key: wrong}), stderr=b"")
+                with patch.object(delivery.subprocess, "run", return_value=result):
+                    with self.assertRaisesRegex(ValueError, "distribution entitlements"):
+                        delivery.distribution_info(ipa, source)
+
+    def test_invalid_local_export_blocks_upload_before_remote_or_upload_command(self):
+        @contextmanager
+        def snapshot(*_):
+            yield self.root
+        with patch.object(delivery, "source_snapshot", snapshot), \
+             patch.object(delivery, "run_logged") as run, \
+             patch.object(delivery, "archive_info", return_value={"version": "1.0", "archive_build": "99"}), \
+             patch.object(delivery, "distribution_info", side_effect=ValueError("bad distribution entitlements")), \
+             patch.object(delivery, "published_revision") as remote:
+            with self.assertRaisesRegex(ValueError, "bad distribution"):
+                delivery.deliver(self.root, self.commit, upload=True)
+            remote.assert_not_called()
+            self.assertFalse(any(Path(call.args[2]).name == "upload.log" for call in run.call_args_list))
+            local_call = next(call for call in run.call_args_list if Path(call.args[2]).name == "local-export.log")
+            options = plistlib.loads(Path(local_call.args[0][local_call.args[0].index("-exportOptionsPlist") + 1]).read_bytes())
+            self.assertEqual(options["destination"], "export")
+
+    def test_archive_only_rechecks_distribution_without_uploading_or_discarding_receipt(self):
+        @contextmanager
+        def snapshot(*_):
+            yield self.root
+        output = self.root / ".build/testflight-delivery" / self.commit
+        output.mkdir(parents=True)
+        receipt = output / "upload-accepted.json"
+        receipt.write_text(json.dumps({"commit": self.commit, "bundle_id": delivery.BUNDLE_ID}))
+        original = receipt.read_bytes()
+        with patch.object(delivery, "source_snapshot", snapshot), \
+             patch.object(delivery, "run_logged") as run, \
+             patch.object(delivery, "archive_info", return_value={"version": "1.0", "archive_build": "99"}), \
+             patch.object(delivery, "distribution_info", return_value={"distribution_entitlements_verified": True}), \
+             patch.object(delivery, "published_revision") as remote:
+            delivery.deliver(self.root, self.commit, upload=False)
+            remote.assert_not_called()
+            self.assertEqual(receipt.read_bytes(), original)
+            self.assertFalse(any(Path(call.args[2]).name == "upload.log" for call in run.call_args_list))
+            local_call = next(call for call in run.call_args_list if Path(call.args[2]).name == "local-export.log")
+            self.assertNotIn("-allowProvisioningUpdates", local_call.args[0])
+
+    def test_checkout_gem_preflight_never_starts_fastlane(self):
+        launcher = Path(__file__).with_name("fastlane-local").resolve()
+        root = launcher.parent.parent
+        executable = self.base / "bundle"
+        calls = self.base / "bundle-calls.jsonl"
+        executable.write_text("#!/bin/sh\nprintf '%s\\n' \"$*|$BUNDLE_GEMFILE|$BUNDLE_PATH|$PWD\" >> \"$BOUND_TEST_CALLS\"\n")
+        executable.chmod(0o700)
+        environment = {**os.environ, "PATH": str(self.base) + ":" + os.environ["PATH"], "BOUND_TEST_CALLS": str(calls)}
+        environment.pop("BUNDLE_PATH", None)
+        subprocess.run([str(launcher), "--check-environment"], cwd=self.base, env=environment, check=True)
+        self.assertEqual(calls.read_text().splitlines(), [f"check|{root}/Gemfile|{root}/.build/gems|{root}"])
+        subprocess.run([str(launcher), "beta", "check:true"], cwd=self.base, env=environment, check=True)
+        self.assertEqual(calls.read_text().splitlines()[-1], f"exec fastlane beta check:true|{root}/Gemfile|{root}/.build/gems|{root}")
+
+    def test_missing_gems_stop_before_fastlane(self):
+        launcher = Path(__file__).with_name("fastlane-local").resolve()
+        executable = self.base / "bundle"
+        calls = self.base / "calls"
+        executable.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$BOUND_TEST_CALLS\"\nexit 17\n")
+        executable.chmod(0o700)
+        environment = {**os.environ, "PATH": str(self.base) + ":" + os.environ["PATH"], "BOUND_TEST_CALLS": str(calls)}
+        result = subprocess.run([str(launcher), "beta"], cwd=self.base, env=environment)
+        self.assertEqual(result.returncode, 17)
+        self.assertEqual(calls.read_text(), "check\n")
 
     def archive_fixture(self):
         archive = self.base / 'Bound.xcarchive'

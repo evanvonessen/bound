@@ -447,6 +447,31 @@ private final class NakamaTransportWirePool: @unchecked Sendable {
         channel.close()
     }
 
+    func testMovementUsesReliableByteLaneAndNeverReachesNativeBattleInbox() async throws {
+        let wire=NakamaTransportWire(match:match),media=NakamaMediaFixture()
+        let transport=BoundNakamaSharingTransport(media:media,client:BoundNakamaClient(socketFactory:{_ in wire}))
+        defer {transport.stop()}
+        let joined=expectation(description:"movement room joined"),sent=expectation(description:"movement uses opcode3")
+        let battle=expectation(description:"native cable remains independent")
+        let movement=Data("BMR1route-fixture".utf8),native=battleFrame()
+        wire.observe { text in
+            if let (opcode,body)=Self.outgoing(text),body==movement {XCTAssertEqual(opcode,3);sent.fulfill()}
+        }
+        transport.configureGameplay(lease);transport.setVideoRequired(false)
+        transport.start(configuration:mediaConfiguration,remoteView:UIView()){if $0 == .joined {joined.fulfill()}}
+        await fulfillment(of:[joined],timeout:2)
+        var received:[Data]=[];transport.setInteractionReceiver{if let data=$0 {received.append(data)}}
+        let channel=try XCTUnwrap(transport.makeBattleChannel(receiver:{ data in
+            XCTAssertEqual(data,native,"Movement metadata must never enter the native cable parser");battle.fulfill()
+        },failed:{XCTFail("Healthy movement cannot fail native cable")}))
+        XCTAssertTrue(transport.sendInteraction(movement));await fulfillment(of:[sent],timeout:2)
+        wire.deliver(incoming(opcode:3,bytes:movement));wire.deliver(incoming(opcode:3,bytes:native))
+        await fulfillment(of:[battle],timeout:2)
+        for _ in 0..<100 {transport.pollInteractions();if received==[movement]{break};try await Task.sleep(for:.milliseconds(10))}
+        XCTAssertEqual(received,[movement]);XCTAssertEqual(media.starts,0)
+        channel.close()
+    }
+
     func testBattleEnqueueAndReceiveContinueWhileMainActorAndSocketSendCompletionAreUnavailable() async throws {
         let wire = NakamaTransportWire(match: match), media = NakamaMediaFixture()
         let transport = BoundNakamaSharingTransport(media: media, client: BoundNakamaClient(socketFactory: { _ in wire }))

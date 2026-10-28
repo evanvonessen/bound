@@ -18,6 +18,7 @@ struct BoundPlayerState: Equatable, Sendable {
     // Presentation can observe the next object step before CameraMove updates
     // the save coordinate. This anchor never grants interaction authority.
     var cameraTile: Point? = nil
+    var mapInstance: UInt64? = nil
 }
 
 struct BoundPlayerStateReading: Equatable, Sendable {
@@ -76,6 +77,7 @@ struct BoundGBAMemorySnapshot: Sendable {
     let workRAM: [UInt8]
     let internalRAM: [UInt8]
     var paletteRAM: [UInt8]? = nil
+    var followerObservation: BoundNativeFollowerObservation? = nil
 
     init?(copyingWorkRAM work: Data, internalRAM internalData: Data) {
         guard work.count == 0x40000, internalData.count == 0x8000 else { return nil }
@@ -200,7 +202,8 @@ enum BoundPlayerStateDecoder {
                 runningState: Int(avatar[2]), tileTransitionState: Int(avatar[3]),
                 // Boundary camera residuals already belong to the new map's
                 // destination tile, even while the saved tile is still behind.
-                cameraTile: pendingCameraStep && !rebasedAtBoundary ? cameraTile : nil))
+                cameraTile: pendingCameraStep && !rebasedAtBoundary ? cameraTile : nil,
+                mapInstance: UInt64(word(headerPointer))<<32 | UInt64(word(header))))
     }
 }
 

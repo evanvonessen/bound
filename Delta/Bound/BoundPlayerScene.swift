@@ -8,6 +8,8 @@ struct BoundPlayerScene: Equatable, Sendable {
     let appearance: BoundPlayerSprite
     let background: BoundPlayerBackground
     let objects: [BoundPlayerSceneObject]
+    var follower: BoundPlayerFollower? = nil
+    var mapInstance: UInt64? = nil
 }
 
 struct BoundPlayerSprite: Hashable, Sendable {
@@ -248,7 +250,7 @@ enum BoundPlayerSceneDecoder {
     private static func sprite(_ raw: [UInt8], memory: BoundGBAMemorySnapshot,
                                rom: (Int, Int) -> [UInt8]?) -> BoundPlayerSprite? {
         let width = -Int(Int8(bitPattern: raw[0x28])) * 2, height = -Int(Int8(bitPattern: raw[0x29])) * 2
-        guard [16, 32].contains(width), [16, 32].contains(height),
+        guard [8, 16, 32, 64].contains(width), [8, 16, 32, 64].contains(height),
               BoundSceneBytes.half(raw) & 0x2F00 == 0, raw[0x3F] & 0x40 == 0,
               raw[0x3E] & 5 == 1, raw[0x2B] < 64,
               let animPointer = rom(BoundSceneBytes.word(raw, 8) + Int(raw[0x2A]) * 4, 4) else { return nil }
@@ -328,6 +330,11 @@ enum BoundPlayerSceneDecoder {
                                 scrollY: BoundSceneBytes.half(regs, 0x12), map: Data(map), masksWholeTiles: true))
         }
         var objects: [BoundPlayerSceneObject] = []
+        let followerBinding:BoundNativeFollowerBinding?
+        if let observation=memory.followerObservation {
+            followerBinding=observation.cache.read(memory:memory,player:player,scope:observation.scope)
+        } else { followerBinding=BoundNativeFollowerBinding.read(memory:memory,player:player) }
+        var follower: BoundPlayerFollower?
         for slot in 0..<16 {
             guard let object = memory.bytes(at: 0x02036E38 + slot * 36, count: 36), object[0] & 1 != 0,
                   BoundSceneBytes.word(object) & (1 << 13) == 0, object[4] < 64,
@@ -337,8 +344,15 @@ enum BoundPlayerSceneDecoder {
             let y = BoundSceneBytes.wrap(BoundSceneBytes.signed(raw, 0x22) + BoundSceneBytes.signed(raw, 0x26) + offset.y)
             objects.append(.init(origin: .init(x: x - appearance.width / 2, y: y - appearance.height / 2),
                                  footY: y + appearance.height / 2, appearance: appearance))
+            if let binding=followerBinding,binding.objectID==slot {
+                follower = .init(identity:binding.identity,species:binding.species,objectID:slot,generation:binding.generation,
+                    current:binding.current,previous:binding.previous,
+                    worldFoot:.init(x:x-camera.x,y:y+appearance.height/2-camera.y),
+                    elevation:binding.elevation,facing:binding.facing,appearance:appearance)
+            }
         }
         return .init(worldFoot: foot, camera: camera, appearance: appearance,
-                     background: .init(tiles: tiles, layers: layers), objects: objects)
+                     background: .init(tiles: tiles, layers: layers), objects: objects,
+                     follower:follower,mapInstance:player.mapInstance)
     }
 }

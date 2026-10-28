@@ -31,8 +31,11 @@ supported={'abi_major':1,'abi_minor':0,'wire_version':2,'checkpoint_format':1,
 if c.get('independent_progression'):
  supported.update(save_state_layout=11, setup_settings_version=5, independent_progression=True)
 if c.get('cooperative_doubles'):
- supported.update(save_state_layout=15 if c.get('independent_progression') else 4,reserved_heap_bytes=8192,cooperative_abi_major=1,cooperative_abi_minor=0,
+ supported.update(save_state_layout=(16 if c.get('presence_abi_major') else 15) if c.get('independent_progression') else 4,reserved_heap_bytes=0x2100 if c.get('presence_abi_major') else 8192,cooperative_abi_major=1,cooperative_abi_minor=0,
   cooperative_host_port_offset=0x1FE0000,cooperative_host_port_size=16384,cooperative_snapshot_address=0x02001800,cooperative_snapshot_size=2048)
+if c.get('presence_abi_major'):
+ supported.update(presence_abi_major=1,presence_abi_minor=0,presence_host_port_offset=0x1FC9200,presence_host_port_size=1024,
+  presence_output_address=0x02002000,presence_output_size=256,presence_code_offset=0x1FD8000,presence_code_limit=0x1FE0000,cooperative_code_limit=0x1FD8000)
 if any(c.get(key)!=value for key,value in supported.items()):
  raise SystemExit('This Bound adapter does not support the exported game layout')
 if a.from_game:

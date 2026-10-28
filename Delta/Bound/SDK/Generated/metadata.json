@@ -10,7 +10,7 @@
   },
   "profiles": {
     "contract.json": "2581f41d6a24d7d005891ca2f9d861f9700a1dd4dbe58cc8530e28484b75c35a",
-    "doubles-contract.json": "28b5346932708cea024624ce18015b85821bd67d6493c89a9ecc748593337082"
+    "doubles-contract.json": "9a5ace164e8597eefdd3c6b6b88a650298bd64ccc950422f77c42d03dfca2fb1"
   },
   "schemaOwner": "multi_red/source/multiplayer/sdk/protocol-v1.json",
   "schemaSHA256": "3314fbe6797a8b5d05f3f6267b6eaf01489b7e743c246ae57595e9781400a148",

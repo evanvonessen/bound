@@ -95,6 +95,24 @@ final class LivePresenceTests: XCTestCase {
         session.setEnabled(true); session.start { _ in true }; return session
     }
 
+    func testCanonicalCollisionTilesStaySeparateFromJumpDrawingCoordinates() throws {
+        var pose=try XCTUnwrap(BoundPresencePose(reading:reading()))
+        let coordinates=[4,6,4,4]
+        pose.collisionTiles=coordinates.enumerated().reduce(UInt64(0)){$0|UInt64($1.element+7)<<(11*$1.offset)}
+        pose.collisionElevation=3
+        pose.x=73;pose.y=83 // Native jump animation need not sit on a tile center.
+        let collision=try XCTUnwrap(BoundPresenceCollision(pose:pose))
+        XCTAssertEqual(collision.current,.init(x:4,y:6))
+        XCTAssertEqual(collision.previous,.init(x:4,y:4))
+        XCTAssertEqual(collision.elevation,3)
+        let packet=BoundPresencePacket(version:1,rom:BoundPlayerROMProfile.supportedSHA256,sender:UUID(),
+            receiver:UUID(),sequence:1,time:1,pose:pose)
+        XCTAssertEqual(try XCTUnwrap(BoundPresencePacket.decode(try XCTUnwrap(packet.encoded()))).pose,pose)
+        pose.collisionTiles=UInt64.max
+        XCTAssertFalse(pose.isValid)
+        XCTAssertNil(BoundPresenceCollision(pose:pose))
+    }
+
     func testOneWayCardinalSeamProjectsBothViewpointsAcrossMapGroups() throws {
         var fixture = PresenceMapFixture()
         fixture.map(0, width: 24, height: 20, edges: [(2, -3, 19)])

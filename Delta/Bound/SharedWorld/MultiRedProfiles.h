@@ -5,6 +5,9 @@
 namespace BoundOriginalGame {
 #include "BoundOriginalGameABI.h"
 }
+namespace BoundEliminationGame {
+#include "BoundEliminationGameABI.h"
+}
 namespace BoundLinksMenuGame {
 #include "BoundLinksMenuGameABI.h"
 }
@@ -35,6 +38,7 @@ struct MultiRedNativeProfile {
     void (*restoreHooks)(uint8_t *);
     unsigned linksHostOffset, linksHostSize, linksCodeStart, linksCodeEnd;
     unsigned eliminationHostOffset, eliminationHostSize, eliminationCodeStart, eliminationCodeEnd;
+    unsigned presenceHostOffset, presenceHostSize, presenceOutputAddress, presenceOutputSize, presenceCodeStart, presenceCodeEnd;
     bool cooperative() const { return cooperativeHostSize != 0; }
     bool matches(const uint8_t *p) const { return p && !memcmp(p+descriptorOffset,descriptor,descriptorSize); }
     bool admitsStateRAM(const uint8_t *ram, size_t count, bool exactCaptureIdentity=false) const {
@@ -64,6 +68,7 @@ struct MultiRedNativeProfile {
         if(cooperative()) memset(p+cooperativeHostOffset,0,cooperativeHostSize);
         if(linksHostSize) memset(p+linksHostOffset,0,linksHostSize);
         if(eliminationHostSize) memset(p+eliminationHostOffset,0,eliminationHostSize);
+        if(presenceHostSize) memset(p+presenceHostOffset,0,presenceHostSize);
     }
     void restore(uint8_t *p) const {
         restoreHooks(p);
@@ -71,6 +76,8 @@ struct MultiRedNativeProfile {
         if(linksCodeEnd>linksCodeStart) memset(p+linksCodeStart,0xFF,linksCodeEnd-linksCodeStart);
         if(eliminationHostSize) memset(p+eliminationHostOffset,0xFF,eliminationHostSize);
         if(eliminationCodeEnd>eliminationCodeStart) memset(p+eliminationCodeStart,0xFF,eliminationCodeEnd-eliminationCodeStart);
+        if(presenceHostSize) memset(p+presenceHostOffset,0xFF,presenceHostSize);
+        if(presenceCodeEnd>presenceCodeStart) memset(p+presenceCodeStart,0xFF,presenceCodeEnd-presenceCodeStart);
         memset(p+codeStart,0xFF,codeEnd-codeStart);
         memset(p+hostOffset,0xFF,hostSize); memset(p+uiHostOffset,0xFF,uiHostSize);
         memset(p+descriptorOffset,0xFF,descriptorSize);
@@ -90,13 +97,35 @@ struct MultiRedNativeProfile {
 static_assert(GameLinksHostOffset+GameLinksHostSize<=GameLinksCodeStart
               && GameLinksCodeStart<GameLinksCodeEnd && GameLinksCodeEnd<=GameCooperativeCodeStart,
               "Links memory must stay inside its audited region");
+#ifdef BOUND_GAME_PRESENCE
+static_assert(GameEliminationHostOffset+GameEliminationHostSize<=GamePresenceHostOffset
+              && GamePresenceHostOffset+GamePresenceHostSize<=GameEliminationCodeStart
+              && GameCooperativeCodeEnd<=GamePresenceCodeStart && GamePresenceCodeStart<GamePresenceCodeEnd
+              && GamePresenceCodeEnd<=GameCooperativeHostOffset, "Presence cartridge regions must not overlap");
+static_assert(GameCooperativeSnapshotAddress+GameCooperativeSnapshotSize<=GamePresenceOutputAddress
+              && GamePresenceOutputAddress+GamePresenceOutputSize<=0x02000000+GameReservedHeapBytes,
+              "Presence RAM output must precede the native heap");
+#endif
 static const MultiRedNativeProfile MultiRedCurrentProfile={
     GameDescriptor,GameCanonicalSHA256,GameRulesetID,GameDescriptorOffset,sizeof(GameDescriptor),GameHostOffset,GameHostSize,
     GameSnapshotAddress,GameSnapshotSize,GameSnapshotRegionSize,GameABIMajor,GameABIMinor,GameSaveStateLayout,
     GameUIHostOffset,GameUIHostSize,GameUIRequestAddress,GameUIRequestSize,GameCodeStart,GameCodeEnd,
     GameCooperativeHostOffset,GameCooperativeHostSize,GameCooperativeCodeStart,GameCooperativeCodeEnd,
     [](uint8_t *p) { for(const auto &entry:GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },
-    GameLinksHostOffset,GameLinksHostSize,GameLinksCodeStart,GameLinksCodeEnd,GameEliminationHostOffset,GameEliminationHostSize,GameEliminationCodeStart,GameEliminationCodeEnd
+    GameLinksHostOffset,GameLinksHostSize,GameLinksCodeStart,GameLinksCodeEnd,GameEliminationHostOffset,GameEliminationHostSize,GameEliminationCodeStart,GameEliminationCodeEnd,
+#ifdef BOUND_GAME_PRESENCE
+    GamePresenceHostOffset,GamePresenceHostSize,GamePresenceOutputAddress,GamePresenceOutputSize,GamePresenceCodeStart,GamePresenceCodeEnd
+#else
+    0,0,0,0,0,0
+#endif
+};
+static const MultiRedNativeProfile MultiRedNativeEliminationProfile={
+    BoundEliminationGame::GameDescriptor,BoundEliminationGame::GameCanonicalSHA256,BoundEliminationGame::GameRulesetID,BoundEliminationGame::GameDescriptorOffset,sizeof(BoundEliminationGame::GameDescriptor),BoundEliminationGame::GameHostOffset,BoundEliminationGame::GameHostSize,
+    BoundEliminationGame::GameSnapshotAddress,BoundEliminationGame::GameSnapshotSize,BoundEliminationGame::GameSnapshotRegionSize,BoundEliminationGame::GameABIMajor,BoundEliminationGame::GameABIMinor,BoundEliminationGame::GameSaveStateLayout,
+    BoundEliminationGame::GameUIHostOffset,BoundEliminationGame::GameUIHostSize,BoundEliminationGame::GameUIRequestAddress,BoundEliminationGame::GameUIRequestSize,BoundEliminationGame::GameCodeStart,BoundEliminationGame::GameCodeEnd,
+    BoundEliminationGame::GameCooperativeHostOffset,BoundEliminationGame::GameCooperativeHostSize,BoundEliminationGame::GameCooperativeCodeStart,BoundEliminationGame::GameCooperativeCodeEnd,
+    [](uint8_t *p) { for(const auto &entry:BoundEliminationGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },
+    BoundEliminationGame::GameLinksHostOffset,BoundEliminationGame::GameLinksHostSize,BoundEliminationGame::GameLinksCodeStart,BoundEliminationGame::GameLinksCodeEnd,BoundEliminationGame::GameEliminationHostOffset,BoundEliminationGame::GameEliminationHostSize,BoundEliminationGame::GameEliminationCodeStart,BoundEliminationGame::GameEliminationCodeEnd,0,0,0,0,0,0
 };
 static const MultiRedNativeProfile MultiRedLinksMenuProfile={
     BoundLinksMenuGame::GameDescriptor,BoundLinksMenuGame::GameCanonicalSHA256,BoundLinksMenuGame::GameRulesetID,BoundLinksMenuGame::GameDescriptorOffset,sizeof(BoundLinksMenuGame::GameDescriptor),BoundLinksMenuGame::GameHostOffset,BoundLinksMenuGame::GameHostSize,
@@ -104,7 +133,7 @@ static const MultiRedNativeProfile MultiRedLinksMenuProfile={
     BoundLinksMenuGame::GameUIHostOffset,BoundLinksMenuGame::GameUIHostSize,BoundLinksMenuGame::GameUIRequestAddress,BoundLinksMenuGame::GameUIRequestSize,BoundLinksMenuGame::GameCodeStart,BoundLinksMenuGame::GameCodeEnd,
     BoundLinksMenuGame::GameCooperativeHostOffset,BoundLinksMenuGame::GameCooperativeHostSize,BoundLinksMenuGame::GameCooperativeCodeStart,BoundLinksMenuGame::GameCooperativeCodeEnd,
     [](uint8_t *p) { for(const auto &entry:BoundLinksMenuGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },
-    BoundLinksMenuGame::GameLinksHostOffset,BoundLinksMenuGame::GameLinksHostSize,BoundLinksMenuGame::GameLinksCodeStart,BoundLinksMenuGame::GameLinksCodeEnd,0,0,0,0
+    BoundLinksMenuGame::GameLinksHostOffset,BoundLinksMenuGame::GameLinksHostSize,BoundLinksMenuGame::GameLinksCodeStart,BoundLinksMenuGame::GameLinksCodeEnd,0,0,0,0,0,0,0,0,0,0
 };
 static const MultiRedNativeProfile MultiRedOriginalProfile=[] {
     return MultiRedNativeProfile{
@@ -114,7 +143,7 @@ static const MultiRedNativeProfile MultiRedOriginalProfile=[] {
         BoundOriginalGame::GameABIMajor,BoundOriginalGame::GameABIMinor,BoundOriginalGame::GameSaveStateLayout,
         BoundOriginalGame::GameUIHostOffset,BoundOriginalGame::GameUIHostSize,BoundOriginalGame::GameUIRequestAddress,BoundOriginalGame::GameUIRequestSize,
         BoundOriginalGame::GameCodeStart,BoundOriginalGame::GameCodeEnd,0,0,0,0,
-        [](uint8_t *p) { for(const auto &entry:BoundOriginalGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },0,0,0,0,0,0,0,0
+        [](uint8_t *p) { for(const auto &entry:BoundOriginalGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },0,0,0,0,0,0,0,0,0,0,0,0,0,0
     };
 }();
 static const MultiRedNativeProfile MultiRedStackSafeProfile={
@@ -126,7 +155,7 @@ static const MultiRedNativeProfile MultiRedStackSafeProfile={
     BoundStackSafeGame::GameCodeStart,BoundStackSafeGame::GameCodeEnd,
     BoundStackSafeGame::GameCooperativeHostOffset,BoundStackSafeGame::GameCooperativeHostSize,
     BoundStackSafeGame::GameCooperativeCodeStart,BoundStackSafeGame::GameCooperativeCodeEnd,
-    [](uint8_t *p) { for(const auto &entry:BoundStackSafeGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },0,0,0,0,0,0,0,0
+    [](uint8_t *p) { for(const auto &entry:BoundStackSafeGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },0,0,0,0,0,0,0,0,0,0,0,0,0,0
 };
 static const MultiRedNativeProfile MultiRedDebugDefaultsProfile={
     BoundDebugDefaultsGame::GameDescriptor,BoundDebugDefaultsGame::GameCanonicalSHA256,BoundDebugDefaultsGame::GameRulesetID,
@@ -137,7 +166,7 @@ static const MultiRedNativeProfile MultiRedDebugDefaultsProfile={
     BoundDebugDefaultsGame::GameCodeStart,BoundDebugDefaultsGame::GameCodeEnd,
     BoundDebugDefaultsGame::GameCooperativeHostOffset,BoundDebugDefaultsGame::GameCooperativeHostSize,
     BoundDebugDefaultsGame::GameCooperativeCodeStart,BoundDebugDefaultsGame::GameCooperativeCodeEnd,
-    [](uint8_t *p) { for(const auto &entry:BoundDebugDefaultsGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },0,0,0,0,0,0,0,0
+    [](uint8_t *p) { for(const auto &entry:BoundDebugDefaultsGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },0,0,0,0,0,0,0,0,0,0,0,0,0,0
 };
 static const MultiRedNativeProfile MultiRedFriendsMultiviewProfile={
     BoundFriendsMultiviewGame::GameDescriptor,BoundFriendsMultiviewGame::GameCanonicalSHA256,BoundFriendsMultiviewGame::GameRulesetID,
@@ -148,7 +177,7 @@ static const MultiRedNativeProfile MultiRedFriendsMultiviewProfile={
     BoundFriendsMultiviewGame::GameCodeStart,BoundFriendsMultiviewGame::GameCodeEnd,
     BoundFriendsMultiviewGame::GameCooperativeHostOffset,BoundFriendsMultiviewGame::GameCooperativeHostSize,
     BoundFriendsMultiviewGame::GameCooperativeCodeStart,BoundFriendsMultiviewGame::GameCooperativeCodeEnd,
-    [](uint8_t *p) { for(const auto &entry:BoundFriendsMultiviewGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },0,0,0,0,0,0,0,0
+    [](uint8_t *p) { for(const auto &entry:BoundFriendsMultiviewGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },0,0,0,0,0,0,0,0,0,0,0,0,0,0
 };
 static const MultiRedNativeProfile MultiRedPreShinyMagikarpProfile={
     BoundPreShinyMagikarpGame::GameDescriptor,BoundPreShinyMagikarpGame::GameCanonicalSHA256,BoundPreShinyMagikarpGame::GameRulesetID,
@@ -159,7 +188,7 @@ static const MultiRedNativeProfile MultiRedPreShinyMagikarpProfile={
     BoundPreShinyMagikarpGame::GameCodeStart,BoundPreShinyMagikarpGame::GameCodeEnd,
     BoundPreShinyMagikarpGame::GameCooperativeHostOffset,BoundPreShinyMagikarpGame::GameCooperativeHostSize,
     BoundPreShinyMagikarpGame::GameCooperativeCodeStart,BoundPreShinyMagikarpGame::GameCooperativeCodeEnd,
-    [](uint8_t *p) { for(const auto &entry:BoundPreShinyMagikarpGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },0,0,0,0,0,0,0,0
+    [](uint8_t *p) { for(const auto &entry:BoundPreShinyMagikarpGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },0,0,0,0,0,0,0,0,0,0,0,0,0,0
 };
 static const MultiRedNativeProfile MultiRedPreLinksMenuProfile={
     BoundPreLinksMenuGame::GameDescriptor,BoundPreLinksMenuGame::GameCanonicalSHA256,BoundPreLinksMenuGame::GameRulesetID,
@@ -170,10 +199,11 @@ static const MultiRedNativeProfile MultiRedPreLinksMenuProfile={
     BoundPreLinksMenuGame::GameCodeStart,BoundPreLinksMenuGame::GameCodeEnd,
     BoundPreLinksMenuGame::GameCooperativeHostOffset,BoundPreLinksMenuGame::GameCooperativeHostSize,
     BoundPreLinksMenuGame::GameCooperativeCodeStart,BoundPreLinksMenuGame::GameCooperativeCodeEnd,
-    [](uint8_t *p) { for(const auto &entry:BoundPreLinksMenuGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },0,0,0,0,0,0,0,0
+    [](uint8_t *p) { for(const auto &entry:BoundPreLinksMenuGame::GameBaseDefinitions) memcpy(p+entry.offset,entry.bytes,entry.size); },0,0,0,0,0,0,0,0,0,0,0,0,0,0
 };
 static const MultiRedNativeProfile *multiRedProfile(const uint8_t *p) {
     if(MultiRedCurrentProfile.matches(p)) return &MultiRedCurrentProfile;
+    if(MultiRedNativeEliminationProfile.matches(p)) return &MultiRedNativeEliminationProfile;
     if(MultiRedLinksMenuProfile.matches(p)) return &MultiRedLinksMenuProfile;
     if(MultiRedPreLinksMenuProfile.matches(p)) return &MultiRedPreLinksMenuProfile;
     if(MultiRedPreShinyMagikarpProfile.matches(p)) return &MultiRedPreShinyMagikarpProfile;

@@ -1,8 +1,8 @@
 {
-  "sha256": "f7e6e912c4e3694ac4816136bd3d6bfc6889d63f15232077642603f0a2d0cabc",
+  "sha256": "723924890b6f912e7f8cf6bca72773fb5bea3d449caefd5abb9d82d22c2144f6",
   "repository": "evanvonessen/multi_red",
-  "tag": "multiplayer-f7e6e912c4e3",
+  "tag": "multiplayer-723924890b6f",
   "asset": "multiplayer.gba",
-  "compatibility": "Exact paired Soul Link elimination build; layout 15; native runtime services required.",
-  "localOnly": false
+  "compatibility": "Exact paired leased world-presence and follower build; layout 16; native runtime services required.",
+  "localOnly": true
 }

@@ -240,6 +240,7 @@ final class FriendSharingSession: ObservableObject {
     let connectionFeed: BoundConnectionFeed
     let livePresence = BoundLivePresenceSession()
     let interactions = BoundFriendInteractionSession()
+    let followerInteractions=BoundFollowerInteractionSession()
     let nativeBattle = BoundNativeBattleSession()
     let cooperativeDoubles = BoundCooperativeDoublesSession()
     let soulLink = BoundSoulSession()
@@ -512,6 +513,25 @@ final class FriendSharingSession: ObservableObject {
         }
         interactions.cancelActivity = { [weak nativeBattle] in nativeBattle?.cancel() }
         interactions.context = { [weak livePresence] in livePresence?.interactionContext() }
+        followerInteractions.context = { [weak self] in
+            guard let self,self.gameplayTransportAvailable,self.interactions.canPresent?() != false,
+                  !self.interactions.blocksGameplay,!self.interactions.nativeDialogueBusy else{return nil}
+            return self.livePresence.followerInteractionContext()
+        }
+        followerInteractions.receiveContext = { [weak self] in
+            guard let self,self.gameplayTransportAvailable else{return nil}
+            return self.livePresence.followerInteractionContext(inbound:true)
+        }
+        followerInteractions.send = { [weak self] data in
+            guard let self,self.gameplayTransportAvailable else{return false};return self.transport.sendInteraction(data)
+        }
+        followerInteractions.changed = { [weak self] in
+            guard let self else{return};self.interactions.inputGate.updateSocial(available:self.followerInteractions.canInteract,blocked:self.followerInteractions.blocksGameplay)
+        }
+        followerInteractions.letPass = { [weak livePresence] in livePresence?.movement.letPass() }
+        livePresence.movement.send = { [weak self] data in
+            guard let self,self.gameplayTransportAvailable else{return false};return self.transport.sendInteraction(data)
+        }
         interactions.admissionIdentity = { [weak self] in
             guard let self, self.debugActivitiesAllowed || self.debugContinuingNative && self.nativeBattle.isActive else { return nil }
             let context=self.nativeBattle.continuationContext ?? self.nativeBattle.continuationContextProvider?()
@@ -711,6 +731,8 @@ final class FriendSharingSession: ObservableObject {
                     self.startInteractions()
                 }
                 if data.starts(with: BoundWorldPacket.prefix) { self.sharedWorld.receive(data) }
+                else if data.starts(with:BoundMovementPacket.prefix){self.livePresence.movement.receive(data)}
+                else if data.starts(with:BoundFollowerInteractionPacket.prefix){self.followerInteractions.receive(data)}
                 else if BoundSoulPacket.recognizes(data) { self.soulLink.receive(data) }
                 else if data.starts(with: BoundCooperativePacket.prefix) { self.cooperativeDoubles.receive(data) }
                 else if data.starts(with: BoundBattleControlPacket.prefix) { self.nativeBattle.receive(data) }
@@ -718,6 +740,7 @@ final class FriendSharingSession: ObservableObject {
                 else { self.interactions.receive(data) }
             }
             else {
+                self.livePresence.movement.reset();self.followerInteractions.suspend()
                 self.sharedWorld.peerGone(); self.soulLink.peerGone()
                 self.cooperativeDoubles.transportInterrupted(); self.nativeBattle.suspendTransport()
                 self.interactions.suspend()
@@ -1002,6 +1025,11 @@ final class FriendSharingSession: ObservableObject {
             self.sharedWorld.tick(enabled: !self.mediaOnly && BoundMultiplayerFeatures.isEnabled && self.livePresence.enabled && self.active, connected: self.joined && !self.reconnecting && !self.backgrounded)
             self.transport.pollPresence()
             self.livePresence.tick()
+            self.followerInteractions.canLetPass=self.gameplayTransportAvailable && self.livePresence.movementContext(at:timestamp).map { c in
+                guard let own=c.own.first,let other=c.other.first else{return false};return own.current.distance(other.current)<=2
+            } == true && self.interactions.canPresent?() != false && !self.interactions.blocksGameplay && !self.interactions.nativeDialogueBusy
+            if self.followerInteractions.isPresented,self.followerInteractions.context?()==nil {self.followerInteractions.dismiss()}
+            self.interactions.inputGate.updateSocial(available:self.followerInteractions.canInteract,blocked:self.followerInteractions.blocksGameplay)
             // An interaction stream can recover without another roster event.
             // Resume only with fresh authenticated positions, never a retained
             // sprite or a timer alone.
@@ -1034,6 +1062,8 @@ final class FriendSharingSession: ObservableObject {
     }
 
     private func stopLane(reason: BoundConnectionFeed.DisconnectReason = .stopped) {
+        followerInteractions.suspend();livePresence.movement.reset()
+        interactions.inputGate.updateSocial(available:false,blocked:false)
         connectionFeed.disconnect(reason)
         connectionFailed = reason == .unavailable
         stop(clearReconnectIntent: true)
@@ -1076,6 +1106,8 @@ final class FriendSharingSession: ObservableObject {
     }
 
     private func stop(clearReconnectIntent: Bool) {
+        followerInteractions.suspend();livePresence.movement.reset()
+        interactions.inputGate.updateSocial(available:false,blocked:false)
         invalidateRemoteVideo()
         BoundMainActorDisposal.drainPending()
         foregroundReconnectRetry?.cancel(); foregroundReconnectRetry = nil
@@ -1109,6 +1141,8 @@ final class FriendSharingSession: ObservableObject {
     }
 
     func background() {
+        followerInteractions.suspend();livePresence.movement.reset()
+        interactions.inputGate.updateSocial(available:false,blocked:false)
         mediaSession?.background()
         connectionFeed.backgrounded(appInBackground: applicationIsBackgrounded())
         if authenticatedMode && active,

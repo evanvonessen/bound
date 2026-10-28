@@ -7,10 +7,15 @@ bundle config set --local path .build/gems
 bundle install
 ```
 
+Use `PrototypeTools/fastlane-local --check-environment` to check the installed
+locked gems without starting Fastlane. The wrapper selects this checkout's
+`Gemfile` and `.build/gems`, including in detached/non-login shells. It never
+installs dependencies automatically. An explicit `BUNDLE_PATH` remains supported.
+
 From the repository root, run:
 
 ```sh
-bundle exec fastlane ios verify
+PrototypeTools/fastlane-local ios verify
 ```
 
 This builds `Bound.xcodeproj` / `Bound` in Release for a generic arm64 iPhone.
@@ -33,8 +38,8 @@ No CI trigger or Xcode Cloud change is configured.
 For the latest validated commit already published to `origin/main`:
 
 ```sh
-bundle exec fastlane beta check:true
-bundle exec fastlane beta
+PrototypeTools/fastlane-local beta check:true
+PrototypeTools/fastlane-local beta
 ```
 
 `beta` reuses `PrototypeTools/deliver-testflight.py`: it checks the remote,
@@ -54,8 +59,14 @@ project/archive number does not need a manual bump for each upload.
 To validate signing without uploading:
 
 ```sh
-bundle exec fastlane beta archive_only:true
+PrototypeTools/fastlane-local beta archive_only:true
 ```
+
+Archive-only validation also exports an App Store distribution IPA locally,
+checks its actual production entitlements and pinned ROM, and never uploads.
+That local export uses installed signing material without allowing provisioning
+updates. A successful archive alone does not establish distribution signing or
+current App Store Connect account access.
 
 Receipts and logs remain under `.build/testflight-delivery/`. An accepted upload
 still needs Apple processing; it is not confirmation of TestFlight availability.

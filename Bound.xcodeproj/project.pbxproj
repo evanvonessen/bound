@@ -32,6 +32,13 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		16389583501B94AA3DC5DD53 /* WorldMovementRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80592CCAB31B8A9F8FC9D992 /* WorldMovementRuntimeTests.swift */; };
+		4BC1CBE6A205E7A274C6DD59 /* BoundWorldMovementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472E7C37E90CB08B899AB348 /* BoundWorldMovementTests.swift */; };
+		CAEB5A21E4BC884265002EDA /* FollowerInteractionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 579EC18AF2815D91EA93FA7C /* FollowerInteractionTests.swift */; };
+		08FA4BEB21032526059E2B45 /* FollowerPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A3E59B44B09FD41A41F55A3 /* FollowerPresentationTests.swift */; };
+		E47B055D942B3E7F32DF232B /* BoundFollowerInteraction.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFD762B3CA5A6BBDE77AAF8B /* BoundFollowerInteraction.swift */; };
+		6893E8D023CB11FDAE29C3B7 /* BoundWorldMovement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 956733E98FE9A2AD964AF321 /* BoundWorldMovement.swift */; };
+		59A83F9C3B189B78852BC5A0 /* BoundPresenceFollower.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84D083F3BB9304672B3B70CA /* BoundPresenceFollower.swift */; };
 		B5E400000000000000000001 /* CooperativeSoulPairTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5E400000000000000000002 /* CooperativeSoulPairTests.swift */; };
 		B5E300000000000000000001 /* BoundBattleLosses.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5E300000000000000000002 /* BoundBattleLosses.swift */; };
 		B5E300000000000000000003 /* BattleLossTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5E300000000000000000004 /* BattleLossTests.swift */; };
@@ -949,6 +956,13 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		80592CCAB31B8A9F8FC9D992 /* WorldMovementRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldMovementRuntimeTests.swift; sourceTree = "<group>"; };
+		472E7C37E90CB08B899AB348 /* BoundWorldMovementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundWorldMovementTests.swift; sourceTree = "<group>"; };
+		579EC18AF2815D91EA93FA7C /* FollowerInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowerInteractionTests.swift; sourceTree = "<group>"; };
+		6A3E59B44B09FD41A41F55A3 /* FollowerPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowerPresentationTests.swift; sourceTree = "<group>"; };
+		CFD762B3CA5A6BBDE77AAF8B /* BoundFollowerInteraction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundFollowerInteraction.swift; sourceTree = "<group>"; };
+		956733E98FE9A2AD964AF321 /* BoundWorldMovement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundWorldMovement.swift; sourceTree = "<group>"; };
+		84D083F3BB9304672B3B70CA /* BoundPresenceFollower.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundPresenceFollower.swift; sourceTree = "<group>"; };
 		B5E400000000000000000002 /* CooperativeSoulPairTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CooperativeSoulPairTests.swift; sourceTree = "<group>"; };
 		B5E300000000000000000002 /* BoundBattleLosses.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundBattleLosses.swift; sourceTree = "<group>"; };
 		B5E300000000000000000004 /* BattleLossTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BattleLossTests.swift; sourceTree = "<group>"; };
@@ -1633,6 +1647,10 @@
 				B5E200000000000000000004 /* SoulLinksTests.swift */,
 				B5E300000000000000000004 /* BattleLossTests.swift */,
 				B5E400000000000000000002 /* CooperativeSoulPairTests.swift */,
+				80592CCAB31B8A9F8FC9D992 /* WorldMovementRuntimeTests.swift */,
+				472E7C37E90CB08B899AB348 /* BoundWorldMovementTests.swift */,
+				579EC18AF2815D91EA93FA7C /* FollowerInteractionTests.swift */,
+				6A3E59B44B09FD41A41F55A3 /* FollowerPresentationTests.swift */,
 				B5E100000000000000000004 /* SoulExtrasTests.swift */,
 				50300000000000000000000A /* ROMMultiplayerContractTests.swift */,
 				784F953E399AA70918F4D1D0 /* SDKPhase4CodecOracle.swift */,
@@ -1803,6 +1821,9 @@
 				B47710000000000000000003 /* BoundVBABattleBridge.h */,
 				B47710000000000000000006 /* BoundNativeBattle.swift */,
 				BCD012340000000000000001 /* BoundCooperativeDoubles.swift */,
+				CFD762B3CA5A6BBDE77AAF8B /* BoundFollowerInteraction.swift */,
+				956733E98FE9A2AD964AF321 /* BoundWorldMovement.swift */,
+				84D083F3BB9304672B3B70CA /* BoundPresenceFollower.swift */,
 				501100000000000000000002 /* BoundSoulLink.swift */,
 				B5E200000000000000000002 /* BoundSoulLinks.swift */,
 				B5E300000000000000000002 /* BoundBattleLosses.swift */,
@@ -3555,6 +3576,10 @@
 				B5E200000000000000000003 /* SoulLinksTests.swift in Sources */,
 				B5E300000000000000000003 /* BattleLossTests.swift in Sources */,
 				B5E400000000000000000001 /* CooperativeSoulPairTests.swift in Sources */,
+				16389583501B94AA3DC5DD53 /* WorldMovementRuntimeTests.swift in Sources */,
+				4BC1CBE6A205E7A274C6DD59 /* BoundWorldMovementTests.swift in Sources */,
+				CAEB5A21E4BC884265002EDA /* FollowerInteractionTests.swift in Sources */,
+				08FA4BEB21032526059E2B45 /* FollowerPresentationTests.swift in Sources */,
 				B5E100000000000000000003 /* SoulExtrasTests.swift in Sources */,
 				503000000000000000000009 /* ROMMultiplayerContractTests.swift in Sources */,
 				F810DFDC54A64E0A8CC8BA5D /* SDKPhase4CodecOracle.swift in Sources */,
@@ -3921,6 +3946,9 @@
 				B47710000000000000000002 /* BoundVBABattleBridge.mm in Sources */,
 				B47710000000000000000007 /* BoundNativeBattle.swift in Sources */,
 				BCD012340000000000000002 /* BoundCooperativeDoubles.swift in Sources */,
+				E47B055D942B3E7F32DF232B /* BoundFollowerInteraction.swift in Sources */,
+				6893E8D023CB11FDAE29C3B7 /* BoundWorldMovement.swift in Sources */,
+				59A83F9C3B189B78852BC5A0 /* BoundPresenceFollower.swift in Sources */,
 				501100000000000000000001 /* BoundSoulLink.swift in Sources */,
 				B5E200000000000000000001 /* BoundSoulLinks.swift in Sources */,
 				B5E300000000000000000001 /* BoundBattleLosses.swift in Sources */,

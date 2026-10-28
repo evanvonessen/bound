@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -41,10 +42,12 @@ def published_revision(root, revision):
     return commit
 
 
-def export_options():
+def export_options(destination="upload"):
+    if destination not in ("upload", "export"):
+        raise ValueError("Distribution destination must be upload or export")
     return {
         "method": "app-store-connect",
-        "destination": "upload",
+        "destination": destination,
         "teamID": TEAM_ID,
         "signingStyle": "automatic",
         "manageAppVersionAndBuildNumber": True,
@@ -71,7 +74,67 @@ def run_logged(command, cwd, log):
     with log.open("w") as stream:
         result = subprocess.run(command, cwd=cwd, stdout=stream, stderr=subprocess.STDOUT)
     if result.returncode:
-        raise RuntimeError(f"Command failed ({result.returncode}). Inspect {log}; delivery is incomplete.")
+        diagnosis = failure_diagnosis(log.read_text(errors="replace"))
+        write_json(log.with_suffix(".failure.json"), {
+            "exit_code": result.returncode, "diagnosis": diagnosis,
+            "upload_acceptance_confirmed": False, "log": str(log),
+        })
+        raise RuntimeError(f"Command failed ({result.returncode}). {diagnosis} Inspect {log}; delivery is incomplete.")
+
+
+def failure_diagnosis(text):
+    if "Failed to Use Accounts" in text or "App Store Connect access for" in text:
+        return ("Xcode could not authenticate the existing App Store Connect account. "
+                "This is an account-access failure, not an Apple binary rejection. "
+                "Verify access in Xcode Accounts without removing accounts or saved credentials.")
+    if "No profiles for" in text or "requires a provisioning profile" in text:
+        return "Xcode could not find a matching signing profile; no accepted upload is confirmed."
+    if "Validation failed" in text or "ERROR ITMS-" in text:
+        return "Apple distribution validation failed; inspect the retained validation log before retrying."
+    return "The command did not finish successfully; no accepted upload is confirmed."
+
+
+def export_command(archive, options, output, upload=False):
+    command = ["xcodebuild", "-exportArchive", "-archivePath", str(archive),
+               "-exportOptionsPlist", str(options), "-exportPath", str(output)]
+    # Local validation uses only already installed signing material. Only the
+    # explicitly requested upload may let Xcode manage provisioning assets.
+    if upload:
+        command.append("-allowProvisioningUpdates")
+    return command
+
+
+def distribution_info(ipa, source=None):
+    """Inspect the actual exported binary without accessing the keychain/account."""
+    prefix = "Payload/Bound.app/"
+    with zipfile.ZipFile(ipa) as package:
+        if len(package.namelist()) != len(set(package.namelist())):
+            raise ValueError("Exported IPA has duplicate ZIP entries")
+        info = plistlib.loads(package.read(prefix + "Info.plist"))
+        executable = info.get("CFBundleExecutable", "")
+        if info.get("CFBundleIdentifier") != BUNDLE_ID or not re.fullmatch(r"[A-Za-z0-9_-]+", executable):
+            raise ValueError("Exported IPA does not match Bound's bundle identity")
+        with tempfile.TemporaryDirectory(prefix="bound-export-inspection-") as directory:
+            binary = Path(directory) / executable
+            binary.write_bytes(package.read(prefix + executable))
+            result = subprocess.run(["codesign", "-d", "--entitlements", ":-", str(binary)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            entitlements = plistlib.loads(result.stdout)
+        if (entitlements.get("application-identifier") != TEAM_ID + "." + BUNDLE_ID
+                or entitlements.get("com.apple.developer.team-identifier") != TEAM_ID
+                or entitlements.get("get-task-allow") is not False
+                or entitlements.get("aps-environment") != "production"):
+            raise ValueError("Exported IPA must have Bound distribution entitlements: production APNs and get-task-allow=false")
+        rom = package.read(prefix + "multiplayer.gba")
+        if len(rom) != 32 * 1024 * 1024:
+            raise ValueError("Exported IPA is missing the complete multiplayer.gba resource")
+        digest = hashlib.sha256(rom).hexdigest()
+        if source is not None:
+            pin = json.loads((source / "PrototypeTools/bundled-rom.json").read_text())
+            if digest != pin.get("sha256"):
+                raise ValueError("Exported IPA ROM differs from the published source pin")
+    return {"version": info["CFBundleShortVersionString"], "archive_build": info["CFBundleVersion"],
+            "rom_sha256": digest, "rom_bytes": len(rom), "distribution_entitlements_verified": True}
 
 
 def write_json(path, data):
@@ -119,8 +182,9 @@ def deliver(root, commit, upload):
             saved = json.loads(receipt.read_text())
             if saved.get("commit") != commit or saved.get("bundle_id") != BUNDLE_ID:
                 raise ValueError("Existing upload receipt does not match the requested revision")
-            print(f"Upload was already accepted for {commit}. Verify processing and group availability in App Store Connect.")
-            return
+            if upload:
+                print(f"Upload was already accepted for {commit}. Verify processing and group availability in App Store Connect.")
+                return
 
         # A temporary Git snapshot keeps unrelated edits and personal files out of the archive.
         # The original project/scheme and committed dependency sources are used unchanged.
@@ -142,8 +206,18 @@ def deliver(root, commit, upload):
             run_logged(["codesign", "--verify", "--deep", "--strict", str(archive / "Products/Applications/Bound.app")], source, attempt / "signature.log")
             run_logged([sys.executable, str(source / "PrototypeTools/verify_privacy_manifests.py"), "--archive", str(archive)], source, attempt / "archive-privacy.log")
             write_json(attempt / "archive.json", {"commit": commit, "bundle_id": BUNDLE_ID, **info})
+            # A development-signed archive can pass codesign and still fail at
+            # the distribution export stage. Exercise that stage before calling
+            # archive-only validation complete or attempting an upload.
+            local_options = attempt / "LocalExportOptions.plist"
+            with local_options.open("wb") as stream:
+                plistlib.dump(export_options("export"), stream)
+            local_export = attempt / "local-export"
+            run_logged(export_command(archive, local_options, local_export, upload=upload), source, attempt / "local-export.log")
+            exported = distribution_info(local_export / "Bound.ipa", source)
+            write_json(attempt / "local-export.json", {"commit": commit, "upload_performed": False, **exported})
             if not upload:
-                print(f"Signed Release iPhone archive verified: {archive}. No upload requested.")
+                print(f"Signed Release iPhone archive and local distribution export verified: {archive}. No upload requested.")
                 return
 
             # Refuse an obsolete revision if another publication occurred during the archive.
@@ -151,11 +225,7 @@ def deliver(root, commit, upload):
             options = attempt / "ExportOptions.plist"
             with options.open("wb") as stream:
                 plistlib.dump(export_options(), stream)
-            run_logged([
-                "xcodebuild", "-exportArchive", "-archivePath", str(archive),
-                "-exportOptionsPlist", str(options), "-exportPath", str(attempt / "export"),
-                "-allowProvisioningUpdates",
-            ], source, attempt / "upload.log")
+            run_logged(export_command(archive, options, attempt / "export", upload=True), source, attempt / "upload.log")
             summary_path = attempt / "export/DistributionSummary.plist"
             uploaded_build = None
             if summary_path.exists():

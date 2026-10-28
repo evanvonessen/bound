@@ -634,10 +634,15 @@ class GameViewController: DeltaCore.GameViewController
             else if !boundWorldAPressed.contains(gameController) {
                 boundWorldAPressed.add(gameController)
                 if worldInput == .interact, self.view.window?.windowScene?.hasKeyboardFocus == true {
-                    boundCompanion.sharing.interactions.open()
+                    if boundCompanion.sharing.followerInteractions.canInteract {
+                        releaseBoundFriendGameplayInputs();boundCompanion.sharing.followerInteractions.open()
+                    } else {boundCompanion.sharing.interactions.open()}
+                } else if worldInput == .blockedA,boundCompanion.sharing.followerInteractions.isPresented {
+                    boundCompanion.sharing.followerInteractions.offerBerry()
                 }
             }
         }
+        if worldInput == .socialBack {boundCompanion.sharing.followerInteractions.dismiss()}
         if worldInput != nil { return }
         if let action = ActionInput(input: input), action.isBoundPanelAction {
             self.receiveBoundPanelAction(action, from: gameController, pressed: value >= 0.5)

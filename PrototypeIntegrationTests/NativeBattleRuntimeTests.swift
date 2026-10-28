@@ -447,7 +447,14 @@ final class NativeBattleRuntimeTests:XCTestCase {
         let target=try XCTUnwrap(order.firstIndex(of:13));XCTAssertEqual(order.filter { $0==13 }.count,1)
         let cursor=Int(menu[0x370F4]);XCTAssertLessThan(cursor,count)
         _=core.resume()
-        for _ in 0..<((target-cursor+count)%count) { try await press(128) }
+        // The count is published before the native menu's opening animation
+        // finishes. Navigate observed cursor changes rather than assuming
+        // every wall-clock pulse is accepted during that transition.
+        for _ in 0..<count*2 {
+            _=core.pause();let actual=Int(try memory()[0x370F4]);_=core.resume()
+            if actual==target { break }
+            try await press(128)
+        }
         _=core.pause();XCTAssertEqual(Int(try memory()[0x370F4]),target);_=core.resume()
         try await press(1)
         try await wait("native consumes completed-frame BLN1 page") {

@@ -14,6 +14,8 @@ p.add_argument('--expected-rom-sha256',required=True)
 p.add_argument('--output',type=Path,required=True)
 p.add_argument('--fixture-only',action='store_true')
 p.add_argument('--compatibility-only',action='store_true')
+p.add_argument('--followers-only',action='store_true')
+p.add_argument('--movement-runtime-only',action='store_true')
 a=p.parse_args()
 state=json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','-j'],text=True))
 devices=[d for ds in state['devices'].values() for d in ds if d['udid']==a.simulator]
@@ -41,6 +43,11 @@ if a.compatibility_only:
   'MultiRedAdapterTests/'+name for name in ['testFreshDebugGamesUseEasyAndNativeLMenuCanToggleRepelBothWays',
    'testProfilesPreserveExactCompatibilityAndCooperativeCapability','testWorldPacketsUseTheBoundProfileAndRejectCrossRulesets',
    'testSavedRunAdmissionKeepsOriginalIdentityAndRejectsCurrentROM','testActualROMProfilesAndRawStatesRemainSeparate']]
+if a.followers_only:
+ selected=['LivePresenceTests','PresenceConnectionCheckTests','FollowerPresentationTests','FollowerInteractionTests',
+  'BoundWorldMovementTests','WorldMovementRuntimeTests','FriendInteractionTests','NakamaSharingTransportTests']
+if a.movement_runtime_only:
+ selected=['WorldMovementRuntimeTests']
 matched=[]
 def configure(value):
  if isinstance(value,dict):

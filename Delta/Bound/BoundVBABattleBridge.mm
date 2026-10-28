@@ -5,6 +5,8 @@
 #import <CommonCrypto/CommonDigest.h>
 #import <objc/runtime.h>
 #include <cstdint>
+#include <atomic>
+#include <chrono>
 #include <cstring>
 #include <mutex>
 #include <set>
@@ -24,6 +26,12 @@ extern void flashSetSize(int size);
 extern bool CPUWriteMemState(char *,int,long &);
 extern bool CPUReadMemState(char *,int);
 namespace {
+std::atomic<uint64_t> movementTimeline{1};
+std::atomic<bool> movementRevocation{false};
+std::atomic<uint64_t> movementDeadline{0};
+uint64_t movementNow() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 // Bound owns this interception; upstream core sources and dependency pins stay
 // unchanged. Every write, including stop() and guest save callbacks, crosses the
 // same bridge selector. The lock covers the original write so a newly blocked
@@ -54,6 +62,8 @@ struct SoulFrameFence {
 };
 SoulFrameFence &soulFrameFence() { static SoulFrameFence value; return value; }
 void advanceSoulFrameGeneration() {
+    movementTimeline.fetch_add(1,std::memory_order_relaxed);
+    [BoundVBABattleBridge setWorldMovementHost:[NSData data]];
     auto &fence=soulFrameFence();std::lock_guard<std::mutex> lock(fence.lock);
     if(++fence.generation==0) fence.generation=1;
     fence.owner.clear();fence.cartridge=nullptr;fence.blocked=false;
@@ -63,6 +73,9 @@ void fencedNativeFrame(id bridge,SEL selector,BOOL video) {
     { std::lock_guard<std::mutex> lock(fence.lock);
       if(fence.blocked&&fence.cartridge==rom) return;
       original=fence.run; }
+    const auto deadline=movementDeadline.load(std::memory_order_relaxed);
+    if(movementRevocation.exchange(false,std::memory_order_relaxed)||(deadline&&movementNow()>deadline))
+        [BoundVBABattleBridge setWorldMovementHost:[NSData data]];
     if(original) original(bridge,selector,video);
 }
 void fencedNativeStart(id bridge,SEL selector,NSURL *url) {
@@ -111,7 +124,11 @@ void fencedStateSave(id bridge,SEL selector,NSURL *url) {
 }
 void fencedStateLoad(id bridge,SEL selector,NSURL *url) {
     auto &fence=gameSaveFence();std::lock_guard<std::mutex> lock(fence.lock);
-    if(!fence.serverOnlyActive&&fence.stateReader) fence.stateReader(bridge,selector,url);
+    if(!fence.serverOnlyActive&&fence.stateReader) {
+        movementTimeline.fetch_add(1,std::memory_order_relaxed);
+        [BoundVBABattleBridge setWorldMovementHost:[NSData data]];
+        fence.stateReader(bridge,selector,url);
+    }
 }
 bool installGameSaveFence() {
     auto &fence=gameSaveFence();
@@ -475,6 +492,8 @@ static uint8_t soulQAScriptBackup[128];
     // Delta's ordinary load reapplies the current cheat configuration. Keep
     // that configuration here too; only the server snapshot supplies battery.
     const int previousBattery=skipSaveGameBattery,previousCheats=skipSaveGameCheats;
+    movementTimeline.fetch_add(1,std::memory_order_relaxed);
+    [self setWorldMovementHost:[NSData data]];
     skipSaveGameBattery=0;skipSaveGameCheats=1;
     const bool restored=CPUReadMemState(static_cast<char *>(owned.mutableBytes),int(owned.length));
     skipSaveGameBattery=previousBattery;skipSaveGameCheats=previousCheats;
@@ -629,6 +648,41 @@ static uint8_t soulQAScriptBackup[128];
     bound_sdk_store_le32(destination+8,sequence-1);
     memcpy(destination,source,8);memcpy(destination+12,source+12,romUIProfile->uiHostSize-12);
     bound_sdk_store_le32(destination+8,sequence);
+}
++ (uint64_t)worldMovementTimeline { return movementTimeline.load(std::memory_order_relaxed); }
++ (void)requestWorldMovementRevocation { movementRevocation.store(true,std::memory_order_relaxed); }
++ (BOOL)worldMovementPublicationInProgress {
+    const auto *profile=multiRedProfile(rom);
+    if(!rom||!workRAM||!profile||profile->presenceOutputSize!=256
+       ||profile->presenceOutputAddress<0x02000000||profile->presenceOutputAddress>0x0203FF00)return NO;
+    const auto *p=workRAM+profile->presenceOutputAddress-0x02000000;
+    return word(p)==0x314F5742&&word(p+4)==1&&(word(p+8)&1);
+}
++ (NSData *)worldMovementSnapshot {
+    const auto *profile=multiRedProfile(rom);
+    if(!rom||!workRAM||!profile||profile->presenceOutputSize!=256
+       ||profile->presenceOutputAddress<0x02000000||profile->presenceOutputAddress>0x0203FF00)return [NSData data];
+    const auto *p=workRAM+profile->presenceOutputAddress-0x02000000;
+    const uint32_t sequence=word(p+8);
+    if(word(p)!=0x314F5742||word(p+4)!=1||!sequence||(sequence&1))return [NSData data];
+    NSData *copy=[NSData dataWithBytes:p length:256];
+    return sequence==word(p+8)?copy:[NSData data];
+}
++ (void)setWorldMovementHost:(NSData *)data {
+    if(!data.length)movementDeadline.store(0,std::memory_order_relaxed);
+    const auto *profile=multiRedProfile(rom);
+    if(!rom||!profile||profile->presenceHostSize!=1024)return;
+    auto *out=rom+profile->presenceHostOffset;
+    if(!data.length){memset(out,0,1024);return;}
+    if(data.length!=1024)return;
+    const auto *p=static_cast<const uint8_t *>(data.bytes);const uint32_t sequence=word(p+8);
+    if(word(p)!=0x31574C42||word(p+4)!=1||!sequence||(sequence&1))return;
+    // Presence can be active before a Soul Link session claims a frame owner.
+    // Install the same Bound-owned native boundary before accepting any lease.
+    if(!installSoulFrameFence())return;
+    movementRevocation.store(false,std::memory_order_relaxed);
+    put32(out+8,sequence-1);memcpy(out,p,8);memcpy(out+12,p+12,1012);put32(out+8,sequence);
+    movementDeadline.store(movementNow()+150000000,std::memory_order_relaxed);
 }
 + (NSInteger)linksMenuPageOffset {
     // Presentation data belongs only to the exact Links-enabled cartridge.
@@ -1287,6 +1341,11 @@ static uint8_t soulQAScriptBackup[128];
     const auto *profile=multiRedProfile(rom);
     return rom&&profile&&profile->eliminationHostSize==288
         ? [NSData dataWithBytes:rom+profile->eliminationHostOffset length:288] : [NSData data];
+}
++ (NSData *)qaWorldMovementHost {
+    const auto *profile=multiRedProfile(rom);
+    if(!rom||!profile||profile->presenceHostSize!=1024)return [NSData data];
+    return [NSData dataWithBytes:rom+profile->presenceHostOffset length:1024];
 }
 + (NSData *)qaLinksMenuHost {
     const auto *profile=multiRedProfile(rom);

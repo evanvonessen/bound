@@ -11,6 +11,10 @@ struct BoundFriendWorldPosition: Codable, Equatable, Sendable {
     let y: Int
     let facing: Int
 
+    init(mapGroup:Int,mapNumber:Int,elevation:Int,x:Int,y:Int,facing:Int) {
+        self.mapGroup=mapGroup;self.mapNumber=mapNumber;self.elevation=elevation;self.x=x;self.y=y;self.facing=facing
+    }
+
     init?(pose: BoundPresencePose) {
         guard pose.isValid else { return nil }
         let tx = (pose.x - 8) / 16, ty = (pose.y - 16) / 16
@@ -398,20 +402,27 @@ final class BoundFriendInteractionSession {
 /// The core ignores this app-only namespace, so interacting cannot also press A
 /// on an underlying NPC, sign or door. Mapping lookups have no UI side effects.
 enum BoundFriendWorldInput: String, Input {
-    case interact, blockedA, blocked
+    case interact, blockedA, blocked, socialBack
     var type: InputType { .controller(GameControllerInputType("com.bound.friend-world")) }
 }
 final class BoundFriendWorldInputGate: @unchecked Sendable {
     private let lock = NSLock()
     private var available = false
     private var blocked = false
+    private var socialAvailable=false,socialBlocked=false
+    func updateSocial(available:Bool,blocked:Bool) {lock.lock();socialAvailable=available;socialBlocked=blocked;lock.unlock()}
     func update(available: Bool, blocked: Bool) {
         lock.lock(); self.available = available; self.blocked = blocked; lock.unlock()
     }
     func filter(_ input: Input) -> Input {
-        lock.lock(); let available = available, blocked = blocked; lock.unlock()
+        lock.lock(); let available = available || socialAvailable, blocked = blocked, socialBlocked=socialBlocked; lock.unlock()
         // Preserve app shortcuts and the native pause/menu control.
         if ActionInput(input: input) != nil || StandardGameControllerInput(input: input) == .menu { return input }
+        if socialBlocked {
+            if Self.isA(input){return BoundFriendWorldInput.blockedA}
+            if StandardGameControllerInput(input:input) == .b || (input.type == .game(.gba) && input.stringValue=="b") {return BoundFriendWorldInput.socialBack}
+            return BoundFriendWorldInput.blocked
+        }
         if blocked { return Self.isA(input) ? BoundFriendWorldInput.blockedA : BoundFriendWorldInput.blocked }
         if available && Self.isA(input) { return BoundFriendWorldInput.interact }
         return input

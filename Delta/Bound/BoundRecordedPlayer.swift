@@ -9,6 +9,7 @@ struct BoundRecordedPlayerPose: Equatable, Sendable {
     let x: Double
     let y: Double
     let appearance: BoundPlayerSprite
+    var opacity: Double = 1
 }
 
 struct BoundRecordedPlayerSample: Equatable, Sendable {
@@ -206,6 +207,31 @@ struct BoundRecordedPlayerControls: View {
 /// The native framebuffer remains untouched. Foreground BG pixels and nearer
 /// object pixels cut holes in the overlay instead of being painted over.
 enum BoundRecordedPlayerRasterizer {
+    /// Resolve mutual actor depth before painting either actor. Equal feet use
+    /// stable input order (trainer first), so overlap never erases both sprites.
+    static func backToFront(_ poses:[BoundRecordedPlayerPose])->[Int] {
+        poses.indices.sorted { a,b in
+            if poses[a].appearance.priority != poses[b].appearance.priority {
+                return poses[a].appearance.priority > poses[b].appearance.priority
+            }
+            if poses[a].y != poses[b].y { return poses[a].y < poses[b].y }
+            return a>b
+        }
+    }
+    static func rgba(poses: [BoundRecordedPlayerPose], scene: BoundPlayerScene) -> [(Data, BoundPlayerState.Point)] {
+        let order=backToFront(poses)
+        var output=poses.map { _ in (Data(),BoundPlayerState.Point(x:0,y:0)) }
+        for (index,actor) in order.enumerated() {
+            let nearer=order.dropFirst(index+1).filter { poses[$0].opacity>=1 }.map { other -> BoundPlayerSceneObject in
+                let origin=BoundPlayerViewport.origin(pose:poses[other],scene:scene)
+                return .init(origin:origin,footY:origin.y+poses[other].appearance.height,appearance:poses[other].appearance)
+            }
+            let view=BoundPlayerScene(worldFoot:scene.worldFoot,camera:scene.camera,appearance:scene.appearance,
+                background:scene.background,objects:scene.objects+nearer,follower:scene.follower,mapInstance:scene.mapInstance)
+            output[actor]=rgba(pose:poses[actor],scene:view)
+        }
+        return output
+    }
     static func rgba(pose: BoundRecordedPlayerPose, scene: BoundPlayerScene) -> (Data, BoundPlayerState.Point) {
         let sprite = pose.appearance
         let origin = BoundPlayerViewport.origin(pose: pose, scene: scene)
@@ -227,7 +253,7 @@ enum BoundRecordedPlayerRasterizer {
                 rgba[offset] = UInt8((color & 31) * 255 / 31)
                 rgba[offset + 1] = UInt8(((color >> 5) & 31) * 255 / 31)
                 rgba[offset + 2] = UInt8(((color >> 10) & 31) * 255 / 31)
-                rgba[offset + 3] = 255
+                rgba[offset + 3] = UInt8((min(1,max(0,pose.opacity))*255).rounded())
             }
         }
         return (rgba, origin)

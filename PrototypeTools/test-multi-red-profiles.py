@@ -10,7 +10,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 for name in ['original', 'current', 'base', 'output']: parser.add_argument('--' + name, type=Path, required=True)
-for name in ['stack-safe', 'debug-defaults', 'friends-multiview', 'pre-shiny-magikarp', 'pre-links-menu', 'links-menu']:
+for name in ['stack-safe', 'debug-defaults', 'friends-multiview', 'pre-shiny-magikarp', 'pre-links-menu', 'links-menu', 'native-elimination']:
     parser.add_argument('--' + name, type=Path, help='Frozen exact cartridge; verify alongside the current profile')
 args = parser.parse_args()
 args.output.mkdir(parents=True, exist_ok=True)
@@ -21,7 +21,7 @@ offset = 4+16+4+45*4+sum(sizes[t] for t in re.findall(r'sizeof\((\w+)\)', fields
 assert offset == 34271
 assert 'stateWorkRAMOffset=34271' in (ROOT / 'Delta/Bound/BoundVBABattleBridge.mm').read_text()
 fixtures = [('original', 'MultiRedOriginalProfile'), ('current', 'MultiRedCurrentProfile')]
-fixtures += [(name, profile) for name, profile in [('stack_safe', 'MultiRedStackSafeProfile'), ('debug_defaults', 'MultiRedDebugDefaultsProfile'), ('friends_multiview', 'MultiRedFriendsMultiviewProfile'), ('pre_shiny_magikarp', 'MultiRedPreShinyMagikarpProfile'), ('pre_links_menu', 'MultiRedPreLinksMenuProfile'), ('links_menu', 'MultiRedLinksMenuProfile')] if getattr(args, name)]
+fixtures += [(name, profile) for name, profile in [('stack_safe', 'MultiRedStackSafeProfile'), ('debug_defaults', 'MultiRedDebugDefaultsProfile'), ('friends_multiview', 'MultiRedFriendsMultiviewProfile'), ('pre_shiny_magikarp', 'MultiRedPreShinyMagikarpProfile'), ('pre_links_menu', 'MultiRedPreLinksMenuProfile'), ('links_menu', 'MultiRedLinksMenuProfile'), ('native_elimination', 'MultiRedNativeEliminationProfile')] if getattr(args, name)]
 source = r'''
 #include "MultiRedProfiles.h"
 #include <CommonCrypto/CommonDigest.h>
@@ -46,6 +46,7 @@ int main(int argc,char **argv) {
   if(profile.cooperative())memset(dynamic.data()+profile.cooperativeHostOffset,0xCC,profile.cooperativeHostSize);
   if(profile.linksHostSize)memset(dynamic.data()+profile.linksHostOffset,0xDD,profile.linksHostSize);
   if(profile.eliminationHostSize)memset(dynamic.data()+profile.eliminationHostOffset,0xEE,profile.eliminationHostSize);
+  if(profile.presenceHostSize)memset(dynamic.data()+profile.presenceHostOffset,0x99,profile.presenceHostSize);
   assert(profile.restoreCanonical(dynamic.data(),hash));assert(dynamic==base);checks+=2;
   auto corrupt=original;corrupt[0x1000]^=1;assert(!profile.restoreCanonical(corrupt.data(),hash));checks++;
   if(profile.linksHostSize) {
@@ -67,6 +68,17 @@ int main(int argc,char **argv) {
    for(unsigned k=0;k<profile.eliminationHostSize;k++)assert(base[profile.eliminationHostOffset+k]==0xFF);
    for(unsigned k=profile.eliminationCodeStart;k<profile.eliminationCodeEnd;k++)assert(base[k]==0xFF);
    auto wrongCode=original;wrongCode[profile.eliminationCodeStart]^=1;
+   assert(!profile.restoreCanonical(wrongCode.data(),hash));checks++;
+  }
+  if(profile.presenceHostSize) {
+   assert(profile.eliminationHostOffset+profile.eliminationHostSize<=profile.presenceHostOffset);
+   assert(profile.presenceHostOffset+profile.presenceHostSize<=profile.eliminationCodeStart);
+   assert(profile.cooperativeCodeEnd<=profile.presenceCodeStart);
+   assert(profile.presenceCodeStart<profile.presenceCodeEnd&&profile.presenceCodeEnd<=profile.cooperativeHostOffset);
+   assert(profile.presenceOutputAddress==0x02002000&&profile.presenceOutputSize==256);
+   for(unsigned k=0;k<profile.presenceHostSize;k++)assert(base[profile.presenceHostOffset+k]==0xFF);
+   for(unsigned k=profile.presenceCodeStart;k<profile.presenceCodeEnd;k++)assert(base[k]==0xFF);
+   auto wrongCode=original;wrongCode[profile.presenceCodeStart]^=1;
    assert(!profile.restoreCanonical(wrongCode.data(),hash));checks++;
   }
   for(unsigned j=0;j<count;j++)if(j!=i) {

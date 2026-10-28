@@ -15,6 +15,16 @@ struct BoundPresencePose: Codable, Equatable, Sendable {
     let flipX: Bool
     let flipY: Bool
     let priority: Int
+    var follower:BoundPresenceFollower? = nil
+    var mapInstance:UInt64? = nil
+    var passing:Bool? = nil
+    var collisionTiles:UInt64? = nil
+    var collisionElevation:Int? = nil
+    enum CodingKeys:String,CodingKey {
+        case mapGroup,mapNumber,elevation,x,y,facing,frameAddress,palette,flipX,flipY,priority
+        case follower="f",mapInstance="m",passing="p"
+        case collisionTiles="c",collisionElevation="z"
+    }
 
     init?(reading: BoundPlayerStateReading) {
         guard reading.status == .live, let player = reading.player,
@@ -25,6 +35,7 @@ struct BoundPresencePose: Codable, Equatable, Sendable {
         facing = ["South": 1, "North": 2, "West": 3, "East": 4][player.facing] ?? 0
         frameAddress = address; palette = scene.appearance.palette
         flipX = scene.appearance.flipX; flipY = scene.appearance.flipY; priority = scene.appearance.priority
+        follower=BoundPresenceFollower(reading:reading);mapInstance=player.mapInstance
     }
 
     var isValid: Bool {
@@ -32,6 +43,12 @@ struct BoundPresencePose: Codable, Equatable, Sendable {
         && x.isFinite && y.isFinite && (-104...1_048_592).contains(x) && (-96...1_048_592).contains(y)
         && (1...4).contains(facing) && (0...3).contains(priority) && palette.count == 32
         && (0x08000000...0x09FFFF00).contains(frameAddress)
+        && (follower?.isValid ?? true) && (mapInstance == nil || mapInstance!>0)
+        && (collisionTiles.map(Self.validCollisionTiles) ?? true) && (collisionElevation.map{(0...15).contains($0)} ?? true)
+    }
+    static func validCollisionTiles(_ value:UInt64)->Bool {
+        let p=(0..<4).map{Int((value>>(11*$0))&2047)-7}
+        return value>>44==0 && p.allSatisfy{(-7...1030).contains($0)} && abs(p[0]-p[2])+abs(p[1]-p[3])<=2
     }
 
     func isSpatiallyComparable(to viewer: BoundPlayerState) -> Bool {
@@ -69,6 +86,12 @@ struct BoundPresenceCollision: Equatable, Sendable {
 
     init?(pose: BoundPresencePose) {
         guard pose.isValid else { return nil }
+        if let packed=pose.collisionTiles {
+            mapGroup=pose.mapGroup;mapNumber=pose.mapNumber;elevation=pose.collisionElevation ?? pose.elevation
+            current = .init(x:Int(packed&2047)-7,y:Int((packed>>11)&2047)-7)
+            previous = .init(x:Int((packed>>22)&2047)-7,y:Int((packed>>33)&2047)-7)
+            return
+        }
         let x = (pose.x - 8) / 16, y = (pose.y - 16) / 16
         let low = BoundPlayerState.Point(x: Int(floor(x)), y: Int(floor(y)))
         let high = BoundPlayerState.Point(x: Int(ceil(x)), y: Int(ceil(y)))
@@ -109,6 +132,7 @@ struct BoundPresencePacket: Codable, Equatable, Sendable {
 /// Server-retained presentation never participates in that handshake.
 @MainActor
 final class BoundLivePresenceSession: ObservableObject {
+    let movement=BoundWorldMovementSession()
     let connectionCheck = BoundPresenceConnectionCheck()
     static let interval: TimeInterval = 0.05
     static let timeout: TimeInterval = 0.75
@@ -181,12 +205,14 @@ final class BoundLivePresenceSession: ObservableObject {
         resetTimeline(keepPresentation: true); updateStatus(); presentationChanged?()
     }
     private func resetTimeline(keepPresentation: Bool = false) {
+        movement.reset()
         if !keepPresentation { retainedPose = nil; retainedAt = nil }
         epoch = UUID(); sequence = 0; lastSent = nil
         localPose = nil; localAt = nil; settledLocal = nil; settledLocalAt = nil
         peerEpoch = nil; proposedPeer = nil; proposalAt = nil; clearPeer()
     }
     private func clearPeer() {
+        movement.reset()
         samples.removeAll(keepingCapacity: true); bufferedSamples = 0
         lastReceived = nil; lastPoseReceived = nil; peerPoseAvailable = false
         lastSequence = 0; lastSenderTime = nil; clockOffset = nil
@@ -209,6 +235,14 @@ final class BoundLivePresenceSession: ObservableObject {
         readerStatus = reading.status.rawValue
         let previousPose=localPose
         localPose=needsReader && romVerified ? BoundPresencePose(reading:reading):nil
+        if var pose=localPose,let native=movement.probe.read(),native.flags&1 != 0,native.instance==pose.mapInstance,
+           native.group==pose.mapGroup,native.number==pose.mapNumber {
+            let coordinates=[native.current.x,native.current.y,native.previous.x,native.previous.y]
+            if coordinates.allSatisfy({(-7...1030).contains($0)}) {
+                pose.collisionTiles=coordinates.enumerated().reduce(UInt64(0)){$0|UInt64($1.element+7)<<(11*$1.offset)}
+                pose.collisionElevation=native.elevation;localPose=pose
+            }
+        }
         if localPose==nil,needsReader,romVerified,retainsNativeDialoguePose?()==true,
            reading.status == .live,let player=reading.player,let previousPose,
            let position=BoundFriendWorldPosition(pose:previousPose),
@@ -236,7 +270,7 @@ final class BoundLivePresenceSession: ObservableObject {
     }
 
     func tick(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
-        guard BoundMultiplayerFeatures.isEnabled, connected, now.isFinite, now >= 0 else { return }
+        guard BoundMultiplayerFeatures.isEnabled, connected, now.isFinite, now >= 0 else { movement.reset();return }
         if let proposalAt, now - proposalAt > 0.3 { proposedPeer = nil; self.proposalAt = nil }
         if let lastReceived, now - lastReceived > Self.timeout {
             // A new challenge prevents queued pre-timeout poses reviving a peer.
@@ -244,15 +278,18 @@ final class BoundLivePresenceSession: ObservableObject {
             setStatus("Waiting for fresh friend presence"); presentationChanged?()
         }
         guard enabled else { return }
+        movement.update(movementContext(at:now),at:now)
         publish(at: now)
     }
     private func publish(at now: TimeInterval, force: Bool = false, withdrawn: Bool = false) {
         guard connected, let send, force || lastSent.map({ now - $0 >= Self.interval - 0.0001 }) ?? true else { return }
         lastSent = now; sequence &+= 1
         let fresh = enabled && localAt.map { now - $0 <= 0.5 } ?? false
+        var outgoing=fresh ? localPose:nil;outgoing?.passing=movement.passing ? true:nil
         var packet = BoundPresencePacket(version: 1,
             rom: romVerified ? (admittedProfile?.romSHA256 ?? String(repeating: "0", count: 64)) : String(repeating: "0", count: 64),
-            sender: epoch, receiver: proposedPeer ?? peerEpoch, sequence: sequence, time: now, pose: fresh ? localPose : nil)
+            sender: epoch, receiver: proposedPeer ?? peerEpoch, sequence: sequence, time: now, pose: outgoing)
+        if packet.pose != nil { packet = BoundPresencePacket(version:packet.version,rom:packet.rom,sender:packet.sender,receiver:packet.receiver,sequence:packet.sequence,time:(now*1000).rounded()/1000,pose:packet.pose) }
         if withdrawn || !enabled { packet.withdrawn = true }
         guard let data = packet.encoded() else { return }
         if send(data) { sentPackets += 1 }
@@ -296,11 +333,13 @@ final class BoundLivePresenceSession: ObservableObject {
         clockOffset = offset; lastSequence = packet.sequence; lastSenderTime = packet.time; lastReceived = now
         receivedPackets += 1
         if packet.withdrawn == true {
+            movement.reset()
             retainedPose = nil; retainedAt = nil; peerPoseAvailable = false; lastPoseReceived = nil
             samples.removeAll(keepingCapacity: true); bufferedSamples = 0
             peerWithdrew?(); presentationChanged?(); return
         }
         guard let pose = packet.pose else {
+            movement.reset()
             // A transient reader gap must not throw away presentation history
             // and snap the next sample ahead of its interpolation delay.
             // It immediately revokes interaction authority and never renews
@@ -352,6 +391,11 @@ final class BoundLivePresenceSession: ObservableObject {
                   b.time - a.time <= 0.2 else { return b.pose }
             let fraction = (target - a.time) / (b.time - a.time)
             pose.x += (b.pose.x - pose.x) * fraction; pose.y += (b.pose.y - pose.y) * fraction
+            if var follower=pose.follower,let next=b.pose.follower,follower.identity==next.identity,follower.generation==next.generation {
+                follower.x += (next.x-follower.x)*fraction;follower.y += (next.y-follower.y)*fraction;pose.follower=follower
+            } else {pose.follower=b.pose.follower}
+            if pose.follower?.identity != last.pose.follower?.identity || pose.follower?.generation != last.pose.follower?.generation {pose.follower=last.pose.follower}
+            pose.passing=last.pose.passing
             return pose
         }
         // Freeze at the last confirmed position during a short packet gap.
@@ -359,10 +403,40 @@ final class BoundLivePresenceSession: ObservableObject {
         return last.pose
     }
     func collision(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundPresenceCollision? {
-        // Each cartridge owns its puzzle objects and story state. A remote
-        // avatar is presentation only, including while both peers are fresh:
-        // occupying a doorway or a differently solved puzzle cannot block play.
-        nil
+        guard movementContext(at:now) != nil,!movement.passing,!movement.reconnecting,let pose=samples.last?.pose else{return nil}
+        return BoundPresenceCollision(pose:pose)
+    }
+
+    /// Retained/interpolated images never supply collision or social authority.
+    func movementContext(at now:TimeInterval)->BoundWorldMovementSession.Context? {
+        guard enabled,connected,romVerified,peerPoseAvailable,let peerEpoch,let own=localPose,let peer=samples.last?.pose,
+              let key=own.mapInstance,key==peer.mapInstance,own.mapGroup==peer.mapGroup,own.mapNumber==peer.mapNumber,
+              peer.collisionTiles != nil,let localAt,let lastPoseReceived,let lastReceived,
+              now>=localAt,now-localAt<=0.2,now>=lastReceived,now-lastReceived<=0.2,
+              now>=lastPoseReceived,now-lastPoseReceived<=0.2,
+              let native=movement.probe.read(),native.flags&1 != 0,native.instance==key,
+              native.elevation==(peer.collisionElevation ?? peer.elevation) else{return nil}
+        let ownTrainer=BoundMovementActor(current:native.current,previous:native.previous,elevation:native.elevation,kind:0,identity:0)
+        guard let peerTiles=BoundPresenceCollision(pose:peer) else{return nil}
+        let peerTrainer=BoundMovementActor(current:.init(peerTiles.current),previous:.init(peerTiles.previous),elevation:peerTiles.elevation,kind:0,identity:0)
+        func follower(_ f:BoundPresenceFollower?)->[BoundMovementActor] {
+            guard let f,f.isValid else{return []}
+            return [.init(current:.init(f.current),previous:.init(f.previous),elevation:f.elevation,kind:1,identity:f.identity)]
+        }
+        return .init(local:epoch,peer:peerEpoch,instance:key,group:own.mapGroup,number:own.mapNumber,elevation:native.elevation,
+            own:[ownTrainer]+follower(own.follower),other:[peerTrainer]+follower(peer.follower))
+    }
+
+    func followerInteractionContext(inbound:Bool=false,at now:TimeInterval=ProcessInfo.processInfo.systemUptime)->BoundFollowerInteractionSession.Context? {
+        guard let c=movementContext(at:now),let own=localPose,let peer=samples.last?.pose,
+              let trainer=(inbound ? c.other:c.own).first,
+              trainer.current==trainer.previous,let f=(inbound ? own:peer).follower,
+              f.current==f.previous else{return nil}
+        let actor=BoundFriendWorldPosition(mapGroup:c.group,mapNumber:c.number,elevation:trainer.elevation,
+            x:trainer.current.x,y:trainer.current.y,facing:(inbound ? peer:own).facing)
+        let target=BoundFriendWorldPosition(mapGroup:c.group,mapNumber:c.number,elevation:f.elevation,x:f.current.x,y:f.current.y,facing:f.facing)
+        guard actor.isFacing(target) else{return nil}
+        return .init(localEpoch:epoch,peerEpoch:c.peer,mapInstance:c.instance,actor:actor,target:target,followerID:f.identity,generation:f.generation)
     }
 
     /// Smooth through real cardinal seams in one coordinate basis. A map ID
@@ -374,14 +448,21 @@ final class BoundLivePresenceSession: ObservableObject {
                 toGroup: pose.mapGroup, number: pose.mapNumber, rom: profile.bytes) else { return nil }
         var result = pose
         result.mapGroup = target.mapGroup; result.mapNumber = target.mapNumber
+        result.mapInstance=target.mapInstance
         result.x += Double(offset.x * 16); result.y += Double(offset.y * 16)
+        if var follower=result.follower {
+            follower.x += Double(offset.x*16);follower.y += Double(offset.y*16)
+            follower.current = .init(x:follower.current.x+offset.x,y:follower.current.y+offset.y)
+            follower.previous = .init(x:follower.previous.x+offset.x,y:follower.previous.y+offset.y)
+            result.follower=follower
+        }
         return result
     }
 
     /// Compares successive peer samples, never distance from the local player.
     /// Discontinuous samples replace the interpolation buffer, not presence.
     private static func continuous(_ a: BoundPresencePose, _ b: BoundPresencePose) -> Bool {
-        a.mapGroup == b.mapGroup && a.mapNumber == b.mapNumber && a.elevation == b.elevation
+        a.mapGroup == b.mapGroup && a.mapNumber == b.mapNumber && a.elevation == b.elevation && a.mapInstance==b.mapInstance
         && abs(a.x - b.x) + abs(a.y - b.y) <= 32
     }
     private func updateStatus() {

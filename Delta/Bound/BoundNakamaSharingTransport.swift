@@ -114,7 +114,11 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         do {
             try client.start(configuration: gameplay) { [weak self] value in
                 if case .message(let opcode, let data, let sender) = value, opcode == 3 {
-                    if sender == expectedOwner { inbox.receive(data) }; return
+                    if sender == expectedOwner {
+                        if data.starts(with:BoundMovementPacket.prefix) {
+                            DispatchQueue.main.async { [weak self] in self?.receive(value,run:run) }
+                        } else {inbox.receive(data)}
+                    }; return
                 }
                 if case .failed = value { inbox.fail() }
                 DispatchQueue.main.async { [weak self] in self?.receive(value, run: run) }
@@ -141,7 +145,7 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
             guard connected, sender == gameplay.peerOwnerID else { return }
             receivedMessages += 1
             if opcode == 1 { pendingPresence = data }
-            else if opcode == 2 {
+            else if opcode == 2 || opcode == 3 && data.starts(with:BoundMovementPacket.prefix) {
                 guard pendingInteractions.count < 128, pendingInteractionBytes + data.count <= 131_072 else {
                     client.stop(); connected = false; peerOnline = false; battleInbox.fail()
                     event?(.failed(.init(.connectionLost))); return
@@ -179,8 +183,16 @@ final class BoundNakamaSharingTransport: FriendSharingTransport {
         acceptedSends += 1; return true
     }
     func sendInteraction(_ data: Data) -> Bool {
+        // Movement coordination shares the existing high-rate reliable byte
+        // lane; it is demultiplexed before the native cable inbox. The ordinary
+        // invitation/Soul Link lane retains its server budget and semantics.
+        if data.starts(with:BoundMovementPacket.prefix) {
+            guard connected,let gameplay,data.count<=768,client.sendBattle(data,targetOwnerID:gameplay.peerOwnerID) else{return false}
+            acceptedSends+=1;return true
+        }
         guard connected, let gameplay, data.count <= 1024,
               data.starts(with: BoundFriendInteractionPacket.prefix) || data.starts(with: BoundBattleControlPacket.prefix)
+                || data.starts(with:BoundMovementPacket.prefix) || data.starts(with:BoundFollowerInteractionPacket.prefix)
                 || BoundSoulPacket.recognizes(data) || data.starts(with: BoundWorldPacket.prefix)
                 || data.starts(with: Data("BRM1".utf8)) || data.starts(with: BoundCooperativePacket.prefix),
               client.sendInteraction(data, targetOwnerID: gameplay.peerOwnerID) else { return false }

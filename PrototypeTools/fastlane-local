@@ -1,0 +1,18 @@
+#!/bin/sh
+# Explicitly use this checkout's pinned, installed gems; never install or upload
+# as a side effect of environment validation.
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ "$#" -eq 0 ]; then
+    echo "Usage: PrototypeTools/fastlane-local --check-environment | <explicit lane and options>" >&2
+    exit 2
+fi
+cd "$root"
+export BUNDLE_GEMFILE="$root/Gemfile"
+export BUNDLE_PATH="${BUNDLE_PATH:-$root/.build/gems}"
+bundle check
+if [ "$1" = "--check-environment" ]; then
+    [ "$#" -eq 1 ] || { echo "Environment check cannot be combined with a lane" >&2; exit 2; }
+    exit 0
+fi
+exec bundle exec fastlane "$@"

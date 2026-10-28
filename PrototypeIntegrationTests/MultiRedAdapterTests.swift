@@ -114,7 +114,11 @@ final class MultiRedAdapterTests: XCTestCase {
         XCTAssertEqual(old.family, current.family)
         XCTAssertNotEqual(old.ruleset, current.ruleset)
         XCTAssertEqual(old.saveStateLayout, 5); XCTAssertEqual(BoundGameProfiles.stackSafe.saveStateLayout, 6)
-        XCTAssertEqual(current.saveStateLayout, 15)
+        XCTAssertEqual(current.saveStateLayout, 16)
+        XCTAssertEqual(BoundGameProfiles.nativeElimination.saveStateLayout,15)
+        XCTAssertEqual(BoundGameProfiles.nativeElimination.romSHA256,"f7e6e912c4e3694ac4816136bd3d6bfc6889d63f15232077642603f0a2d0cabc")
+        XCTAssertEqual(BoundGameProfiles.nativeElimination.gameID,"e34215c5eeefc2574821ef4f8e3bc2be6bd91c73")
+        XCTAssertNotEqual(BoundGameProfiles.nativeElimination.ruleset,current.ruleset)
         XCTAssertEqual(BoundGameProfiles.linksMenu.saveStateLayout,14)
         XCTAssertEqual(BoundGameProfiles.linksMenu.romSHA256,"13d914106810336badd6762258e5bd1b01ab0d8c8044164cdd5d551a227808d8")
         XCTAssertEqual(BoundGameProfiles.linksMenu.gameID,"f0cffbdb710c5b64b3afec815c6e2ce2a9e51f09")
@@ -123,7 +127,7 @@ final class MultiRedAdapterTests: XCTestCase {
         XCTAssertEqual(BoundGameProfiles.preLinksMenu.romSHA256,"d7d9ec63064f9ea8dae75fa2ee05817056769f2cc933f4291414267575885583")
         XCTAssertEqual(BoundGameProfiles.preLinksMenu.gameID,"eb96749d9ebb8c9e4300885a59b930e94e23eca3")
         XCTAssertNotEqual(BoundGameProfiles.preLinksMenu.ruleset,current.ruleset)
-        XCTAssertEqual(BoundGameProfiles.all.count,8)
+        XCTAssertEqual(BoundGameProfiles.all.count,9)
         XCTAssertEqual(BoundGameProfiles.preShinyMagikarp.saveStateLayout,12)
         XCTAssertNotEqual(BoundGameProfiles.preShinyMagikarp.ruleset,current.ruleset)
         XCTAssertFalse(old.supportsCooperativeDoubles); XCTAssertTrue(current.supportsCooperativeDoubles)
@@ -168,13 +172,14 @@ final class MultiRedAdapterTests: XCTestCase {
               FileManager.default.fileExists(atPath: root.appendingPathComponent("pre-shiny-magikarp.gba").path),
               FileManager.default.fileExists(atPath: root.appendingPathComponent("pre-links-menu.gba").path),
               FileManager.default.fileExists(atPath: root.appendingPathComponent("links-menu.gba").path),
+              FileManager.default.fileExists(atPath: root.appendingPathComponent("native-elimination.gba").path),
               FileManager.default.fileExists(atPath: root.appendingPathComponent("current.gba").path) else {
-            throw XCTSkip("Requires all eight exact owned profile ROM fixtures in MultiRedProfilesQA")
+            throw XCTSkip("Requires all nine exact owned profile ROM fixtures in MultiRedProfilesQA")
         }
         let output = root.appendingPathComponent("results-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         var states: [String: Data] = [:]
-        let pairs = [("original", BoundGameProfiles.original), ("stack-safe", BoundGameProfiles.stackSafe), ("debug-defaults", BoundGameProfiles.debugDefaults), ("friends-multiview", BoundGameProfiles.friendsMultiview), ("pre-shiny-magikarp", BoundGameProfiles.preShinyMagikarp), ("pre-links-menu", BoundGameProfiles.preLinksMenu), ("links-menu", BoundGameProfiles.linksMenu), ("current", BoundGameProfiles.current)]
+        let pairs = [("original", BoundGameProfiles.original), ("stack-safe", BoundGameProfiles.stackSafe), ("debug-defaults", BoundGameProfiles.debugDefaults), ("friends-multiview", BoundGameProfiles.friendsMultiview), ("pre-shiny-magikarp", BoundGameProfiles.preShinyMagikarp), ("pre-links-menu", BoundGameProfiles.preLinksMenu), ("links-menu", BoundGameProfiles.linksMenu), ("native-elimination", BoundGameProfiles.nativeElimination), ("current", BoundGameProfiles.current)]
         for (name, expected) in pairs {
             let rom = root.appendingPathComponent(name + ".gba"), bytes = try Data(contentsOf: rom)
             let profile = try BoundPlayerROMProfile(rom: bytes)

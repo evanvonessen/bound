@@ -434,6 +434,7 @@ final class BoundCompanionCoordinator {
     private lazy var tap = BoundDeltaFrameTap { [weak self] frame in self?.sharing.receivePlaybackFrame(frame) }
     let playerStateDisplay = BoundPlayerStateDisplay()
     private var friendInteractionPanel: BoundFriendInteractionPanel?
+    private var followerInteractionHost:UIHostingController<BoundFollowerInteractionView>?
     #if DEBUG && targetEnvironment(simulator)
     var friendDialogueReading: BoundFriendDialogueProbe.Reading { friendInteractionPanel?.probe.read() ?? .init() }
     #endif
@@ -445,6 +446,17 @@ final class BoundCompanionCoordinator {
         friendPanel.name = { [weak self] in self?.onboarding.selected?.displayName ?? "Friend" }
         friendPanel.willOpen = { [weak owner] in owner?.releaseBoundFriendGameplayInputs() }
         friendInteractionPanel = friendPanel
+        let followerPanel=UIHostingController(rootView:BoundFollowerInteractionView(session:sharing.followerInteractions))
+        followerPanel.sizingOptions = [.intrinsicContentSize]
+        followerPanel.view.backgroundColor = .clear
+        owner.addChild(followerPanel);owner.view.addSubview(followerPanel.view);followerPanel.didMove(toParent:owner)
+        followerPanel.view.translatesAutoresizingMaskIntoConstraints=false
+        NSLayoutConstraint.activate([
+            followerPanel.view.leadingAnchor.constraint(equalTo:owner.view.safeAreaLayoutGuide.leadingAnchor,constant:12),
+            followerPanel.view.topAnchor.constraint(equalTo:owner.view.safeAreaLayoutGuide.topAnchor,constant:8),
+            followerPanel.view.widthAnchor.constraint(lessThanOrEqualToConstant:280)
+        ])
+        followerInteractionHost=followerPanel
         let soulBanner = BoundSoulBanner()
         owner.view.addSubview(soulBanner); soulBanner.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -849,6 +861,8 @@ final class BoundCompanionCoordinator {
         playerStateDisplay.bind(core: core)
         friendInteractionPanel?.bind(core: core)
         guard boundCore !== core || self.gameID != gameID else { return }
+        sharing.followerInteractions.suspend();sharing.livePresence.movement.reset()
+        sharing.interactions.inputGate.updateSocial(available:false,blocked:false)
         notesDismissalTask?.cancel(); notesDismissalTask = nil; pendingControllerReferenceAction = nil
         cancelInteractions(); tap.setEnabled(false)
         if preservingNative { sharing.background() } else { sharing.stop() }
@@ -859,15 +873,17 @@ final class BoundCompanionCoordinator {
         guard let core else { boundCore = nil; state.emulationDetails = nil; return }
         state.emulationDetails = BoundEmulationDetails(packageName: core.deltaCore.name, packageIdentifier: core.deltaCore.identifier, packageVersion: core.deltaCore.version)
         boundCore = core
-        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe, soul = sharing.soulLink.probe, world = sharing.sharedWorld.probe, dialogue = friendInteractionPanel?.probe, romService = romMultiplayer.probe, cooperative = sharing.cooperativeDoubles.probe, cooperativeCable = sharing.cooperativeDoubles.cable
+        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe, soul = sharing.soulLink.probe, world = sharing.sharedWorld.probe, dialogue = friendInteractionPanel?.probe, romService = romMultiplayer.probe, cooperative = sharing.cooperativeDoubles.probe, cooperativeCable = sharing.cooperativeDoubles.cable, movement=sharing.livePresence.movement.probe
+        movement.configure(core:core)
         #if DEBUG && targetEnvironment(simulator)
         let tradeQA = BoundFullAppGameplayQA.current?.tradeProbe
         BoundFullAppGameplayQA.current?.configureTrade(core:core)
         #endif
-        core.updateHandler = { [weak tap, weak reader, weak battle, weak soul, weak world, weak dialogue, weak romService, weak cooperative, weak cooperativeCable] core in
+        core.updateHandler = { [weak tap, weak reader, weak battle, weak soul, weak world, weak dialogue, weak romService, weak cooperative, weak cooperativeCable, weak movement] core in
             BoundFrameMemory.perform {
                 previous?(core)
                 romService?.receive(core)
+                movement?.receive(core)
                 world?.receive(core)
                 dialogue?.receive(core)
                 reader?.receive(core)

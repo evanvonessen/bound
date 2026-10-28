@@ -31,6 +31,7 @@ final class BoundPresenceFrameCompositor: @unchecked Sendable {
     private var pose: BoundPresencePose?
     private var coreID: ObjectIdentifier?
     private var renderer: BoundPresenceVideoRenderer?
+    private let followerCache=BoundNativeFollowerCache()
     #if DEBUG
     // QA installs this while the core is paused; callbacks stay on its owner.
     var observeFrame: ((BoundPlayerStateReading, BoundRecordedPlayerPose?, Int) -> Void)?
@@ -55,8 +56,8 @@ final class BoundPresenceFrameCompositor: @unchecked Sendable {
     }
     fileprivate func process(_ core: EmulatorCore, downstream: VideoRendering) {
         lock.lock(); let profile = self.profile, pose = self.pose, expected = coreID; lock.unlock()
-        guard expected == ObjectIdentifier(core), let profile, let pose,
-              let memory = BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }) else {
+        guard expected == ObjectIdentifier(core), let profile,let pose,
+              var memory = BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }) else {
             downstream.processFrame()
             #if DEBUG
             // Frame-level QA must count a missing configured pose too; otherwise
@@ -65,11 +66,19 @@ final class BoundPresenceFrameCompositor: @unchecked Sendable {
             #endif
             return
         }
+        memory.followerObservation = .init(cache:followerCache,scope:.init(core:ObjectIdentifier(core),profile:ObjectIdentifier(profile),
+            timeline:BoundVBABattleBridge.worldMovementTimeline()))
         let reading = profile.adapter.readPlayer(profile, memory: memory, frame: 1, includeScene: true, presentationOnly: true)
-        let rendered = reading.player.flatMap { pose.rendered(profile: profile, viewer: $0) }
+        func fade(_ actor:BoundRecordedPlayerPose?,passing:Bool)->BoundRecordedPlayerPose? {
+            guard var actor else { return nil };actor.opacity=passing ? 0.45:1;return actor
+        }
+        let rendered = fade(reading.player.flatMap { viewer in pose.rendered(profile: profile, viewer: viewer) },passing:pose.passing==true)
+        let follower=fade(reading.player.flatMap { viewer in pose.follower?.rendered(profile:profile,viewer:viewer,mapGroup:pose.mapGroup,mapNumber:pose.mapNumber) },passing:pose.passing==true)
         var pixels = 0
-        if let scene = reading.player?.scene, let rendered, let buffer = downstream.videoBuffer {
-            pixels = Self.composite(rendered, scene: scene, into: buffer) { downstream.processFrame() }
+        if let scene = reading.player?.scene, let buffer = downstream.videoBuffer {
+            let actors=(rendered.map { [$0] } ?? [])+(follower.map { [$0] } ?? [])
+            let counts=Self.composite(actors,scene:scene,into:buffer) { downstream.processFrame() }
+            pixels = rendered != nil ? counts.first ?? 0 : 0
         } else { downstream.processFrame() }
         #if DEBUG
         observeFrame?(reading, rendered, pixels)
@@ -78,23 +87,37 @@ final class BoundPresenceFrameCompositor: @unchecked Sendable {
     @discardableResult
     static func composite(_ pose: BoundRecordedPlayerPose, scene: BoundPlayerScene,
                           into buffer: UnsafeMutablePointer<UInt8>, present: () -> Void) -> Int {
-        let (rgba, origin) = BoundRecordedPlayerRasterizer.rgba(pose: pose, scene: scene)
+        composite([pose],scene:scene,into:buffer,present:present).first ?? 0
+    }
+    @discardableResult
+    static func composite(_ poses: [BoundRecordedPlayerPose], scene: BoundPlayerScene,
+                          into buffer: UnsafeMutablePointer<UInt8>, present: () -> Void) -> [Int] {
+        let images=BoundRecordedPlayerRasterizer.rgba(poses:poses,scene:scene)
         var saved: [(Int, UInt32)] = []
-        saved.reserveCapacity(pose.appearance.width * pose.appearance.height)
-        for y in 0..<pose.appearance.height {
+        saved.reserveCapacity(poses.reduce(0) { $0+$1.appearance.width*$1.appearance.height })
+        var counts=Array(repeating:0,count:poses.count)
+        for actor in BoundRecordedPlayerRasterizer.backToFront(poses) {
+          let pose=poses[actor]
+          let (rgba,origin)=images[actor]
+          for y in 0..<pose.appearance.height {
             for x in 0..<pose.appearance.width {
                 let src = (y * pose.appearance.width + x) * 4
                 guard rgba[src + 3] != 0 else { continue } // Rasterizer clips/masks.
                 let dst = ((origin.y + y) * 240 + origin.x + x) * 4
                 let old = UInt32(buffer[dst]) | UInt32(buffer[dst+1]) << 8 | UInt32(buffer[dst+2]) << 16 | UInt32(buffer[dst+3]) << 24
                 saved.append((dst, old))
-                buffer[dst] = rgba[src+2]; buffer[dst+1] = rgba[src+1]
-                buffer[dst+2] = rgba[src]; buffer[dst+3] = 255 // VBA-M BGRA8.
+                let alpha=Int(rgba[src+3])
+                for (out,input) in [(0,2),(1,1),(2,0)] {
+                    buffer[dst+out]=UInt8((Int(rgba[src+input])*alpha+Int(buffer[dst+out])*(255-alpha)+127)/255)
+                }
+                buffer[dst+3] = 255 // VBA-M BGRA8.
+                counts[actor]+=1
             }
+          }
         }
         present()
-        for (dst, old) in saved { for byte in 0..<4 { buffer[dst+byte] = UInt8(truncatingIfNeeded: old >> (byte * 8)) } }
-        return saved.count
+        for (dst, old) in saved.reversed() { for byte in 0..<4 { buffer[dst+byte] = UInt8(truncatingIfNeeded: old >> (byte * 8)) } }
+        return counts
     }
 }
 
@@ -131,6 +154,7 @@ final class BoundVBAPlayerStateProbe: @unchecked Sendable {
     private var workerGeneration: UInt64?
     private var frame: UInt64 = 0
     private var tracker = BoundPlayerPresenceTracker()
+    private let followerCache=BoundNativeFollowerCache()
 
     func configure(coreID: ObjectIdentifier?, profile: BoundPlayerROMProfile?, active: Bool,
                    status: BoundPlayerStateReading.Status, detail: String, sceneEnabled: Bool = false) {
@@ -169,7 +193,9 @@ final class BoundVBAPlayerStateProbe: @unchecked Sendable {
         }
         frame &+= 1
         let reading: BoundPlayerStateReading
-        if let memory = BoundGBAMemorySnapshot.capture(readMemory: readMemory) {
+        if var memory = BoundGBAMemorySnapshot.capture(readMemory: readMemory) {
+            memory.followerObservation = .init(cache:followerCache,scope:.init(core:coreID,profile:ObjectIdentifier(currentProfile),
+                timeline:BoundVBABattleBridge.worldMovementTimeline()))
             reading = tracker.update(currentProfile.adapter.readPlayer(currentProfile, memory: memory, frame: frame, includeScene: includeScene))
         } else {
             reading = tracker.update(.inactive(.invalidMemory, "RAM capture unavailable", frame: frame))
@@ -408,7 +434,7 @@ final class BoundPlayerStateDisplay {
 
     private func renderLivePresence() {
         let enabled = presence?.needsReader == true && !suspended && core?.state == .running
-        probe.compositor.configure(profile: enabled ? profile : nil, pose: enabled ? presence?.pose() : nil, coreID: core.map(ObjectIdentifier.init))
+        probe.compositor.configure(profile: enabled ? profile : nil, pose: enabled ? presence?.pose() : nil,coreID:core.map(ObjectIdentifier.init))
         let now = ProcessInfo.processInfo.systemUptime
         if let presence, let reading = currentReading, reading.status == .live,
            let lastFrameAt, now - lastFrameAt < BoundLivePresenceSession.visibilityGrace, let profile, let viewer = reading.player {
