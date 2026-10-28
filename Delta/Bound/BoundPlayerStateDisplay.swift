@@ -273,10 +273,11 @@ final class BoundPlayerStateDisplay {
     private var timer: Timer?
     private var lastFrameAt: TimeInterval?
     private var suspended = false
-    private struct FriendRouteRequest: Equatable {
+    struct FriendRouteRequest: Equatable {
         let mapGroup: Int, mapNumber: Int
         let instance: UInt64?
         let tile: BoundPlayerState.Point
+        let elevation: Int
         let dynamicWarp: BoundPlayerState.DynamicWarp?
         let access: BoundFriendRouteAccess?
         let friendGroup: Int, friendNumber: Int
@@ -287,6 +288,7 @@ final class BoundPlayerStateDisplay {
             // during movement. They trigger a fresh query without blanking its
             // advisory presentation. Only spatial identity invalidates it.
             return mapGroup == other.mapGroup && mapNumber == other.mapNumber && instance == other.instance
+                && elevation == other.elevation
                 && dynamicWarp == other.dynamicWarp
                 && friendGroup == other.friendGroup && friendNumber == other.friendNumber && friendInstance == other.friendInstance
         }
@@ -499,7 +501,8 @@ final class BoundPlayerStateDisplay {
             return .init(x: Int(friend.x.rounded()), y: Int(friend.y.rounded()))
         }
         let query = FriendRouteRequest(mapGroup: viewer.mapGroup, mapNumber: viewer.mapNumber,
-            instance: viewer.mapInstance, tile: viewer.tile, dynamicWarp: viewer.dynamicWarp, access: viewer.routeAccess,
+            instance: viewer.mapInstance, tile: viewer.tile, elevation: viewer.elevation,
+            dynamicWarp: viewer.dynamicWarp, access: viewer.routeAccess,
             friendGroup: friend.mapGroup, friendNumber: friend.mapNumber, friendInstance: friend.mapInstance,
             friendTile: .init(x: Int(floor((friend.x - 8) / 16)), y: Int(floor((friend.y - 16) / 16))))
         if let previous = directionRequest, !previous.sharesScope(with: query) { clearDirectionRoute() }

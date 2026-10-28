@@ -979,6 +979,24 @@ final class RecordedPlayerTests: XCTestCase {
 
 @MainActor
 final class DirectionalFriendRouteTests: XCTestCase {
+    func testRouteRefreshesForEitherPlayerMovementAndInvalidatesAtTransitions() {
+        func request(map: Int = 0, x: Int = 10, elevation: Int = 3,
+                     friendMap: Int = 1, friendX: Int = 20) -> BoundPlayerStateDisplay.FriendRouteRequest {
+            .init(mapGroup: 3, mapNumber: map, instance: 1, tile: .init(x: x, y: 5),
+                elevation: elevation, dynamicWarp: nil, access: nil,
+                friendGroup: 3, friendNumber: friendMap, friendInstance: 2,
+                friendTile: .init(x: friendX, y: 10))
+        }
+        let current = request()
+        for moved in [request(x: 11), request(friendX: 21)] {
+            XCTAssertNotEqual(current, moved, "Either player's movement refreshes route selection")
+            XCTAssertTrue(current.sharesScope(with: moved), "Keep the exit visible during an in-map refresh")
+        }
+        for transitioned in [request(map: 19), request(friendMap: 19), request(elevation: 4)] {
+            XCTAssertFalse(current.sharesScope(with: transitioned), "A route from an old map or elevation cannot survive a transition")
+        }
+    }
+
     func testDirectionalOverrideHidesInFrameAndPointsAcrossRoomsWithLetPassHidden() throws {
         let previous = UserDefaults.standard.object(forKey: BoundLetPassButton.key)
         UserDefaults.standard.set(false, forKey: BoundLetPassButton.key)

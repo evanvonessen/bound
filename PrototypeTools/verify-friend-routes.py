@@ -108,6 +108,19 @@ let detour = detourGraph.target(viewer: player(0), friendGroup: 0, friendNumber:
         map.number != 1 || edge.destination.number != 2 || entry.x == 8
     })
 assert(detour == .init(x: 168, y: 96), "A locked shorter branch does not hide an accessible longer route")
+let fastest = detourGraph.target(viewer: player(0), friendGroup: 0, friendNumber: 2, friendInstance: instance(2),
+    friendX: 80, friendY: 80, arrivalCost: { _, _, _ in 0 }, traversalCost: { map, _, edge in
+        map.number == 0 && edge.direction == 0 ? 100 : 1
+    })
+assert(fastest == .init(x: 168, y: 96), "A shorter walking route wins even when it crosses more map transitions")
+let nearFriend = regions.target(viewer: player(0), friendGroup: 0, friendNumber: 1, friendInstance: instance(1),
+    friendX: 136, friendY: 32, arrivalCost: { _, entry, _ in abs(entry.x - 8) + abs(entry.y - 1) },
+    traversalCost: { _, entry, edge in let p = edge.waypoint(from: entry); return abs(p.x - entry.x) + abs(p.y - entry.y) })
+assert(nearFriend == .init(x: 152, y: 160), "Destination walking distance beats the nearest first doorway")
+let movedFriend = regions.target(viewer: player(0), friendGroup: 0, friendNumber: 1, friendInstance: instance(1),
+    friendX: 24, friendY: 160, arrivalCost: { _, entry, _ in abs(entry.x - 1) + abs(entry.y - 9) },
+    traversalCost: { _, entry, edge in let p = edge.waypoint(from: entry); return abs(p.x - entry.x) + abs(p.y - entry.y) })
+assert(movedFriend == .init(x: 88, y: 96), "Friend movement changes the fastest doorway within the same destination map")
 print("PASS: native entrances, exits, stairs, multiple rooms, movement, map identity, disconnected/ambiguous routes")
 '''
 if a.rom:

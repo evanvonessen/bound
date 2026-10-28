@@ -107,26 +107,44 @@ struct BoundFriendRouteAccess: Equatable, Sendable {
         var borderCells: [Int: UInt16] = [:]
 
         func reachable(from start: Point, elevation: Int = 0) -> Set<Int> {
-            guard (0..<width).contains(start.x), (0..<height).contains(start.y) else { return [] }
+            Set(walkingDistances(from: start, elevation: elevation).keys)
+        }
+
+        /// Native walking distance, retaining elevation in the search
+        /// state. A portal's straight-line distance is not its walking cost:
+        /// walls, scripts and objects can require a much longer approach.
+        func walkingDistances(from start: Point, elevation: Int = 0) -> [Int: Int] {
+            guard (0..<width).contains(start.x), (0..<height).contains(start.y) else { return [:] }
             let count = width * height, initial = start.y * width + start.x
             let initialCellLevel = Int(cells[initial] >> 12)
             let initialLevel = elevation == 0 && initialCellLevel != 15 ? initialCellLevel : max(0, min(15, elevation))
-            var visited: Set<Int> = [initialLevel * count + initial]
-            var result: Set<Int> = [initial], queue = [(initial, initialLevel)], cursor = 0
+            var costs = [initialLevel * count + initial: 0], result = [initial: 0]
+            var queue = [(initial, initialLevel)], nextSteps: [(Int, Int)] = [], jumpSteps: [(Int, Int)] = []
+            var distance = 0, examined = 0
             let moves = [(0, 1, 1), (0, -1, 2), (-1, 0, 3), (1, 0, 4)]
-            while cursor < queue.count, queue.count <= count * 16 {
-                if cursor & 255 == 0, Task.isCancelled { return [] }
-                let (index, level) = queue[cursor]; cursor += 1
+            while !queue.isEmpty || !nextSteps.isEmpty {
+              for (index, level) in queue {
+                guard costs[level * count + index] == distance else { continue }
+                if examined & 255 == 0, Task.isCancelled { return [:] }
+                examined += 1
                 if index != initial, warps.contains(index) { continue }
                 for (dx, dy, direction) in moves {
-                    let x = index % width + dx, y = index / width + dy
+                    var x = index % width + dx, y = index / width + dy, steps = 1
                     guard (0..<width).contains(x), (0..<height).contains(y) else { continue }
+                    let ledge = Int(behaviors[y * width + x])
+                    if (0x38...0x3B).contains(ledge) {
+                        // Native GetLedgeJumpDirection accepts only the marked
+                        // direction and Jump2 lands two tiles from the player.
+                        guard [1:0x3B,2:0x3A,3:0x39,4:0x38][direction] == ledge else { continue }
+                        x += dx; y += dy; steps = 2
+                        guard (0..<width).contains(x), (0..<height).contains(y) else { continue }
+                    }
                     let next = y * width + x, cell = cells[next], behavior = Int(behaviors[next])
                     guard cell != 0x3FF, cell & 0xC00 == 0, !blockedScripts.contains(next),
                           !Self.blocks(behavior: Int(behaviors[index]), toward: direction),
                           !Self.blocks(behavior: behavior, toward: Self.opposite(direction)),
-                          // Currents, spin tiles, ice and ledges have native
-                          // forced movement. Never model them as ordinary floor.
+                          // Other forced movement remains unsupported rather
+                          // than being treated as ordinary walkable floor.
                           ![0x10,0x11,0x12,0x13,0x15,0x19,0x1A,0x1B,0x23,0x26,0x27].contains(behavior),
                           !(0x38...0x58).contains(behavior) else { continue }
                     let destinationLevel = Int(cell >> 12)
@@ -136,29 +154,98 @@ struct BoundFriendRouteAccess: Equatable, Sendable {
                         (object.elevation == 0 || nextLevel == 0 || object.elevation == nextLevel) &&
                         ((object.tile.x == x && object.tile.y == y) || (object.previous.x == x && object.previous.y == y))
                     }) else { continue }
-                    result.insert(next)
-                    if visited.insert(nextLevel * count + next).inserted { queue.append((next, nextLevel)) }
+                    let cost = distance + steps, key = nextLevel * count + next
+                    if cost < result[next, default: .max] { result[next] = cost }
+                    if cost < costs[key, default: .max] {
+                        costs[key] = cost
+                        if steps == 1 { nextSteps.append((next, nextLevel)) }
+                        else { jumpSteps.append((next, nextLevel)) }
+                    }
                 }
+              }
+              queue = nextSteps; nextSteps = jumpSteps; jumpSteps = []; distance += 1
             }
             return result
         }
 
         func canReachTarget(_ target: Point, reachable: Set<Int>, doorway: Bool = false) -> Bool {
+            distance(to: target, doorway: doorway, at: { reachable.contains($0) ? 0 : nil }) != nil
+        }
+
+        func walkingDistance(to target: Point, distances: [Int: Int], doorway: Bool = false) -> Int? {
+            distance(to: target, doorway: doorway, at: { distances[$0] })
+        }
+
+        func hasWarp(at tile: Point) -> Bool {
+            (0..<width).contains(tile.x) && (0..<height).contains(tile.y) && warps.contains(tile.y * width + tile.x)
+        }
+
+        func warpDistance(to tile: Point, distances: [Int: Int], elevation: Int = 0, eventElevation: Int = 0) -> Int? {
+            guard hasWarp(at: tile), let steps = walkingDistance(to: tile, distances: distances, doorway: true) else { return nil }
+            let index = tile.y * width + tile.x, behavior = behaviors[index]
+            if eventElevation != 0 {
+                // A colliding animated door is activated from its south tile,
+                // before entering the door's own metatile/elevation.
+                let standing = behavior == 0x69 && distances[index] == nil ? index + width : index
+                let level = Int(cells[standing] >> 12)
+                if level != 0 && level != 15 {
+                    guard level == eventElevation else { return nil }
+                } else {
+                    // Wildcard/bridge cells carry the previous elevation. A
+                    // flattened flood must not infer an unproved warp layer.
+                    guard elevation == eventElevation, !distances.keys.contains(where: {
+                        let encountered = Int(cells[$0] >> 12)
+                        return encountered != 0 && encountered != 15 && encountered != elevation
+                    }) else { return nil }
+                }
+            }
+            // Arrow and directional stair exits trigger on another direction
+            // input while standing on the tile, not merely by entering it.
+            return steps + ((0x62...0x65).contains(behavior) || (0x6C...0x6F).contains(behavior) ? 1 : 0)
+        }
+
+        func warpArrival(at tile: Point) -> Point? {
+            guard (0..<width).contains(tile.x), (0..<height).contains(tile.y) else { return nil }
+            if [0x60, 0x69].contains(behaviors[tile.y * width + tile.x]) {
+                // Native initial-avatar facing is south for both door kinds;
+                // their exit animations then take one step in that direction.
+                // Route from that standing tile, never through a door's sides.
+                let standing = Point(x: tile.x, y: tile.y + 1)
+                return canEnter(standing, elevation: 0, direction: 1) ? standing : nil
+            }
+            return tile
+        }
+
+        /// A cardinal seam enters ordinary terrain, unlike a door's native
+        /// arrival animation. Never seed a remote flood inside a blocked tile.
+        func canEnter(_ tile: Point, elevation: Int, direction: Int = 0) -> Bool {
+            guard (0..<width).contains(tile.x), (0..<height).contains(tile.y) else { return false }
+            let index = tile.y * width + tile.x, cell = cells[index], level = Int(cell >> 12), behavior = Int(behaviors[index])
+            return cell != 0x3FF && cell & 0xC00 == 0 && !blockedScripts.contains(index) &&
+                (elevation == 0 || level == 0 || level == 15 || level == elevation) &&
+                ![0x10,0x11,0x12,0x13,0x15,0x19,0x1A,0x1B,0x23,0x26,0x27].contains(behavior) && !(0x38...0x58).contains(behavior) &&
+                (direction == 0 || !Self.blocks(behavior: behavior, toward: Self.opposite(direction))) &&
+                !objects.contains { ($0.elevation == 0 || elevation == 0 || $0.elevation == elevation) && ($0.tile == tile || $0.previous == tile) }
+        }
+
+        private func distance(to target: Point, doorway: Bool, at distance: (Int) -> Int?) -> Int? {
             if (0..<width).contains(target.x), (0..<height).contains(target.y) {
                 let index = target.y * width + target.x
-                if reachable.contains(index) { return true }
+                if let steps = distance(index) { return steps }
                 // Native door entry is attempted northward before ordinary
                 // collision. No generic adjacent-wall exception is permitted.
                 guard doorway, behaviors[index] == 0x69, !blockedScripts.contains(index),
-                      !objects.contains(where: { $0.tile == target || $0.previous == target }), target.y + 1 < height else { return false }
-                return reachable.contains((target.y + 1) * width + target.x)
+                      !objects.contains(where: { $0.tile == target || $0.previous == target }), target.y + 1 < height else { return nil }
+                return distance((target.y + 1) * width + target.x).map { $0 + 1 }
             }
             guard (target.x == -1 || target.x == width) && (0..<height).contains(target.y) ||
-                  (target.y == -1 || target.y == height) && (0..<width).contains(target.x) else { return false }
+                  (target.y == -1 || target.y == height) && (0..<width).contains(target.x) else { return nil }
             let x = min(width - 1, max(0, target.x)), y = min(height - 1, max(0, target.y))
-            guard reachable.contains(y * width + x) else { return false }
-            if let cell = borderCells[target.y * (width + 2) + target.x] { return cell != 0x3FF && cell & 0xC00 == 0 }
-            return true
+            guard let steps = distance(y * width + x) else { return nil }
+            let direction = target.y == height ? 1 : target.y == -1 ? 2 : target.x == -1 ? 3 : 4
+            guard !Self.blocks(behavior: Int(behaviors[y * width + x]), toward: direction) else { return nil }
+            if let cell = borderCells[target.y * (width + 2) + target.x], cell == 0x3FF || cell & 0xC00 != 0 { return nil }
+            return steps + 1
         }
 
         private static func opposite(_ direction: Int) -> Int { direction == 1 ? 2 : direction == 2 ? 1 : direction == 3 ? 4 : 3 }
@@ -272,7 +359,13 @@ struct BoundFriendRouteAccess: Equatable, Sendable {
             guard let rows = rom(Self.word(events, 8), Int(events[1]) * 8) else { return nil }
             for offset in stride(from: 0, to: rows.count, by: 8) {
                 let x = Self.signed(rows, offset), y = Self.signed(rows, offset + 2)
-                if (0..<width).contains(x), (0..<height).contains(y) { warps.insert(y * width + x) }
+                if (0..<width).contains(x), (0..<height).contains(y) {
+                    let index = y * width + x, behavior = behaviors[index]
+                    // Event tables also contain dormant/script-only arrival
+                    // coordinates (Pallet's extra event is on normal floor).
+                    // Native field control warps only on an active warp tile.
+                    if (0x60...0x6F).contains(behavior) || behavior == 0x71 { warps.insert(index) }
+                }
             }
         }
         var result = MapAccess(width: width, height: height, cells: cells, behaviors: behaviors,
@@ -320,7 +413,7 @@ struct BoundFriendRouteAccess: Equatable, Sendable {
             0x0F:0x0806A2B5,0x2F:0x0806B069,0x33:0x0806B0E1,0x37:0x0806B17D,
             0x5B:0x0806B5F5,0x7F:0x0806BD15,0x84:0x0806BED5,0x9F:0x0806C4D5,
             0xA3:0x0806AA19,0xA4:0x0806A9FD,0xA5:0x0806AA25,0xC7:0x0806B7ED,0xD0:0x0806A8C1,
-            0x26:0x08069F3D]
+            0x26:0x08069F3D,0x65:0x0806B629]
         var pc = address, stack: [Int] = [], comparison: Int?
         for _ in 0..<256 {
             guard !Task.isCancelled else { return false }
@@ -384,6 +477,14 @@ struct BoundFriendRouteAccess: Equatable, Sendable {
                       let x = projectedVariable(Self.half(args, 2), on: map, projection: projection),
                       let y = projectedVariable(Self.half(args, 4), on: map, projection: projection) else { return false }
                 projection.objectPositions[id] = .init(x: x, y: y); pc += 6
+            case 0x65:
+                guard projecting, let args = rom(pc, 3),
+                      let id = projectedVariable(Self.half(args), on: map, projection: projection), id != 0xFF,
+                      (7...10).contains(args[2]) else { return false }
+                // Exact native setobjectmovementtype only changes template
+                // byte9. These four stationary facing types never move the
+                // object, so its already-projected collision position holds.
+                pc += 3
             case 0xA2:
                 guard projecting, let args = rom(pc, 8),
                       let x = projectedVariable(Self.half(args), on: map, projection: projection),

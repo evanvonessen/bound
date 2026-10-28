@@ -84,53 +84,54 @@ final class BoundPlayerSceneAssets: @unchecked Sendable {
     /// arrow query never holds up emulation/compositor asset reads.
     func friendRouteTarget(viewer: BoundPlayerState, friendGroup: Int, friendNumber: Int,
                            friendInstance: UInt64?, friendX: Double, friendY: Double,
-                           rom: (Int, Int) -> [UInt8]?) -> BoundPlayerState.Point? {
+                           rom: @escaping (Int, Int) -> [UInt8]?) -> BoundPlayerState.Point? {
         lock.lock(); let prepared = friendRoutes; lock.unlock()
         guard let graph = prepared else { return nil }
         typealias Map = BoundPlayerMapConnections.Map
         struct FloodKey: Hashable { let map: Map; let x: Int; let y: Int; let elevation: Int }
         var maps: [Map: BoundFriendRouteAccess.MapAccess] = [:]
         var absent = Set<Map>()
-        var floods: [FloodKey: Set<Int>] = [:]
+        var floods: [FloodKey: [Int: Int]] = [:]
         var retainedTiles = 0
-        func reachable(_ map: Map, _ entry: BoundPlayerState.Point, _ elevation: Int) -> (BoundFriendRouteAccess.MapAccess, Set<Int>)? {
+        func mapAccess(_ map: Map) -> BoundFriendRouteAccess.MapAccess? {
             guard let access = viewer.routeAccess, !absent.contains(map) else { return nil }
             if maps[map] == nil {
                 guard let value = access.map(map, rom: rom) else { absent.insert(map); return nil }
                 if maps.count >= 64 { maps.removeAll() }
                 maps[map] = value
             }
-            guard let value = maps[map] else { return nil }
+            return maps[map]
+        }
+        func reachable(_ map: Map, _ entry: BoundPlayerState.Point, _ elevation: Int) -> (BoundFriendRouteAccess.MapAccess, [Int: Int])? {
+            guard let value = mapAccess(map) else { return nil }
             let key = FloodKey(map: map, x: entry.x, y: entry.y, elevation: elevation)
             if let cached = floods[key] { return (value, cached) }
-            let tiles = value.reachable(from: entry, elevation: elevation)
+            let tiles = value.walkingDistances(from: entry, elevation: elevation)
             if floods.count >= 32 || retainedTiles + tiles.count > 500_000 {
                 floods.removeAll(); retainedTiles = 0
             }
             if tiles.count <= 500_000 { floods[key] = tiles; retainedTiles += tiles.count }
             return (value, tiles)
         }
-        let resolved = graph.target(viewer: viewer, friendGroup: friendGroup, friendNumber: friendNumber,
-            friendInstance: friendInstance, friendX: friendX, friendY: friendY,
-            canArrive: { map, entry, elevation in
-                guard let (value, tiles) = reachable(map, entry, elevation) else { return false }
-                let tile = BoundPlayerState.Point(x: Int(floor((friendX - 8) / 16)), y: Int(floor((friendY - 16) / 16)))
-                return value.canReachTarget(tile, reachable: tiles)
-            }, canTraverse: { map, entry, edge in
-                guard let (value, tiles) = reachable(map, entry, edge.sourceElevation) else { return false }
-                return value.canReachTarget(edge.waypoint(from: entry), reachable: tiles, doorway: edge.direction == 0)
-            })
-        if let resolved { return resolved }
-        // Remote entry scripts may depend on native effects that cannot be
-        // projected from this map. Give directions to a reachable local exit;
-        // recompute from actual terrain after crossing it. This is advisory UI,
-        // never movement permission or a promise that every later door is open.
         return graph.target(viewer: viewer, friendGroup: friendGroup, friendNumber: friendNumber,
             friendInstance: friendInstance, friendX: friendX, friendY: friendY,
-            canTraverse: { map, entry, edge in
-                guard map == .init(group: viewer.mapGroup, number: viewer.mapNumber) else { return true }
-                guard let (value, tiles) = reachable(map, entry, edge.sourceElevation) else { return false }
-                return value.canReachTarget(edge.waypoint(from: entry), reachable: tiles, doorway: edge.direction == 0)
+            arrivalCost: { map, entry, elevation in
+                guard let (value, tiles) = reachable(map, entry, elevation) else { return nil }
+                let tile = BoundPlayerState.Point(x: Int(floor((friendX - 8) / 16)), y: Int(floor((friendY - 16) / 16)))
+                return value.walkingDistance(to: tile, distances: tiles)
+            }, traversalCost: { map, entry, edge in
+                guard let (value, tiles) = reachable(map, entry, edge.sourceElevation) else { return nil }
+                let portal = edge.waypoint(from: entry)
+                if edge.direction == 0 {
+                    return value.warpDistance(to: portal, distances: tiles,
+                        elevation: edge.sourceElevation, eventElevation: edge.warpElevation)
+                } else {
+                    guard let arrival = edge.arrivalTile, let next = mapAccess(edge.destination),
+                          next.canEnter(arrival, elevation: edge.arrivalElevation, direction: edge.direction) else { return nil }
+                }
+                return value.walkingDistance(to: portal, distances: tiles)
+            }, warpArrival: { map, tile in
+                mapAccess(map)?.warpArrival(at: tile)
             })
     }
 
@@ -221,7 +222,9 @@ struct BoundFriendRouteGraph: Sendable {
         var dynamicExit: Bool = false
         var setsDynamicReturn: Bool = false
         var sourceElevation: Int = 0
+        var warpElevation: Int = 0
         var arrivalElevation: Int = 0
+        var arrivalSteps: Int = 0
         var connectionOffset: Int = 0
         // Cardinal exits track the player's position along the shared seam.
         var direction: Int = 0
@@ -302,12 +305,12 @@ struct BoundFriendRouteGraph: Sendable {
             for warp in values {
                 if warp.destination.number == 127 {
                     nodes[map]?.edges.append(.init(destination: warp.destination, tile: warp.tile,
-                        sourceWarpID: warp.slot, dynamicExit: true, sourceElevation: warp.elevation))
+                        sourceWarpID: warp.slot, dynamicExit: true, sourceElevation: warp.elevation, warpElevation: warp.elevation))
                 } else if let arrival = warps[warp.destination]?.first(where: { $0.slot == warp.index }) {
                     nodes[map]?.edges.append(.init(destination: warp.destination, tile: warp.tile,
                         sourceWarpID: warp.slot, arrivalWarpID: warp.index, arrivalTile: arrival.tile,
                         setsDynamicReturn: arrival.destination.number == 127,
-                        sourceElevation: warp.elevation, arrivalElevation: arrival.elevation))
+                        sourceElevation: warp.elevation, warpElevation: warp.elevation, arrivalElevation: arrival.elevation))
                 }
             }
         }
@@ -356,7 +359,10 @@ struct BoundFriendRouteGraph: Sendable {
     func target(viewer: BoundPlayerState, friendGroup: Int, friendNumber: Int, friendInstance: UInt64?,
                 friendX: Double, friendY: Double, distances: [Map: Int] = [:],
                 canArrive: (Map, BoundPlayerState.Point, Int) -> Bool = { _, _, _ in true },
-                canTraverse: (Map, BoundPlayerState.Point, Edge) -> Bool = { _, _, _ in true }) -> BoundPlayerState.Point? {
+                canTraverse: (Map, BoundPlayerState.Point, Edge) -> Bool = { _, _, _ in true },
+                arrivalCost: ((Map, BoundPlayerState.Point, Int) -> Int?)? = nil,
+                traversalCost: ((Map, BoundPlayerState.Point, Edge) -> Int?)? = nil,
+                warpArrival: ((Map, BoundPlayerState.Point) -> BoundPlayerState.Point?)? = nil) -> BoundPlayerState.Point? {
         let source = Map(group: viewer.mapGroup, number: viewer.mapNumber), destination = Map(group: friendGroup, number: friendNumber)
         guard let node = nodes[source], node.instance == viewer.mapInstance,
               let target = nodes[destination], target.instance == friendInstance,
@@ -368,11 +374,16 @@ struct BoundFriendRouteGraph: Sendable {
         }
         let initial = RouteState(map: source, x: viewer.tile.x, y: viewer.tile.y, elevation: viewer.elevation,
             returnWarp: normalized(viewer.dynamicWarp))
-        var visited: Set<RouteState> = [initial]
-        var queue: [(RouteState, BoundPlayerState.Point?)] = [(initial, nil)], cursor = 0
-        while cursor < queue.count, queue.count <= 8192 {
+        let friendTile = BoundPlayerState.Point(x: Int(floor((friendX - 8) / 16)), y: Int(floor((friendY - 16) / 16)))
+        var costs: [RouteState: Int] = [initial: 0], queue = RouteQueue(), examined = 0
+        var best: (cost: Int, portal: BoundPlayerState.Point)?
+        queue.push(state: initial, first: nil, cost: 0)
+        while let candidate = queue.pop(), examined < 8192 {
             if Task.isCancelled { return nil }
-            let (state, first) = queue[cursor]; cursor += 1
+            let state = candidate.state, first = candidate.first
+            guard costs[state] == candidate.cost else { continue }
+            if let best, candidate.cost >= best.cost { break }
+            examined += 1
             guard let current = nodes[state.map] else { continue }
             // A connected border often contains trees/walls except for a small
             // gap. Test the full native overlap instead of aiming blindly at
@@ -397,7 +408,7 @@ struct BoundFriendRouteGraph: Sendable {
                 var edge = original
                 let portal = edge.waypoint(from: state.entry)
                 var returnWarp = state.returnWarp
-                let arrival: BoundPlayerState.Point
+                var arrival: BoundPlayerState.Point
                 if edge.dynamicExit {
                     guard let saved = state.returnWarp,
                           let resolved = resolve(saved) else { continue }
@@ -421,19 +432,76 @@ struct BoundFriendRouteGraph: Sendable {
                     }
                 }
                 edge.sourceElevation = state.elevation
+                if edge.direction == 0, let warpArrival {
+                    guard let normalized = warpArrival(edge.destination, arrival) else { continue }
+                    edge.arrivalSteps = abs(normalized.x - arrival.x) + abs(normalized.y - arrival.y)
+                    arrival = normalized; edge.arrivalTile = normalized
+                }
                 guard let next = nodes[edge.destination],
                       (0..<next.width).contains(arrival.x), (0..<next.height).contains(arrival.y),
                       canTraverse(state.map, state.entry, edge) else { continue }
+                let steps: Int
+                if let traversalCost {
+                    guard let value = traversalCost(state.map, state.entry, edge), value >= 0 else { continue }
+                    steps = value
+                } else { steps = abs(portal.x - state.x) + abs(portal.y - state.y) }
+                let cost = candidate.cost + max(1, steps) + edge.arrivalSteps
                 let initialPortal = first ?? portal
                 if edge.destination == destination && canArrive(edge.destination, arrival, edge.arrivalElevation) {
-                    return .init(x: initialPortal.x * 16 + 8, y: initialPortal.y * 16 + 16)
+                    let finalSteps: Int?
+                    if let arrivalCost { finalSteps = arrivalCost(edge.destination, arrival, edge.arrivalElevation) }
+                    else { finalSteps = abs(friendTile.x - arrival.x) + abs(friendTile.y - arrival.y) }
+                    if let finalSteps, finalSteps >= 0, best == nil || cost + finalSteps < best!.cost {
+                        best = (cost + finalSteps, initialPortal)
+                    }
                 }
                 let following = RouteState(map: edge.destination, x: arrival.x, y: arrival.y,
                     elevation: edge.arrivalElevation, returnWarp: normalized(returnWarp))
-                if visited.insert(following).inserted { queue.append((following, initialPortal)) }
+                if cost < costs[following, default: .max], best == nil || cost < best!.cost {
+                    costs[following] = cost; queue.push(state: following, first: initialPortal, cost: cost)
+                }
             }
         }
-        return nil
+        // Hitting the work bound cannot establish that a discovered path is
+        // shortest. Withhold it rather than displaying a speculative shortcut.
+        guard examined < 8192, let best else { return nil }
+        return .init(x: best.portal.x * 16 + 8, y: best.portal.y * 16 + 16)
+    }
+
+    /// Stable min-heap for Dijkstra's search over actual portal arrivals. Map
+    /// hop count alone prefers short-looking routes with long walking detours.
+    private struct RouteQueue {
+        struct Candidate {
+            let state: RouteState
+            let first: BoundPlayerState.Point?
+            let cost: Int
+            let order: Int
+            func precedes(_ other: Self) -> Bool { cost == other.cost ? order < other.order : cost < other.cost }
+        }
+        var values: [Candidate] = []
+        var sequence = 0
+        mutating func push(state: RouteState, first: BoundPlayerState.Point?, cost: Int) {
+            values.append(.init(state: state, first: first, cost: cost, order: sequence)); sequence += 1
+            var index = values.count - 1
+            while index > 0 {
+                let parent = (index - 1) / 2
+                guard values[index].precedes(values[parent]) else { break }
+                values.swapAt(index, parent); index = parent
+            }
+        }
+        mutating func pop() -> Candidate? {
+            guard !values.isEmpty else { return nil }
+            if values.count == 1 { return values.removeLast() }
+            let result = values[0]; values[0] = values.removeLast()
+            var index = 0
+            while index * 2 + 1 < values.count {
+                var child = index * 2 + 1
+                if child + 1 < values.count, values[child + 1].precedes(values[child]) { child += 1 }
+                guard values[child].precedes(values[index]) else { break }
+                values.swapAt(index, child); index = child
+            }
+            return result
+        }
     }
 
     private struct RouteState: Hashable {

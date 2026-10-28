@@ -116,7 +116,59 @@ put(0x0815F9B4+0x29*4,0x0806A82D)
 put(zeroFlag,0x29,1);put(zeroFlag+1,0,2);put(zeroFlag+3,0x2B,1);put(zeroFlag+4,0,2)
 put(zeroFlag+6,0x06,1);put(zeroFlag+7,1,1);put(zeroFlag+8,zeroDanger);put(zeroFlag+12,0x02,1);put(zeroDanger,0x25,1)
 assert(access(flags).scriptAllowsPassage(zeroFlag,on:m0,rom:read),"native FlagSet0 cannot turn null flag true in dry projection")
-print("PASS: exact native flags, live grids, objects, predicate branches, handler identity, remote on-load tile gates, visibility, doors and fail-closed scripts")
+// Native warp events can also be script-only arrival coordinates on normal
+// floor. They must neither offer a departure nor stop the walking flood.
+let warpRows=0x08007B00
+put(events+1,1,1);put(events+8,warpRows);fill(warpRows,8);put(warpRows,2,2);put(warpRows+2,2,2)
+let dormant=access(flags).map(m0,rom:read)!
+assert(!dormant.hasWarp(at:.init(x:2,y:2)) && reaches(access(flags)),"ordinary-floor event is not an active warp or walking barrier")
+put(attributes,0x61)
+let ladder=access(flags).map(m0,rom:read)!
+assert(ladder.hasWarp(at:.init(x:2,y:2)) && !reaches(access(flags)),"active ladder stops the flood at the actual transition")
+put(attributes,0);put(events+1,0,1)
+// Directional ledges jump two tiles. The opposite approach cannot walk through
+// their collision, and an invalid landing never becomes a route shortcut.
+for (dx,dy,behavior) in [(1,0,0x38),(-1,0,0x39),(0,-1,0x3A),(0,1,0x3B)] {
+    let origin=BoundPlayerState.Point(x:2-dx,y:2-dy),landing=BoundPlayerState.Point(x:2+dx,y:2+dy)
+    var cells=[UInt16](repeating:0xC00,count:25),behaviors=[UInt8](repeating:0,count:25)
+    cells[origin.y*5+origin.x]=0;cells[landing.y*5+landing.x]=0;behaviors[12]=UInt8(behavior)
+    let jump=BoundFriendRouteAccess.MapAccess(width:5,height:5,cells:cells,behaviors:behaviors,objects:[],blockedScripts:[],warps:[])
+    assert(jump.walkingDistance(to:landing,distances:jump.walkingDistances(from:origin))==2,"ledge has two-tile directional walking cost")
+    assert(jump.walkingDistance(to:origin,distances:jump.walkingDistances(from:landing))==nil,"ledge cannot be climbed backward")
+    cells[landing.y*5+landing.x]=0xC00
+    let blocked=BoundFriendRouteAccess.MapAccess(width:5,height:5,cells:cells,behaviors:behaviors,objects:[],blockedScripts:[],warps:[])
+    assert(blocked.walkingDistance(to:landing,distances:blocked.walkingDistances(from:origin))==nil,"blocked ledge landing stays unavailable")
+}
+let edgeWall=BoundFriendRouteAccess.MapAccess(width:1,height:1,cells:[0],behaviors:[0x30],objects:[],blockedScripts:[],warps:[])
+assert(edgeWall.walkingDistance(to:.init(x:1,y:0),distances:[0:0])==nil,"seam respects directional wall on departure")
+assert(!edgeWall.canEnter(.init(x:0,y:0),elevation:0,direction:3),"seam respects directional wall on arrival")
+let edgeWater=BoundFriendRouteAccess.MapAccess(width:1,height:1,cells:[0],behaviors:[0x10],objects:[],blockedScripts:[],warps:[])
+assert(!edgeWater.canEnter(.init(x:0,y:0),elevation:0,direction:1),"seam cannot seed an ordinary walk in water")
+var doorCells=[UInt16](repeating:0,count:9),doorBehaviors=[UInt8](repeating:0,count:9)
+doorCells[4]=0xC00;doorBehaviors[4]=0x69
+let exitDoor=BoundFriendRouteAccess.MapAccess(width:3,height:3,cells:doorCells,behaviors:doorBehaviors,objects:[],blockedScripts:[],warps:[4])
+assert(exitDoor.warpArrival(at:.init(x:1,y:1)) == .init(x:1,y:2),"animated door arrives south after native exit animation")
+doorBehaviors[4]=0x60
+let caveDoor=BoundFriendRouteAccess.MapAccess(width:3,height:3,cells:doorCells,behaviors:doorBehaviors,objects:[],blockedScripts:[],warps:[4])
+assert(caveDoor.warpArrival(at:.init(x:1,y:1)) == .init(x:1,y:2),"nonanimated cave door restores south facing and exits south")
+doorCells[7]=0xC00
+let blockedExit=BoundFriendRouteAccess.MapAccess(width:3,height:3,cells:doorCells,behaviors:doorBehaviors,objects:[],blockedScripts:[],warps:[4])
+assert(blockedExit.warpArrival(at:.init(x:1,y:1))==nil,"blocked door exit cannot seed a sideward flood")
+let raisedWarp=BoundFriendRouteAccess.MapAccess(width:1,height:1,cells:[0x3000],behaviors:[0x61],objects:[],blockedScripts:[],warps:[0])
+assert(raisedWarp.warpDistance(to:.init(x:0,y:0),distances:[0:0],elevation:3,eventElevation:3)==0,"warp event matches its native endpoint elevation")
+assert(raisedWarp.warpDistance(to:.init(x:0,y:0),distances:[0:0],elevation:3,eventElevation:4)==nil,"warp event on another layer cannot activate")
+let carriedWarp=BoundFriendRouteAccess.MapAccess(width:1,height:1,cells:[0xF000],behaviors:[0x61],objects:[],blockedScripts:[],warps:[0])
+assert(carriedWarp.warpDistance(to:.init(x:0,y:0),distances:[0:0],elevation:3,eventElevation:3)==0,"bridge warp retains proved carried elevation")
+assert(carriedWarp.warpDistance(to:.init(x:0,y:0),distances:[0:0],elevation:0,eventElevation:3)==nil,"unknown carried elevation never guesses a matching warp layer")
+let elevatedDoor=BoundFriendRouteAccess.MapAccess(width:1,height:2,cells:[0x3C00,0x4000],behaviors:[0x69,0],objects:[],blockedScripts:[],warps:[0])
+assert(elevatedDoor.warpDistance(to:.init(x:0,y:0),distances:[1:0],elevation:4,eventElevation:3)==nil,"door event checks the player's adjacent layer before entry")
+assert(elevatedDoor.warpDistance(to:.init(x:0,y:0),distances:[1:0],elevation:4,eventElevation:4)==1,"door activation retains the matching adjacent layer")
+put(0x0815F9B4+0x65*4,0x0806B629)
+put(load,0x65,1);put(load+1,1,2);put(load+3,7,1);put(load+4,0x02,1)
+assert(access(flags).map(m1,rom:read) != nil,"exact stationary-facing template command preserves collision position")
+put(load+3,0,1)
+assert(access(flags).map(m1,rom:read)==nil,"unmodeled moving template command stays unknown")
+print("PASS: native flags/grids/objects, predicates, handler identity, script gates, dormant warps, directed ledges, seam boundaries and native door arrivals")
 '''
 if a.rom:
     source += r'''
