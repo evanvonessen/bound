@@ -22,7 +22,7 @@ class GameProfileFreezeTests(unittest.TestCase):
         swift = output[generator.ROOT / 'Delta/Bound/SDK/Generated/BoundGameProfiles.swift'].decode()
         self.assertIn('static let preShinyMagikarp = BoundGameProfile(', swift)
         self.assertIn('romSHA256: "fcfaa8a9fb022656994a429be4cba5b9f14ba6c477ec813d2d6a2aa3878edc00", gameID: "51ebbe0108c0c18bb5bfcbef42ed3d19a4cfd606"', swift)
-        self.assertIn('all = [original, stackSafe, debugDefaults, friendsMultiview, preShinyMagikarp, preLinksMenu, linksMenu, nativeElimination, current]', swift)
+        self.assertIn('all = [original, stackSafe, debugDefaults, friendsMultiview, preShinyMagikarp, preLinksMenu, linksMenu, nativeElimination, preRuntime, current]', swift)
 
     def test_pre_links_profile_exports_exact_frozen_abi_and_library_identity(self):
         output = generator.generate()
@@ -31,7 +31,7 @@ class GameProfileFreezeTests(unittest.TestCase):
         swift = output[generator.ROOT / 'Delta/Bound/SDK/Generated/BoundGameProfiles.swift'].decode()
         self.assertIn('static let preLinksMenu = BoundGameProfile(', swift)
         self.assertIn('romSHA256: "d7d9ec63064f9ea8dae75fa2ee05817056769f2cc933f4291414267575885583", gameID: "eb96749d9ebb8c9e4300885a59b930e94e23eca3"', swift)
-        self.assertIn('all = [original, stackSafe, debugDefaults, friendsMultiview, preShinyMagikarp, preLinksMenu, linksMenu, nativeElimination, current]', swift)
+        self.assertIn('all = [original, stackSafe, debugDefaults, friendsMultiview, preShinyMagikarp, preLinksMenu, linksMenu, nativeElimination, preRuntime, current]', swift)
 
     def test_native_links_profile_exports_exact_frozen_abi_and_library_identity(self):
         output = generator.generate()
@@ -40,7 +40,7 @@ class GameProfileFreezeTests(unittest.TestCase):
         swift = output[generator.ROOT / 'Delta/Bound/SDK/Generated/BoundGameProfiles.swift'].decode()
         self.assertIn('static let linksMenu = BoundGameProfile(', swift)
         self.assertIn('romSHA256: "13d914106810336badd6762258e5bd1b01ab0d8c8044164cdd5d551a227808d8", gameID: "f0cffbdb710c5b64b3afec815c6e2ce2a9e51f09"', swift)
-        self.assertIn('all = [original, stackSafe, debugDefaults, friendsMultiview, preShinyMagikarp, preLinksMenu, linksMenu, nativeElimination, current]', swift)
+        self.assertIn('all = [original, stackSafe, debugDefaults, friendsMultiview, preShinyMagikarp, preLinksMenu, linksMenu, nativeElimination, preRuntime, current]', swift)
 
     def test_native_elimination_profile_exports_exact_frozen_abi_and_library_identity(self):
         output = generator.generate()
