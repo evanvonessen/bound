@@ -1000,6 +1000,10 @@ final class BoundCompanionCoordinator {
         guard let owner else { return }
         defer {
             playerStateDisplay.layout(in: owner, gameView: owner.gameView)
+            if let panel = followerInteractionHost?.view,
+               sharing.followerInteractions.isPresented || sharing.followerInteractions.canLetPass || !sharing.followerInteractions.reaction.isEmpty {
+                owner.view.bringSubviewToFront(panel)
+            }
             if let panel = friendInteractionPanel, !panel.isHidden { owner.view.bringSubviewToFront(panel) }
         }
         if !arrangementLayers.active { arrangementLayers.apply() }
