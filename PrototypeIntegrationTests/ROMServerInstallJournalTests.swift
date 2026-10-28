@@ -1,7 +1,10 @@
 import XCTest
 import CoreData
 import UIKit
+import DeltaCore
 @testable import Delta
+@testable import class Delta.Game
+@testable import class Delta.SaveState
 
 final class ROMServerInstallJournalTests: XCTestCase {
     @MainActor func testOptInLiveDeniedAccountCannotSeeOrStartUpdate() async throws {
@@ -176,6 +179,93 @@ final class ROMServerInstallJournalTests: XCTestCase {
         XCTAssertEqual(try BoundROMServerInstaller.revision(gameID: selected.identity.gameID, storage: journal.storage), revision)
     }
 
+    @MainActor func testRetiredLibraryEntryCanBeDeletedWithLetPassHiddenWithoutTouchingCurrentROMOrSaves() throws {
+        let journal = try fixture(), selected = try target(), manifest = manifest(501), revision = UUID()
+        try journal.write(BoundROMServerInstallJournal.Installed(manifest: manifest, revision: revision,
+            retiredGameIDs: [selected.identity.gameID]), to: journal.installedURL)
+        let receipt = try Data(contentsOf: journal.installedURL)
+        let suite = "RetiredROMDeletion-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let manager = BoundROMUpdateManager(defaults: defaults, storage: journal.storage)
+        let visibility = UserDefaults.standard.object(forKey: BoundLetPassButton.key)
+        UserDefaults.standard.set(false, forKey: BoundLetPassButton.key)
+        defer { UserDefaults.standard.set(visibility, forKey: BoundLetPassButton.key) }
+        XCTAssertFalse(BoundLetPassButton.isShown)
+        XCTAssertTrue(manager.hasPendingSaveClear(for: selected.identity.gameID), "Retirement still fences import and sync")
+        XCTAssertFalse(manager.hasDeletionConflict(for: selected.identity.gameID))
+        XCTAssertFalse(manager.hasDeletionConflict(for: manifest.gameID))
+
+        // Run the same Core Data deletion/cascade as the library action using
+        // an in-memory store and uniquely named files in the isolated QA app.
+        let context = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
+        let coordinator = NSPersistentStoreCoordinator(managedObjectModel: DatabaseManager.shared.managedObjectModel)
+        try coordinator.addPersistentStore(ofType: NSInMemoryStoreType, configurationName: nil, at: nil)
+        context.persistentStoreCoordinator = coordinator
+        defer { context.reset() }
+        func game(_ id: String) -> Game {
+            let value = Game(context: context)
+            value.identifier = id; value.filename = "DeletionQA-" + UUID().uuidString + ".gba"
+            value.name = "Deletion fixture"; value.type = .gba
+            return value
+        }
+        let old = game(selected.identity.gameID), current = game(manifest.gameID)
+        let oldState = SaveState(context: context); oldState.game = old; oldState.type = .general
+        let currentState = SaveState(context: context); currentState.game = current; currentState.type = .general
+        let currentSave = GameSave(context: context); currentSave.identifier = current.identifier; currentSave.game = current
+        let oldROM = old.fileURL, oldStateURL = oldState.fileURL, oldImage = oldState.imageFileURL
+        let retained = [current.fileURL, current.gameSaveURL, currentState.fileURL, currentState.imageFileURL]
+        let owned = [oldROM, oldStateURL, oldImage] + retained
+        defer { for url in owned { try? FileManager.default.removeItem(at: url) } }
+        var bytes: [URL: Data] = [:]
+        for (index, url) in owned.enumerated() {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+            let value = Data("deletion fixture \(index)".utf8)
+            try value.write(to: url, options: .withoutOverwriting); bytes[url] = value
+        }
+        try context.save()
+        let currentID = current.objectID, saveID = currentSave.objectID, stateID = currentState.objectID
+        XCTAssertFalse(journal.storage.hasDeletionConflict(gameID: old.identifier))
+        XCTAssertEqual(try journal.storage.saveClearRevision(gameID: old.identifier), revision)
+        context.delete(old)
+        try context.save()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldROM.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldStateURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldImage.path))
+        for url in retained { XCTAssertEqual(try Data(contentsOf: url), bytes[url]) }
+        XCTAssertEqual(try context.fetch(Game.fetchRequest()).map(\.objectID), [currentID])
+        XCTAssertEqual(current.gameSave?.objectID, saveID)
+        XCTAssertEqual(current.saveStates.map(\.objectID), [stateID])
+        XCTAssertEqual(try Data(contentsOf: journal.installedURL), receipt)
+        XCTAssertTrue(journal.blocks(selected.identity.gameID), "Deleting a retired row must not admit old downloads again")
+    }
+
+    @MainActor func testDeletionStillWaitsForActiveSaveClearAndInstallAndRejectsStaleRevision() throws {
+        let journal = try fixture(), selected = try target(), manifest = manifest(), revision = UUID()
+        try journal.write(BoundROMServerInstallJournal.Installed(manifest: manifest, revision: revision,
+            retiredGameIDs: [selected.identity.gameID]), to: journal.installedURL)
+        let manager = BoundROMUpdateManager(defaults: .standard, storage: journal.storage)
+        XCTAssertFalse(manager.hasDeletionConflict(for: selected.identity.gameID))
+        let clear = try journal.storage.beginSaveClear(gameID: selected.identity.gameID, gameName: "Old build", cloudContext: Data())
+        XCTAssertTrue(manager.hasDeletionConflict(for: selected.identity.gameID))
+        XCTAssertFalse(manager.hasDeletionConflict(for: manifest.gameID))
+        try journal.storage.completeSaveClear(clear)
+        XCTAssertFalse(manager.hasDeletionConflict(for: selected.identity.gameID))
+        let captured = try journal.storage.saveClearRevision(gameID: selected.identity.gameID)
+        let job = BoundROMServerInstallJournal.Job(id: UUID(), owner: UUID(), manifest: manifest, targets: [selected])
+        try journal.write(job, to: journal.pendingURL)
+        XCTAssertTrue(manager.hasDeletionConflict(for: selected.identity.gameID))
+        XCTAssertTrue(manager.hasDeletionConflict(for: manifest.gameID))
+        XCTAssertFalse(manager.hasDeletionConflict(for: "ordinary-game"))
+        XCTAssertNotEqual(try journal.storage.saveClearRevision(gameID: selected.identity.gameID), captured)
+        try journal.write(BoundROMServerInstallJournal.Installed(manifest: manifest, revision: job.id,
+            retiredGameIDs: [selected.identity.gameID]), to: journal.installedURL)
+        try journal.finishCommittedJob()
+        XCTAssertFalse(manager.hasDeletionConflict(for: selected.identity.gameID))
+        XCTAssertNotEqual(try journal.storage.saveClearRevision(gameID: selected.identity.gameID), captured,
+                          "A confirmation opened before an install cannot delete after it finishes")
+    }
+
     func testDamagedJournalFailsClosedForKnownROMsWithoutBlockingOrdinaryGames() throws {
         let journal = try fixture(), selected = try target()
         try journal.write(Data("incomplete".utf8), to: journal.pendingURL)
@@ -183,6 +273,9 @@ final class ROMServerInstallJournalTests: XCTestCase {
         XCTAssertTrue(journal.blocks(selected.identity.gameID))
         XCTAssertTrue(journal.blocks(BoundGameProfiles.current.gameID))
         XCTAssertFalse(journal.blocks("ordinary-game"))
+        XCTAssertTrue(journal.blocksDeletion(selected.identity.gameID))
+        XCTAssertTrue(journal.blocksDeletion(BoundGameProfiles.current.gameID))
+        XCTAssertFalse(journal.blocksDeletion("ordinary-game"))
     }
 
     func testExistingIncomingIdentityIsCapturedAndDeletionPhaseSurvivesRestart() throws {

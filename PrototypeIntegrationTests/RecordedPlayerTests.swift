@@ -979,7 +979,10 @@ final class RecordedPlayerTests: XCTestCase {
 
 @MainActor
 final class DirectionalFriendRouteTests: XCTestCase {
-    func testDirectionalOverridePointsFromLocalPlayerEvenWhenOnscreenOrAcrossRooms() throws {
+    func testDirectionalOverrideHidesInFrameAndPointsAcrossRoomsWithLetPassHidden() throws {
+        let previous = UserDefaults.standard.object(forKey: BoundLetPassButton.key)
+        UserDefaults.standard.set(false, forKey: BoundLetPassButton.key)
+        defer { UserDefaults.standard.set(previous, forKey: BoundLetPassButton.key) }
         let appearance = BoundPlayerSprite(width: 16, height: 32, tiles: Data(repeating: 0x11, count: 256),
             palette: Data(repeating: 0, count: 32), flipX: false, flipY: false, priority: 2)
         // At a camera boundary the local player is far from viewport center.
@@ -989,9 +992,35 @@ final class DirectionalFriendRouteTests: XCTestCase {
         let overlay = BoundRecordedPlayerOverlay(frame: CGRect(x: 0, y: 0, width: 240, height: 160))
         overlay.show(pose: pose, scene: scene, offscreenName: "Friend", drawsSprite: false, directionTarget: .init(x: 40, y: 32))
         XCTAssertFalse(overlay.isHidden)
-        XCTAssertEqual(try XCTUnwrap(overlay.offscreenIndicator).angle, 0, accuracy: 0.001)
-        XCTAssertEqual(overlay.offscreenIndicator?.distanceInTiles, 1)
+        XCTAssertNil(overlay.offscreenIndicator)
         XCTAssertGreaterThan(overlay.visiblePixels, 0, "Direction UI preserves sprite visibility diagnostics")
+        // Every edge includes a one-pixel partial sprite, then a fully offscreen
+        // sprite. Camera movement alone must restore/hide the pointer immediately.
+        for (x, y, visible) in [(-7.0, 32.0, true), (-8, 32, false),
+                               (247, 32, true), (248, 32, false),
+                               (40, 1, true), (40, 0, false),
+                               (40, 191, true), (40, 192, false)] {
+            let peer = BoundRecordedPlayerPose(mapGroup: 4, mapNumber: 0, elevation: 0,
+                x: x, y: y, appearance: appearance)
+            overlay.show(pose: peer, scene: scene, offscreenName: "Friend", drawsSprite: false,
+                directionTarget: .init(x: Int(x), y: Int(y)))
+            XCTAssertEqual(overlay.offscreenIndicator == nil, visible)
+        }
+        let offscreen = BoundRecordedPlayerPose(mapGroup: 4, mapNumber: 0, elevation: 0,
+            x: 248, y: 32, appearance: appearance)
+        let panned = BoundPlayerScene(worldFoot: scene.worldFoot, camera: .init(x: -16, y: 0),
+            appearance: appearance, background: scene.background, objects: [])
+        overlay.show(pose: offscreen, scene: panned, offscreenName: "Friend", drawsSprite: false,
+            directionTarget: .init(x: 248, y: 32))
+        XCTAssertNil(overlay.offscreenIndicator)
+        XCTAssertGreaterThan(overlay.visiblePixels, 0)
+        let occluder = BoundPlayerSceneObject(origin: .init(x: 32, y: 0), footY: 33, appearance: appearance)
+        let occluded = BoundPlayerScene(worldFoot: scene.worldFoot, camera: scene.camera,
+            appearance: appearance, background: scene.background, objects: [occluder])
+        overlay.show(pose: pose, scene: occluded, offscreenName: "Friend", drawsSprite: false,
+            directionTarget: .init(x: 40, y: 32))
+        XCTAssertNil(overlay.offscreenIndicator, "Occlusion inside the frame must not create an arrow")
+        XCTAssertEqual(overlay.visiblePixels, 0)
         // A route waypoint remains visible without compositing a friend through walls.
         overlay.show(pose: nil, scene: scene, offscreenName: "Friend", drawsSprite: false, directionTarget: .init(x: 24, y: 16))
         XCTAssertFalse(overlay.isHidden)

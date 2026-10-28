@@ -105,6 +105,17 @@ struct BoundROMServerInstallJournal {
             return BoundRecognizedROMs.all.contains { $0.gameID == gameID } || MultiRedAdapter.profile(gameID: gameID) != nil
         }
     }
+    /// Retirement prevents importing or syncing an old identity indefinitely,
+    /// but only an unfinished install owns its local deletion. Keep the retired
+    /// receipt when the user removes a leftover library entry.
+    func blocksDeletion(_ gameID: String) -> Bool {
+        do {
+            guard let job = try pending() else { return false }
+            return job.manifest.gameID == gameID || job.targets.contains { $0.identity.gameID == gameID }
+        } catch {
+            return BoundRecognizedROMs.all.contains { $0.gameID == gameID } || MultiRedAdapter.profile(gameID: gameID) != nil
+        }
+    }
 }
 
 @MainActor

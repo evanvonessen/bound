@@ -13,7 +13,7 @@ final class BoundWorldMovementTests:XCTestCase {
         var ac=BoundMovementTile(x:0,y:0),ap=BoundMovementTile(x:0,y:0)
         var bc=BoundMovementTile(x:2,y:0),bp=BoundMovementTile(x:2,y:0)
         var ar:BoundMovementStep?,br:BoundMovementStep?,adone:UInt32=0,bdone:UInt32=0
-        var ag:UInt32=2,bg:UInt32=2,af:[BoundMovementActor]=[],bf:[BoundMovementActor]=[]
+        var ag:UInt32=2,bg:UInt32=2,ae=0,be=0,af:[BoundMovementActor]=[],bf:[BoundMovementActor]=[]
         var aPeer:[BoundMovementActor]?,bPeer:[BoundMovementActor]?
         var queue:[(Bool,Data)]=[],history:[BoundMovementPacket]=[],drop:Set<BoundMovementPacket.Kind>=[]
         init() {
@@ -23,24 +23,24 @@ final class BoundWorldMovementTests:XCTestCase {
         func sent(_ fromA:Bool,_ bytes:Data) {
             queue.append((fromA,bytes));if let p=BoundMovementPacket.decode(bytes){history.append(p)}
         }
-        func step(_ from:Int,_ to:Int,nonce:UInt32=1,generation:UInt32=2,kind:Int=0)->BoundMovementStep {
-            .init(nonce:nonce,generation:generation,instance:9,group:3,number:43,elevation:0,
+        func step(_ from:Int,_ to:Int,nonce:UInt32=1,generation:UInt32=2,kind:Int=0,elevation:Int=0)->BoundMovementStep {
+            .init(nonce:nonce,generation:generation,instance:9,group:3,number:43,elevation:elevation,
                   from:.init(x:from,y:0),to:.init(x:to,y:0),kind:kind)
         }
-        func actor(_ current:BoundMovementTile,_ previous:BoundMovementTile,kind:Int=0,id:UInt64=0)->BoundMovementActor {
-            .init(current:current,previous:previous,elevation:0,kind:kind,identity:id)
+        func actor(_ current:BoundMovementTile,_ previous:BoundMovementTile,kind:Int=0,id:UInt64=0,elevation:Int=0)->BoundMovementActor {
+            .init(current:current,previous:previous,elevation:elevation,kind:kind,identity:id)
         }
         func context(_ fromA:Bool)->BoundWorldMovementSession.Context {
-            let ownA=[actor(ac,ap)]+af,ownB=[actor(bc,bp)]+bf
-            return .init(local:fromA ? first:second,peer:fromA ? second:first,instance:9,group:3,number:43,elevation:0,
+            let ownA=[actor(ac,ap,elevation:ae)]+af,ownB=[actor(bc,bp,elevation:be)]+bf
+            return .init(local:fromA ? first:second,peer:fromA ? second:first,instance:9,group:3,number:43,elevation:fromA ? ae:be,
                 own:fromA ? ownA:ownB,other:fromA ? (aPeer ?? ownB):(bPeer ?? ownA))
         }
         func snapshot(_ fromA:Bool,frame override:UInt32?=nil,sequence:UInt32?=nil)->BoundMovementSnapshot {
             var data=Data(repeating:0,count:256);let put=BoundMovementSnapshot.put
             let request=fromA ? ar:br,generation=fromA ? ag:bg,at=override ?? frame
             put(0x314F5742,&data,0);put(1,&data,4);put(sequence ?? (at*2+2),&data,8);put(at,&data,12)
-            put(generation,&data,16);put(request==nil ? 7:15,&data,20)
-            data[32]=3;data[33]=43;data[35]=2
+            put(generation,&data,16);put(request==nil ? 7:79,&data,20)
+            data[32]=3;data[33]=43;data[34]=UInt8(fromA ? ae:be);data[35]=2
             BoundMovementSnapshot.putTile(fromA ? ac:bc,&data,36);BoundMovementSnapshot.putTile(fromA ? ap:bp,&data,40)
             if let request {
                 put(request.nonce,&data,52);BoundMovementSnapshot.putTile(request.from,&data,56)
@@ -69,31 +69,152 @@ final class BoundWorldMovementTests:XCTestCase {
         func grantB() {br=step(2,1);ticks(6);XCTAssertEqual(permit(b),1)}
     }
 
-    func testPassThroughDoesNotDependOnLetPassVisibilityOrMovementGrants() {
-        let previous = UserDefaults.standard.object(forKey: BoundLetPassButton.key)
-        defer { UserDefaults.standard.set(previous, forKey: BoundLetPassButton.key) }
-        UserDefaults.standard.set(false, forKey: BoundLetPassButton.key)
-        for delta in [BoundMovementTile(x: 1, y: 0), .init(x: -1, y: 0), .init(x: 0, y: 1), .init(x: 0, y: -1)] {
-            let pair = Pair()
-            pair.bc = pair.ac; pair.bp = pair.ap
-            pair.af = [pair.actor(pair.ac, pair.ap, kind: 1, id: 10)]
-            pair.bf = [pair.actor(pair.bc, pair.bp, kind: 1, id: 20)]
+    func testExactOccupiedTilesAreSolidWithLetPassHiddenAndNoProximityNegotiation() {
+        let previous=UserDefaults.standard.object(forKey:BoundLetPassButton.key)
+        defer {UserDefaults.standard.set(previous,forKey:BoundLetPassButton.key)}
+        UserDefaults.standard.set(false,forKey:BoundLetPassButton.key)
+        for direction in [BoundMovementTile(x:1,y:0),.init(x:-1,y:0),.init(x:0,y:1),.init(x:0,y:-1)] {
+            let pair=Pair()
+            pair.bc = .init(x:direction.x*2,y:direction.y*2)
+            pair.bp = .init(x:direction.x,y:direction.y)
+            pair.bf=[pair.actor(.init(x:direction.x*3,y:direction.y*3),pair.bc,kind:1,id:20)]
             pair.connect()
-            // Spawn overlap, both sides of every cardinal crossing, and
-            // the former one-tile buffer, including stale departure tiles.
-            for offset in [0, 1, 2, 1, 0, -1, -2] {
-                pair.bp = pair.bc
-                pair.bc = .init(x: delta.x * offset, y: delta.y * offset)
-                pair.tick()
-                for session in [pair.a, pair.b] {
-                    let host = session.probe.hostInput()!
-                    XCTAssertEqual(BoundMovementSnapshot.word(host, 12), 1, "Proximity negotiation must stay disabled")
-                    XCTAssertEqual(BoundMovementSnapshot.word(host, 68), 0, "Neither peer nor follower is an obstacle")
-                    XCTAssertTrue(host[128..<192].allSatisfy { $0 == 0 })
-                    XCTAssertFalse(session.passing, "No Let Pass request is needed")
-                }
+            let host=pair.a.probe.hostInput()!
+            XCTAssertEqual(BoundMovementSnapshot.word(host,12),1,"No network proximity reservation")
+            XCTAssertEqual(BoundMovementSnapshot.word(host,68),2,"Trainer and Pokémon remain solid")
+            for (i,actor) in pair.context(true).other.enumerated() {
+                XCTAssertEqual(BoundMovementSnapshot.tile(host,132+i*32),actor.current)
+                XCTAssertEqual(BoundMovementSnapshot.tile(host,136+i*32),actor.current,"No old departure tile border")
+            }
+            XCTAssertFalse(pair.a.passing)
+        }
+    }
+
+    func testOverlapRecoveryAllowsEveryDirectionAndSameDirectionUntilSeparate() {
+        let previous=UserDefaults.standard.object(forKey:BoundLetPassButton.key)
+        defer {UserDefaults.standard.set(previous,forKey:BoundLetPassButton.key)}
+        UserDefaults.standard.set(false,forKey:BoundLetPassButton.key)
+        for direction in [BoundMovementTile(x:1,y:0),.init(x:-1,y:0),.init(x:0,y:1),.init(x:0,y:-1)] {
+            let pair=Pair();pair.bc=pair.ac;pair.bp=pair.ap;pair.connect()
+            for session in [pair.a,pair.b] {XCTAssertEqual(BoundMovementSnapshot.word(session.probe.hostInput()!,68),0)}
+            for step in 1...4 {
+                // A gets a frame ahead while B still occupies the shared source.
+                pair.ap=pair.ac;pair.ac = .init(x:direction.x*step,y:direction.y*step);pair.tick()
+                for session in [pair.a,pair.b] {XCTAssertEqual(BoundMovementSnapshot.word(session.probe.hostInput()!,68),0)}
+                pair.bp=pair.bc;pair.bc=pair.ac;pair.tick()
+                for session in [pair.a,pair.b] {XCTAssertEqual(BoundMovementSnapshot.word(session.probe.hostInput()!,68),0)}
+                pair.ap=pair.ac;pair.bp=pair.bc;pair.tick()
+                for session in [pair.a,pair.b] {XCTAssertEqual(BoundMovementSnapshot.word(session.probe.hostInput()!,68),0)}
+            }
+            pair.ap=pair.ac;pair.ac = .init(x:pair.ac.x+direction.x,y:pair.ac.y+direction.y)
+            pair.bp=pair.bc;pair.bc = .init(x:pair.bc.x-direction.x,y:pair.bc.y-direction.y);pair.tick()
+            for session in [pair.a,pair.b] {XCTAssertEqual(BoundMovementSnapshot.word(session.probe.hostInput()!,68),0)}
+            pair.ap=pair.ac;pair.bp=pair.bc;pair.tick()
+            for session in [pair.a,pair.b] {
+                XCTAssertEqual(BoundMovementSnapshot.word(session.probe.hostInput()!,68),1,"Solid again immediately after native footprints separate")
+                XCTAssertFalse(session.passing)
             }
         }
+    }
+
+    func testFrameProbeCanRecoverOverlapAndRestoreCollisionBetweenCoordinatorPolls() {
+        let pair=Pair();pair.connect()
+        let initial=pair.a.probe.hostInput()!
+        let probe=BoundMovementProbe(clock:{0})
+        probe.publish(initial,local:pair.snapshot(true))
+        XCTAssertEqual(BoundMovementSnapshot.word(probe.frameInput(at:0)!,68),1)
+        pair.ac=pair.bc;pair.ap=pair.ac;probe.record(pair.snapshot(true,frame:10,sequence:22))
+        XCTAssertEqual(BoundMovementSnapshot.word(probe.frameInput(at:0.01)!,68),0)
+        pair.ac = .init(x:3,y:0);probe.record(pair.snapshot(true,frame:11,sequence:24))
+        XCTAssertEqual(BoundMovementSnapshot.word(probe.frameInput(at:0.02)!,68),0)
+        pair.ap=pair.ac;probe.record(pair.snapshot(true,frame:12,sequence:26))
+        let restored=probe.frameInput(at:0.03)!
+        XCTAssertEqual(BoundMovementSnapshot.word(restored,68),1)
+        XCTAssertEqual(BoundMovementSnapshot.tile(restored,132),pair.bc)
+        XCTAssertEqual(BoundMovementSnapshot.tile(restored,136),pair.bc)
+    }
+
+    func testFollowerOverlapCanExitTowardEitherActorWithoutLosingTerrainAuthority() {
+        let pair=Pair();pair.bf=[pair.actor(pair.ac,pair.ap,kind:1,id:20)];pair.connect()
+        XCTAssertEqual(BoundMovementSnapshot.word(pair.a.probe.hostInput()!,68),0)
+        pair.ac = .init(x:1,y:0);pair.tick()
+        XCTAssertEqual(BoundMovementSnapshot.word(pair.a.probe.hostInput()!,68),0)
+        pair.ap=pair.ac;pair.tick()
+        let host=pair.a.probe.hostInput()!
+        XCTAssertEqual(BoundMovementSnapshot.word(host,68),2)
+        XCTAssertEqual(BoundMovementSnapshot.word(host,88),0,"No permit bypasses native terrain")
+    }
+
+    func testZeroElevationCollisionIsSymmetricWithoutMergingBridgeLevels() {
+        for (a,b) in [(0,3),(3,0),(0,0),(3,3)] {
+            let pair=Pair();pair.ae=a;pair.be=b;pair.connect()
+            for (i,session) in [pair.a,pair.b].enumerated() {
+                let host=session.probe.hostInput()!
+                XCTAssertEqual(BoundMovementSnapshot.word(host,68),1)
+                XCTAssertEqual(Int(host[66]),i==0 ? a:b,"Native header keeps this player's elevation")
+                XCTAssertEqual(host[140],host[66],"Compatible remote actor uses this native port's elevation")
+            }
+        }
+        let pair=Pair();pair.ae=3;pair.be=4;pair.ticks(8)
+        XCTAssertTrue(pair.a.reconnecting);XCTAssertTrue(pair.b.reconnecting)
+        XCTAssertNil(pair.a.probe.hostInput());XCTAssertNil(pair.b.probe.hostInput())
+    }
+
+    func testLegacyStepExchangeKeepsRequestElevationAcrossCompatibleSurfaces() {
+        for (a,b) in [(0,3),(3,0)] {
+            let pair=Pair();pair.ae=a;pair.be=b;pair.connect()
+            pair.br=pair.step(2,1,elevation:b);pair.ticks(6)
+            XCTAssertEqual(pair.permit(pair.b),1)
+            XCTAssertTrue(pair.history.filter{$0.step != nil}.allSatisfy{$0.elevation==$0.step!.elevation})
+        }
+    }
+
+    func testCarpetElevationChangeKeepsHandshakeAndOverlapRecovery() {
+        let pair=Pair();pair.be=3;pair.bc=pair.ac;pair.bp=pair.ap;pair.connect()
+        for session in [pair.a,pair.b] {XCTAssertEqual(BoundMovementSnapshot.word(session.probe.hostInput()!,68),0)}
+        pair.ac = .init(x:1,y:0);pair.ae=3;pair.tick()
+        for session in [pair.a,pair.b] {
+            XCTAssertFalse(session.reconnecting)
+            XCTAssertEqual(BoundMovementSnapshot.word(session.probe.hostInput()!,68),0)
+        }
+        pair.ap=pair.ac;pair.tick()
+        for session in [pair.a,pair.b] {
+            let host=session.probe.hostInput()!
+            XCTAssertEqual(BoundMovementSnapshot.word(host,68),1)
+            XCTAssertEqual(host[66],3);XCTAssertEqual(host[140],3)
+        }
+    }
+
+    func testFrameProbeAdaptsCompatibleElevationBeforeNextCoordinatorPoll() {
+        let pair=Pair();pair.be=3;pair.connect()
+        let probe=BoundMovementProbe(clock:{0})
+        probe.publish(pair.a.probe.hostInput()!,local:pair.snapshot(true))
+        pair.ae=3;probe.record(pair.snapshot(true,frame:10,sequence:22))
+        let host=probe.frameInput(at:0.01)!
+        XCTAssertEqual(host[66],3);XCTAssertEqual(host[140],3)
+        XCTAssertEqual(BoundMovementSnapshot.word(host,68),1)
+    }
+
+    func testIncompatibleFollowerElevationDoesNotCauseGhostingOrNativeCollision() {
+        let pair=Pair();pair.ae=3;pair.be=3
+        pair.bf=[pair.actor(pair.ac,pair.ap,kind:1,id:20,elevation:4)];pair.connect()
+        let host=pair.a.probe.hostInput()!
+        XCTAssertEqual(BoundMovementSnapshot.word(host,68),2)
+        XCTAssertEqual(host[66],3);XCTAssertEqual(host[172],4)
+    }
+
+    func testNativeOrdinaryStepsNeverStartReliableMovementNegotiation() {
+        let pair=Pair();pair.connect();let count=pair.history.count
+        pair.ar=pair.step(0,1)
+        for _ in 0..<20 {
+            pair.now+=0.05;pair.frame+=1
+            var raw=pair.snapshot(true).bytes;BoundMovementSnapshot.put(15,&raw,20)
+            pair.a.update(pair.context(true),native:BoundMovementSnapshot(raw)!,at:pair.now)
+            pair.b.update(pair.context(false),native:pair.snapshot(false),at:pair.now);pair.drain()
+        }
+        XCTAssertFalse(pair.history.dropFirst(count).contains{[BoundMovementPacket.Kind.request,.offer,.accept,.grant].contains($0.kind)})
+        XCTAssertEqual(pair.permit(pair.a),0)
+        XCTAssertEqual(BoundMovementSnapshot.word(pair.a.probe.hostInput()!,12),1)
     }
 
     func testVisibilityToggleDoesNotChangeNativeCollisionInput() {
@@ -111,7 +232,7 @@ final class BoundWorldMovementTests:XCTestCase {
         }
     }
 
-    func testPassExpiryAndReconnectNeverRestoreNativeObstacles() {
+    func testPassExpiryAndReconnectPreserveOverlapRecovery() {
         let pair = Pair(); pair.bc = pair.ac; pair.bp = pair.ap; pair.connect()
         pair.a.letPass(at: pair.now); pair.drain()
         for _ in 0..<50 {

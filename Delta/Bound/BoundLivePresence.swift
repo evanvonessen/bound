@@ -75,8 +75,8 @@ struct BoundPresencePose: Codable, Equatable, Sendable {
     }
 }
 
-/// Occupancy comes from the newest authenticated sample, never the delayed
-/// drawing interpolation. A walking sprite occupies both ends of its step.
+/// The newest authenticated sample supplies current and departure tiles for
+/// overlap recovery. The frame port makes only the current tile solid.
 struct BoundPresenceCollision: Equatable, Sendable {
     let mapGroup: Int
     let mapNumber: Int
@@ -403,8 +403,8 @@ final class BoundLivePresenceSession: ObservableObject {
         return last.pose
     }
     func collision(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundPresenceCollision? {
-        // The legacy UI port must not reintroduce solid peer footprints.
-        // Presence rendering and social targeting still use movementContext.
+        // Exact occupancy and overlap recovery have one owner: the frame
+        // movement port. The legacy UI port must not add a second blocker.
         return nil
     }
 
@@ -416,7 +416,7 @@ final class BoundLivePresenceSession: ObservableObject {
               now>=localAt,now-localAt<=0.2,now>=lastReceived,now-lastReceived<=0.2,
               now>=lastPoseReceived,now-lastPoseReceived<=0.2,
               let native=movement.probe.read(),native.flags&1 != 0,native.instance==key,
-              native.elevation==(peer.collisionElevation ?? peer.elevation) else{return nil}
+              BoundMovementElevation.compatible(native.elevation,peer.collisionElevation ?? peer.elevation) else{return nil}
         let ownTrainer=BoundMovementActor(current:native.current,previous:native.previous,elevation:native.elevation,kind:0,identity:0)
         guard let peerTiles=BoundPresenceCollision(pose:peer) else{return nil}
         let peerTrainer=BoundMovementActor(current:.init(peerTiles.current),previous:.init(peerTiles.previous),elevation:peerTiles.elevation,kind:0,identity:0)

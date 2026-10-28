@@ -167,6 +167,10 @@ final class BoundROMUpdateManager: ObservableObject {
         clearingSaveGameIDs.contains(gameID) || storage.hasPendingSaveClear(gameID: gameID)
     }
 
+    func hasDeletionConflict(for gameID: String) -> Bool {
+        clearingSaveGameIDs.contains(gameID) || storage.hasDeletionConflict(gameID: gameID)
+    }
+
     func clearSaves(for game: Game, completion: @escaping (Error?) -> Void) {
         clearSaves(gameID: game.identifier, gameName: game.name, completion: completion)
     }

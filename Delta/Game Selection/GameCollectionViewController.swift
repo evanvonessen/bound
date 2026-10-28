@@ -889,6 +889,8 @@ private extension GameCollectionViewController
         if pending {
             importSaveFile.attributes.insert(.disabled)
             saveStatesAction.attributes.insert(.disabled)
+        }
+        if BoundROMUpdateManager.shared.hasDeletionConflict(for: game.identifier) {
             deleteAction.attributes.insert(.disabled)
         }
         
@@ -963,17 +965,17 @@ private extension GameCollectionViewController
     
     func delete(_ game: Game)
     {
-        guard !BoundROMUpdateManager.shared.hasPendingSaveClear(for: game.identifier) else { return }
+        guard !BoundROMUpdateManager.shared.hasDeletionConflict(for: game.identifier) else { return }
         let gameID = game.identifier
         let revision = try? BoundROMUpdateStorage.live.saveClearRevision(gameID: gameID)
         let confirmationAlertController = UIAlertController(title: NSLocalizedString("Are you sure you want to delete this game?", comment: ""),
                                                             message: NSLocalizedString("All associated data, such as saves, save states, and cheat codes, will also be deleted.", comment: ""),
                                                             preferredStyle: .alert)
         confirmationAlertController.addAction(UIAlertAction(title: NSLocalizedString("Delete Game", comment: ""), style: .destructive, handler: { action in
-            guard !BoundROMUpdateManager.shared.hasPendingSaveClear(for: gameID),
+            guard !BoundROMUpdateManager.shared.hasDeletionConflict(for: gameID),
                   (try? BoundROMUpdateStorage.live.saveClearRevision(gameID: gameID)) == revision else { return }
             DatabaseManager.shared.performBackgroundTask { (context) in
-                guard !BoundROMUpdateStorage.live.hasPendingSaveClear(gameID: gameID),
+                guard !BoundROMUpdateStorage.live.hasDeletionConflict(gameID: gameID),
                       (try? BoundROMUpdateStorage.live.saveClearRevision(gameID: gameID)) == revision else { return }
                 let temporaryGame = context.object(with: game.objectID) as! Game
                 context.delete(temporaryGame)

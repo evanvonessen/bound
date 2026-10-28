@@ -166,6 +166,10 @@ final class BoundROMUpdateStorage {
         fm.fileExists(atPath: saveClearURL(gameID: gameID).path) || BoundROMCleanupJournal(storage: self).blocks(gameID) ||
             BoundROMServerInstaller.blocks(gameID, storage: self)
     }
+    func hasDeletionConflict(gameID: String) -> Bool {
+        fm.fileExists(atPath: saveClearURL(gameID: gameID).path) || BoundROMCleanupJournal(storage: self).blocks(gameID) ||
+            BoundROMServerInstallJournal(storage: self).blocksDeletion(gameID)
+    }
     func pendingSaveClear(gameID: String) throws -> SaveClear? {
         guard fm.fileExists(atPath: saveClearURL(gameID: gameID).path) else { return nil }
         let value = try JSONDecoder().decode(SaveClear.self, from: Data(contentsOf: saveClearURL(gameID: gameID)))

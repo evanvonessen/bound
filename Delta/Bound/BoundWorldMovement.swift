@@ -10,6 +10,11 @@ struct BoundMovementTile: Codable, Equatable, Hashable, Sendable {
     var valid:Bool { (-7...1030).contains(x) && (-7...1030).contains(y) }
     func distance(_ other:Self)->Int { abs(x-other.x)+abs(y-other.y) }
 }
+/// FireRed's native AreElevationsCompatible treats ground elevation zero as
+/// compatible with either surface; two different nonzero bridge levels differ.
+enum BoundMovementElevation {
+    static func compatible(_ a:Int,_ b:Int)->Bool { a==0 || b==0 || a==b }
+}
 struct BoundMovementActor: Equatable, Sendable {
     let current:BoundMovementTile, previous:BoundMovementTile
     let elevation:Int,kind:Int,identity:UInt64
@@ -33,7 +38,7 @@ struct BoundMovementStep: Codable, Equatable, Sendable {
         && (0...15).contains(elevation) && from.valid && to.valid
         && (from.x==to.x || from.y==to.y) && ((kind==0 && from.distance(to)==1) || (kind==1 && from.distance(to)==2)) }
     func conflicts(_ other:Self)->Bool {
-        instance==other.instance && group==other.group && number==other.number && elevation==other.elevation
+        instance==other.instance && group==other.group && number==other.number && BoundMovementElevation.compatible(elevation,other.elevation)
         && (kind==1 || other.kind==1 ? !path.isDisjoint(with:other.path):(to==other.to || to==other.from || from==other.to))
     }
 }
@@ -72,10 +77,63 @@ struct BoundMovementSnapshot: Equatable, Sendable {
     }
 }
 
+/// Collision uses the native destination tile, never the swept path or a
+/// proximity reservation. Keep an existing overlap non-solid until its native
+/// step footprints separate; this lets both owners walk out in the same
+/// direction without taking turns or changing either player's coordinates.
+struct BoundMovementOccupancy {
+    private var scope:Data?
+    private var recovering=false
+    mutating func reset() { scope=nil;recovering=false }
+    mutating func input(_ source:Data,local:BoundMovementSnapshot?)->Data {
+        guard source.count==1024,let local,
+              BoundMovementSnapshot.word(source,0)==0x31574C42,
+              BoundMovementSnapshot.word(source,20)==local.generation,
+              BoundMovementSnapshot.word(source,32)==UInt32(truncatingIfNeeded:local.instance),
+              BoundMovementSnapshot.word(source,36)==UInt32(local.instance>>32),
+              Int(source[64])==local.group,Int(source[65])==local.number else{return source}
+        // Elevation can change across an ordinary carpet edge without changing
+        // map identity. Each frame uses its actual local native elevation.
+        let next=source.subdata(in:20..<66)
+        if scope != next {scope=next;recovering=false}
+        let count=Int(BoundMovementSnapshot.word(source,68))
+        guard count<=2 else{return source}
+        var overlapping=false,stillIntersecting=false
+        for i in 0..<count {
+            let n=128+i*32
+            guard BoundMovementSnapshot.word(source,n)&1 != 0,BoundMovementElevation.compatible(Int(source[n+12]),local.elevation) else{continue}
+            let current=BoundMovementSnapshot.tile(source,n+4),previous=BoundMovementSnapshot.tile(source,n+8)
+            overlapping = overlapping || local.current==current
+            stillIntersecting = stillIntersecting || [local.current,local.previous].contains(current)
+                || [local.current,local.previous].contains(previous)
+        }
+        if overlapping {recovering=true}
+        else if !stillIntersecting {recovering=false}
+        var result=source
+        result[66]=UInt8(local.elevation)
+        if recovering {
+            BoundMovementSnapshot.put(0,&result,68)
+            result.replaceSubrange(128..<192,with:repeatElement(UInt8(0),count:64))
+        } else {
+            for i in 0..<count {
+                let n=128+i*32
+                BoundMovementSnapshot.putTile(BoundMovementSnapshot.tile(source,n+4),&result,n+8)
+                // The installed port compares exact elevations. Preserve its
+                // ABI while applying the native zero-elevation wildcard here.
+                if BoundMovementElevation.compatible(Int(source[n+12]),local.elevation) {
+                    result[n+12]=UInt8(local.elevation)
+                }
+            }
+        }
+        return result
+    }
+}
+
 /// The completed-frame owner is the sole reader/writer of the transient port.
 final class BoundMovementProbe: @unchecked Sendable {
     private let lock=NSLock()
     private var coreID:ObjectIdentifier?,desired:Data?,snapshot:BoundMovementSnapshot?
+    private var desiredLocal:BoundMovementSnapshot?,occupancy=BoundMovementOccupancy()
     private let clock:()->TimeInterval
     private let requestRevocation:()->Void
     private var desiredAt:TimeInterval = -.infinity,frameSequence:UInt32=0
@@ -88,16 +146,20 @@ final class BoundMovementProbe: @unchecked Sendable {
     func configure(core:EmulatorCore?) {
         lock.lock();defer{lock.unlock()};requestRevocation();coreID=core.map(ObjectIdentifier.init);desired=nil;snapshot=nil
         frameSequence=0;lastObserved=nil;observationEpoch &+= 1;loadTimeline=BoundVBABattleBridge.worldMovementTimeline()
-        oddFrames=0;publicationInProgress=false
+        oddFrames=0;publicationInProgress=false;desiredLocal=nil;occupancy.reset()
     }
-    func publish(_ bytes:Data?,epoch:UInt64?=nil) {
+    func publish(_ bytes:Data?,epoch:UInt64?=nil,local:BoundMovementSnapshot?=nil) {
         lock.lock();defer{lock.unlock()}
         guard epoch.map({$0==observationEpoch}) ?? true else {return}
         if bytes?.count != 1024 {requestRevocation()}
-        desired=bytes;desiredAt=clock();desiredEpoch=observationEpoch
+        desired=bytes;desiredAt=clock();desiredEpoch=observationEpoch;desiredLocal=local
+        if bytes==nil {occupancy.reset()}
     }
     func read()->BoundMovementSnapshot? {lock.lock();defer{lock.unlock()};return snapshot}
-    func hostInput()->Data? {lock.lock();defer{lock.unlock()};return desired}
+    func hostInput()->Data? {
+        lock.lock();defer{lock.unlock()}
+        return desired.map{occupancy.input($0,local:snapshot ?? desiredLocal)}
+    }
     func epoch()->UInt64 {lock.lock();defer{lock.unlock()};return observationEpoch}
     func record(_ value:BoundMovementSnapshot?,publicationInProgress:Bool=false,timeline:UInt64?=nil) {
         lock.lock();defer{lock.unlock()}
@@ -106,7 +168,7 @@ final class BoundMovementProbe: @unchecked Sendable {
     private func invalidate(forceEpoch:Bool=false) {
         requestRevocation()
         if forceEpoch || desired != nil || snapshot != nil || lastObserved != nil {observationEpoch &+= 1}
-        desired=nil;snapshot=nil;lastObserved=nil;oddFrames=0;publicationInProgress=false
+        desired=nil;snapshot=nil;lastObserved=nil;oddFrames=0;publicationInProgress=false;desiredLocal=nil;occupancy.reset()
     }
     private func observe(_ value:BoundMovementSnapshot?,publicationInProgress writing:Bool,timeline:UInt64) {
         if let previous=loadTimeline,previous != timeline {
@@ -122,7 +184,7 @@ final class BoundMovementProbe: @unchecked Sendable {
         if let old=lastObserved {
             if value.generation != old.generation || value.frame &- old.frame>0x80000000 || value.sequence &- old.sequence>0x80000000 {
                 requestRevocation()
-                desired=nil;observationEpoch &+= 1
+                desired=nil;desiredLocal=nil;occupancy.reset();observationEpoch &+= 1
             }
         }
         lastObserved=value;snapshot=value
@@ -135,7 +197,8 @@ final class BoundMovementProbe: @unchecked Sendable {
               var bytes=desired,bytes.count==1024 else{return Data()}
         if publicationInProgress {return nil}
         frameSequence &+= 2;if frameSequence==0 {frameSequence=2}
-        BoundMovementSnapshot.put(frameSequence,&bytes,8);return bytes
+        BoundMovementSnapshot.put(frameSequence,&bytes,8)
+        return occupancy.input(bytes,local:snapshot ?? desiredLocal)
     }
     func receive(_ core:EmulatorCore) {
         lock.lock();defer{lock.unlock()};guard coreID==ObjectIdentifier(core) else{return}
@@ -237,7 +300,7 @@ final class BoundWorldMovementSession:ObservableObject {
         }
         func sameWorld(_ other:Self)->Bool {
             local==other.local && peer==other.peer && instance==other.instance && group==other.group
-                && number==other.number && elevation==other.elevation
+                && number==other.number && BoundMovementElevation.compatible(elevation,other.elevation)
         }
     }
     private struct Attempt {
@@ -281,7 +344,7 @@ final class BoundWorldMovementSession:ObservableObject {
         sentTimes.removeAll{$0<=clock-1}
         guard let c=context,sequence<UInt64.max,sentTimes.count<50 else{return};sequence+=1
         let packet=BoundMovementPacket(sender:c.local,receiver:c.peer,channel:channel,acknowledgedChannel:peerChannel,
-            sequence:sequence,instance:c.instance,generation:generation,group:c.group,number:c.number,elevation:c.elevation,
+            sequence:sequence,instance:c.instance,generation:generation,group:c.group,number:c.number,elevation:step?.elevation ?? c.elevation,
             kind:kind,token:token,step:step)
         if let bytes=packet.encoded(){sentTimes.append(clock);_=send?(bytes)}
     }
@@ -297,7 +360,7 @@ final class BoundWorldMovementSession:ObservableObject {
     }
     func receive(_ data:Data,at now:TimeInterval=ProcessInfo.processInfo.systemUptime) {
         guard now.isFinite,now>=clock,let c=context,let p=BoundMovementPacket.decode(data),p.sender==c.peer,p.receiver==c.local,
-              p.instance==c.instance,p.group==c.group,p.number==c.number,p.elevation==c.elevation,
+              p.instance==c.instance,p.group==c.group,p.number==c.number,BoundMovementElevation.compatible(p.elevation,c.elevation),
               p.sequence>(received[c.peer] ?? 0) else{return}
         clock=now
         if p.kind == .hello {
@@ -424,7 +487,9 @@ final class BoundWorldMovementSession:ObservableObject {
                     if !old.started && (old.step.generation != value.generation || now>=old.deadline || (value.request != nil && value.request != old.step)) {finishLocal(completed:false,at:now)}
                 }
             }
-            if attempt==nil,let step=value.request,let token=nextToken() {
+            // Ordinary exact-tile collision needs no transport round trip.
+            // Only a legacy native negotiation request can start this exchange.
+            if attempt==nil,value.flags&64 != 0,let step=value.request,let token=nextToken() {
                 attempt = .init(key:.init(owner:next.local,token:token),step:step,deadline:now+0.8)
             }
             if next.isArbiter {grantPending(context:next,at:now)}
@@ -462,8 +527,8 @@ final class BoundWorldMovementSession:ObservableObject {
     }
     private func targetAvailable(_ step:BoundMovementStep,actors:[BoundMovementActor])->Bool {
         let entered=step.path.subtracting([step.from])
-        let origin=Set(actors.indices.filter{actors[$0].elevation==step.elevation && actors[$0].tiles.contains(step.from)})
-        let blocked=Set(actors.indices.filter{actors[$0].elevation==step.elevation && !actors[$0].tiles.isDisjoint(with:entered)})
+        let origin=Set(actors.indices.filter{BoundMovementElevation.compatible(actors[$0].elevation,step.elevation) && actors[$0].tiles.contains(step.from)})
+        let blocked=Set(actors.indices.filter{BoundMovementElevation.compatible(actors[$0].elevation,step.elevation) && !actors[$0].tiles.isDisjoint(with:entered)})
         // A negotiated escape may reduce an overlap, preserving native actor
         // masks. It may never exchange an old blocker for a different actor.
         return blocked.isEmpty || (step.kind==0 && !origin.isEmpty && blocked.isStrictSubset(of:origin))
@@ -475,16 +540,22 @@ final class BoundWorldMovementSession:ObservableObject {
         put(native.generation,&out,20);put(Self.epoch(c.local),&out,24);put(Self.epoch(c.peer),&out,28)
         for n in [32,48] {put(UInt32(truncatingIfNeeded:c.instance),&out,n);put(UInt32(c.instance>>32),&out,n+4)}
         out[64]=UInt8(c.group);out[65]=UInt8(c.number);out[66]=UInt8(c.elevation)
-        // Remote trainers and followers are presentation, never native obstacles.
-        // Disable both occupancy and proximity negotiation, independently of
-        // Let Pass. This also works with previously installed BLW1 cartridges.
-        put(0,&out,68)
+        // GP_NEGOTIATE remains off: adjacent open tiles never wait on a network
+        // reservation. The completed-frame probe handles overlap recovery and
+        // collapses each fresh actor to its occupied native tile.
+        let actors=passing ? []:Array(c.other.prefix(2));put(UInt32(actors.count),&out,68)
+        for (i,a) in actors.enumerated() {
+            let n=128+i*32;put(1,&out,n)
+            BoundMovementSnapshot.putTile(a.current,&out,n+4);BoundMovementSnapshot.putTile(a.previous,&out,n+8)
+            out[n+12]=UInt8(a.elevation);out[n+13]=UInt8(a.kind)
+            put(UInt32(truncatingIfNeeded:a.identity),&out,n+20);put(UInt32(a.identity>>32),&out,n+24)
+        }
         let permit=passing ? native.request:attempt.flatMap{$0.phase == .committed && !$0.started && now<$0.deadline ? $0.step:nil}
         if let permit,permit==native.request {
             put(permit.nonce,&out,72);put(permit.generation,&out,76)
             BoundMovementSnapshot.putTile(permit.from,&out,80);BoundMovementSnapshot.putTile(permit.to,&out,84);put(passing ? 3:0,&out,88)
         }
-        probe.publish(out,epoch:probeEpoch)
+        probe.publish(out,epoch:probeEpoch,local:native)
     }
     static func epoch(_ id:UUID)->UInt32 {
         var value=id.uuid;let bytes=withUnsafeBytes(of:&value){Data($0)}

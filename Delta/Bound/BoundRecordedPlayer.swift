@@ -37,6 +37,20 @@ enum BoundPlayerViewport {
         let distance = hypot(pose.x - Double(scene.worldFoot.x), pose.y - Double(scene.worldFoot.y)) / 16
         return .init(target: target, distanceInTiles: max(1, Int(distance.rounded())))
     }
+
+    static func indicator(pose: BoundRecordedPlayerPose?, scene: BoundPlayerScene,
+                          directionTarget: BoundPlayerState.Point?) -> BoundOffscreenPlayerIndicator? {
+        // A route target must not override the camera's sprite visibility test.
+        // Partial visibility and foreground occlusion still count as in frame.
+        if let pose, indicator(pose: pose, scene: scene) == nil { return nil }
+        if let target = directionTarget {
+            return .init(target: CGPoint(x: bounds.midX + CGFloat(target.x - scene.worldFoot.x),
+                                         y: bounds.midY + CGFloat(target.y - scene.worldFoot.y)),
+                distanceInTiles: max(0, Int((hypot(Double(target.x - scene.worldFoot.x),
+                    Double(target.y - scene.worldFoot.y)) / 16).rounded())))
+        }
+        return pose.flatMap { indicator(pose: $0, scene: scene) }
+    }
 }
 
 struct BoundOffscreenPlayerIndicator: Equatable {
@@ -301,12 +315,7 @@ final class BoundRecordedPlayerOverlay: UIView {
         imageView.isHidden = !drawsSprite
         offscreenIndicator = nil; offscreenText = nil; indicatorView.isHidden = true
         guard let scene else { isHidden = true; imageView.image = nil; visiblePixels = 0; return }
-        let directional = directionTarget.map { target in
-            BoundOffscreenPlayerIndicator(target: CGPoint(x: BoundPlayerViewport.bounds.midX + CGFloat(target.x - scene.worldFoot.x),
-                y: BoundPlayerViewport.bounds.midY + CGFloat(target.y - scene.worldFoot.y)),
-                distanceInTiles: max(0, Int((hypot(Double(target.x - scene.worldFoot.x), Double(target.y - scene.worldFoot.y)) / 16).rounded())))
-        }
-        let indicator = directional ?? pose.flatMap { BoundPlayerViewport.indicator(pose: $0, scene: scene) }
+        let indicator = BoundPlayerViewport.indicator(pose: pose, scene: scene, directionTarget: directionTarget)
         if let offscreenName, let indicator {
             offscreenIndicator = indicator
             let name = String(offscreenName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(24))
@@ -315,10 +324,6 @@ final class BoundRecordedPlayerOverlay: UIView {
             indicatorDistanceLabel.text = "· \(indicator.distanceInTiles) tiles"
             indicatorView.accessibilityLabel = offscreenText
             indicatorView.isHidden = false; imageView.image = nil; visiblePixels = 0; isHidden = false
-            if directional != nil, let pose {
-                let (rgba, _) = BoundRecordedPlayerRasterizer.rgba(pose: pose, scene: scene)
-                visiblePixels = stride(from: 3, to: rgba.count, by: 4).filter { rgba[$0] != 0 }.count
-            }
             accessibilityValue = "directional-friend distance=\(indicator.distanceInTiles)"
             setNeedsLayout()
             return
