@@ -68,6 +68,8 @@ enum BoundServerDisconnectSave {
                 let message: String
                 if error is CancellationError {
                     message = "Saving was interrupted. Reopen the last confirmed server checkpoint."
+                } else if case BoundNakamaRunService.Failure.incompatibleServer = error {
+                    message = error.localizedDescription
                 } else if isConflict(error) {
                     message = "The server save changed on another device. Reopen its latest checkpoint."
                 } else {

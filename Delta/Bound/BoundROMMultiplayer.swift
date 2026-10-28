@@ -1861,7 +1861,9 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                 // only schedules another background attempt.
                 guard !Task.isCancelled, self.serverOperation == operation else { return }
                 self.serverPollAt = self.now + 3
-                if self.serverOnly, self.isServerConflict(error) {
+                if self.serverOnly, case BoundNakamaRunService.Failure.incompatibleServer = error {
+                    self.failServerSession(error.localizedDescription)
+                } else if self.serverOnly, self.isServerConflict(error) {
                     if await self.discoverGameOver(for: identity) { return }
                     guard !Task.isCancelled, self.serverOperation == operation else { return }
                     self.failServerSession("This run changed on another device. Refresh and reopen its server save.")
@@ -1945,7 +1947,9 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
             } catch {
                 guard self.snapshotOperation == operation else { return }
                 self.snapshotRetryAt = self.now + 3
-                if self.serverOnly, self.isServerConflict(error) {
+                if self.serverOnly, case BoundNakamaRunService.Failure.incompatibleServer = error {
+                    self.failServerSession(error.localizedDescription)
+                } else if self.serverOnly, self.isServerConflict(error) {
                     if await self.discoverGameOver(for: package.payload.manifest.identity) { return }
                     guard !Task.isCancelled, self.snapshotOperation == operation else { return }
                     self.failServerSession("This run changed on another device. Refresh and reopen its server save.")

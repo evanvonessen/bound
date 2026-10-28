@@ -64,7 +64,64 @@ private actor NakamaRPCRecordingFixture {
     func authorizations() -> Int { authorizationCount }
 }
 
+private actor CancelledSaveDownloadFixture {
+    let started: XCTestExpectation
+    private var waiter: CheckedContinuation<Void, Never>?
+    private(set) var calls = 0
+    init(started: XCTestExpectation) { self.started = started }
+    func perform(_ request: URLRequest) async throws -> Data {
+        calls += 1
+        if calls == 1 {
+            started.fulfill()
+            await withCheckedContinuation { waiter = $0 }
+        }
+        let chunk = try JSONEncoder().encode(["data": String(repeating: "A", count: 12000)])
+        return try JSONEncoder().encode(["payload": String(decoding: chunk, as: UTF8.self)])
+    }
+    func release() { waiter?.resume(); waiter = nil }
+}
+
 final class BoundNakamaClientTests: XCTestCase {
+    func testUnsupportedServerRecordsAreDistinctFromOwnershipConflicts() throws {
+        let url = URL(string: "https://bound.example/v2/rpc/bound_independent_v2")!
+        for message in ["Unsupported shared event", "Too many checkpoint acquisitions"] {
+            let data = try JSONEncoder().encode(["message": message])
+            let response = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 400, httpVersion: nil, headerFields: nil))
+            XCTAssertThrowsError(try BoundNakamaRunService.validatedRPCResponse(data, response: response)) { error in
+                guard case BoundNakamaRunService.Failure.incompatibleServer = error else { return XCTFail("Wrong failure: \(error)") }
+            }
+        }
+        for data in [Data(), Data("<html>bad gateway</html>".utf8), try JSONEncoder().encode(["message": "Player save changed; retry"])] {
+            let response = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 400, httpVersion: nil, headerFields: nil))
+            XCTAssertThrowsError(try BoundNakamaRunService.validatedRPCResponse(data, response: response)) { error in
+                guard case BoundNakamaRunService.Failure.conflict = error else { return XCTFail("Conflict protection changed") }
+            }
+        }
+        for status in [401, 429, 503] {
+            let response = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil))
+            XCTAssertThrowsError(try BoundNakamaRunService.validatedRPCResponse(Data(#"{"message":"Unsupported shared event"}"#.utf8), response: response)) { error in
+                guard case BoundNakamaRunService.Failure.unavailable = error else { return XCTFail("HTTP status must take precedence") }
+            }
+        }
+    }
+
+    func testCancelledDownloadDoesNotFetchAnotherChunkAfterLateTransportCompletion() async throws {
+        let identity = independentIdentity()
+        let started = expectation(description: "first download chunk held")
+        let fixture = CancelledSaveDownloadFixture(started: started)
+        let service = BoundNakamaRunService { try await fixture.perform($0) }
+        await service.configure(configuration())
+        let receipt = BoundMultiplayerCheckpointReceipt(run: identity.run, checkpoint: UUID(), owner: identity.owner,
+            payloadSHA256: String(repeating: "a", count: 64), sharedEventDigest: String(repeating: "b", count: 64))
+        let task = Task { try await service.downloadIndependent(identity: identity, upload: .init(receipt: receipt, count: 2, bytes: 18000)) }
+        await fulfillment(of: [started], timeout: 2)
+        task.cancel()
+        await fixture.release()
+        do { _ = try await task.value; XCTFail("A cancelled selection must not return a package") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        let calls = await fixture.calls
+        XCTAssertEqual(calls, 1)
+    }
     private func saveSession(owner: UUID) throws -> AppCloudSession {
         let bytes = try JSONSerialization.data(withJSONObject: ["sub": owner.uuidString.lowercased(), "exp": Date().timeIntervalSince1970 + 3600])
         let token = bytes.base64EncodedString().replacingOccurrences(of: "+", with: "-")

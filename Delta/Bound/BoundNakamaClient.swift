@@ -430,12 +430,13 @@ actor BoundNakamaRunService {
         let pending: Checkpoint?
     }
     enum Failure: LocalizedError {
-        case unavailable, conflict, tooLarge
+        case unavailable, conflict, tooLarge, incompatibleServer
         var errorDescription: String? {
             switch self {
             case .unavailable: return "Server save unavailable. Retry Save when connected."
             case .conflict: return "The server save changed. Refresh and reopen it."
             case .tooLarge: return "This save exceeds the server checkpoint limit."
+            case .incompatibleServer: return "The multiplayer server needs an update for this game. Your saved data was kept."
             }
         }
     }
@@ -472,11 +473,21 @@ actor BoundNakamaRunService {
         try await BoundNakamaAuthorization.fetchSaves(session: $0, room: $1)
     }, perform: @escaping @Sendable (URLRequest) async throws -> Data = { request in
         let (data, response) = try await BoundNakamaRunService.memorySession.data(for: request)
+        return try BoundNakamaRunService.validatedRPCResponse(data, response: response)
+    }) { self.perform = perform; self.authorizeSaves = authorizeSaves;debugRoute=nil }
+    nonisolated static func validatedRPCResponse(_ data: Data, response: URLResponse) throws -> Data {
         guard let response = response as? HTTPURLResponse else { throw Failure.unavailable }
+        if response.statusCode == 400, data.count <= 8192 {
+            struct Rejection: Decodable { let message: String }
+            if let rejection = try? JSONDecoder().decode(Rejection.self, from: data),
+               ["Unsupported shared event", "Too many checkpoint acquisitions"].contains(rejection.message) {
+                throw Failure.incompatibleServer
+            }
+        }
         if [400, 403, 404, 409].contains(response.statusCode) { throw Failure.conflict }
         guard response.statusCode == 200 else { throw Failure.unavailable }
         return data
-    }) { self.perform = perform; self.authorizeSaves = authorizeSaves;debugRoute=nil }
+    }
     func configure(_ configuration: BoundNakamaConfiguration) {
         guard debugRoute==nil else { return }
         guard configuration.isValid() else { return }
@@ -648,13 +659,16 @@ actor BoundNakamaRunService {
         return state
     }
     func downloadIndependent(identity: BoundMultiplayerRunIdentity, upload: Upload) async throws -> BoundMultiplayerSavePackage {
+        try Task.checkCancellation()
         guard upload.receipt.run == identity.run, upload.receipt.owner == identity.owner,
               upload.bytes > 0, upload.bytes <= 16 * 1024 * 1024,
               upload.count == ((upload.bytes + 2) / 3 * 4 + 11999) / 12000 else { throw Failure.conflict }
         struct Chunk: Decodable { let data: String }
         var encoded = ""
         for index in 0..<upload.count {
+            try Task.checkCancellation()
             let data = try await request("saveDownload", identity: identity, fields: ["checkpoint": upload.receipt.checkpoint.uuidString.lowercased(), "index": index], rpc: "bound_independent_v2")
+            try Task.checkCancellation()
             let chunk = try JSONDecoder().decode(Chunk.self, from: data)
             guard chunk.data.utf8.count <= 12000 else { throw Failure.conflict }
             encoded += chunk.data
