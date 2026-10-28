@@ -16,6 +16,18 @@ import XCTest
         XCTAssertTrue(visibility.update(enabled: true, distance: 0, at: 2.3))
         XCTAssertFalse(visibility.update(enabled: false, distance: nil, at: 2.31))
     }
+    func testStandingNearbyDoesNotFlickerAcrossRepeatedPacketGaps() {
+        var visibility = BoundLetPassVisibility()
+        for tick in 0..<600 {
+            let distance: Int? = tick % 6 == 0 ? 2 : nil
+            XCTAssertTrue(visibility.update(enabled: true, distance: distance, at: Double(tick) * 0.05))
+        }
+        XCTAssertFalse(visibility.update(enabled: false, distance: nil, at: 30))
+        XCTAssertFalse(visibility.update(enabled: true, distance: nil, at: 30.1), "Reconnect needs a fresh nearby sample")
+        XCTAssertTrue(visibility.update(enabled: true, distance: 1, at: 30.2))
+        XCTAssertFalse(visibility.update(enabled: true, distance: nil, at: 31), "A departed peer must not leave a permanent button")
+    }
+
     func testHiddenLetPassImmediatelyClearsPresentationAndCannotSend() {
         let previous = UserDefaults.standard.object(forKey: BoundLetPassButton.key)
         defer { UserDefaults.standard.set(previous, forKey: BoundLetPassButton.key) }

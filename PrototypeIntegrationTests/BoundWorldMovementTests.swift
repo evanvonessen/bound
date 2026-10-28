@@ -96,6 +96,42 @@ final class BoundWorldMovementTests:XCTestCase {
         }
     }
 
+    func testVisibilityToggleDoesNotChangeNativeCollisionInput() {
+        let previous = UserDefaults.standard.object(forKey: BoundLetPassButton.key)
+        defer { UserDefaults.standard.set(previous, forKey: BoundLetPassButton.key) }
+        let pair = Pair(); pair.bc = pair.ac; pair.bp = pair.ap; pair.connect()
+        var expected = pair.a.probe.hostInput()!
+        BoundMovementSnapshot.put(0, &expected, 8)
+        for shown in [false, true, false, true] {
+            UserDefaults.standard.set(shown, forKey: BoundLetPassButton.key)
+            pair.tick()
+            var actual = pair.a.probe.hostInput()!
+            BoundMovementSnapshot.put(0, &actual, 8)
+            XCTAssertEqual(actual, expected, "Visibility changes only presentation")
+        }
+    }
+
+    func testPassExpiryAndReconnectNeverRestoreNativeObstacles() {
+        let pair = Pair(); pair.bc = pair.ac; pair.bp = pair.ap; pair.connect()
+        pair.a.letPass(at: pair.now); pair.drain()
+        for _ in 0..<50 {
+            pair.tick()
+            for session in [pair.a, pair.b] {
+                let host = session.probe.hostInput()!
+                XCTAssertEqual(BoundMovementSnapshot.word(host, 12), 1)
+                XCTAssertEqual(BoundMovementSnapshot.word(host, 68), 0)
+                XCTAssertTrue(host[128..<192].allSatisfy { $0 == 0 })
+            }
+        }
+        XCTAssertFalse(pair.a.passing); XCTAssertFalse(pair.b.passing)
+        pair.a.reset(); pair.b.reset(); pair.connect()
+        for session in [pair.a, pair.b] {
+            let host = session.probe.hostInput()!
+            XCTAssertEqual(BoundMovementSnapshot.word(host, 12), 1)
+            XCTAssertEqual(BoundMovementSnapshot.word(host, 68), 0)
+        }
+    }
+
     func testPendingCollisionSurvivesInterveningNativeFrameWithoutAuthorizingStaleStep() {
         let pair=Pair();pair.ar=pair.step(0,1)
         var bytes=pair.snapshot(true).bytes
