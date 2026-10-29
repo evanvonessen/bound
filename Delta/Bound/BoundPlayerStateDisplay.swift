@@ -551,6 +551,7 @@ final class BoundPlayerStateDisplay {
     }
 
     func stop() {
+        clearDirectionRoute()
         probe.compositor.configure(profile: nil, pose: nil)
         timer?.invalidate(); timer = nil
         loadTask?.cancel(); loadTask = nil

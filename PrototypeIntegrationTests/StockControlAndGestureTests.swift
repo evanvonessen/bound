@@ -32,6 +32,107 @@ private final class StaticButtonTouch: UITouch {
 
 @MainActor
 final class StockControlAndGestureTests: XCTestCase {
+    func testLiveDexCaptureDoesNotWaitForForegroundControllerQueue() async throws {
+        try await withLiveDexCaptureFixture { owner, game, core in
+            // Model an actual lifecycle resume already occupying Delta's serial
+            // controller queue while it waits for UI admission. The real core
+            // remains running, so DEX must take a coherent pause/capture cut.
+            let entered = expectation(description: "Lifecycle delegate entered")
+            let finished = expectation(description: "Lifecycle request drained")
+            let delegate = HeldDexResumeDelegate(entered: entered)
+            owner.delegate = delegate
+            defer { delegate.release.signal(); owner.delegate = owner }
+            DispatchQueue.global(qos: .userInitiated).async {
+                _ = owner.resumeEmulation()
+                finished.fulfill()
+            }
+            await fulfillment(of: [entered], timeout: 5)
+            XCTAssertEqual(core.state, .running)
+            owner.boundRRDexSaveCache.invalidate(restoredState: true)
+            XCTAssertTrue(owner.gameViewControllerShouldPauseEmulation(owner), "Fixture must permit native capture")
+            let captured = XCTKVOExpectation(keyPath: #keyPath(EmulatorCore.state), object: core,
+                                            expectedValue: EmulatorCore.State.paused.rawValue)
+            let started = ProcessInfo.processInfo.systemUptime
+            XCTAssertThrowsError(try owner.boundCompanionForTesting.importCurrentRRDexSave(gameID: game.identifier)) { error in
+                print("DEX_LIFECYCLE_CAPTURE_ERROR", String(describing: error))
+                XCTAssertNotEqual(error as? BoundRRDexSave.ImportError, .cannotPause)
+            }
+            XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 1.5,
+                              "DEX capture waited on the lifecycle controller queue")
+            XCTAssertEqual(core.state, .running, "A failed parse must release its own capture pause")
+            delegate.release.signal()
+            await fulfillment(of: [captured, finished], timeout: 5)
+        }
+    }
+
+    func testLiveDexCapturePreservesExistingPauseAndHonorsUIResumeDenial() async throws {
+        try await withLiveDexCaptureFixture { owner, game, core in
+            XCTAssertTrue(core.pause())
+            owner.boundRRDexSaveCache.invalidate(restoredState: true)
+            XCTAssertThrowsError(try owner.boundCompanionForTesting.importCurrentRRDexSave(gameID: game.identifier))
+            XCTAssertEqual(core.state, .paused, "DEX does not own a pre-existing pause")
+
+            XCTAssertTrue(core.resume())
+            owner.updateServerSetupOverlay(true)
+            defer { owner.updateServerSetupOverlay(false) }
+            XCTAssertFalse(owner.boundCanResumeEmulation(resumingNativeActivity: false))
+            owner.boundRRDexSaveCache.invalidate(restoredState: true)
+            XCTAssertThrowsError(try owner.boundCompanionForTesting.importCurrentRRDexSave(gameID: game.identifier))
+            XCTAssertEqual(core.state, .paused, "Capture cleanup must preserve the server menu's pause")
+        }
+    }
+
+    private func withLiveDexCaptureFixture(
+        _ body: (GameViewController, Game, EmulatorCore) async throws -> Void
+    ) async throws {
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let directory = DatabaseManager.gamesDirectoryURL
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let filename = "dex-lifecycle-\(UUID().uuidString).gba"
+        let rom = directory.appendingPathComponent(filename)
+        try FileManager.default.copyItem(at: fixture, to: rom)
+        defer { try? FileManager.default.removeItem(at: rom) }
+        let context = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
+        context.persistentStoreCoordinator = DatabaseManager.shared.persistentStoreCoordinator
+        defer { context.reset() }
+        let game = Game(entity: try XCTUnwrap(NSEntityDescription.entity(forEntityName: "Game", in: context)), insertInto: context)
+        game.type = .gba; game.filename = filename; game.identifier = UUID().uuidString
+        game.name = "DEX Lifecycle Fixture"
+        // Real controller state changes update playedDate in the app's database.
+        // Give those background contexts a resolvable, permanent fixture ID.
+        try context.save()
+        defer { context.delete(game); try? context.save() }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene), owner = GameViewController()
+        defer {
+            owner.delegate = owner
+            owner.updateServerSetupOverlay(false)
+            owner.boundCompanionForTesting.stop()
+            owner.emulatorCore?.stop()
+            owner.game = nil
+            window.rootViewController = nil; window.isHidden = true
+            previousWindow?.makeKeyAndVisible()
+            try? FileManager.default.removeItem(at: game.gameSaveURL)
+        }
+        window.rootViewController = owner; window.makeKeyAndVisible()
+        owner.game = game
+        owner.view.layoutIfNeeded()
+        let core = try XCTUnwrap(owner.emulatorCore)
+        owner.boundCompanionForTesting.bind(core: core, gameID: game.identifier)
+        for _ in 0..<100 where !owner.boundCanResumeEmulation(resumingNativeActivity: false) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        if core.state == .stopped { XCTAssertTrue(core.start()) }
+        if core.state == .paused { XCTAssertTrue(core.resume()) }
+        XCTAssertEqual(core.state, .running)
+        XCTAssertEqual(UIApplication.shared.applicationState, .active)
+        XCTAssertTrue(owner.boundCanResumeEmulation(resumingNativeActivity: false))
+        // The diagnostic ROM has no RR save. Parsing deliberately fails after
+        // native capture, exercising the same cleanup as a failed live import.
+        try await body(owner, game, core)
+    }
+
     func testServerNewGameStartsAStoppedCoreAndDoesNotRestartAPausedCore() throws {
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -1674,6 +1775,27 @@ final class StockControlAndGestureTests: XCTestCase {
         }
     }
 
+}
+
+private final class HeldDexResumeDelegate: DeltaCore.GameViewControllerDelegate, @unchecked Sendable {
+    let release = DispatchSemaphore(value: 0)
+    private let entered: XCTestExpectation
+    private let lock = NSLock()
+    private var held = false
+    init(entered: XCTestExpectation) { self.entered = entered }
+    func gameViewControllerShouldResumeEmulation(_ gameViewController: DeltaCore.GameViewController) -> Bool {
+        guard !Thread.isMainThread else { return false }
+        lock.lock()
+        let shouldHold = !held
+        held = true
+        lock.unlock()
+        guard shouldHold else { return false }
+        entered.fulfill()
+        // Bound the old failure: a queue-dependent capture exceeds its timing
+        // assertion instead of permanently wedging the test runner.
+        _ = release.wait(timeout: .now() + 3)
+        return false
+    }
 }
 
 private final class BoundVirtualMappingController: NSObject, GameController {

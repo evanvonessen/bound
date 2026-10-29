@@ -121,7 +121,24 @@ let movedFriend = regions.target(viewer: player(0), friendGroup: 0, friendNumber
     friendX: 24, friendY: 160, arrivalCost: { _, entry, _ in abs(entry.x - 1) + abs(entry.y - 9) },
     traversalCost: { _, entry, edge in let p = edge.waypoint(from: entry); return abs(p.x - entry.x) + abs(p.y - entry.y) })
 assert(movedFriend == .init(x: 88, y: 96), "Friend movement changes the fastest doorway within the same destination map")
-print("PASS: native entrances, exits, stairs, multiple rooms, movement, map identity, disconnected/ambiguous routes")
+// Unsupported destination scripts must not erase a proven approach to its
+// threshold. Unknown intermediate rooms and blocked source exits stay closed.
+let threshold = graph.target(viewer: player(0), friendGroup: 0, friendNumber: 2, friendInstance: instance(2),
+    friendX: 80, friendY: 80, destinationApproachCost: { _, _, _ in 1 },
+    warpArrival: { map, tile in map.number == 2 ? nil : tile })
+assert(threshold == .init(x: 88, y: 96), "A known path reaches the threshold of an unprojectable destination")
+assert(graph.target(viewer: player(0), friendGroup: 0, friendNumber: 2, friendInstance: instance(2),
+    friendX: 80, friendY: 80, destinationApproachCost: { _, _, _ in nil }) == nil,
+    "A blocked target threshold cannot be reached by the approach fallback")
+assert(graph.target(viewer: player(0), friendGroup: 0, friendNumber: 2, friendInstance: instance(2),
+    friendX: 80, friendY: 80, destinationApproachCost: { _, _, _ in 1 },
+    warpArrival: { map, tile in map.number == 1 ? nil : tile }) == nil,
+    "Unknown intermediate rooms are never traversed for a destination approach")
+assert(graph.target(viewer: player(0), friendGroup: 0, friendNumber: 2, friendInstance: 1,
+    friendX: 80, friendY: 80, destinationApproachCost: { _, _, _ in 1 }) == nil,
+    "Destination approach still rejects stale friend map identity")
+print("PASS: native entrances, exits, stairs, multiple rooms, movement, map identity, disconnected/ambiguous routes, destination thresholds")
+
 '''
 if a.rom:
     source += '\nlet actualROM = try Data(contentsOf: URL(fileURLWithPath: ' + json.dumps(str(a.rom.resolve())) + '))\n'

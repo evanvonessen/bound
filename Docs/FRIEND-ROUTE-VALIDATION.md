@@ -7,14 +7,17 @@ Validated October 28, 2026 in the paired multiplayer-isolation worktrees.
 The route search distinguishes active native exits from dormant warp records.
 Pallet Town's event at `(7,9)` is ordinary floor, so it cannot become a direction
 target. Every route checks terrain, native objects, story conditions, the entry
-region on the next map, and the final approach to the friend. There is no fallback
-that assumes unverified remote exits are open.
+region on the next map, and the final approach to the friend. When only the
+friend's destination room cannot be projected, directions stop at that room's
+verified source-side threshold. They do not assume its cutscene or interior is
+traversable, and unknown intermediate rooms remain closed to routing.
 
 Route selection compares walking distance through the maps, including the last
 leg to the friend, rather than minimizing map transitions. Directional ledges
 retain their one-way movement. Native dynamic return warps remain part of the
-search state. Unsupported scripts or forced movement withhold a route rather
-than inventing a shortcut.
+search state. Unsupported intermediate scripts or forced movement withhold a route rather
+than inventing a shortcut. Unknown destination scripts no longer erase a proven
+approach to the entrance, such as Viridian's Pokémon Center.
 
 Either player's tile movement requests a new route. Map identity, return-warp,
 and elevation changes invalidate the prior result immediately. Searches run on
@@ -54,7 +57,9 @@ test, or a live two-player WAN session.
   exit. The same progressed fixture already chose the north exit in the old
   build, but used its unchecked fallback. The new code proves that route through
   native access checks and withholds the blocked pre-Oak route. Pre-parcel
-  cutscenes with unsupported effects also withhold guidance.
+  cutscenes with unsupported effects previously withheld guidance. The updated
+  destination-threshold search retains the usable Mart entrance without
+  projecting its cutscene.
 - Graph checks include a faster route with more map transitions, final approach
   cost, changing the preferred doorway when the friend moves, dynamic elevator
   returns, and the exact cartridge's 437 maps and 1,530 portal records.
@@ -68,6 +73,29 @@ test, or a live two-player WAN session.
 - Exact-ROM routing queries measured approximately 0.1–7 ms in the optimized
   standalone Mac harness, below the existing 200 ms query cadence. This is not
   a physical iPhone performance measurement.
+
+## Destination-script regression checks
+
+The updated production Swift route search passes 42 checks over the same
+hash-verified native snapshots, including Pallet Town, Route 1 and Viridian City
+guidance toward a friend in the Pokémon Center. Its entry specials and first-visit
+cutscene are unsupported by the read-only script interpreter; this previously
+removed the whole route even though its approach was walkable. No prior Route 1
+visit or cached result is needed. Oak's genuine introductory gate remains blocked.
+
+The graph checks additionally reject an unknown intermediate room, blocked
+threshold and stale map identity. Stopping the reader cancels its pending route
+worker and clears the cached target so a previous game cannot restore an old arrow.
+The preexisting label says “Route unavailable” when a known friend has no proven
+approach; it does not declare that player offline.
+
+The initial 42 checks reused recorded native grids with ROM/state hash checks.
+A subsequent full run regenerated the native maps and passed all 42 checks plus
+11 real native button sequences for town/route seams, doors, stairs and a dormant
+warp. Evidence is under `artifacts/multiplayer-isolation/resume-directions-battles/native-route-exits`.
+The fixture tool's `--fixtures-report` option also permits a hash-verified pure
+rerun. Physical two-phone, WAN, and a naturally played first-new-game visit remain
+untested.
 
 Unknown script effects, unsupported forced terrain, and exceptional warp modes
 remain conservative route-unavailable cases. The shortest-route comparison

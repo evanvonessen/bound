@@ -394,7 +394,7 @@ final class RecordedPlayerTests: XCTestCase {
         try await runNativeMusicOwnerScenario(protect: false)
     }
     private func runNativeMusicOwnerScenario(protect: Bool) async throws {
-        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("MultiplayerValidation")
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(ProcessInfo.processInfo.environment["BOUND_NATIVE_FIXTURE_NAME"] ?? "MultiplayerValidation")
         let rom = root.appendingPathComponent("RadicalRed.gba")
         guard FileManager.default.fileExists(atPath: rom.path) else { throw XCTSkip("Requires owned ROM fixture") }
         let output = root.appendingPathComponent("music-owner-" + UUID().uuidString)
@@ -486,8 +486,14 @@ final class RecordedPlayerTests: XCTestCase {
         try await runViridianMartDoorEntry(stoppedMusic: true, debugPlayer: 0)
     }
     private func runViridianMartDoorEntry(stoppedMusic: Bool, debugPlayer: UInt8) async throws {
-        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("MultiplayerValidation")
-        let romURL = try XCTUnwrap(Bundle(for: Game.self).url(forResource: "multiplayer", withExtension: "gba"))
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(ProcessInfo.processInfo.environment["BOUND_NATIVE_FIXTURE_NAME"] ?? "MultiplayerValidation")
+        let fixtureROM = root.appendingPathComponent("RadicalRed.gba")
+        // Explicit QA fixtures take precedence. Distribution builds correctly
+        // omit the cartridge, so the private fixture also supports those builds.
+        let romURL = ProcessInfo.processInfo.environment["BOUND_NATIVE_FIXTURE_NAME"] != nil
+            ? fixtureROM
+            : Bundle(for: Game.self).url(forResource: "multiplayer", withExtension: "gba") ?? fixtureROM
+        guard FileManager.default.fileExists(atPath: romURL.path) else { throw XCTSkip("Requires owned ROM fixture") }
         let profile = try BoundPlayerROMProfile(rom: Data(contentsOf: romURL))
         let output = root.appendingPathComponent("mart-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
@@ -577,7 +583,7 @@ final class RecordedPlayerTests: XCTestCase {
     }
 
     func testInterruptedViridianMartDoorEntry() async throws {
-        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("MultiplayerValidation")
+        let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(ProcessInfo.processInfo.environment["BOUND_NATIVE_FIXTURE_NAME"] ?? "MultiplayerValidation")
         let romURL = root.appendingPathComponent("RadicalRed.gba")
         guard FileManager.default.fileExists(atPath: romURL.path) else { throw XCTSkip("Requires owned ROM fixture") }
         let profile = try BoundPlayerROMProfile(rom: Data(contentsOf: romURL))
@@ -619,7 +625,7 @@ final class RecordedPlayerTests: XCTestCase {
 
     func testActualPalletRouteOneCrossingKeepsDecodedScene() async throws {
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MultiplayerValidation")
+            .appendingPathComponent(ProcessInfo.processInfo.environment["BOUND_NATIVE_FIXTURE_NAME"] ?? "MultiplayerValidation")
         let romURL = root.appendingPathComponent("RadicalRed.gba")
         guard FileManager.default.fileExists(atPath: romURL.path) else { throw XCTSkip("Requires owned ROM fixture") }
         let profile = try BoundPlayerROMProfile(rom: Data(contentsOf: romURL))
@@ -770,7 +776,7 @@ final class RecordedPlayerTests: XCTestCase {
 
     func testActualVBAMRecordingAndReplayAgainstMovingCamera() async throws {
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MultiplayerValidation", isDirectory: true)
+            .appendingPathComponent(ProcessInfo.processInfo.environment["BOUND_NATIVE_FIXTURE_NAME"] ?? "MultiplayerValidation", isDirectory: true)
         let rom = root.appendingPathComponent("RadicalRed.gba")
         guard FileManager.default.fileExists(atPath: rom.path) else { throw XCTSkip("Install private fixtures per Docs/BOUND-MULTIPLAYER.md") }
         let originalROM = SHA256.hash(data: try Data(contentsOf: rom))

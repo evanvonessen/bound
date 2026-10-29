@@ -1662,12 +1662,23 @@ final class BoundCompanionCoordinator {
     private func captureRestoredRRDexSave(owner: GameViewController, core: EmulatorCore, gameID: String) throws -> BoundRRDexSave {
         try BoundRRDexSaveRefreshEvent.suppressWhileCapturing(gameID: gameID) {
             let wasRunning = core.state == .running
-            if wasRunning, !owner.pauseEmulation() { throw BoundRRDexSave.ImportError.cannotPause }
+            // A foreground/focus resume on Delta's controller queue can be
+            // waiting for main-thread admission. Never synchronously enter
+            // that queue from this main-thread memory capture: it would wait
+            // for us while we wait for it. Use the core's serialized boundary,
+            // as server checkpoint captures do, and suppress its save callback.
+            if wasRunning {
+                guard owner.gameViewControllerShouldPauseEmulation(owner),
+                      BoundServerSaveRequestGate.withCapturePause(core: core, { core.pause() }) else {
+                    throw BoundRRDexSave.ImportError.cannotPause
+                }
+            }
             defer {
                 if wasRunning, owner.emulatorCore === core, core.state == .paused,
                    (owner.game as? Game)?.identifier == gameID, owner.view.window != nil,
-                   UIApplication.shared.applicationState == .active {
-                    owner.resumeEmulation()
+                   UIApplication.shared.applicationState == .active,
+                   owner.boundCanResumeEmulation(resumingNativeActivity: false) {
+                    core.resume()
                 }
             }
             guard core.state == .paused else { throw BoundRRDexSave.ImportError.cannotPause }

@@ -23,8 +23,10 @@ def digest(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('rom', 'state', 'output'):
+    for name in ('rom', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--state', type=Path)
+    parser.add_argument('--fixtures-report', type=Path, help='Reuse hash-verified native snapshots; run only pure route checks')
     parser.add_argument('--source-ref', help='Optional existing Git revision for a read-only before/after comparison')
     args = parser.parse_args()
     game = Path(os.environ['BOUND_GAME_SOURCE']).resolve(strict=True)
@@ -34,13 +36,28 @@ def main():
     from game_elimination_storage_native import Machine
 
     args.rom = args.rom.resolve(strict=True)
-    args.state = args.state.resolve(strict=True)
+    if not args.state and not args.fixtures_report:
+        parser.error('Supply --state or --fixtures-report')
+    if args.state:
+        args.state = args.state.resolve(strict=True)
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
-    image, seed = args.rom.read_bytes(), args.state.read_bytes()
-    assert len(image) == 0x2000000 and len(seed) == 0x61000
-    assert struct.unpack_from('<I', seed, 8)[0] == zlib.crc32(image), 'Fixture must match exact cartridge'
-    rom_hash, state_hash = digest(args.rom), digest(args.state)
+    image = args.rom.read_bytes()
+    assert len(image) == 0x2000000
+    rom_hash = digest(args.rom)
+    if args.fixtures_report:
+        reused = json.loads(args.fixtures_report.read_text())
+        assert reused['romSHA256'] == rom_hash
+        state_hash = reused['seedSHA256']
+        fixtures = reused['fixtures']
+        for fixture in fixtures:
+            raw = Path(fixture['state']).read_bytes()
+            assert hashlib.sha256(raw).hexdigest() == fixture['sha256']
+            assert len(raw) == 0x61000 and struct.unpack_from('<I', raw, 8)[0] == zlib.crc32(image)
+    else:
+        seed = args.state.read_bytes()
+        assert len(seed) == 0x61000 and struct.unpack_from('<I', seed, 8)[0] == zlib.crc32(image)
+        state_hash, fixtures = digest(args.state), []
     # Native map IDs and ordinary open floor, avoiding script/warp tiles.
     locations = [('pallet', 3, 0, 10, 10), ('viridian', 3, 1, 20, 26),
                  ('route1', 3, 19, 13, 32), ('downstairs', 4, 0, 4, 6),
@@ -58,7 +75,8 @@ def main():
                  ('mart-exit', 5, 3, 4, 7, 'DOWN', 3, 1),
                  ('dormant-pallet-warp', 3, 0, 7, 10, 'UP', 3, 0)]
     locations += [endpoint[:5] for endpoint in endpoints]
-    fixtures = []
+    if args.fixtures_report:
+        locations, endpoints = [], []
     for name, group, number, x, y in locations:
         output = args.output / name
         output.mkdir(exist_ok=True)
@@ -175,7 +193,9 @@ struct BoundGBAMemorySnapshot {
     binary = args.output / 'friend-route-exits'
     subprocess.run(['xcrun', 'swiftc', '-O', '-module-cache-path', str(args.output / 'modules'), str(swift), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
-    assert digest(args.rom) == rom_hash and digest(args.state) == state_hash, 'Original inputs changed'
+    assert digest(args.rom) == rom_hash, 'Original ROM changed'
+    if not args.fixtures_report:
+        assert digest(args.state) == state_hash, 'Original state changed'
     assert all(row['passed'] for row in transitions), 'Native endpoint transition failed'
 
 
@@ -238,7 +258,7 @@ for (from, to, expectedX, expectedY) in [("pallet", "viridian", 12, -1), ("virid
     print("ROUTE", resultRow)
 }
 require("Oak's actual introductory gate withholds the inaccessible route", route("pallet-before-oak", "viridian") == nil)
-require("Unprojectable parcel cutscene withholds route through the unverified room", route("viridian-before-parcel", "mart") == nil)
+require("Unprojectable parcel cutscene still permits approach to the verified Mart door", route("viridian-before-parcel", "mart") == Point(x: 36 * 16 + 8, y: 19 * 16 + 16))
 for (x, y) in [(168, 176), (184, 176), (184, 192)] {
     let viewer = viewers["pallet"]!
     let result = assets.friendRouteTarget(viewer: viewer, friendGroup: viewer.mapGroup, friendNumber: viewer.mapNumber,
@@ -256,6 +276,19 @@ print("CHECKS", checks.count, "passed", checks.filter { $0["passed"] as! Bool }.
 '''
 
 CURRENT_CHECKS = r'''
+// The center's exact-ROM entry scripts include unsupported native specials
+// and its first-visit cutscene. The friend is known, so guide to its threshold.
+let center = Map(group: 5, number: 4)
+for (name, x, y) in [("pallet",12,-1),("route1",13,-1),("viridian",26,26)] {
+    let viewer = viewers[name]!
+    require("\(name) cannot project center entry scripts", viewer.routeAccess!.map(center, rom: read) == nil)
+    let target = assets.friendRouteTarget(viewer: viewer, friendGroup: center.group, friendNumber: center.number,
+        friendInstance: graph.nodes[center]!.instance, friendX: 8 * 16 + 8, friendY: 6 * 16 + 16, rom: read)
+    require("\(name) tracks friend in center without entering Route 1 first", target == Point(x:x * 16 + 8,y:y * 16 + 16))
+}
+let blocked = viewers["pallet-before-oak"]!
+require("Unknown center does not bypass Oak gate", assets.friendRouteTarget(viewer:blocked,friendGroup:center.group,
+    friendNumber:center.number,friendInstance:graph.nodes[center]!.instance,friendX:136,friendY:112,rom:read) == nil)
 // Enumerate every valid opening through the two exact native seams. This
 // independent exhaustive combination check does not use the graph's Dijkstra
 // search or its first-portal selection, and includes the friend's final walk.

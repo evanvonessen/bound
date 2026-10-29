@@ -113,9 +113,21 @@ final class BoundPlayerSceneAssets: @unchecked Sendable {
             if tiles.count <= 500_000 { floods[key] = tiles; retainedTiles += tiles.count }
             return (value, tiles)
         }
+        let destination = Map(group: friendGroup, number: friendNumber)
+        let destinationKnown = mapAccess(destination) != nil
         return graph.target(viewer: viewer, friendGroup: friendGroup, friendNumber: friendNumber,
             friendInstance: friendInstance, friendX: friendX, friendY: friendY,
-            arrivalCost: { map, entry, elevation in
+            destinationApproachCost: destinationKnown ? nil : { map, entry, edge in
+                // A known friend can stand in a room whose entry cutscene is
+                // outside the read-only interpreter. Guide to its verified
+                // threshold, without claiming to traverse that unknown room.
+                // Intermediate maps still require full native access proof.
+                guard let (value, tiles) = reachable(map, entry, edge.sourceElevation) else { return nil }
+                let portal = edge.waypoint(from: entry)
+                return edge.direction == 0
+                    ? value.warpDistance(to: portal, distances: tiles, elevation: edge.sourceElevation, eventElevation: edge.warpElevation)
+                    : value.walkingDistance(to: portal, distances: tiles)
+            }, arrivalCost: { map, entry, elevation in
                 guard let (value, tiles) = reachable(map, entry, elevation) else { return nil }
                 let tile = BoundPlayerState.Point(x: Int(floor((friendX - 8) / 16)), y: Int(floor((friendY - 16) / 16)))
                 return value.walkingDistance(to: tile, distances: tiles)
@@ -360,6 +372,7 @@ struct BoundFriendRouteGraph: Sendable {
                 friendX: Double, friendY: Double, distances: [Map: Int] = [:],
                 canArrive: (Map, BoundPlayerState.Point, Int) -> Bool = { _, _, _ in true },
                 canTraverse: (Map, BoundPlayerState.Point, Edge) -> Bool = { _, _, _ in true },
+                destinationApproachCost: ((Map, BoundPlayerState.Point, Edge) -> Int?)? = nil,
                 arrivalCost: ((Map, BoundPlayerState.Point, Int) -> Int?)? = nil,
                 traversalCost: ((Map, BoundPlayerState.Point, Edge) -> Int?)? = nil,
                 warpArrival: ((Map, BoundPlayerState.Point) -> BoundPlayerState.Point?)? = nil) -> BoundPlayerState.Point? {
@@ -432,6 +445,16 @@ struct BoundFriendRouteGraph: Sendable {
                     }
                 }
                 edge.sourceElevation = state.elevation
+                if edge.destination == destination, let destinationApproachCost {
+                    // This is an approach to the source-side threshold only.
+                    // Do not normalize a destination door or flood unknown
+                    // terrain, and never use it as an intermediate shortcut.
+                    if let steps = destinationApproachCost(state.map, state.entry, edge), steps >= 0 {
+                        let cost = candidate.cost + max(1, steps)
+                        if best == nil || cost < best!.cost { best = (cost, first ?? portal) }
+                    }
+                    continue
+                }
                 if edge.direction == 0, let warpArrival {
                     guard let normalized = warpArrival(edge.destination, arrival) else { continue }
                     edge.arrivalSteps = abs(normalized.x - arrival.x) + abs(normalized.y - arrival.y)

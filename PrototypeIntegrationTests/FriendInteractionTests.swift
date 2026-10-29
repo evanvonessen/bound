@@ -455,7 +455,8 @@ final class FriendInteractionTests: XCTestCase {
             throw XCTSkip("Requires the owned-simulator exact-ROM invitation fixture")
         }
         let rom = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("FullAppGameplayQA/RadicalRed.gba")
+            .appendingPathComponent(ProcessInfo.processInfo.environment["BOUND_NATIVE_FIXTURE_NAME"] ?? "FullAppGameplayQA")
+            .appendingPathComponent("RadicalRed.gba")
         XCTAssertEqual(try BoundPlayerROMProfile(rom: Data(contentsOf: rom)).gameProfile, BoundGameProfiles.current)
         let battery = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sav")
         let core = try XCTUnwrap(EmulatorCore(game: FriendDialogueGame(fileURL: rom, gameSaveURL: battery), options: [.metal: true]))
