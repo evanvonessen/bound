@@ -581,6 +581,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         var error:String?
         var activeDenied=false
         var partyWipedOut=false
+        var nativeBattleLoss:BoundSoulLinks.NativeLossState?
     }
     private struct Observation: Equatable, Sendable {
         let generation:UUID,frame:Int
@@ -616,6 +617,9 @@ final class BoundSoulProbe: @unchecked Sendable {
         var linkAreas:[Int:String]=[:],linksConnected=false,linksDirty=true
         var linksOffset = -1
         var linksSequence:UInt32=0
+        var lossPresentation=false
+        var terminalLoss=false
+        var nativeBattleLoss:BoundSoulLinks.NativeLossState?
         var observedBattle=false,battleID:UUID?
         var resumeBattleID:UUID?
     }
@@ -941,7 +945,25 @@ final class BoundSoulProbe: @unchecked Sendable {
               value.memorials?[index].announced==false else { return }
         value.memorials?[index].announced=true;try persist(value)
     } }
-    func read()->Snapshot { lock.lock();defer { lock.unlock() };return published }
+    func read()->Snapshot {
+        lock.lock();defer { lock.unlock() }
+        var value=published;value.nativeBattleLoss=owner.nativeBattleLoss;return value
+    }
+    func setBattleLossPresentation(_ enabled:Bool) {
+        lock.lock();defer { lock.unlock() }
+        if owner.lossPresentation != enabled { owner.lossPresentation=enabled;owner.linksDirty=true }
+    }
+    /// The terminal run is already fenced and the core paused. Rendering this
+    /// cartridge modal may resume frames, while its data-only terminal barrier
+    /// suppresses every gameplay callback until the app returns to its menu.
+    func prepareTerminalBattleLoss(core:EmulatorCore)->Bool {
+        lock.lock();defer { lock.unlock() }
+        guard BoundMultiplayerFeatures.isEnabled,owner.coreID==ObjectIdentifier(core),core.state == .paused,
+              published.error==nil,published.ledger?.battleLosses?.pending != nil,
+              BoundSoulLinks.NativeLossState.decode(BoundVBABattleBridge.nativeBattleLossSnapshot()) != nil else { return false }
+        owner.terminalLoss=true;owner.lossPresentation=true;owner.linksDirty=true
+        publishLinksUnlocked();return true
+    }
     func setLinksPresentation(areas:[Int:String],connected:Bool) {
         lock.lock();defer { lock.unlock() }
         if owner.linkAreas != areas || owner.linksConnected != connected {
@@ -949,12 +971,15 @@ final class BoundSoulProbe: @unchecked Sendable {
         }
     }
     private func publishLinksUnlocked() {
+        owner.nativeBattleLoss=BoundSoulLinks.NativeLossState.decode(BoundVBABattleBridge.nativeBattleLossSnapshot())
         let offset=BoundVBABattleBridge.linksMenuPageOffset()
         guard offset>=0 else { owner.linksOffset = -1;return }
         guard owner.linksDirty || owner.linksOffset != offset else { return }
         owner.linksSequence = owner.linksSequence >= UInt32.max-2 ? 2 : owner.linksSequence+2
         guard let page=BoundSoulLinks.page(ledger:published.ledger,areaNames:owner.linkAreas,
-                                          offset:offset,sequence:owner.linksSequence,connected:owner.linksConnected) else { return }
+                                          offset:offset,sequence:owner.linksSequence,connected:owner.linksConnected,
+                                          battleLoss:owner.lossPresentation && owner.nativeBattleLoss != nil,
+                                          terminalLoss:owner.terminalLoss) else { return }
         BoundVBABattleBridge.setLinksMenuHost(page)
         owner.linksOffset=offset;owner.linksDirty=false
     }
@@ -1188,7 +1213,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         owner.criticalGate=false
         if owner.replacementVerification==nil { owner.replacementVerification=owner.verified }
         owner.verified=false;owner.installed=false;owner.nativeGeneration=0
-        owner.linksDirty=true;owner.linksOffset = -1
+        owner.linksDirty=true;owner.linksOffset = -1;owner.nativeBattleLoss=nil;owner.lossPresentation=false;owner.terminalLoss=false
         owner.lastInput=nil;owner.lastPolicy=Data();receipt=nil
         owner.observedBattle=false;owner.battleID=nil;owner.resumeBattleID=published.ledger?.battleLosses?.battle?.id
     }
@@ -1207,7 +1232,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         lock.lock();defer { lock.unlock() }
         guard owner.generation==token else { throw BoundSoulLedger.Error.corrupt }
         owner.installed=false;owner.lastPolicy=Data();owner.lastInput=nil;receipt=nil
-        owner.linksDirty=true;owner.linksOffset = -1
+        owner.linksDirty=true;owner.linksOffset = -1;owner.nativeBattleLoss=nil;owner.lossPresentation=false;owner.terminalLoss=false
         owner.nativeGeneration=0;owner.verified=active || owner.replacementVerification==true
         owner.replacementVerification=nil
         if active {
@@ -1231,7 +1256,7 @@ final class BoundSoulProbe: @unchecked Sendable {
         guard core.state == .paused else { throw BoundSoulLedger.Error.corrupt }
         try pipeline.flush()
         lock.lock();defer { lock.unlock() }
-        owner.linksDirty=true;owner.linksOffset = -1
+        owner.linksDirty=true;owner.linksOffset = -1;owner.nativeBattleLoss=nil;owner.lossPresentation=false;owner.terminalLoss=false
         guard owner.coreID==ObjectIdentifier(core),core.deltaCore.identifier=="com.rileytestut.GBADeltaCore",
               owner.friendly != ObjectIdentifier(core),owner.cooperative != ObjectIdentifier(core),
               let value=published.ledger,value.valid,published.error==nil else { throw BoundSoulLedger.Error.corrupt }
@@ -1645,12 +1670,22 @@ final class BoundSoulSession: ObservableObject {
     }
     private func updateDeathMoment(at now: TimeInterval) {
         let snapshot=probe.read()
+        // Only the native A acknowledgment for this exact pending batch retires
+        // its durable journal entry. Hiding the game never acknowledges a loss.
+        if let pending=ledger?.battleLosses?.pending, snapshot.nativeBattleLoss?.acknowledged==pending.id {
+            dismissBattleLoss()
+        }
         guard BoundMultiplayerFeatures.isEnabled, ledger?.offering == false,
-              snapshot.error == nil, (core==nil || snapshot.terminalBattleEnded || snapshot.ready && !snapshot.inBattle),canPresentDeathMoment?() == true else {
+              snapshot.error == nil, (core==nil || snapshot.nativeBattleLoss?.active==true || snapshot.terminalBattleEnded || snapshot.ready && !snapshot.inBattle),canPresentDeathMoment?() == true else {
+            probe.setBattleLossPresentation(false)
             if deathMoment != nil { deathMoment = nil; deathMomentStarted = nil };battleLossMoment=nil
             return
         }
-        if let pending=ledger?.battleLosses?.pending { battleLossMoment=pending;deathMoment=nil;deathMomentStarted=nil;return }
+        if let pending=ledger?.battleLosses?.pending {
+            probe.setBattleLossPresentation(snapshot.nativeBattleLoss != nil)
+            battleLossMoment=snapshot.nativeBattleLoss == nil ? pending:nil;deathMoment=nil;deathMomentStarted=nil;return
+        }
+        probe.setBattleLossPresentation(false)
         battleLossMoment=nil
         guard active else { deathMoment=nil;deathMomentStarted=nil;return }
         if let profile = MultiRedAdapter.profile(gameID: gameID), profile.saveStateLayout>=15 {

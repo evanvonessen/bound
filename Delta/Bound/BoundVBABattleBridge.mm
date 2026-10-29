@@ -756,14 +756,27 @@ static uint8_t soulQAScriptBackup[128];
     put32(out+8,sequence-1);memcpy(out,p,8);memcpy(out+12,p+12,1012);put32(out+8,sequence);
     movementDeadline.store(movementNow()+150000000,std::memory_order_relaxed);
 }
++ (NSData *)nativeBattleLossSnapshot {
+    const auto *profile=multiRedProfile(rom);
+    if(!rom||!workRAM||!profile||!profile->linksHostSize||profile->uiRequestSize!=256
+       ||profile->uiRequestAddress<0x02000000||profile->uiRequestAddress>0x0203FF00)return [NSData data];
+    const auto *p=workRAM+profile->uiRequestAddress-0x02000000;
+    const uint32_t sequence=word(p+8);
+    if(word(p)!=BOUND_SDK_UIREQUEST_MAGIC||word(p+4)!=1||!sequence||(sequence&1)
+       ||word(p+168)!=0x31534C42||word(p+172)!=1)return [NSData data];
+    NSData *copy=[NSData dataWithBytes:p+168 length:44];
+    return sequence==word(p+8)?copy:[NSData data];
+}
 + (NSInteger)linksMenuPageOffset {
     // Presentation data belongs only to the exact Links-enabled cartridge.
     // Older profiles retain their own allocations and remain untouched.
     const auto *profile=multiRedProfile(rom);
     if(!rom||!workRAM||!profile||!profile->linksHostSize) return -1;
     const auto *request=workRAM+GameLinksRequestAddress-0x02000000;
-    if(word(request)!=0x51524C42||request[14]!=1||word(request+4)>4094||word(request+4)%2) return -1;
-    return word(request+4);
+    if(word(request)==0x51524C42&&request[14]==1&&word(request+4)<=4094&&!(word(request+4)%2))return word(request+4);
+    // New cartridges need presentation data before their automatic loss view
+    // opens. Old cartridges keep their existing explicit Links-menu handshake.
+    return [self nativeBattleLossSnapshot].length==44?0:-1;
 }
 + (void)setLinksMenuHost:(NSData *)data {
     const auto *profile=multiRedProfile(rom);

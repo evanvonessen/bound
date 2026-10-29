@@ -2458,6 +2458,12 @@ extension BoundROMMultiplayerCoordinator {
         pauseForGameOver()
         do { try sharing.soulLink.probe.finalizeTerminalBattle() }
         catch { serverMenuError="Couldn’t preserve final battle losses. Reopen Multiplayer to retry.";return }
+        if !record.returnRequested,let core,sharing.soulLink.probe.prepareTerminalBattleLoss(core:core) {
+            // The cartridge's terminal presentation barrier is installed while
+            // paused. Only its loss modal and A input advance on these frames;
+            // Game Over remains pending until dismissal is durably recorded.
+            needsServerMenu=false;gameOverMenuRun=nil;_=core.resume();return
+        }
         if record.returnRequested { moveGameOverToMenu(record) }
         else { needsServerMenu = false; gameOverMenuRun = nil; gameOverID = record.eventID }
     }
@@ -2538,6 +2544,10 @@ extension BoundROMMultiplayerCoordinator {
     }
     private func tickGameOver() {
         guard serverOnly, let game, let session = account.session else { return }
+        if let identity, let record=pendingGameOvers[identity.run],!record.returnRequested,gameOverID==nil,
+           sharing.soulLink.probe.read().ledger?.battleLosses?.pending==nil {
+            showGameOver(record)
+        }
         if gameOverLoadedOwner != session.owner {
             do {
                 pendingGameOvers = try gameOverStore.load(owner: session.owner, gameID: game.identifier)

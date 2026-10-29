@@ -41,6 +41,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)requestWorldMovementRevocation;
 + (void)setWorldMovementHost:(NSData *)data;
 + (NSInteger)linksMenuPageOffset;
++ (NSData *)nativeBattleLossSnapshot;
 + (void)setLinksMenuHost:(NSData *)data;
 + (BOOL)installSharedWorld;
 + (NSDictionary<NSString *,id> *)sharedWorldSnapshot;
