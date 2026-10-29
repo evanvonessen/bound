@@ -43,10 +43,11 @@ enum BoundMultiplayerFeatures {
     }
 }
 
-/// Presentation only; this preference never controls native movement.
+/// Retired key retained for upgrade tests. Saved values no longer enable UI
+/// or alter collision; overlap recovery is automatic.
 enum BoundLetPassButton {
     static let key = "bound.multiplayer.show-let-pass.v1"
-    static var isShown: Bool { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+    static var isShown: Bool { false }
 }
 
 /// Retired customization-visibility preference kept for upgrade/reset compatibility.

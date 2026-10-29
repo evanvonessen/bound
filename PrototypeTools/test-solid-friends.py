@@ -65,7 +65,7 @@ MainActor.assumeIsolated {
                     group:s.group,number:s.number,elevation:s.elevation,own:[actor(s)],other:peers)
                 sessions[i].probe.record(s)
                 sessions[i].update(c,native:s,at:clock)
-                precondition(!BoundLetPassButton.isShown && !sessions[i].passing)
+                precondition(!BoundLetPassButton.isShown)
             }
             while !queue.isEmpty { let (i,data)=queue.removeFirst();sessions[i].receive(data,at:clock) }
             if sessions.allSatisfy({ !$0.reconnecting && $0.probe.hostInput() != nil }) { break }

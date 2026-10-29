@@ -68,7 +68,7 @@ final class FollowerPresentationTests: XCTestCase {
     }
     func testNativeBindingFailsClosedForDisabledHiddenStaleOrDifferentCompanion() throws {
         let (original,player)=nativeFixture()
-        let cases:[(Int,UInt8,String)]=[(0x3B25E,0,"service disabled"),(0x2060,3,"not visible"),(0x2008,3,"torn publication"),
+        let cases:[(Int,UInt8,String)]=[(0x3B25E,0,"service disabled"),(0x2060,1,"not active"),(0x2008,3,"torn publication"),
             (0x3B81C,19,"human companion"),(0x3B824,0,"different script"),(0x2078,238,"selected graphics stale"),
             (0x24284+100,9,"identity changed"),(0x24284+100+19,6,"egg"),(0x24284+100+86,0,"fainted"),
             (0x36E38+7*36+1,0x20,"hidden object"),(0x2063C+12*68+0x2E,8,"sprite reassigned")]
@@ -81,6 +81,22 @@ final class FollowerPresentationTests: XCTestCase {
         let snapshot=try XCTUnwrap(BoundGBAMemorySnapshot(copyingWorkRAM:original,internalRAM:Data(repeating:0,count:0x8000)))
         XCTAssertNil(BoundNativeFollowerBinding.read(memory:snapshot,player:warped),"Old map instance cannot publish a follower")
         XCTAssertNil(BoundPresenceFollower(reading:reading(1,x:4)),"No synthetic follower is created when the game provides none")
+    }
+    func testOwnerCameraCullingDoesNotEraseWorldFollower() throws {
+        let (original,player)=nativeFixture()
+        var work=original
+        work[0x2060]=3 // Enabled and active; outside the owner's camera.
+        work[0x36E38+7*36+1]=0x40
+        work[0x2063C+12*68+0x3E]=5
+        func binding(_ bytes:Data) throws -> BoundNativeFollowerBinding? {
+            BoundNativeFollowerBinding.read(memory:try XCTUnwrap(BoundGBAMemorySnapshot(copyingWorkRAM:bytes,
+                internalRAM:Data(repeating:0,count:0x8000))),player:player)
+        }
+        XCTAssertNotNil(try binding(work))
+        work[0x36E38+7*36+1]=0x60
+        XCTAssertNil(try binding(work),"An explicitly hidden native follower stays hidden")
+        work[0x36E38+7*36+1]=0
+        XCTAssertNil(try binding(work),"Unexplained sprite invisibility cannot authorize a world actor")
     }
     func testOddPublicationCacheIsBoundedAndRevokesNativeChangesImmediately() throws {
         let (original,player)=nativeFixture(),core=NSObject(),profile=NSObject()

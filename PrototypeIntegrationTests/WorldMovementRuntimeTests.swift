@@ -67,7 +67,8 @@ private final class MovementRuntimeFrames:@unchecked Sendable {
 }
 
 @MainActor private final class MovementRuntimeWorker {
-    let core:EmulatorCore,output:URL,image:Data,state:Data
+    let core:EmulatorCore,output:URL,image:Data
+    private(set) var state:Data
     let probe:BoundMovementProbe,frames:MovementRuntimeFrames,clock:MovementRuntimeClock
     private let host=BoundROMMultiplayerProbe()
     init(name:String) throws {
@@ -99,6 +100,19 @@ private final class MovementRuntimeFrames:@unchecked Sendable {
         BoundFrameMemory.perform{host.receive(core);probe.receive(core)}
     }
     func close(){_=core.pause();BoundVBABattleBridge.setWorldMovementHost(Data());BoundVBABattleBridge.closeSoulLink();_=core.stop()}
+    func preparePalletFixture() async throws {
+        let initial=try snapshot()
+        if initial.group==4 && [0,1].contains(initial.number) {
+            // A fresh current-cartridge state starts in the bedroom. Use the
+            // original native warp opcode to prepare the same open Pallet floor;
+            // do not transplant an older ROM's emulator state or patch movement.
+            XCTAssertTrue(BoundVBABattleBridge.qaWarpPalletEntrance())
+            try await advance(180)
+            state=MultiRedAdapter.captureState()
+        }
+        let ready=try snapshot()
+        XCTAssertEqual(ready.group,3);XCTAssertEqual(ready.number,0)
+    }
     func memory() throws->BoundGBAMemorySnapshot {
         try XCTUnwrap(BoundGBAMemorySnapshot.capture(readMemory:{core.deltaCore.emulatorBridge.readMemory?(at:$0,size:$1)}))
     }
@@ -206,8 +220,9 @@ private final class MovementRuntimeFrames:@unchecked Sendable {
         guard ProcessInfo.processInfo.environment["BOUND_ENCOUNTER_GAMEPLAY"]=="1" else {throw XCTSkip("Requires isolated current-ROM runtime fixture")}
         continueAfterFailure=false
     }
-    func testActualNativeWorldPortBlocksReleasesOverlapsAndCompletesAgreedStep() async throws {
+    func testActualNativeWorldPortBlocksOccupiedTilesAndAllowsImmediateOverlapExit() async throws {
         try required();let w=try MovementRuntimeWorker(name:"world-native-movement");defer{w.close()}
+        try await w.preparePalletFixture()
         let initial=try w.snapshot();XCTAssertNotEqual(initial.flags&1,0)
         XCTAssertEqual(initial.group,3);XCTAssertEqual(initial.number,0,"Fixture must expose the verified native Pallet floor")
         let target=BoundMovementTile(x:initial.current.x-1,y:initial.current.y)
@@ -220,26 +235,21 @@ private final class MovementRuntimeFrames:@unchecked Sendable {
             w.publish(nil);try await w.leftStep()
             XCTAssertEqual(try w.snapshot().current,target,"Revocation must release an already held blocker")
         }
-        try w.rewind();let overlap=try w.snapshot();try await w.admit(w.hostData(overlap,actors:[w.actor(overlap)],flags:3))
-        let overlapAttempt=try await w.leftStep();XCTAssertEqual(try w.snapshot().current,overlap.current,"Overlapped peers still coordinate simultaneous escape")
-        let escape=try XCTUnwrap(overlapAttempt.request)
-        var escapeGrant=w.hostData(overlap,actors:[w.actor(overlap)],flags:3)
-        BoundMovementSnapshot.put(escape.nonce,&escapeGrant,72);BoundMovementSnapshot.put(escape.generation,&escapeGrant,76)
-        BoundMovementSnapshot.putTile(escape.from,&escapeGrant,80);BoundMovementSnapshot.putTile(escape.to,&escapeGrant,84)
-        try await w.admit(escapeGrant);try await w.leftStep()
-        XCTAssertEqual(try w.snapshot().current,target,"Exact grant releases overlap without an asynchronous position change")
-        try w.rewind();let near=try w.snapshot();try await w.admit(w.hostData(near,actors:[w.actor(near,dx:-2)],flags:3))
-        let pending=try await w.leftStep();XCTAssertEqual(try w.snapshot().current,near.current)
-        let step=try XCTUnwrap(pending.request);XCTAssertNotEqual(pending.flags&64,0)
-        var grant=w.hostData(pending,actors:[w.actor(pending,dx:-2)],flags:3)
-        BoundMovementSnapshot.put(step.nonce,&grant,72);BoundMovementSnapshot.put(step.generation,&grant,76)
-        BoundMovementSnapshot.putTile(step.from,&grant,80);BoundMovementSnapshot.putTile(step.to,&grant,84)
-        try await w.admit(grant);try await w.leftStep()
-        let arrived=try w.snapshot();XCTAssertEqual(arrived.current,target);XCTAssertEqual(arrived.completed,step.nonce)
-        try w.report("movement",["passed":true,"checked":checked+["overlap escape","near gate","granted native arrival"],"completedNonce":arrived.completed,"nativeGeneration":arrived.generation,"scope":"Real VBA-M frames and DPad; synthetic declared peer occupancy/grant, no position writes"])
+        // Match production's GP_ENABLED publication. GP_NEGOTIATE is retired;
+        // explicitly enabling its legacy gate would manufacture the old delay.
+        try w.rewind();let overlap=try w.snapshot();try await w.admit(w.hostData(overlap,actors:[w.actor(overlap)]))
+        let escape=try await w.leftStep()
+        XCTAssertEqual(try w.snapshot().current,target,"Native overlap recovery must move immediately without a network grant")
+        XCTAssertNil(escape.request)
+        try w.rewind();let near=try w.snapshot();try await w.admit(w.hostData(near,actors:[w.actor(near,dx:-2)]))
+        let beside=try await w.leftStep(),arrived=try w.snapshot()
+        XCTAssertEqual(arrived.current,target,"An adjacent open tile must not become an invisible collision border")
+        XCTAssertNil(beside.request);XCTAssertEqual(beside.flags&64,0)
+        try w.report("movement",["passed":true,"checked":checked+["immediate overlap escape","adjacent open tile without grant"],"nativeGeneration":arrived.generation,"scope":"Real VBA-M frames and DPad; synthetic declared peer occupancy, no position writes"])
     }
     func testActualNativePortAtomicValidationTTLMapAndBagTransition() async throws {
         try required();let w=try MovementRuntimeWorker(name:"world-native-port");defer{w.close()}
+        try await w.preparePalletFixture()
         let s=try w.snapshot();w.frames.enable(false)
         let valid=w.hostData(s,actors:[w.actor(s,dx:-1)],sequence:42)
         BoundVBABattleBridge.setWorldMovementHost(valid);try await w.advance(1)
@@ -268,30 +278,14 @@ private final class MovementRuntimeFrames:@unchecked Sendable {
         let bagSnapshot=try w.snapshot();XCTAssertEqual(bagSnapshot.flags&(1|4),0);XCTAssertNil(bagSnapshot.request,"Native menu/fade removes movement authority")
         try w.report("port",["passed":true,"checks":["atomic odd/short rejection","native15-frame TTL","different current map","different map instance","Bag transition removes authority"],"snapshot":bagSnapshot.bytes.base64EncodedString()])
     }
-    func testActualCosmeticBerryLeavesPausedRAMUnchangedAndProductionFilterSuppressesA() async throws {
+    func testRetiredCosmeticBerryLeavesRAMUnchangedAndInteractionFilterSuppressesA() async throws {
         try required();let w=try MovementRuntimeWorker(name:"world-cosmetic-berry");defer{w.close()}
-        let paused=try w.memory()
-        let nativeMons=BoundSoulMon.decode(Data(paused.workRAM[0x24284..<0x24284+600]),stride:100)
-        let leader=try XCTUnwrap(nativeMons.first{!$0.isEgg && ($0.hp ?? 0)>0})
-        // Explicit cosmetic protocol target only. This does not claim that the
-        // Viridian service is enabled or this native mon is following. Actual
-        // enabled-follower selection/rendering has its separate native fixture.
-        let fixtureID=UInt64(leader.identity.personality)<<32|UInt64(leader.identity.trainer),fixtureGeneration:UInt32=1
-        let s=try w.snapshot(),a=UUID(),b=UUID(),sender=BoundFollowerInteractionSession(),receiver=BoundFollowerInteractionSession()
-        defer{sender.suspend();receiver.suspend()}
-        let actor=BoundFriendWorldPosition(mapGroup:s.group,mapNumber:s.number,elevation:s.elevation,x:s.current.x,y:s.current.y,facing:4)
-        let target=BoundFriendWorldPosition(mapGroup:s.group,mapNumber:s.number,elevation:s.elevation,x:s.current.x+1,y:s.current.y,facing:1)
-        sender.context={.init(localEpoch:a,peerEpoch:b,mapInstance:s.instance,actor:actor,target:target,followerID:fixtureID,generation:fixtureGeneration)}
-        receiver.receiveContext={.init(localEpoch:b,peerEpoch:a,mapInstance:s.instance,actor:actor,target:target,followerID:fixtureID,generation:fixtureGeneration)}
-        var packets=[Data](),reactions=[UInt64]()
-        sender.send={packets.append($0);receiver.receive($0);return true};receiver.onReaction={reactions.append($0)}
+        try await w.preparePalletFixture()
+        let paused=try w.memory(),receiver=BoundFollowerInteractionSession()
         let ramBefore=Data(paused.workRAM)+Data(paused.internalRAM)
-        XCTAssertTrue(sender.open());sender.offerBerry();XCTAssertEqual(packets.count,1);XCTAssertTrue(packets[0].starts(with:Data("BFC1".utf8)))
-        receiver.receive(packets[0]);XCTAssertEqual(reactions,[fixtureID]);XCTAssertTrue(receiver.reaction.contains("♥"))
-        let renderer=ImageRenderer(content:BoundFollowerInteractionView(session:receiver));renderer.proposedSize = .init(width:340,height:150)
-        let image=try XCTUnwrap(renderer.uiImage),png=try XCTUnwrap(image.pngData())
-        try png.write(to:w.output.appendingPathComponent("cosmetic-heart.png"))
-        let ramAfter=try w.memory();XCTAssertEqual(Data(ramAfter.workRAM)+Data(ramAfter.internalRAM),ramBefore,"Open, berry send/receive, replay rejection and heart rendering must not touch paused native RAM")
+        receiver.receive(Data("BFC1".utf8)+Data(repeating:0,count:96))
+        let ramAfter=try w.memory()
+        XCTAssertEqual(Data(ramAfter.workRAM)+Data(ramAfter.internalRAM),ramBefore,"Retired cosmetic packets cannot mutate native RAM")
         let gate=BoundFriendWorldInputGate(),controller=MovementRuntimeController();gate.updateSocial(available:true,blocked:false)
         let interact=gate.filter(GBAGameInput.a);XCTAssertEqual(BoundFriendWorldInput(input:interact),.interact)
         w.core.gameController(controller,didActivate:interact,value:1);try await w.advance(3)
@@ -301,12 +295,13 @@ private final class MovementRuntimeFrames:@unchecked Sendable {
         w.core.gameController(controller,didActivate:blocked,value:1);try await w.advance(3)
         keys=try w.memory().internalRAM;XCTAssertEqual(keys[0x311C]&1,0)
         w.core.gameController(controller,didDeactivate:blocked)
-        try w.report("cosmetic",["passed":true,"nativeRAMBytesCompared":ramBefore.count,"packetBytes":packets[0].count,"fixtureIdentity":String(fixtureID),"productionANamespaceSuppressed":true,"scope":"Explicit synthetic cosmetic target using an actual healthy party identity; no active native follower claim. Native core paused through all berry/UI actions"])
+        try w.report("retired-cosmetic",["passed":true,"nativeRAMBytesCompared":ramBefore.count,"productionANamespaceSuppressed":true,"scope":"Retired cosmetic packets cannot mutate RAM; native feeding has separate script/effect tests"])
     }
     func testActualPreFrameRevocationAndWallClockExpiryClearOnlyDeclaredHostPort() async throws {
         try required()
         #if targetEnvironment(simulator)
         let w=try MovementRuntimeWorker(name:"world-preframe-revocation");defer{w.close()}
+        try await w.preparePalletFixture()
         let s=try w.snapshot();try await w.admit(w.hostData(s,actors:[w.actor(s,dx:-1)]))
         w.frames.enable(false)
         let zero=Data(repeating:0,count:1024),committed=BoundVBABattleBridge.qaWorldMovementHost()

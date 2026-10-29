@@ -176,8 +176,17 @@ final class BoundLivePresenceSession: ObservableObject {
     private var presentationCheck = BoundPresenceReaderCheck()
     private var lastPresentationAt: TimeInterval?
     private var lastPresentedPose: BoundPresencePose?
-    private struct Sample { let time: TimeInterval; let pose: BoundPresencePose }
+    private struct Sample {
+        let time: TimeInterval
+        let pose: BoundPresencePose
+        let followerPresentation: BoundPresenceFollower?
+        var presentation: BoundPresencePose {
+            var value = pose; value.follower = followerPresentation; return value
+        }
+    }
     private var samples: [Sample] = []
+    private var lastFollowerPose: BoundPresencePose?
+    private var lastFollowerAt: TimeInterval?
 
     func setEnabled(_ requested: Bool) {
         let value = requested && BoundMultiplayerFeatures.isEnabled
@@ -214,6 +223,7 @@ final class BoundLivePresenceSession: ObservableObject {
     private func clearPeer() {
         movement.reset()
         samples.removeAll(keepingCapacity: true); bufferedSamples = 0
+        lastFollowerPose = nil; lastFollowerAt = nil
         lastReceived = nil; lastPoseReceived = nil; peerPoseAvailable = false
         lastSequence = 0; lastSenderTime = nil; clockOffset = nil
     }
@@ -285,7 +295,7 @@ final class BoundLivePresenceSession: ObservableObject {
         guard connected, let send, force || lastSent.map({ now - $0 >= Self.interval - 0.0001 }) ?? true else { return }
         lastSent = now; sequence &+= 1
         let fresh = enabled && localAt.map { now - $0 <= 0.5 } ?? false
-        var outgoing=fresh ? localPose:nil;outgoing?.passing=movement.passing ? true:nil
+        let outgoing=fresh ? localPose:nil
         var packet = BoundPresencePacket(version: 1,
             rom: romVerified ? (admittedProfile?.romSHA256 ?? String(repeating: "0", count: 64)) : String(repeating: "0", count: 64),
             sender: epoch, receiver: proposedPeer ?? peerEpoch, sequence: sequence, time: now, pose: outgoing)
@@ -333,6 +343,7 @@ final class BoundLivePresenceSession: ObservableObject {
         clockOffset = offset; lastSequence = packet.sequence; lastSenderTime = packet.time; lastReceived = now
         receivedPackets += 1
         if packet.withdrawn == true {
+            lastFollowerPose = nil; lastFollowerAt = nil
             movement.reset()
             retainedPose = nil; retainedAt = nil; peerPoseAvailable = false; lastPoseReceived = nil
             samples.removeAll(keepingCapacity: true); bufferedSamples = 0
@@ -347,11 +358,25 @@ final class BoundLivePresenceSession: ObservableObject {
             peerPoseAvailable = false
             setStatus("Friend sprite unavailable or paused"); presentationChanged?(); return
         }
-        retainedPose = pose; retainedAt = now; lastPoseReceived = now; peerPoseAvailable = true
+        var presentation = pose
+        if pose.follower != nil {
+            lastFollowerPose = pose; lastFollowerAt = now
+        } else if let prior = lastFollowerPose, let at = lastFollowerAt,
+                  now >= at, now - at <= 0.25,
+                  prior.mapGroup == pose.mapGroup, prior.mapNumber == pose.mapNumber,
+                  prior.mapInstance == pose.mapInstance {
+            // A brief native reader/packet gap must not blink a confirmed
+            // follower. Only presentation borrows it: raw samples below still
+            // govern collision and interaction, and never refresh this deadline.
+            presentation.follower = prior.follower
+        } else {
+            lastFollowerPose = nil; lastFollowerAt = nil
+        }
+        retainedPose = presentation; retainedAt = now; lastPoseReceived = now; peerPoseAvailable = true
         if let previous = samples.last,
            comparable(previous.pose, to: pose).map({ Self.continuous($0, pose) }) != true
             || packet.time - previous.time > 0.2 { samples.removeAll(keepingCapacity: true) }
-        samples.append(.init(time: packet.time, pose: pose))
+        samples.append(.init(time: packet.time, pose: pose, followerPresentation: presentation.follower))
         if samples.count > 8 { samples.removeFirst(samples.count - 8) }
         bufferedSamples = samples.count; setStatus("Receiving live friend sprite")
     }
@@ -382,25 +407,42 @@ final class BoundLivePresenceSession: ObservableObject {
             return retainedPose
         }
         let target = now - offset - 0.1
-        if target <= first.time { return first.pose }
+        if target <= first.time { return first.presentation }
         for index in 1..<samples.count where target <= samples[index].time {
             let a = samples[index - 1], b = samples[index]
             // Discontinuity changes smoothing only. A confirmed position must
             // never disappear because a movement step exceeds two tiles.
-            guard var pose = comparable(a.pose, to: b.pose), Self.continuous(pose, b.pose),
-                  b.time - a.time <= 0.2 else { return b.pose }
+            guard var pose = comparable(a.presentation, to: b.presentation), Self.continuous(pose, b.pose),
+                  b.time - a.time <= 0.2 else { return b.presentation }
             let fraction = (target - a.time) / (b.time - a.time)
             pose.x += (b.pose.x - pose.x) * fraction; pose.y += (b.pose.y - pose.y) * fraction
-            if var follower=pose.follower,let next=b.pose.follower,follower.identity==next.identity,follower.generation==next.generation {
-                follower.x += (next.x-follower.x)*fraction;follower.y += (next.y-follower.y)*fraction;pose.follower=follower
-            } else {pose.follower=b.pose.follower}
-            if pose.follower?.identity != last.pose.follower?.identity || pose.follower?.generation != last.pose.follower?.generation {pose.follower=last.pose.follower}
+            pose.follower=b.followerPresentation
+            if pose.follower?.identity != last.followerPresentation?.identity {pose.follower=last.followerPresentation}
+            // A missing follower observation is not a stationary observation.
+            // Interpolate between its real samples on the trainer's existing
+            // presentation clock, skipping brief reader gaps without adding
+            // latency or turning borrowed presentation into collision authority.
+            if let identity=pose.follower?.identity {
+                let followers=samples.compactMap { sample -> (TimeInterval, BoundPresenceFollower)? in
+                    guard let value=comparable(sample.pose,to:pose)?.follower,value.identity==identity else { return nil }
+                    return (sample.time,value)
+                }
+                for (before,after) in zip(followers,followers.dropFirst()) where before.0<=target && target<=after.0 {
+                    guard after.0>before.0,after.0-before.0<=0.3,
+                          abs(before.1.x-after.1.x)+abs(before.1.y-after.1.y)<=32 else { break }
+                    let weight=(target-before.0)/(after.0-before.0)
+                    var follower=after.1
+                    follower.x=before.1.x+(after.1.x-before.1.x)*weight
+                    follower.y=before.1.y+(after.1.y-before.1.y)*weight
+                    pose.follower=follower;break
+                }
+            }
             pose.passing=last.pose.passing
             return pose
         }
         // Freeze at the last confirmed position during a short packet gap.
         // The session deadline above and explicit withdrawals still remove it.
-        return last.pose
+        return last.presentation
     }
     func collision(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundPresenceCollision? {
         // Exact occupancy and overlap recovery have one owner: the frame

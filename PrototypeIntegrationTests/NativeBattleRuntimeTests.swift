@@ -16,6 +16,8 @@ private final class NativeBattleDriver:@unchecked Sendable {
     private let lock=NSLock()
     private let reader=BoundVBAPlayerStateProbe()
     private let setup:NativePlayerSceneSetup?
+    var inputGate:BoundFriendWorldInputGate?
+    private let fieldDialogue=BoundFriendDialogueProbe(),fieldMovement=BoundMovementProbe()
     private var frame=0,battleFrame:Int?,lastMask=0
     private var playing=false,moves=false,run=false,didBoot=false,didDamage=false
     private var firstMenuHP:[Int]?,firstMenuEnemyHP:[Int]?
@@ -33,6 +35,7 @@ private final class NativeBattleDriver:@unchecked Sendable {
     let damage=XCTestExpectation(description:"Native battle damage")
     init(core:EmulatorCore,profile:BoundPlayerROMProfile,admittedSetup:Bool=false) {
         setup=admittedSetup ? NativePlayerSceneSetup(core:core):nil
+        fieldDialogue.configure(core:core);fieldMovement.configure(core:core)
         reader.configure(coreID:ObjectIdentifier(core),profile:profile,active:true,status:.waiting,detail:"Native battle cold boot")
     }
     func play(moves:Bool,run:Bool=false) { lock.lock(); playing=true; self.moves=moves;self.run=run; lock.unlock() }
@@ -42,6 +45,10 @@ private final class NativeBattleDriver:@unchecked Sendable {
     func receive(_ core:EmulatorCore) {
         frame+=1
         lock.lock(); let playing=playing,moves=moves,run=run; lock.unlock()
+        if ProcessInfo.processInfo.environment["BOUND_NATIVE_FIELD_SERVICES"]=="1" {
+            fieldMovement.receive(core);fieldDialogue.receive(core)
+        }
+        if playing,ProcessInfo.processInfo.environment["BOUND_NATIVE_FIELD_SERVICES"]=="1" { setup?.receive(core) }
         if !playing {
             setup?.receive(core)
             let value=reader.receive(core)
@@ -121,6 +128,13 @@ private final class NativeBattleDriver:@unchecked Sendable {
         else { apply(0,core:core) }
     }
     private func apply(_ mask:Int,core:EmulatorCore) {
+        var mask=mask
+        if let inputGate {
+            let inputs:[(Int,StandardGameControllerInput)]=[(1,.a),(2,.b),(8,.start),(16,.right),(32,.left),(64,.up),(128,.down)]
+            for (bit,input) in inputs {
+                if BoundFriendWorldInput(input:inputGate.filter(input)) != nil {mask &= ~bit}
+            }
+        }
         for bit in [1,2,8,16,32,64,128] where mask&bit != lastMask&bit {
             if mask&bit != 0 { core.deltaCore.emulatorBridge.activateInput(bit,value:1,playerIndex:0) }
             else { core.deltaCore.emulatorBridge.deactivateInput(bit,playerIndex:0) }
@@ -1185,6 +1199,141 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertEqual(try Data(contentsOf: rom), originalROM); XCTAssertEqual(try Data(contentsOf: seed), originalSeed)
     }
 
+    func testAcceptedBattleDuringNativeDialogueDoesNotTrapInput() async throws {
+        guard ProcessInfo.processInfo.environment["BOUND_INVITATION_RUNTIME"]=="1" else{throw XCTSkip("Owned native dialogue fixture")}
+        let root=nativeFixtureURL("FullAppGameplayQA"),rom=root.appendingPathComponent("RadicalRed.gba")
+        let battery=FileManager.default.temporaryDirectory.appendingPathComponent("battle-dialogue-"+UUID().uuidString+".sav")
+        try Data(repeating:255,count:0x20000).write(to:battery)
+        let core=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
+        let profile=try BoundPlayerROMProfile(rom:Data(contentsOf:rom))
+        let driver=NativeBattleDriver(core:core,profile:profile,admittedSetup:true)
+        let scene=try await nativeWindowScene(),window=UIWindow(windowScene:scene),owner=UIViewController(),view=GameView()
+        window.rootViewController=owner;window.makeKeyAndVisible();owner.view.addSubview(view);view.frame=owner.view.bounds;core.add(view)
+        core.updateHandler={driver.receive($0)}
+        let session=BoundFriendInteractionSession(),panel=BoundFriendInteractionPanel(session:session)
+        defer {panel.bind(core:nil);session.changed=nil;session.send=nil;_=core.pause();_=core.stop();window.isHidden=true;try? FileManager.default.removeItem(at:battery)}
+        core.rate=8;XCTAssertTrue(core.start());await fulfillment(of:[driver.booted],timeout:90)
+        _=core.pause();core.rate=1;try await prepareNativeParty(core)
+        // An unanswered invitation intentionally leaves normal gameplay usable.
+        // The player talks to their own follower before the friend accepts.
+        try primeNativeInteraction(session,activity:.battle)
+        owner.view.addSubview(panel);panel.bind(core:core);session.changed={panel.render()}
+        let probe=panel.probe
+        core.updateHandler={core in driver.receive(core);probe.receive(core)}
+        XCTAssertTrue(BoundVBABattleBridge.qaPrepareBerryFixture(true));_=core.resume()
+        try await Task.sleep(for:.milliseconds(500))
+        XCTAssertFalse(BoundVBABattleBridge.friendDialogueReady())
+        var handedOff=false
+        session.agreed={activity,_,_ in
+            XCTAssertEqual(activity,.battle);XCTAssertTrue(BoundVBABattleBridge.friendDialogueReady());handedOff=true
+        }
+        let anchor=try XCTUnwrap(session.context?()),id=try XCTUnwrap(session.requestID)
+        session.receive(try XCTUnwrap(BoundFriendInteractionPacket(sender:anchor.peerSession,receiver:anchor.localSession,id:id,
+            activity:.battle,action:.accept,origin:anchor.local,target:anchor.peer).encoded()))
+        XCTAssertEqual(session.phase,.agreed)
+        var nativePresses=0
+        for _ in 0..<30 {
+            if handedOff {break}
+            // Use the exact app/core input filter. Direct bridge presses hid
+            // this deadlock in the previous native invitation tests.
+            if BoundFriendWorldInput(input:session.inputGate.filter(StandardGameControllerInput.a))==nil {
+                core.deltaCore.emulatorBridge.activateInput(1,value:1,playerIndex:0);nativePresses+=1
+            }
+            try await Task.sleep(for:.milliseconds(70));core.deltaCore.emulatorBridge.deactivateInput(1,playerIndex:0)
+            try await Task.sleep(for:.milliseconds(130))
+        }
+        XCTAssertGreaterThan(nativePresses,0,"Consent must not steal input from the native dialogue it is waiting to close")
+        XCTAssertTrue(handedOff,"Accepted battle remained trapped behind the player's existing native dialogue")
+    }
+
+    func testNativeFollowerBerryUsesOwnScriptAndEffects() async throws {
+        continueAfterFailure=false
+        guard ProcessInfo.processInfo.environment["BOUND_INVITATION_RUNTIME"] == "1" else {
+            throw XCTSkip("Requires the owned simulator native feeding fixture")
+        }
+        let root=nativeFixtureURL("FullAppGameplayQA"),rom=root.appendingPathComponent("RadicalRed.gba")
+        let output=root.appendingPathComponent("native-berry-"+UUID().uuidString)
+        try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+        let battery=output.appendingPathComponent("work.sav")
+        try Data(repeating:255,count:0x20000).write(to:battery)
+        let core=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
+        let profile=try BoundPlayerROMProfile(rom:Data(contentsOf:rom))
+        XCTAssertEqual(profile.gameProfile,BoundGameProfiles.current)
+        let driver=NativeBattleDriver(core:core,profile:profile,admittedSetup:true)
+        let scene=try await nativeWindowScene(),window=UIWindow(windowScene:scene),owner=UIViewController(),view=GameView()
+        window.rootViewController=owner;window.makeKeyAndVisible();owner.view.addSubview(view);view.frame=owner.view.bounds;core.add(view)
+        core.updateHandler={ core in driver.receive(core);_=BoundVBABattleBridge.advanceFollowerBerry() }
+        defer { _=core.pause();BoundVBABattleBridge.closeFollowerBerry();_=core.stop();window.isHidden=true }
+        core.rate=8;XCTAssertTrue(core.start());await fulfillment(of:[driver.booted],timeout:90)
+        _=core.pause();core.rate=1;try await prepareNativeParty(core)
+        let baseline=MultiRedAdapter.captureState(),originalParty=BoundVBABattleBridge.qaTradeParty()
+        try baseline.write(to:root.appendingPathComponent("native-current-field.state"),options:.atomic)
+        let target=originalParty.subdata(in:0..<100)
+        func bag()->Data { core.deltaCore.emulatorBridge.readMemory!(at:0x8000+0x3BB20,size:0xC00)! }
+        func run(_ button:Int=1) async throws {
+            _=core.resume()
+            for _ in 0..<60 {
+                core.deltaCore.emulatorBridge.activateInput(button,value:1,playerIndex:0)
+                try await Task.sleep(for:.milliseconds(70))
+                core.deltaCore.emulatorBridge.deactivateInput(button,playerIndex:0)
+                try await Task.sleep(for:.milliseconds(130))
+                if BoundVBABattleBridge.friendDialogueReady() { _=core.pause();return }
+            }
+            XCTFail("Native feeding did not release gameplay")
+        }
+        XCTAssertTrue(BoundVBABattleBridge.qaPrepareBerryFixture(true))
+        try await run()
+        let own=BoundVBABattleBridge.qaTradeParty().subdata(in:0..<100),ownBag=bag()
+        let changed=Array(0..<100).filter{own[$0] != target[$0]}
+        print("NATIVE_FOLLOWER_BERRY_CHANGED_BYTES",changed.map { [$0,Int(target[$0]),Int(own[$0])] })
+        XCTAssertNotEqual(own,target,"The native friendship effect must actually run")
+        XCTAssertTrue(MultiRedAdapter.restoreState(baseline))
+        XCTAssertTrue(BoundVBABattleBridge.qaPrepareBerryFixture(false));try await run()
+        let stocked=MultiRedAdapter.captureState(),stockedBag=bag()
+        XCTAssertTrue(BoundVBABattleBridge.beginFollowerBerry(target));try await run()
+        let result=BoundVBABattleBridge.advanceFollowerBerry()
+        XCTAssertEqual(result["consumed"] as? Bool,true)
+        XCTAssertEqual(result["pokemon"] as? Data,own,"Remote target receives the identical native effect")
+        XCTAssertEqual(bag(),ownBag,"Native bag removes exactly the same selected Oran Berry")
+        XCTAssertEqual(BoundVBABattleBridge.qaTradeParty(),originalParty,"Donor party is never substituted or changed")
+        XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady(),"All temporary target bindings are restored")
+        BoundVBABattleBridge.closeFollowerBerry()
+        XCTAssertTrue(MultiRedAdapter.restoreState(stocked))
+        XCTAssertTrue(BoundVBABattleBridge.beginFollowerBerry(target));try await run(2)
+        XCTAssertEqual(BoundVBABattleBridge.advanceFollowerBerry()["consumed"] as? Bool,false)
+        XCTAssertEqual(bag(),stockedBag,"Declining consumes nothing")
+        BoundVBABattleBridge.closeFollowerBerry()
+        XCTAssertTrue(MultiRedAdapter.restoreState(baseline))
+        let emptyBag=bag()
+        XCTAssertTrue(BoundVBABattleBridge.beginFollowerBerry(target));try await run()
+        XCTAssertEqual(BoundVBABattleBridge.advanceFollowerBerry()["consumed"] as? Bool,false)
+        XCTAssertEqual(bag(),emptyBag,"Missing berries cannot invent an effect or item")
+        BoundVBABattleBridge.closeFollowerBerry()
+        // Validate every native friendship tier and the cap against the own-
+        // follower branch, including a valid feed at maximum friendship.
+        for friendship:UInt8 in [0,99,100,199,200,250,255] {
+            XCTAssertTrue(MultiRedAdapter.restoreState(baseline))
+            var candidate=target;candidate[41]=friendship
+            XCTAssertTrue(BoundVBABattleBridge.qaSetFollowerFriendship(UInt(friendship)))
+            XCTAssertTrue(BoundVBABattleBridge.qaPrepareBerryFixture(true));try await run()
+            let expected=BoundVBABattleBridge.qaTradeParty().subdata(in:0..<100),expectedBag=bag()
+            XCTAssertTrue(MultiRedAdapter.restoreState(baseline))
+            XCTAssertTrue(BoundVBABattleBridge.qaSetFollowerFriendship(UInt(friendship)))
+            XCTAssertTrue(BoundVBABattleBridge.qaPrepareBerryFixture(false));try await run()
+            XCTAssertTrue(BoundVBABattleBridge.beginFollowerBerry(candidate));try await run()
+            let actual=BoundVBABattleBridge.advanceFollowerBerry()
+            XCTAssertEqual(actual["consumed"] as? Bool,true)
+            XCTAssertEqual(actual["pokemon"] as? Data,expected);XCTAssertEqual(bag(),expectedBag)
+            BoundVBABattleBridge.closeFollowerBerry()
+            var forged=expected;forged[86] &+= 1
+            XCTAssertFalse(BoundVBABattleBridge.commitFollowerBerry(forged,replacing:candidate))
+            forged=expected;forged[41] ^= 1
+            XCTAssertFalse(BoundVBABattleBridge.commitFollowerBerry(forged,replacing:candidate))
+            XCTAssertTrue(BoundVBABattleBridge.commitFollowerBerry(expected,replacing:candidate))
+            XCTAssertEqual(BoundVBABattleBridge.qaTradeParty().subdata(in:0..<100),expected)
+        }
+    }
+
     func testActualNativeFriendDialogue() async throws {
         continueAfterFailure=false
         guard ProcessInfo.processInfo.environment["BOUND_INVITATION_RUNTIME"] == "1" else {
@@ -1736,6 +1885,7 @@ final class NativeBattleRuntimeTests:XCTestCase {
         native.continuationHeadsProvider={ _ in BoundContinuationHeads(checkpoints:[],permitsNoCheckpoint:true) }
         let interactions=BoundFriendInteractionSession(),probe=native.probe
         try primeNativeInteraction(interactions,activity:.battle)
+        if ProcessInfo.processInfo.environment["BOUND_NATIVE_FIELD_SERVICES"]=="1" {driver.inputGate=interactions.inputGate}
         let soulProbe=BoundSoulProbe(),soulJournal=output.appendingPathComponent("run.json")
         soulProbe.configure(core:core,url:soulJournal); soulProbe.setVerified(true); soulProbe.setPreviewEnabled(true)
         native.soulProbe=partyMode==1 ? nil:soulProbe
@@ -1811,7 +1961,8 @@ final class NativeBattleRuntimeTests:XCTestCase {
         configureTransport(native)
         core.rate=battleRate
         driver.play(moves:!entryOnly && !(runBattle && peer=="B"),run:runBattle && peer=="A"); _=core.resume()
-        native.begin(activity:.battle,id:uuid,initiator:peer=="A")
+        let initiatingPeer=ProcessInfo.processInfo.environment["BOUND_NATIVE_INITIATOR"] ?? "A"
+        native.begin(activity:.battle,id:uuid,initiator:peer==initiatingPeer)
         XCTAssertEqual(core.rate,battleRate,"Friendly entry preserves local fast-forward")
         if partyMode != 1 { soulProbe.setNativeObservationAllowed(true) }
         var entered=false

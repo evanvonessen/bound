@@ -111,7 +111,8 @@ final class BoundFriendInteractionSession {
     var beforeAgreement: ((@escaping () -> Void) -> Void)?
     var nativeDialogueManaged=false, nativeDialogueReady=false, nativeDialogueBusy=false, nativeDialogueInput=false
     func refreshInputGate() {
-        inputGate.update(available:canInteract, blocked:(blocksGameplay || nativeDialogueBusy) && !nativeDialogueInput)
+        inputGate.update(available:canInteract, blocked:(blocksGameplay || nativeDialogueBusy) && !nativeDialogueInput,
+                         cancellable:phase == .agreed || phase == .connecting)
     }
     private func notify() { refreshInputGate(); changed?() }
     private(set) var anchorFailure=""
@@ -402,20 +403,21 @@ final class BoundFriendInteractionSession {
 /// The core ignores this app-only namespace, so interacting cannot also press A
 /// on an underlying NPC, sign or door. Mapping lookups have no UI side effects.
 enum BoundFriendWorldInput: String, Input {
-    case interact, blockedA, blocked, socialBack
+    case interact, blockedA, blocked, socialBack, cancelInteraction
     var type: InputType { .controller(GameControllerInputType("com.bound.friend-world")) }
 }
 final class BoundFriendWorldInputGate: @unchecked Sendable {
     private let lock = NSLock()
     private var available = false
     private var blocked = false
+    private var cancellable = false
     private var socialAvailable=false,socialBlocked=false
     func updateSocial(available:Bool,blocked:Bool) {lock.lock();socialAvailable=available;socialBlocked=blocked;lock.unlock()}
-    func update(available: Bool, blocked: Bool) {
-        lock.lock(); self.available = available; self.blocked = blocked; lock.unlock()
+    func update(available: Bool, blocked: Bool, cancellable:Bool=false) {
+        lock.lock(); self.available = available; self.blocked = blocked;self.cancellable=cancellable; lock.unlock()
     }
     func filter(_ input: Input) -> Input {
-        lock.lock(); let available = available || socialAvailable, blocked = blocked, socialBlocked=socialBlocked; lock.unlock()
+        lock.lock(); let available = available || socialAvailable, blocked = blocked, socialBlocked=socialBlocked,cancellable=cancellable; lock.unlock()
         // Preserve app shortcuts and the native pause/menu control.
         if ActionInput(input: input) != nil || StandardGameControllerInput(input: input) == .menu { return input }
         if socialBlocked {
@@ -423,7 +425,10 @@ final class BoundFriendWorldInputGate: @unchecked Sendable {
             if StandardGameControllerInput(input:input) == .b || (input.type == .game(.gba) && input.stringValue=="b") {return BoundFriendWorldInput.socialBack}
             return BoundFriendWorldInput.blocked
         }
-        if blocked { return Self.isA(input) ? BoundFriendWorldInput.blockedA : BoundFriendWorldInput.blocked }
+        if blocked {
+            if cancellable,StandardGameControllerInput(input:input) == .b || (input.type == .game(.gba) && input.stringValue=="b") {return BoundFriendWorldInput.cancelInteraction}
+            return Self.isA(input) ? BoundFriendWorldInput.blockedA : BoundFriendWorldInput.blocked
+        }
         if available && Self.isA(input) { return BoundFriendWorldInput.interact }
         return input
     }

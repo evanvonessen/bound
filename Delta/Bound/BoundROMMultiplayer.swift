@@ -685,6 +685,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     private struct ServerContinuationSettlement {
         let native: BoundContinuationSettlement?
         let cooperative: BoundContinuationSettlement?
+        let berry: BoundContinuationSettlement?
     }
     private var serverContinuationSettlements: [UUID: ServerContinuationSettlement] = [:]
     @Published private(set) var hasUnconfirmedServerSave = false
@@ -731,6 +732,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
             try self.persistWorldSnapshot(state)
         }
         sharing.nativeBattle.continuationHeadsProvider = { [weak self] context in self?.continuationHeads(for: context) }
+        sharing.followerInteractions.continuationHeadsProvider = { [weak self] context in self?.continuationHeads(for: context) }
         sharing.cooperativeDoubles.continuationHeadsProvider = { [weak self] context in self?.continuationHeads(for: context) }
         let timer = Timer(timeInterval:0.1,repeats:true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -779,10 +781,11 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
             return token
         }
         return .init(native: matching(sharing.nativeBattle.continuationSettlement()),
-                     cooperative: matching(sharing.cooperativeDoubles.continuationSettlement()))
+                     cooperative: matching(sharing.cooperativeDoubles.continuationSettlement()), berry: matching(sharing.followerInteractions.continuationSettlement()))
     }
     private static func settle(_ captured: ServerContinuationSettlement?, native: BoundNativeBattleSession,
-                               cooperative: BoundCooperativeDoublesSession) throws {
+                               cooperative: BoundCooperativeDoublesSession, berry: BoundFollowerInteractionSession) throws {
+        if let token = captured?.berry { try berry.settleContinuation(token) }
         if let token = captured?.native { try native.settleContinuation(token) }
         if let token = captured?.cooperative { try cooperative.settleContinuation(token) }
     }
@@ -1028,6 +1031,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     @discardableResult func suspend() -> Bool {
         guard !debugBlocksCoreResume else { return false }
         if let run = identity?.run, pendingGameOvers[run] != nil { return true }
+        if sharing.followerInteractions.isActive { return sharing.followerInteractions.checkpointForContinuation() }
         if sharing.nativeBattle.isActive {
             return sharing.nativeBattle.checkpointForContinuation()
         }
@@ -1057,7 +1061,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                         self.setup?.serverEpoch == authority.epoch && self.serverSelection == retrySelection &&
                         renewed.isSameSession(as: self.account.session) && self.debugInstalledManifest == debugScope &&
                         self.pendingGameOvers[identity.run] == nil && !self.debugBlocksCoreResume &&
-                        !self.sharing.nativeBattle.protectsTemporaryState && !self.sharing.cooperativeDoubles.blocksAutoSave
+                        !self.sharing.protectsNativeTemporaryState && !self.sharing.cooperativeDoubles.blocksAutoSave
                 }
                 guard stillCurrent() else { throw BoundMultiplayerSaveStore.Failure.incomplete }
                 let client = try self.runService(for: identity)
@@ -1119,7 +1123,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                     guard let package = try self.captureServerCheckpoint(final: true) else { throw BoundMultiplayerSaveStore.Failure.incomplete }
                     let verifiedCursor = self.sharedServerCursor
                     let settlement = self.serverContinuationSettlements[package.payload.checkpoint]
-                    let account = self.account, native = self.sharing.nativeBattle, cooperative = self.sharing.cooperativeDoubles
+                    let account = self.account, native = self.sharing.nativeBattle, cooperative = self.sharing.cooperativeDoubles, berry = self.sharing.followerInteractions
                     let debugScope = self.debugInstalledManifest
                     if debugScope != nil { self.debugFinalCheckpoint = nil }
                     self.finalServerSaveRetry = { [weak self] session in
@@ -1127,7 +1131,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                             pendingHead: pending, session: session, verifiedCursor: verifiedCursor, service: scopedService,
                             onConfirmed: { [weak self] checkpoint in
                                 guard session.isSameSession(as: account.session) else { throw CancellationError() }
-                                try Self.settle(settlement, native: native, cooperative: cooperative)
+                                try Self.settle(settlement, native: native, cooperative: cooperative, berry: berry)
                                 if let debugScope, self?.debugInstalledManifest == debugScope { self?.debugFinalCheckpoint = checkpoint }
                             })
                     }
@@ -1142,7 +1146,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         }
         guard verified, saveFenceReady, workingStateAuthorized, let manifest, manifest.deviceOwner == store.deviceID,
               manifest.identity.owner == account.session?.owner,
-              !sharing.nativeBattle.blocksAutoSave && !sharing.cooperativeDoubles.blocksAutoSave,
+              !sharing.blocksNativeSave && !sharing.cooperativeDoubles.blocksAutoSave,
               pendingSnapshot == nil || didRestore, let core, let game,
               core.state == .running || core.state == .paused else { return false }
         guard core.state == .paused else { return false }
@@ -1300,7 +1304,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         if newGameAfterEnd {
             sharing.soulLink.endRun()
             try journalSoulEvents()
-            guard !sharing.nativeBattle.protectsTemporaryState && !sharing.cooperativeDoubles.blocksAutoSave else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+            guard !sharing.protectsNativeTemporaryState && !sharing.cooperativeDoubles.blocksAutoSave else { throw BoundMultiplayerSaveStore.Failure.incomplete }
             try store.finishNewGame(gameID:game.identifier,run:identity.run,owner:identity.owner)
             BoundVBABattleBridge.closeSoulLink()
             sharing.soulLink.bind(core:nil,gameID:game.identifier)
@@ -1612,7 +1616,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     }
     /// A world save cannot consume or cancel an active friendly execution.
     private func restoreFriendlyBattleBeforeSaving(resume: Bool = true) throws {
-        guard !sharing.nativeBattle.protectsTemporaryState && !sharing.cooperativeDoubles.blocksAutoSave else {
+        guard !sharing.protectsNativeTemporaryState && !sharing.cooperativeDoubles.blocksAutoSave else {
             throw BoundMultiplayerSaveStore.Failure.incomplete
         }
     }
@@ -1631,7 +1635,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         if serverOnly { try captureServerCheckpoint(); return }
         guard let manifest, let game, let core, workingStateAuthorized,
               manifest.identity.owner == account.session?.owner,
-              !sharing.nativeBattle.blocksAutoSave, !sharing.cooperativeDoubles.blocksAutoSave else {
+              !sharing.blocksNativeSave, !sharing.cooperativeDoubles.blocksAutoSave else {
             throw BoundMultiplayerSaveStore.Failure.incomplete
         }
         let wasRunning = core.state == .running
@@ -1922,7 +1926,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                 // upload response. A newer activity's claim remains untouched.
                 if serverManaged {
                     guard !Task.isCancelled, session.isSameSession(as: self.account.session) else { return }
-                    try Self.settle(settlement, native: self.sharing.nativeBattle, cooperative: self.sharing.cooperativeDoubles)
+                    try Self.settle(settlement, native: self.sharing.nativeBattle, cooperative: self.sharing.cooperativeDoubles, berry: self.sharing.followerInteractions)
                     self.serverContinuationSettlements.removeValue(forKey: package.payload.checkpoint)
                 }
                 guard !Task.isCancelled, self.snapshotOperation == operation,
@@ -2120,7 +2124,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
                               saved.identity.run == request.identifier, saved.identity.owner == owner else {
                             throw BoundMultiplayerSaveStore.Failure.ownerMismatch
                         }
-                        guard !sharing.nativeBattle.protectsTemporaryState && !sharing.cooperativeDoubles.blocksAutoSave else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+                        guard !sharing.protectsNativeTemporaryState && !sharing.cooperativeDoubles.blocksAutoSave else { throw BoundMultiplayerSaveStore.Failure.incomplete }
                         try store.preserveForNewGame(gameID:game.identifier,run:request.identifier,owner:owner,gameSaveURL:game.gameSaveURL)
                         manifest = saved; newGameAfterEnd = true; recoveredNewGameChoice = false
                         try finishRun()
@@ -2207,7 +2211,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         }
     }
     private func restoreSnapshotIfNeeded() throws {
-        guard error == nil, !sharing.nativeBattle.blocksAutoSave && !sharing.cooperativeDoubles.blocksAutoSave,
+        guard error == nil, !sharing.blocksNativeSave && !sharing.cooperativeDoubles.blocksAutoSave,
               !didRestore, manifest?.requiresInitialHistorySync != true, let pendingSnapshot, let core, let game,
               manifest?.deviceOwner == store.deviceID, identity?.owner == account.session?.owner,
               core.state == .running || core.state == .paused else { return }
@@ -2246,7 +2250,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         probe.discardRequestAfterRestore(); requestCursor.didRestore(); friendsRefresh.reset()
     }
     private func restoreIncomingIfReady() throws {
-        guard !sharing.nativeBattle.blocksAutoSave && !sharing.cooperativeDoubles.blocksAutoSave, let game, let core, let grant, grant.isCurrent,
+        guard !sharing.blocksNativeSave && !sharing.cooperativeDoubles.blocksAutoSave, let game, let core, let grant, grant.isCurrent,
               incoming != nil || store.hasInterruptedRestore(gameID:game.identifier) else { return }
         guard core.state == .paused || core.pause() else { throw BoundMultiplayerSaveStore.Failure.incomplete }
         do { try installIncoming(game:game,grant:grant,core:core) }
@@ -2546,7 +2550,7 @@ extension BoundROMMultiplayerCoordinator {
         if let identity, identity.owner == session.owner, workingStateAuthorized,
            pendingGameOvers[identity.run] == nil,
            BoundMultiplayerSetupOptions.deletesSaveOnGameOver(settings: identity.settings) == true,
-           !sharing.nativeBattle.protectsTemporaryState {
+           !sharing.protectsNativeTemporaryState {
             let snapshot = sharing.soulLink.probe.read()
             if snapshot.ledger?.run == identity.run, snapshot.error == nil, snapshot.partyWipedOut {
                 let record = BoundSoulGameOverRecord(gameID: game.identifier, owner: session.owner, run: identity.run, eventID: UUID())
@@ -2636,6 +2640,7 @@ extension BoundROMMultiplayerCoordinator {
     /// its accepted observations and its usual suspension/checkpoint.
     @discardableResult func prepareForCoreReplacement() -> Bool {
         guard !debugBlocksCoreResume else { return false }
+        if sharing.followerInteractions.isActive,!sharing.followerInteractions.checkpointForContinuation() {return false}
         if finalSaveBoundary.ownsSource && !finalSaveBoundary.captured { return false }
         guard !holdForObservationRecoveryIfNeeded() else { return false }
         guard sharing.soulLink.probe.read().error == nil else { return false }
@@ -2749,7 +2754,7 @@ extension BoundROMMultiplayerCoordinator {
             needsServerMenu = observationRecoveryPreviousMenu || hasUnconfirmedServerSave
             observationRecoveryPreviousError = nil; observationRecoveryPreviousMenu = false
             if !needsServerMenu, servicesActive, UIApplication.shared.applicationState == .active, gameOverID == nil,
-               !sharing.nativeBattle.protectsTemporaryState, !sharing.nativeBattle.blocksCoreResume,
+               !sharing.protectsNativeTemporaryState, !sharing.nativeBattle.blocksCoreResume,
                !sharing.cooperativeDoubles.blocksAutoSave, !sharing.cooperativeDoubles.blocksCoreResume {
                 resumeAfterObservationRecovery?()
             }
@@ -3091,9 +3096,10 @@ extension BoundROMMultiplayerCoordinator {
         sharing.cooperativeDoubles.continuationContext = sharing.nativeBattle.continuationContext
         sharing.nativeBattle.bind(core: core, gameID: game.identifier, interactions: sharing.interactions)
         sharing.cooperativeDoubles.bind(core: core, gameID: game.identifier, soul: sharing.soulLink.probe)
-        let continuedNativeActivity = try sharing.nativeBattle.restoreContinuationIfAvailable(serverHead: upload?.receipt.checkpoint)
-        let continuedCooperativeActivity = continuedNativeActivity ? false : try sharing.cooperativeDoubles.restoreContinuationIfAvailable(serverHead: upload?.receipt.checkpoint)
-        let continuedActivity = continuedNativeActivity || continuedCooperativeActivity
+        let continuedBerryActivity = sharing.followerInteractions.restoreContinuationIfAvailable(serverHead: upload?.receipt.checkpoint)
+        let continuedNativeActivity = continuedBerryActivity ? false : try sharing.nativeBattle.restoreContinuationIfAvailable(serverHead: upload?.receipt.checkpoint)
+        let continuedCooperativeActivity = continuedBerryActivity || continuedNativeActivity ? false : try sharing.cooperativeDoubles.restoreContinuationIfAvailable(serverHead: upload?.receipt.checkpoint)
+        let continuedActivity = continuedBerryActivity || continuedNativeActivity || continuedCooperativeActivity
         if continuedActivity { try sharing.soulLink.reloadContinuationMemory(for: core) }
         manifest = try checkpointPersistence.manifest(gameID: game.identifier); head = package; serverUploaded = package?.payload.checkpoint
         independentServerHead = upload?.receipt.checkpoint; serverRegisteredRun = state.identity.run
@@ -3143,7 +3149,7 @@ extension BoundROMMultiplayerCoordinator {
         // Native activities preserve their exact execution separately. Making a
         // new world checkpoint from old RAM plus current activity journals would
         // both mix executions and move the continuation's server-head boundary.
-        if sharing.nativeBattle.protectsTemporaryState || sharing.cooperativeDoubles.blocksAutoSave {
+        if sharing.protectsNativeTemporaryState || sharing.cooperativeDoubles.blocksAutoSave {
             serverCapturePending = true
             if final { throw BoundMultiplayerSaveStore.Failure.incomplete }
             return nil
@@ -3161,7 +3167,7 @@ extension BoundROMMultiplayerCoordinator {
         // Recheck the cartridge's completed frame after stopping the core: a
         // dialogue can begin between the timer's observation and this pause.
         // Explicit suspension still captures the full interrupted state.
-        if !final, !criticalAcquisition, !sharing.nativeBattle.blocksAutoSave, !sharing.cooperativeDoubles.blocksAutoSave,
+        if !final, !criticalAcquisition, !sharing.blocksNativeSave, !sharing.cooperativeDoubles.blocksAutoSave,
            BoundROMRequest.decode(BoundVBABattleBridge.romMultiplayerSnapshot())?.permitsAutomaticFieldSave != true {
             serverCapturePending = true
             if wasRunning, UIApplication.shared.applicationState == .active { core.resume() }
@@ -3287,7 +3293,7 @@ extension BoundROMMultiplayerCoordinator {
         } else {
             host.friends = onboarding.rooms.compactMap { room in UUID(uuidString: room.roomID).map { .init(room: $0, name: room.displayName) } }
         }
-        if !serverStarting, !sharing.nativeBattle.blocksAutoSave, !sharing.cooperativeDoubles.blocksAutoSave,
+        if !serverStarting, !sharing.blocksNativeSave, !sharing.cooperativeDoubles.blocksAutoSave,
            request?.permitsAutomaticFieldSave == true, serverCapturePending || now >= nextAutomaticSave {
             do { try captureServerCheckpoint() } catch { serverMenuError = error.localizedDescription; nextAutomaticSave = now + 3 }
         }
@@ -3323,7 +3329,7 @@ extension BoundROMMultiplayerCoordinator: BoundDebugHost {
     private func requireDebugBoundary() throws {
         guard !finalSaveBlocksCoreResume else { throw BoundDebugFailure.busy }
         guard let core, workingStateAuthorized, !serverStarting, !serverActivating,
-              !observationRecoveryRequired, !sharing.nativeBattle.protectsTemporaryState,
+              !observationRecoveryRequired, !sharing.protectsNativeTemporaryState,
               !sharing.cooperativeDoubles.blocksAutoSave, gameOverID == nil,
               core.state == .running || core.state == .paused,
               MultiRedAdapter.readSetupRequest()?.permitsFieldInterruption == true else { throw BoundDebugFailure.busy }
@@ -3364,7 +3370,7 @@ extension BoundROMMultiplayerCoordinator: BoundDebugHost {
               confirmed.identity == identity, confirmed.committed, !confirmed.cancelled,
               confirmed.saves[identity.owner.uuidString.lowercased()]?.receipt == sealed.receipt else { throw BoundDebugFailure.stale }
         try checkpointPersistence.acknowledgeServerCheckpoint(sealed, replacing: package)
-        try Self.settle(serverContinuationSettlements[package.payload.checkpoint], native: sharing.nativeBattle, cooperative: sharing.cooperativeDoubles)
+        try Self.settle(serverContinuationSettlements[package.payload.checkpoint], native: sharing.nativeBattle, cooperative: sharing.cooperativeDoubles, berry: sharing.followerInteractions)
         serverContinuationSettlements.removeValue(forKey: package.payload.checkpoint)
         head = sealed; independentServerHead = sealed.payload.checkpoint; serverUploaded = sealed.payload.checkpoint
         sharedServerCursor = confirmed.serverCursor; serverCapturePending = false
@@ -3409,7 +3415,7 @@ extension BoundROMMultiplayerCoordinator: BoundDebugHost {
               debugOrdinaryBookmark == nil || debugOrdinaryBookmark == bookmark,
               debugSession.bookmark == nil || debugSession.bookmark == bookmark,
               let core, !serverStarting, !serverActivating,
-              !sharing.nativeBattle.protectsTemporaryState, !sharing.nativeBattle.blocksCoreResume,
+              !sharing.protectsNativeTemporaryState, !sharing.nativeBattle.blocksCoreResume,
               !sharing.cooperativeDoubles.blocksAutoSave, !sharing.cooperativeDoubles.blocksCoreResume else {
             throw BoundDebugFailure.stale
         }
@@ -3447,7 +3453,7 @@ extension BoundROMMultiplayerCoordinator: BoundDebugHost {
               debugInstalledManifest == nil || debugInstalledManifest == source,
               core.state == .stopped || core.state == .paused,
               serverTask == nil, gameOverTask == nil, snapshotTask == nil,
-              !sharing.nativeBattle.protectsTemporaryState, !sharing.nativeBattle.blocksCoreResume,
+              !sharing.protectsNativeTemporaryState, !sharing.nativeBattle.blocksCoreResume,
               !sharing.cooperativeDoubles.blocksAutoSave, !sharing.cooperativeDoubles.blocksCoreResume else {
             throw BoundDebugFailure.stale
         }
@@ -3656,7 +3662,7 @@ extension BoundROMMultiplayerCoordinator: BoundDebugHost {
                 if let sourceIdentity, wasRunning, !debugRestoreHoldsCore, debugCaptureOperation == nil,
                    serverSelection == sourceSelection, setup?.serverEpoch == sourceEpoch,
                    !finalSaveBlocksCoreResume, !observationRecoveryRequired,
-                   !sharing.nativeBattle.protectsTemporaryState, !sharing.cooperativeDoubles.blocksAutoSave {
+                   !sharing.protectsNativeTemporaryState, !sharing.cooperativeDoubles.blocksAutoSave {
                     resumeDebugBoundaryIfSafe(wasRunning: true, core: core, identity: sourceIdentity, context: context)
                 }
                 throw BoundDebugFailure.busy

@@ -11,12 +11,15 @@
   <p><time datetime="2026-10-28">October 28, 2026</time></p>
   <p>Radical Red multiplayer</p>
   <ul>
+    <li>Talking to a friend's Pokémon now opens the game's follower-feeding dialogue. Oran Berries come from your bag and apply the original friendship effect to your friend's Pokémon, with recovery for interrupted feeding.</li>
+    <li>Friend Pokémon remain visible and move smoothly through brief network updates and camera changes.</li>
+    <li>Accepted friendly battles let an open native dialogue finish before starting. Battle startup can be cancelled while waiting for the other player.</li>
+    <li>Removed Let Pass and its Settings toggle. Solid occupied tiles and natural overlap recovery work automatically.</li>
     <li>The friend arrow checks usable map exits and refreshes its route as either player moves between towns, routes and rooms.</li>
-    <li>Friends and their Pokémon are solid only on their occupied tile. Overlapping players can move apart naturally, including together in the same direction, with Let Pass hidden. Open movement no longer waits for nearby movement grants.</li>
+    <li>Friends and their Pokémon are solid only on their occupied tile. Overlapping players can move apart naturally, including together in the same direction. Open movement no longer waits for nearby movement grants.</li>
     <li>The friend pointer hides whenever any part of the friend is in frame and returns when the friend moves offscreen.</li>
-    <li>Players can move apart after spawning together and pass through friends and their followers without a surrounding collision buffer or Let Pass. The optional Let Pass button stays stable nearby and can be hidden in main Settings.</li>
     <li>Initial New Game presets use BLUE (Boy), RED (Girl), Minimal Grinding, Common Cheats and Debug Mode enabled. Setup changes are remembered; saved friend-arrow and damage-calculation preferences are preserved.</li>
-    <li>Friend movement grants survive intervening native frames. Let pass uses the current observation clock, and building directions remain visible while routes refresh.</li>
+    <li>Friend movement grants survive intervening native frames, and building directions remain visible while routes refresh.</li>
     <li>Returning to the server-save picker preserves the reason the game was paused while the save list refreshes.</li>
     <li>Server compatibility failures show a server-update message instead of a device conflict. Cancelled server-save downloads stop before fetching more chunks.</li>
     <li>Interrupted uploads stop before sending another server request. Damaged save-download chunks are rejected immediately in both current and legacy recovery.</li>
@@ -48,8 +51,8 @@
     <li>Friend guidance follows native shared-interior return destinations and checks collision, objects and story-script conditions before choosing a route. Unavailable routes show a compact status.</li>
     <li>Added Enable Directional Friend Arrow in pre-game settings, available with Developer Mode on or off, with doorway, exit and staircase guidance.</li>
     <li>Allow Notifications now has separate choices for notifying a friend when joining and receiving game invitations or shared-server starts.</li>
-    <li>Friends can see and interact with the Pokémon brought out through the Viridian Pokémon Center follower service. Berry offers are cosmetic and use no items.</li>
-    <li>Added collision with connected friends and their following Pokémon on the same map, including coordinated crossings and ledge landings. Let pass briefly allows passage through narrow spaces.</li>
+    <li>Friends can see and interact with the Pokémon brought out through the Viridian Pokémon Center follower service.</li>
+    <li>Added collision with connected friends and their following Pokémon on the same map, including coordinated crossings and ledge landings.</li>
     <li>Soul Link elimination keeps both linked Pokémon fainted through healing, battles and PC storage, with red X marks in the party and summary screens.</li>
     <li>Reserved Boxes 18–25 for manual storage of eliminated Pokémon, with matching black backgrounds. Other Pokémon and automatic catches cannot enter these boxes.</li>
     <li>Added a battle-loss graphic showing each player's lost linked Pokémon after battle, with durable dismissal and reconnect recovery.</li>

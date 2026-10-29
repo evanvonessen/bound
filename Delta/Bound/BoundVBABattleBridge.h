@@ -48,6 +48,14 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)beginFriendDialogue:(NSUInteger)mode text:(NSString *)text;
 + (void)cancelFriendDialogue;
 + (NSDictionary<NSString *,id> *)advanceFriendDialogue;
+/// Reuses the cartridge's follower Oran Berry script and native effect routine.
+/// The explicit target binding never replaces the local player's party.
++ (NSData *)followerBerryTarget:(uint64_t)identity;
++ (BOOL)beginFollowerBerry:(NSData *)target;
++ (NSDictionary<NSString *,id> *)advanceFollowerBerry;
++ (void)cancelFollowerBerry;
++ (void)closeFollowerBerry;
++ (BOOL)commitFollowerBerry:(NSData *)after replacing:(NSData *)before;
 + (BOOL)verifyBattleReady;
 + (BOOL)verifyBattleEntryReady;
 + (BOOL)prepareBattleForPlayer:(NSUInteger)player;
@@ -115,6 +123,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSArray<NSNumber *> *)qaSoulCheckResult;
 + (void)qaFinishSoulCheck;
 + (BOOL)qaPrepareTradeFixture:(NSUInteger)marker;
++ (BOOL)qaPrepareBerryFixture:(BOOL)ownInteraction;
++ (BOOL)qaSetFollowerFriendship:(NSUInteger)value;
 + (NSData *)qaTradeParty;
 + (NSDictionary<NSString *, id> *)qaTradeMenu;
 #endif

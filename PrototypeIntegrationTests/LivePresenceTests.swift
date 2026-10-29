@@ -95,6 +95,35 @@ final class LivePresenceTests: XCTestCase {
         session.setEnabled(true); session.start { _ in true }; return session
     }
 
+    func testFollowerUsesExistingClockAcrossMissingSamplesAndGenerationChanges() throws {
+        let session=session(),peer=UUID()
+        func sample(_ x:Int,followerX:Int?,generation:UInt32=1,map:Int=3) throws -> BoundPlayerStateReading {
+            var value=reading(x:x,map:map),player=try XCTUnwrap(value.player),scene=try XCTUnwrap(player.scene)
+            if let followerX {
+                scene.follower = .init(identity:42,species:4,objectID:1,generation:generation,
+                    current:.init(x:followerX/16,y:6),previous:.init(x:followerX/16,y:6),
+                    worldFoot:.init(x:followerX,y:112),elevation:0,facing:4,appearance:scene.appearance)
+            }
+            player.scene=scene;value = .init(frame:1,status:.live,detail:"Follower continuity fixture",player:player)
+            return value
+        }
+        session.receive(try packet(session,peer:peer,time:10,reading:sample(120,followerX:104)),at:20)
+        session.receive(try packet(session,peer:peer,sequence:2,time:10.05,reading:sample(128,followerX:nil)),at:20.05)
+        XCTAssertNotNil(session.pose(at:20.05)?.follower)
+        session.receive(try packet(session,peer:peer,sequence:3,time:10.1,reading:sample(136,followerX:120,generation:2)),at:20.1)
+        let middle=try XCTUnwrap(session.pose(at:20.15))
+        XCTAssertEqual(middle.x,128,accuracy:0.001,"Trainer's original interpolation delay stays unchanged")
+        XCTAssertEqual(try XCTUnwrap(middle.follower).x,112,accuracy:0.001,"Do not stop at the missing sample or reset on generation churn")
+        XCTAssertNotNil(session.pose(at:20.8)?.follower,"An ordinary network gap preserves both actors")
+        session.receive(try packet(session,peer:peer,sequence:4,time:10.8,reading:sample(136,followerX:nil)),at:20.8)
+        XCTAssertNil(session.pose(at:20.91)?.follower,"Persistent native absence expires the brief continuity bridge")
+        session.receive(try packet(session,peer:peer,sequence:5,time:10.95,reading:sample(136,followerX:120)),at:20.95)
+        session.receive(try packet(session,peer:peer,sequence:6,time:11,reading:sample(136,followerX:nil,map:4)),at:21)
+        XCTAssertNil(session.pose(at:21.11)?.follower,"Never borrow a follower across maps")
+        session.receive(try packet(session,peer:peer,sequence:7,time:11.15,withdrawn:true),at:21.15)
+        XCTAssertNil(session.pose(at:21.15),"Explicit disconnect clears both actors")
+    }
+
     func testCanonicalCollisionTilesStaySeparateFromJumpDrawingCoordinates() throws {
         var pose=try XCTUnwrap(BoundPresencePose(reading:reading()))
         let coordinates=[4,6,4,4]

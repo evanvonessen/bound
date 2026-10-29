@@ -85,7 +85,7 @@ struct BoundNativeFollowerBinding: Equatable, Sendable {
         func word(_ b:[UInt8],_ p:Int)->UInt32 { (0..<4).reduce(0) { $0|UInt32(b[p+$1])<<(8*$1) } }
         func half(_ b:[UInt8],_ p:Int)->Int { Int(b[p])|Int(b[p+1])<<8 }
         guard word(bytes,0)==0x314F5742,word(bytes,4)==1,word(bytes,8)>0,word(bytes,8)&1==0,
-              word(bytes,96)==7,word(bytes,100)<16,word(bytes,104)<6,
+              word(bytes,96)&3==3,word(bytes,100)<16,word(bytes,104)<6,
               (1...4095).contains(word(bytes,116)),word(bytes,120)<=65535,word(bytes,124)>0,
               bytes[32]==player.mapGroup,bytes[33]==player.mapNumber,
               let key=player.mapInstance,key==(UInt64(word(bytes,80))|UInt64(word(bytes,84))<<32),
@@ -99,7 +99,11 @@ struct BoundNativeFollowerBinding: Equatable, Sendable {
               let object=memory.bytes(at:0x02036E38+36*objectID,count:36),object[0]&1 != 0,word(object,0)&(1<<13)==0,
               object[4]<64,Int(object[5])|Int(object[35])<<8==word(bytes,120),
               let sprite=memory.bytes(at:0x0202063C+68*Int(object[4]),count:68),half(sprite,0x2E)==objectID,
-              half(sprite,0)&0x2F00==0,sprite[0x3F]&0x40==0,sprite[0x3E]&5==1,
+              half(sprite,0)&0x2F00==0,sprite[0x3F]&0x40==0,sprite[0x3E]&1==1,
+              // Native sprite invisibility also means outside its owner's
+              // camera. That must not remove a world actor from the peer's
+              // camera or collision; explicit object invisibility still does.
+              sprite[0x3E]&4==0 || word(object,0)&(1<<14) != 0,
               (1...4).contains(Int(object[24]&15)) else { return nil }
         let current=BoundPlayerState.Point(x:Int(Int16(bitPattern:UInt16(half(object,16))))-7,y:Int(Int16(bitPattern:UInt16(half(object,18))))-7)
         let previous=BoundPlayerState.Point(x:Int(Int16(bitPattern:UInt16(half(object,20))))-7,y:Int(Int16(bitPattern:UInt16(half(object,22))))-7)
@@ -113,7 +117,7 @@ struct BoundNativeFollowerBinding: Equatable, Sendable {
 /// Optional presentation within the existing version1 presence pose. Eight
 /// compact array fields stay below150 bytes at the admitted bounds. ROM tiles
 /// are resolved by the receiving device; no images, RAM or gameplay state are
-/// sent. Identity scopes cosmetic actions and never enrolls a Soul Link catch.
+/// sent. Identity scopes follower interactions and never enrolls a Soul Link catch.
 struct BoundPresenceFollower: Codable, Equatable, Sendable {
     let identity: UInt64
     let species: Int

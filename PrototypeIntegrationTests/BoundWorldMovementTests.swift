@@ -86,7 +86,6 @@ final class BoundWorldMovementTests:XCTestCase {
                 XCTAssertEqual(BoundMovementSnapshot.tile(host,132+i*32),actor.current)
                 XCTAssertEqual(BoundMovementSnapshot.tile(host,136+i*32),actor.current,"No old departure tile border")
             }
-            XCTAssertFalse(pair.a.passing)
         }
     }
 
@@ -112,7 +111,6 @@ final class BoundWorldMovementTests:XCTestCase {
             pair.ap=pair.ac;pair.bp=pair.bc;pair.tick()
             for session in [pair.a,pair.b] {
                 XCTAssertEqual(BoundMovementSnapshot.word(session.probe.hostInput()!,68),1,"Solid again immediately after native footprints separate")
-                XCTAssertFalse(session.passing)
             }
         }
     }
@@ -232,9 +230,8 @@ final class BoundWorldMovementTests:XCTestCase {
         }
     }
 
-    func testPassExpiryAndReconnectPreserveOverlapRecovery() {
+    func testAutomaticOverlapRecoverySurvivesReconnect() {
         let pair = Pair(); pair.bc = pair.ac; pair.bp = pair.ap; pair.connect()
-        pair.a.letPass(at: pair.now); pair.drain()
         for _ in 0..<50 {
             pair.tick()
             for session in [pair.a, pair.b] {
@@ -244,7 +241,6 @@ final class BoundWorldMovementTests:XCTestCase {
                 XCTAssertTrue(host[128..<192].allSatisfy { $0 == 0 })
             }
         }
-        XCTAssertFalse(pair.a.passing); XCTAssertFalse(pair.b.passing)
         pair.a.reset(); pair.b.reset(); pair.connect()
         for session in [pair.a, pair.b] {
             let host = session.probe.hostInput()!
@@ -357,25 +353,21 @@ final class BoundWorldMovementTests:XCTestCase {
         pair.b.receive(old.encoded()!,at:pair.now);XCTAssertEqual(pair.permit(pair.b),0)
         pair.ticks(5);XCTAssertFalse(pair.b.reconnecting)
     }
-    func testLetPassRemainsUsableAtVisibleHysteresisBoundary() {
-        let pair = Pair(); pair.bc = .init(x: 3, y: 0); pair.bp = pair.bc
-        pair.connect(); pair.a.letPass(at: pair.now); pair.drain(); pair.ticks(3)
-        XCTAssertTrue(pair.a.passing); XCTAssertTrue(pair.b.passing)
-    }
-    func testLetPassRequiresAcknowledgementAndRetriesLostAcknowledgement() {
-        let pair=Pair();pair.connect();pair.drop=[.passAck];pair.a.letPass(at:pair.now);pair.drain();pair.ticks(3)
-        XCTAssertFalse(pair.a.passing);XCTAssertFalse(pair.b.passing)
-        pair.drop=[];pair.ticks(3);XCTAssertTrue(pair.a.passing);XCTAssertTrue(pair.b.passing)
-        pair.tick();XCTAssertEqual(BoundMovementSnapshot.word(pair.a.probe.hostInput()!,68),0)
-        XCTAssertEqual(BoundMovementSnapshot.word(pair.b.probe.hostInput()!,68),0)
-        pair.ticks(45);XCTAssertFalse(pair.a.passing);XCTAssertFalse(pair.b.passing)
-    }
-    func testSimultaneousLetPassConvergesWithoutRenewingTwoSecondWindow() {
-        let pair=Pair();pair.connect();pair.a.letPass(at:pair.now);pair.b.letPass(at:pair.now);pair.drain();pair.ticks(3)
-        XCTAssertTrue(pair.a.passing);XCTAssertTrue(pair.b.passing)
-        let old=pair.history.last{$0.kind == .passCommit}!
-        pair.ticks(45);pair.b.receive(old.encoded()!,at:pair.now);pair.tick()
-        XCTAssertFalse(pair.a.passing);XCTAssertFalse(pair.b.passing)
+    func testRetiredPassPacketsNeverRemoveOccupiedActors() {
+        let pair = Pair(); pair.connect()
+        let heartbeat = pair.history.last { $0.sender == pair.first && $0.kind == .heartbeat }!
+        for (index, kind) in [BoundMovementPacket.Kind.pass, .passAck, .passCommit, .passCommitted].enumerated() {
+            let packet = BoundMovementPacket(sender: heartbeat.sender, receiver: heartbeat.receiver,
+                channel: heartbeat.channel, acknowledgedChannel: heartbeat.acknowledgedChannel,
+                sequence: heartbeat.sequence + UInt64(index + 100), instance: heartbeat.instance,
+                generation: heartbeat.generation, group: heartbeat.group, number: heartbeat.number,
+                elevation: heartbeat.elevation, kind: kind, token: 1, step: nil)
+            let bytes = packet.encoded()!
+            pair.b.receive(bytes, at: pair.now)
+            pair.tick()
+            XCTAssertEqual(BoundMovementSnapshot.word(pair.b.probe.hostInput()!, 68), 1)
+            XCTAssertFalse(pair.history.contains { [.passAck, .passCommit, .passCommitted].contains($0.kind) })
+        }
     }
     func testArbiterNeverRenewsOffersAndNeverExpiresCommittedMovement() {
         var arbiter=BoundMovementArbiter();let pair=Pair(),step=pair.step(2,1)

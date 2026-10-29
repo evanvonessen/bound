@@ -636,11 +636,11 @@ enum BoundSceneBytes {
 
 enum BoundPlayerSceneDecoder {
     private static func sprite(_ raw: [UInt8], memory: BoundGBAMemorySnapshot,
-                               rom: (Int, Int) -> [UInt8]?) -> BoundPlayerSprite? {
+                               rom: (Int, Int) -> [UInt8]?, outsideOwnerCamera: Bool = false) -> BoundPlayerSprite? {
         let width = -Int(Int8(bitPattern: raw[0x28])) * 2, height = -Int(Int8(bitPattern: raw[0x29])) * 2
         guard [8, 16, 32, 64].contains(width), [8, 16, 32, 64].contains(height),
               BoundSceneBytes.half(raw) & 0x2F00 == 0, raw[0x3F] & 0x40 == 0,
-              raw[0x3E] & 5 == 1, raw[0x2B] < 64,
+              raw[0x3E] & 1 == 1, outsideOwnerCamera || raw[0x3E] & 4 == 0, raw[0x2B] < 64,
               let animPointer = rom(BoundSceneBytes.word(raw, 8) + Int(raw[0x2A]) * 4, 4) else { return nil }
         let anim = BoundSceneBytes.word(animPointer)
         // At ANIM_END the visible frame is the preceding frame command.
@@ -727,11 +727,14 @@ enum BoundPlayerSceneDecoder {
             guard let object = memory.bytes(at: 0x02036E38 + slot * 36, count: 36), object[0] & 1 != 0,
                   BoundSceneBytes.word(object) & (1 << 13) == 0, object[4] < 64,
                   let raw = memory.bytes(at: 0x0202063C + Int(object[4]) * 68, count: 68),
-                  let appearance = sprite(raw, memory: memory, rom: rom) else { continue }
+                  let appearance = sprite(raw, memory: memory, rom: rom,
+                    outsideOwnerCamera: followerBinding?.objectID == slot && BoundSceneBytes.word(object) & (1 << 14) != 0) else { continue }
             let x = BoundSceneBytes.wrap(BoundSceneBytes.signed(raw, 0x20) + BoundSceneBytes.signed(raw, 0x24) + offset.x)
             let y = BoundSceneBytes.wrap(BoundSceneBytes.signed(raw, 0x22) + BoundSceneBytes.signed(raw, 0x26) + offset.y)
-            objects.append(.init(origin: .init(x: x - appearance.width / 2, y: y - appearance.height / 2),
-                                 footY: y + appearance.height / 2, appearance: appearance))
+            if raw[0x3E] & 4 == 0 {
+                objects.append(.init(origin: .init(x: x - appearance.width / 2, y: y - appearance.height / 2),
+                                     footY: y + appearance.height / 2, appearance: appearance))
+            }
             if let binding=followerBinding,binding.objectID==slot {
                 follower = .init(identity:binding.identity,species:binding.species,objectID:slot,generation:binding.generation,
                     current:binding.current,previous:binding.previous,

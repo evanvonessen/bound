@@ -69,11 +69,8 @@ final class BoundPresenceFrameCompositor: @unchecked Sendable {
         memory.followerObservation = .init(cache:followerCache,scope:.init(core:ObjectIdentifier(core),profile:ObjectIdentifier(profile),
             timeline:BoundVBABattleBridge.worldMovementTimeline()))
         let reading = profile.adapter.readPlayer(profile, memory: memory, frame: 1, includeScene: true, presentationOnly: true)
-        func fade(_ actor:BoundRecordedPlayerPose?,passing:Bool)->BoundRecordedPlayerPose? {
-            guard var actor else { return nil };actor.opacity=passing ? 0.45:1;return actor
-        }
-        let rendered = fade(reading.player.flatMap { viewer in pose.rendered(profile: profile, viewer: viewer) },passing:pose.passing==true)
-        let follower=fade(reading.player.flatMap { viewer in pose.follower?.rendered(profile:profile,viewer:viewer,mapGroup:pose.mapGroup,mapNumber:pose.mapNumber) },passing:pose.passing==true)
+        let rendered = reading.player.flatMap { viewer in pose.rendered(profile: profile, viewer: viewer) }
+        let follower = reading.player.flatMap { viewer in pose.follower?.rendered(profile:profile,viewer:viewer,mapGroup:pose.mapGroup,mapNumber:pose.mapNumber) }
         var pixels = 0
         if let scene = reading.player?.scene, let buffer = downstream.videoBuffer {
             let actors=(rendered.map { [$0] } ?? [])+(follower.map { [$0] } ?? [])

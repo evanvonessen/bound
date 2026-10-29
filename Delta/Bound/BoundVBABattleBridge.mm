@@ -298,6 +298,7 @@ static_assert(BoundFriendsMultiviewGame::GameCooperativeSnapshotAddress==GameCoo
 #endif
 #include "SoulLink/bridge.inc"
 #include "NativeBattle/invitation.inc"
+#include "NativeBattle/follower-berry.inc"
 namespace {
 uint8_t *romUIOwner=nullptr,*cooperativeROM=nullptr;
 const MultiRedNativeProfile *romUIProfile=nullptr;
@@ -765,7 +766,7 @@ static uint8_t soulQAScriptBackup[128];
     inviteROM=nullptr; inviteActive=inviteBHeld=inviteCancelling=false; inviteResult=-1;
 }
 + (BOOL)friendDialogueReady {
-    if(armed||inviteActive||!fieldInterruptionReady()) return NO;
+    if(armed||inviteActive||berryActive||!fieldInterruptionReady()) return NO;
     if(ownsROMUI()) {
         const auto *state=workRAM+GameUIRequestAddress-0x02000000;
         if(word(state)==0x31525552&&(word(state+76)||(word(state+80)&(2|4)))) return NO;
@@ -842,9 +843,82 @@ static uint8_t soulQAScriptBackup[128];
         @"menuReady":@(inviteMenuReady()),@"result":@(inviteResult),
         @"mode":@(inviteActive?int(inviteMode):-1),@"cursor":@(inviteActive&&workRAM?int(workRAM[0x3ADE6]):-1)};
 }
++ (NSData *)followerBerryTarget:(uint64_t)identity {
+    if(!workRAM||!internalRAM||!fieldInterruptionReady()) return [NSData data];
+    const auto *p=workRAM+0x2000;
+    if(word(p)!=0x314F5742||word(p+4)!=1||(word(p+8)&1)||(word(p+96)&3)!=3||word(p+104)>=workRAM[0x24029]) return [NSData data];
+    const auto *mon=workRAM+0x24284+word(p+104)*100;
+    if(!berryMon(mon)||((uint64_t(word(mon))<<32)|word(mon+4))!=identity||word(mon)!=word(p+108)||word(mon+4)!=word(p+112)) return [NSData data];
+    return [NSData dataWithBytes:mon length:100];
+}
++ (BOOL)beginFollowerBerry:(NSData *)target {
+    if(target.length!=100||![self friendDialogueReady]||!berryMon((const uint8_t *)target.bytes)) return NO;
+    uint8_t digest[32];soulOriginalHash(digest);
+    const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
+        0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
+    if(memcmp(digest,expected,32)||word(rom+0x10996FC)!=0x02024029||word(rom+0x1099700)!=0x02024284
+       ||half(rom+0x10996AC)!=0xD11D||word(rom+0x1049C81)!=0x090995D5) return NO;
+    for(size_t i=0;i<BerrySize;i++) if(rom[BerryScript+i]!=0xFF) return NO;
+    berryROM=rom;berryActive=true;berryCancelling=berryBHeld=false;berryFrames=0;berryConsumed=false;berryAfter=nil;
+    memcpy(berryEnemy,workRAM+0x2402C,100);memcpy(berryString,workRAM+0x21CE4,20);
+    berryCountOriginal=internalRAM[BerryCount];internalRAM[BerryCount]=1;
+    memcpy(berryCountPointer,rom+0x10996FC,4);memcpy(berryPartyPointer,rom+0x1099700,4);
+    memcpy(berrySelection,rom+0x10996AC,2);memcpy(berryAnimation,rom+0x1049C81,4);
+    berryBagBefore=[NSData dataWithBytes:workRAM+0x3BB20 length:0xC00];
+    memcpy(workRAM+0x2402C,target.bytes,100);
+    memset(workRAM+0x21CE4,0xFF,20);memcpy(workRAM+0x21CE4,(const uint8_t *)target.bytes+8,10);
+    // The native selection loop still checks living/non-Egg eligibility. Its
+    // single explicit target replaces the comparison to the local follower's
+    // graphics species; its actual friendship calculation is unchanged.
+    put32(rom+0x10996FC,0x03000000+BerryCount);put32(rom+0x1099700,0x0202402C);
+    put16(rom+0x10996AC,0x46C0);
+    put16(rom+BerryScript+0x80,0x4770); // Optional local object animation: bx lr.
+    put32(rom+0x1049C81,0x08000000+BerryScript+0x81);
+    rom[BerryScript]=0x69;rom[BerryScript+1]=0x05;put32(rom+BerryScript+2,0x09049C30);
+    memset(internalRAM+0xEB0,0,0x74);internalRAM[0xEB1]=1;
+    put32(internalRAM+0xEB8,0x08000000+BerryScript);put32(internalRAM+0xF0C,0x0815F9B4);put32(internalRAM+0xF10,0x0815FD08);
+    internalRAM[0xEA8]=0;internalRAM[0xF9C]=1;internalRAM[0xF9D]=internalRAM[0xF9E]=internalRAM[0xFA0]=0;
+    return YES;
+}
++ (NSDictionary<NSString *,id> *)advanceFollowerBerry {
+    if(berryActive&&berryROM!=rom) {berryActive=false;berryAfter=nil;berryConsumed=false;}
+    if(berryOwnsROM()) {
+        if(overworld()) {
+            berryAfter=[NSData dataWithBytes:workRAM+0x2402C length:100];
+            berryConsumed=![berryBagBefore isEqualToData:[NSData dataWithBytes:workRAM+0x3BB20 length:0xC00]];
+            berryRestore();
+        } else if(berryCancelling) {
+            bool held=++berryFrames%12<2;
+            if(held!=berryBHeld) {
+                if(held) [[GBAEmulatorBridge sharedBridge] activateInput:2 value:1 playerIndex:0];
+                else [[GBAEmulatorBridge sharedBridge] deactivateInput:2 playerIndex:0];
+                berryBHeld=held;
+            }
+        }
+    }
+    return @{ @"active":@(berryActive),@"finished":@(berryAfter!=nil),@"consumed":@(berryConsumed),@"pokemon":berryAfter?:[NSData data] };
+}
++ (void)cancelFollowerBerry {if(berryOwnsROM()) berryCancelling=true;}
++ (void)closeFollowerBerry {berryRestore();berryAfter=nil;berryBagBefore=nil;berryConsumed=false;}
++ (BOOL)commitFollowerBerry:(NSData *)after replacing:(NSData *)before {
+    if(after.length!=100||before.length!=100||!workRAM||!fieldInterruptionReady()) return NO;
+    const auto *a=(const uint8_t *)after.bytes,*b=(const uint8_t *)before.bytes;
+    if(!berryMon(a)||!berryMon(b)||memcmp(a,b,8)||half(a+32)!=half(b+32)) return NO;
+    // Authenticate the result's entire mutation surface. The native routine at
+    // 0x09099620 changes only friendship (MON_DATA_FRIENDSHIP, byte 41), by
+    // 70/60/30 at its original 100/200 thresholds, capped at 255. This checks
+    // the cartridge-produced result; it does not implement a second effect.
+    const unsigned friendship=b[41],gain=friendship<100?70:friendship<200?60:30;
+    if(a[41]!=std::min(255u,friendship+gain)||memcmp(a,b,41)||memcmp(a+42,b+42,58)) return NO;
+    for(unsigned slot=0;slot<workRAM[0x24029]&&slot<6;slot++) {
+        auto *mon=workRAM+0x24284+slot*100;
+        if(!memcmp(mon,b,100)) {memcpy(mon,a,100);return YES;}
+    }
+    return NO;
+}
 + (BOOL)verifyBattleReady {
     verifiedROM=nullptr;
-    if(armed||!fieldInterruptionReady()||workRAM[0x24029]==0||workRAM[0x24029]>6) return NO;
+    if(armed||berryActive||!fieldInterruptionReady()||workRAM[0x24029]==0||workRAM[0x24029]>6) return NO;
     const uint8_t expected[32]={0x68,0x92,0x99,0x66,0x4a,0x95,0x4c,0x12,0xda,0xd6,0x6e,0x03,0xc2,0xd1,0x84,0x46,
         0xb3,0x48,0xcb,0x31,0xbd,0x98,0xb3,0x95,0xc8,0x7b,0x9b,0x51,0x4b,0x28,0x80,0x66};
     uint8_t digest[CC_SHA256_DIGEST_LENGTH]; soulOriginalHash(digest);
@@ -1482,6 +1556,23 @@ static uint8_t soulQAScriptBackup[128];
     const auto status=word(internalRAM+0x7304);
     if(!(status&0xFFFF)) return NO;
     put32(internalRAM+0x7304,status|0x80000000u);
+    return YES;
+}
++ (BOOL)qaSetFollowerFriendship:(NSUInteger)value {
+    if(!workRAM||!fieldInterruptionReady()||workRAM[0x24029]==0||value>255) return NO;
+    workRAM[0x24284+41]=(uint8_t)value;return YES;
+}
++ (BOOL)qaPrepareBerryFixture:(BOOL)ownInteraction {
+    if(!ownsROMUI()||!fieldInterruptionReady()||workRAM[0x24029]!=1) return NO;
+    // Disposable fixture only: native AddBagItem supplies two Oran Berries.
+    // The own-interaction branch executes the unmodified feeding script and
+    // effect helper, using the native Bulbasaur givemon fixture as its target.
+    const uint8_t script[]={0x44,0x8B,0,2,0,0x16,0x30,0x51,1,0,0x23,0xF5,0x6D,9,9,0x69,0x05,0x30,0x9C,4,9};
+    memcpy(internalRAM+0x4280,script,sizeof(script));
+    if(!ownInteraction) internalRAM[0x4285]=0x02;
+    memset(internalRAM+0xEB0,0,0x74);internalRAM[0xEB1]=1;put32(internalRAM+0xEB8,0x03004280);
+    put32(internalRAM+0xF0C,0x0815F9B4);put32(internalRAM+0xF10,0x0815FD08);
+    internalRAM[0xEA8]=0;internalRAM[0xF9C]=1;
     return YES;
 }
 + (BOOL)qaStartMusicPauseText {

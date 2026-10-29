@@ -248,6 +248,30 @@ final class FriendInteractionTests: XCTestCase {
         XCTAssertEqual(AnyInput(try XCTUnwrap(coreMapping.input(forControllerInput:MFiGameController.Input.a))),AnyInput(GBAGameInput.a))
     }
 
+    func testStartupCancellationPreservesNativeBOutsideBlockedHandoff() {
+        let gate=BoundFriendWorldInputGate()
+        for blocked in [false,true] {
+            for cancellable in [false,true] {
+                gate.update(available:false,blocked:blocked,cancellable:cancellable)
+                for input: any Input in [GBAGameInput.b,StandardGameControllerInput.b] {
+                    let filtered=gate.filter(input)
+                    if blocked {
+                        XCTAssertEqual(BoundFriendWorldInput(input:filtered),cancellable ? .cancelInteraction:.blocked)
+                    } else {
+                        XCTAssertEqual(AnyInput(filtered),AnyInput(input))
+                    }
+                }
+            }
+        }
+        let p=peers();var cleanup:(()->Void)?,launches=0
+        p.a.beforeAgreement={cleanup=$0};p.a.agreed={_,_,_ in launches+=1}
+        p.a.open(at:10);p.a.request(.battle,at:10);p.deliver();p.b.accept(at:10);p.deliver()
+        XCTAssertEqual(p.a.phase,.agreed)
+        XCTAssertEqual(BoundFriendWorldInput(input:p.a.inputGate.filter(GBAGameInput.b)),.cancelInteraction)
+        p.a.cancel();p.deliver();cleanup?()
+        XCTAssertEqual(launches,0);XCTAssertFalse(p.a.blocksGameplay);XCTAssertFalse(p.b.blocksGameplay)
+    }
+
     func testInvitationAttachmentDoesNotInterceptGameplayWithoutAPendingNotification() {
         let p=peers(), panel=BoundFriendInteractionPanel(session:peers().a)
         XCTAssertTrue(panel.isHidden)
@@ -427,7 +451,12 @@ final class FriendInteractionTests: XCTestCase {
 
     func testNativeInvitationWaitsReleaseAllMenuOwnershipAndKeepFramesRunning() async throws {
         continueAfterFailure = false
-        let rom = try XCTUnwrap(Bundle(for: Game.self).url(forResource: "multiplayer", withExtension: "gba"))
+        guard ProcessInfo.processInfo.environment["BOUND_INVITATION_RUNTIME"] == "1" else {
+            throw XCTSkip("Requires the owned-simulator exact-ROM invitation fixture")
+        }
+        let rom = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("FullAppGameplayQA/RadicalRed.gba")
+        XCTAssertEqual(try BoundPlayerROMProfile(rom: Data(contentsOf: rom)).gameProfile, BoundGameProfiles.current)
         let battery = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sav")
         let core = try XCTUnwrap(EmulatorCore(game: FriendDialogueGame(fileURL: rom, gameSaveURL: battery), options: [.metal: true]))
         // The hosted app may still be connecting its first scene after model
@@ -523,6 +552,39 @@ final class FriendInteractionTests: XCTestCase {
         p.a.tick(at: ProcessInfo.processInfo.systemUptime + Session.invitationLifetime)
         try await wait { p.a.phase == .ended && !probe.read().active && probe.read().ready }
         XCTAssertFalse(p.a.blocksGameplay)
+        // Exercise the accepted handoff in both roles. Earlier coverage only
+        // dismissed invitations, so it never tested closing a pending native
+        // window while the consent coordinator already owns gameplay input.
+        for rate in [1.0,8.0] { for localInitiates in [true, false] {
+            core.rate=rate
+            p.a.cancel(); p.b.cancel(); p.aPackets.removeAll(); p.bPackets.removeAll()
+            try await wait { p.a.canInteract }
+            var handedOff = false
+            p.a.agreed = { activity, _, initiator in
+                XCTAssertEqual(activity, .battle)
+                XCTAssertEqual(initiator, localInitiates)
+                XCTAssertTrue(BoundVBABattleBridge.friendDialogueReady())
+                handedOff = true
+            }
+            if localInitiates {
+                XCTAssertTrue(p.a.open())
+                try await wait { probe.read().menuReady }
+                try await press(1)
+                try await wait { p.a.phase == .outgoing && probe.read().ready }
+                p.deliver(at: ProcessInfo.processInfo.systemUptime)
+                p.b.accept()
+            } else {
+                XCTAssertTrue(p.b.open()); p.b.request(.battle)
+                p.deliver(at: ProcessInfo.processInfo.systemUptime)
+                try await wait { p.a.phase == .incoming && p.a.canInteract }
+                XCTAssertTrue(p.a.open())
+                try await wait { probe.read().menuReady }
+                try await press(1)
+            }
+            for _ in 0..<4 { p.deliver(at: ProcessInfo.processInfo.systemUptime) }
+            try await wait { handedOff }
+            XCTAssertFalse(probe.read().active)
+        } }
         XCTAssertTrue(core.pause())
         // A fresh bedroom save has no Pokémon yet; battle admission also tests
         // party size. This check specifically verifies native field/UI cleanup.

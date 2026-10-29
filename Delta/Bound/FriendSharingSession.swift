@@ -503,6 +503,9 @@ final class FriendSharingSession: ObservableObject {
         soulLink.nativeActivity = { [weak self] in self?.nativeBattle.isActive == true || self?.cooperativeDoubles.isActive == true }
         interactions.agreed = { [weak self] activity, id, initiator in
             guard let self, self.debugActivitiesAllowed else { return }
+            guard !self.followerInteractions.blocksAutoSave else {
+                self.interactions.activityEnded("Finish feeding first");return
+            }
             guard !self.cooperativeDoubles.blocksAutoSave else {
                 self.interactions.activityEnded("Finish the cooperative battle first");return
             }
@@ -522,13 +525,16 @@ final class FriendSharingSession: ObservableObject {
             guard let self,self.gameplayTransportAvailable else{return nil}
             return self.livePresence.followerInteractionContext(inbound:true)
         }
+        followerInteractions.wireScope = { [weak self] in
+            guard let self,let peer=self.livePresence.peerEpoch else{return nil}
+            return (self.livePresence.epoch,peer)
+        }
         followerInteractions.send = { [weak self] data in
             guard let self,self.gameplayTransportAvailable else{return false};return self.transport.sendInteraction(data)
         }
         followerInteractions.changed = { [weak self] in
             guard let self else{return};self.interactions.inputGate.updateSocial(available:self.followerInteractions.canInteract,blocked:self.followerInteractions.blocksGameplay)
         }
-        followerInteractions.letPass = { [weak livePresence] in livePresence?.movement.letPass() }
         livePresence.movement.send = { [weak self] data in
             guard let self,self.gameplayTransportAvailable else{return false};return self.transport.sendInteraction(data)
         }
@@ -559,9 +565,9 @@ final class FriendSharingSession: ObservableObject {
             self?.nativeBattle.cancel()
             self?.interactions.stop(message: "Your friend disconnected")
         }
-        livePresence.retainsNativeDialoguePose = { [weak interactions] in
+        livePresence.retainsNativeDialoguePose = { [weak interactions, weak followerInteractions] in
             guard let interactions,interactions.nativeDialogueManaged else { return false }
-            return interactions.menuPresented || interactions.phase == .agreed || interactions.nativeDialogueBusy
+            return followerInteractions?.isPresented == true || interactions.menuPresented || interactions.phase == .agreed || interactions.nativeDialogueBusy
         }
         interactions.contextDiagnostic = { [weak livePresence] in livePresence?.interactionDiagnostic() ?? "presence unavailable" }
         livePresence.connectionCheck.snapshot = { [weak self] in self?.presenceConnectionSample() }
@@ -584,7 +590,7 @@ final class FriendSharingSession: ObservableObject {
         } else {
             // Cancel restores a battle snapshot before its cable/consent channel closes.
             // Interrupted-battle recovery stays available even with the feature off.
-            cooperativeDoubles.suspend(); nativeBattle.cancel(resume: !backgrounded)
+            followerInteractions.suspend();cooperativeDoubles.suspend(); nativeBattle.cancel(resume: !backgrounded)
             if nativeBattle.blocksAutoSave {
                 interactions.stop(message: "Recovery snapshot kept. Reopen this game to restore it.")
             } else {
@@ -1025,16 +1031,6 @@ final class FriendSharingSession: ObservableObject {
             self.sharedWorld.tick(enabled: !self.mediaOnly && BoundMultiplayerFeatures.isEnabled && self.livePresence.enabled && self.active, connected: self.joined && !self.reconnecting && !self.backgrounded)
             self.transport.pollPresence()
             self.livePresence.tick()
-            let now = ProcessInfo.processInfo.systemUptime
-            let distance = self.livePresence.movementContext(at: now).flatMap { c -> Int? in
-                guard let own = c.own.first, let other = c.other.first else { return nil }
-                return own.current.distance(other.current)
-            }
-            self.followerInteractions.updateLetPass(
-                available: self.gameplayTransportAvailable && BoundMultiplayerFeatures.isEnabled
-                    && self.interactions.canPresent?() != false && !self.interactions.blocksGameplay && !self.interactions.nativeDialogueBusy,
-                distance: distance, at: now)
-            if self.followerInteractions.isPresented,self.followerInteractions.context?()==nil {self.followerInteractions.dismiss()}
             self.interactions.inputGate.updateSocial(available:self.followerInteractions.canInteract,blocked:self.followerInteractions.blocksGameplay)
             // An interaction stream can recover without another roster event.
             // Resume only with fresh authenticated positions, never a retained
@@ -1095,6 +1091,8 @@ final class FriendSharingSession: ObservableObject {
         cooperativeDoubles.transportResumed()
     }
 
+    var blocksNativeSave:Bool { nativeBattle.blocksAutoSave || followerInteractions.blocksAutoSave }
+    var protectsNativeTemporaryState:Bool { nativeBattle.protectsTemporaryState || followerInteractions.blocksAutoSave }
     private var gameplayTransportAvailable: Bool {
         !mediaOnly && BoundMultiplayerFeatures.isEnabled && active && joined && !reconnecting && !backgrounded
     }

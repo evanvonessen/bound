@@ -124,7 +124,6 @@ struct SettingsView: View {
     @State private var resetRevision = 0
     @AppStorage(BoundMultiplayerFeatures.key) private var experimentalFeaturesEnabled = false
     @AppStorage(BoundDeveloperFeatures.key) private var developerFeaturesEnabled = false
-    @AppStorage(BoundLetPassButton.key) private var showLetPassButton = true
     @AppStorage(BoundDirectionalFriendArrow.key) private var directionalFriendArrow = true
     var gameplay: BoundSettingsGameplayContext?
     private let friends: BoundAccountFriendsContext
@@ -263,8 +262,6 @@ struct SettingsView: View {
                                 BoundMultiplayerFeatures.setEnabled(enabled)
                             }
 
-                        Toggle("Show Let Pass Button", isOn: $showLetPassButton)
-                            .accessibilityIdentifier("bound.settings-show-let-pass")
                     }
                     Section {
                         BoundROMServerUpdateControls()

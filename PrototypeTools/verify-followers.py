@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute actual native follower binding, compositor and cosmetic models on macOS.
+"""Execute actual native follower binding and compositor models on macOS.
 
 Only UIKit/native I/O adapter methods are omitted from the extracted sources.
 No parallel policy models, simulator, ROM writes or backend calls are used.
@@ -54,7 +54,7 @@ follower=read('Delta/Bound/BoundPresenceFollower.swift')
 declarations+=follower[:follower.index('    func rendered(profile:')]+'}\n'
 presence=read('Delta/Bound/BoundLivePresence.swift')
 pose=cut(presence,'struct BoundPresencePose:','/// Main-actor, bounded receive buffer')
-pose=pose[:pose.index('    func rendered(profile:')]+'}\n'+pose[pose.index('/// Occupancy'):]
+pose=pose[:pose.index('    func rendered(profile:')]+'}\n'+pose[pose.index('struct BoundPresenceCollision:'):]
 declarations+=pose
 friend=read('Delta/Bound/BoundFriendInteraction.swift')
 declarations+=cut(friend,'struct BoundFriendWorldPosition:','/// A separate namespace')
@@ -64,12 +64,10 @@ declarations+=cut(recorded,'enum BoundRecordedPlayerRasterizer {','@MainActor\nf
 display=read('Delta/Bound/BoundPlayerStateDisplay.swift')
 methods=display[display.index('    @discardableResult\n    static func composite'):display.index('\n}\n\nprivate final class BoundPresenceVideoRenderer')]
 declarations+='enum BoundPresenceFrameCompositor {\n'+methods+'\n}\n'
-interaction=read('Delta/Bound/BoundFollowerInteraction.swift')
-declarations+=interaction[:interaction.index('struct BoundFollowerInteractionView:')]
 test_sources=[read('PrototypeIntegrationTests/'+name).replace('@testable import Delta\n','')
-    for name in ['FollowerPresentationTests.swift','FollowerInteractionTests.swift']]
+    for name in ['FollowerPresentationTests.swift']]
 source='import Foundation\nimport CryptoKit\nimport SwiftUI\nimport XCTest\n'+declarations+'\n'+'\n'.join(test_sources)
-source+='\nMainActor.assumeIsolated {\nlet suite=XCTestSuite(name:"Actual-source cosmetic follower models")\n'
+source+='\nMainActor.assumeIsolated {\nlet suite=XCTestSuite(name:"Actual-source follower presentation models")\n'
 count=0
 for tests in test_sources:
     name=re.search(r'final class (\w+):?\s*XCTestCase',tests).group(1)

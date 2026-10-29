@@ -434,7 +434,6 @@ final class BoundCompanionCoordinator {
     private lazy var tap = BoundDeltaFrameTap { [weak self] frame in self?.sharing.receivePlaybackFrame(frame) }
     let playerStateDisplay = BoundPlayerStateDisplay()
     private var friendInteractionPanel: BoundFriendInteractionPanel?
-    private var followerInteractionHost:UIHostingController<BoundFollowerInteractionView>?
     #if DEBUG && targetEnvironment(simulator)
     var friendDialogueReading: BoundFriendDialogueProbe.Reading { friendInteractionPanel?.probe.read() ?? .init() }
     #endif
@@ -446,17 +445,6 @@ final class BoundCompanionCoordinator {
         friendPanel.name = { [weak self] in self?.onboarding.selected?.displayName ?? "Friend" }
         friendPanel.willOpen = { [weak owner] in owner?.releaseBoundFriendGameplayInputs() }
         friendInteractionPanel = friendPanel
-        let followerPanel=UIHostingController(rootView:BoundFollowerInteractionView(session:sharing.followerInteractions))
-        followerPanel.sizingOptions = [.intrinsicContentSize]
-        followerPanel.view.backgroundColor = .clear
-        owner.addChild(followerPanel);owner.view.addSubview(followerPanel.view);followerPanel.didMove(toParent:owner)
-        followerPanel.view.translatesAutoresizingMaskIntoConstraints=false
-        NSLayoutConstraint.activate([
-            followerPanel.view.leadingAnchor.constraint(equalTo:owner.view.safeAreaLayoutGuide.leadingAnchor,constant:12),
-            followerPanel.view.topAnchor.constraint(equalTo:owner.view.safeAreaLayoutGuide.topAnchor,constant:8),
-            followerPanel.view.widthAnchor.constraint(lessThanOrEqualToConstant:280)
-        ])
-        followerInteractionHost=followerPanel
         let soulBanner = BoundSoulBanner()
         owner.view.addSubview(soulBanner); soulBanner.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -810,6 +798,21 @@ final class BoundCompanionCoordinator {
             return BoundNativeContinuationContext(owner:owner,roomID:room,runID:nil)
         }
         sharing.nativeBattle.bind(core: core, gameID: gameID, interactions: sharing.interactions)
+        sharing.followerInteractions.continuationContextProvider = { [weak sharing] in
+            sharing?.nativeBattle.continuationContext ?? sharing?.nativeBattle.continuationContextProvider?()
+        }
+        sharing.followerInteractions.bind(core:core,gameID:gameID,restoreLocal:(owner?.game as? Game)?.boundUsesServerMultiplayer != true)
+        sharing.followerInteractions.canResume = { [weak owner] in
+            UIApplication.shared.applicationState == .active && owner?.view.window?.windowScene?.hasKeyboardFocus == true
+                && owner?.boundCanResumeEmulation(resumingNativeActivity:true) == true
+        }
+        sharing.followerInteractions.beforeReplace = { [weak soul=sharing.soulLink.probe,weak core] in
+            guard let core else{return false}
+            do {try soul?.drainBeforeMemoryReplacement(core:core);return true}catch{return false}
+        }
+        sharing.followerInteractions.afterReplace = { [weak soul=sharing.soulLink.probe,weak core] in
+            guard let core else{return};try soul?.refreshAfterNativeMemoryReplacement(core:core)
+        }
         sharing.soulLink.bind(core: core, gameID: gameID)
         sharing.cooperativeDoubles.bind(core:core,gameID:gameID,soul:sharing.soulLink.probe)
         romMultiplayer.debugModeChanged = { [weak self] enabled in self?.state.settings.setDebugGame(enabled) }
@@ -829,7 +832,7 @@ final class BoundCompanionCoordinator {
                       UIApplication.shared.applicationState == .active,
                       owner.view.window?.windowScene?.activationState == .foregroundActive,
                       owner.view.window?.windowScene?.hasKeyboardFocus == true,
-                      !self.sharing.nativeBattle.protectsTemporaryState,
+                      !self.sharing.protectsNativeTemporaryState,
                       !self.sharing.cooperativeDoubles.blocksAutoSave,
                       owner.boundCanResumeEmulation(resumingNativeActivity: false) else { return }
                 core.resume()
@@ -873,19 +876,20 @@ final class BoundCompanionCoordinator {
         guard let core else { boundCore = nil; state.emulationDetails = nil; return }
         state.emulationDetails = BoundEmulationDetails(packageName: core.deltaCore.name, packageIdentifier: core.deltaCore.identifier, packageVersion: core.deltaCore.version)
         boundCore = core
-        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe, soul = sharing.soulLink.probe, world = sharing.sharedWorld.probe, dialogue = friendInteractionPanel?.probe, romService = romMultiplayer.probe, cooperative = sharing.cooperativeDoubles.probe, cooperativeCable = sharing.cooperativeDoubles.cable, movement=sharing.livePresence.movement.probe
+        let previous = core.updateHandler, tap = self.tap, reader = playerStateDisplay.probe, battle = sharing.nativeBattle.probe, soul = sharing.soulLink.probe, world = sharing.sharedWorld.probe, dialogue = friendInteractionPanel?.probe, romService = romMultiplayer.probe, cooperative = sharing.cooperativeDoubles.probe, cooperativeCable = sharing.cooperativeDoubles.cable, movement=sharing.livePresence.movement.probe, berry=sharing.followerInteractions.probe
         movement.configure(core:core)
         #if DEBUG && targetEnvironment(simulator)
         let tradeQA = BoundFullAppGameplayQA.current?.tradeProbe
         BoundFullAppGameplayQA.current?.configureTrade(core:core)
         #endif
-        core.updateHandler = { [weak tap, weak reader, weak battle, weak soul, weak world, weak dialogue, weak romService, weak cooperative, weak cooperativeCable, weak movement] core in
+        core.updateHandler = { [weak tap, weak reader, weak battle, weak soul, weak world, weak dialogue, weak romService, weak cooperative, weak cooperativeCable, weak movement, weak berry] core in
             BoundFrameMemory.perform {
                 previous?(core)
                 romService?.receive(core)
                 movement?.receive(core)
                 world?.receive(core)
                 dialogue?.receive(core)
+                berry?.receive(core)
                 reader?.receive(core)
                 tap?.receive(core)
                 cooperativeCable?.receive(core)
@@ -1000,10 +1004,6 @@ final class BoundCompanionCoordinator {
         guard let owner else { return }
         defer {
             playerStateDisplay.layout(in: owner, gameView: owner.gameView)
-            if let panel = followerInteractionHost?.view,
-               sharing.followerInteractions.isPresented || sharing.followerInteractions.canLetPass || !sharing.followerInteractions.reaction.isEmpty {
-                owner.view.bringSubviewToFront(panel)
-            }
             if let panel = friendInteractionPanel, !panel.isHidden { owner.view.bringSubviewToFront(panel) }
         }
         if !arrangementLayers.active { arrangementLayers.apply() }
@@ -1600,6 +1600,7 @@ final class BoundCompanionCoordinator {
         #endif
     }
     @discardableResult func preserveNativeActivity()->Bool {
+        if sharing.followerInteractions.isActive {return sharing.followerInteractions.checkpointForContinuation()}
         if !romMultiplayer.serverOnly {
             guard sharing.nativeBattle.protectLocalLifecycle(),sharing.cooperativeDoubles.protectLocalLifecycle() else { return false }
         }

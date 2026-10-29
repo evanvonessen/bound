@@ -136,9 +136,9 @@ final class BoundFriendInteractionPanel: UIView {
     func render() {
         isHidden=true
         guard let session, configured else { return }
-        let pending = [.incoming,.outgoing,.confirming].contains(session.phase) && !session.menuPresented
+        let pending = [.incoming,.outgoing,.confirming,.agreed,.connecting].contains(session.phase) && !session.menuPresented
         if pending {
-            let title = session.phase == .confirming ? "Confirming…" : (session.activity?.title ?? "Friend") + (session.phase == .incoming ? " invitation":" pending")
+            let title = [.agreed,.connecting].contains(session.phase) ? session.message : session.phase == .confirming ? "Confirming…" : (session.activity?.title ?? "Friend") + (session.phase == .incoming ? " invitation":" pending")
             invitationButton.setTitle(title,for:.normal)
             invitationButton.isEnabled=session.canInteract
             invitationButton.accessibilityHint="Open invitation menu"
@@ -193,7 +193,10 @@ final class BoundFriendInteractionPanel: UIView {
         let value=probe.read()
         session.nativeDialogueReady=value.ready
         session.nativeDialogueBusy=value.active || request != nil || closeCompletion != nil
-        session.nativeDialogueInput=value.permitsNativeInput(pending: request != nil, acknowledgingEnd: session.phase == .ended)
+        // Consent may arrive while ordinary gameplay has opened an NPC/follower
+        // dialogue or menu. Native cleanup needs its own A/B input until field
+        // admission is ready; otherwise agreed blocks the input it waits for.
+        session.nativeDialogueInput=value.permitsNativeInput(pending: request != nil || closeCompletion != nil, acknowledgingEnd: session.phase == .ended)
         session.refreshInputGate()
         if let closeCompletion,!value.active,value.ready {
             self.closeCompletion=nil; closeCompletion(); return

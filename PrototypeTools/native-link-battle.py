@@ -7,6 +7,7 @@ observations. It supplies no ROM, RAM, credentials or gameplay commands.
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import plistlib
 import subprocess
@@ -27,6 +28,8 @@ def main():
     parser.add_argument('--silent-disconnect',action='store_true',help='Blackhole packets without a transport error; native liveness detection must suspend automatically')
     parser.add_argument('--rate-a',type=float,default=1);parser.add_argument('--rate-b',type=float,default=1)
     parser.add_argument('--local-menus',action='store_true')
+    parser.add_argument('--field-services',action='store_true',help='Keep the resident game UI host updated during native entry and battle, as in the app')
+    parser.add_argument('--initiator',choices=['A','B'],default='A',help='Player who initiates the friendly battle')
     parser.add_argument('--battle-run',action='store_true',help='Peer A chooses the native Run action; both peers must return and restore their parties')
     parser.add_argument('--battle-party',choices=['healthy','fainted','soul-denied'],default='healthy',help='Disposable party: healthy, ordinary 0HP, or a permanently denied lead plus a living damaged mon')
     parser.add_argument('--trade-cancel',action='store_true',help='Cancel from the native trade menu before offering; both original parties must persist')
@@ -64,6 +67,7 @@ def main():
     threading.Thread(target=server.serve_forever,daemon=True).start()
     relay=None; connections={}; condition=threading.Condition(); relay_id=str(uuid.uuid4())
     write_locks={peer:threading.Lock() for peer in ('A','B')}
+    packet_times={peer:[] for peer in ('A','B')}
     if args.relay:
         class Forward(socketserver.BaseRequestHandler):
             def handle(self):
@@ -90,6 +94,7 @@ def main():
                             if not 38<=count<=4134:return
                             if len(buffered)<count+4:break
                             packet=bytes(buffered[:count+4]);del buffered[:count+4]
+                            packet_times[peer].append(time.monotonic())
                             with condition:
                                 if not condition.wait_for(lambda:other_peer in connections,timeout=120):return
                                 other=connections[other_peer]
@@ -116,6 +121,8 @@ def main():
                 if 'TestBundlePath' in copy:
                     copy.setdefault('EnvironmentVariables',{}).update(BOUND_NATIVE_BATTLE_PEER=peer,BOUND_NATIVE_BATTLE_PORT=str(server.server_port),BOUND_NATIVE_TRADE_CANCEL='1' if args.trade_cancel else '0',BOUND_SHARED_WORLD_PAIR='1' if args.shared_world else '0',BOUND_NATIVE_DISCONNECT_SECONDS=str(args.disconnect_seconds),BOUND_NATIVE_DISCONNECT_STAGE=args.disconnect_stage,BOUND_NATIVE_SILENT_DISCONNECT='1' if args.silent_disconnect else '0',BOUND_NATIVE_BATTLE_RUN='1' if args.battle_run else '0',BOUND_NATIVE_BATTLE_PARTY=str(['healthy','fainted','soul-denied'].index(args.battle_party)))
                     copy['EnvironmentVariables'].update(BOUND_NATIVE_BATTLE_RATE=str(args.rate_a if peer=='A' else args.rate_b),BOUND_NATIVE_LOCAL_MENUS='1' if args.local_menus else '0')
+                    copy['EnvironmentVariables']['BOUND_NATIVE_FIELD_SERVICES']='1' if args.field_services else '0'
+                    copy['EnvironmentVariables']['BOUND_NATIVE_INITIATOR']=args.initiator
                     if relay:copy['EnvironmentVariables'].update(BOUND_NATIVE_BATTLE_RELAY_PORT=str(relay.server_address[1]),BOUND_NATIVE_BATTLE_RELAY_ID=relay_id)
                 return copy
             if isinstance(value,list): return [visit(v) for v in value]
@@ -124,7 +131,8 @@ def main():
     try:
         for peer,sim in zip(('A','B'),(args.sim_a,args.sim_b)):
             log=(args.output/(peer+'.log')).open('wb')
-            cmd=['/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild','test-without-building','-xctestrun',str(clone(peer)),
+            developer=Path(os.environ.get('DEVELOPER_DIR','/Applications/Developer/Xcode.app/Contents/Developer'))
+            cmd=[str(developer/'usr/bin/xcodebuild'),'test-without-building','-xctestrun',str(clone(peer)),
                 '-destination','platform=iOS Simulator,id='+sim,'-parallel-testing-enabled','NO',
                 '-only-testing:BoundIntegrationTests/NativeBattleRuntimeTests/'+('testTwoPlayerNuggetBridgePrerequisite' if args.shared_world else 'testActualNativeTrade' if args.trade else 'testNativeSessionForwardedEntry' if args.session_entry else 'testActualNativeLinkBattle'),
                 '-collect-test-diagnostics','never','-resultBundlePath',str(args.output/(peer+'.xcresult'))]
@@ -163,7 +171,8 @@ def main():
             if process.poll() is None: process.terminate()
             log.close()
         with lock: result=dict(peers)
-        (args.output/'summary.json').write_text(json.dumps(dict(passed=passed,error=error,relay=args.relay,latencyMs=args.latency_ms,entryOnly=args.session_entry,trade=args.trade,cancel=args.trade_cancel,sharedWorld=args.shared_world,battleRun=args.battle_run,battleParty=args.battle_party,disconnectSeconds=args.disconnect_seconds,disconnectStage=args.disconnect_stage,silentDisconnect=args.silent_disconnect,elapsed=time.monotonic()-started,peers=result,
+        peaks={peer:max((sum(t-1 < other <= t for other in times) for t in times),default=0) for peer,times in packet_times.items()}
+        (args.output/'summary.json').write_text(json.dumps(dict(passed=passed,error=error,relay=args.relay,latencyMs=args.latency_ms,entryOnly=args.session_entry,initiator=args.initiator,fieldServices=args.field_services,peakPacketsPerSecond=peaks,trade=args.trade,cancel=args.trade_cancel,sharedWorld=args.shared_world,battleRun=args.battle_run,battleParty=args.battle_party,disconnectSeconds=args.disconnect_seconds,disconnectStage=args.disconnect_stage,silentDisconnect=args.silent_disconnect,elapsed=time.monotonic()-started,peers=result,
             rates=[args.rate_a,args.rate_b],localMenus=args.local_menus,limits='Native command transport on two owned simulators over host loopback; separate from authenticated internet transport and normal-app interaction acceptance.'),indent=2)+'\n')
         server.shutdown(); server.server_close()
         if relay:relay.shutdown(); relay.server_close()

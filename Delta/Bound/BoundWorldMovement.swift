@@ -309,21 +309,14 @@ final class BoundWorldMovementSession:ObservableObject {
         var phase:Phase = .waiting,started=false,completed=false
     }
     private struct PeerRequest {let key:BoundMovementArbiter.Key,step:BoundMovementStep,created:TimeInterval}
-    private struct Pass {
-        enum Phase {case awaitingAck,awaitingCommit,awaitingCommitted,active}
-        let token:UInt64,initiator:UUID,deadline:TimeInterval
-        var phase:Phase,until:TimeInterval=0
-    }
     let probe=BoundMovementProbe()
     var send:((Data)->Bool)?
-    @Published private(set) var passing=false
     @Published private(set) var reconnecting=true
     private var context:Context?,native:BoundMovementSnapshot?,arbiter=BoundMovementArbiter()
-    private var attempt:Attempt?,peerRequest:PeerRequest?,pass:Pass?
+    private var attempt:Attempt?,peerRequest:PeerRequest?
     private var channel=UUID(),peerChannel:UUID?,peerGeneration:UInt32?
     private var generation:UInt32=0,sequence:UInt64=0,serial:UInt64=0,nativeSequence:UInt32=0
     private var received:[UUID:UInt64]=[:]
-    private var retiredPass:[UUID:UInt64]=[:]
     private var lastNative:(frame:UInt32,sequence:UInt32)?,clock:TimeInterval=0,sentTimes:[TimeInterval]=[]
     private var probeEpoch:UInt64=0
     private var lastEcho:TimeInterval = -.infinity,lastHeartbeat:TimeInterval = -.infinity,lastAction:TimeInterval = -.infinity
@@ -336,7 +329,7 @@ final class BoundWorldMovementSession:ObservableObject {
         clearReservations();probe.publish(nil)
     }
     private func clearReservations() {
-        arbiter.clear();attempt=nil;peerRequest=nil;retiredPass=[:];pass=nil;passing=false;probe.publish(nil)
+        arbiter.clear();attempt=nil;peerRequest=nil;probe.publish(nil)
     }
     private func nextToken()->UInt64? {guard serial<UInt64.max else{return nil};serial+=1;return serial}
     private func ready(at now:TimeInterval)->Bool {peerChannel != nil && now>=lastEcho && now-lastEcho<=0.3}
@@ -347,16 +340,6 @@ final class BoundWorldMovementSession:ObservableObject {
             sequence:sequence,instance:c.instance,generation:generation,group:c.group,number:c.number,elevation:step?.elevation ?? c.elevation,
             kind:kind,token:token,step:step)
         if let bytes=packet.encoded(){sentTimes.append(clock);_=send?(bytes)}
-    }
-    private func nearAndStationary(_ c:Context)->Bool {
-        guard let own=c.own.first,let other=c.other.first else{return false}
-        return own.current==own.previous && other.current==other.previous && own.current.distance(other.current)<=3
-    }
-    func letPass(at now:TimeInterval=ProcessInfo.processInfo.systemUptime) {
-        guard now.isFinite,now>=clock,let c=context,ready(at:now),nearAndStationary(c),pass==nil,let token=nextToken() else{return}
-        clock=now
-        pass = .init(token:token,initiator:c.local,deadline:now+0.8,phase:.awaitingAck)
-        transmit(.pass,token:token);lastAction=now
     }
     func receive(_ data:Data,at now:TimeInterval=ProcessInfo.processInfo.systemUptime) {
         guard now.isFinite,now>=clock,let c=context,let p=BoundMovementPacket.decode(data),p.sender==c.peer,p.receiver==c.local,
@@ -417,35 +400,7 @@ final class BoundWorldMovementSession:ObservableObject {
             if old.phase == .finishing || p.kind == .cancelled && !old.started {
                 attempt=nil
             }
-        case .pass,.passAck,.passCommit,.passCommitted:receivePass(p,context:c,at:now)
-        }
-    }
-    private func receivePass(_ p:BoundMovementPacket,context c:Context,at now:TimeInterval) {
-        switch p.kind {
-        case .pass:
-            guard nearAndStationary(c),(retiredPass[c.peer] ?? 0)<p.token else{return}
-            if let old=pass {
-                if old.initiator==c.peer && old.token==p.token {transmit(.passAck,token:p.token);return}
-                if old.initiator.uuidString<c.peer.uuidString {return}
-            }
-            pass = .init(token:p.token,initiator:c.peer,deadline:now+0.8,phase:.awaitingCommit)
-            transmit(.passAck,token:p.token)
-        case .passAck:
-            guard var value=pass,value.initiator==c.local,value.token==p.token,
-                  value.phase == .awaitingAck || value.phase == .awaitingCommitted,now<value.deadline else{return}
-            if value.phase == .awaitingAck {value.phase = .awaitingCommitted;value.until=now+2;passing=true;arbiter.clear();attempt=nil;peerRequest=nil}
-            pass=value;transmit(.passCommit,token:p.token)
-        case .passCommit:
-            guard var value=pass,value.initiator==c.peer,value.token==p.token else{return}
-            if value.phase == .awaitingCommit {
-                guard now<value.deadline else{return}
-                value.phase = .active;value.until=now+2;pass=value;passing=true;arbiter.clear();attempt=nil;peerRequest=nil
-            }
-            guard value.phase == .active else{return};transmit(.passCommitted,token:p.token)
-        case .passCommitted:
-            guard var value=pass,value.initiator==c.local,value.token==p.token,value.phase == .awaitingCommitted else{return}
-            value.phase = .active;pass=value
-        default:break
+        case .pass,.passAck,.passCommit,.passCommitted: break // Retired protocol: never disables solid collision.
         }
     }
     func update(_ next:Context?,at now:TimeInterval=ProcessInfo.processInfo.systemUptime) {
@@ -470,39 +425,28 @@ final class BoundWorldMovementSession:ObservableObject {
         if now-lastHeartbeat>=0.1 {transmit(reconnecting ? .hello:.heartbeat);lastHeartbeat=now}
         guard !reconnecting else {probe.publish(nil);return}
         arbiter.expire(at:now)
-        if let p=pass {
-            if (p.phase == .active && now>=p.until) || (p.phase != .active && now>=p.deadline) {
-                retiredPass[p.initiator]=max(retiredPass[p.initiator] ?? 0,p.token);pass=nil;passing=false
-            }
-            else if now-lastAction>=0.05 {
-                transmit(p.phase == .awaitingAck ? .pass:p.phase == .awaitingCommit ? .passAck:p.phase == .awaitingCommitted ? .passCommit:.passCommitted,token:p.token)
-                lastAction=now
+        if var old=attempt,old.phase != .finishing {
+            if value.completed==old.step.nonce {finishLocal(completed:true,at:now)}
+            else {
+                if value.previous==old.step.from && old.step.path.contains(value.current) && value.current != value.previous {old.started=true;attempt=old}
+                if !old.started && (old.step.generation != value.generation || now>=old.deadline || (value.request != nil && value.request != old.step)) {finishLocal(completed:false,at:now)}
             }
         }
-        if !passing {
-            if var old=attempt,old.phase != .finishing {
-                if value.completed==old.step.nonce {finishLocal(completed:true,at:now)}
-                else {
-                    if value.previous==old.step.from && old.step.path.contains(value.current) && value.current != value.previous {old.started=true;attempt=old}
-                    if !old.started && (old.step.generation != value.generation || now>=old.deadline || (value.request != nil && value.request != old.step)) {finishLocal(completed:false,at:now)}
-                }
+        // Ordinary exact-tile collision needs no transport round trip.
+        // Only a legacy native negotiation request can start this exchange.
+        if attempt==nil,value.flags&64 != 0,let step=value.request,let token=nextToken() {
+            attempt = .init(key:.init(owner:next.local,token:token),step:step,deadline:now+0.8)
+        }
+        if next.isArbiter {grantPending(context:next,at:now)}
+        if now-lastAction>=0.05 {
+            if let old=attempt {
+                if old.phase == .finishing {transmit(old.completed ? .release:.cancel,old.step,token:old.key.token)}
+                else if !next.isArbiter {transmit(old.phase == .waiting ? .request:old.phase == .offered ? .accept:old.started ? .started:.accept,old.step,token:old.key.token)}
             }
-            // Ordinary exact-tile collision needs no transport round trip.
-            // Only a legacy native negotiation request can start this exchange.
-            if attempt==nil,value.flags&64 != 0,let step=value.request,let token=nextToken() {
-                attempt = .init(key:.init(owner:next.local,token:token),step:step,deadline:now+0.8)
+            if next.isArbiter,let request=peerRequest,let lease=arbiter.lease(request.key) {
+                transmit(lease.phase == .offered ? .offer:.grant,request.step,token:request.key.token)
             }
-            if next.isArbiter {grantPending(context:next,at:now)}
-            if now-lastAction>=0.05 {
-                if let old=attempt {
-                    if old.phase == .finishing {transmit(old.completed ? .release:.cancel,old.step,token:old.key.token)}
-                    else if !next.isArbiter {transmit(old.phase == .waiting ? .request:old.phase == .offered ? .accept:old.started ? .started:.accept,old.step,token:old.key.token)}
-                }
-                if next.isArbiter,let request=peerRequest,let lease=arbiter.lease(request.key) {
-                    transmit(lease.phase == .offered ? .offer:.grant,request.step,token:request.key.token)
-                }
-                lastAction=now
-            }
+            lastAction=now
         }
         publish(native:value,context:next,at:now)
     }
@@ -543,17 +487,17 @@ final class BoundWorldMovementSession:ObservableObject {
         // GP_NEGOTIATE remains off: adjacent open tiles never wait on a network
         // reservation. The completed-frame probe handles overlap recovery and
         // collapses each fresh actor to its occupied native tile.
-        let actors=passing ? []:Array(c.other.prefix(2));put(UInt32(actors.count),&out,68)
+        let actors=Array(c.other.prefix(2));put(UInt32(actors.count),&out,68)
         for (i,a) in actors.enumerated() {
             let n=128+i*32;put(1,&out,n)
             BoundMovementSnapshot.putTile(a.current,&out,n+4);BoundMovementSnapshot.putTile(a.previous,&out,n+8)
             out[n+12]=UInt8(a.elevation);out[n+13]=UInt8(a.kind)
             put(UInt32(truncatingIfNeeded:a.identity),&out,n+20);put(UInt32(a.identity>>32),&out,n+24)
         }
-        let permit=passing ? native.request:attempt.flatMap{$0.phase == .committed && !$0.started && now<$0.deadline ? $0.step:nil}
+        let permit=attempt.flatMap{$0.phase == .committed && !$0.started && now<$0.deadline ? $0.step:nil}
         if let permit,permit==native.request {
             put(permit.nonce,&out,72);put(permit.generation,&out,76)
-            BoundMovementSnapshot.putTile(permit.from,&out,80);BoundMovementSnapshot.putTile(permit.to,&out,84);put(passing ? 3:0,&out,88)
+            BoundMovementSnapshot.putTile(permit.from,&out,80);BoundMovementSnapshot.putTile(permit.to,&out,84);put(0,&out,88)
         }
         probe.publish(out,epoch:probeEpoch,local:native)
     }
