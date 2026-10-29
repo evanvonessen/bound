@@ -3999,7 +3999,7 @@
     "Cores/GBADeltaCore/visualboyadvance-m/src/gba/Flash.h": "9e6d0431781e36a4138112022c338102ac08c73b3d98bd448d2b160dc8ac2770",
     "Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA-arm.cpp": "1d3b14089eeb183006941f524cce23b9ad4c531b3fc933653d15b0a5e515c0e4",
     "Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA-thumb.cpp": "c862fb19edc9c828983b458442a173561f6caa98b9106253b0cc5b78ead3a164",
-    "Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA.cpp": "54965d42e1c63d636615baf96089242fd4b8d8dccf3a0f432c86b5812d944436",
+    "Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA.cpp": "51359757a07f14fb7522be80e84f2216f2b102b1f6d92aac0cacaf2765f0e447",
     "Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA.h": "e9a69e43113633a881b2d35a6d14163d916874c2c655f8de0032a65affee3d1d",
     "Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBAGfx.cpp": "764d8d431a80bd5ed595a2f43df545599fa6ac581c7619786b03a275c24ee521",
     "Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBAGfx.h": "0afa7723985936ffb25f46e4d27b05f63f745c0dbaa8c99569b1c87a3600fed5",

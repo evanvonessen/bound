@@ -744,9 +744,9 @@ bool CPUWriteState(const char* file)
     return res;
 }
 
-bool CPUWriteMemState(char* memory, int available, long& reserved)
+static bool CPUWriteMemStateWithMode(char* memory, int available, long& reserved, const char* mode)
 {
-    gzFile gzFile = utilMemGzOpen(memory, available, "w");
+    gzFile gzFile = utilMemGzOpen(memory, available, mode);
 
     if (gzFile == NULL) {
         return false;
@@ -762,6 +762,19 @@ bool CPUWriteMemState(char* memory, int available, long& reserved)
     utilGzClose(gzFile);
 
     return res;
+}
+
+bool CPUWriteMemState(char* memory, int available, long& reserved)
+{
+    return CPUWriteMemStateWithMode(memory, available, reserved, "w");
+}
+
+// Bound checkpoint extension: copy the identical v10 payload using stored
+// DEFLATE blocks. The caller can resume the core before recompressing owned
+// bytes. Ordinary Delta state writers retain their existing compression.
+bool CPUWriteMemStateUncompressed(char* memory, int available, long& reserved)
+{
+    return CPUWriteMemStateWithMode(memory, available, reserved, "w0");
 }
 
 static bool CPUReadState(gzFile gzFile)

@@ -32,6 +32,35 @@ See [Nakama persistence and operation classes](../Backend/nakama/README.md).
 
 ## Conflict rules
 
+### Checkpoint capture and gameplay pacing
+
+The checkpoint boundary pauses the core, drains ordered progression events,
+then copies the native v10 state, battery, memory files and history cursor from
+that stopped execution. The state copy uses stored DEFLATE blocks, preserving
+the existing VBA/gzip format without doing compression search during the pause.
+The exact ROM/layout binding is captured with those bytes. After the normal
+resume gate, a separate zlib stream recompresses only the owned copy and updates
+its compressed-content digest. It never reads a resumed core or uses the core's
+global gzip dispatch functions. A stored stream remains a valid recovery
+fallback if recompression fails.
+
+Checkpoint construction stays synchronous on the coordinator actor, preserving
+final-save ordering, checkpoint ancestry and upload coalescing. The existing
+15-second automatic interval and pending-save admission remain unchanged.
+Failed ordered drains retain their existing pause/recovery behavior. Final or
+background saves do not resume when the existing lifecycle gate forbids it.
+This reduces the state-serialization part of gameplay pauses; journal drains,
+pause admission and copying still require a stopped core. Package construction
+still runs synchronously after that boundary.
+
+Instruments signposts in `com.evanvonessen.bound` / `Checkpoint` expose
+`StateCapture` (including whether compression ran) and `StateCompression`.
+`ServerFinalSaveLifecycleTests` compares the native capture times and verifies
+decompressed-byte identity, restore compatibility and corruption rejection.
+The current-ROM adapter test also checks preservation of the ROM/layout tag.
+
+### Authority and recovery
+
 * Different players may save independently; their snapshot slots never overlap.
 * Two devices for one player use compare-and-swap against the last known server
   head. The first valid seal wins. The other device stops and asks to refresh and

@@ -1,4 +1,5 @@
 import XCTest
+import zlib
 @preconcurrency import DeltaCore
 @testable import Delta
 
@@ -68,6 +69,73 @@ private final class FinalSaveGate {
 final class ServerFinalSaveLifecycleTests: XCTestCase {
     private enum ExpectedFailure: Error { case capture, deadline }
     private final class PausedOwner { var facts: [String] = [] }
+
+    private func decodedState(_ state: Data) throws -> Data {
+        var stream = z_stream()
+        var output = Data(count: 4 * 1024 * 1024)
+        XCTAssertEqual(inflateInit2_(&stream, 31, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)), Z_OK)
+        defer { inflateEnd(&stream) }
+        let capacity = output.count
+        let result = state.withUnsafeBytes { input in
+            output.withUnsafeMutableBytes { destination in
+                stream.next_in = UnsafeMutablePointer(mutating: input.bindMemory(to: UInt8.self).baseAddress!.advanced(by: 8))
+                stream.avail_in = uInt(state.count - 8)
+                stream.next_out = destination.bindMemory(to: UInt8.self).baseAddress!
+                stream.avail_out = uInt(capacity)
+                return inflate(&stream, Z_FINISH)
+            }
+        }
+        XCTAssertEqual(result, Z_STREAM_END)
+        XCTAssertEqual(stream.avail_in, 0)
+        output.count = Int(stream.total_out)
+        return output
+    }
+
+    func testNativeCheckpointCopiesBeforeResumeAndCompressesOwnedBytes() throws {
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let rom = root.appendingPathComponent("checkpoint.gba")
+        try FileManager.default.copyItem(at: fixture, to: rom)
+        let core = try XCTUnwrap(EmulatorCore(game: FinalSaveNativeGame(fileURL: rom), options: [.metal: true]))
+        try BoundROMMultiplayerCoordinator.prepareServerCoreForSelection(core)
+        defer { core.updateHandler = nil; core.stop() }
+        var legacyTimes = [Double](), copyTimes = [Double]()
+        for iteration in 0..<12 {
+            let start = ProcessInfo.processInfo.systemUptime
+            let legacy = BoundVBABattleBridge.captureServerState()
+            let copiedAt = ProcessInfo.processInfo.systemUptime
+            let stored = BoundVBABattleBridge.captureUncompressedServerState()
+            let end = ProcessInfo.processInfo.systemUptime
+            legacyTimes.append(copiedAt - start); copyTimes.append(end - copiedAt)
+            XCTAssertGreaterThan(stored.count, legacy.count)
+            XCTAssertEqual(try decodedState(stored), try decodedState(legacy), "Every native v10 field must remain byte identical")
+            let frameDelivered = DispatchSemaphore(value: 0)
+            core.updateHandler = { _ in frameDelivered.signal() }
+            XCTAssertTrue(core.resume())
+            let compressed = BoundVBABattleBridge.compressServerState(stored)
+            if iteration == 0 {
+                // Hold this main actor busy with owned-byte compression for
+                // several frame periods. Frame delivery must continue without
+                // needing the coordinator actor or touching the live core.
+                for _ in 0..<16 {
+                    XCTAssertEqual(BoundVBABattleBridge.compressServerState(stored), compressed)
+                }
+                XCTAssertEqual(frameDelivered.wait(timeout: .now()), .success,
+                               "Emulation must deliver frames while checkpoint compression occupies the main actor")
+            }
+            XCTAssertEqual(core.state, .running)
+            XCTAssertEqual(try decodedState(compressed), try decodedState(stored), "Recompression must use the captured bytes after resume")
+            XCTAssertTrue(core.pause())
+            XCTAssertTrue(BoundVBABattleBridge.restoreServerState(compressed))
+            XCTAssertTrue(BoundVBABattleBridge.restoreServerState(stored), "Stored stream is a valid recovery fallback")
+            var corrupt = stored; corrupt[corrupt.count - 5] ^= 1
+            XCTAssertTrue(BoundVBABattleBridge.compressServerState(corrupt).isEmpty)
+            XCTAssertTrue(BoundVBABattleBridge.compressServerState(Data(stored.dropLast())).isEmpty)
+        }
+        print("CHECKPOINT_CAPTURE_MS legacy=\(legacyTimes.map { $0 * 1000 }) stored=\(copyTimes.map { $0 * 1000 })")
+    }
 
     func testActualNativeCapturePausesDoNotScheduleAnotherSaveButManualPauseDoes() throws {
         let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "BoundDiagnostic", withExtension: "gba"))

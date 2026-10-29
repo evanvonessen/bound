@@ -3186,7 +3186,9 @@ extension BoundROMMultiplayerCoordinator {
             // Activities were excluded above. Even if their closing dialogue
             // still blocks automatic saves, a final capture must contain the
             // current result, never the pre-activity world's old RAM.
-            state = MultiRedAdapter.captureState(); battery = BoundVBABattleBridge.captureServerBattery()
+            // Stored gzip blocks copy the same native serialization without
+            // running the compression search while gameplay is stopped.
+            state = BoundVBABattleBridge.captureUncompressedServerState(); battery = BoundVBABattleBridge.captureServerBattery()
             memory = BoundServerMemoryFiles.snapshot(gameID: game.identifier)
             historyCut = historyBits(ledger: sharing.soulLink.probe.read().ledger)
             cursorCut = historyCut == nil ? try eventPersistence.sharedEventAcknowledgement(gameID: game.identifier).cursor : nil
@@ -3195,11 +3197,18 @@ extension BoundROMMultiplayerCoordinator {
         }
         if wasRunning, UIApplication.shared.applicationState == .active { core.resume() }
         guard !state.isEmpty, battery.count == 131072 else { throw BoundMultiplayerSaveStore.Failure.incomplete }
+        // Only owned bytes cross this boundary. Keep checkpoint construction
+        // synchronous on this actor so final captures, head fences and event
+        // ancestry cannot overtake an automatic capture. The emulator is free
+        // to advance while the independent zlib codec runs.
+        let compressed = BoundVBABattleBridge.compressServerState(state)
         let history: String
         if let historyCut { history = BoundROMHistoryJournal.digest(historyCut) }
         else if let cursorCut { history = BoundMultiplayerSaveStore.hash(try BoundMultiplayerSaveStore.encode(cursorCut)) }
         else { throw BoundMultiplayerSaveStore.Failure.incomplete }
-        let files = ["checkpoint.state": state, "game.sav": battery, "memory-files.json": try JSONEncoder().encode(memory)]
+        // The stored stream is itself a valid compatible checkpoint; retain it
+        // if recompression cannot allocate, rather than losing a captured save.
+        let files = ["checkpoint.state": compressed.isEmpty ? state : compressed, "game.sav": battery, "memory-files.json": try JSONEncoder().encode(memory)]
         let package: BoundMultiplayerSavePackage
         if let debugCut {
             let journal = try eventPersistence.journal(gameID: game.identifier)

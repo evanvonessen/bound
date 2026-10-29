@@ -4,6 +4,7 @@
 #import <GBADeltaCore/GBADeltaCore.h>
 #import <CommonCrypto/CommonDigest.h>
 #import <objc/runtime.h>
+#import <os/signpost.h>
 #include <cstdint>
 #include <atomic>
 #include <chrono>
@@ -24,6 +25,7 @@ extern int flashSize;
 extern int skipSaveGameBattery,skipSaveGameCheats;
 extern void flashSetSize(int size);
 extern bool CPUWriteMemState(char *,int,long &);
+extern bool CPUWriteMemStateUncompressed(char *,int,long &);
 extern bool CPUReadMemState(char *,int);
 namespace {
 std::atomic<uint64_t> movementTimeline{1};
@@ -427,10 +429,22 @@ static uint8_t soulQAScriptBackup[128];
     return YES;
 }
 + (NSData *)captureServerState {
+    return [self captureServerStateWithCompression:YES];
+}
++ (NSData *)captureUncompressedServerState {
+    return [self captureServerStateWithCompression:NO];
+}
++ (NSData *)captureServerStateWithCompression:(BOOL)compress {
+    static os_log_t log=os_log_create("com.evanvonessen.bound","Checkpoint");
+    const auto signpost=os_signpost_id_generate(log);
+    os_signpost_interval_begin(log,signpost,"StateCapture","compressed=%d",compress);
+    auto finish=[&] {os_signpost_interval_end(log,signpost,"StateCapture");};
+    struct EndCapture { decltype(finish)& end; ~EndCapture(){end();} } end{finish};
     if(!rom||!workRAM||!internalRAM) return [NSData data];
     NSMutableData *data=[NSMutableData dataWithLength:4*1024*1024];
     long reserved=0;
-    if(!CPUWriteMemState(static_cast<char *>(data.mutableBytes),int(data.length),reserved)) return [NSData data];
+    const auto writer=compress ? CPUWriteMemState:CPUWriteMemStateUncompressed;
+    if(!writer(static_cast<char *>(data.mutableBytes),int(data.length),reserved)) return [NSData data];
     const auto *bytes=static_cast<const uint8_t *>(data.bytes);
     // VBA's memory writer prepends its own eight-byte length header. Read the
     // finalized length after gzip close rather than its pre-close estimate.
@@ -453,6 +467,56 @@ static uint8_t soulQAScriptBackup[128];
         return tagged;
     }
     return data;
+}
++ (NSData *)compressServerState:(NSData *)snapshot {
+    static os_log_t log=os_log_create("com.evanvonessen.bound","Checkpoint");
+    const auto signpost=os_signpost_id_generate(log);
+    os_signpost_interval_begin(log,signpost,"StateCompression");
+    auto finish=[&] {os_signpost_interval_end(log,signpost,"StateCompression");};
+    struct EndCompression { decltype(finish)& end; ~EndCompression(){end();} } end{finish};
+    // No ROM, RAM, utilGz* dispatch pointers or other mutable core globals here.
+    // Preserve the exact decompressed serialization and capture-time binding.
+    constexpr size_t limit=4*1024*1024;
+    if(snapshot.length<=32||snapshot.length>limit) return [NSData data];
+    const auto *bytes=static_cast<const uint8_t *>(snapshot.bytes);
+    if(memcmp(bytes,"VBA ",4)||size_t(word(bytes+4))+8!=snapshot.length
+       ||bytes[8]!=0x1F||bytes[9]!=0x8B||bytes[10]!=8||(bytes[11]!=0&&bytes[11]!=4)) return [NSData data];
+    const bool tagged=bytes[11]==4;
+    if(tagged) {
+        if(snapshot.length<=92||half(bytes+18)!=72||bytes[20]!='B'||bytes[21]!='R'||half(bytes+22)!=68) return [NSData data];
+        uint8_t digest[32];CC_SHA256(bytes+92,CC_LONG(snapshot.length-92),digest);
+        if(memcmp(digest,bytes+60,32)) return [NSData data];
+    }
+    NSMutableData *raw=[NSMutableData dataWithLength:limit];
+    z_stream decoder={};
+    decoder.next_in=const_cast<Bytef *>(bytes+8);decoder.avail_in=uInt(snapshot.length-8);
+    decoder.next_out=static_cast<Bytef *>(raw.mutableBytes);decoder.avail_out=uInt(raw.length);
+    if(inflateInit2(&decoder,15+16)!=Z_OK) return [NSData data];
+    const int decoded=inflate(&decoder,Z_FINISH);
+    const size_t rawLength=decoder.total_out;const auto remaining=decoder.avail_in;
+    inflateEnd(&decoder);
+    if(decoded!=Z_STREAM_END||remaining||rawLength<700000||rawLength>limit) return [NSData data];
+    NSMutableData *result=[NSMutableData dataWithLength:limit];
+    memcpy(result.mutableBytes,"VBA ",4);
+    z_stream encoder={};
+    encoder.next_in=static_cast<Bytef *>(raw.mutableBytes);encoder.avail_in=uInt(rawLength);
+    encoder.next_out=static_cast<Bytef *>(result.mutableBytes)+8;encoder.avail_out=uInt(limit-8-74);
+    if(deflateInit2(&encoder,Z_DEFAULT_COMPRESSION,Z_DEFLATED,15+16,8,Z_DEFAULT_STRATEGY)!=Z_OK) return [NSData data];
+    const int encoded=deflate(&encoder,Z_FINISH);const size_t size=encoder.total_out+8;
+    deflateEnd(&encoder);
+    if(encoded!=Z_STREAM_END) return [NSData data];
+    result.length=size;
+    if(tagged) {
+        uint8_t extra[74];memcpy(extra,bytes+18,74);
+        const auto *compressed=static_cast<const uint8_t *>(result.bytes);
+        CC_SHA256(compressed+18,CC_LONG(size-18),extra+42);
+        NSMutableData *bound=[NSMutableData dataWithBytes:compressed length:18];
+        static_cast<uint8_t *>(bound.mutableBytes)[11]|=4;
+        [bound appendBytes:extra length:74];[bound appendBytes:compressed+18 length:size-18];
+        result=bound;
+    }
+    put32(static_cast<uint8_t *>(result.mutableBytes)+4,uint32_t(result.length-8));
+    return result;
 }
 + (BOOL)restoreServerState:(NSData *)data {
     if(!rom||!workRAM||!internalRAM||data.length<=32||data.length>4*1024*1024) return NO;

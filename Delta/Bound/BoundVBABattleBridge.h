@@ -10,6 +10,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)setServerOnlyGameSave:(BOOL)enabled forURL:(NSURL *)url NS_SWIFT_NAME(setServerOnlyGameSave(_:for:));
 /// Paused core or completed-frame owner only; these functions perform no I/O.
 + (NSData *)captureServerState;
+// Capture only while the core is paused; owns all bytes including ROM binding.
++ (NSData *)captureUncompressedServerState;
+// Pure codec: safe after resume, without accessing any core/global serializer.
++ (NSData *)compressServerState:(NSData *)snapshot;
 + (BOOL)restoreServerState:(NSData *)data;
 + (NSData *)captureServerBattery;
 + (BOOL)restoreServerBattery:(NSData *)data;

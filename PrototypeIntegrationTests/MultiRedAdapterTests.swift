@@ -58,6 +58,15 @@ final class MultiRedAdapterTests: XCTestCase {
         try soul.prepareRestoredState(core)
         try soul.prepareCheckpoint(core: core)
         let state = MultiRedAdapter.captureState(), battery = BoundVBABattleBridge.captureServerBattery()
+        let stored = BoundVBABattleBridge.captureUncompressedServerState()
+        let recompressed = BoundVBABattleBridge.compressServerState(stored)
+        XCTAssertFalse(recompressed.isEmpty)
+        XCTAssertEqual(stored.subdata(in: 24..<60), recompressed.subdata(in: 24..<60), "Exact ROM/layout binding must survive recompression")
+        XCTAssertTrue(MultiRedAdapter.restoreState(recompressed))
+        var wrongBinding = recompressed; wrongBinding[24] ^= 1
+        XCTAssertFalse(MultiRedAdapter.restoreState(wrongBinding))
+        var wrongDigest = recompressed; wrongDigest[60] ^= 1
+        XCTAssertFalse(MultiRedAdapter.restoreState(wrongDigest))
         let memory = BoundServerMemoryFiles.snapshot(gameID: profile.gameID)
         XCTAssertGreaterThan(state.count, 1024)
         XCTAssertEqual(battery.count, 0x20000)
