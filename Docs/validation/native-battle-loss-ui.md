@@ -18,6 +18,10 @@ Frames can then render the notification and sample A while the cartridge skips
 all gameplay callbacks. Retiring the notice preserves that barrier until the
 existing Game Over/menu handoff. The durable terminal record, account scope,
 save-deletion barrier and explicit return action remain in their existing path.
+Paused memory-replacement boundaries clear the ROM presentation port so that
+its transient terminal barrier cannot freeze a restored or restarted execution.
+If a terminal native view cannot open within two seconds, the core returns to
+the existing paused Game Over/card path and keeps the loss unacknowledged.
 
 ## Pair and compatibility
 
@@ -64,12 +68,16 @@ workspace, outside Git:
   actual Delta/VBA-M test cold boots the candidate, publishes the real host page,
   verifies absence of the Bound card, uses native A, reopens the durable journal
   and checks that terminal presentation never advances gameplay callbacks.
+  The final run also checks paused port retirement, stalled native presentation
+  and refusal to resume for a notice that cannot be encoded natively.
   Existing terminal/recovery and legacy graphic cases also pass.
 - 13 pure Swift native-page/metadata cases and 13 battle-journal/packet cases
   pass. Eleven cartridge composition tests pass. The production C++ runtime
   interface accepts the candidate and rejects wrong engines, layouts and
   cross-release restoration identities.
 - Simulator build-for-testing and the final unsigned iPhone Release build pass.
+  Final logs are `simulator-build-verified.log`, `release-build-recovery.log`
+  and `recovery-tests.xcresult` / `recovery-summary.json`.
 
 Failed early attempts remain in the artifact directory: missing SDK/cache
 permissions, rejected wrong base-ROM input, freestanding C compiler repairs,

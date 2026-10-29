@@ -442,6 +442,33 @@ final class NativeBattleRuntimeTests:XCTestCase {
         let reopened=BoundSoulProbe();XCTAssertTrue(reopened.configure(core:nil,url:journal))
         XCTAssertNil(reopened.read().ledger?.battleLosses?.pending,"A acknowledgment survives reopening the durable journal")
         XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady())
+        try probe.prepareForNativeMemoryReplacement(core:core)
+        XCTAssertTrue(BoundVBABattleBridge.qaLinksMenuHost().allSatisfy { $0==0 },"Paused replacement retires terminal authority from ROM data ports")
+        _=core.resume();try await Task.sleep(for:.milliseconds(100));_=core.pause()
+        XCTAssertNotEqual(BoundVBABattleBridge.romMultiplayerSnapshot().subdata(in:84..<88),terminalFrame,"A cleared terminal port cannot freeze the replacement execution")
+        try probe.refreshAfterNativeMemoryReplacement(core:core)
+        // Deliberately withhold native frames to exercise unavailable terminal
+        // presentation without claiming a naturally exhausted native heap.
+        let fallbackProbe=BoundSoulProbe(),fallbackNotice=BoundBattleLossNotice(id:UUID(),slots:notice.slots,completedAt:Date())
+        ledger.battleLosses = .init(notices:[fallbackNotice])
+        let fallbackJournal=output.appendingPathComponent("fallback.json")
+        try JSONEncoder().encode(ledger).write(to:fallbackJournal)
+        XCTAssertTrue(fallbackProbe.configure(core:core,url:fallbackJournal));fallbackProbe.setVerified(true)
+        XCTAssertTrue(fallbackProbe.prepareTerminalBattleLoss(core:core))
+        try await Task.sleep(for:.milliseconds(2100))
+        XCTAssertTrue(fallbackProbe.terminalBattleLossStalled)
+        XCTAssertFalse(fallbackProbe.prepareTerminalBattleLoss(core:core))
+        XCTAssertTrue(BoundVBABattleBridge.qaLinksMenuHost().allSatisfy { $0==0 })
+        XCTAssertNil(fallbackProbe.read().nativeBattleLoss)
+        let fallbackSession=BoundSoulSession(probe:fallbackProbe);fallbackSession.canPresentDeathMoment={ true };fallbackSession.tick()
+        XCTAssertEqual(fallbackSession.battleLossMoment?.id,fallbackNotice.id,"Unavailable native presentation retains a dismissible durable loss card")
+        let zeroID=try XCTUnwrap(UUID(uuidString:"00000000-0000-0000-0000-000000000000"))
+        ledger.battleLosses = .init(notices:[.init(id:zeroID,slots:notice.slots,completedAt:Date())])
+        try JSONEncoder().encode(ledger).write(to:fallbackJournal)
+        XCTAssertTrue(fallbackProbe.configure(core:core,url:fallbackJournal));fallbackProbe.setVerified(true)
+        XCTAssertFalse(fallbackProbe.prepareTerminalBattleLoss(core:core),"An unencodable native notice must never authorize terminal gameplay frames")
+        XCTAssertTrue(BoundVBABattleBridge.qaLinksMenuHost().allSatisfy { $0==0 })
+        XCTAssertEqual(core.state,.paused)
     }
     func testBattleLossGraphicRendersOwnAndPartnerSides() async throws {
         let row=BoundSoulLinks.Row(slot:"area:102",label:"Route 2",

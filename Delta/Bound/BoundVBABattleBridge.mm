@@ -780,6 +780,10 @@ static uint8_t soulQAScriptBackup[128];
 }
 + (void)setLinksMenuHost:(NSData *)data {
     const auto *profile=multiRedProfile(rom);
+    if(!rom||!profile||!profile->linksHostSize)return;
+    // Paused replacement boundaries must retire presentation authority too.
+    // ROM data ports deliberately survive native save-state restoration.
+    if(!data.length) {memset(rom+profile->linksHostOffset,0,profile->linksHostSize);return;}
     if([self linksMenuPageOffset]<0||!profile||data.length!=profile->linksHostSize) return;
     const auto *source=static_cast<const uint8_t *>(data.bytes);
     const uint32_t sequence=word(source+8),total=word(source+12),offset=word(source+16),count=word(source+20);

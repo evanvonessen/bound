@@ -2545,7 +2545,7 @@ extension BoundROMMultiplayerCoordinator {
     private func tickGameOver() {
         guard serverOnly, let game, let session = account.session else { return }
         if let identity, let record=pendingGameOvers[identity.run],!record.returnRequested,gameOverID==nil,
-           sharing.soulLink.probe.read().ledger?.battleLosses?.pending==nil {
+           (sharing.soulLink.probe.read().ledger?.battleLosses?.pending==nil || sharing.soulLink.probe.terminalBattleLossStalled) {
             showGameOver(record)
         }
         if gameOverLoadedOwner != session.owner {
