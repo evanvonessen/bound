@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Archive a published Bound revision and optionally upload it for internal testing."""
+"""Archive a published Bound revision and optionally upload it for TestFlight."""
 
 import argparse
 from contextlib import contextmanager
@@ -102,7 +102,7 @@ def published_revision(root, revision):
     return commit
 
 
-def export_options(destination="upload"):
+def export_options(destination="upload", external_testing=False):
     if destination not in ("upload", "export"):
         raise ValueError("Distribution destination must be upload or export")
     return {
@@ -111,7 +111,7 @@ def export_options(destination="upload"):
         "teamID": TEAM_ID,
         "signingStyle": "automatic",
         "manageAppVersionAndBuildNumber": True,
-        "testFlightInternalTestingOnly": True,
+        "testFlightInternalTestingOnly": not external_testing,
         "uploadSymbols": True,
     }
 
@@ -234,7 +234,7 @@ def archive_info(archive, source):
             "rom_distribution": "developer-approved-server"}
 
 
-def deliver(root, commit, upload):
+def deliver(root, commit, upload, external_testing=False):
     authentication = api_key_arguments(root=root) if upload else []
     base = root / ".build/testflight-delivery"
     base.mkdir(parents=True, exist_ok=True)
@@ -279,7 +279,7 @@ def deliver(root, commit, upload):
             # archive-only validation complete or attempting an upload.
             local_options = attempt / "LocalExportOptions.plist"
             with local_options.open("wb") as stream:
-                plistlib.dump(export_options("export"), stream)
+                plistlib.dump(export_options("export", external_testing=external_testing), stream)
             local_export = attempt / "local-export"
             run_logged(export_command(archive, local_options, local_export, upload=upload, authentication=authentication), source, attempt / "local-export.log")
             exported = distribution_info(local_export / "Bound.ipa", source)
@@ -292,7 +292,7 @@ def deliver(root, commit, upload):
             published_revision(root, commit)
             options = attempt / "ExportOptions.plist"
             with options.open("wb") as stream:
-                plistlib.dump(export_options(), stream)
+                plistlib.dump(export_options(external_testing=external_testing), stream)
             run_logged(export_command(archive, options, attempt / "export", upload=True, authentication=authentication), source, attempt / "upload.log")
             summary_path = attempt / "export/DistributionSummary.plist"
             uploaded_build = None
@@ -302,15 +302,21 @@ def deliver(root, commit, upload):
                 uploaded_build = next((item.get("buildNumber") for items in summary.values()
                                        for item in items if item.get("name") == "Bound.app"), None)
             write_json(receipt, {
-                "commit": commit, "bundle_id": BUNDLE_ID, "group_id": GROUP_ID,
-                "group_name": GROUP_NAME, "accepted_at": datetime.now(timezone.utc).isoformat(),
+                "commit": commit, "bundle_id": BUNDLE_ID,
+                "group_id": None if external_testing else GROUP_ID,
+                "group_name": "iPhone Group" if external_testing else GROUP_NAME,
+                "external_testing_eligible": external_testing,
+                "accepted_at": datetime.now(timezone.utc).isoformat(),
                 "status": "upload accepted; processing and TestFlight availability not yet verified",
                 "attempt": str(attempt), "uploaded_build": uploaded_build, **info,
             })
             print(f"Apple accepted the upload for {commit}. This is not a TestFlight processing confirmation.")
             if uploaded_build:
                 print(f"Exported build: {info['version']} ({uploaded_build}).")
-            print(f"Verify the processed build in {GROUP_NAME}. Apple processing is separate from upload acceptance.")
+            if external_testing:
+                print("After processing, manually add this build to iPhone Group in App Store Connect and submit for beta review if required. No external group assignment was performed.")
+            else:
+                print(f"Verify the processed build in {GROUP_NAME}. Apple processing is separate from upload acceptance.")
             print(f"Receipt: {receipt}")
 
 
@@ -320,7 +326,9 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="Read-only remote/revision check")
     mode.add_argument("--archive-only", action="store_true", help="Validate a signed Release archive without uploading")
-    mode.add_argument("--upload", action="store_true", help="Archive and upload for internal TestFlight testing")
+    mode.add_argument("--upload", action="store_true", help="Archive and upload to TestFlight (internal-only by default)")
+    parser.add_argument("--external-testing", action="store_true",
+                        help="Allow external testing; assign to iPhone Group manually after processing")
     args = parser.parse_args()
     try:
         commit = published_revision(ROOT, args.revision)
@@ -328,7 +336,7 @@ def main():
             print(f"Verified origin/main: {commit}. No build, signing update or upload performed.")
         else:
             signing_preflight()
-            deliver(ROOT, commit, args.upload)
+            deliver(ROOT, commit, args.upload, external_testing=args.external_testing)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"TestFlight delivery incomplete: {error}", file=sys.stderr)
         return 1

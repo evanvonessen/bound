@@ -1,4 +1,4 @@
-"""Offline safeguards for publication snapshots and internal upload scope."""
+"""Offline safeguards for publication snapshots and TestFlight upload scope."""
 
 import importlib.util
 import hashlib
@@ -147,6 +147,46 @@ class DeliveryTests(unittest.TestCase):
         self.assertTrue(options["manageAppVersionAndBuildNumber"])
         self.assertEqual(options["destination"], "upload")
         self.assertEqual(options["teamID"], "3N83BX5M9G")
+
+    def test_external_delivery_exports_eligible_build_and_preserves_duplicate_receipt(self):
+        @contextmanager
+        def snapshot(*_):
+            yield self.root
+        with patch.object(delivery, "source_snapshot", snapshot), \
+             patch.object(delivery, "run_logged") as run, \
+             patch.object(delivery, "archive_info", return_value={"version": "1.0", "archive_build": "99"}), \
+             patch.object(delivery, "distribution_info", return_value={}), \
+             patch.object(delivery, "published_revision"):
+            delivery.deliver(self.root, self.commit, upload=True, external_testing=True)
+            exports = [call.args[0] for call in run.call_args_list
+                       if Path(call.args[2]).name in ("upload.log", "local-export.log")]
+            self.assertEqual(len(exports), 2)
+            for command in exports:
+                options = plistlib.loads(Path(command[command.index("-exportOptionsPlist") + 1]).read_bytes())
+                self.assertFalse(options["testFlightInternalTestingOnly"])
+                self.assertTrue(options["manageAppVersionAndBuildNumber"])
+                self.assertEqual(command[-6:], delivery.api_key_arguments(root=self.root))
+            receipt = self.root / ".build/testflight-delivery" / self.commit / "upload-accepted.json"
+            saved = json.loads(receipt.read_text())
+            self.assertTrue(saved["external_testing_eligible"])
+            self.assertEqual(saved["group_name"], "iPhone Group")
+            self.assertIsNone(saved["group_id"])
+            original = receipt.read_bytes()
+            run.reset_mock()
+            delivery.deliver(self.root, self.commit, upload=True)
+            run.assert_not_called()
+            self.assertEqual(receipt.read_bytes(), original)
+
+    def test_external_mode_does_not_reupload_an_accepted_internal_revision(self):
+        output = self.root / ".build/testflight-delivery" / self.commit
+        output.mkdir(parents=True)
+        receipt = output / "upload-accepted.json"
+        receipt.write_text(json.dumps({"commit": self.commit, "bundle_id": delivery.BUNDLE_ID}))
+        original = receipt.read_bytes()
+        with patch.object(delivery, "run_logged") as run:
+            delivery.deliver(self.root, self.commit, upload=True, external_testing=True)
+            run.assert_not_called()
+        self.assertEqual(receipt.read_bytes(), original)
 
     def test_local_distribution_export_cannot_upload_or_update_signing_assets(self):
         options = delivery.export_options("export")

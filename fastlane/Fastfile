@@ -35,6 +35,11 @@ platform :ios do
     UI.success("Bound Release iPhone build passed. Logs: #{logs}")
   end
 
+  desc "Archive and upload an external-eligible build for manual assignment to iPhone Group"
+  lane :beta_external do |options|
+    beta(options.merge(external_testing: true))
+  end
+
   desc "Archive and upload published main to personal internal TestFlight testing"
   lane :beta do |options|
     root = File.expand_path("..", __dir__)
@@ -46,7 +51,8 @@ platform :ios do
 
     # Reuse the existing snapshot, remote, privacy and duplicate-upload checks.
     # Xcode uses its signed-in account; no Apple credentials belong in this repo.
-    sh("python3", File.join(root, "PrototypeTools", "deliver-testflight.py"),
-       "--revision", revision, mode)
+    arguments = ["--revision", revision, mode]
+    arguments << "--external-testing" if options[:external_testing].to_s == "true"
+    sh("python3", File.join(root, "PrototypeTools", "deliver-testflight.py"), *arguments)
   end
 end

@@ -36,6 +36,37 @@ This lane covers compilation only. Run checks relevant to each change before
 publishing. It does not validate physical-device performance or live networking.
 No CI trigger or Xcode Cloud change is configured.
 
+## External iPhone TestFlight (manual invocation)
+
+Use the additional `beta_external` lane when the next upload should be eligible
+for the existing external **iPhone Group**:
+
+```sh
+PrototypeTools/fastlane-local beta_external check:true
+PrototypeTools/fastlane-local beta_external archive_only:true
+# Upload only when you explicitly choose to run it:
+PrototypeTools/fastlane-local beta_external
+```
+
+This lane sets `testFlightInternalTestingOnly: false` for both local export and
+upload. The existing `beta` lane remains internal-only. It preserves managed
+upload numbering, API-key authentication, published-revision checks and the
+same per-revision duplicate-upload receipts. An internal-only accepted revision
+is not silently uploaded again: use a new validated, published revision and
+preserve the previous receipt. This configuration change alone does not publish
+that revision or start delivery.
+
+After Apple finishes processing, open App Store Connect → Bound → TestFlight →
+External Testing → iPhone Group → Add Builds. Select the new build, enter What to
+Test, enable Automatically notify testers and submit for review or start testing
+as offered. This lane makes the upload eligible; it does not assign groups,
+submit beta review or notify external testers automatically. Existing builds
+marked Internal cannot be converted by changing this configuration.
+
+The user's existing `testlane` alias still invokes internal `beta` from its
+configured checkout. To use this new lane, run it explicitly from the checkout
+containing this change; an unchanged alias will not select it.
+
 ## Personal internal TestFlight
 
 For the latest validated commit already published to `origin/main`:
