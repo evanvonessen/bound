@@ -962,9 +962,12 @@ final class BoundSoulProbe: @unchecked Sendable {
         lock.lock();defer { lock.unlock() }
         guard BoundMultiplayerFeatures.isEnabled,owner.coreID==ObjectIdentifier(core),core.state == .paused,
               !owner.nativeLossFallback,published.error==nil,published.ledger?.battleLosses?.pending != nil,
-              BoundSoulLinks.NativeLossState.decode(BoundVBABattleBridge.nativeBattleLossSnapshot()) != nil else { return false }
+              let native=BoundSoulLinks.NativeLossState.decode(BoundVBABattleBridge.nativeBattleLossSnapshot()) else { return false }
+        // A can arrive after the coordinator's last poll but before this pause.
+        // Use that final native acknowledgment when deciding whether to fall back.
+        owner.nativeBattleLoss=native
         let now=ProcessInfo.processInfo.systemUptime
-        if owner.terminalLoss,owner.nativeBattleLoss?.active != true,now>=owner.terminalLossDeadline {
+        if terminalBattleLossStalledUnlocked(at:now) {
             // A terminal battle may have no spare native window/heap. Keep its
             // durable loss pending and fall back to the existing paused card.
             owner.nativeLossFallback=true;owner.terminalLoss=false;owner.lossPresentation=false
@@ -980,8 +983,14 @@ final class BoundSoulProbe: @unchecked Sendable {
     }
     var terminalBattleLossStalled:Bool {
         lock.lock();defer { lock.unlock() }
-        return owner.terminalLoss && owner.nativeBattleLoss?.active != true &&
-            ProcessInfo.processInfo.systemUptime>=owner.terminalLossDeadline
+        return terminalBattleLossStalledUnlocked(at:ProcessInfo.processInfo.systemUptime)
+    }
+    private func terminalBattleLossStalledUnlocked(at now:TimeInterval)->Bool {
+        guard owner.terminalLoss,let pending=published.ledger?.battleLosses?.pending else { return false }
+        // Closing with A is successful presentation, even if the independent
+        // session timer has not yet persisted this exact pending acknowledgment.
+        return owner.nativeBattleLoss?.active != true &&
+            owner.nativeBattleLoss?.acknowledged != pending.id && now>=owner.terminalLossDeadline
     }
     func setLinksPresentation(areas:[Int:String],connected:Bool) {
         lock.lock();defer { lock.unlock() }

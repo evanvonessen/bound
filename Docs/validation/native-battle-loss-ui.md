@@ -22,6 +22,9 @@ Paused memory-replacement boundaries clear the ROM presentation port so that
 its transient terminal barrier cannot freeze a restored or restarted execution.
 If a terminal native view cannot open within two seconds, the core returns to
 the existing paused Game Over/card path and keeps the loss unacknowledged.
+An exact native A acknowledgment is excluded from that timeout even when the
+coordinator polls before the session persists it. Paused preparation refreshes
+the native snapshot so a late A cannot turn successful dismissal into fallback.
 
 ## Pair and compatibility
 

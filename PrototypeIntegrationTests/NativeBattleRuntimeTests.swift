@@ -441,6 +441,37 @@ final class NativeBattleRuntimeTests:XCTestCase {
         XCTAssertEqual(probe.read().ledger?.dead,ledger.dead)
         let reopened=BoundSoulProbe();XCTAssertTrue(reopened.configure(core:nil,url:journal))
         XCTAssertNil(reopened.read().ledger?.battleLosses?.pending,"A acknowledgment survives reopening the durable journal")
+        // Leave this probe without a session timer so the coordinator's paused
+        // preparation can run before durable acknowledgment, regardless of timer order.
+        let delayedProbe=BoundSoulProbe(),delayedNotice=BoundBattleLossNotice(id:UUID(),slots:notice.slots,completedAt:Date())
+        ledger.battleLosses = .init(notices:[delayedNotice])
+        let delayedJournal=output.appendingPathComponent("delayed-a.json")
+        try JSONEncoder().encode(ledger).write(to:delayedJournal)
+        XCTAssertTrue(delayedProbe.configure(core:core,url:delayedJournal));delayedProbe.setVerified(true)
+        XCTAssertTrue(delayedProbe.prepareTerminalBattleLoss(core:core))
+        core.updateHandler={ core in BoundFrameMemory.perform { hostProbe.receive(core);delayedProbe.receive(core) } }
+        XCTAssertTrue(core.resume())
+        try await wait("delayed A native presentation") { delayedProbe.read().nativeBattleLoss?.active==true }
+        try await Task.sleep(for:.milliseconds(2100))
+        XCTAssertFalse(delayedProbe.terminalBattleLossStalled,"Reading an open native notice is not a stalled presentation")
+        core.deltaCore.emulatorBridge.activateInput(1,value:1,playerIndex:0)
+        try await Task.sleep(for:.milliseconds(80))
+        core.deltaCore.emulatorBridge.deactivateInput(1,playerIndex:0)
+        try await wait("delayed native A before session persistence") {
+            delayedProbe.read().nativeBattleLoss?.acknowledged==delayedNotice.id && delayedProbe.read().nativeBattleLoss?.active==false
+        }
+        XCTAssertTrue(core.pause())
+        XCTAssertEqual(delayedProbe.read().ledger?.battleLosses?.pending?.id,delayedNotice.id)
+        XCTAssertFalse(delayedProbe.terminalBattleLossStalled,"A completed native acknowledgment must survive the coordinator polling first")
+        XCTAssertTrue(delayedProbe.prepareTerminalBattleLoss(core:core),"Paused coordinator preparation must retain a late A instead of activating fallback")
+        XCTAssertEqual(delayedProbe.read().nativeBattleLoss?.acknowledged,delayedNotice.id)
+        let delayedSession=BoundSoulSession(probe:delayedProbe);delayedSession.canPresentDeathMoment={ true };delayedSession.tick()
+        XCTAssertNil(delayedSession.battleLossMoment,"Late native A must not redisplay the fallback card")
+        XCTAssertNil(delayedProbe.read().ledger?.battleLosses?.pending)
+        let delayedReopened=BoundSoulProbe();XCTAssertTrue(delayedReopened.configure(core:nil,url:delayedJournal))
+        XCTAssertNil(delayedReopened.read().ledger?.battleLosses?.pending,"Delayed A is still durably acknowledged")
+        XCTAssertEqual(BoundVBABattleBridge.romMultiplayerSnapshot().subdata(in:84..<88),terminalFrame)
+        core.updateHandler={ core in BoundFrameMemory.perform { hostProbe.receive(core);probe.receive(core) } }
         XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady())
         try probe.prepareForNativeMemoryReplacement(core:core)
         XCTAssertTrue(BoundVBABattleBridge.qaLinksMenuHost().allSatisfy { $0==0 },"Paused replacement retires terminal authority from ROM data ports")
