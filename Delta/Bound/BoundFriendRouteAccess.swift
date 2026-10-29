@@ -114,8 +114,13 @@ struct BoundFriendRouteAccess: Equatable, Sendable {
         /// state. A portal's straight-line distance is not its walking cost:
         /// walls, scripts and objects can require a much longer approach.
         func walkingDistances(from start: Point, elevation: Int = 0) -> [Int: Int] {
+            walkingDistances(from: start, elevation: elevation, approaching: nil)
+        }
+
+        private func walkingDistances(from start: Point, elevation: Int, approaching target: Point?) -> [Int: Int] {
             guard (0..<width).contains(start.x), (0..<height).contains(start.y) else { return [:] }
             let count = width * height, initial = start.y * width + start.x
+            let endpoint = target.map { $0.y * width + $0.x }
             let initialCellLevel = Int(cells[initial] >> 12)
             let initialLevel = elevation == 0 && initialCellLevel != 15 ? initialCellLevel : max(0, min(15, elevation))
             var costs = [initialLevel * count + initial: 0], result = [initial: 0]
@@ -127,7 +132,7 @@ struct BoundFriendRouteAccess: Equatable, Sendable {
                 guard costs[level * count + index] == distance else { continue }
                 if examined & 255 == 0, Task.isCancelled { return [:] }
                 examined += 1
-                if index != initial, warps.contains(index) { continue }
+                if index != initial, warps.contains(index) || index == endpoint { continue }
                 for (dx, dy, direction) in moves {
                     var x = index % width + dx, y = index / width + dy, steps = 1
                     guard (0..<width).contains(x), (0..<height).contains(y) else { continue }
@@ -150,7 +155,10 @@ struct BoundFriendRouteAccess: Equatable, Sendable {
                     let destinationLevel = Int(cell >> 12)
                     guard level == 0 || destinationLevel == 0 || destinationLevel == 15 || destinationLevel == level else { continue }
                     let nextLevel = destinationLevel == 0 || destinationLevel == 15 ? level : destinationLevel
-                    guard !objects.contains(where: { object in
+                    // Only the final friend endpoint may overlap an NPC in our
+                    // independently simulated world. It is a terminal approach,
+                    // never an opening through that NPC or its previous tile.
+                    guard (next == endpoint && steps == 1) || !objects.contains(where: { object in
                         (object.elevation == 0 || nextLevel == 0 || object.elevation == nextLevel) &&
                         ((object.tile.x == x && object.tile.y == y) || (object.previous.x == x && object.previous.y == y))
                     }) else { continue }
@@ -174,6 +182,23 @@ struct BoundFriendRouteAccess: Equatable, Sendable {
 
         func walkingDistance(to target: Point, distances: [Int: Int], doorway: Bool = false) -> Int? {
             distance(to: target, doorway: doorway, at: { distances[$0] })
+        }
+
+        /// A friend's independently simulated NPCs need not occupy our template
+        /// positions. Reaching an adjacent standing tile is a valid approach to
+        /// that endpoint; it does not make the occupant traversable. Likewise a
+        /// visible friend exiting an animated door can still be on its colliding
+        /// threshold before the native southward step finishes.
+        func friendApproachDistance(to target: Point, from start: Point, distances: [Int: Int], elevation: Int = 0) -> Int? {
+            if let steps = walkingDistance(to: target, distances: distances, doorway: hasWarp(at: target)) { return steps }
+            guard (0..<width).contains(target.x), (0..<height).contains(target.y),
+                  canEnterTerrain(target, elevation: 0),
+                  objects.contains(where: { $0.tile == target || $0.previous == target }) else { return nil }
+            // Reuse the native flood rather than inferring adjacency from its
+            // flattened distance result: bridges carry the reached elevation,
+            // and automatic warp tiles cannot be walked through to approach it.
+            let approach = walkingDistances(from: start, elevation: elevation, approaching: target)
+            return approach[target.y * width + target.x].map { max(0, $0 - 1) }
         }
 
         func hasWarp(at tile: Point) -> Bool {
@@ -219,13 +244,17 @@ struct BoundFriendRouteAccess: Equatable, Sendable {
         /// A cardinal seam enters ordinary terrain, unlike a door's native
         /// arrival animation. Never seed a remote flood inside a blocked tile.
         func canEnter(_ tile: Point, elevation: Int, direction: Int = 0) -> Bool {
+            canEnterTerrain(tile, elevation: elevation, direction: direction) &&
+                !objects.contains { ($0.elevation == 0 || elevation == 0 || $0.elevation == elevation) && ($0.tile == tile || $0.previous == tile) }
+        }
+
+        private func canEnterTerrain(_ tile: Point, elevation: Int, direction: Int = 0) -> Bool {
             guard (0..<width).contains(tile.x), (0..<height).contains(tile.y) else { return false }
             let index = tile.y * width + tile.x, cell = cells[index], level = Int(cell >> 12), behavior = Int(behaviors[index])
             return cell != 0x3FF && cell & 0xC00 == 0 && !blockedScripts.contains(index) &&
                 (elevation == 0 || level == 0 || level == 15 || level == elevation) &&
                 ![0x10,0x11,0x12,0x13,0x15,0x19,0x1A,0x1B,0x23,0x26,0x27].contains(behavior) && !(0x38...0x58).contains(behavior) &&
-                (direction == 0 || !Self.blocks(behavior: behavior, toward: Self.opposite(direction))) &&
-                !objects.contains { ($0.elevation == 0 || elevation == 0 || $0.elevation == elevation) && ($0.tile == tile || $0.previous == tile) }
+                (direction == 0 || !Self.blocks(behavior: behavior, toward: Self.opposite(direction)))
         }
 
         private func distance(to target: Point, doorway: Bool, at distance: (Int) -> Int?) -> Int? {

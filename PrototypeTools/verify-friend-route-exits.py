@@ -4,7 +4,10 @@
 Use qa-python and an explicit BOUND_GAME_SOURCE. Disposable fixture preparation
 only registers a native task calling SetWarpDestination/WarpIntoMap/LoadMap.
 The cartridge then loads terrain, map scripts and objects under pinned mGBA.
-No gameplay endpoint, collision result, player position or terrain is stubbed.
+Native checkpoint pairs use captured positions and collision; optional sweeps
+explicitly probe hypothetical positions on captured reachable native terrain.
+The pairs JSON contains romSHA256, fixtures (name/group/number/state/sha256),
+and pairs (name/from/to). Each pair runs forward and reverse independently.
 """
 import argparse
 import hashlib
@@ -27,6 +30,8 @@ def main():
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--state', type=Path)
     parser.add_argument('--fixtures-report', type=Path, help='Reuse hash-verified native snapshots; run only pure route checks')
+    parser.add_argument('--pairs-report', type=Path, help='Additional exact-ROM native snapshots and checkpoint pairs; every pair is checked in both directions')
+    parser.add_argument('--sweep-destinations', action='store_true', help='Probe both directions from every reachable tile in the native fixtures; reports discrepancies without pretending these probes are gameplay')
     parser.add_argument('--source-ref', help='Optional existing Git revision for a read-only before/after comparison')
     args = parser.parse_args()
     game = Path(os.environ['BOUND_GAME_SOURCE']).resolve(strict=True)
@@ -147,6 +152,40 @@ def main():
         print('Native transition', transitions[-1], flush=True)
     (args.output / 'native-transitions.json').write_text(json.dumps(transitions, indent=2) + '\n')
 
+    # Check both phones after each actual native endpoint transition. Historical
+    # fixtures remain immutable; their resulting walk states are hash-checked
+    # like every newly supplied checkpoint. Keeping the two observations
+    # separate is essential: independently progressed viewers can disagree.
+    pairs = []
+    fixture_names = {fixture['name'] for fixture in fixtures}
+    for fixture in list(fixtures):
+        walked = Path(fixture['state']).parent / 'walk' / 'final.state'
+        if not walked.exists():
+            continue
+        raw = walked.read_bytes()
+        assert len(raw) == 0x61000 and struct.unpack_from('<I', raw, 8)[0] == zlib.crc32(image)
+        save = struct.unpack_from('<I', raw, 0x19000 + 0x5008)[0] - 0x02000000 + 0x21000
+        group, number = struct.unpack_from('<BB', raw, save + 4)
+        name = fixture['name'] + '-after-transition'
+        if name not in fixture_names:
+            fixtures.append(dict(name=name, group=group, number=number, state=str(walked), sha256=digest(walked)))
+            fixture_names.add(name)
+        pairs.append(dict(name=name, **{'from': 'pallet', 'to': name}))
+    if args.pairs_report:
+        additional = json.loads(args.pairs_report.read_text())
+        assert additional['romSHA256'] == rom_hash
+        names = {fixture['name'] for fixture in fixtures}
+        for fixture in additional['fixtures']:
+            assert fixture['name'] not in names, 'Duplicate fixture name: ' + fixture['name']
+            raw = Path(fixture['state']).read_bytes()
+            assert hashlib.sha256(raw).hexdigest() == fixture['sha256']
+            assert len(raw) == 0x61000 and struct.unpack_from('<I', raw, 8)[0] == zlib.crc32(image)
+            fixtures.append(fixture)
+            names.add(fixture['name'])
+        for pair in additional['pairs']:
+            assert pair['from'] in names and pair['to'] in names
+            pairs.append(pair)
+
     root = Path(__file__).resolve().parents[1]
     def owning_source(path):
         if args.source_ref:
@@ -183,11 +222,13 @@ struct BoundGBAMemorySnapshot {
     source += scene[scene.index('final class BoundPlayerSceneAssets:'):scene.index('enum BoundPlayerSceneDecoder {')]
     source += '\nlet rom = Array(try Data(contentsOf: URL(fileURLWithPath: ' + json.dumps(str(args.rom)) + ')))\n'
     source += '\nlet fixtureJSON = ' + json.dumps(json.dumps(fixtures)) + '\n'
+    source += '\nlet pairJSON = ' + json.dumps(json.dumps(pairs)) + '\n'
     source += SWIFT
     source = source.replace('REPORT_PATH', json.dumps(str(args.output / 'native-route-exits.json')))
     source = source.replace('ROM_HASH', json.dumps(rom_hash)).replace('STATE_HASH', json.dumps(state_hash))
     source = source.replace('SOURCE_REF', json.dumps(args.source_ref or 'working-tree'))
     source = source.replace('CURRENT_CHECKS', '' if args.source_ref else CURRENT_CHECKS)
+    source = source.replace('DESTINATION_SWEEP', DESTINATION_SWEEP if args.sweep_destinations else '')
     swift = args.output / 'main.swift'
     swift.write_text(source)
     binary = args.output / 'friend-route-exits'
@@ -225,9 +266,16 @@ for row in rows {
     precondition(map.group == row["group"] as! Int && map.number == row["number"] as! Int, "Native map load did not finish")
     let access = BoundFriendRouteAccess.capture(memory: memory, save: save, currentMap: map, rom: read)!
     let tile = Point(x: h(saved), y: h(saved, 2))
+    let avatar = memory.bytes(at: 0x02037078, count: 8)!
+    let object = memory.bytes(at: 0x02036E38 + Int(avatar[5]) * 36, count: 36)!
+    let warp = memory.bytes(at: save + 0x14, count: 8)!
+    let warpID = Int(Int8(bitPattern: warp[2]))
+    let dynamicWarp: BoundPlayerState.DynamicWarp? = warp[0] < 43 && warp[1] < 127 && warpID >= -1
+        ? .init(mapGroup: Int(warp[0]), mapNumber: Int(warp[1]), warpID: warpID,
+                x: Int(Int16(bitPattern: UInt16(h(warp, 4)))), y: Int(Int16(bitPattern: UInt16(h(warp, 6))))) : nil
     viewers[row["name"] as! String] = .init(mapGroup: map.group, mapNumber: map.number, tile: tile,
-        previousTile: tile, facing: "North", elevation: 0, graphicsID: 0, runningState: 0,
-        tileTransitionState: 0, mapInstance: graph.nodes[map]!.instance, routeAccess: access)
+        previousTile: tile, facing: "North", elevation: Int(object[11] & 15), graphicsID: Int(object[5]), runningState: Int(avatar[2]),
+        tileTransitionState: Int(avatar[3]), mapInstance: graph.nodes[map]!.instance, dynamicWarp: dynamicWarp, routeAccess: access)
     let local = access.map(map, rom: read)!
     print("CAPTURE", row["name"]!, map, tile, "grid", local.width, local.height, "blockedScripts", local.blockedScripts)
 }
@@ -266,13 +314,81 @@ for (x, y) in [(168, 176), (184, 176), (184, 192)] {
     require("Same map preserves exact friend position \(x),\(y)", result == Point(x: x, y: y))
 }
 CURRENT_CHECKS
+let pairs = try JSONSerialization.jsonObject(with: Data(pairJSON.utf8)) as! [[String: Any]]
+var pairReport: [[String: Any]] = []
+for pair in pairs {
+    let name = pair["name"] as! String, first = pair["from"] as! String, second = pair["to"] as! String
+    for (from, to, direction) in [(first, second, "forward"), (second, first, "reverse")] {
+        unknownRouteOpcodes.removeAll()
+        let viewer = viewers[from]!, friend = viewers[to]!, start = Date(), result = route(from, to)
+        let map = Map(group: viewer.mapGroup, number: viewer.mapNumber)
+        let sameMap = viewer.mapGroup == friend.mapGroup && viewer.mapNumber == friend.mapNumber
+        let local = viewer.routeAccess!.map(map, rom: read)!
+        let target = result.map { Point(x: ($0.x - 8) / 16, y: ($0.y - 16) / 16) }
+        let matching = target.map { tile in graph.nodes[map]!.edges.filter { $0.waypoint(from: tile) == tile } } ?? []
+        let valid = target.map { tile in
+            sameMap ? tile == friend.tile : local.canReachTarget(tile,
+                reachable: local.reachable(from: viewer.tile, elevation: viewer.elevation),
+                doorway: matching.contains { $0.direction == 0 }) && !matching.isEmpty
+        } ?? false
+        let expected = pair[direction + "Available"] as? Bool ?? true
+        require("\(name) \(direction): \(from) to \(to) has the expected route availability", (result != nil) == expected)
+        if expected { require("\(name) \(direction) points to the friend or a reachable native exit", valid) }
+        if let expectedTarget = pair[direction + "Target"] as? [Int] {
+            require("\(name) \(direction) selects the expected exit", target == Point(x: expectedTarget[0], y: expectedTarget[1]))
+        }
+        let entry: [String: Any] = ["checkpoint": name, "direction": direction, "from": from, "to": to,
+            "sourceMap": [viewer.mapGroup, viewer.mapNumber], "sourceTile": [viewer.tile.x, viewer.tile.y],
+            "destinationMap": [friend.mapGroup, friend.mapNumber], "destinationTile": [friend.tile.x, friend.tile.y],
+            "available": result != nil, "expectedAvailable": expected, "target": target.map { [$0.x, $0.y] } ?? [],
+            "nativeReachable": valid, "seconds": Date().timeIntervalSince(start),
+            "unsupportedOpcodes": unknownRouteOpcodes.sorted()]
+        pairReport.append(entry)
+        print("PAIR", entry)
+    }
+}
+var sweepReport: [[String: Any]] = []
+DESTINATION_SWEEP
 let passed = checks.allSatisfy { $0["passed"] as! Bool }
 let result: [String: Any] = ["passed": passed, "romSHA256": ROM_HASH, "seedSHA256": STATE_HASH,
-    "sourceRef": SOURCE_REF, "routes": report, "checks": checks, "fixtures": rows,
+    "sourceRef": SOURCE_REF, "routes": report, "pairRoutes": pairReport, "destinationSweep": sweepReport, "checks": checks, "fixtures": rows,
     "provenance": "Exact cartridge native LoadMap fixtures; explicit native VarSet fixture stages4050/4057; production Swift route code and immutable captured grids. No live transport or physical-device validation."]
 try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: REPORT_PATH))
-if SOURCE_REF == "working-tree" { precondition(passed, "Native route regression failed; inspect report") }
 print("CHECKS", checks.count, "passed", checks.filter { $0["passed"] as! Bool }.count)
+if SOURCE_REF == "working-tree" && !passed { exit(1) }
+'''
+
+DESTINATION_SWEEP = r'''
+// These are pure route-policy probes over native reachable terrain. They do
+// not edit the fixture state or assert that gameplay visited every coordinate.
+let stationary = viewers["pallet"]!
+for name in ["route1", "viridian", "downstairs", "upstairs", "mart"] {
+    let original = viewers[name]!, map = Map(group: original.mapGroup, number: original.mapNumber)
+    let local = original.routeAccess!.map(map, rom: read)!
+    let tiles = local.reachable(from: original.tile, elevation: original.elevation).sorted()
+    var forwardMissing: [[Int]] = [], reverseMissing: [[Int]] = [], asymmetric: [[Int]] = []
+    for index in tiles {
+        let tile = Point(x: index % local.width, y: index / local.width)
+        let moved = BoundPlayerState(mapGroup: original.mapGroup, mapNumber: original.mapNumber, tile: tile,
+            previousTile: tile, facing: original.facing, elevation: original.elevation, graphicsID: original.graphicsID,
+            runningState: 0, tileTransitionState: 0, mapInstance: original.mapInstance,
+            dynamicWarp: original.dynamicWarp, routeAccess: original.routeAccess)
+        func query(_ source: BoundPlayerState, _ friend: BoundPlayerState) -> Bool {
+            assets.friendRouteTarget(viewer: source, friendGroup: friend.mapGroup, friendNumber: friend.mapNumber,
+                friendInstance: friend.mapInstance, friendX: Double(friend.tile.x * 16 + 8),
+                friendY: Double(friend.tile.y * 16 + 16), rom: read) != nil
+        }
+        let forward = query(stationary, moved), reverse = query(moved, stationary), position = [tile.x, tile.y]
+        if !forward { forwardMissing.append(position) }
+        if !reverse { reverseMissing.append(position) }
+        if forward != reverse { asymmetric.append(position) }
+    }
+    let row: [String: Any] = ["fixture": name, "testedTiles": tiles.count, "directedQueries": tiles.count * 2,
+        "forwardUnavailable": forwardMissing, "reverseUnavailable": reverseMissing, "asymmetric": asymmetric,
+        "method": "Pure hypothetical tile probes on the unmodified captured native reachable terrain; no native movement claim"]
+    sweepReport.append(row)
+    print("SWEEP", row)
+}
 '''
 
 CURRENT_CHECKS = r'''
@@ -330,6 +446,23 @@ checkShortest("pallet-north", "viridian", through: [pallet, route1, viridian])
 checkShortest("pallet", "viridian-south", through: [pallet, route1, viridian])
 checkShortest("route1-south", "viridian", through: [route1, viridian])
 checkShortest("route1-north", "pallet", through: [route1, pallet])
+// The native snapshot has already moved these wandering NPCs off their ROM
+// template origins. Each tile is reachable in the actual destination map;
+// stale projected NPC origins must not erase the stationary player's arrow.
+// These policy probes complement the separately recorded native journey.
+for (name, x, y) in [("route1", 6, 28), ("viridian", 16, 22), ("mart", 6, 2)] {
+    let original = viewers[name]!, map = Map(group: original.mapGroup, number: original.mapNumber)
+    let local = original.routeAccess!.map(map, rom: read)!, tile = Point(x: x, y: y)
+    require("\(name) wandering NPC origin is reachable in captured native terrain",
+        local.reachable(from: original.tile, elevation: original.elevation).contains(y * local.width + x))
+    let probe = name + "-vacated-npc-origin"
+    viewers[probe] = .init(mapGroup: original.mapGroup, mapNumber: original.mapNumber, tile: tile,
+        previousTile: tile, facing: original.facing, elevation: original.elevation, graphicsID: original.graphicsID,
+        runningState: 0, tileTransitionState: 0, mapInstance: original.mapInstance,
+        dynamicWarp: original.dynamicWarp, routeAccess: original.routeAccess)
+    require("Pallet routes toward \(name) friend on vacated wandering NPC origin", route("pallet", probe) != nil)
+    require("\(name) friend on vacated wandering NPC origin routes back to Pallet", route(probe, "pallet") != nil)
+}
 '''
 
 

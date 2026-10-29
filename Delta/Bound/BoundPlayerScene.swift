@@ -130,7 +130,7 @@ final class BoundPlayerSceneAssets: @unchecked Sendable {
             }, arrivalCost: { map, entry, elevation in
                 guard let (value, tiles) = reachable(map, entry, elevation) else { return nil }
                 let tile = BoundPlayerState.Point(x: Int(floor((friendX - 8) / 16)), y: Int(floor((friendY - 16) / 16)))
-                return value.walkingDistance(to: tile, distances: tiles)
+                return value.friendApproachDistance(to: tile, from: entry, distances: tiles, elevation: elevation)
             }, traversalCost: { map, entry, edge in
                 guard let (value, tiles) = reachable(map, entry, edge.sourceElevation) else { return nil }
                 let portal = edge.waypoint(from: entry)

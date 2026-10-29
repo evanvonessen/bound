@@ -168,7 +168,55 @@ put(load,0x65,1);put(load+1,1,2);put(load+3,7,1);put(load+4,0x02,1)
 assert(access(flags).map(m1,rom:read) != nil,"exact stationary-facing template command preserves collision position")
 put(load+3,0,1)
 assert(access(flags).map(m1,rom:read)==nil,"unmodeled moving template command stays unknown")
-print("PASS: native flags/grids/objects, predicates, handler identity, script gates, dormant warps, directed ledges, seam boundaries and native door arrivals")
+// A friend may occupy an NPC's template origin after that NPC wandered away
+// on their independent phone. Final approach can stop alongside the projected
+// occupant, while the same occupant remains impassable to every walking flood.
+let endpoint=BoundPlayerState.Point(x:2,y:2)
+let occupant=BoundFriendRouteAccess.Object(localID:7,map:m1,tile:endpoint,previous:endpoint,elevation:3)
+var corridorCells=[UInt16](repeating:0x3C00,count:25)
+for x in 0..<5 {corridorCells[2*5+x]=0x3000}
+func corridor(_ cells:[UInt16],_ behaviors:[UInt8]=Array(repeating:0,count:25),_ scripts:Set<Int>=[],_ objects:[BoundFriendRouteAccess.Object]=[occupant])->BoundFriendRouteAccess.MapAccess {
+    .init(width:5,height:5,cells:cells,behaviors:behaviors,objects:objects,blockedScripts:scripts,warps:[])
+}
+let occupied=corridor(corridorCells),approachDistances=occupied.walkingDistances(from:start,elevation:3)
+assert(occupied.walkingDistance(to:endpoint,distances:approachDistances)==nil,"occupied endpoint is never traversable")
+assert(occupied.friendApproachDistance(to:endpoint,from:start,distances:approachDistances,elevation:3)==1,"friend approach ends at reachable adjacent tile")
+assert(occupied.friendApproachDistance(to:goal,from:start,distances:approachDistances,elevation:3)==nil,"endpoint approach never crosses an NPC to a farther friend")
+let clearCorridor=corridor(corridorCells,Array(repeating:0,count:25),[],[])
+assert(clearCorridor.friendApproachDistance(to:goal,from:start,distances:clearCorridor.walkingDistances(from:start,elevation:3),elevation:3)==4,"exact reachable endpoint retains full walking distance")
+var wallCells=corridorCells;wallCells[12]=0x3C00
+assert(corridor(wallCells).friendApproachDistance(to:endpoint,from:start,distances:approachDistances,elevation:3)==nil,"NPC approach cannot bypass a wall")
+assert(corridor(corridorCells,Array(repeating:0,count:25),[12]).friendApproachDistance(to:endpoint,from:start,distances:approachDistances,elevation:3)==nil,"NPC approach cannot bypass a blocked story script")
+var waterBehaviors=[UInt8](repeating:0,count:25);waterBehaviors[12]=0x10
+assert(corridor(corridorCells,waterBehaviors).friendApproachDistance(to:endpoint,from:start,distances:approachDistances,elevation:3)==nil,"NPC approach cannot infer ordinary walking onto water")
+var directionalBehaviors=[UInt8](repeating:0,count:25);directionalBehaviors[11]=0x30
+assert(corridor(corridorCells,directionalBehaviors).friendApproachDistance(to:endpoint,from:start,distances:approachDistances,elevation:3)==nil,"adjacent approach respects a directional departure wall")
+directionalBehaviors[11]=0;directionalBehaviors[12]=0x31
+assert(corridor(corridorCells,directionalBehaviors).friendApproachDistance(to:endpoint,from:start,distances:approachDistances,elevation:3)==nil,"adjacent approach respects a directional arrival wall")
+var upperCells=corridorCells;upperCells[12]=0x4000
+assert(corridor(upperCells).friendApproachDistance(to:endpoint,from:start,distances:approachDistances,elevation:3)==nil,"adjacent tiles on different floors cannot become a route")
+assert(occupied.friendApproachDistance(to:.init(x:-1,y:2),from:start,distances:approachDistances,elevation:3)==nil,"out-of-bounds endpoint cannot use a nearby object")
+let exitingDoor=BoundFriendRouteAccess.MapAccess(width:1,height:2,cells:[0x3C00,0x3000],behaviors:[0x69,0],objects:[],blockedScripts:[],warps:[0])
+assert(exitingDoor.friendApproachDistance(to:.init(x:0,y:0),from:.init(x:0,y:1),distances:[1:0],elevation:3)==1,"a friend exiting an active animated door keeps a valid approach")
+let dormantDoor=BoundFriendRouteAccess.MapAccess(width:1,height:2,cells:[0x3C00,0x3000],behaviors:[0x69,0],objects:[],blockedScripts:[],warps:[])
+assert(dormantDoor.friendApproachDistance(to:.init(x:0,y:0),from:.init(x:0,y:1),distances:[1:0],elevation:3)==nil,"door appearance alone cannot invent a warp endpoint")
+let lockedDoor=BoundFriendRouteAccess.MapAccess(width:1,height:2,cells:[0x3C00,0x3000],behaviors:[0x69,0],objects:[],blockedScripts:[0],warps:[0])
+assert(lockedDoor.friendApproachDistance(to:.init(x:0,y:0),from:.init(x:0,y:1),distances:[1:0],elevation:3)==nil,"active door approach still respects its story script")
+let beyondWarp=BoundPlayerState.Point(x:2,y:0)
+let warpOccupant=BoundFriendRouteAccess.Object(localID:1,map:m1,tile:beyondWarp,previous:beyondWarp,elevation:3)
+let terminalWarp=BoundFriendRouteAccess.MapAccess(width:3,height:1,cells:[0x3000,0x3000,0x3000],behaviors:[0,0x60,0],objects:[warpOccupant],blockedScripts:[],warps:[1])
+let terminalDistances=terminalWarp.walkingDistances(from:.init(x:0,y:0),elevation:3)
+assert(terminalDistances[1]==1 && terminalDistances[2]==nil,"native warp ends the walking flood")
+assert(terminalWarp.friendApproachDistance(to:beyondWarp,from:.init(x:0,y:0),distances:terminalDistances,elevation:3)==nil,"friend approach cannot continue past a terminal warp tile")
+let bridgeOccupant=BoundFriendRouteAccess.Object(localID:1,map:m1,tile:beyondWarp,previous:beyondWarp,elevation:4)
+let carriedBridge=BoundFriendRouteAccess.MapAccess(width:3,height:1,cells:[0x3000,0xF000,0x4000],behaviors:[0,0,0],objects:[bridgeOccupant],blockedScripts:[],warps:[])
+let bridgeDistances=carriedBridge.walkingDistances(from:.init(x:0,y:0),elevation:0)
+assert(bridgeDistances[1]==1 && bridgeDistances[2]==nil,"bridge retains its incoming native layer")
+assert(carriedBridge.friendApproachDistance(to:beyondWarp,from:.init(x:0,y:0),distances:bridgeDistances,elevation:0)==nil,"friend approach cannot guess another layer after a bridge")
+let occupiedLedge=BoundFriendRouteAccess.MapAccess(width:3,height:1,cells:[0x3000,0x3C00,0x3000],behaviors:[0,0x38,0],objects:[warpOccupant],blockedScripts:[],warps:[])
+let ledgeDistances=occupiedLedge.walkingDistances(from:.init(x:0,y:0),elevation:3)
+assert(occupiedLedge.friendApproachDistance(to:beyondWarp,from:.init(x:0,y:0),distances:ledgeDistances,elevation:3)==nil,"friend approach cannot stop halfway through a jump onto an occupied landing")
+print("PASS: native flags/grids/objects, predicates, handler identity, script gates, dormant warps, directed ledges, seam boundaries, native door arrivals and bounded friend endpoint approaches")
 '''
 if a.rom:
     source += r'''
