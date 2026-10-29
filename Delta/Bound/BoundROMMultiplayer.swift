@@ -615,10 +615,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     private var error: String?
     private var server = BoundNakamaRunService.shared
     private var serverTask: Task<Void, Never>?
-    private let snapshotServer = BoundNakamaRunService()
-    private var snapshotTask: Task<Void,Never>?
-    private var snapshotOperation = UUID()
-    private var snapshotRetryAt: TimeInterval = 0
+    private let checkpointUpload = BoundServerCheckpointUpload()
     private let archivedEventServer = BoundNakamaRunService()
     private var archivedEventTask: Task<Void,Never>?
     private var archivedEventOperation = UUID()
@@ -742,7 +739,7 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
     deinit {
         let timer = timer
         BoundMainActorDisposal.enqueue { timer?.invalidate() }
-        verification?.cancel(); leaseTask?.cancel(); serverTask?.cancel(); snapshotTask?.cancel(); archivedEventTask?.cancel()
+        verification?.cancel(); leaseTask?.cancel(); serverTask?.cancel(); archivedEventTask?.cancel()
         gameOverTask?.cancel()
     }
     private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
@@ -842,8 +839,8 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         verification?.cancel(); leaseTask?.cancel(); serverTask?.cancel(); leaseTask = nil; grant = nil; validatedFence = nil
         leaseOperation = UUID()
         serverTask?.cancel(); serverTask = nil; serverOperation = UUID()
-        if !serverOnly { snapshotTask?.cancel() }
-        snapshotTask = nil; snapshotOperation = UUID(); snapshotRetryAt = 0
+        if serverOnly { checkpointUpload.detach() }
+        else { checkpointUpload.cancel(resetRetry: true) }
         archivedEventTask?.cancel(); archivedEventTask = nil; archivedEventOperation = UUID(); archivedEventRetryAt = 0
         archivedServerCursors = [:]; archivedEventIndex = 0
         serverRegisteredRun = nil; serverUploaded = nil; serverPollAt = 0; manualSavePending = false; serverCaptureAuthorized = nil; serverReservedCheckpoint = nil
@@ -1102,15 +1099,15 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
             // Close admission before awaiting any producer. In-flight history
             // still applies its accepted events, but cannot spawn another save.
             // Capture ancestry only after its existing upload has completed.
-            return finalSaveBoundary.begin(drainRequired: serverTask != nil || gameOverTask != nil || snapshotTask != nil,
+            return finalSaveBoundary.begin(drainRequired: serverTask != nil || gameOverTask != nil || checkpointUpload.isUploading,
                 drain: { [weak self, core] in
                     guard let self else { throw CancellationError() }
                     await self.serverTask?.value
                     await self.gameOverTask?.value
-                    await self.snapshotTask?.value
+                    await self.checkpointUpload.awaitCurrent()
                     try Task.checkCancellation()
                     guard self.core === core, captureSelection == self.serverSelection,
-                          self.serverTask == nil, self.gameOverTask == nil, self.snapshotTask == nil else {
+                          self.serverTask == nil, self.gameOverTask == nil, !self.checkpointUpload.isUploading else {
                         throw BoundMultiplayerSaveStore.Failure.incomplete
                     }
                 }, capture: { [weak self, core] in
@@ -1878,90 +1875,64 @@ final class BoundROMMultiplayerCoordinator: ObservableObject {
         }
     }
     private func uploadSnapshotInBackground(_ package: BoundMultiplayerSavePackage) {
-        guard !finalSaveBlocksCoreResume else { return }
-        guard snapshotTask == nil, now >= snapshotRetryAt, let session = account.session,
-              session.owner == package.payload.manifest.identity.owner else { return }
+        guard !finalSaveBlocksCoreResume, !checkpointUpload.isUploading, let session = account.session else { return }
+        let destination: BoundServerCheckpointUpload.Destination
         if serverOnly {
-            do {
-                guard try BoundServerDisconnectSave.pendingEvents(in: package, verifiedCursor: sharedServerCursor)
-                    .allSatisfy(\.requiresNativeCheckpoint) else { return }
-            } catch { failServerSession("The shared event journal could not be verified."); return }
-        }
-        let operation = UUID(); snapshotOperation = operation
-        let expected = independentServerHead, serverManaged = serverOnly
-        let settlement = serverManaged ? serverContinuationSettlements[package.payload.checkpoint] : nil
-        snapshotTask = Task { [weak self] in
-            guard let self else { return }
-            defer { if self.snapshotOperation == operation { self.snapshotTask = nil } }
-            do {
-                let uploader = try serverManaged ? self.runService(for: package.payload.manifest.identity) : self.snapshotServer
-                var committedAcquisitions: [BoundMultiplayerSharedEvent.ID] = []
-                if self.independentServerHead != package.payload.checkpoint {
-                    if serverManaged {
-                        try await Self.authorizeRunService(uploader, session: session)
-                        let confirmed = try await uploader.uploadIndependent(package, expectedHead: expected, session: session)
-                        guard confirmed.identity == package.payload.manifest.identity,
-                              confirmed.save_id == package.payload.manifest.identity.run,
-                              confirmed.committed, !confirmed.cancelled,
-                              confirmed.saves[session.owner.uuidString.lowercased()]?.receipt == package.receipt else {
-                            throw BoundNakamaRunService.Failure.conflict
-                        }
-                        let acquisitions = try BoundServerDisconnectSave.pendingEvents(in: package, verifiedCursor: .init())
-                            .filter(\.requiresNativeCheckpoint)
-                        guard acquisitions.allSatisfy({ confirmed.serverCursor.contains($0.id) }) else {
-                            throw BoundNakamaRunService.Failure.unavailable
-                        }
-                        committedAcquisitions = acquisitions.map(\.id)
-                    } else {
-                        _ = try await self.snapshotServer.uploadIndependent(package,expectedHead:expected,session:session,authorize:{ [leaseClient = self.leaseClient] in
-                            _ = try await leaseClient.independentAuthority(runID:package.payload.manifest.identity.run,session:session)
-                        })
-                    }
-                }
-                if !serverManaged, package.payload.manifest.deviceOwner == self.store.deviceID {
-                    _ = try await self.leaseClient.publishIndependentCheckpoint(package:package,session:session)
-                }
-                // Settle only the activity token captured with these exact
-                // gameplay bytes, including a successful retry after a lost
-                // upload response. A newer activity's claim remains untouched.
-                if serverManaged {
-                    guard !Task.isCancelled, session.isSameSession(as: self.account.session) else { return }
-                    try Self.settle(settlement, native: self.sharing.nativeBattle, cooperative: self.sharing.cooperativeDoubles, berry: self.sharing.followerInteractions)
+            let settlement = serverContinuationSettlements[package.payload.checkpoint]
+            // Retain this owner until the admitted transaction finishes, just as
+            // the coordinator's former upload Task did. Detach only fences UI;
+            // the exact captured activity still settles after confirmation.
+            destination = .managed(makeService: { try self.runService(for: package.payload.manifest.identity) },
+                isSessionCurrent: { session.isSameSession(as: self.account.session) },
+                settleCapturedContinuation: {
+                    try Self.settle(settlement, native: self.sharing.nativeBattle,
+                        cooperative: self.sharing.cooperativeDoubles, berry: self.sharing.followerInteractions)
                     self.serverContinuationSettlements.removeValue(forKey: package.payload.checkpoint)
-                }
-                guard !Task.isCancelled, self.snapshotOperation == operation,
-                      self.identity?.run == package.payload.manifest.identity.run else { return }
-                for id in committedAcquisitions { self.sharedServerCursor.insert(id) }
-                self.serverUploaded = package.payload.checkpoint
-                self.independentServerHead = package.payload.checkpoint
-                if var returned = self.debugReturnInstallation, let core = self.core,
-                   returned.core == ObjectIdentifier(core), returned.selection == self.serverSelection,
-                   package.payload.manifest.identity == returned.bookmark.identity,
-                   package.payload.manifest.deviceOwner == self.store.deviceID,
-                   self.setup?.serverEpoch == UInt64(returned.bookmark.ownershipEpoch),
-                   self.workingStateAuthorized, self.debugInstalledManifest == nil,
-                   let context = try? self.debugContext(), returned.context.sameAuthority(as: context) {
-                    // Keep the exact confirmed receipt even if a subsequent
-                    // capture replaces head before Return acknowledgement.
-                    // The proof already sent to the client remains unchanged.
-                    returned.receipt = package.receipt
-                    self.debugReturnInstallation = returned
-                }
-                if self.serverOnly { self.host.status = .complete; self.host.message = "Saved to server." }
-            } catch {
-                guard self.snapshotOperation == operation else { return }
-                self.snapshotRetryAt = self.now + 3
-                if self.serverOnly, case BoundNakamaRunService.Failure.incompatibleServer = error {
-                    self.failServerSession(error.localizedDescription)
-                } else if self.serverOnly, self.isServerConflict(error) {
-                    if await self.discoverGameOver(for: package.payload.manifest.identity) { return }
-                    guard !Task.isCancelled, self.snapshotOperation == operation else { return }
-                    self.failServerSession("This run changed on another device. Refresh and reopen its server save.")
-                } else if error as? BoundRunLeaseError == .transferRequired {
-                    self.error = "This run was transferred to another device. Use recovery to continue."
-                }
-            }
+                })
+        } else {
+            destination = .leased(client: leaseClient, deviceID: store.deviceID)
         }
+        let request = BoundServerCheckpointUpload.Request(package: package, expectedHead: independentServerHead, session: session,
+            verifiedCursor: sharedServerCursor, destination: destination,
+            isAlreadyConfirmed: { self.independentServerHead == package.payload.checkpoint })
+        let callbacks = BoundServerCheckpointUpload.Callbacks(
+                isCurrentRun: { self.identity?.run == package.payload.manifest.identity.run },
+                confirmed: { acquisitions in
+                    for id in acquisitions { self.sharedServerCursor.insert(id) }
+                    self.serverUploaded = package.payload.checkpoint
+                    self.independentServerHead = package.payload.checkpoint
+                    if var returned = self.debugReturnInstallation, let core = self.core,
+                       returned.core == ObjectIdentifier(core), returned.selection == self.serverSelection,
+                       package.payload.manifest.identity == returned.bookmark.identity,
+                       package.payload.manifest.deviceOwner == self.store.deviceID,
+                       self.setup?.serverEpoch == UInt64(returned.bookmark.ownershipEpoch),
+                       self.workingStateAuthorized, self.debugInstalledManifest == nil,
+                       let context = try? self.debugContext(), returned.context.sameAuthority(as: context) {
+                        // Retain the exact confirmed receipt even if a later
+                        // capture replaces head before Return acknowledgement.
+                        returned.receipt = package.receipt
+                        self.debugReturnInstallation = returned
+                    }
+                    if self.serverOnly {
+                        // This receipt confirms only the captured cut. A native
+                        // save or suspension admitted during its upload still
+                        // needs a newer checkpoint before we can report success.
+                        let saved = self.head?.payload.checkpoint == package.payload.checkpoint
+                            && !self.serverCapturePending && !self.finalSaveBlocksCoreResume
+                        self.host.status = saved ? .complete : .waiting
+                        self.host.message = saved ? "Saved to server." : "Saving to server..."
+                    }
+                },
+                discoverGameOver: { await self.discoverGameOver(for: package.payload.manifest.identity) },
+                failed: { failure in
+                    switch failure {
+                    case .invalidJournal: self.failServerSession("The shared event journal could not be verified.")
+                    case .incompatibleServer(let message): self.failServerSession(message)
+                    case .conflict: self.failServerSession("This run changed on another device. Refresh and reopen its server save.")
+                    case .transferRequired: self.error = "This run was transferred to another device. Use recovery to continue."
+                    }
+                })
+        checkpointUpload.start(request, callbacks: callbacks)
     }
     private func synchronizeArchivedEvents() {
         guard archivedEventTask == nil, now >= archivedEventRetryAt, UIApplication.shared.applicationState == .active,
@@ -2445,7 +2416,7 @@ extension BoundROMMultiplayerCoordinator {
     }
     private func pauseForGameOver() {
         core?.pause(); workingStateAuthorized = false
-        snapshotTask?.cancel(); snapshotTask = nil; snapshotOperation = UUID()
+        checkpointUpload.cancel()
         serverTask?.cancel(); serverTask = nil; serverOperation = UUID()
         serverStarting = false; serverMenuBusy = false; serverMenuError = nil
         serverCapturePending = false; finalServerSaveQueued = false
@@ -2886,7 +2857,7 @@ extension BoundROMMultiplayerCoordinator {
         finalSaveBoundary.release()
         finalServerSaveReauthorize = nil
         hasUnconfirmedServerSave = false
-        snapshotTask?.cancel(); snapshotTask = nil; snapshotOperation = UUID(); snapshotRetryAt = 0
+        checkpointUpload.cancel(resetRetry: true)
         pendingAction.clear(); channel.reset(); peerHello = nil
     }
     func retryFinalServerSave() async {
@@ -2926,7 +2897,7 @@ extension BoundROMMultiplayerCoordinator {
     }
     func discardUnconfirmedServerSave() {
         guard !serverMenuBusy, !holdForObservationRecoveryIfNeeded() else { return }
-        guard serverTask == nil, gameOverTask == nil, snapshotTask == nil else {
+        guard serverTask == nil, gameOverTask == nil, !checkpointUpload.isUploading else {
             serverMenuError = "Final save preparation is still settling accepted work. Retry when it finishes."
             return
         }
@@ -3164,7 +3135,7 @@ extension BoundROMMultiplayerCoordinator {
             if final { throw BoundMultiplayerSaveStore.Failure.incomplete }
             return nil
         }
-        if !final, snapshotTask != nil || head?.payload.checkpoint != serverUploaded {
+        if !final, checkpointUpload.isUploading || head?.payload.checkpoint != serverUploaded {
             serverCapturePending = true
             if let head { uploadSnapshotInBackground(head) }
             return nil
@@ -3253,7 +3224,7 @@ extension BoundROMMultiplayerCoordinator {
         if gameOverID != nil || identity.map({ pendingGameOvers[$0.run] != nil }) == true { return }
         serverSelection = UUID(); serverActivating = false
         core?.pause(); workingStateAuthorized = false; needsServerMenu = true; serverStarting = false
-        snapshotTask?.cancel(); snapshotTask = nil; snapshotOperation = UUID()
+        checkpointUpload.cancel()
         serverTask?.cancel(); serverTask = nil; serverOperation = UUID()
         serverMenuBusy = false; serverMenuError = message; host.recovery = true; host.connected = false
         probe.publish(host)
@@ -3361,8 +3332,8 @@ extension BoundROMMultiplayerCoordinator: BoundDebugHost {
         // it. New timer work is fenced by debugSwitchInProgress throughout.
         await serverTask?.value
         await gameOverTask?.value
-        await snapshotTask?.value
-        guard serverTask == nil, gameOverTask == nil, snapshotTask == nil else { throw BoundDebugFailure.busy }
+        await checkpointUpload.awaitCurrent()
+        guard serverTask == nil, gameOverTask == nil, !checkpointUpload.isUploading else { throw BoundDebugFailure.busy }
     }
     private func settleDebugSource() async throws -> BoundNakamaRunService.IndependentState {
         let context = try debugContext()
@@ -3462,7 +3433,7 @@ extension BoundROMMultiplayerCoordinator: BoundDebugHost {
         // replacement metadata. In-flight history may still reveal this loss.
         await serverTask?.value
         await gameOverTask?.value
-        await snapshotTask?.value
+        await checkpointUpload.awaitCurrent()
         await finalSaveBoundary.task?.value
         await finalServerSaveTask?.value
         try Task.checkCancellation()
@@ -3471,7 +3442,7 @@ extension BoundROMMultiplayerCoordinator: BoundDebugHost {
               self.identity == nil || self.identity == sourceIdentity,
               debugInstalledManifest == nil || debugInstalledManifest == source,
               core.state == .stopped || core.state == .paused,
-              serverTask == nil, gameOverTask == nil, snapshotTask == nil,
+              serverTask == nil, gameOverTask == nil, !checkpointUpload.isUploading,
               !sharing.protectsNativeTemporaryState, !sharing.nativeBattle.blocksCoreResume,
               !sharing.cooperativeDoubles.blocksAutoSave, !sharing.cooperativeDoubles.blocksCoreResume else {
             throw BoundDebugFailure.stale
@@ -3697,7 +3668,7 @@ extension BoundROMMultiplayerCoordinator: BoundDebugHost {
         debugTerminalTransition = nil
         debugOrdinaryBookmark = descriptor.bookmark ?? debugOrdinaryBookmark
         setDebugContinuation(nil)
-        snapshotTask?.cancel(); snapshotTask = nil; snapshotOperation = UUID()
+        checkpointUpload.cancel()
         serverTask?.cancel(); serverTask = nil; serverOperation = UUID()
         gameOverTask?.cancel(); gameOverTask = nil; gameOverOperation = UUID()
         pendingGameOvers = [:]; gameOverLoadedOwner = nil
@@ -3843,7 +3814,7 @@ extension BoundROMMultiplayerCoordinator: BoundDebugHost {
         // Wait for the upload already owned by this execution, without chasing
         // an unbounded chain of new captures. Every suspension rechecks the
         // retained installation; an unrelated run never inherits its proof.
-        await snapshotTask?.value
+        await checkpointUpload.awaitCurrent()
         try Task.checkCancellation()
         guard context.sameAuthority(as: try debugContext()), self.core === core,
               installed.selection == serverSelection, workingStateAuthorized, identity == bookmark.identity,
@@ -3868,7 +3839,7 @@ extension BoundROMMultiplayerCoordinator: BoundDebugHost {
               current.proof == previous else { throw BoundDebugFailure.stale }
         try Self.validateDebugReturnReceipt(receipt, installed: current.receipt,
             requestedHead: requestedHead, currentHead: head?.receipt, requestedConfirmed: requestedConfirmed,
-            currentConfirmed: independentServerHead, uploadInFlight: snapshotTask != nil)
+            currentConfirmed: independentServerHead, uploadInFlight: checkpointUpload.isUploading)
         current.receipt = receipt
         current.proof = .init(checkpoint: receipt.checkpoint, deviceID: store.deviceID, nativeVerified: true)
         debugReturnInstallation = current

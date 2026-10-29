@@ -2,10 +2,168 @@ import XCTest
 import UIKit
 import CoreData
 import ObjectiveC
+import zlib
 @preconcurrency import DeltaCore
 @testable import Delta
 @testable import class Delta.Game
 @testable import class Delta.GameViewController
+
+/// Delivery-only faults for ordinary saves. Requests retain their real TLS,
+/// credentials, bodies and server CAS; no successful response is synthesized.
+private final class LocalOrdinarySaveDelivery: URLProtocol, @unchecked Sendable {
+    enum Fault: Equatable { case hold, lose }
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var run: UUID?, fault: Fault?, checkpoint: UUID?
+        var held: (() -> Void)?, reached = false, delivered = false
+        var handled = 0, parsed = 0, acceptedSeals = 0
+        var actions: [String: Int] = [:], statuses: [Int: Int] = [:]
+    }
+    private static let state = State()
+    private static let forwarding: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = []
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration)
+    }()
+    private var forwardingTask: URLSessionDataTask?
+    static func arm(run: UUID, fault: Fault) {
+        state.lock.lock(); defer { state.lock.unlock() }
+        state.run = run; state.fault = fault; state.checkpoint = nil
+        state.reached = false; state.delivered = false
+    }
+    static func snapshot() -> (reached: Bool, delivered: Bool, checkpoint: UUID?) {
+        state.lock.lock(); defer { state.lock.unlock() }
+        return (state.reached, state.delivered, state.checkpoint)
+    }
+    static func diagnostics() -> [String: BoundDebugJSON] {
+        state.lock.lock(); defer { state.lock.unlock() }
+        return ["handled": .number(Double(state.handled)), "parsed": .number(Double(state.parsed)),
+                "acceptedSeals": .number(Double(state.acceptedSeals)),
+                "actions": .object(state.actions.mapValues { .number(Double($0)) }),
+                "statuses": .object(Dictionary(uniqueKeysWithValues: state.statuses.map { (String($0.key), .number(Double($0.value))) }))]
+    }
+    static func release() {
+        state.lock.lock()
+        let held = state.held; state.held = nil; state.fault = nil
+        state.lock.unlock()
+        held?()
+    }
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == "127.0.0.1" && request.url?.port == 58552 &&
+        request.url?.path == "/v2/rpc/bound_independent_v2" &&
+        URLProtocol.property(forKey: "BoundOrdinaryForwarded", in: request) == nil
+    }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let forwarded = (request as NSURLRequest).mutableCopy() as! NSMutableURLRequest
+        URLProtocol.setProperty(true, forKey: "BoundOrdinaryForwarded", in: forwarded)
+        var body = request.httpBody
+        if body == nil, let stream = request.httpBodyStream {
+            stream.open(); defer { stream.close() }
+            var data = Data(), bytes = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&bytes, maxLength: bytes.count)
+                guard count >= 0, data.count + count <= 131_072 else {
+                    client?.urlProtocol(self, didFailWithError: URLError(.dataLengthExceedsMaximum)); return
+                }
+                if count == 0 { break }
+                data.append(contentsOf: bytes.prefix(count))
+            }
+            body = data; forwarded.httpBody = data
+        }
+        let fields = body.flatMap { try? JSONDecoder().decode(String.self, from: $0) }
+            .flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+        let run = (fields?["save_id"] as? String).flatMap(UUID.init(uuidString:))
+        let checkpoint = (fields?["checkpoint"] as? String).flatMap(UUID.init(uuidString:))
+        let seal = fields?["action"] as? String == "saveSeal"
+        Self.state.lock.lock()
+        Self.state.handled += 1
+        if let action = fields?["action"] as? String {
+            Self.state.parsed += 1
+            if ["create", "get", "save", "saveChunk", "saveSeal", "saveDownload", "events"].contains(action) {
+                Self.state.actions[action, default: 0] += 1
+            }
+        }
+        Self.state.lock.unlock()
+        forwardingTask = Self.forwarding.dataTask(with: forwarded as URLRequest) { [self] data, response, error in
+            let deliver: () -> Void = { [self] in
+                if let error { client?.urlProtocol(self, didFailWithError: error); return }
+                guard let response, let data else {
+                    client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse)); return
+                }
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: data); client?.urlProtocolDidFinishLoading(self)
+            }
+            Self.state.lock.lock()
+            if let status = (response as? HTTPURLResponse)?.statusCode { Self.state.statuses[status, default: 0] += 1 }
+            if seal, (response as? HTTPURLResponse)?.statusCode == 200 { Self.state.acceptedSeals += 1 }
+            let selected = seal && run == Self.state.run && !Self.state.reached &&
+                Self.state.fault != nil && (response as? HTTPURLResponse)?.statusCode == 200
+            if selected {
+                Self.state.reached = true; Self.state.checkpoint = checkpoint
+                if Self.state.fault == .hold {
+                    Self.state.held = {
+                        Self.state.lock.lock(); Self.state.delivered = true; Self.state.lock.unlock()
+                        deliver()
+                    }
+                    Self.state.lock.unlock(); return
+                }
+                Self.state.delivered = true
+                Self.state.lock.unlock()
+                client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost)); return
+            }
+            Self.state.lock.unlock(); deliver()
+        }
+        forwardingTask?.resume()
+    }
+    override func stopLoading() { forwardingTask?.cancel() }
+}
+
+/// Foundation's global protocol registry does not attach a custom protocol to
+/// every ephemeral session. Scope the standard configuration factory in this
+/// test process, before the ordinary service creates its private session. The
+/// forwarding session explicitly clears protocolClasses and still validates TLS.
+private final class LocalOrdinaryProtocolRegistration {
+    private typealias Factory = @convention(c) (AnyObject, Selector) -> Unmanaged<URLSessionConfiguration>
+    private let method: Method, original: IMP, replacement: IMP
+    init() throws {
+        let selector = NSSelectorFromString("ephemeralSessionConfiguration")
+        guard let method = class_getClassMethod(URLSessionConfiguration.self, selector),
+              method_getNumberOfArguments(method) == 2 else { throw BoundDebugFailure.unavailable }
+        self.method = method; original = method_getImplementation(method)
+        let factory = unsafeBitCast(original, to: Factory.self)
+        let block: @convention(block) (AnyObject) -> URLSessionConfiguration = { receiver in
+            let configuration = factory(receiver, selector).takeUnretainedValue()
+            configuration.protocolClasses = [LocalOrdinarySaveDelivery.self] +
+                (configuration.protocolClasses ?? []).filter { $0 != LocalOrdinarySaveDelivery.self }
+            return configuration
+        }
+        replacement = imp_implementationWithBlock(block)
+        let prior = method_setImplementation(method, replacement)
+        guard unsafeBitCast(prior, to: UInt.self) == unsafeBitCast(original, to: UInt.self) else {
+            method_setImplementation(method, prior); throw BoundDebugFailure.stale
+        }
+    }
+    func restore() {
+        if unsafeBitCast(method_getImplementation(method), to: UInt.self) == unsafeBitCast(replacement, to: UInt.self) {
+            method_setImplementation(method, original)
+        }
+        // Keep this bounded trampoline alive until process exit; a Foundation
+        // request already entering the factory may still be returning through it.
+    }
+}
+
+private final class LocalOrdinaryApplicationTransitions: @unchecked Sendable {
+    private let lock = NSLock()
+    private var enteredBackground = false, returnedActive = false
+    func background() { lock.lock(); enteredBackground = true; lock.unlock() }
+    func active() { lock.lock(); returnedActive = enteredBackground; lock.unlock() }
+    func snapshot() -> (background: Bool, active: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        return (enteredBackground, returnedActive)
+    }
+}
 
 /// A fault changes delivery only. Every accepted response still comes from the
 /// task gateway, using the account's current credentials and real server CAS.
@@ -283,7 +441,7 @@ private final class LocalDebugBoundaryRenderer: GameViewControllerDelegate {
         let endpoint: String, roomID: UUID, accounts: [Account]
     }
     private struct Input: Decodable {
-        enum Scenario: String, Decodable { case ordinary, customHold, returnHold, returnVerifyLostReply, customLostReply, unseenPeerDeath, staleOrdinarySelection, customCommitLossPrepare, customCommitLossRecover, reloadBuiltin, reloadCustom, buddyLeave, controllerRevoke, partialRestorePrepare, partialRestoreRecover }
+        enum Scenario: String, Decodable { case ordinary, ordinaryRecovery, ordinaryTerminateAccepted, customHold, returnHold, returnVerifyLostReply, customLostReply, unseenPeerDeath, staleOrdinarySelection, customCommitLossPrepare, customCommitLossRecover, reloadBuiltin, reloadCustom, buddyLeave, controllerRevoke, partialRestorePrepare, partialRestoreRecover }
         let version: Int, attemptID: UUID, role: String, scenario: Scenario
         let creationRequestID: UUID
         let ordinaryRunID: UUID?
@@ -296,6 +454,14 @@ private final class LocalDebugBoundaryRenderer: GameViewControllerDelegate {
         /// test never fabricates a loss or writes guest RAM to create one.
         let expectedPeerLossSlot: String?
         let recoveryAttemptID: UUID?
+        let expectedROM: String?
+        let expectedGameID: String?
+        let previousReceipt: BoundMultiplayerCheckpointReceipt?
+        let previousProcessID: Int32?
+        let previousTerminationAttemptID: UUID?
+        let restoreExperimentalPreferencePresent: Bool?
+        let restoreExperimentalPreferenceEnabled: Bool?
+        let exerciseOSBackground: Bool?
     }
     private struct RestartProof: Codable {
         let version: Int, processID: Int32, attemptID: UUID, recoveryAttemptID: UUID
@@ -323,6 +489,7 @@ private final class LocalDebugBoundaryRenderer: GameViewControllerDelegate {
     private var finalReceipt: LocalDebugFinalReceipt?
     private var diagnosticOutput: URL?
     private var stage = "inputs"
+    private var ordinaryProfile: BoundGameProfile?
     private var root: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("DEBUGLocalQA") }
 
     private func trace(_ label: String) {
@@ -385,6 +552,29 @@ private final class LocalDebugBoundaryRenderer: GameViewControllerDelegate {
         guard core.state == .paused else { throw BoundDebugFailure.busy }
         let memory = try XCTUnwrap(BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }))
         return Data(memory.workRAM) + Data(memory.internalRAM)
+    }
+    private func checkpointRAM(_ state: Data) throws -> Data {
+        // Same bounded gzip decode used by ServerFinalSaveLifecycleTests.
+        // These offsets are the pinned VBA-M v10 serialization verified by
+        // BoundVBABattleBridge: IWRAM, palette, then EWRAM. No state is edited.
+        guard state.count > 32, state.count <= 4 * 1024 * 1024,
+              state.prefix(4) == Data("VBA ".utf8) else { throw BoundDebugFailure.incompatible }
+        var stream = z_stream(), decoded = Data(count: 4 * 1024 * 1024)
+        guard inflateInit2_(&stream, 31, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else { throw BoundDebugFailure.storage }
+        defer { inflateEnd(&stream) }
+        let capacity = decoded.count
+        let result = state.withUnsafeBytes { input in
+            decoded.withUnsafeMutableBytes { output in
+                stream.next_in = UnsafeMutablePointer(mutating: input.bindMemory(to: UInt8.self).baseAddress!.advanced(by: 8))
+                stream.avail_in = uInt(state.count - 8)
+                stream.next_out = output.bindMemory(to: UInt8.self).baseAddress!
+                stream.avail_out = uInt(capacity)
+                return inflate(&stream, Z_FINISH)
+            }
+        }
+        guard result == Z_STREAM_END, stream.avail_in == 0, stream.total_out >= 34271 + 0x40000,
+              decoded.prefix(4) == Data([10, 0, 0, 0]) else { throw BoundDebugFailure.incompatible }
+        return decoded.subdata(in: 34271 ..< 34271 + 0x40000) + decoded.subdata(in: 479 ..< 479 + 0x8000)
     }
     private func pausedUIRequest(_ core: EmulatorCore) throws -> Data {
         let view = try XCTUnwrap(owner), context = try view.boundCompanionForTesting.romMultiplayer.debugContext()
@@ -1247,7 +1437,7 @@ private final class LocalDebugBoundaryRenderer: GameViewControllerDelegate {
         let source = root.appendingPathComponent("RadicalRed.gba")
         guard FileManager.default.fileExists(atPath: source.path) else { throw XCTSkip("Awaiting exact task-local current ROM at DEBUGLocalQA/RadicalRed.gba") }
         let bytes = try Data(contentsOf: source), profile = try MultiRedAdapter(rom: bytes).profile
-        guard profile == BoundGameProfiles.current else { throw BoundDebugFailure.incompatible }
+        guard profile == (ordinaryProfile ?? BoundGameProfiles.current) else { throw BoundDebugFailure.incompatible }
         if !DatabaseManager.shared.isStarted {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 DatabaseManager.shared.start { error in
@@ -1287,16 +1477,55 @@ private final class LocalDebugBoundaryRenderer: GameViewControllerDelegate {
         let inputBytes = try Data(contentsOf: inputURL), loginBytes = try Data(contentsOf: root.appendingPathComponent("synthetic-login.json"))
         guard inputBytes.count <= 8192, loginBytes.count <= 8192 else { throw BoundDebugFailure.rejected }
         let input = try JSONDecoder().decode(Input.self, from: inputBytes), login = try JSONDecoder().decode(Login.self, from: loginBytes)
-        let simulator = input.role == "controller" ? "92586556-6715-4BA0-98FC-5C1FF776F0A9" : "14BD3EC6-B57B-49A1-98D1-457A9DC0C088"
+        let ordinaryTask = input.expectedROM != nil && [.ordinary, .ordinaryRecovery, .ordinaryTerminateAccepted].contains(input.scenario)
+        let simulator = ordinaryTask ? env["BOUND_ORDINARY_QA_SIMULATOR"] :
+            (input.role == "controller" ? "92586556-6715-4BA0-98FC-5C1FF776F0A9" : "14BD3EC6-B57B-49A1-98D1-457A9DC0C088")
         guard input.version == 1, ["controller", "buddy"].contains(input.role), env["SIMULATOR_UDID"] == simulator,
               env["BOUND_QA_LOCAL_BACKEND"] == "1", login.endpoint == "https://127.0.0.1:58552",
               try BoundBackendConfiguration.current().origin == login.endpoint,
               login.accounts.count == 2, Set(login.accounts.map(\.ownerID)).count == 2,
               let credentials = login.accounts.first(where: { $0.role == input.role }) else { throw BoundDebugFailure.rejected }
         let output = root.appendingPathComponent("native-results").appendingPathComponent(input.attemptID.uuidString).appendingPathComponent(input.role)
+        let preparedMarker = output.appendingPathComponent("ordinary-termination-prepared.json")
+        if ordinaryTask, input.scenario == .ordinaryTerminateAccepted,
+           FileManager.default.fileExists(atPath: preparedMarker.path) {
+            let prepared = try BoundDebugJSON(data: Data(contentsOf: preparedMarker))
+            guard prepared["attemptID"]?.string.flatMap(UUID.init(uuidString:)) == input.attemptID,
+                  prepared["role"]?.string == input.role else { throw BoundDebugFailure.stale }
+            try record(["attemptID": .string(input.attemptID.uuidString), "role": .string(input.role),
+                        "originalProcessID": prepared["processID"] ?? .null, "processID": .number(Double(getpid())),
+                        "blockedBeforeAuthenticationAndMutation": .bool(true)], name: "ordinary-termination-rerun-blocked", output: output)
+            // XCTest may restart its crashed host while finishing a run even
+            // with one requested iteration. Never repeat authentication,
+            // preference changes, native selection, or the prepared save.
+            throw XCTSkip("This attempt already prepared its intentional process termination; recovery requires a new attempt")
+        }
+        let protocolRegistration = ordinaryTask ? try LocalOrdinaryProtocolRegistration() : nil
+        defer { protocolRegistration?.restore() }
+        if ordinaryTask {
+            guard let expectedROM = input.expectedROM, let expectedGame = input.expectedGameID,
+                  simulator != nil, env["BOUND_ORDINARY_QA_TASK"] == "coordinator-stability" else { throw BoundDebugFailure.rejected }
+            let bytes = try Data(contentsOf: root.appendingPathComponent("RadicalRed.gba"))
+            let profile = try MultiRedAdapter(rom: bytes).profile
+            guard profile.romSHA256 == expectedROM, profile.gameID == expectedGame else { throw BoundDebugFailure.incompatible }
+            ordinaryProfile = profile
+            guard URLProtocol.registerClass(LocalOrdinarySaveDelivery.self) else { throw BoundDebugFailure.unavailable }
+        }
+        defer {
+            LocalOrdinarySaveDelivery.release()
+            URLProtocol.unregisterClass(LocalOrdinarySaveDelivery.self)
+        }
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         diagnosticOutput = output
         previousExperimental = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        if input.previousTerminationAttemptID != nil {
+            guard ordinaryTask, input.scenario == .ordinaryRecovery, input.previousReceipt != nil,
+                  let present = input.restoreExperimentalPreferencePresent,
+                  !present || input.restoreExperimentalPreferenceEnabled != nil else { throw BoundDebugFailure.rejected }
+            // Intentional process death cannot execute the earlier attempt's
+            // cleanup. Restore that attempt's original preference on recovery.
+            previousExperimental = present ? input.restoreExperimentalPreferenceEnabled : nil
+        }
         previousDeveloperFeatures = UserDefaults.standard.object(forKey: BoundDeveloperFeatures.key)
         BoundMultiplayerFeatures.setEnabled(true)
         if [.customCommitLossRecover, .partialRestoreRecover].contains(input.scenario) { UserDefaults.standard.set(true, forKey: BoundDeveloperFeatures.key) }
@@ -1333,10 +1562,17 @@ private final class LocalDebugBoundaryRenderer: GameViewControllerDelegate {
         // only the exact role's owner, then use normal sign-in to reauthorize.
         guard companion.account.session == nil || companion.account.session?.owner == credentials.ownerID else { throw BoundDebugFailure.rejected }
         ownsAccountSession = true
-        trace("Sign in synthetic owner")
-        await companion.account.signIn(email: credentials.email, password: credentials.password)
+        if input.previousTerminationAttemptID != nil {
+            trace("Restore persisted synthetic owner after intentional termination")
+            await companion.account.refreshIfNeeded()
+            guard companion.account.session?.owner == credentials.ownerID else { throw BoundDebugFailure.rejected }
+        } else {
+            trace("Sign in synthetic owner")
+            await companion.account.signIn(email: credentials.email, password: credentials.password)
+        }
         let session = try XCTUnwrap(companion.account.session)
         guard session.owner == credentials.ownerID else { throw BoundDebugFailure.rejected }
+        try session.credentials()
         trace("Attach actual core")
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         previousWindow = scene.windows.first(where: \.isKeyWindow)
@@ -1363,10 +1599,40 @@ private final class LocalDebugBoundaryRenderer: GameViewControllerDelegate {
         if let existing = input.ordinaryRunID { runID = existing }
         else {
             guard input.role == "controller" else { throw XCTSkip("Buddy awaits controller ordinaryRunID from ordinary-created.json; no guessed run selection") }
-            let created = try await ordinary.createSave(gameID: game.identifier, romSHA256: BoundGameProfiles.current.romSHA256,
+            let created = try await ordinary.createSave(gameID: game.identifier, romSHA256: (ordinaryProfile ?? BoundGameProfiles.current).romSHA256,
                 settings: options.settings, profile: options.profile, partnerProfile: options.partnerProfile, requestID: input.creationRequestID)
             runID = try XCTUnwrap(created.save_id)
             try record(["ordinaryRunID": .string(runID.uuidString.lowercased()), "attemptID": .string(input.attemptID.uuidString.lowercased())], name: "ordinary-created", output: output)
+        }
+        let originalRestoreCallback = coordinator.didRestoreSnapshot
+        var observedRestores = 0, nativeRestoreMatched = false
+        var restartProof: [String: BoundDebugJSON]?
+        defer { coordinator.didRestoreSnapshot = originalRestoreCallback }
+        if let previous = input.previousReceipt {
+            let state = try await ordinary.getSave(runID)
+            guard let previousPID = input.previousProcessID, previousPID != getpid(),
+                  previous.run == runID, previous.owner == session.owner,
+                  state.saves[session.owner.uuidString.lowercased()]?.receipt == previous else { throw BoundDebugFailure.stale }
+            let package = try await ordinary.downloadIndependent(identity: state.identity,
+                upload: try XCTUnwrap(state.saves[session.owner.uuidString.lowercased()]))
+            guard package.receipt == previous, package.payload.manifest.identity.owner == session.owner else { throw BoundDebugFailure.nativeVerification }
+            let expectedBattery = try XCTUnwrap(package.payload.files["game.sav"]?.data)
+            let expectedRAM = try checkpointRAM(XCTUnwrap(package.payload.files["checkpoint.state"]?.data))
+            coordinator.didRestoreSnapshot = {
+                observedRestores += 1
+                nativeRestoreMatched = core.state == .paused &&
+                    BoundVBABattleBridge.captureServerBattery() == expectedBattery &&
+                    (try? self.nativeRAM(core)) == expectedRAM
+                // Preserve the product's existing restore observer after the
+                // read-only paused native inspection, before gameplay resumes.
+                originalRestoreCallback?()
+            }
+            restartProof = ["receipt": try .wire(previous), "previousProcessID": .number(Double(previousPID)),
+                        "processID": .number(Double(getpid())), "exactConfirmedHeadBeforeSelection": .bool(true),
+                        "expectedBatterySHA256": .string(BoundMultiplayerSaveStore.hash(expectedBattery)),
+                        "expectedNativeRAMSHA256": .string(BoundMultiplayerSaveStore.hash(expectedRAM)),
+                        "afterIntentionalTermination": .bool(input.previousTerminationAttemptID != nil),
+                        "previousTerminationAttemptID": input.previousTerminationAttemptID.map { .string($0.uuidString) } ?? .null]
         }
         // selectServerRun refuses execution until asynchronous full-ROM
         // admission succeeds. Observe its real store result, never a private
@@ -1376,6 +1642,13 @@ private final class LocalDebugBoundaryRenderer: GameViewControllerDelegate {
             _ = await coordinator.selectServerRun(runID, profile: input.role == "controller" ? options.profile : options.partnerProfile)
             return try BoundMultiplayerSaveStore.shared.manifest(gameID: game.identifier)?.identity.run == runID
         }
+        if var proof = restartProof {
+            proof["actualNativeRestoreCount"] = .number(Double(observedRestores))
+            proof["restoredNativeBatteryAndRAMMatchAcceptedPackage"] = .bool(nativeRestoreMatched)
+            try record(proof, name: "ordinary-restart-proof", output: output)
+            guard observedRestores == 1, nativeRestoreMatched else { throw BoundDebugFailure.nativeVerification }
+        }
+        coordinator.didRestoreSnapshot = originalRestoreCallback
         trace("Wait for native Debug New Game")
         try await wait("The actual cartridge must complete admitted Debug New Game", seconds: 90) {
             coordinator.probe.read()?.settingsApplied == true && coordinator.probe.read()?.permitsFieldInterruption == true && !coordinator.needsServerMenu
@@ -1415,7 +1688,7 @@ private final class LocalDebugBoundaryRenderer: GameViewControllerDelegate {
         try record(["ordinaryRunID": .string(runID.uuidString.lowercased()), "receipt": try .wire(own.receipt),
                     "nativeTrainerID": .number(Double(state.identity.localSeed)), "actualCoordinator": .bool(true),
                     "nativeStateBytes": .number(Double(nativeStateBytes))], name: "ordinary-native-proof", output: output)
-        guard input.scenario != .ordinary else { return }
+        if input.scenario == .ordinary { return }
         // This pause belongs only to the native trainer inspection above.
         // Restore normal execution through the same resume gate as the UI;
         // otherwise an odd native publication can stay paused indefinitely
@@ -1424,6 +1697,16 @@ private final class LocalDebugBoundaryRenderer: GameViewControllerDelegate {
             guard view.emulatorCore === core, view.boundCanResumeEmulation(resumingNativeActivity: false), core.resume() else {
                 throw BoundDebugFailure.busy
             }
+        }
+        if input.scenario == .ordinaryRecovery {
+            try await exerciseOrdinaryRecovery(input, coordinator: coordinator, ordinary: ordinary,
+                                              core: core, identity: state.identity, output: output)
+            return
+        }
+        if input.scenario == .ordinaryTerminateAccepted {
+            try await prepareOrdinaryTermination(input, coordinator: coordinator, ordinary: ordinary,
+                                                 core: core, identity: state.identity, output: output)
+            return
         }
         let reviewed = input.reviewedCandidateCertificates ?? BoundDebugFixtureStore.certificates
         guard Set(reviewed.keys) == Set(["01/controller", "01/buddy"]), reviewed.values.allSatisfy(BoundDebugJSON.validDigest) else {
@@ -1937,8 +2220,206 @@ private final class LocalDebugBoundaryRenderer: GameViewControllerDelegate {
                     "uiResumeDenied": .bool(true), "serverAccepted": .bool(true), "resolvedThroughReconcile": .bool(true)], name: "boundary-proof", output: output)
     }
 
+    private func prepareOrdinaryTermination(_ input: Input, coordinator: BoundROMMultiplayerCoordinator,
+                                             ordinary: BoundNakamaRunService, core: EmulatorCore,
+                                             identity: BoundMultiplayerRunIdentity, output: URL) async throws {
+        let view = try XCTUnwrap(owner)
+        coordinator.setServiceActive(true)
+        if core.state == .paused {
+            guard view.emulatorCore === core, view.boundCanResumeEmulation(resumingNativeActivity: false),
+                  core.resume() else { throw BoundDebugFailure.busy }
+        }
+        try await wait("Native field must admit the checkpoint preceding process death") {
+            core.state == .running && coordinator.probe.read()?.permitsFieldInterruption == true
+        }
+        trace("Hold accepted ordinary checkpoint before intentional process death")
+        LocalOrdinarySaveDelivery.arm(run: identity.run, fault: .hold)
+        core.save()
+        try await wait("Termination requires a real accepted automatic seal", seconds: 45) {
+            LocalOrdinarySaveDelivery.snapshot().reached
+        }
+        let checkpoint = try XCTUnwrap(LocalOrdinarySaveDelivery.snapshot().checkpoint)
+        let state = try await ordinary.getSave(identity.run)
+        let own = try XCTUnwrap(state.saves[identity.owner.uuidString.lowercased()])
+        let package = try await ordinary.downloadIndependent(identity: identity, upload: own)
+        let delivery = LocalOrdinarySaveDelivery.snapshot()
+        guard state.identity == identity, own.receipt.checkpoint == checkpoint,
+              own.receipt.owner == identity.owner, package.receipt == own.receipt,
+              package.payload.manifest.identity == identity,
+              let battery = package.payload.files["game.sav"]?.data, battery.count == 131_072,
+              let nativeState = package.payload.files["checkpoint.state"]?.data, nativeState.count > 1024,
+              delivery.reached, !delivery.delivered, delivery.checkpoint == checkpoint,
+              !FileManager.default.fileExists(atPath: output.appendingPathComponent("final-native-save.json").path),
+              previousExperimental == nil || previousExperimental is Bool else { throw BoundDebugFailure.nativeVerification }
+        // Only this credential-free, atomically persisted marker authorizes
+        // the runner's deliberate process termination. Do not release the
+        // reply or run final-save teardown on the successful prepare path.
+        try record(["version": .number(1), "attemptID": .string(input.attemptID.uuidString), "role": .string(input.role),
+                    "processID": .number(Double(getpid())), "receipt": try .wire(own.receipt),
+                    "acceptedPackageDownloaded": .bool(true), "responseDelivered": .bool(false),
+                    "finalSaveTeardownStarted": .bool(false),
+                    "batterySHA256": .string(BoundMultiplayerSaveStore.hash(battery)),
+                    "stateSHA256": .string(BoundMultiplayerSaveStore.hash(nativeState)),
+                    "previousExperimental": (previousExperimental as? Bool).map(BoundDebugJSON.bool) ?? .null],
+                   name: "ordinary-termination-prepared", output: output)
+        trace("Await runner termination without delivering accepted seal or final-save teardown")
+        try await wait("Runner must intentionally terminate the prepared process", seconds: 90) {
+            guard !LocalOrdinarySaveDelivery.snapshot().delivered else { throw BoundDebugFailure.stale }
+            return false
+        }
+    }
+
+    private func exerciseOrdinaryRecovery(_ input: Input, coordinator: BoundROMMultiplayerCoordinator,
+                                          ordinary: BoundNakamaRunService, core: EmulatorCore,
+                                          identity: BoundMultiplayerRunIdentity, output: URL) async throws {
+        let view = try XCTUnwrap(owner)
+        func resumeOwnedPause() throws {
+            coordinator.setServiceActive(true)
+            if core.state == .paused {
+                guard view.emulatorCore === core, view.boundCanResumeEmulation(resumingNativeActivity: false),
+                      core.resume() else { throw BoundDebugFailure.busy }
+            }
+        }
+        try resumeOwnedPause()
+        try await wait("Ordinary field must admit manual native saving") {
+            coordinator.probe.read()?.permitsFieldInterruption == true && core.state == .running
+        }
+        trace("Hold an authenticated ordinary automatic save reply")
+        LocalOrdinarySaveDelivery.arm(run: identity.run, fault: .hold)
+        core.save()
+        do {
+            try await wait("Real automatic saveSeal must reach the authenticated backend", seconds: 45) {
+                LocalOrdinarySaveDelivery.snapshot().reached
+            }
+        } catch {
+            var diagnostic = LocalOrdinarySaveDelivery.diagnostics()
+            diagnostic["coreRunning"] = .bool(core.state == .running)
+            diagnostic["fieldSafe"] = .bool(coordinator.probe.read()?.permitsFieldInterruption == true)
+            diagnostic["serverMenuError"] = coordinator.serverMenuError.map(BoundDebugJSON.string) ?? .null
+            if let host = Mirror(reflecting: coordinator).children.first(where: { $0.label == "host" })?.value as? BoundROMHostState {
+                diagnostic["hostMessage"] = .string(host.message)
+            }
+            try record(diagnostic, name: "ordinary-delivery-diagnostic", output: output)
+            throw error
+        }
+        let held = try XCTUnwrap(LocalOrdinarySaveDelivery.snapshot().checkpoint)
+        let confirmedWhileHeld = try await ordinary.getSave(identity.run)
+        XCTAssertEqual(confirmedWhileHeld.saves[identity.owner.uuidString.lowercased()]?.receipt.checkpoint, held)
+        XCTAssertFalse(LocalOrdinarySaveDelivery.snapshot().delivered)
+
+        // Queue a newer native save while the old reply is held, then use the
+        // real temporary-background boundary. Inactive services cannot capture
+        // the pending cut, even though the previous native request was safe.
+        coordinator.nativeServerSaveRequested(core: core)
+        coordinator.setServiceActive(false, temporary: true)
+        XCTAssertEqual(core.state, .paused)
+        LocalOrdinarySaveDelivery.release()
+        try await wait("Held seal reply must be delivered") { LocalOrdinarySaveDelivery.snapshot().delivered }
+        try await Task.sleep(for: .milliseconds(300))
+        let host = try XCTUnwrap(Mirror(reflecting: coordinator).children.first { $0.label == "host" }?.value as? BoundROMHostState,
+                                "Read-only observation of the actual native save status")
+        let falseSuccess = host.status == .complete && host.message == "Saved to server."
+        try record(["runID": .string(identity.run.uuidString), "checkpoint": .string(held.uuidString),
+                    "serverAcceptedBeforeReply": .bool(true), "newerNativeSavePending": .bool(true),
+                    "corePaused": .bool(core.state == .paused), "reportedMessage": .string(host.message),
+                    "falseSaveSuccess": .bool(falseSuccess)], name: "ordinary-held-reply", output: output)
+        XCTAssertFalse(falseSuccess, "An older upload cannot report Saved while a newer background checkpoint remains uncaptured")
+
+        trace("Reactivate the same native owner after the held reply")
+        let previousFrame = coordinator.probe.read()?.frame
+        try resumeOwnedPause()
+        try await wait("Native frames must resume after the temporary interruption") {
+            core.state == .running && coordinator.probe.read()?.frame != previousFrame
+        }
+        var settled: BoundDebugBookmark?
+        try await wait("The newer pending checkpoint must settle", seconds: 45) {
+            do { settled = try await coordinator.settleForDebugSwitch(); return true }
+            catch BoundDebugFailure.busy { return false }
+        }
+        let afterHeld = try XCTUnwrap(settled?.receipt)
+        XCTAssertNotEqual(afterHeld.checkpoint, held)
+        XCTAssertEqual(afterHeld.owner, identity.owner)
+        let afterHeldState = try await ordinary.getSave(identity.run)
+        XCTAssertEqual(afterHeldState.saves[identity.owner.uuidString.lowercased()]?.receipt, afterHeld)
+
+        trace("Lose an accepted authenticated ordinary seal reply")
+        LocalOrdinarySaveDelivery.arm(run: identity.run, fault: .lose)
+        core.save()
+        try await wait("Real automatic seal must be accepted before losing its reply", seconds: 45) {
+            LocalOrdinarySaveDelivery.snapshot().reached
+        }
+        let lost = try XCTUnwrap(LocalOrdinarySaveDelivery.snapshot().checkpoint)
+        let accepted = try await ordinary.getSave(identity.run)
+        XCTAssertEqual(accepted.saves[identity.owner.uuidString.lowercased()]?.receipt.checkpoint, lost)
+        LocalOrdinarySaveDelivery.release()
+        try await wait("Lost reply recovery must settle the same ordinary owner", seconds: 45) {
+            do { settled = try await coordinator.settleForDebugSwitch(); return true }
+            catch BoundDebugFailure.busy { return false }
+        }
+        let recovered = try XCTUnwrap(settled?.receipt)
+        let state = try await ordinary.getSave(identity.run)
+        guard state.identity == identity, state.saves[identity.owner.uuidString.lowercased()]?.receipt == recovered,
+              recovered.owner == identity.owner, !coordinator.hasUnconfirmedServerSave else { throw BoundDebugFailure.nativeVerification }
+        let downloaded = try await ordinary.downloadIndependent(identity: identity,
+            upload: try XCTUnwrap(state.saves[identity.owner.uuidString.lowercased()]))
+        XCTAssertEqual(downloaded.receipt, recovered)
+        XCTAssertEqual(downloaded.payload.manifest.identity.owner, identity.owner)
+        try record(["acceptedCheckpointWithLostReply": .string(lost.uuidString), "confirmedReceipt": try .wire(recovered),
+                    "ownerPreserved": .bool(true), "nativeFramesRecovered": .bool(true),
+                    "interruption": .string("actual coordinator temporary-background lifecycle; not OS suspension"),
+                    "processID": .number(Double(getpid()))], name: "ordinary-recovery-proof", output: output)
+        if input.exerciseOSBackground == true {
+            trace("Await actual OS background while an ordinary seal reply is held")
+            let transitions = LocalOrdinaryApplicationTransitions()
+            let notifications = NotificationCenter.default
+            let background = notifications.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { _ in
+                transitions.background()
+            }
+            let active = notifications.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { _ in
+                transitions.active()
+            }
+            defer { notifications.removeObserver(background); notifications.removeObserver(active) }
+            LocalOrdinarySaveDelivery.arm(run: identity.run, fault: .hold)
+            core.save()
+            try await wait("OS interruption must start with an actual held saveSeal", seconds: 45) {
+                LocalOrdinarySaveDelivery.snapshot().reached
+            }
+            coordinator.nativeServerSaveRequested(core: core)
+            let process = getpid()
+            try record(["attemptID": .string(input.attemptID.uuidString), "role": .string(input.role),
+                        "processID": .number(Double(process))], name: "ordinary-background-request", output: output)
+            try await wait("The app must observe real OS background and foreground", seconds: 45) {
+                let observed = transitions.snapshot()
+                return observed.background && observed.active && UIApplication.shared.applicationState == .active &&
+                    FileManager.default.fileExists(atPath: output.appendingPathComponent("ordinary-background-ack.json").path)
+            }
+            let ack = try BoundDebugJSON(data: Data(contentsOf: output.appendingPathComponent("ordinary-background-ack.json")))
+            guard ack["attemptID"]?.string.flatMap(UUID.init(uuidString:)) == input.attemptID,
+                  ack["role"]?.string == input.role, ack["backgroundExit"]?.integer == 0,
+                  ack["foregroundExit"]?.integer == 0, getpid() == process else { throw BoundDebugFailure.stale }
+            LocalOrdinarySaveDelivery.release()
+            try resumeOwnedPause()
+            let frame = coordinator.probe.read()?.frame
+            try await wait("Native frames must recover after actual OS foreground") {
+                core.state == .running && coordinator.probe.read()?.frame != frame
+            }
+            try await wait("OS-interrupted newer native checkpoint must be confirmed", seconds: 45) {
+                do { settled = try await coordinator.settleForDebugSwitch(); return true }
+                catch BoundDebugFailure.busy { return false }
+            }
+            let finalReceipt = try XCTUnwrap(settled?.receipt)
+            let finalState = try await ordinary.getSave(identity.run)
+            guard finalState.saves[identity.owner.uuidString.lowercased()]?.receipt == finalReceipt else { throw BoundDebugFailure.nativeVerification }
+            try record(["observedOSBackground": .bool(transitions.snapshot().background),
+                        "observedOSForeground": .bool(transitions.snapshot().active),
+                        "sameProcess": .bool(getpid() == process), "nativeFramesRecovered": .bool(true),
+                        "confirmedReceipt": try .wire(finalReceipt)], name: "ordinary-background-proof", output: output)
+        }
+    }
+
     private func finish(output: URL) async throws {
         trace("Preserve final native checkpoint before teardown")
+        LocalOrdinarySaveDelivery.release()
         await transport?.release()
         defer {
             if owner == nil {
@@ -2009,7 +2490,8 @@ private final class LocalDebugBoundaryRenderer: GameViewControllerDelegate {
                   BoundServerDisconnectSave.failureMessage(run: receipt.identity.run) == nil else {
                 throw BoundDebugFailure.storage
             }
-            try record(["receipt": try .wire(confirmed.receipt), "confirmedBeforeSignOut": .bool(true)], name: "final-native-save", output: output)
+            try record(["receipt": try .wire(confirmed.receipt), "confirmedBeforeSignOut": .bool(true),
+                        "processID": .number(Double(getpid()))], name: "final-native-save", output: output)
         }
         let previousCore = owner.emulatorCore
         owner.game = nil
