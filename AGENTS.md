@@ -13,20 +13,17 @@ Before publishing changes, run focused checks and a Release iPhone build, preser
 
 Publish completed, validated Bound changes by default unless the user explicitly says not to publish. This is standing project-wide authorization; do not ask for repeat permission. Verify the remote and push validated changes directly to `origin/main` with an explicit refspec; never push the current branch implicitly. Preserve unrelated work rather than including it in the publication. Use original upstream Delta playback smoothness as the performance baseline, and do not claim phone parity from simulator tests.
 
-TestFlight uploads are allowed through the manually invoked Fastlane `beta`
-workflow, as explicitly authorized by the user. Do not upload through other
-entry points or start an Xcode Cloud run that delivers to TestFlight.
+Run Fastlane or upload to TestFlight only when the user explicitly requests it.
+Do not use Xcode Cloud for delivery.
 Never check Xcode Cloud usage, available minutes, or capacity. These are standing
 user instructions for all chats and supersede older delivery guidance in this
 repository. Normal local validation, commits, and pushes remain authorized.
 Keep the existing Cloud workflow manual-only; do not enable automatic triggers.
 
-## Manual Fastlane delivery and Apple account preservation
+## Optional TestFlight delivery and Apple account preservation
 
-The user runs delivery manually. Agents must not launch `testlane`, Fastlane
-`beta`, or any TestFlight upload unless the user explicitly authorizes that run.
-A code change, commit, push, ROM publication, or request to diagnose a failure
-is not upload authorization. Preserve existing upload receipts.
+See `fastlane/README.md` for the optional delivery workflow.
+Preserve existing upload receipts.
 
 In the user's Terminal, `source ~/.zshrc` loads the `testlane` alias and shared
 `ASC_API_KEY_PATH`, `ASC_API_KEY_ID`, and `ASC_API_ISSUER_ID` settings. The alias
