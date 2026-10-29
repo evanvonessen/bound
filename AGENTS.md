@@ -1,5 +1,7 @@
 # Working on Bound 2
 
+Work on `main` unless the user asks otherwise.
+
 Preserve the upstream Delta module/core identities and committed dependency pins and patches. The ordinary app entry is Bound.xcodeproj / Bound. Do not introduce a nested app-build wrapper or restore the old mGBA app.
 
 Keep feature UI concise. Do not add explanatory blurbs, implementation details,
