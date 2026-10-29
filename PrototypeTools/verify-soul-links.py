@@ -21,7 +21,7 @@ model = model[model.index('struct BoundSoulIdentity:'):model.index('/// The fram
 codec = (root / 'Delta/Bound/BoundSoulExtras.swift').read_text() + (root / 'Delta/Bound/BoundSoulLinks.swift').read_text()
 tests = (root / 'PrototypeIntegrationTests/SoulLinksTests.swift').read_text().replace('@testable import Delta\n', '')
 names = re.findall(r'    func (test\w+)\(', tests)
-assert len(names) == 11
+assert names and len(names) == len(set(names))
 source = 'import Foundation\nimport XCTest\n' + battle_models + model + codec + tests
 source += '\nlet suite = XCTestSuite(name: "Soul Link native Links presentation and cosmetic chunks")\n'
 source += '\n'.join(f'suite.addTest(SoulLinksTests(selector: NSSelectorFromString("{name}")))' for name in names)

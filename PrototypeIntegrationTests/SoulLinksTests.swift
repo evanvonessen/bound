@@ -3,6 +3,52 @@ import XCTest
 @testable import Delta
 
 final class SoulLinksTests: XCTestCase {
+    func testNativeBattleLossPageIncludesEveryLostPairAndPreservesTheLinksPage() throws {
+        var value=ledger()
+        let slots=["area:102","area:101","egg:1","gift:1","static:1","area:0"]
+        for (index,slot) in slots.enumerated() { add(slot,to:&value,id:UInt32(index+1)) }
+        value.dead=Set(slots)
+        value.partnerAcquisitions=Set(slots.dropLast())
+        value.partnerLinks=Dictionary(uniqueKeysWithValues:slots.dropLast().enumerated().map { ($0.element,presentation($0.offset+1,name:"EMBER",species:4)) })
+        let notice=BoundBattleLossNotice(id:UUID(),slots:slots,completedAt:Date())
+        value.battleLosses=BoundBattleLossJournal(notices:[notice])
+        let ordinary=try XCTUnwrap(BoundSoulLinks.page(ledger:value,areaNames:[:],offset:4,sequence:2,connected:false))
+        let native=try XCTUnwrap(BoundSoulLinks.page(ledger:value,areaNames:[:],offset:4,sequence:2,connected:false,battleLoss:true))
+        XCTAssertEqual(native.count,1024);XCTAssertEqual(native.prefix(160),ordinary.prefix(160))
+        XCTAssertEqual(word(native,160),0x31534C42);XCTAssertEqual(word(native,168),6)
+        var id=notice.id.uuid
+        withUnsafeBytes(of:&id) { XCTAssertEqual(native[176..<192],Data($0)) }
+        for (index,slot) in slots.enumerated() {
+            XCTAssertEqual(word(native,192+index*64,size:2),UInt32(try XCTUnwrap(BoundSoulLedger.wireIndex(slot))))
+            XCTAssertEqual(word(native,194+index*64,size:2)&1,1)
+        }
+        XCTAssertTrue(native[576...].allSatisfy { $0==0 })
+        XCTAssertTrue(ordinary[160...].allSatisfy { $0==0 },"Hidden or unsupported games never receive a notice")
+        if let output=ProcessInfo.processInfo.environment["BOUND_NATIVE_LOSS_PAGE_OUTPUT"] {
+            try native.write(to:URL(fileURLWithPath:output))
+        }
+        value.battleLosses?.markAnnounced(notice.id)
+        let dismissed=try XCTUnwrap(BoundSoulLinks.page(ledger:value,areaNames:[:],offset:0,sequence:4,connected:false,battleLoss:true))
+        XCTAssertTrue(dismissed[160...].allSatisfy { $0==0 },"A durable A acknowledgment retires the native presentation")
+        let terminal=try XCTUnwrap(BoundSoulLinks.page(ledger:value,areaNames:[:],offset:0,sequence:6,connected:false,battleLoss:true,terminalLoss:true))
+        XCTAssertEqual(word(terminal,160),0x31534C42);XCTAssertEqual(word(terminal,168),0)
+        XCTAssertEqual(word(terminal,172),1,"The terminal callback barrier remains after the durable loss acknowledgment")
+    }
+    func testNativeBattleLossStateRequiresCapabilityAndRetainsTheExactAcknowledgedUUID() throws {
+        var data=Data(repeating:0,count:44)
+        XCTAssertNil(BoundSoulLinks.NativeLossState.decode(data))
+        data.replaceSubrange(0..<8,with:Data([0x42,0x4C,0x53,0x31,1,0,0,0]))
+        XCTAssertEqual(BoundSoulLinks.NativeLossState.decode(data)?.active,false)
+        XCTAssertNil(BoundSoulLinks.NativeLossState.decode(data)?.acknowledged)
+        let id=UUID();var bytes=id.uuid
+        withUnsafeBytes(of:&bytes) { data.replaceSubrange(12..<28,with:$0) }
+        data[8]=1
+        XCTAssertEqual(BoundSoulLinks.NativeLossState.decode(data)?.acknowledged,id)
+        XCTAssertEqual(BoundSoulLinks.NativeLossState.decode(data)?.active,true)
+        for size in 0..<44 { XCTAssertNil(BoundSoulLinks.NativeLossState.decode(data.prefix(size))) }
+        data[8]=2;XCTAssertNil(BoundSoulLinks.NativeLossState.decode(data))
+        data[8]=1;data[4]=2;XCTAssertNil(BoundSoulLinks.NativeLossState.decode(data))
+    }
     private func ledger() -> BoundSoulLedger { .init(run: UUID(), binding: String(repeating: "a", count: 64)) }
     private func add(_ slot: String, to ledger: inout BoundSoulLedger, id: UInt32, name: String = "Sparky", species: Int = 25, egg: Bool = false) {
         var record = BoundSoulRecord(identity: .init(personality: id, trainer: 42), slot: slot, name: name, eligible: true, pendingHatch: egg)

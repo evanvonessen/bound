@@ -223,8 +223,11 @@ struct BoundBattleLossGraphic: View {
     private var brokenLink: some View {
         Canvas { context, size in
             let red = Color(red: 0.65, green: 0.12, blue: 0.12)
-            for (x,y,w,h) in [(0.0,10.0,11.0,4.0),(23,10,11,4),(10,4,4,8),(19,14,4,8),(14,0,4,4),(15,24,4,4)] {
-                context.fill(Path(CGRect(x:x,y:y,width:w,height:h)),with:.color(red))
+            let origin = CGPoint(x: floor((size.width-21)/2), y: floor((size.height-21)/2))
+            for step in 0..<7 {
+                for x in [step,6-step] {
+                    context.fill(Path(CGRect(x:origin.x+CGFloat(x*3),y:origin.y+CGFloat(step*3),width:3,height:3)),with:.color(red))
+                }
             }
         }
     }

@@ -103,6 +103,18 @@ struct BoundSoulLinksPacket: Sendable {
 }
 
 enum BoundSoulLinks {
+    struct NativeLossState: Equatable, Sendable {
+        let active: Bool
+        let acknowledged: UUID?
+        static func decode(_ data: Data) -> Self? {
+            guard data.count == 44, data.prefix(8) == Data([0x42,0x4C,0x53,0x31,1,0,0,0]),
+                  data[8] <= 1, data[9..<12].allSatisfy({ $0 == 0 }) else { return nil }
+            let bytes = Array(data[12..<28])
+            let id = UUID(uuid: (bytes[0],bytes[1],bytes[2],bytes[3],bytes[4],bytes[5],bytes[6],bytes[7],
+                                bytes[8],bytes[9],bytes[10],bytes[11],bytes[12],bytes[13],bytes[14],bytes[15]))
+            return .init(active: data[8] == 1, acknowledged: bytes.allSatisfy({ $0 == 0 }) ? nil : id)
+        }
+    }
     struct Row: Equatable, Sendable {
         var slot: String
         var label: String
@@ -155,11 +167,29 @@ enum BoundSoulLinks {
         guard let area, area > 0 else { return category }
         return category + " - " + (areaNames[area] ?? "Area \(area)")
     }
-    static func page(ledger: BoundSoulLedger?, areaNames: [Int: String], offset: Int, sequence: UInt32, connected: Bool) -> Data? {
+    static func page(ledger: BoundSoulLedger?, areaNames: [Int: String], offset: Int, sequence: UInt32, connected: Bool,
+                     battleLoss: Bool = false, terminalLoss: Bool = false) -> Data? {
         let rows: [Row]
         if let ledger { guard let value = orderedRows(ledger: ledger, areaNames: areaNames) else { return nil }; rows = value }
         else { rows = [] }
-        return encodePage(rows: rows, offset: offset, sequence: sequence, connected: connected)
+        guard var page = encodePage(rows: rows, offset: offset, sequence: sequence, connected: connected) else { return nil }
+        if terminalLoss {
+            page.replaceSubrange(160..<176, with: Data([0x42,0x4C,0x53,0x31,1,0,0,0,0,0,0,0,1,0,0,0]))
+        }
+        if battleLoss, let notice = ledger?.battleLosses?.pending {
+            guard notice.valid, notice.id != UUID(uuid: (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)) else { return nil }
+            let losses = notice.slots.compactMap { slot in rows.first { $0.slot == slot && $0.dead } }
+            guard losses.count == notice.slots.count else { return nil }
+            page.replaceSubrange(160..<176, with: Data([0x42,0x4C,0x53,0x31,1,0,0,0,UInt8(losses.count),0,0,0,terminalLoss ? 1:0,0,0,0]))
+            var uuid = notice.id.uuid
+            withUnsafeBytes(of: &uuid) { page.replaceSubrange(176..<192, with: $0) }
+            for start in stride(from: 0, to: losses.count, by: 2) {
+                guard let encoded = encodePage(rows: losses, offset: start, sequence: sequence, connected: connected) else { return nil }
+                let count = min(2, losses.count-start)
+                page.replaceSubrange(192+start*64..<192+(start+count)*64, with: encoded[32..<32+count*64])
+            }
+        }
+        return page
     }
     /// BLN1 is an immutable two-row viewport in the exact game's 1024-byte port.
     /// It contains no commands and cannot modify catches, identities or saves.

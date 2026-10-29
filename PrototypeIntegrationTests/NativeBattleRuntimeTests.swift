@@ -366,6 +366,110 @@ final class NativeBattleRuntimeTests:XCTestCase {
         BoundVBABattleBridge.closeSoulLink()
         XCTAssertEqual(BoundVBABattleBridge.qaEliminationPolicy(),Data(repeating:0,count:288))
     }
+    func testNativeBattleLossUsesAAndDurablyDismissesWithoutBoundCard() async throws {
+        guard ProcessInfo.processInfo.environment["BOUND_NATIVE_LOSS_UI"] == "1" else {
+            throw XCTSkip("Requires the dedicated native loss UI simulator and explicit candidate ROM")
+        }
+        continueAfterFailure=false
+        let image=try Data(contentsOf:BoundROMTestFixture.currentURL())
+        _ = try BoundPlayerROMProfile(rom:image)
+        let output=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0]
+            .appendingPathComponent("NativeLossUI-"+UUID().uuidString)
+        try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+        let rom=output.appendingPathComponent("candidate.gba"),battery=output.appendingPathComponent("fixture.sav")
+        try image.write(to:rom);try Data(repeating:0xFF,count:131072).write(to:battery)
+        let core=try XCTUnwrap(EmulatorCore(game:NativeBattleGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
+        core.audioManager.isEnabled=false
+        let setup=NativePlayerSceneSetup(core:core,debugPlayer:1),ready=expectation(description:"Native Debug field"),once=NativeFixtureCompletion()
+        core.updateHandler={ core in BoundFrameMemory.perform {
+            setup.receive(core)
+            if setup.isReady,BoundVBABattleBridge.verifyBattleReady(),once.claim() { ready.fulfill() }
+        } }
+        let scene=try await nativeWindowScene(),previous=scene.windows.first { $0.isKeyWindow }
+        let window=UIWindow(windowScene:scene),owner=UIViewController(),view=GameView()
+        window.rootViewController=owner;window.makeKeyAndVisible();owner.view.addSubview(view)
+        view.frame=CGRect(x:0,y:150,width:window.bounds.width,height:window.bounds.width*2/3);core.add(view)
+        defer {
+            core.deltaCore.emulatorBridge.deactivateInput(1,playerIndex:0)
+            _=core.pause();BoundVBABattleBridge.closeSoulLink();_=core.stop()
+            window.isHidden=true;previous?.makeKeyAndVisible()
+        }
+        core.rate=8;XCTAssertTrue(core.start());core.deltaCore.emulatorBridge.audioRenderer=nil
+        await fulfillment(of:[ready],timeout:90)
+        XCTAssertTrue(core.pause());core.rate=1
+        XCTAssertNotNil(BoundSoulLinks.NativeLossState.decode(BoundVBABattleBridge.nativeBattleLossSnapshot()))
+        let party=BoundVBABattleBridge.qaTradeParty(),notice=BoundBattleLossNotice(id:UUID(),slots:["area:102"],completedAt:Date())
+        var ledger=BoundSoulLedger(run:UUID(),binding:String(repeating:"a",count:64))
+        ledger.records=[.init(identity:.init(personality:100,trainer:42),slot:"area:102",name:"Sparky",eligible:true,species:25,area:102)]
+        ledger.partnerAcquisitions=["area:102"]
+        ledger.partnerLinks=["area:102":.init(species:133,personality:201,name:"Eevee",area:102,ordinal:1)]
+        ledger.dead=["area:102"];ledger.ended=true;ledger.battleLosses = .init(notices:[notice])
+        let journal=output.appendingPathComponent("run.json")
+        try JSONEncoder().encode(ledger).write(to:journal)
+        let probe=BoundSoulProbe(),hostProbe=BoundROMMultiplayerProbe()
+        XCTAssertTrue(probe.configure(core:core,url:journal));probe.setVerified(true)
+        let session=BoundSoulSession(probe:probe,areaNames:[102:"Route 2"])
+        session.canPresentDeathMoment={ true }
+        hostProbe.configure(core:core);hostProbe.setVerified(true)
+        var host=BoundROMHostState();host.enabled=true;host.ended=true;host.status = .complete;hostProbe.publish(host)
+        XCTAssertTrue(probe.prepareTerminalBattleLoss(core:core),"Game Over installs its native callback barrier before resuming graphics")
+        core.updateHandler={ core in BoundFrameMemory.perform { hostProbe.receive(core);probe.receive(core) } }
+        func wait(_ label:String,_ predicate:() throws->Bool) async throws {
+            for _ in 0..<160 {
+                _=core.pause();session.tick();let done=try predicate();_=core.resume()
+                if done { return };try await Task.sleep(for:.milliseconds(25))
+            }
+            XCTFail("Native loss view timed out: \(label)")
+            throw NSError(domain:"NativeLossUITimeout",code:1,userInfo:[NSLocalizedDescriptionKey:label])
+        }
+        XCTAssertTrue(core.resume());core.deltaCore.emulatorBridge.audioRenderer=nil
+        try await wait("automatic native presentation") { probe.read().nativeBattleLoss?.active==true }
+        XCTAssertNil(session.battleLossMoment,"The supported cartridge must suppress Bound's loss card")
+        XCTAssertEqual(probe.read().ledger?.battleLosses?.pending?.id,notice.id)
+        _=core.pause();let terminalFrame=BoundVBABattleBridge.romMultiplayerSnapshot().subdata(in:84..<88);_=core.resume()
+        let screenshot=UIGraphicsImageRenderer(bounds:window.bounds).image { _ in window.drawHierarchy(in:window.bounds,afterScreenUpdates:true) }
+        let attachment=XCTAttachment(image:screenshot);attachment.name="Native battle loss — A to close";attachment.lifetime = .keepAlways;add(attachment)
+        core.deltaCore.emulatorBridge.activateInput(1,value:1,playerIndex:0)
+        try await Task.sleep(for:.milliseconds(80))
+        core.deltaCore.emulatorBridge.deactivateInput(1,playerIndex:0)
+        try await wait("durable A acknowledgment and native close") {
+            probe.read().ledger?.battleLosses?.pending==nil && probe.read().nativeBattleLoss?.active==false
+        }
+        _=core.pause()
+        XCTAssertEqual(BoundVBABattleBridge.qaTradeParty(),party)
+        XCTAssertEqual(BoundVBABattleBridge.romMultiplayerSnapshot().subdata(in:84..<88),terminalFrame,"Terminal graphics and A must never advance gameplay callbacks")
+        XCTAssertEqual(probe.read().ledger?.dead,ledger.dead)
+        let reopened=BoundSoulProbe();XCTAssertTrue(reopened.configure(core:nil,url:journal))
+        XCTAssertNil(reopened.read().ledger?.battleLosses?.pending,"A acknowledgment survives reopening the durable journal")
+        XCTAssertTrue(BoundVBABattleBridge.verifyBattleReady())
+        try probe.prepareForNativeMemoryReplacement(core:core)
+        XCTAssertTrue(BoundVBABattleBridge.qaLinksMenuHost().allSatisfy { $0==0 },"Paused replacement retires terminal authority from ROM data ports")
+        _=core.resume();try await Task.sleep(for:.milliseconds(100));_=core.pause()
+        XCTAssertNotEqual(BoundVBABattleBridge.romMultiplayerSnapshot().subdata(in:84..<88),terminalFrame,"A cleared terminal port cannot freeze the replacement execution")
+        try probe.refreshAfterNativeMemoryReplacement(core:core)
+        // Deliberately withhold native frames to exercise unavailable terminal
+        // presentation without claiming a naturally exhausted native heap.
+        let fallbackProbe=BoundSoulProbe(),fallbackNotice=BoundBattleLossNotice(id:UUID(),slots:notice.slots,completedAt:Date())
+        ledger.battleLosses = .init(notices:[fallbackNotice])
+        let fallbackJournal=output.appendingPathComponent("fallback.json")
+        try JSONEncoder().encode(ledger).write(to:fallbackJournal)
+        XCTAssertTrue(fallbackProbe.configure(core:core,url:fallbackJournal));fallbackProbe.setVerified(true)
+        XCTAssertTrue(fallbackProbe.prepareTerminalBattleLoss(core:core))
+        try await Task.sleep(for:.milliseconds(2100))
+        XCTAssertTrue(fallbackProbe.terminalBattleLossStalled)
+        XCTAssertFalse(fallbackProbe.prepareTerminalBattleLoss(core:core))
+        XCTAssertTrue(BoundVBABattleBridge.qaLinksMenuHost().allSatisfy { $0==0 })
+        XCTAssertNil(fallbackProbe.read().nativeBattleLoss)
+        let fallbackSession=BoundSoulSession(probe:fallbackProbe);fallbackSession.canPresentDeathMoment={ true };fallbackSession.tick()
+        XCTAssertEqual(fallbackSession.battleLossMoment?.id,fallbackNotice.id,"Unavailable native presentation retains a dismissible durable loss card")
+        let zeroID=try XCTUnwrap(UUID(uuidString:"00000000-0000-0000-0000-000000000000"))
+        ledger.battleLosses = .init(notices:[.init(id:zeroID,slots:notice.slots,completedAt:Date())])
+        try JSONEncoder().encode(ledger).write(to:fallbackJournal)
+        XCTAssertTrue(fallbackProbe.configure(core:core,url:fallbackJournal));fallbackProbe.setVerified(true)
+        XCTAssertFalse(fallbackProbe.prepareTerminalBattleLoss(core:core),"An unencodable native notice must never authorize terminal gameplay frames")
+        XCTAssertTrue(BoundVBABattleBridge.qaLinksMenuHost().allSatisfy { $0==0 })
+        XCTAssertEqual(core.state,.paused)
+    }
     func testBattleLossGraphicRendersOwnAndPartnerSides() async throws {
         let row=BoundSoulLinks.Row(slot:"area:102",label:"Route 2",
             own:.init(species:25,personality:1,name:"Sparky",area:102,ordinal:1),
