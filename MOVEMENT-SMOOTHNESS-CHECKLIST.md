@@ -244,17 +244,40 @@ Updated October 29, 2026. Work on `main`; evidence lives in
   `paired-preservation-final05.json` verifies the original project, scheme,
   Info.plist, dependency pins and generated profiles remain byte-identical.
   Both retired LaunchAgents are still disabled and unloaded.
-- [ ] Commit requested validated changes; push explicitly to `origin/main` and
+- [x] Commit requested validated changes; push explicitly to `origin/main` and
   independently verify the remote commit.
+  Final app source: `721e2e70399116cd75ff8b8ec2c9d552f10b629b`.
+  Final game source: `ec65a46387495f65a90955848ce7c8a4ccabd247`.
+  Both explicit pushes and independent remote reads match. Unrelated app
+  project/scheme/Info.plist edits and untracked Cloud configuration remain intact.
 - [x] User explicitly approved the private ROM publication exception. Push
   `169bd658a68483f5f1d3d3f4df162ef1ee3df767` with `HEAD:refs/heads/main` and
   independently verify the remote head. Existing workflow 40973584928 succeeded:
   build 507 exactly matches candidate-02 SHA-256, all 39 CI checks pass, and
   publication/server read-back succeeded. Fast-forward main to the workflow's
   receipt-only commit `a9884bd51b3ea553349cc32b905e77d7458b3cc4`.
-- [ ] Upload the new revision once through Fastlane, preserving the receipt.
-- [ ] Verify assigned upload build number, Apple processing and TestFlight group
+- [x] Verify final candidate-05 private publication from workflow 40987725974,
+  including exact artifact hash, server read-back and counter receipt.
+  Build **508** matches the complete candidate-05 SHA-256. The workflow's
+  independent Linode read-back succeeds. Main fast-forwards to receipt-only
+  commit `60051f3df6c97c849f0aae3429ab93b0b8346752`, independently remote-verified.
+  The game working tree is clean; evidence is under `game-publication-508`.
+- [x] Upload the new revision once through Fastlane, preserving the receipt.
+  Apple accepted app source `721e2e70` at 2026-10-29 18:49:35 Pacific.
+  Published-main preflight, signed archive, signature/privacy checks, local
+  distribution export, upload and post-upload Fastlane Release verification
+  pass. Receipt: `.build/testflight-delivery/721e2e70399116cd75ff8b8ec2c9d552f10b629b/upload-accepted.json`.
+  Non-blocking prebuilt-framework dSYM warnings remain in the upload log.
+- [x] Verify assigned upload build number, Apple processing and TestFlight group
   availability separately.
+  Apple build **225** is `VALID` and `IN_BETA_TESTING`, with verified membership
+  in **Evan Only Internal Testing**, checked at 2026-10-29 18:55:04 Pacific.
+  `apple-after-upload-03.json` records Apple's assigned number and availability;
+  the original acceptance receipt is retained unchanged. Do not upload this
+  accepted source revision again. A final documentation-only commit records
+  delivery after the uploaded source commit; it does not require another build.
+- [x] Preserve final test artifacts, then shut down and delete only task-owned
+  simulator `B066738C-2594-4509-B11C-2F8B5D37981C`. Shared simulators are untouched.
 
 ## Unresolved / limits
 
