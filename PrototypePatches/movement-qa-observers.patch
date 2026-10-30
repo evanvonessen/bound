@@ -1,0 +1,636 @@
+# Local bounded QA observers; upstream revisions, normal Release behavior and guest save format unchanged.
+diff --git a/Cores/DeltaCore/DeltaCore.xcodeproj/project.pbxproj b/Cores/DeltaCore/DeltaCore.xcodeproj/project.pbxproj
+index 5902e84b..d92a222f 100644
+--- a/Cores/DeltaCore/DeltaCore.xcodeproj/project.pbxproj
++++ b/Cores/DeltaCore/DeltaCore.xcodeproj/project.pbxproj
+@@ -793,7 +793,7 @@
+ 				OTHER_SWIFT_FLAGS = "-Xfrontend -debug-time-function-bodies";
+ 				PRODUCT_BUNDLE_IDENTIFIER = "com.rileytestut.$(PRODUCT_NAME:rfc1034identifier)";
+ 				SKIP_INSTALL = YES;
+-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = FRAMEWORK;
++				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "FRAMEWORK DEBUG";
+ 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+ 				SWIFT_VERSION = 5.0;
+ 			};
+diff --git a/Cores/DeltaCore/DeltaCore/Emulator Core/EmulatorCore.swift b/Cores/DeltaCore/DeltaCore/Emulator Core/EmulatorCore.swift
+index c379ddc1..b36a58a5 100644
+--- a/Cores/DeltaCore/DeltaCore/Emulator Core/EmulatorCore.swift	
++++ b/Cores/DeltaCore/DeltaCore/Emulator Core/EmulatorCore.swift	
+@@ -8,6 +8,58 @@
+ 
+ import AVFoundation
+ 
++#if DEBUG
++/// Opt-in, bounded frame tracing. Install only while the core is paused.
++/// Numeric events stay in memory until QA exports them after playback stops.
++public final class EmulatorFrameTrace: @unchecked Sendable {
++    public struct Event: Codable, Sendable {
++        public let frame: UInt64
++        public let stage: String
++        public let time: TimeInterval
++        public let duration: TimeInterval
++        public let value: Double
++        public let detail: UInt64
++    }
++    private let lock = NSLock()
++    private let capacity: Int
++    private var frame: UInt64 = 0
++    private var events: [Event] = []
++    private var overflow = 0
++    /// Set before resuming. Runs synchronously on the native video owner.
++    public var observeVideo: ((UInt64) -> Void)?
++    public init(capacity: Int = 200_000) {
++        self.capacity = max(1, min(capacity, 2_000_000))
++        events.reserveCapacity(self.capacity)
++    }
++    public var currentFrame: UInt64 { lock.lock(); defer { lock.unlock() }; return frame }
++    public var droppedEvents: Int { lock.lock(); defer { lock.unlock() }; return overflow }
++    public func snapshot() -> [Event] { lock.lock(); defer { lock.unlock() }; return events }
++    @discardableResult public func beginFrame(renderGraphics: Bool) -> UInt64 {
++        lock.lock(); defer { lock.unlock() }
++        frame &+= 1
++        append("frame.begin", frame: frame, time: ProcessInfo.processInfo.systemUptime,
++               duration: 0, value: renderGraphics ? 1 : 0, detail: 0)
++        return frame
++    }
++    public func record(_ stage: String, frame: UInt64? = nil, at time: TimeInterval? = nil,
++                       duration: TimeInterval = 0, value: Double = 0, detail: UInt64 = 0) {
++        let now = time ?? ProcessInfo.processInfo.systemUptime
++        lock.lock(); defer { lock.unlock() }
++        append(stage, frame: frame ?? self.frame, time: now, duration: duration, value: value, detail: detail)
++    }
++    private func append(_ stage: String, frame: UInt64, time: TimeInterval,
++                        duration: TimeInterval, value: Double, detail: UInt64) {
++        guard events.count < capacity else { overflow += 1; return }
++        events.append(.init(frame: frame, stage: stage, time: time, duration: duration, value: value, detail: detail))
++    }
++    public func measure<T>(_ stage: String, frame: UInt64? = nil, _ work: () throws -> T) rethrows -> T {
++        let start = ProcessInfo.processInfo.systemUptime
++        defer { record(stage, frame: frame, at: start, duration: ProcessInfo.processInfo.systemUptime - start) }
++        return try work()
++    }
++}
++#endif
++
+ extension EmulatorCore
+ {
+     @objc public static let emulationDidQuitNotification = Notification.Name("com.rileytestut.DeltaCore.emulationDidQuit")
+@@ -52,6 +104,9 @@ public final class EmulatorCore: NSObject
+     
+     public var updateHandler: ((EmulatorCore) -> Void)?
+     public var saveHandler: ((EmulatorCore) -> Void)?
++    #if DEBUG
++    public var debugFrameTrace: EmulatorFrameTrace?
++    #endif
+     
+     public let audioManager: AudioManager
+     public let videoManager: VideoManager
+@@ -523,6 +578,9 @@ private extension EmulatorCore
+                 
+                 if framesToSkip > 0
+                 {
++                    #if DEBUG
++                    self.debugFrameTrace?.record("loop.catchup", value: Double(framesToSkip), detail: self.rate == 1 ? 1 : 0)
++                    #endif
+                     // Only actually skip frames if we're running at normal speed
+                     if self.rate == 1.0
+                     {
+@@ -560,7 +618,17 @@ private extension EmulatorCore
+     
+     func runFrame(renderGraphics: Bool)
+     {
++        #if DEBUG
++        let trace = self.debugFrameTrace
++        let tracedFrame = trace?.beginFrame(renderGraphics: renderGraphics) ?? 0
++        self.videoManager.debugBeginFrame(trace: trace, frame: tracedFrame)
++        let frameStarted = trace == nil ? 0 : ProcessInfo.processInfo.systemUptime
++        #endif
+         self.deltaCore.emulatorBridge.runFrame(processVideo: renderGraphics)
++        #if DEBUG
++        trace?.record("frame.emulate", frame: tracedFrame, at: frameStarted,
++                      duration: ProcessInfo.processInfo.systemUptime - frameStarted)
++        #endif
+         
+         if renderGraphics
+         {
+@@ -572,7 +640,14 @@ private extension EmulatorCore
+             dispatchGroup.leave()
+         }
+         
++        #if DEBUG
++        if let trace { trace.measure("frame.updateHandler", frame: tracedFrame) { self.updateHandler?(self) } }
++        else { self.updateHandler?(self) }
++        trace?.record("frame.end", frame: tracedFrame, at: frameStarted,
++                      duration: ProcessInfo.processInfo.systemUptime - frameStarted)
++        #else
+         self.updateHandler?(self)
++        #endif
+     }
+ }
+ 
+diff --git a/Cores/DeltaCore/DeltaCore/Emulator Core/Video/VideoManager.swift b/Cores/DeltaCore/DeltaCore/Emulator Core/Video/VideoManager.swift
+index ffd0dbb8..e9a3d74a 100644
+--- a/Cores/DeltaCore/DeltaCore/Emulator Core/Video/VideoManager.swift	
++++ b/Cores/DeltaCore/DeltaCore/Emulator Core/Video/VideoManager.swift	
+@@ -62,6 +62,15 @@ public class VideoManager: NSObject, VideoRendering
+     private var processor: VideoProcessor
+     @NSCopying private var processedImage: CIImage?
+     @NSCopying private var displayedImage: CIImage? // Can only accurately snapshot rendered images.
++    #if DEBUG
++    private let traceLock = NSLock()
++    private var sourceTrace: (EmulatorFrameTrace, UInt64)?
++    private var processedTrace: (EmulatorFrameTrace, UInt64)?
++    private var displayedTrace: (EmulatorFrameTrace, UInt64)?
++    func debugBeginFrame(trace: EmulatorFrameTrace?, frame: UInt64) {
++        traceLock.lock(); sourceTrace = trace.map { ($0, frame) }; traceLock.unlock()
++    }
++    #endif
+     
+     private lazy var renderThread = RenderThread(action: { [weak self] in
+         self?._render()
+@@ -160,7 +169,17 @@ public extension VideoManager
+         guard self.isEnabled else { return }
+         
+         autoreleasepool {
++            #if DEBUG
++            traceLock.lock(); let observation = sourceTrace; traceLock.unlock()
++            let start = observation == nil ? 0 : ProcessInfo.processInfo.systemUptime
++            if let observation { observation.0.observeVideo?(observation.1) }
++            #endif
+             self.processedImage = self.processor.processFrame()
++            #if DEBUG
++            traceLock.lock(); processedTrace = observation; traceLock.unlock()
++            observation?.0.record("video.process", frame: observation?.1, at: start,
++                                  duration: ProcessInfo.processInfo.systemUptime - start)
++            #endif
+         }
+     }
+     
+@@ -169,11 +188,24 @@ public extension VideoManager
+         guard self.isEnabled else { return }
+         
+         guard let image = self.processedImage else { return }
++        #if DEBUG
++        traceLock.lock(); let observation = processedTrace; traceLock.unlock()
++        observation?.0.record("render.request", frame: observation?.1)
++        #endif
+         
+         // Skip frame if previous frame is not finished rendering.
+-        guard self.renderThread.wait(timeout: .now()) == .success else { return }
++        guard self.renderThread.wait(timeout: .now()) == .success else {
++            #if DEBUG
++            observation?.0.record("render.busyDrop", frame: observation?.1)
++            #endif
++            return
++        }
+         
+         self.displayedImage = image
++        #if DEBUG
++        traceLock.lock(); displayedTrace = observation; traceLock.unlock()
++        observation?.0.record("render.accept", frame: observation?.1)
++        #endif
+         
+         self.renderThread.run()
+     }
+@@ -220,6 +252,12 @@ private extension VideoManager
+ {
+     func _render()
+     {
++        #if DEBUG
++        traceLock.lock(); let observation = displayedTrace; traceLock.unlock()
++        let start = observation == nil ? 0 : ProcessInfo.processInfo.systemUptime
++        defer { observation?.0.record("render.handoff", frame: observation?.1, at: start,
++                                     duration: ProcessInfo.processInfo.systemUptime - start) }
++        #endif
+         for gameView in self.gameViews
+         {
+             if let exclusiveVideoManager = gameView.exclusiveVideoManager
+@@ -227,6 +265,9 @@ private extension VideoManager
+                 guard exclusiveVideoManager == self else { continue }
+             }
+             
++            #if DEBUG
++            gameView.debugReceiveFrame(trace: observation?.0, frame: observation?.1 ?? 0)
++            #endif
+             gameView.inputImage = self.displayedImage
+         }
+     }
+diff --git a/Cores/DeltaCore/DeltaCore/UI/Game/GameView.swift b/Cores/DeltaCore/DeltaCore/UI/Game/GameView.swift
+index a9f0eedf..8c6b53e5 100644
+--- a/Cores/DeltaCore/DeltaCore/UI/Game/GameView.swift
++++ b/Cores/DeltaCore/DeltaCore/UI/Game/GameView.swift
+@@ -37,6 +37,18 @@ public enum SamplerMode
+ public class GameView: UIView
+ {
+     public var isEnabled: Bool = true
++    #if DEBUG
++    private let frameTraceLock = NSLock()
++    private var frameTrace: (EmulatorFrameTrace, UInt64)?
++    func debugReceiveFrame(trace: EmulatorFrameTrace?, frame: UInt64) {
++        frameTraceLock.lock(); frameTrace = trace.map { ($0, frame) }; frameTraceLock.unlock()
++        trace?.record("view.input", frame: frame, detail: debugViewID)
++    }
++    private var debugViewID: UInt64 { UInt64(UInt(bitPattern: Unmanaged.passUnretained(self).toOpaque())) }
++    private var debugFrame: (EmulatorFrameTrace, UInt64)? {
++        frameTraceLock.lock(); defer { frameTraceLock.unlock() }; return frameTrace
++    }
++    #endif
+     
+     // Set to limit rendering to just a specific VideoManager.
+     public weak var exclusiveVideoManager: VideoManager?
+@@ -296,12 +308,25 @@ private extension GameView
+         // Calling display when outputImage is nil may crash for OpenGLES-based rendering.
+         guard self.isEnabled && self.outputImage != nil else { return }
+         
++        #if DEBUG
++        let observation = debugFrame
++        let waiting = observation == nil ? 0 : ProcessInfo.processInfo.systemUptime
++        #endif
+         os_unfair_lock_lock(&self.lock)
++        #if DEBUG
++        observation?.0.record("view.lock", frame: observation?.1, at: waiting,
++                              duration: ProcessInfo.processInfo.systemUptime - waiting, detail: debugViewID)
++        #endif
+         defer { os_unfair_lock_unlock(&self.lock) }
+         
+         // layoutSubviews() must be called after setting self.eaglContext before we can display anything.
+         // Otherwise, the app may crash due to race conditions when creating framebuffer from background thread.
+-        guard self.didLayoutSubviews else { return }
++        guard self.didLayoutSubviews else {
++            #if DEBUG
++            observation?.0.record("view.layoutDrop", frame: observation?.1, detail: debugViewID)
++            #endif
++            return
++        }
+ 
+         if !self.didRenderInitialFrame
+         {
+@@ -345,6 +370,12 @@ private extension GameView
+ {
+     func glkView(_ view: GLKView, drawIn rect: CGRect)
+     {
++        #if DEBUG
++        let observation = debugFrame
++        let start = observation == nil ? 0 : ProcessInfo.processInfo.systemUptime
++        defer { observation?.0.record("view.gl.draw", frame: observation?.1, at: start,
++                                     duration: ProcessInfo.processInfo.systemUptime - start, detail: debugViewID) }
++        #endif
+         glClearColor(0.0, 0.0, 0.0, 1.0)
+         glClear(UInt32(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT))
+         
+@@ -365,10 +396,34 @@ extension GameView: MTKViewDelegate
+     public func draw(in view: MTKView)
+     {
+         autoreleasepool {
++            #if DEBUG
++            let observation = debugFrame, viewID = debugViewID
++            let start = observation == nil ? 0 : ProcessInfo.processInfo.systemUptime
++            defer { observation?.0.record("view.metal.draw", frame: observation?.1, at: start,
++                                         duration: ProcessInfo.processInfo.systemUptime - start, detail: viewID) }
++            #endif
+             guard let image = self.outputImage,
+                   let commandBuffer = self.metalCommandQueue?.makeCommandBuffer(),
+                   let currentDrawable = self.metalLayer?.nextDrawable()
+-            else { return }
++            else {
++                #if DEBUG
++                observation?.0.record("view.metal.unavailable", frame: observation?.1, detail: viewID)
++                #endif
++                return
++            }
++            #if DEBUG
++            observation?.0.record("view.metal.drawable", frame: observation?.1, at: start,
++                                  duration: ProcessInfo.processInfo.systemUptime - start,
++                                  detail: viewID)
++            if let observation {
++                commandBuffer.addCompletedHandler { buffer in
++                    // This is completion of the presentation command buffer,
++                    // not drawable presentation, Core Image completion or scanout.
++                    observation.0.record("view.metal.presentCommandCompleted", frame: observation.1,
++                                         value: Double(buffer.status.rawValue), detail: viewID)
++                }
++            }
++            #endif
+             
+             let scaleX = view.drawableSize.width / image.extent.width
+             let scaleY = view.drawableSize.height / image.extent.height
+@@ -389,6 +444,9 @@ extension GameView: MTKViewDelegate
+                 
+                 commandBuffer.present(currentDrawable)
+                 commandBuffer.commit()
++                #if DEBUG
++                observation?.0.record("view.metal.commit", frame: observation?.1, detail: viewID)
++                #endif
+             }
+             catch
+             {
+diff --git a/Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA-arm.cpp b/Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA-arm.cpp
+index c98c1569..50e38175 100644
+--- a/Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA-arm.cpp
++++ b/Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA-arm.cpp
+@@ -21,6 +21,7 @@
+ #include "bios.h"
+ #include "elf.h"
+ #include "remote.h"
++#include "BoundQAGuestTiming.h"
+ 
+ #ifdef PROFILING
+ #include "prof/prof.h"
+@@ -2836,6 +2837,9 @@ static void tester(void) {
+ int armExecute()
+ {
+     do {
++#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
++        BoundQAGuestTimingInstruction();
++#endif
+         if (cheatsEnabled) {
+             cpuMasterCodeCheck();
+         }
+diff --git a/Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA-thumb.cpp b/Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA-thumb.cpp
+index ac9f5eae..ada41729 100644
+--- a/Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA-thumb.cpp
++++ b/Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA-thumb.cpp
+@@ -24,6 +24,7 @@
+ #include "bios.h"
+ #include "elf.h"
+ #include "remote.h"
++#include "BoundQAGuestTiming.h"
+ 
+ #ifdef PROFILING
+ #include "prof/prof.h"
+@@ -2113,6 +2114,9 @@ static insnfunc_t thumbInsnTable[1024] = {
+ int thumbExecute()
+ {
+     do {
++#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
++        BoundQAGuestTimingInstruction();
++#endif
+         if (cheatsEnabled) {
+             cpuMasterCodeCheck();
+         }
+diff --git a/Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA.cpp b/Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA.cpp
+index 1f02b525..5b7868c0 100644
+--- a/Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA.cpp
++++ b/Cores/GBADeltaCore/visualboyadvance-m/src/gba/GBA.cpp
+@@ -130,6 +130,8 @@ int captureNumber = 0;
+ int armOpcodeCount = 0;
+ int thumbOpcodeCount = 0;
+ 
++#include "BoundQAGuestTiming.inc"
++
+ const int TIMER_TICKS[4] = {
+     0,
+     6,
+@@ -617,6 +619,9 @@ bool CPUWriteMemState(char* memory, int available, long& reserved)
+ 
+ bool CPUReadState(const uint8_t* data, unsigned size)
+ {
++#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
++    BoundQAGuestTimingInvalidate();
++#endif
+     // Don't really care about version.
+     int version = utilReadIntMem(data);
+     if (version != SAVE_GAME_VERSION)
+@@ -1381,6 +1386,9 @@ bool CPUIsELF(const char* file)
+ 
+ void CPUCleanUp()
+ {
++#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
++    BoundQAGuestTimingInvalidate();
++#endif
+ #ifdef PROFILING
+     if (profilingTicksReload) {
+         profCleanup();
+@@ -3410,6 +3418,9 @@ void SetSaveType(int st)
+ 
+ void CPUReset()
+ {
++#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
++    BoundQAGuestTimingInvalidate();
++#endif
+     if (gbaSaveType == 0) {
+         if (eepromInUse)
+             gbaSaveType = 3;
+@@ -3716,8 +3727,12 @@ void CPULoop(int ticks)
+                     return;
+             }
+             clockTicks = 0;
+-        } else
++        } else {
+             clockTicks = CPUUpdateTicks();
++#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
++            BoundQAGuestTimingIdle(clockTicks);
++#endif
++        }
+ 
+         cpuTotalTicks += clockTicks;
+ 
+@@ -3737,6 +3752,9 @@ void CPULoop(int ticks)
+             cpuTotalTicks = 0;
+ 
+         updateLoop:
++#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
++            BoundQAGuestTimingAdvance(clockTicks);
++#endif
+ 
+             if (IRQTicks) {
+                 IRQTicks -= clockTicks;
+@@ -3786,6 +3804,9 @@ void CPULoop(int ticks)
+                         lcdTicks += 1008;
+                         DISPSTAT &= 0xFFFD;
+                         if (VCOUNT == 160) {
++#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
++                            BoundQAGuestTimingVideo();
++#endif
+                             count++;
+                             systemFrame();
+ 
+@@ -4130,6 +4151,9 @@ void CPULoop(int ticks)
+                     clockTicks = cpuNextEvent;
+                 else
+                     clockTicks = cpuDmaTicksToUpdate;
++#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
++                BoundQAGuestTimingDMA(clockTicks);
++#endif
+                 cpuDmaTicksToUpdate -= clockTicks;
+                 if (cpuDmaTicksToUpdate < 0)
+                     cpuDmaTicksToUpdate = 0;
+@@ -4149,6 +4173,9 @@ void CPULoop(int ticks)
+                 if (res) {
+                     if (intState) {
+                         if (!IRQTicks) {
++#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
++                            BoundQAGuestTimingInterrupt(remainingTicks);
++#endif
+                             CPUInterrupt();
+                             intState = false;
+                             holdState = false;
+@@ -4162,6 +4189,9 @@ void CPULoop(int ticks)
+                             if (cpuNextEvent > IRQTicks)
+                                 cpuNextEvent = IRQTicks;
+                         } else {
++#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
++                            BoundQAGuestTimingInterrupt(remainingTicks);
++#endif
+                             CPUInterrupt();
+                             holdState = false;
+                             stopState = false;
+diff --git a/Cores/GBADeltaCore/visualboyadvance-m/src/gba/BoundQAGuestTiming.h b/Cores/GBADeltaCore/visualboyadvance-m/src/gba/BoundQAGuestTiming.h
+new file mode 100644
+--- /dev/null
++++ b/Cores/GBADeltaCore/visualboyadvance-m/src/gba/BoundQAGuestTiming.h
+@@ -0,0 +1,27 @@
++#ifndef BOUND_QA_GUEST_TIMING_H
++#define BOUND_QA_GUEST_TIMING_H
++
++// Opt-in host diagnostics only. No guest address, register, timing or save ABI
++// is changed. Every interpreter callsite is compiled out without this macro.
++#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
++#include <stddef.h>
++#include <stdint.h>
++
++struct BoundQAGuestTimingRecord { uint64_t words[17]; };
++struct BoundQAGuestTimingSummary {
++    uint64_t records, dropped, stackOverflows, invalidated, cycles;
++    uint64_t videoFrames, dmaCycles, idleCycles, openCalls, openInterrupts;
++};
++extern "C" {
++__attribute__((visibility("default"))) bool BoundQAGuestTimingStart(const uint32_t *points, const uint32_t *trackReturns, size_t count, size_t capacity);
++__attribute__((visibility("default"))) const BoundQAGuestTimingRecord *BoundQAGuestTimingStop(BoundQAGuestTimingSummary *summary);
++}
++void BoundQAGuestTimingInstruction();
++void BoundQAGuestTimingAdvance(int cycles);
++void BoundQAGuestTimingDMA(int cycles);
++void BoundQAGuestTimingIdle(int cycles);
++void BoundQAGuestTimingInterrupt(int remainingInstructionCycles);
++void BoundQAGuestTimingVideo();
++void BoundQAGuestTimingInvalidate();
++#endif
++#endif
+diff --git a/Cores/GBADeltaCore/visualboyadvance-m/src/gba/BoundQAGuestTiming.inc b/Cores/GBADeltaCore/visualboyadvance-m/src/gba/BoundQAGuestTiming.inc
+new file mode 100644
+--- /dev/null
++++ b/Cores/GBADeltaCore/visualboyadvance-m/src/gba/BoundQAGuestTiming.inc
+@@ -0,0 +1,122 @@
++// Included once by GBA.cpp after its timing globals. Configuration and export
++// happen only with the emulator paused; the CPU owner is the sole writer while
++// running. The bounded host buffer is deliberately absent from save states.
++#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
++#include "BoundQAGuestTiming.h"
++#include <algorithm>
++#include <vector>
++static_assert(sizeof(BoundQAGuestTimingRecord) == 136, "Guest timing record ABI");
++namespace {
++struct BoundQATimingPoint { uint32_t pc, id, trackReturn; };
++struct BoundQATimingCall { uint32_t pc, sp, mode, point; uint64_t id; };
++struct BoundQATimingState {
++    bool active = false;
++    uint64_t clock = 0, serial = 0, video = 0, dma = 0, idle = 0;
++    uint64_t dropped = 0, stackOverflows = 0, invalidated = 0;
++    size_t capacity = 0, pointCount = 0, callCount = 0, irqCount = 0;
++    BoundQATimingPoint points[64]{};
++    BoundQATimingCall calls[256]{}, irqs[16]{};
++    std::vector<BoundQAGuestTimingRecord> records;
++} boundQATiming;
++
++uint64_t boundQATimingNow() {
++    // cpuTotalTicks is elapsed instruction/idle time not yet handed to the
++    // hardware event loop. updateLoop consumes it exactly once in chunks.
++    return boundQATiming.clock + uint64_t(cpuTotalTicks > 0 ? cpuTotalTicks : 0);
++}
++void boundQATimingRecord(uint64_t kind, uint64_t id = 0, uint64_t point = 0, bool eventBoundary = false) {
++    auto &s = boundQATiming;
++    if (s.records.size() >= s.capacity) { ++s.dropped; return; }
++    BoundQAGuestTimingRecord row{{kind, eventBoundary ? s.clock : boundQATimingNow(), id, point,
++        armNextPC, reg[14].I, reg[13].I, uint64_t(armMode) | (armState ? 0x100u : 0u),
++        VCOUNT, DISPSTAT, uint64_t(int64_t(lcdTicks)), IE, IF, IME, s.video, s.dma, s.idle}};
++    s.records.push_back(row);
++}
++bool boundQATimingReturned(const BoundQATimingCall &call) {
++    return call.pc == armNextPC && call.sp == reg[13].I &&
++        call.mode == (uint32_t(armMode) | (armState ? 0x100u : 0u));
++}
++}
++
++extern "C" bool BoundQAGuestTimingStart(const uint32_t *points, const uint32_t *trackReturns, size_t count, size_t capacity) {
++    // Normal CPULoop exits drain all instruction/event chunks. Reject a
++    // debugger/early exit instead of inventing an origin for pending ticks.
++    if (boundQATiming.active || cpuTotalTicks != 0 || !points || !trackReturns || !count || count > 64 || capacity < 1024 || capacity > 262144)
++        return false;
++    for (size_t i = 0; i < count; ++i) {
++        if ((points[i] & 1) || points[i] < 0x08000000 || points[i] >= 0x0A000000 || trackReturns[i] > 1) return false;
++        for (size_t j = 0; j < i; ++j) if (points[i] == points[j]) return false;
++    }
++    boundQATiming = BoundQATimingState();
++    auto &s = boundQATiming;
++    s.capacity = capacity; s.pointCount = count;
++    s.records.reserve(capacity);
++    for (size_t i = 0; i < count; ++i) s.points[i] = {points[i], uint32_t(i + 1), trackReturns[i]};
++    std::sort(s.points, s.points + count, [](const BoundQATimingPoint &a, const BoundQATimingPoint &b) { return a.pc < b.pc; });
++    s.active = true;
++    boundQATimingRecord(6);
++    return true;
++}
++extern "C" const BoundQAGuestTimingRecord *BoundQAGuestTimingStop(BoundQAGuestTimingSummary *summary) {
++    auto &s = boundQATiming;
++    if (s.active) boundQATimingRecord(7);
++    s.active = false;
++    if (summary) *summary = {s.records.size(), s.dropped, s.stackOverflows, s.invalidated,
++        boundQATimingNow(), s.video, s.dma, s.idle, s.callCount, s.irqCount};
++    return s.records.data();
++}
++void BoundQAGuestTimingInstruction() {
++    auto &s = boundQATiming;
++    if (!s.active) return;
++    while (s.irqCount && boundQATimingReturned(s.irqs[s.irqCount - 1])) {
++        const auto call = s.irqs[--s.irqCount]; boundQATimingRecord(4, call.id);
++    }
++    while (s.callCount && boundQATimingReturned(s.calls[s.callCount - 1])) {
++        const auto call = s.calls[--s.callCount]; boundQATimingRecord(2, call.id, call.point);
++    }
++    size_t low = 0, high = s.pointCount;
++    while (low < high) {
++        const size_t mid = low + (high - low) / 2;
++        if (s.points[mid].pc < armNextPC) low = mid + 1; else high = mid;
++    }
++    if (low == s.pointCount || s.points[low].pc != armNextPC) return;
++    if (!s.points[low].trackReturn) { boundQATimingRecord(9, 0, s.points[low].id); return; }
++    if (s.callCount == 256) { ++s.stackOverflows; return; }
++    const uint64_t id = ++s.serial;
++    s.calls[s.callCount++] = {reg[14].I & ~1u, reg[13].I,
++        uint32_t(armMode) | ((reg[14].I & 1) ? 0u : 0x100u), s.points[low].id, id};
++    boundQATimingRecord(1, id, s.points[low].id);
++}
++void BoundQAGuestTimingAdvance(int cycles) {
++    if (boundQATiming.active && cycles > 0) boundQATiming.clock += uint64_t(cycles);
++}
++void BoundQAGuestTimingDMA(int cycles) {
++    if (boundQATiming.active && cycles > 0) boundQATiming.dma += uint64_t(cycles);
++}
++void BoundQAGuestTimingIdle(int cycles) {
++    if (boundQATiming.active && cycles > 0) boundQATiming.idle += uint64_t(cycles);
++}
++void BoundQAGuestTimingInterrupt(int remainingInstructionCycles) {
++    auto &s = boundQATiming;
++    if (!s.active) return;
++    if (s.irqCount == 16) { ++s.stackOverflows; return; }
++    const uint64_t id = ++s.serial;
++    s.irqs[s.irqCount++] = {armNextPC, reg[13].I,
++        uint32_t(armMode) | (armState ? 0x100u : 0u), 0, id};
++    boundQATimingRecord(3, id, 0, true);
++    // The interpreter already completed the interrupted instruction, but its
++    // tail may still be waiting for updateLoop. Attribute that tail to the
++    // interrupted code, not to the IRQ. Hardware events retain their own time.
++    if (!s.records.empty() && s.records.back().words[0] == 3 && s.records.back().words[2] == id)
++        s.records.back().words[1] += uint64_t(remainingInstructionCycles > 0 ? remainingInstructionCycles : 0);
++}
++void BoundQAGuestTimingVideo() {
++    if (!boundQATiming.active) return;
++    ++boundQATiming.video;
++    boundQATimingRecord(5, 0, 0, true);
++}
++void BoundQAGuestTimingInvalidate() {
++    if (!boundQATiming.active) return;
++    ++boundQATiming.invalidated; boundQATimingRecord(8); boundQATiming.active = false;
++}
++#endif

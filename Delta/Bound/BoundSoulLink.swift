@@ -69,6 +69,30 @@ struct BoundSoulMon: Equatable, Sendable {
     }
 }
 
+enum BoundSoulObservationAdmission {
+    /// RR's ordinary walking friendship setter changes only party byte41.
+    /// Its checksum store is disabled, so even a valid prior checksum becomes
+    /// stale. Require those checksum bytes (and every other byte) unchanged;
+    /// never interpret an arbitrary raw-party difference as a cosmetic update.
+    static func onlyRoutineFriendshipChanged(from previous:Data,to party:Data)->Bool {
+        guard previous != party,previous.count==party.count,(100...600).contains(party.count),party.count%100==0 else { return false }
+        let before=BoundSoulMon.decode(previous,stride:100),after=BoundSoulMon.decode(party,stride:100)
+        guard before.count==party.count/100,after==before,Set(before.map(\.identity)).count==before.count,
+              before.allSatisfy({ $0.level != nil && ($0.maxHP ?? 0)>0 && ($0.hp ?? -1)>=0
+                  && ($0.hp ?? 0)<=($0.maxHP ?? 0) }) else { return false }
+        // Stable fainted records introduce no new death fact. An unchanged
+        // valid egg sibling is harmless, but changing an egg's byte41 may be
+        // its hatch countdown, which is outside this friendship exception.
+        for slot in before.indices where previous[slot*100+41] != party[slot*100+41] {
+            guard !before[slot].isEgg else { return false }
+        }
+        for offset in 0..<party.count where offset%100 != 41 {
+            guard previous[offset]==party[offset] else { return false }
+        }
+        return true
+    }
+}
+
 enum BoundSoulWipeout {
     /// A lost pair is not a game over while another usable party member lives.
     /// Eggs and boxed Pokémon cannot keep the current party in a battle.
@@ -614,6 +638,9 @@ final class BoundSoulProbe: @unchecked Sendable {
         var lastPolicy=Data(),lastInput:Observation?
         var replacementVerification:Bool?
         var callbacks:UInt64=0,blockedCallbacks:UInt64=0,criticalCallbacks:UInt64=0
+        #if DEBUG
+        var routineFriendshipChanges:UInt64=0,criticalPartyChanges:UInt64=0
+        #endif
         var linkAreas:[Int:String]=[:],linksConnected=false,linksDirty=true
         var linksOffset = -1
         var linksSequence:UInt32=0
@@ -1014,17 +1041,39 @@ final class BoundSoulProbe: @unchecked Sendable {
     func observationMetrics()->[String:UInt64] {
         var result=pipeline.metrics()
         lock.lock();result["callbacks"]=owner.callbacks;result["blockedCallbacks"]=owner.blockedCallbacks
-        result["criticalCallbacks"]=owner.criticalCallbacks;lock.unlock();return result
+        result["criticalCallbacks"]=owner.criticalCallbacks
+        #if DEBUG
+        result["routineFriendshipChanges"]=owner.routineFriendshipChanges
+        result["criticalPartyChanges"]=owner.criticalPartyChanges
+        #endif
+        lock.unlock();return result
     }
 
     @discardableResult private func submitUnlocked(_ input:Observation)->Bool {
         if let previous=owner.lastInput,input.sameContents(as:previous),input.frame%15 != 0 { return true }
         let prior=owner.lastInput
+        let partyChanged=prior?.party != input.party
+        let routineFriendship=partyChanged && (prior.map { previous in
+            input.generation==previous.generation && input.ready && previous.ready
+                && !input.battle && !previous.battle && !input.cooperative && !previous.cooperative
+                && !input.overflow && !previous.overflow && input.boxes==previous.boxes
+                && input.faints==previous.faints && input.battleFaints==previous.battleFaints
+                && input.nativeRing==previous.nativeRing && input.acquisitions==previous.acquisitions
+                && input.outcome==previous.outcome && input.flags==previous.flags
+                && input.battleID==previous.battleID && input.acceptedFaintsOnly==previous.acceptedFaintsOnly
+                && BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:previous.party,to:input.party)
+        } ?? false)
         let critical=published.ledger?.ended==false && (
-            (input.ready && (prior?.party != input.party || prior?.boxes != input.boxes))
+            (input.ready && ((partyChanged && !routineFriendship) || prior?.boxes != input.boxes))
             || (!input.faints.isEmpty && prior?.faints != input.faints)
             || (!input.battleFaints.isEmpty && prior?.battleFaints != input.battleFaints)
             || (!input.acquisitions.isEmpty && prior?.acquisitions != input.acquisitions))
+        #if DEBUG
+        if published.ledger?.ended==false,input.ready,partyChanged {
+            if routineFriendship { owner.routineFriendshipChanges &+= 1 }
+            else { owner.criticalPartyChanges &+= 1 }
+        }
+        #endif
         if critical {
             owner.criticalGate=true
             _=BoundVBABattleBridge.setSoulFrameBlocked(true,owner:owner.generation.uuidString,generation:owner.nativeGeneration)

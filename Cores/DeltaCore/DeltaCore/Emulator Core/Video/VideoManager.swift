@@ -62,6 +62,15 @@ public class VideoManager: NSObject, VideoRendering
     private var processor: VideoProcessor
     @NSCopying private var processedImage: CIImage?
     @NSCopying private var displayedImage: CIImage? // Can only accurately snapshot rendered images.
+    #if DEBUG
+    private let traceLock = NSLock()
+    private var sourceTrace: (EmulatorFrameTrace, UInt64)?
+    private var processedTrace: (EmulatorFrameTrace, UInt64)?
+    private var displayedTrace: (EmulatorFrameTrace, UInt64)?
+    func debugBeginFrame(trace: EmulatorFrameTrace?, frame: UInt64) {
+        traceLock.lock(); sourceTrace = trace.map { ($0, frame) }; traceLock.unlock()
+    }
+    #endif
     
     private lazy var renderThread = RenderThread(action: { [weak self] in
         self?._render()
@@ -160,7 +169,17 @@ public extension VideoManager
         guard self.isEnabled else { return }
         
         autoreleasepool {
+            #if DEBUG
+            traceLock.lock(); let observation = sourceTrace; traceLock.unlock()
+            let start = observation == nil ? 0 : ProcessInfo.processInfo.systemUptime
+            if let observation { observation.0.observeVideo?(observation.1) }
+            #endif
             self.processedImage = self.processor.processFrame()
+            #if DEBUG
+            traceLock.lock(); processedTrace = observation; traceLock.unlock()
+            observation?.0.record("video.process", frame: observation?.1, at: start,
+                                  duration: ProcessInfo.processInfo.systemUptime - start)
+            #endif
         }
     }
     
@@ -169,11 +188,24 @@ public extension VideoManager
         guard self.isEnabled else { return }
         
         guard let image = self.processedImage else { return }
+        #if DEBUG
+        traceLock.lock(); let observation = processedTrace; traceLock.unlock()
+        observation?.0.record("render.request", frame: observation?.1)
+        #endif
         
         // Skip frame if previous frame is not finished rendering.
-        guard self.renderThread.wait(timeout: .now()) == .success else { return }
+        guard self.renderThread.wait(timeout: .now()) == .success else {
+            #if DEBUG
+            observation?.0.record("render.busyDrop", frame: observation?.1)
+            #endif
+            return
+        }
         
         self.displayedImage = image
+        #if DEBUG
+        traceLock.lock(); displayedTrace = observation; traceLock.unlock()
+        observation?.0.record("render.accept", frame: observation?.1)
+        #endif
         
         self.renderThread.run()
     }
@@ -220,6 +252,12 @@ private extension VideoManager
 {
     func _render()
     {
+        #if DEBUG
+        traceLock.lock(); let observation = displayedTrace; traceLock.unlock()
+        let start = observation == nil ? 0 : ProcessInfo.processInfo.systemUptime
+        defer { observation?.0.record("render.handoff", frame: observation?.1, at: start,
+                                     duration: ProcessInfo.processInfo.systemUptime - start) }
+        #endif
         for gameView in self.gameViews
         {
             if let exclusiveVideoManager = gameView.exclusiveVideoManager
@@ -227,6 +265,9 @@ private extension VideoManager
                 guard exclusiveVideoManager == self else { continue }
             }
             
+            #if DEBUG
+            gameView.debugReceiveFrame(trace: observation?.0, frame: observation?.1 ?? 0)
+            #endif
             gameView.inputImage = self.displayedImage
         }
     }

@@ -359,6 +359,16 @@ final class BoundCompanionCoordinator {
     let sharing: FriendSharingSession
     #if DEBUG && targetEnvironment(simulator)
     private let usesLocalPairedFixture: Bool
+    var qaUsesLocalPairedFixture: Bool { usesLocalPairedFixture }
+    private static var hostTraceOwnerScope = false
+    /// Only the explicitly created replay owner may join its localhost lane.
+    /// Other app controllers retain ordinary account/lifecycle admission.
+    static func makeHostTraceController() -> GameViewController {
+        precondition(!hostTraceOwnerScope)
+        hostTraceOwnerScope = true
+        defer { hostTraceOwnerScope = false }
+        return GameViewController()
+    }
     #endif
     let onboarding: FriendOnboarding
     let account: BoundFriendAccount
@@ -378,11 +388,16 @@ final class BoundCompanionCoordinator {
         #endif
         #if DEBUG && targetEnvironment(simulator)
         let environment = ProcessInfo.processInfo.environment
-        if ProcessInfo.processInfo.arguments.contains("--bound-ui-paired-transport"),
+        let hostTraceFixture = Self.hostTraceOwnerScope && environment["BOUND_HOST_TRACE"] == "1"
+            && environment["BOUND_PAIR_PRESENCE_ONLY"] == "1"
+            && environment["BOUND_PAIR_NAMESPACE"].flatMap(UUID.init(uuidString:)) != nil
+        if (ProcessInfo.processInfo.arguments.contains("--bound-ui-paired-transport") || hostTraceFixture),
            let peer = environment["BOUND_PAIR_PEER"], ["A", "B"].contains(peer),
            let rawPort = environment["BOUND_PAIR_PORT"], let port = Int(rawPort), (1024...65535).contains(port) {
             sharing = FriendSharingSession(configuration: .init(appID: String(repeating: "0", count: 32), channel: "localpair", uid: peer == "A" ? 1 : 2, remoteUID: peer == "A" ? 2 : 1, token: "offline-fixture-not-an-RTC-token"),
-                transport: BoundLocalPairedTransport(peer: peer, port: port), authenticatedMode: false)
+                transport: BoundLocalPairedTransport(peer: peer, port: port,
+                    presenceNamespace: environment["BOUND_PAIR_NAMESPACE"],
+                    presenceOnly: environment["BOUND_PAIR_PRESENCE_ONLY"] == "1"), authenticatedMode: false)
             usesLocalPairedFixture = true
         } else { sharing = FriendSharingSession(authenticatedMode: true); usesLocalPairedFixture = false }
         #else
@@ -884,6 +899,40 @@ final class BoundCompanionCoordinator {
         #endif
         core.updateHandler = { [weak tap, weak reader, weak battle, weak soul, weak world, weak dialogue, weak romService, weak cooperative, weak cooperativeCable, weak movement, weak berry] core in
             BoundFrameMemory.perform {
+                #if DEBUG
+                if let trace = core.debugFrameTrace {
+                    let frame = trace.currentFrame
+                    trace.measure("owner.previous", frame: frame) { previous?(core) }
+                    trace.measure("owner.romService", frame: frame) { romService?.receive(core) }
+                    trace.measure("owner.movement", frame: frame) { movement?.receive(core) }
+                    trace.measure("owner.world", frame: frame) { world?.receive(core) }
+                    trace.measure("owner.dialogue", frame: frame) { dialogue?.receive(core) }
+                    trace.measure("owner.berry", frame: frame) { berry?.receive(core) }
+                    if let reading = trace.measure("owner.reader", frame: frame, { reader?.receive(core) }) {
+                        trace.record("reader.result.\(reading.status.rawValue)",frame:frame,
+                                     value:reading.player?.scene == nil ? 0:1,detail:reading.frame)
+                        trace.record("reader.detail.\(reading.detail)",frame:frame)
+                    }
+                    trace.measure("owner.tap", frame: frame) { tap?.receive(core) }
+                    trace.measure("owner.cooperativeCable", frame: frame) { cooperativeCable?.receive(core) }
+                    trace.measure("owner.cooperative", frame: frame) { cooperative?.receive(core) }
+                    trace.measure("owner.soul", frame: frame) { soul?.receive(core) }
+                    trace.measure("owner.battle", frame: frame) { battle?.receive(core) }
+                } else {
+                    previous?(core)
+                    romService?.receive(core)
+                    movement?.receive(core)
+                    world?.receive(core)
+                    dialogue?.receive(core)
+                    berry?.receive(core)
+                    reader?.receive(core)
+                    tap?.receive(core)
+                    cooperativeCable?.receive(core)
+                    cooperative?.receive(core)
+                    soul?.receive(core)
+                    battle?.receive(core)
+                }
+                #else
                 previous?(core)
                 romService?.receive(core)
                 movement?.receive(core)
@@ -896,6 +945,7 @@ final class BoundCompanionCoordinator {
                 cooperative?.receive(core)
                 soul?.receive(core)
                 battle?.receive(core)
+                #endif
                 #if DEBUG && targetEnvironment(simulator)
                 tradeQA?.receive(core)
                 #endif

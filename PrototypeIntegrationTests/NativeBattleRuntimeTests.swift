@@ -2116,8 +2116,9 @@ final class NativeBattleRuntimeTests:XCTestCase {
             try await Task.sleep(for:.milliseconds(50))
         }
         try verifyNativeBridgeRestore(core)
-        native=try restoreNativeOwner(native,core:core,gameID:output.lastPathComponent,interactions:interactions,soulProbe:soulProbe,
+        native=try restoreNativeOwner(native,core:core,gameID:output.lastPathComponent,interactions:interactions,
             receive:{ driver.receive($0);soulProbe.receive($0) },configure:configureTransport)
+        XCTAssertTrue(native.soulProbe === (partyMode==1 ? nil:soulProbe),"Continuation preserves this fixture's attached Soul owner")
         if disconnectSeconds>0 {
             try await verifyNativeReconnect(native:native,id:uuid,core:core,interactions:interactions,port:port,peer:peer,seconds:disconnectSeconds,
                 silent:silentDisconnect,disconnect:{ networkAvailable=false; if silentDisconnect { channel?.dropTraffic() } else { channel?.close() } },reconnect:{ networkAvailable=true })
@@ -2225,8 +2226,11 @@ final class NativeBattleRuntimeTests:XCTestCase {
         return try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first,"QA application did not connect its window scene")
     }
     private func restoreNativeOwner(_ previous:BoundNativeBattleSession,core:EmulatorCore,gameID:String,
-        interactions:BoundFriendInteractionSession,soulProbe:BoundSoulProbe?=nil,
+        interactions:BoundFriendInteractionSession,
         receive:@escaping @Sendable (EmulatorCore)->Void,configure:(BoundNativeBattleSession)->Void) throws -> BoundNativeBattleSession {
+        // The ordinary-fainted fixture deliberately has no Soul owner. Reload
+        // only an attached owner; configure() would reactivate a suspended probe.
+        let soulProbe=previous.soulProbe
         previous.canResume={ false }
         XCTAssertTrue(previous.checkpointForContinuation(),previous.lastFailure)
         XCTAssertEqual(core.state,.paused)

@@ -45,13 +45,28 @@ def bounded_value(value, depth=0):
 
 
 class RelayState:
-    def __init__(self):
+    def __init__(self, presence_namespace=None, interaction_peers=PEERS):
+        if not interaction_peers or not set(interaction_peers).issubset(PEERS):
+            raise ValueError("Interaction peers must explicitly select A, B or both")
         self.lock = threading.RLock()
         self.epoch = 0
         self.online = True
         self.stage = "portrait"
         self.orientation = {p: "portrait" for p in PEERS}
         self.latest = {}
+        self.presence_namespace = presence_namespace
+        self.presence = {}
+        self.presence_sequence = 0
+        self.presence_counts = {peer: 0 for peer in PEERS}
+        self.presence_producers = {peer: {} for peer in PEERS}
+        self.host_ready = set()
+        self.host_finished = set()
+        self.interactions = {peer: deque() for peer in PEERS}
+        self.interaction_peers = frozenset(interaction_peers)
+        self.unrouted_interactions = {peer: 0 for peer in PEERS}
+        self.interaction_sequence = 0
+        self.interaction_counts = {peer: 0 for peer in PEERS}
+        self.maximum_interactions = 0
         self.saved = None
         self.stale_peer = None
         self.stale_primed = False
@@ -90,6 +105,11 @@ class RelayState:
                 if not requested:
                     self.saved = self.latest.get("B") or self.latest.get("A")
                 self.latest.clear()
+                self.presence.clear()
+                self.host_ready.clear()
+                self.host_finished.clear()
+                for queue in self.interactions.values():
+                    queue.clear()
                 self.epoch += 1
                 self.online = requested
                 self.stale_peer = None
@@ -159,6 +179,84 @@ class RelayState:
                 return 404, None
             return 200, packet
 
+    def put_presence(self, namespace, peer, epoch, data, producer="unspecified"):
+        with self.lock:
+            if not self.presence_namespace or namespace != self.presence_namespace:
+                return 403
+            if not self.online:
+                return 503
+            if epoch != self.epoch:
+                return 409
+            # The fixture transports the unmodified shipping packet. Its peer
+            # still owns codec, exact-ROM, epoch and sequence admission.
+            if not 0 < len(data) <= 768:
+                return 400
+            if producer != "unspecified" and not re.fullmatch(r"[0-9A-Fa-f-]{36}", producer):
+                return 400
+            producers = self.presence_producers[peer]
+            if producer not in producers and len(producers) >= 8:
+                return 429
+            producers[producer] = producers.get(producer, 0) + 1
+            self.presence_sequence += 1
+            self.presence[peer] = (self.presence_sequence, data)
+            self.presence_counts[peer] += 1
+            return 200
+
+    def get_presence(self, namespace, peer, after):
+        with self.lock:
+            if not self.presence_namespace or namespace != self.presence_namespace:
+                return 403, None
+            if not self.online:
+                return 503, None
+            packet = self.presence.get("B" if peer == "A" else "A")
+            return (200, packet) if packet and packet[0] > after else (404, None)
+
+    def put_interaction(self, namespace, peer, epoch, data):
+        with self.lock:
+            if not self.presence_namespace or namespace != self.presence_namespace:
+                return 403
+            if not self.online:
+                return 503
+            if epoch != self.epoch:
+                return 409
+            if not 0 < len(data) <= 1024:
+                return 400
+            if peer not in self.interaction_peers:
+                return 403
+            recipient = "B" if peer == "A" else "A"
+            if recipient not in self.interaction_peers:
+                # An explicitly single-peer fixture has no receiving session.
+                # Record send acceptance without retaining an undeliverable
+                # ordered queue or inventing a peer/handshake acknowledgement.
+                self.interaction_counts[peer] += 1
+                self.unrouted_interactions[peer] += 1
+                return 200
+            queue = self.interactions[peer]
+            if len(queue) >= 64:
+                return 429
+            self.interaction_sequence += 1
+            queue.append((self.interaction_sequence, data))
+            self.interaction_counts[peer] += 1
+            self.maximum_interactions = max(self.maximum_interactions, len(queue))
+            return 200
+
+    def get_interaction(self, namespace, peer, after):
+        with self.lock:
+            if not self.presence_namespace or namespace != self.presence_namespace:
+                return 403, None
+            if not self.online:
+                return 503, None
+            if after < 0:
+                return 400, None
+            if peer not in self.interaction_peers:
+                return 403, None
+            queue = self.interactions["B" if peer == "A" else "A"]
+            # The receiving fixture acknowledges only bytes already retained
+            # in its bounded inbox; GET retries return the same next packet.
+            while queue and queue[0][0] <= after:
+                queue.popleft()
+            return (200, queue[0]) if queue else (404, None)
+
     def report(self, peer, body, ui=False):
         with self.lock:
             fields = UI_FIELDS if ui else REPORT_FIELDS
@@ -192,6 +290,15 @@ class RelayState:
             result = {"epoch": self.epoch, "online": self.online, "stage": self.stage, "orientation": dict(self.orientation), "reports": dict(self.reports), "uiReports": dict(self.ui_reports), "counters": dict(self.counters), "elapsed": round(time.monotonic()-self.started, 3), "retainedFrameBuffers": len(self.latest)+int(self.saved is not None)}
             if history:
                 result["history"] = list(self.history)
+            result["presenceNamespace"] = self.presence_namespace
+            result["presencePackets"] = dict(self.presence_counts)
+            result["presenceProducers"] = {p: dict(ids) for p, ids in self.presence_producers.items()}
+            result["retainedPresencePackets"] = len(self.presence)
+            result["interactionPackets"] = dict(self.interaction_counts)
+            result["interactionPeers"] = sorted(self.interaction_peers)
+            result["unroutedInteractionPackets"] = dict(self.unrouted_interactions)
+            result["retainedInteractionPackets"] = {p: len(q) for p, q in self.interactions.items()}
+            result["maximumInteractionQueue"] = self.maximum_interactions
             return result
 
 
@@ -223,12 +330,12 @@ class RelayHandler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup()
         self.connection.settimeout(3)
-    def reply(self, code, data=b"", packet=None):
+    def reply(self, code, data=b"", packet=None, presence=None, interaction=None):
         try:
-            self._reply(code, data, packet)
+            self._reply(code, data, packet, presence, interaction)
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass # Cancellation is an intentional test stage, not a server failure.
-    def _reply(self, code, data=b"", packet=None):
+    def _reply(self, code, data=b"", packet=None, presence=None, interaction=None):
         if isinstance(data, dict):
             data = json.dumps(data, sort_keys=True).encode()
         with self.server.state.lock:
@@ -238,6 +345,12 @@ class RelayHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/octet-stream" if packet else "application/json")
         self.send_header("X-Epoch", str(packet["epoch"] if packet else current))
         self.send_header("X-Current-Epoch", str(current))
+        if presence:
+            self.send_header("X-Presence-Sequence", str(presence[0]))
+            self.send_header("X-Peer", presence[1])
+        if interaction:
+            self.send_header("X-Interaction-Sequence", str(interaction[0]))
+            self.send_header("X-Peer", interaction[1])
         if packet:
             for header, key in (("X-Sequence", "sequence"), ("X-Run", "run"), ("X-Peer", "peer"), ("X-Hash", "hash")):
                 self.send_header(header, str(packet[key]))
@@ -263,6 +376,20 @@ class RelayHandler(BaseHTTPRequestHandler):
             parts, parsed = self.route()
             if parsed.path in ("/control/status", "/status"):
                 return self.reply(200, self.server.state.status())
+            if len(parts) == 3 and parts[0] in ("ready", "finished") and parts[2] in PEERS:
+                with self.server.state.lock:
+                    if not self.server.state.presence_namespace or parts[1] != self.server.state.presence_namespace:
+                        return self.reply(403)
+                    ready = sorted(self.server.state.host_ready if parts[0] == "ready" else self.server.state.host_finished)
+                return self.reply(200, {"ready": ready})
+            if len(parts) == 3 and parts[0] == "interaction" and parts[2] in PEERS:
+                after = int(parse_qs(parsed.query).get("after", ["0"])[0])
+                code, packet = self.server.state.get_interaction(parts[1], parts[2], after)
+                return self.reply(code, packet[1] if packet else b"", interaction=(packet[0], "B" if parts[2] == "A" else "A") if packet else None)
+            if len(parts) == 3 and parts[0] == "presence" and parts[2] in PEERS:
+                after = int(parse_qs(parsed.query).get("after", ["0"])[0])
+                code, packet = self.server.state.get_presence(parts[1], parts[2], after)
+                return self.reply(code, packet[1] if packet else b"", presence=(packet[0], "B" if parts[2] == "A" else "A") if packet else None)
             if len(parts) != 2 or parts[0] != "frame" or parts[1] not in PEERS:
                 return self.reply(404)
             query = parse_qs(parsed.query)
@@ -275,6 +402,22 @@ class RelayHandler(BaseHTTPRequestHandler):
     def do_PUT(self):
         try:
             parts, _ = self.route()
+            if len(parts) == 3 and parts[0] in ("ready", "finished") and parts[2] in PEERS:
+                self.body(128)
+                with self.server.state.lock:
+                    if not self.server.state.presence_namespace or parts[1] != self.server.state.presence_namespace:
+                        return self.reply(403)
+                    target = self.server.state.host_ready if parts[0] == "ready" else self.server.state.host_finished
+                    target.add(parts[2])
+                return self.reply(200)
+            if len(parts) == 3 and parts[0] == "interaction" and parts[2] in PEERS:
+                data = self.body(1024)
+                epoch = int(self.headers.get("X-Epoch", "-1"))
+                return self.reply(self.server.state.put_interaction(parts[1], parts[2], epoch, data))
+            if len(parts) == 3 and parts[0] == "presence" and parts[2] in PEERS:
+                data = self.body(768)
+                epoch = int(self.headers.get("X-Epoch", "-1"))
+                return self.reply(self.server.state.put_presence(parts[1], parts[2], epoch, data, self.headers.get("X-Producer", "unspecified")))
             if len(parts) != 2 or parts[0] != "frame" or parts[1] not in PEERS:
                 return self.reply(404)
             pixels = self.body(FRAME_BYTES)
@@ -322,10 +465,59 @@ def call(port, path, body=None, method=None, headers=None):
 
 
 def self_test():
-    state = RelayState(); server = RelayServer(state)
+    state = RelayState("00000000-0000-0000-0000-000000000001"); server = RelayServer(state)
     thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
     port = server.server_port
     try:
+        lane = "/presence/00000000-0000-0000-0000-000000000001/"
+        assert call(port, lane+"A")[0] == 404
+        producer = "00000000-0000-0000-0000-000000000002"
+        assert call(port, lane+"B", b"fixture-packet", "PUT", {"X-Epoch":"0", "X-Producer":producer})[0] == 200
+        assert state.presence_producers["B"] == {producer: 1}
+        code, headers, packet = call(port, lane+"A")
+        assert code == 200 and packet == b"fixture-packet" and headers["X-Peer"] == "B"
+        assert call(port, lane+"A?after="+headers["X-Presence-Sequence"])[0] == 404
+        assert call(port, lane+"B")[0] == 404
+        assert call(port, lane+"A", b"x"*769, "PUT", {"X-Epoch":"0"})[0] == 400
+        assert call(port, "/presence/wrong/A", b"x", "PUT", {"X-Epoch":"0"})[0] == 403
+        control_lane = lane.replace("/presence/", "/interaction/")
+        assert call(port, control_lane+"A")[0] == 404
+        assert call(port, "/interaction/wrong/B", b"BMR1", "PUT", {"X-Epoch":"0"})[0] == 403
+        assert call(port, control_lane+"B", b"x"*1025, "PUT", {"X-Epoch":"0"})[0] == 400
+        assert call(port, control_lane+"B", b"BMR1", "PUT", {"X-Epoch":"1"})[0] == 409
+        assert call(port, control_lane+"A?after=-1")[0] == 400
+        for index in range(64):
+            assert call(port, control_lane+"B", b"BMR1"+bytes([index]), "PUT", {"X-Epoch":"0"})[0] == 200
+        assert call(port, control_lane+"B", b"BMR1-full", "PUT", {"X-Epoch":"0"})[0] == 429
+        assert call(port, control_lane+"B")[0] == 404  # No self-delivery.
+        cursor = 0
+        for index in range(64):
+            code, headers, packet = call(port, control_lane+"A?after="+str(cursor))
+            assert code == 200 and packet == b"BMR1"+bytes([index]) and headers["X-Peer"] == "B"
+            assert call(port, control_lane+"A?after="+str(cursor))[2] == packet  # Retry before ACK.
+            cursor = int(headers["X-Interaction-Sequence"])
+        assert call(port, control_lane+"A?after="+str(cursor))[0] == 404
+        assert not state.interactions["B"] and state.maximum_interactions == 64
+        single = RelayState(state.presence_namespace, interaction_peers=("A",))
+        for _ in range(256):
+            assert single.put_interaction(state.presence_namespace, "A", 0, b"BMR1") == 200
+        assert single.interaction_counts == {"A": 256, "B": 0}
+        assert single.unrouted_interactions == {"A": 256, "B": 0}
+        assert not any(single.interactions.values()) and single.maximum_interactions == 0
+        assert single.get_interaction(state.presence_namespace, "A", 0) == (404, None)
+        assert single.get_interaction(state.presence_namespace, "B", 0) == (403, None)
+        assert single.put_interaction(state.presence_namespace, "B", 0, b"BMR1") == 403
+        assert single.put_interaction("wrong", "A", 0, b"BMR1") == 403
+        assert single.put_interaction(state.presence_namespace, "A", 1, b"BMR1") == 409
+        single.online = False
+        assert single.put_interaction(state.presence_namespace, "A", 0, b"BMR1") == 503
+        assert single.status()["interactionPeers"] == ["A"]
+        for phase in ("ready", "finished"):
+            route = lane.replace("/presence/", "/"+phase+"/")
+            assert call(port, route+"A", b"", "PUT")[0] == 200
+            assert json.loads(call(port, route+"B")[2])["ready"] == ["A"]
+            assert call(port, route+"B", b"", "PUT")[0] == 200
+            assert json.loads(call(port, route+"A")[2])["ready"] == ["A", "B"]
         pixels = bytes([19, 31, 41, 255]) * (240*160)
         headers = {"X-Sequence": "1", "X-Run": "self-test-B", "X-Epoch": "0"}
         assert call(port, "/frame/B", pixels, "PUT", headers)[0] == 200
@@ -342,6 +534,7 @@ def self_test():
         call(port, "/frame/A", pixels, "PUT", {"X-Sequence": "1", "X-Run": "self-test-A", "X-Epoch": "0"})
         assert state.counters["maximumRetainedBuffers"] == 2
         call(port, "/control", {"online": False, "stage": "offline"})
+        assert not state.host_ready and not state.host_finished and not any(state.interactions.values())
         code, got, _ = call(port, "/frame/A?after=1")
         assert code == 503 and got["X-Epoch"] == "1"
         call(port, "/control", {"online": True, "stage": "recovered", "injectStaleFor": "A"})
@@ -365,7 +558,7 @@ def self_test():
         assert call(port, "/frame/A?after=1&run=replacement-B")[0] == 404
         assert state.counters["staleInjected"] == 1
         assert state.counters["maximumRetainedBuffers"] <= 2
-        print("Relay self-test passed: opposite-peer pixels/hash, epochs, stale injection, 1.5s delayed ACK, bounded retention.")
+        print("Relay self-test passed: opposite-peer presence/control/video, ordered control retry/ACK, bounded queues, explicit absent recipient, start/finish barriers, epochs, stale injection and delayed ACK.")
     finally:
         server.shutdown(); server.server_close()
 
@@ -463,6 +656,7 @@ def main():
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--metadata-out", default="/tmp/bound-pair-summary.json")
+    parser.add_argument("--presence-namespace", help="Explicit task UUID for the optional bounded presence lane")
     parser.add_argument("--xctestrun")
     parser.add_argument("--sim-a")
     parser.add_argument("--sim-b")
@@ -474,7 +668,9 @@ def main():
         return self_test()
     if args.xctestrun and not (args.sim_a and args.sim_b):
         parser.error("--xctestrun needs --sim-a and --sim-b")
-    state = RelayState(); server = RelayServer(state, args.port)
+    if args.presence_namespace and not re.fullmatch(r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}", args.presence_namespace):
+        parser.error("--presence-namespace must be a task UUID")
+    state = RelayState(args.presence_namespace.upper() if args.presence_namespace else None); server = RelayServer(state, args.port)
     print(json.dumps({"url": "http://127.0.0.1:"+str(server.server_port), "port": server.server_port, "pixelsWrittenToDisk": False}), flush=True)
     try:
         if args.xctestrun:

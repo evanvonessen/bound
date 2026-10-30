@@ -14,6 +14,103 @@ private struct ServerMemoryFixtureGame: GameProtocol {
 }
 
 final class SoulLinkTests: XCTestCase {
+    private func friendshipParty(_ count:Int=1)->Data {
+        var result=Data()
+        for slot in 0..<count {
+            var mon=Data(repeating:0,count:100)
+            mon[0]=UInt8(slot+1);mon[4]=42;mon[8]=187;mon[9]=255;mon[19]=2
+            mon[32]=4;mon[41]=127;mon[69]=157;mon[70]=5
+            mon[84]=5;mon[86]=20;mon[88]=30
+            let checksum=stride(from:32,to:80,by:2).reduce(0) { $0+Int(mon[$1])+Int(mon[$1+1])*256 }&65535
+            mon[28]=UInt8(truncatingIfNeeded:checksum);mon[29]=UInt8(truncatingIfNeeded:checksum>>8)
+            result.append(mon)
+        }
+        return result
+    }
+    func testRoutineNativeFriendshipDoesNotRequirePolicyFence() {
+        for count in 1...6 {
+            let previous=friendshipParty(count)
+            for slot in 0..<count {
+                for friendship:UInt8 in [0,1,128,254,255] {
+                    var current=previous;current[slot*100+41]=friendship
+                    XCTAssertTrue(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:previous,to:current))
+                    XCTAssertEqual(BoundSoulMon.decode(previous,stride:100),BoundSoulMon.decode(current,stride:100))
+                    XCTAssertEqual(current[slot*100+28],previous[slot*100+28])
+                    XCTAssertEqual(current[slot*100+29],previous[slot*100+29],"Exact RR setter leaves checksum stale")
+                }
+            }
+        }
+        var stale=friendshipParty();stale[28] ^= 0x55
+        var current=stale;current[41]=128
+        XCTAssertTrue(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:stale,to:current),
+                      "RR disables checksum validation/store; unchanged stale checksum is not a new policy fact")
+        XCTAssertFalse(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:stale,to:stale))
+    }
+    func testFriendshipExemptionRejectsEveryOtherChangedPartyByte() {
+        let previous=friendshipParty(2)
+        for offset in 0..<previous.count where offset%100 != 41 {
+            var current=previous;current[41]=128;current[offset] ^= 1
+            XCTAssertFalse(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:previous,to:current),"Changed byte \(offset)")
+        }
+        for length in [0,99,101,199,201,700] {
+            XCTAssertFalse(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:previous,to:Data(repeating:0,count:length)))
+        }
+    }
+    func testFriendshipExemptionFailsClosedForChangedEggMalformedOrDuplicateParty() {
+        for (offset,value):(Int,UInt8) in [(19,0),(19,3),(19,6),(75,64),(32,0),(33,255),(84,0),(84,101),(86,31),(88,0)] {
+            var previous=friendshipParty();previous[offset]=value
+            var current=previous;current[41]=128
+            XCTAssertFalse(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:previous,to:current),"Invalid byte \(offset)=\(value)")
+        }
+        let duplicate=friendshipParty()+friendshipParty()
+        var current=duplicate;current[41]=128
+        XCTAssertFalse(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:duplicate,to:current))
+    }
+    func testFriendshipExemptionPreservesStableFaintedAndUnchangedEggSiblings() throws {
+        var previous=friendshipParty(6)
+        for slot in 0..<5 { previous[slot*100+86]=0 }
+        var current=previous
+        for slot in 0..<6 { current[slot*100+41]=128 }
+        XCTAssertTrue(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:previous,to:current),
+                      "Native friendship also updates already-fainted party members")
+        var eggSibling=friendshipParty(2);eggSibling[175] |= 64
+        var ordinaryChanged=eggSibling;ordinaryChanged[41]=128
+        XCTAssertTrue(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:eggSibling,to:ordinaryChanged))
+        ordinaryChanged[141]=128
+        XCTAssertFalse(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:eggSibling,to:ordinaryChanged))
+        var invalidSibling=friendshipParty(2);invalidSibling[119]=3
+        ordinaryChanged=invalidSibling;ordinaryChanged[41]=128
+        XCTAssertFalse(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:invalidSibling,to:ordinaryChanged))
+        var ledger=BoundSoulLedger(run:UUID(),binding:String(repeating:"a",count:64))
+        let healthy=friendshipParty()
+        try ledger.observe(BoundSoulMon.decode(healthy,stride:100),registering:true,fainted:[])
+        var dead=healthy;dead[86]=0
+        try ledger.observe(BoundSoulMon.decode(dead,stride:100),registering:true,fainted:[])
+        let committed=ledger
+        current=dead;current[41]=128
+        XCTAssertTrue(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:dead,to:current))
+        try ledger.observe(BoundSoulMon.decode(current,stride:100),registering:true,fainted:[])
+        XCTAssertEqual(ledger,committed);XCTAssertEqual(ledger.dead,["area:157"])
+        current[86]=20
+        XCTAssertFalse(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:dead,to:current),"Any HP transition remains critical")
+    }
+    func testFriendshipExemptionPreservesDeathIdentityAndLedgerFacts() throws {
+        let previous=friendshipParty()
+        var current=previous;current[41]=128
+        var ledger=BoundSoulLedger(run:UUID(),binding:String(repeating:"a",count:64))
+        try ledger.observe(BoundSoulMon.decode(previous,stride:100),registering:true,fainted:[])
+        let healthy=ledger
+        try ledger.observe(BoundSoulMon.decode(current,stride:100),registering:true,fainted:[])
+        XCTAssertEqual(ledger,healthy,"Native friendship-only updates do not change durable policy")
+        var fainted=current;fainted[86]=0
+        XCTAssertFalse(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:current,to:fainted))
+        try ledger.observe(BoundSoulMon.decode(fainted,stride:100),registering:true,fainted:[])
+        XCTAssertEqual(ledger.dead,["area:157"])
+        var replacement=current;replacement[0]=99
+        XCTAssertFalse(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:current,to:replacement))
+        var egg=current;egg[75] |= 64
+        XCTAssertFalse(BoundSoulObservationAdmission.onlyRoutineFriendshipChanged(from:current,to:egg))
+    }
     func testTerminalBattleFinalizesDurablyAndDismissalSurvivesReopen() throws {
         let directory=FileManager.default.temporaryDirectory.appendingPathComponent("soul-terminal-"+UUID().uuidString)
         try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)

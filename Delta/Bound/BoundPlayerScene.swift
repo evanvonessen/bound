@@ -70,19 +70,111 @@ final class BoundNativePresentationCache: @unchecked Sendable {
         let nativeTiles: NativeTiles?
         let acceptedFoot: Point?
     }
+    struct PlayerImageIdentity: Equatable {
+        let scope: BoundNativePresentationScope, map: Map, instance: UInt64
+        let spriteSlot: Int, objectSlot: Int, graphicsID: Int
+        let animations: Int, images: Int, template: Int, callback: Int
+        let width: Int, height: Int, shape: Int, size: Int, tileBase: Int, sheetTileStart: Int
+    }
+    private struct PlayerImage {
+        let identity: PlayerImageIdentity, appearance: BoundPlayerSprite
+        var pendingSeekUsed = false
+    }
     private let lock = NSLock()
     private var state: State?
-    func reset() { lock.lock(); state = nil; lock.unlock() }
+    private var playerImage: PlayerImage?
+#if DEBUG && targetEnvironment(simulator)
+    private var diagnostic: [String:Any]?
+    private var pendingPlayerImageRetentions: UInt64 = 0, pendingPlayerImageRefusals: UInt64 = 0
+    func qaPlayerImageMetrics() -> [String:UInt64] {
+        lock.lock();defer{lock.unlock()}
+        return ["pendingPlayerImageRetentions":pendingPlayerImageRetentions,"pendingPlayerImageRefusals":pendingPlayerImageRefusals]
+    }
+    private func diagnosticPoint(_ point:Point?) -> Any {
+        point.map { [$0.x,$0.y] } as Any? ?? NSNull()
+    }
+    private func diagnosticTiles(_ tiles:NativeTiles?) -> Any {
+        tiles.map { ["current":[$0.current.x,$0.current.y],"previous":[$0.previous.x,$0.previous.y]] } as Any? ?? NSNull()
+    }
+    func beginDiagnostic() {
+        lock.lock();defer{lock.unlock()}
+        let previous:Any = state.map { value -> [String:Any] in
+            ["core":String(describing:value.scope.core),"profile":String(describing:value.scope.profile),
+             "timeline":String(value.scope.timeline),"map":[value.map.group,value.map.number],"instance":String(value.instance),
+             "camera":diagnosticPoint(value.camera),"applied":diagnosticPoint(value.applied),
+             "nativeTiles":diagnosticTiles(value.nativeTiles),"acceptedFoot":diagnosticPoint(value.acceptedFoot)]
+        } as Any? ?? NSNull()
+        let image:Any = playerImage.map { value -> [String:Any] in
+            let key=value.identity
+            return ["core":String(describing:key.scope.core),"profile":String(describing:key.scope.profile),
+                "timeline":String(key.scope.timeline),"map":[key.map.group,key.map.number],"instance":String(key.instance),
+                "spriteSlot":key.spriteSlot,"objectSlot":key.objectSlot,"graphicsID":key.graphicsID,
+                "animations":key.animations,"images":key.images,"template":key.template,"callback":key.callback,
+                "width":key.width,"height":key.height,"shape":key.shape,"size":key.size,
+                "tileBase":key.tileBase,"sheetTileStart":key.sheetTileStart,
+                "romAddress":value.appearance.romAddress as Any? ?? NSNull(),"pendingSeekUsed":value.pendingSeekUsed]
+        } as Any? ?? NSNull()
+        diagnostic = ["prestate":previous,"playerImagePrestate":image,"sceneStage":"stateDecoder"]
+    }
+    func diagnosticStage(_ stage:String) {
+        lock.lock();defer{lock.unlock()};diagnostic?["sceneStage"] = stage
+    }
+    func takeDiagnostic() -> [String:Any]? {
+        lock.lock();defer{lock.unlock()};let value=diagnostic;diagnostic=nil;return value
+    }
+#endif
+    func reset() { lock.lock(); state = nil; playerImage = nil; lock.unlock() }
+    func rememberPlayerImage(_ appearance: BoundPlayerSprite, identity: PlayerImageIdentity) {
+        lock.lock();defer{lock.unlock()}
+        guard let state, state.scope == identity.scope, state.map == identity.map, state.instance == identity.instance else {
+            playerImage=nil;return
+        }
+        playerImage = .init(identity:identity,appearance:appearance)
+    }
+    func pendingPlayerImage(identity: PlayerImageIdentity, validFirstFrame: Bool) -> BoundPlayerSprite? {
+        lock.lock();defer{lock.unlock()}
+        guard validFirstFrame, let state, state.scope == identity.scope, state.map == identity.map,
+              state.instance == identity.instance, let image=playerImage, image.identity == identity, !image.pendingSeekUsed else {
+            playerImage=nil
+#if DEBUG && targetEnvironment(simulator)
+            pendingPlayerImageRefusals &+= 1
+#endif
+            return nil
+        }
+        playerImage?.pendingSeekUsed=true
+#if DEBUG && targetEnvironment(simulator)
+        pendingPlayerImageRetentions &+= 1
+#endif
+        return image.appearance
+    }
     private static func delta(_ value: Int) -> Int { ((value + 128) & 255) - 128 }
 
     func camera(proposed: Point, appliedScroll: Point, desiredScroll: Point,
                 liveFoot: Point, builtFoot: Point, map: Map, instance: UInt64,
                 nativeTiles: NativeTiles? = nil,
+                normalizingResidual: Bool = false,
                 scope: BoundNativePresentationScope, project: (Map, Map) -> Point?) -> Point? {
         lock.lock(); defer { lock.unlock() }
         let coherent = liveFoot == builtFoot && Self.delta(desiredScroll.x - appliedScroll.x) == 0
             && Self.delta(desiredScroll.y - appliedScroll.y) == 0
+#if DEBUG && targetEnvironment(simulator)
+        if diagnostic != nil {
+            diagnostic?["cameraInput"] = ["proposed":diagnosticPoint(proposed),"appliedScroll":diagnosticPoint(appliedScroll),
+                "desiredScroll":diagnosticPoint(desiredScroll),"liveFoot":diagnosticPoint(liveFoot),"builtFoot":diagnosticPoint(builtFoot),
+                "map":[map.group,map.number],"instance":String(instance),"nativeTiles":diagnosticTiles(nativeTiles),
+                "core":String(describing:scope.core),"profile":String(describing:scope.profile),"timeline":String(scope.timeline)]
+            diagnostic?["coherent"] = coherent
+            diagnostic?["cameraDecision"] = "noCoherentOrigin"
+        }
+#endif
         if state?.scope != scope || (state?.map == map && state?.instance != instance) { state = nil }
+        // CameraUpdate stores its sum before reducing it modulo16. That sum
+        // cannot establish an origin or cross a map boundary; only the existing
+        // applied-scroll observation and its native segment can locate it.
+        if normalizingResidual {
+            guard !coherent, let previous = state, previous.map == map, previous.instance == instance,
+                  previous.nativeTiles != nil, nativeTiles != nil else { state = nil; return nil }
+        }
         let priorState = state
         var result: Point?
         var priorTiles = state?.nativeTiles
@@ -104,6 +196,10 @@ final class BoundNativePresentationCache: @unchecked Sendable {
         if coherent { result = proposed }
         guard let result else { state = nil; return nil }
         let foot = Point(x: builtFoot.x - result.x, y: builtFoot.y + 16 - result.y)
+#if DEBUG && targetEnvironment(simulator)
+        diagnostic?["resolvedCamera"] = diagnosticPoint(result)
+        diagnostic?["resolvedFoot"] = diagnosticPoint(foot)
+#endif
         if let nativeTiles {
             // Native settlement can collapse current/previous before the last
             // pixels of that step reach the framebuffer. Its prior observed
@@ -113,6 +209,14 @@ final class BoundNativePresentationCache: @unchecked Sendable {
                 $0.map == map && $0.instance == instance && $0.nativeTiles == nativeTiles && $0.acceptedFoot == foot
                     && Self.delta(appliedScroll.x - $0.applied.x) == 0 && Self.delta(appliedScroll.y - $0.applied.y) == 0
             } ?? false
+#if DEBUG && targetEnvironment(simulator)
+            if diagnostic != nil {
+                diagnostic?["currentSegmentContains"] = nativeTiles.contains(foot)
+                diagnostic?["priorSegmentContains"] = priorTiles?.contains(foot) ?? false
+                diagnostic?["repeatedFrame"] = repeatedFrame
+                diagnostic?["cameraDecision"] = "outsideObservedSegments"
+            }
+#endif
             // A repeated framebuffer may retain that already-admitted foot,
             // but any changed pixels still need current/prior segment evidence.
             guard nativeTiles.contains(foot) || (!coherent && (priorTiles?.contains(foot) == true || repeatedFrame)) else {
@@ -121,6 +225,9 @@ final class BoundNativePresentationCache: @unchecked Sendable {
         }
         state = .init(scope: scope, map: map, instance: instance, camera: result, applied: appliedScroll,
                       nativeTiles: nativeTiles, acceptedFoot: nativeTiles == nil ? nil : foot)
+#if DEBUG && targetEnvironment(simulator)
+        diagnostic?["cameraDecision"] = "accepted"
+#endif
         return result
     }
 }
@@ -746,6 +853,22 @@ enum BoundSceneBytes {
 }
 
 enum BoundPlayerSceneDecoder {
+    /// RR CameraUpdate writes the +/-16 sum before its signed remainder. Admit
+    /// only that observed moving phase; the caller still needs a seeded cache.
+    static func isPendingResidualNormalization(camera: [UInt8], player: BoundPlayerState,
+                                               live: BoundPlayerState.Point, built: BoundPlayerState.Point,
+                                               applied: BoundPlayerState.Point, desired: BoundPlayerState.Point) -> Bool {
+        guard camera.count == 24, BoundSceneBytes.word(camera) == 0x0805AB31,
+              (1..<64).contains(BoundSceneBytes.word(camera, 4)), player.runningState == 2, player.tileTransitionState == 1,
+              player.tile == player.previousTile,
+              (desired.x - applied.x) & 255 == 0, (desired.y - applied.y) & 255 == 0 else { return false }
+        func signed(_ offset: Int) -> Int { Int(Int32(bitPattern: UInt32(BoundSceneBytes.word(camera, offset)))) }
+        let x = signed(8), y = signed(12), residualX = signed(16), residualY = signed(20)
+        guard live.x - built.x == x, live.y - built.y == y else { return false }
+        return ((x == -2 || x == -1 || x == 1 || x == 2) && y == 0 && residualX == (x < 0 ? -16 : 16) && residualY == 0)
+            || ((y == -2 || y == -1 || y == 1 || y == 2) && x == 0 && residualY == (y < 0 ? -16 : 16) && residualX == 0)
+    }
+
     /// OAM stores wrapped screen coordinates. Unwrap around the native live
     /// position so offscreen actors retain their actual side of the viewport.
     static func builtSpriteCenter(_ raw: [UInt8], live: BoundPlayerState.Point) -> BoundPlayerState.Point {
@@ -757,29 +880,48 @@ enum BoundPlayerSceneDecoder {
         return .init(x: unwrap(x, near: live.x, modulus: 512), y: unwrap(y, near: live.y, modulus: 256))
     }
     private static func sprite(_ raw: [UInt8], memory: BoundGBAMemorySnapshot,
-                               rom: (Int, Int) -> [UInt8]?, outsideOwnerCamera: Bool = false) -> BoundPlayerSprite? {
+                               rom: (Int, Int) -> [UInt8]?, outsideOwnerCamera: Bool = false,
+                               pendingPlayer: BoundNativePresentationCache.PlayerImageIdentity? = nil) -> BoundPlayerSprite? {
         let width = -Int(Int8(bitPattern: raw[0x28])) * 2, height = -Int(Int8(bitPattern: raw[0x29])) * 2
         guard [8, 16, 32, 64].contains(width), [8, 16, 32, 64].contains(height),
               BoundSceneBytes.half(raw) & 0x2F00 == 0, raw[0x3F] & 0x40 == 0,
-              raw[0x3E] & 1 == 1, outsideOwnerCamera || raw[0x3E] & 4 == 0, raw[0x2B] < 64,
+              raw[0x3E] & 1 == 1, outsideOwnerCamera || raw[0x3E] & 4 == 0,
+              raw[0x2B] < 64 || (raw[0x2B] == 255 && pendingPlayer != nil),
               let animPointer = rom(BoundSceneBytes.word(raw, 8) + Int(raw[0x2A]) * 4, 4) else { return nil }
         let anim = BoundSceneBytes.word(animPointer)
-        // At ANIM_END the visible frame is the preceding frame command.
-        var imageIndex: Int?
-        for index in stride(from: Int(raw[0x2B]), through: 0, by: -1) {
-            guard let command = rom(anim + index * 4, 4) else { return nil }
-            if BoundSceneBytes.signed(command) >= 0 { imageIndex = BoundSceneBytes.half(command); break }
+        func image(_ index:Int) -> (address:Int, tiles:Data)? {
+            guard index < 64, let image=rom(BoundSceneBytes.word(raw,12)+index*8,8),
+                  BoundSceneBytes.half(image,4) == width*height/2,
+                  let tiles=rom(BoundSceneBytes.word(image),width*height/2) else { return nil }
+            return (BoundSceneBytes.word(image),Data(tiles))
         }
-        guard let imageIndex, imageIndex < 64,
-              let image = rom(BoundSceneBytes.word(raw, 12) + imageIndex * 8, 8),
-              BoundSceneBytes.half(image, 4) == width * height / 2,
-              let tiles = rom(BoundSceneBytes.word(image), width * height / 2),
-              let palette = memory.bytes(at: 0x05000200 + (BoundSceneBytes.half(raw, 4) >> 12) * 32, count: 32)
+        let selected:(address:Int,tiles:Data)
+        if raw[0x2B] == 255 {
+            // SeekSpriteAnim(0) stores FF before clearing delay/begin/end flags,
+            // then ContinueAnim wraps it to0 before requesting the new image.
+            // The first command validates the pending animation, not the image
+            // still displayed. Only a prior complete scene supplies that image.
+            let first=rom(anim,4)
+            let validFirst=first.map { BoundSceneBytes.signed($0) >= 0 && image(BoundSceneBytes.half($0)) != nil } ?? false
+            guard let pendingPlayer, let retained=memory.presentationObservation?.cache.pendingPlayerImage(identity:pendingPlayer,validFirstFrame:validFirst),
+                  let address=retained.romAddress, retained.width == width, retained.height == height else { return nil }
+            selected=(address,retained.tiles)
+        } else {
+            // At ANIM_END the visible frame is the preceding frame command.
+            var imageIndex:Int?
+            for index in stride(from:Int(raw[0x2B]),through:0,by:-1) {
+                guard let command=rom(anim+index*4,4) else { return nil }
+                if BoundSceneBytes.signed(command) >= 0 { imageIndex=BoundSceneBytes.half(command);break }
+            }
+            guard let imageIndex,let value=image(imageIndex) else { return nil }
+            selected=value
+        }
+        guard let palette = memory.bytes(at: 0x05000200 + (BoundSceneBytes.half(raw, 4) >> 12) * 32, count: 32)
                 ?? memory.bytes(at: 0x020375F8 + 512 + (BoundSceneBytes.half(raw, 4) >> 12) * 32, count: 32) else { return nil }
-        return .init(width: width, height: height, tiles: Data(tiles), palette: Data(palette),
+        return .init(width: width, height: height, tiles: selected.tiles, palette: Data(palette),
                      flipX: raw[3] & 0x10 != 0, flipY: raw[3] & 0x20 != 0,
                      priority: (BoundSceneBytes.half(raw, 4) >> 10) & 3,
-                     romAddress: BoundSceneBytes.word(image))
+                     romAddress: selected.address)
     }
 
     static func camera(save: BoundPlayerState.Point, residual: BoundPlayerState.Point,
@@ -799,10 +941,25 @@ enum BoundPlayerSceneDecoder {
                      rom: (Int, Int) -> [UInt8]?, assets: BoundPlayerSceneAssets) -> BoundPlayerScene? {
         var completed = false
         defer { if !completed { memory.presentationObservation?.cache.reset() } }
+#if DEBUG && targetEnvironment(simulator)
+        memory.presentationObservation?.cache.diagnosticStage("avatarSpriteCameraAssets")
+#endif
         // Script/control locks stop movement, not the visible field or its sprites.
         guard let avatar = memory.bytes(at: 0x02037078, count: 8), avatar[0] & 0x1E == 0,
-              let raw = memory.bytes(at: 0x0202063C + Int(avatar[4]) * 68, count: 68),
-              let appearance = sprite(raw, memory: memory, rom: rom), appearance.width == 16, appearance.height == 32,
+              let raw = memory.bytes(at: 0x0202063C + Int(avatar[4]) * 68, count: 68) else { return nil }
+        let imageIdentity = memory.presentationObservation.flatMap { observation in
+            player.mapInstance.map { instance in
+                BoundNativePresentationCache.PlayerImageIdentity(scope:observation.scope,
+                    map:.init(group:player.mapGroup,number:player.mapNumber),instance:instance,
+                    spriteSlot:Int(avatar[4]),objectSlot:Int(avatar[5]),graphicsID:player.graphicsID,
+                    animations:BoundSceneBytes.word(raw,8),images:BoundSceneBytes.word(raw,12),
+                    template:BoundSceneBytes.word(raw,20),callback:BoundSceneBytes.word(raw,28),
+                    width:-Int(Int8(bitPattern:raw[0x28]))*2,height:-Int(Int8(bitPattern:raw[0x29]))*2,
+                    shape:BoundSceneBytes.half(raw)>>14,size:BoundSceneBytes.half(raw,2)>>14,
+                    tileBase:BoundSceneBytes.half(raw,4)&1023,sheetTileStart:BoundSceneBytes.half(raw,0x40))
+            }
+        }
+        guard let appearance = sprite(raw, memory: memory, rom: rom,pendingPlayer:imageIdentity), appearance.width == 16, appearance.height == 32,
               BoundSceneBytes.signed(raw, 0x24) == 0, BoundSceneBytes.signed(raw, 0x26) == 0,
               let offsetBytes = memory.bytes(at: 0x02021BC8, count: 4), raw[0x3E] & 2 != 0,
               let cameraBytes = memory.bytes(at: 0x03005060, count: 16),
@@ -811,24 +968,39 @@ enum BoundPlayerSceneDecoder {
               let regs = memory.bytes(at: 0x03000000, count: 0x40) else { return nil }
         let residual = BoundPlayerState.Point(x: Int(Int32(bitPattern: UInt32(BoundSceneBytes.word(cameraBytes)))),
                                              y: Int(Int32(bitPattern: UInt32(BoundSceneBytes.word(cameraBytes, 4)))))
-        guard abs(residual.x) < 16, abs(residual.y) < 16 else { return nil }
+#if DEBUG && targetEnvironment(simulator)
+        memory.presentationObservation?.cache.diagnosticStage("residualBounds")
+#endif
+        let normalizedResidual = abs(residual.x) < 16 && abs(residual.y) < 16
+        guard normalizedResidual || memory.presentationObservation != nil else { return nil }
         let offset = BoundPlayerState.Point(x: BoundSceneBytes.signed(offsetBytes), y: BoundSceneBytes.signed(offsetBytes, 2))
-        var camera = camera(save: player.cameraTile ?? player.tile, residual: residual,
+        // The unnormalized sum is never used as an origin, even temporarily.
+        var camera = normalizedResidual ? camera(save: player.cameraTile ?? player.tile, residual: residual,
                             total: .init(x: BoundSceneBytes.signed(cameraBytes, 12), y: BoundSceneBytes.signed(cameraBytes, 8)), offset: offset)
+            : .init(x: 0, y: 0)
         let live = BoundPlayerState.Point(x: BoundSceneBytes.wrap(BoundSceneBytes.signed(raw, 0x20) + offset.x),
                                          y: BoundSceneBytes.wrap(BoundSceneBytes.signed(raw, 0x22) + offset.y))
         var center = live
         let nativeTiles = BoundNativePresentationCache.NativeTiles(current: player.tile, previous: player.previousTile)
         if let observation = memory.presentationObservation {
             center = builtSpriteCenter(raw, live: live)
-            guard let field = memory.bytes(at: 0x03000E90, count: 12), let instance = player.mapInstance,
-                  let resolved = observation.cache.camera(proposed: camera,
-                    appliedScroll: .init(x: BoundSceneBytes.half(regs, 0x14), y: BoundSceneBytes.half(regs, 0x16)),
-                    desiredScroll: .init(x: Int(field[0]) + BoundSceneBytes.signed(field, 8),
-                                         y: Int(field[1]) + BoundSceneBytes.signed(field, 10) + 8),
+            guard let field = memory.bytes(at: 0x03000E90, count: 12), let instance = player.mapInstance else { return nil }
+            let applied = BoundPlayerState.Point(x: BoundSceneBytes.half(regs, 0x14), y: BoundSceneBytes.half(regs, 0x16))
+            let desired = BoundPlayerState.Point(x: Int(field[0]) + BoundSceneBytes.signed(field, 8),
+                                                 y: Int(field[1]) + BoundSceneBytes.signed(field, 10) + 8)
+            if !normalizedResidual {
+                guard let update = memory.bytes(at: 0x03005050, count: 24),
+                      isPendingResidualNormalization(camera: update, player: player, live: live, built: center,
+                                                     applied: applied, desired: desired) else { return nil }
+            }
+#if DEBUG && targetEnvironment(simulator)
+            observation.cache.diagnosticStage("cameraResolution")
+#endif
+            guard let resolved = observation.cache.camera(proposed: camera,
+                    appliedScroll: applied, desiredScroll: desired,
                     liveFoot: live, builtFoot: center,
                     map: .init(group: player.mapGroup, number: player.mapNumber), instance: instance,
-                    nativeTiles: nativeTiles, scope: observation.scope,
+                    nativeTiles: nativeTiles, normalizingResidual: !normalizedResidual, scope: observation.scope,
                     project: { next, previous in
                         assets.mapOffset(fromGroup: next.group, number: next.number,
                             toGroup: previous.group, number: previous.number, rom: rom)
@@ -836,11 +1008,17 @@ enum BoundPlayerSceneDecoder {
             camera = resolved
         }
         let foot = BoundPlayerState.Point(x: center.x - camera.x, y: center.y + 16 - camera.y)
+#if DEBUG && targetEnvironment(simulator)
+        memory.presentationObservation?.cache.diagnosticStage("uncachedFootBounds")
+#endif
         guard memory.presentationObservation != nil || nativeTiles.contains(foot) else { return nil }
         var layers: [BoundPlayerBackground.Layer] = []
         for bg in 1...2 {
             if BoundSceneBytes.half(regs) & (1 << (8 + bg)) == 0 { continue }
             let control = BoundSceneBytes.half(regs, 8 + bg * 2)
+#if DEBUG && targetEnvironment(simulator)
+            memory.presentationObservation?.cache.diagnosticStage("background\(bg)")
+#endif
             guard control & 0xC08C == 0,
                   // Buffer2 is BG1 (foreground), Buffer1 is BG2 (middle).
                   let pointer = memory.bytes(at: bg == 1 ? 0x03005018 : 0x03005014, count: 4),
@@ -852,6 +1030,9 @@ enum BoundPlayerSceneDecoder {
         // UI windows use RAM-generated tiles rather than the map tileset.
         if BoundSceneBytes.half(regs) & 0x100 != 0 {
             let control = BoundSceneBytes.half(regs, 8)
+#if DEBUG && targetEnvironment(simulator)
+            memory.presentationObservation?.cache.diagnosticStage("uiBackground")
+#endif
             guard control & 0xC080 == 0,
                   let pointer = memory.bytes(at: 0x030008EC, count: 4),
                   let map = memory.bytes(at: BoundSceneBytes.word(pointer), count: 2048) else { return nil }
@@ -890,7 +1071,13 @@ enum BoundPlayerSceneDecoder {
                     elevation:binding.elevation,facing:binding.facing,appearance:appearance)
             }
         }
+        if raw[0x2B] < 64, let imageIdentity {
+            memory.presentationObservation?.cache.rememberPlayerImage(appearance,identity:imageIdentity)
+        }
         completed = true
+#if DEBUG && targetEnvironment(simulator)
+        memory.presentationObservation?.cache.diagnosticStage("success")
+#endif
         return .init(worldFoot: foot, camera: camera, appearance: appearance,
                      background: .init(tiles: tiles, layers: layers), objects: objects,
                      follower:follower,mapInstance:player.mapInstance)

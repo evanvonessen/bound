@@ -129,6 +129,18 @@ struct BoundMovementOccupancy {
     }
 }
 
+/// Uncommitted header fields are only evidence that a writer has progressed.
+/// They never provide actors, requests, completion, or authority.
+struct BoundMovementPublication: Equatable {
+    let sequence:UInt32,frame:UInt32,generation:UInt32
+    init?(_ data:Data) {
+        guard data.count==20,BoundMovementSnapshot.word(data,0)==0x314F5742,
+              BoundMovementSnapshot.word(data,4)==1,BoundMovementSnapshot.word(data,8)&1==1 else{return nil}
+        sequence=BoundMovementSnapshot.word(data,8);frame=BoundMovementSnapshot.word(data,12)
+        generation=BoundMovementSnapshot.word(data,16)
+    }
+}
+
 /// The completed-frame owner is the sole reader/writer of the transient port.
 final class BoundMovementProbe: @unchecked Sendable {
     private let lock=NSLock()
@@ -139,6 +151,7 @@ final class BoundMovementProbe: @unchecked Sendable {
     private var desiredAt:TimeInterval = -.infinity,frameSequence:UInt32=0
     private var observationEpoch:UInt64=0,lastObserved:BoundMovementSnapshot?
     private var loadTimeline:UInt64?,desiredEpoch:UInt64=0,oddFrames=0,publicationInProgress=false
+    private var lastPublication:BoundMovementPublication?,observedAt:TimeInterval = -.infinity
     init(clock:@escaping ()->TimeInterval = {ProcessInfo.processInfo.systemUptime},
          revoke:@escaping ()->Void = {BoundVBABattleBridge.requestWorldMovementRevocation()}) {
         self.clock=clock;requestRevocation=revoke
@@ -146,7 +159,7 @@ final class BoundMovementProbe: @unchecked Sendable {
     func configure(core:EmulatorCore?) {
         lock.lock();defer{lock.unlock()};requestRevocation();coreID=core.map(ObjectIdentifier.init);desired=nil;snapshot=nil
         frameSequence=0;lastObserved=nil;observationEpoch &+= 1;loadTimeline=BoundVBABattleBridge.worldMovementTimeline()
-        oddFrames=0;publicationInProgress=false;desiredLocal=nil;occupancy.reset()
+        oddFrames=0;publicationInProgress=false;lastPublication=nil;observedAt = -.infinity;desiredLocal=nil;occupancy.reset()
     }
     func publish(_ bytes:Data?,epoch:UInt64?=nil,local:BoundMovementSnapshot?=nil) {
         lock.lock();defer{lock.unlock()}
@@ -161,28 +174,52 @@ final class BoundMovementProbe: @unchecked Sendable {
         return desired.map{occupancy.input($0,local:snapshot ?? desiredLocal)}
     }
     func epoch()->UInt64 {lock.lock();defer{lock.unlock()};return observationEpoch}
-    func record(_ value:BoundMovementSnapshot?,publicationInProgress:Bool=false,timeline:UInt64?=nil) {
+    func record(_ value:BoundMovementSnapshot?,publicationInProgress:Bool=false,
+                publication:BoundMovementPublication?=nil,timeline:UInt64?=nil) {
         lock.lock();defer{lock.unlock()}
-        observe(value,publicationInProgress:publicationInProgress,timeline:timeline ?? loadTimeline ?? 0)
+        observe(value,publicationInProgress:publicationInProgress,publication:publication,timeline:timeline ?? loadTimeline ?? 0)
     }
     private func invalidate(forceEpoch:Bool=false) {
         requestRevocation()
         if forceEpoch || desired != nil || snapshot != nil || lastObserved != nil {observationEpoch &+= 1}
-        desired=nil;snapshot=nil;lastObserved=nil;oddFrames=0;publicationInProgress=false;desiredLocal=nil;occupancy.reset()
+        desired=nil;snapshot=nil;lastObserved=nil;oddFrames=0;publicationInProgress=false
+        lastPublication=nil;observedAt = -.infinity;desiredLocal=nil;occupancy.reset()
     }
-    private func observe(_ value:BoundMovementSnapshot?,publicationInProgress writing:Bool,timeline:UInt64) {
+    private func observe(_ value:BoundMovementSnapshot?,publicationInProgress writing:Bool,
+                         publication:BoundMovementPublication?,timeline:UInt64) {
         if let previous=loadTimeline,previous != timeline {
             loadTimeline=timeline;invalidate(forceEpoch:true);return
         }
         loadTimeline=timeline
-        if value==nil,writing,snapshot != nil {
+        if value==nil,writing,let snapshot {
+            let now=clock()
+            guard now.isFinite,now>=observedAt,now-observedAt<=0.15 else{invalidate();return}
             oddFrames+=1
+            if let publication {
+                // A display-frame boundary may repeatedly land inside different
+                // native transactions. Distinguish that from one stuck writer,
+                // without extending the last coherent observation's lifetime.
+                let sequenceDelta=publication.sequence &- snapshot.sequence
+                guard publication.generation==snapshot.generation,
+                      sequenceDelta>0,sequenceDelta<0x80000000,
+                      publication.frame &- snapshot.frame<15 else{invalidate();return}
+                if let previous=lastPublication {
+                    let delta=publication.sequence &- previous.sequence
+                    guard delta<0x80000000,publication.frame &- previous.frame<0x80000000 else{invalidate();return}
+                    if delta>0 {oddFrames=1}
+                } else {oddFrames=1}
+                lastPublication=publication
+            }
             if oddFrames<=3 {publicationInProgress=true;return}
         }
         guard let value else {invalidate();return}
-        oddFrames=0;publicationInProgress=false
+        if let previous=lastPublication,value.generation==previous.generation,
+           value.sequence &- previous.sequence>=0x80000000 || value.frame &- previous.frame>=0x80000000 {
+            invalidate();return
+        }
+        oddFrames=0;publicationInProgress=false;lastPublication=nil;observedAt=clock()
         if let old=lastObserved {
-            if value.generation != old.generation || value.frame &- old.frame>0x80000000 || value.sequence &- old.sequence>0x80000000 {
+            if value.generation != old.generation || value.frame &- old.frame>=0x80000000 || value.sequence &- old.sequence>=0x80000000 {
                 requestRevocation()
                 desired=nil;desiredLocal=nil;occupancy.reset();observationEpoch &+= 1
             }
@@ -196,6 +233,17 @@ final class BoundMovementProbe: @unchecked Sendable {
         guard now.isFinite,now>=desiredAt,now-desiredAt<=0.15,desiredEpoch==observationEpoch,
               var bytes=desired,bytes.count==1024 else{return Data()}
         if publicationInProgress {return nil}
+        if BoundMovementSnapshot.word(bytes,72)>0 {
+            let request=snapshot?.request
+            if request?.nonce != BoundMovementSnapshot.word(bytes,72)
+                || request?.generation != BoundMovementSnapshot.word(bytes,76)
+                || request?.from != BoundMovementSnapshot.tile(bytes,80)
+                || request?.to != BoundMovementSnapshot.tile(bytes,84) {
+                // A grant prepared while waiting for a coherent publication
+                // cannot outlive that exact freshly observed native request.
+                bytes.replaceSubrange(72..<92,with:repeatElement(UInt8(0),count:20))
+            }
+        }
         frameSequence &+= 2;if frameSequence==0 {frameSequence=2}
         BoundMovementSnapshot.put(frameSequence,&bytes,8)
         return occupancy.input(bytes,local:snapshot ?? desiredLocal)
@@ -204,10 +252,10 @@ final class BoundMovementProbe: @unchecked Sendable {
         lock.lock();defer{lock.unlock()};guard coreID==ObjectIdentifier(core) else{return}
         let before=BoundVBABattleBridge.worldMovementTimeline()
         let value=BoundMovementSnapshot(BoundVBABattleBridge.worldMovementSnapshot())
-        let writing=BoundVBABattleBridge.worldMovementPublicationInProgress()
+        let publication=BoundMovementPublication(BoundVBABattleBridge.worldMovementPublicationHeader())
         let after=BoundVBABattleBridge.worldMovementTimeline()
         if before != after {loadTimeline=after;invalidate(forceEpoch:true)}
-        else {observe(value,publicationInProgress:writing,timeline:after)}
+        else {observe(value,publicationInProgress:publication != nil,publication:publication,timeline:after)}
         let latest=BoundVBABattleBridge.worldMovementTimeline()
         if latest != loadTimeline {loadTimeline=latest;invalidate(forceEpoch:true)}
         if let input=prepare(at:clock()) {BoundVBABattleBridge.setWorldMovementHost(input)}
@@ -414,7 +462,7 @@ final class BoundWorldMovementSession:ObservableObject {
         clock=now
         if context.map({!$0.sameWorld(next)}) ?? true {reset()}
         context=next;native=value
-        let rollback=lastNative.map{value.frame &- $0.frame>0x80000000 || value.sequence &- $0.sequence>0x80000000} ?? false
+        let rollback=lastNative.map{value.frame &- $0.frame>=0x80000000 || value.sequence &- $0.sequence>=0x80000000} ?? false
         let observedEpoch=probe.epoch()
         if generation != value.generation || rollback || observedEpoch != probeEpoch {
             generation=value.generation;probeEpoch=observedEpoch;restartChannel()

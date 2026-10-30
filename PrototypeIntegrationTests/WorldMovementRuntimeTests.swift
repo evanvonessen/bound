@@ -2,6 +2,7 @@ import XCTest
 import UIKit
 import SwiftUI
 import CryptoKit
+import Darwin
 import DeltaCore
 import GBADeltaCore
 @testable import Delta
@@ -11,15 +12,105 @@ private struct MovementRuntimeGame:GameProtocol {
     var type:GameType { .gba }
 }
 
+/// The endpoint controller must not depend on an admitted BWO snapshot, which
+/// can retain an older tile while its native writer is in progress. These tiny
+/// reads observe the committed native step target identically in every mode.
+private enum MovementCadenceNativeTarget {
+    static let source="Native avatar/ObjectEvent target and SaveBlock map; no BWO admission"
+    static func read(_ core:EmulatorCore)->[String:Double]? {
+        let bridge=core.deltaCore.emulatorBridge
+        guard let avatarData=bridge.readMemory?(at:0x8000+0x37078,size:8),avatarData.count==8,
+              avatarData[4]<64,avatarData[5]<16,
+              let objectData=bridge.readMemory?(at:0x8000+0x36E38+Int(avatarData[5])*36,size:36),objectData.count==36,
+              let pointerData=bridge.readMemory?(at:0x5008,size:4),pointerData.count==4 else{return nil}
+        let object=Array(objectData),pointer=BoundSceneBytes.word(Array(pointerData))
+        guard BoundSceneBytes.word(object)&0x10001==0x10001,object[8]==255,object[4]==avatarData[4],
+              pointer&3==0,(0x02000000...0x0203FFF4).contains(pointer),
+              let saveData=bridge.readMemory?(at:0x8000+pointer-0x02000000,size:12),saveData.count==12 else{return nil}
+        let save=Array(saveData)
+        return ["tileX":Double(BoundSceneBytes.signed(object,0x10)-7),"tileY":Double(BoundSceneBytes.signed(object,0x12)-7),
+                "previousTileX":Double(BoundSceneBytes.signed(object,0x14)-7),"previousTileY":Double(BoundSceneBytes.signed(object,0x16)-7),
+                "cameraTileX":Double(BoundSceneBytes.signed(save)),"cameraTileY":Double(BoundSceneBytes.signed(save,2)),
+                "mapGroup":Double(save[4]),"mapNumber":Double(save[5])]
+    }
+}
+
 /// Optional read-only diagnostics for the known center-screen paved-road tape.
 /// Keep eight tiny trainer templates and one sparse background sample, never a
 /// video history. Ambiguous matches remain diagnostics and cannot prove motion.
+private enum MovementCadenceAxis:String {
+    case horizontal,vertical
+    var initialDirection:Int {self == .horizontal ? 32:128}
+    var shiftKey:String {self == .horizontal ? "previousXMinusCurrentX":"previousYMinusCurrentY"}
+    // Row23 enters the grass south of the Mart. Stay on the two-tile paved
+    // vertical lane; a successful one-way walk does not establish a safe loop.
+    var route:[String:Int] {self == .horizontal ? ["leftTileX":33,"rightTileX":36,"tileY":20]:["tileX":36,"topTileY":20,"bottomTileY":22]}
+}
+/// Test-only access to the already loaded VBA video banks. The achievement RAM
+/// reader does not expose hardware OAM or OBJ VRAM. Never load another core or
+/// retain a bank pointer across callbacks; only the emulation owner calls read.
+private final class MovementCadenceNativeVideo {
+    struct Sprite {
+        let appearance:BoundPlayerSprite,x:Int,y:Int,entry:Int,attributes:[Int]
+        var evidence:[String:Any] { ["entry":entry,"x":x,"y":y,"attributes":attributes,
+            "width":appearance.width,"height":appearance.height,"tilesBase64":appearance.tiles.base64EncodedString(),
+            "paletteBase64":appearance.palette.base64EncodedString(),"flipX":appearance.flipX,"flipY":appearance.flipY] }
+    }
+    private let symbols:[String:UnsafeMutableRawPointer]
+    init(){
+        var found=[String:UnsafeMutableRawPointer]()
+        for name in ["oam","vram","paletteRAM","ioMem"] {
+            guard let symbol=dlsym(UnsafeMutableRawPointer(bitPattern:-2),name) else{continue}
+            var owner=Dl_info()
+            guard dladdr(symbol,&owner) != 0,let path=owner.dli_fname,
+                  String(cString:path).hasSuffix("/GBADeltaCore.framework/GBADeltaCore") else{continue}
+            found[name]=symbol
+        }
+        symbols=found
+    }
+    func read(_ core:EmulatorCore,spriteID:Int)->Sprite? {
+        func bank(_ name:String)->UnsafeMutablePointer<UInt8>? {
+            symbols[name]?.assumingMemoryBound(to:UnsafeMutablePointer<UInt8>?.self).pointee
+        }
+        guard (0..<64).contains(spriteID),let oam=bank("oam"),let vram=bank("vram"),
+              let palette=bank("paletteRAM"),let io=bank("ioMem"),
+              let data=core.deltaCore.emulatorBridge.readMemory?(at:0x8000+0x2063C+spriteID*68,size:6),data.count==6 else{return nil}
+        let raw=Array(data),identity0=BoundSceneBytes.half(raw),identity1=BoundSceneBytes.half(raw,2),identity2=BoundSceneBytes.half(raw,4)
+        func half(_ p:UnsafeMutablePointer<UInt8>,_ at:Int)->Int {Int(p[at])|Int(p[at+1])<<8}
+        let matches=(0..<128).filter {index in
+            let a0=half(oam,index*8),a1=half(oam,index*8+2),a2=half(oam,index*8+4)
+            // A unique tile/palette/shape identity, never a predicted position.
+            return a0&0x3F00==0 && a0&0xC000==identity0&0xC000 && a1&0xC000==identity1&0xC000 && a2&0xF3FF==identity2&0xF3FF
+        }
+        guard matches.count==1,let entry=matches.first else{return nil}
+        let a0=half(oam,entry*8),a1=half(oam,entry*8+2),a2=half(oam,entry*8+4),shape=a0>>14,size=a1>>14
+        let dimensions=[[(8,8),(16,16),(32,32),(64,64)],[(16,8),(32,8),(32,16),(64,32)],[(8,16),(8,32),(16,32),(32,64)]]
+        guard shape<3 else{return nil}
+        let (width,height)=dimensions[shape][size],tile=a2&1023,oneDimensional=half(io,0)&64 != 0
+        var tiles=[UInt8]();tiles.reserveCapacity(width*height/2)
+        for ty in 0..<height/8 {for tx in 0..<width/8 {
+            let offset=0x10000+((tile+ty*(oneDimensional ? width/8:32)+tx)&1023)*32
+            tiles.append(contentsOf:UnsafeBufferPointer(start:vram+offset,count:32))
+        }}
+        let paletteBytes=Data(bytes:palette+0x200+(a2>>12)*32,count:32)
+        let x=a1&511,y=a0&255
+        return .init(appearance:.init(width:width,height:height,tiles:Data(tiles),palette:paletteBytes,
+            flipX:a1&0x1000 != 0,flipY:a1&0x2000 != 0,priority:(a2>>10)&3),
+            x:x>=256 ? x-512:x,y:y>=160 ? y-256:y,entry:entry,attributes:[a0,a1,a2])
+    }
+}
 private final class MovementCadencePixelDiagnostics {
     private struct Pixel {let x:Int,y:Int,r:Int,g:Int,b:Int}
     private struct Template {let appearance:BoundPlayerSprite,pixels:[Pixel]}
     private var templates=[Template](),previousStrips=[[UInt32]]()
-    private let stripRows=[12,20,28,36,104,112,120,128]
-    func reset(){templates=[];previousStrips=[]}
+    private let nativeVideo=MovementCadenceNativeVideo()
+    private var failureBuffers=0
+    private let axis:MovementCadenceAxis,shifts:[Int]
+    init(axis:MovementCadenceAxis){
+        self.axis=axis
+        shifts=ProcessInfo.processInfo.environment["BOUND_MOVEMENT_TAPE"] == "continuous-walk" ? Array(-6...6):[-6,-4,-2,0,2,4,6]
+    }
+    func reset(){templates=[];previousStrips=[];failureBuffers=0}
     func observe(_ core:EmulatorCore,reading:BoundPlayerStateReading)->[String:Any] {
         let started=ProcessInfo.processInfo.systemUptime
         guard let buffer=core.deltaCore.emulatorBridge.videoRenderer?.videoBuffer else{return ["bufferAvailable":false]}
@@ -45,7 +136,18 @@ private final class MovementCadencePixelDiagnostics {
             output["desiredScrollY"]=Int(raw[1])+BoundSceneBytes.signed(raw,10)+8
             output["appliedBG1ScrollX"]=BoundSceneBytes.half(shadow);output["appliedBG1ScrollY"]=BoundSceneBytes.half(shadow,2)
         }
-        if let appearance=reading.player?.scene?.appearance,appearance.width==16,appearance.height==32,
+        var nativeTrainer:MovementCadenceNativeVideo.Sprite?,nativeFollower:MovementCadenceNativeVideo.Sprite?
+        if axis == .vertical {
+            if let id=output["spriteID"] as? Int {nativeTrainer=nativeVideo.read(core,spriteID:id)}
+            if let follower=reading.player?.scene?.follower,(0..<16).contains(follower.objectID),
+               let object=core.deltaCore.emulatorBridge.readMemory?(at:0x8000+0x36E38+follower.objectID*36,size:5),object.count==5,
+               object[0]&1 != 0,object[4]<64 {nativeFollower=nativeVideo.read(core,spriteID:Int(object[4]))}
+            // ROM animation commands can already describe the next frame. Use
+            // the actual OAM tile/palette and OBJ VRAM at this video boundary.
+            templates=[]
+        }
+        let appearance=axis == .vertical ? nativeTrainer?.appearance:reading.player?.scene?.appearance
+        if let appearance,appearance.width==16,appearance.height==32,
            !templates.contains(where:{$0.appearance==appearance}) {
             var pixels=[Pixel]()
             for y in 0..<24 {for x in 0..<16 {
@@ -55,50 +157,89 @@ private final class MovementCadencePixelDiagnostics {
             }}
             if pixels.count>=40 {templates.append(.init(appearance:appearance,pixels:pixels));if templates.count>8 {templates.removeFirst()}}
         }
-        // This fixture's native trainer foot is near (120,88). Do not infer a
-        // location outside this explicitly bounded, visible road search window.
-        var scores=[(x:Int,y:Int,score:Double,template:Int)]()
-        for x in 112...128 {
-            let y=88
-            var best=(score:0.0,template:0)
+        var occlusion=[Int:Pixel]()
+        if let follower=nativeFollower {
+            for y in 0..<follower.appearance.height {for x in 0..<follower.appearance.width {
+                let color=follower.appearance.colorIndex(x:x,y:y),sx=follower.x+x,sy=follower.y+y
+                guard color != 0,(0..<240).contains(sx),(0..<160).contains(sy) else{continue}
+                let word=Int(follower.appearance.palette[color*2])|Int(follower.appearance.palette[color*2+1])<<8
+                let p=Pixel(x:sx,y:sy,r:(word&31)*255/31,g:((word>>5)&31)*255/31,b:((word>>10)&31)*255/31),at=(sy*240+sx)*4
+                // A footprint alone cannot excuse a mismatched trainer pixel.
+                // Only pixels visibly matching that actual native follower do.
+                if abs(Int(buffer[at+2])-p.r)<=8 && abs(Int(buffer[at+1])-p.g)<=8 && abs(Int(buffer[at])-p.b)<=8 {occlusion[sy*240+sx]=p}
+            }}
+        }
+        // Vertical overlap must still locate the trainer in BOTH axes. A wrong
+        // Y cannot pass by assuming the expected center. Horizontal is unchanged.
+        var scores=[(x:Int,y:Int,score:Double,template:Int,visible:Int,masked:Int)]()
+        for y in axis == .vertical ? Array(84...92):[88] {for x in 112...128 {
+            var best=(score:0.0,template:0,visible:0,masked:0)
             for (index,t) in templates.enumerated() {
-                var matched=0
+                var matched=0,visible=0,masked=0
                 for p in t.pixels {
-                    let at=((y-32+p.y)*240+x-8+p.x)*4
+                    let point=(y-32+p.y)*240+x-8+p.x,at=point*4
+                    if occlusion[point] != nil {masked+=1;continue}
+                    visible+=1
                     if abs(Int(buffer[at+2])-p.r)<=8 && abs(Int(buffer[at+1])-p.g)<=8 && abs(Int(buffer[at])-p.b)<=8 {matched+=1}
                 }
-                let fraction=Double(matched)/Double(t.pixels.count)
-                if fraction>best.score {best=(fraction,index)}
+                let fraction=visible>=40 ? Double(matched)/Double(visible):0
+                if fraction>best.score {best=(fraction,index,visible,masked)}
             }
-            scores.append((x,y,best.score,best.template))
-        }
+            scores.append((x,y,best.score,best.template,best.visible,best.masked))
+        }}
         scores.sort{$0.score>$1.score}
         if !templates.isEmpty,let best=scores.first,scores.count>1 {
             let second=scores[1],margin=best.score-second.score
             output["trainerTemplate"]=["footX":best.x,"footY":best.y,"matchFraction":best.score,
                 "runnerUpFootX":second.x,"runnerUpMatchFraction":second.score,"margin":margin,
-                "confident":best.score>=0.8 && margin>=0.05,"templateCount":templates.count,
+                "runnerUpFootY":second.y,"visiblePixels":best.visible,"maskedPixels":best.masked,
+                "opaqueTemplatePixels":templates[best.template].pixels.count,"nativeFollowerMaskPixels":occlusion.count,
+                "confident":best.visible>=40 && best.score>=0.8 && margin>=0.05,"templateCount":templates.count,
                 "templateROMAddress":templates[best.template].appearance.romAddress ?? 0,
-                "search":"footX112...128 footY88, opaque upper24 trainer rows, BGRA RGB tolerance8"] as [String:Any]
+                "search":axis == .vertical ? "footX112...128 footY84...92; actual OAM/OBJ VRAM; >=40 visible upper24 pixels; RGB tolerance8":"footX112...128 footY88, opaque upper24 trainer rows, BGRA RGB tolerance8",
+                "maskSource":axis == .vertical ? "Fresh unique native follower hardware OAM/OBJ VRAM; only framebuffer RGB-confirmed opaque pixels":"none"] as [String:Any]
         }
-        let strips=stripRows.map{y in (0..<240).map{x in let at=(y*240+x)*4;return UInt32(buffer[at])|UInt32(buffer[at+1])<<8|UInt32(buffer[at+2])<<16}}
+        if axis == .vertical {
+            output["nativeTrainerOAM"]=nativeTrainer.map{["entry":$0.entry,"x":$0.x,"y":$0.y,"attributes":$0.attributes]}
+            output["nativeFollowerOAM"]=nativeFollower.map{["entry":$0.entry,"x":$0.x,"y":$0.y,"attributes":$0.attributes]}
+            let confident=(output["trainerTemplate"] as? [String:Any])?["confident"] as? Bool == true
+            if !confident,reading.player?.scene != nil,failureBuffers<8 {
+                failureBuffers+=1
+                var captured:[String:Any]=["index":failureBuffers,"width":240,"height":160,"format":"BGRA8888",
+                    "pixelsBase64":Data(bytes:buffer,count:240*160*4).base64EncodedString()]
+                captured["trainer"]=nativeTrainer?.evidence;captured["follower"]=nativeFollower?.evidence
+                output["failureBuffer"]=captured
+            }
+        }
+        // Horizontal rows and vertical columns both avoid the center trainer.
+        // The vertical columns include the Mart's roof/walls: edge columns
+        // contain too few colors for the unchanged confidence threshold.
+        // Keep its sample inside the visible textured area across the32px lane.
+        let lines=axis == .horizontal ? [12,20,28,36,104,112,120,128]:[64,72,80,88,96,144,152,160]
+        let length=axis == .horizontal ? 240:160
+        let sampleEnd=axis == .horizontal ? length-16:112
+        let strips=lines.map{line in (0..<length).map{position in
+            let x=axis == .horizontal ? position:line,y=axis == .horizontal ? line:position
+            let at=(y*240+x)*4;return UInt32(buffer[at])|UInt32(buffer[at+1])<<8|UInt32(buffer[at+2])<<16
+        }}
         if previousStrips.count==strips.count {
             var matches=[(shift:Int,score:Double)]()
-            for shift in [-6,-4,-2,0,2,4,6] {
+            for shift in shifts {
                 var equal=0,total=0
-                for row in strips.indices {for x in stride(from:16,to:224,by:2) {
+                for row in strips.indices {for x in stride(from:16,to:sampleEnd,by:2) {
                     if strips[row][x]==previousStrips[row][x+shift] {equal+=1};total+=1
                 }}
                 matches.append((shift,Double(equal)/Double(total)))
             }
             matches.sort{$0.score>$1.score}
             let best=matches[0],second=matches[1],margin=best.score-second.score
-            let colors=Set(strips.flatMap{$0}).count
-            output["backgroundStrips"]=["previousXMinusCurrentX":best.shift,"matchFraction":best.score,
+            let colors=Set(strips.flatMap{line in axis == .horizontal ? line:Array(stride(from:16,to:sampleEnd,by:2).map{line[$0]})}).count
+            output["backgroundStrips"]=[axis.shiftKey:best.shift,"axis":axis.rawValue,"matchFraction":best.score,
                 "runnerUpShift":second.shift,"runnerUpMatchFraction":second.score,"margin":margin,
                 "distinctColors":colors,"confident":best.score>=0.9 && margin>=0.02 && colors>=8,
+                "lines":lines,"sampleStart":16,"sampleEndExclusive":sampleEnd,"sampleStride":2,
                 "scores":matches.map{["shift":Double($0.shift),"matchFraction":$0.score]},
-                "scope":"Sparse native BGRA row correlation; ambiguity, sprites and animated tiles can invalidate inference"] as [String:Any]
+                "scope":"Sparse native BGRA \(axis.rawValue) correlation; ambiguity, sprites and animated tiles can invalidate inference"] as [String:Any]
         }
         previousStrips=strips;output["workMs"]=(ProcessInfo.processInfo.systemUptime-started)*1000
         return output
@@ -112,19 +253,33 @@ private final class MovementCadenceTape: @unchecked Sendable {
     private let lock=NSLock()
     private var rows=[[String:Double]](),index=0,lastMask=0,limit=0
     private var videoRows=[[String:Any]]()
-    private let pixels=ProcessInfo.processInfo.environment["BOUND_MOVEMENT_PIXEL_DIAGNOSTICS"]=="1" ? MovementCadencePixelDiagnostics():nil
-    private var mode="native",anchor=BoundMovementTile(x:0,y:0)
+    private let axis:MovementCadenceAxis,pixels:MovementCadencePixelDiagnostics?
+    private var mode="native",tape="release-run",direction=32,anchor=BoundMovementTile(x:0,y:0)
     let probe=BoundMovementProbe()
     let senderProbe=BoundVBAPlayerStateProbe()
-    func arm(frames:Int,preRollFrames:Int,mode:String,anchor:BoundMovementTile) {
+    init(axis:MovementCadenceAxis) {
+        self.axis=axis
+        pixels=ProcessInfo.processInfo.environment["BOUND_MOVEMENT_PIXEL_DIAGNOSTICS"]=="1" ? MovementCadencePixelDiagnostics(axis:axis):nil
+    }
+    func arm(frames:Int,preRollFrames:Int,mode:String,tape:String,anchor:BoundMovementTile) {
         lock.lock();defer{lock.unlock()}
         rows=[];rows.reserveCapacity(frames);videoRows=[];videoRows.reserveCapacity(frames)
         pixels?.reset()
-        index = -preRollFrames;lastMask=0;limit=frames;self.mode=mode;self.anchor=anchor
+        index = -preRollFrames;lastMask=0;limit=frames;self.mode=mode;self.tape=tape;direction=axis.initialDirection;self.anchor=anchor
     }
     var finished:Bool {lock.lock();defer{lock.unlock()};return limit>0 && index>=limit}
     func result()->[[String:Double]] {lock.lock();defer{lock.unlock()};return rows}
     func videoResult()->[[String:Any]] {lock.lock();defer{lock.unlock()};return videoRows}
+    private func rawWorldCounters(_ core:EmulatorCore)->[String:Double] {
+        // readMemory exposes IWRAM first, then EWRAM at offset 0x8000.
+        // Native 0x02002008/0x0200200C are the writer sequence/frame. These
+        // bytes are deliberately unfenced: an odd sequence identifies a
+        // writer in progress, unlike the probe's retained admitted snapshot.
+        guard let data=core.deltaCore.emulatorBridge.readMemory?(at:0x8000+0x2008,size:8),data.count==8 else{return [:]}
+        let bytes=Array(data),sequence=BoundSceneBytes.word(bytes)
+        return ["rawWorldSequence":Double(sequence),"rawWorldFrameUnfenced":Double(BoundSceneBytes.word(bytes,4)),
+                "rawWorldWriterActive":Double(sequence&1)]
+    }
     func receiveVideo(_ core:EmulatorCore,_ reading:BoundPlayerStateReading,pixels:Int) {
         let now=ProcessInfo.processInfo.systemUptime
         lock.lock();defer{lock.unlock()}
@@ -132,6 +287,8 @@ private final class MovementCadenceTape: @unchecked Sendable {
         var row:[String:Any]=["frame":Double(videoRows.count),"completedFrameIndex":Double(index),
             "time":now,"input":Double(lastMask),"status":reading.status.rawValue,"detail":reading.detail,
             "overlayPixels":Double(pixels),"safeField":reading.status == .live ? 1.0:0.0]
+        for (key,value) in rawWorldCounters(core) {row[key]=value}
+        if mode != "raw-native",let admitted=probe.read() {row["admittedGuestFrame"]=Double(admitted.frame)}
         if let player=reading.player {
             row["tileX"]=Double(player.tile.x);row["tileY"]=Double(player.tile.y)
             row["previousTileX"]=Double(player.previousTile.x);row["previousTileY"]=Double(player.previousTile.y)
@@ -148,10 +305,12 @@ private final class MovementCadenceTape: @unchecked Sendable {
     func receive(_ core:EmulatorCore,profile:BoundPlayerROMProfile,field:Bool) {
         let started=ProcessInfo.processInfo.systemUptime
         lock.lock();defer{lock.unlock()}
-        probe.receive(core)
+        let rawCounters=rawWorldCounters(core)
+        let nativeTarget=MovementCadenceNativeTarget.read(core)
+        if mode != "raw-native" {probe.receive(core)}
         guard limit>0,index<limit else{return}
-        let snapshot=probe.read()
-        if mode != "native",let s=snapshot {
+        let snapshot=mode == "raw-native" ? nil:probe.read()
+        if mode != "native",mode != "raw-native",let s=snapshot {
             var d=Data(repeating:0,count:1024)
             let put=BoundMovementSnapshot.put
             put(0x31574C42,&d,0);put(1,&d,4);put(2,&d,8);put(1,&d,12);put(15,&d,16)
@@ -161,7 +320,9 @@ private final class MovementCadenceTape: @unchecked Sendable {
             let dx=mode=="moving" ? (max(0,index)/3)%7-3:0
             for actor in 0..<2 {
                 let at=128+actor*32
-                let tile=BoundMovementTile(x:anchor.x+dx-actor,y:anchor.y+(mode=="far" ? 40:2))
+                let separation=mode=="far" ? 40:2
+                let tile=axis == .horizontal ? BoundMovementTile(x:anchor.x+dx-actor,y:anchor.y+separation):
+                    BoundMovementTile(x:anchor.x+separation,y:anchor.y+dx-actor)
                 put(1,&d,at);BoundMovementSnapshot.putTile(tile,&d,at+4);BoundMovementSnapshot.putTile(tile,&d,at+8)
                 d[at+12]=UInt8(s.elevation);d[at+13]=UInt8(actor)
                 if actor==1 {put(0x12345678,&d,at+20)}
@@ -173,13 +334,15 @@ private final class MovementCadenceTape: @unchecked Sendable {
         // probes and the video compositor still run during this deterministic
         // warmup; only measurement and the input tape wait for frame zero.
         if index<0 {index+=1;return}
-        var row:[String:Double]=["frame":Double(index),"time":started,"input":Double(lastMask),"safeField":field ? 1:0]
+        let safeField=mode == "raw-native" ? senderReading?.status == .live:field
+        var row:[String:Double]=["frame":Double(index),"time":started,"input":Double(lastMask),"safeField":safeField ? 1:0]
+        row.merge(rawCounters){_,new in new}
         if let s=snapshot {
-            row["guestFrame"]=Double(s.frame);row["guestFlags"]=Double(s.flags)
-            row["mapGroup"]=Double(s.group);row["mapNumber"]=Double(s.number)
-            row["tileX"]=Double(s.current.x);row["tileY"]=Double(s.current.y)
-            row["previousTileX"]=Double(s.previous.x);row["previousTileY"]=Double(s.previous.y)
+            row["guestFrame"]=Double(s.frame);row["admittedGuestFrame"]=Double(s.frame);row["guestFlags"]=Double(s.flags)
+            row["admittedTileX"]=Double(s.current.x);row["admittedTileY"]=Double(s.current.y)
         }
+        row["nativeTargetAvailable"]=nativeTarget == nil ? 0:1
+        if let nativeTarget {row.merge(nativeTarget){_,new in new}}
         if let memory=BoundGBAMemorySnapshot.capture(readMemory:{core.deltaCore.emulatorBridge.readMemory?(at:$0,size:$1)}) {
             row["followerActive"]=(memory.workRAM[0x3B25E]&0x20 != 0 && memory.workRAM[0x3B818]==1) ? 1:0
         }
@@ -191,16 +354,34 @@ private final class MovementCadenceTape: @unchecked Sendable {
                 row["cameraX"]=Double(scene.camera.x);row["cameraY"]=Double(scene.camera.y)
             }
         }
+        let mask:Int
+        if tape=="release-run" {
+            // Preserve the historical tape for comparison with retained runs.
+            let phase=index%80;mask=phase%40<32 ? (phase<40 ? 32:16)|2:0
+        } else {
+            // The native current tile is the committed step's target, not its
+            // displayed arrival. Reverse while that step finishes, keeping a
+            // direction held continuously within the already verified lane.
+            // There is no release window in which a slower run can catch up.
+            if let nativeTarget {
+                if axis == .horizontal,let x=nativeTarget["tileX"] {
+                    if x<=Double(anchor.x-3) {direction=16}
+                    else if x>=Double(anchor.x) {direction=32}
+                } else if axis == .vertical,let y=nativeTarget["tileY"] {
+                    if y<=Double(anchor.y) {direction=128}
+                    else if y>=Double(anchor.y+2) {direction=64}
+                }
+            }
+            mask=direction | (tape=="continuous-run" ? 2:0)
+        }
+        row["nextInput"]=Double(mask)
         row["probeMs"]=(ProcessInfo.processInfo.systemUptime-started)*1000;rows.append(row)
-        // A short straight paved-road loop avoids walls, grass and natural NPCs.
-        // Retain the historical 32-frame run / 8-frame release input pattern.
-        let phase=index%80,mask=phase%40<32 ? (phase<40 ? 32:16)|2:0
-        for bit in [2,16,32] where mask&bit != lastMask&bit {
+        for bit in [2,16,32,64,128] where mask&bit != lastMask&bit {
             if mask&bit != 0 {core.deltaCore.emulatorBridge.activateInput(bit,value:1,playerIndex:0)}
             else {core.deltaCore.emulatorBridge.deactivateInput(bit,playerIndex:0)}
         }
         lastMask=mask;index+=1
-        if index==limit {for bit in [2,16,32] {core.deltaCore.emulatorBridge.deactivateInput(bit,playerIndex:0)}}
+        if index==limit {for bit in [2,16,32,64,128] {core.deltaCore.emulatorBridge.deactivateInput(bit,playerIndex:0)}}
     }
     static func metrics(_ rows:[[String:Double]])->[String:Any] {
         let pairs=Array(zip(rows,rows.dropFirst()))
@@ -211,12 +392,12 @@ private final class MovementCadenceTape: @unchecked Sendable {
         for (a,b) in pairs {
             if a["tileX"] != b["tileX"] || a["tileY"] != b["tileY"] {changes.append(Int(b["frame"]!))}
             if a["guestFrame"]==b["guestFrame"] {guestHeld+=1} else {guestHolds.append(guestHeld);guestHeld=0}
-            let stableInput=a["input"]==b["input"] && (Int(b["input"]!)&48 != 0)
+            let stableInput=a["input"]==b["input"] && (Int(b["input"]!)&240 != 0)
             // Ignore intentional releases and direction-change startup. Begin
             // counting only after real pixel motion under the new held input.
             if stableInput,let x=a["pixelX"],let y=a["pixelY"],let bx=b["pixelX"],let by=b["pixelY"] {
                 if x != bx || y != by {
-                    let delta=(bx-x)*(Int(b["input"]!)&32 != 0 ? -1:1)
+                    let mask=Int(b["input"]!),delta=(mask&48 != 0 ? bx-x:by-y)*(mask&(32|64) != 0 ? -1:1)
                     if movingInHeldDirection && delta<0 {backward+=1}
                     if delta>0 {movingInHeldDirection=true};pixelHolds.append(held);held=0
                 }
@@ -247,19 +428,32 @@ private final class MovementCadenceTape: @unchecked Sendable {
         for key in ["longestGuestFrameFreeze","activeFollowerSamples","admittedPortSamples","remoteBlockedSamples","p99ProbeMs"] {result.removeValue(forKey:key)}
         var deltas=[Int](),backward=0,moving=false
         for (a,b) in zip(numeric,numeric.dropFirst()) {
-            guard a["input"]==b["input"],let mask=b["input"],Int(mask)&48 != 0,
-                  let x=a["pixelX"],let bx=b["pixelX"] else{moving=false;continue}
-            let directional=(bx-x)*(Int(mask)&32 != 0 ? -1:1)
+            guard a["input"]==b["input"],let mask=b["input"],Int(mask)&240 != 0,
+                  let x=a["pixelX"],let bx=b["pixelX"],let y=a["pixelY"],let by=b["pixelY"] else{moving=false;continue}
+            let directional=(Int(mask)&48 != 0 ? bx-x:by-y)*(Int(mask)&(32|64) != 0 ? -1:1)
             if directional>0 {moving=true}
             if moving {deltas.append(Int(directional));if directional<0 {backward+=1}}
         }
         result["heldMotionDeltaHistogram"]=Dictionary(grouping:deltas,by:{$0}).map{["pixels":$0.key,"count":$0.value.count]}.sorted{$0["pixels"]!<$1["pixels"]!}
+        var travel=0.0,allHeldPairs=0,allHeldHolds=0,turns=0
+        for (a,b) in zip(numeric,numeric.dropFirst()) {
+            if let ax=a["pixelX"],let ay=a["pixelY"],let bx=b["pixelX"],let by=b["pixelY"] {
+                travel+=abs(bx-ax)+abs(by-ay)
+                if Int(a["input"] ?? 0)&240 != 0,Int(b["input"] ?? 0)&240 != 0 {
+                    allHeldPairs+=1
+                    if ax==bx && ay==by {allHeldHolds+=1}
+                    if Int(a["input"] ?? 0)&240 != Int(b["input"] ?? 0)&240 {turns+=1}
+                }
+            }
+        }
+        result["totalPixelTravel"]=travel;result["allHeldPairs"]=allHeldPairs
+        result["allHeldPixelHolds"]=allHeldHolds;result["directionChanges"]=turns
         result["backwardStepsAfterMotionBegan"]=backward
         result["overlayPixelSamples"]=numeric.filter{($0["overlayPixels"] ?? 0)>0}.count
         result["observationBoundary"]="Actual native video processFrame; completed-frame RAM observations are separate diagnostics"
         return result
     }
-    static func pixelValidation(_ rows:[[String:Any]])->[String:Int] {
+    static func pixelValidation(_ rows:[[String:Any]],axis:MovementCadenceAxis)->[String:Int] {
         var result=["videoFrames":rows.count,"trainerChecks":0,"trainerMismatches":0,"nativeCenterMismatches":0,
                     "cameraChecks":0,"cameraMismatches":0]
         for row in rows {
@@ -273,11 +467,12 @@ private final class MovementCadenceTape: @unchecked Sendable {
         }
         for (a,b) in zip(rows,rows.dropFirst()) {
             guard let d=b["nativePixelDiagnostic"] as? [String:Any],let background=d["backgroundStrips"] as? [String:Any],
-                  background["confident"] as? Bool == true,let shift=background["previousXMinusCurrentX"] as? Int,
+                  background["confident"] as? Bool == true,let shift=background[axis.shiftKey] as? Int,
                   let ax=a["cameraX"] as? Double,let bx=b["cameraX"] as? Double,
                   let ay=a["cameraY"] as? Double,let by=b["cameraY"] as? Double else{continue}
             result["cameraChecks",default:0]+=1
-            if bx-ax != -Double(shift) || by != ay {result["cameraMismatches",default:0]+=1}
+            let along=axis == .horizontal ? bx-ax:by-ay,across=axis == .horizontal ? by-ay:bx-ax
+            if along != -Double(shift) || across != 0 {result["cameraMismatches",default:0]+=1}
         }
         return result
     }
@@ -300,11 +495,47 @@ extension WorldMovementRuntimeTests {
         let repeats=Int(env["BOUND_MOVEMENT_REPEATS"] ?? "3") ?? 0
         let rates=(env["BOUND_MOVEMENT_RATES"] ?? "1,3").split(separator:",").compactMap{Double($0)}
         let modes=(env["BOUND_MOVEMENT_MODES"] ?? "native,far,near,moving").split(separator:",").map(String.init)
+        let nativeFloorDiagnostic=env["BOUND_MOVEMENT_NATIVE_FLOOR"]=="1"
+        let guestTimingRequested=env["BOUND_MOVEMENT_GUEST_TIMING"]=="1"
+        let anchorReplayRequested=env["BOUND_MOVEMENT_ANCHOR_REPLAY"]=="1"
+        var anchorReplay:[String:Any]?
+        if anchorReplayRequested {
+            XCTAssertFalse(nativeFloorDiagnostic);XCTAssertFalse(guestTimingRequested)
+            let data=try Data(contentsOf:URL(fileURLWithPath:try XCTUnwrap(env["BOUND_MOVEMENT_ANCHOR_RECEIPT"])))
+            XCTAssertEqual(SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined(),
+                try XCTUnwrap(env["BOUND_MOVEMENT_ANCHOR_RECEIPT_SHA256"]))
+            let receipt=try XCTUnwrap(JSONSerialization.jsonObject(with:data) as? [String:Any])
+            XCTAssertEqual(receipt["schema"] as? Int,1);XCTAssertEqual(receipt["diagnosticOnly"] as? Bool,true)
+            XCTAssertEqual(receipt["candidateAcceptance"] as? Bool,false)
+            XCTAssertEqual(receipt["stateLayout"] as? Int,16);XCTAssertEqual(receipt["nativeStateVersion"] as? Int,10)
+            anchorReplay=receipt
+        }
+        var guestTimingConfig:[String:Any]?,guestTimingConfigHash:String?
+        if guestTimingRequested {
+            XCTAssertLessThanOrEqual(frames,3600);XCTAssertEqual(repeats,1);XCTAssertEqual(rates,[1.0])
+            let data=try Data(contentsOf:URL(fileURLWithPath:try XCTUnwrap(env["BOUND_MOVEMENT_GUEST_TIMING_CONFIG"])))
+            let hash=SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()
+            XCTAssertEqual(hash,try XCTUnwrap(env["BOUND_MOVEMENT_GUEST_TIMING_CONFIG_SHA256"]))
+            let config=try XCTUnwrap(JSONSerialization.jsonObject(with:data) as? [String:Any])
+            XCTAssertEqual(config["schema"] as? Int,1);XCTAssertEqual(config["romSHA256"] as? String,digest)
+            XCTAssertNotNil(config["points"] as? [[String:Any]])
+            guestTimingConfig=config;guestTimingConfigHash=hash
+        }
+        let tapeName=env["BOUND_MOVEMENT_TAPE"] ?? "release-run"
+        let axis=try XCTUnwrap(MovementCadenceAxis(rawValue:env["BOUND_MOVEMENT_AXIS"] ?? "horizontal"))
+        XCTAssertTrue(axis == .horizontal || tapeName != "release-run","Vertical coverage requires continuous native input")
         let phaseValues=(env["BOUND_MOVEMENT_PHASES"] ?? "0").split(separator:",",omittingEmptySubsequences:false)
         let phases=phaseValues.compactMap{Int($0)}
         XCTAssertTrue((160...36000).contains(frames));XCTAssertTrue((1...10).contains(repeats))
         XCTAssertFalse(rates.isEmpty);XCTAssertTrue(rates.allSatisfy{[1.0,3.0].contains($0)})
-        XCTAssertFalse(modes.isEmpty);XCTAssertTrue(modes.allSatisfy{["native","far","near","moving"].contains($0)})
+        XCTAssertFalse(modes.isEmpty)
+        if nativeFloorDiagnostic {
+            XCTAssertEqual(modes.count,Set(modes).count)
+            XCTAssertTrue([Set(["native","raw-native"]),Set(["native","far","raw-native"])].contains(Set(modes)))
+            XCTAssertTrue(["continuous-run","continuous-walk"].contains(tapeName))
+        } else {XCTAssertTrue(modes.allSatisfy{["native","far","near","moving"].contains($0)})}
+        XCTAssertTrue(["release-run","continuous-run","continuous-walk"].contains(tapeName))
+        if tapeName != "release-run" {XCTAssertEqual(env["BOUND_MOVEMENT_PIXEL_DIAGNOSTICS"],"1","Continuous acceptance requires native bitmap evidence")}
         XCTAssertFalse(phases.isEmpty);XCTAssertEqual(phases.count,phaseValues.count)
         XCTAssertTrue(phases.allSatisfy{(0...600).contains($0)})
         let output=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0]
@@ -317,7 +548,7 @@ extension WorldMovementRuntimeTests {
         options.name="RED";options.gender=0;options.partnerName="BLUE";options.partnerGender=0;options.rival="BLUE"
         options.difficulty=0;options.minimalGrinding=false;options.species=0;options.randomMoves=false;options.randomAbilities=false
         options.cheats=false;options.nicknames=true;options.debug=true;options.deleteSaveOnGameOver=true
-        let tape=MovementCadenceTape(),setup=NativePlayerSceneSetup(core:core,debugPlayer:1,
+        let tape=MovementCadenceTape(axis:axis),setup=NativePlayerSceneSetup(core:core,debugPlayer:1,
             run:UUID(uuidString:"11111111-2222-3333-4444-555555555555")!,
             localSeed:0x12345678,partnerSeed:0x87654321,settings:options.settings,playerProfile:options.profile)
         let stateProbe=BoundVBAPlayerStateProbe(),videoCompositor=BoundPresenceFrameCompositor()
@@ -329,7 +560,13 @@ extension WorldMovementRuntimeTests {
         view.frame=CGRect(x:0,y:160,width:owner.view.bounds.width,height:owner.view.bounds.width*2/3)
         owner.view.addSubview(view);core.add(view);core.audioManager.isEnabled=false
         defer {
-            _=core.pause();videoCompositor.observeFrame=nil;videoCompositor.configure(profile:nil,pose:nil)
+            _=core.pause()
+            if core.state == .paused {
+                if guestTimingRequested {_=BoundVBABattleBridge.qaEndGuestTiming(core)}
+                let restored=BoundVBABattleBridge.qaRestoreNativeMovementEntries(core)
+                XCTAssertEqual(restored?["restored"] as? Bool,true,"Every exit must restore the candidate's entry bytes before stopping")
+            }
+            videoCompositor.observeFrame=nil;videoCompositor.configure(profile:nil,pose:nil)
             BoundVBABattleBridge.setWorldMovementHost(Data());_=core.stop()
             window.isHidden=true;oldWindow?.makeKeyAndVisible()
         }
@@ -374,59 +611,146 @@ extension WorldMovementRuntimeTests {
         XCTAssertTrue(core.resume());try await Task.sleep(for:.seconds(1));XCTAssertTrue(core.pause())
         let reading=try XCTUnwrap(stateProbe.takeLatest()),player=try XCTUnwrap(reading.player)
         XCTAssertEqual(player.mapGroup,3);XCTAssertEqual(player.mapNumber,1);XCTAssertNotNil(player.scene)
+        XCTAssertEqual(player.tile.x,36);XCTAssertEqual(player.tile.y,20,"Both axes start on the same native Mart lane anchor")
         // A real, valid pose remains far offscreen in every case. It activates
         // the shipping video wrapper without contributing any overlay pixels.
         var offscreen=try XCTUnwrap(BoundPresencePose(reading:reading));offscreen.x+=512;offscreen.follower=nil
         videoCompositor.configure(profile:profile,pose:offscreen,coreID:ObjectIdentifier(core))
         videoCompositor.observeFrame={reading,_,pixels in tape.receiveVideo(core,reading,pixels:pixels)}
         videoCompositor.receive(core)
-        let anchor=MultiRedAdapter.captureState();XCTAssertFalse(anchor.isEmpty)
+        var anchor=MultiRedAdapter.captureState();XCTAssertFalse(anchor.isEmpty)
+        let coldAnchorSHA256=SHA256.hash(data:anchor).map{String(format:"%02x",$0)}.joined()
+        if let anchorReplay {
+            let prior=try XCTUnwrap(anchorReplay["fixture"] as? [String:Any])
+            XCTAssertEqual(prior["romSHA256"] as? String,digest)
+            XCTAssertEqual(prior["axis"] as? String,axis.rawValue);XCTAssertEqual(prior["tape"] as? String,tapeName)
+            XCTAssertEqual(prior["followerRequested"] as? Bool,followerRequested)
+            XCTAssertEqual(prior["phaseFrames"] as? [Int],phases)
+            XCTAssertEqual(prior["settings"] as? String,options.settings.base64EncodedString())
+            XCTAssertEqual(prior["localSeed"] as? UInt32,0x12345678);XCTAssertEqual(prior["partnerSeed"] as? UInt32,0x87654321)
+            XCTAssertEqual(prior["run"] as? String,"11111111-2222-3333-4444-555555555555")
+            XCTAssertEqual(prior["debugPlayer"] as? Int,1);XCTAssertEqual(prior["route"] as? [String:Int],axis.route)
+            anchor=try Data(contentsOf:URL(fileURLWithPath:try XCTUnwrap(env["BOUND_MOVEMENT_ANCHOR_STATE"])))
+            let hash=SHA256.hash(data:anchor).map{String(format:"%02x",$0)}.joined()
+            XCTAssertEqual(hash,anchorReplay["anchorSHA256"] as? String);XCTAssertEqual(hash,prior["anchorSHA256"] as? String)
+            XCTAssertEqual(core.state,.paused)
+            XCTAssertTrue(MultiRedAdapter.restoreState(anchor),"Only the production exact-ROM/state decoder restores the verified anchor")
+            // Inspect fresh native RAM while paused. Do not advance the CPU,
+            // use the cold setup's cached reading, or rewrite an endpoint.
+            let target=try XCTUnwrap(MovementCadenceNativeTarget.read(core)),restored=try memory()
+            XCTAssertEqual(target["mapGroup"],3);XCTAssertEqual(target["mapNumber"],1)
+            for key in ["tileX","previousTileX","cameraTileX"] {XCTAssertEqual(target[key],36)}
+            for key in ["tileY","previousTileY","cameraTileY"] {XCTAssertEqual(target[key],20)}
+            XCTAssertEqual(restored.workRAM[0x3B25E]&0x20 != 0,followerRequested)
+            XCTAssertEqual(restored.workRAM[0x3B818]==1,followerRequested)
+        }
         try anchor.write(to:output.appendingPathComponent("exact-ROM-anchor.state"))
-        let fixture:[String:Any]=["romSHA256":digest,"localSeed":UInt32(0x12345678),"partnerSeed":UInt32(0x87654321),
+        let route=axis.route
+        var fixture:[String:Any]=["romSHA256":digest,"localSeed":UInt32(0x12345678),"partnerSeed":UInt32(0x87654321),
             "run":"11111111-2222-3333-4444-555555555555","debugPlayer":1,"settings":options.settings.base64EncodedString(),
             "followerRequested":followerRequested,"anchorSHA256":SHA256.hash(data:anchor).map{String(format:"%02x",$0)}.joined(),
             "pixelDiagnostics":env["BOUND_MOVEMENT_PIXEL_DIAGNOSTICS"]=="1",
+            "tape":tapeName,"axis":axis.rawValue,"route":route,"endpointControl":MovementCadenceNativeTarget.source,
+            "nativeFloorDiagnostic":nativeFloorDiagnostic,
+            "guestTimingDiagnostic":guestTimingRequested,
             "phaseFrames":phases,"preRollFramesByRepeat":(0..<repeats).map{phases[$0%phases.count]},
             "scope":"Native New Game, QA party preparation if absent, native warp/script and actual follower dialogue; no position/collision/follower state endpoint writes"]
+        if let anchorReplay {
+            fixture["anchorReplay"]=anchorReplay;fixture["diagnosticOnly"]=true;fixture["candidateAcceptance"]=false
+            fixture["coldSetupAnchorSHA256"]=coldAnchorSHA256
+            fixture["scope"]="Fresh native cold setup followed by paused exact-ROM/core verified anchor restore. Diagnostic only; no new cold-run acceptance."
+        }
         try JSONSerialization.data(withJSONObject:fixture,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("fixture.json"))
         var reports=[[String:Any]]()
         for repetition in 0..<repeats {
             let preRollFrames=phases[repetition%phases.count]
             for rate in rates {
                 for mode in repetition%2==0 ? modes:Array(modes.reversed()) {
+                    XCTAssertEqual(BoundVBABattleBridge.qaRestoreNativeMovementEntries(core)?["restored"] as? Bool,true)
                     XCTAssertTrue(MultiRedAdapter.restoreState(anchor));core.rate=rate
-                    for bit in [2,16,32] {core.deltaCore.emulatorBridge.deactivateInput(bit,playerIndex:0)}
+                    for bit in [2,16,32,64,128] {core.deltaCore.emulatorBridge.deactivateInput(bit,playerIndex:0)}
                     videoCompositor.receive(core)
                     tape.probe.configure(core:core)
                     tape.senderProbe.configure(coreID:ObjectIdentifier(core),profile:profile,active:true,status:.waiting,
                         detail:"Production sender cadence",sceneEnabled:true)
-                    tape.arm(frames:frames,preRollFrames:preRollFrames,mode:mode,anchor:.init(player.tile))
+                    tape.arm(frames:frames,preRollFrames:preRollFrames,mode:mode,tape:tapeName,anchor:.init(player.tile))
+                    if let guestTimingConfig {
+                        let points=try XCTUnwrap(guestTimingConfig["points"] as? [[String:Any]])
+                        let begun=try XCTUnwrap(BoundVBABattleBridge.qaBeginGuestTiming(core,expectedROM:image,points:points,maximumEvents:262144),
+                            "Requested diagnostic requires an explicitly compiled BOUND_QA_GUEST_TIMING core and exact resident ROM")
+                        XCTAssertEqual(begun["enabled"] as? Bool,true)
+                    }
+                    let entryDiagnostic=mode == "raw-native" ? try XCTUnwrap(BoundVBABattleBridge.qaBeginNativeMovementEntries(core,expectedROM:image)):nil
                     core.updateHandler={core in
-                        BoundFrameMemory.perform {setup.receive(core);videoCompositor.receive(core);tape.receive(core,profile:profile,field:setup.request?.safeField==true)}
+                        BoundFrameMemory.perform {
+                            if mode != "raw-native" {setup.receive(core)}
+                            videoCompositor.receive(core);tape.receive(core,profile:profile,field:setup.request?.safeField==true)
+                        }
                     }
                     XCTAssertTrue(core.resume())
-                    let deadline=ProcessInfo.processInfo.systemUptime+Double(frames+preRollFrames)/(60*rate)+30
+                    let deadline=ProcessInfo.processInfo.systemUptime+Double(frames+preRollFrames)/(60*rate)+(guestTimingRequested ? 180:30)
                     while !tape.finished,ProcessInfo.processInfo.systemUptime<deadline {try await Task.sleep(for:.milliseconds(10))}
                     XCTAssertTrue(core.pause())
+                    var timingReceipt:[String:Any]?
+                    if guestTimingRequested {
+                        timingReceipt=try XCTUnwrap(BoundVBABattleBridge.qaEndGuestTiming(core))
+                        XCTAssertEqual(timingReceipt?["enabled"] as? Bool,true)
+                        XCTAssertEqual(timingReceipt?["dropped"] as? Int,0)
+                        XCTAssertEqual(timingReceipt?["stackOverflows"] as? Int,0)
+                        XCTAssertEqual(timingReceipt?["invalidated"] as? Int,0)
+                        XCTAssertGreaterThan(timingReceipt?["recordCount"] as? Int ?? 0,0)
+                        XCTAssertGreaterThan(timingReceipt?["videoFrames"] as? Int ?? 0,0)
+                    }
+                    let entryRestoration=try XCTUnwrap(BoundVBABattleBridge.qaRestoreNativeMovementEntries(core))
+                    XCTAssertEqual(entryRestoration["restored"] as? Bool,true)
+                    if mode == "raw-native" {XCTAssertEqual(entryRestoration["normalizedIdentityRestored"] as? Bool,true)}
                     let rows=tape.result(),completedMetrics=MovementCadenceTape.metrics(rows),videoRows=tape.videoResult()
                     let metrics=MovementCadenceTape.videoMetrics(videoRows)
-                    let pixelValidation=MovementCadenceTape.pixelValidation(videoRows)
+                    let pixelValidation=MovementCadenceTape.pixelValidation(videoRows,axis:axis)
                     let name="repeat-\(repetition+1)-\(mode)-\(rate)"
-                    let report:[String:Any]=["name":name,"romSHA256":digest,"mode":mode,"rate":rate,
+                    var report:[String:Any]=["name":name,"romSHA256":digest,"mode":mode,"rate":rate,
+                        "tape":tapeName,"axis":axis.rawValue,"route":route,"endpointControl":MovementCadenceNativeTarget.source,
+                        "nativeFloorDiagnostic":nativeFloorDiagnostic,
                         "preRollFrames":preRollFrames,
                         "repeat":repetition+1,"metrics":metrics,"videoRaw":videoRows,"completedFrameMetrics":completedMetrics,"raw":rows,
                         "pixelValidation":pixelValidation,
+                        "guestCounterScope":"guestFrame/admittedGuestFrame and longestGuestFrameFreeze describe the probe's retained admitted snapshot; repeated values do not prove native inactivity. rawWorldSequence/rawWorldFrameUnfenced are direct eight-byte reads; odd rawWorldSequence means the native writer is in progress, not a coherent publication.",
                         "scope":"Movement cadence at actual VBA-M video processFrame, native DPad and BoundMovementProbe; raw/completedFrameMetrics use production BoundVBAPlayerStateProbe sender, not the video boundary; synthetic occupancy, no network/backend/checkpoint/physical scanout"]
+                    if let entryDiagnostic {
+                        report["nativeEntryDiagnostic"]=entryDiagnostic;report["nativeEntryRestoration"]=entryRestoration
+                        report["scope"]="Private same-anchor native main/field entry diagnostic only; native RAM endpoint input and shipping scene/bitmap observation. No BWO admission/publication, no candidate acceptance or saved-state compatibility claim. Other candidate hooks remain resident."
+                    }
+                    if anchorReplay != nil {
+                        report["diagnosticOnly"]=true;report["candidateAcceptance"]=false
+                        report["anchorSHA256"]=fixture["anchorSHA256"]
+                        report["scope"]="Verified retained exact-ROM/core anchor diagnostic; unchanged input, pre-roll and bitmap gates. No new cold-run acceptance."
+                    }
+                    if var timingReceipt {
+                        let binary=try XCTUnwrap(timingReceipt.removeValue(forKey:"records") as? Data)
+                        XCTAssertEqual(timingReceipt["recordBytes"] as? Int,136)
+                        XCTAssertEqual(binary.count,(timingReceipt["recordCount"] as? Int ?? 0)*136)
+                        let filename=name+"-guest-timing.bin"
+                        try binary.write(to:output.appendingPathComponent(filename))
+                        timingReceipt["binaryFile"]=filename
+                        timingReceipt["binarySHA256"]=SHA256.hash(data:binary).map{String(format:"%02x",$0)}.joined()
+                        timingReceipt["configSHA256"]=guestTimingConfigHash
+                        timingReceipt["manifestSHA256"]=guestTimingConfig?["manifestSHA256"]
+                        timingReceipt["watchSHA256"]=guestTimingConfig?["watchSHA256"]
+                        report["guestTiming"]=timingReceipt;report["diagnosticOnly"]=true
+                        try JSONSerialization.data(withJSONObject:timingReceipt,options:[.prettyPrinted,.sortedKeys])
+                            .write(to:output.appendingPathComponent(name+"-guest-timing.json"))
+                    }
                     try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent(name+".json"))
                     reports.append(report.filter{$0.key != "raw" && $0.key != "videoRaw"})
                     print("BOUND_MOVEMENT_CADENCE \(name) \(metrics) output=\(output.path)")
                     XCTAssertTrue(tape.finished);XCTAssertEqual(rows.count,frames)
+                    XCTAssertTrue(rows.allSatisfy{$0["nativeTargetAvailable"]==1},"Every endpoint decision requires a native target, never a cached BWO fallback")
                     XCTAssertGreaterThan(videoRows.count,Int(Double(frames)/(rate*2)),"Exercise actual rendered frames at both playback rates")
                     XCTAssertEqual(metrics["overlayPixelSamples"] as? Int,0,"All modes use the same invisible observation wrapper")
                     XCTAssertGreaterThan(completedMetrics["tileTransitions"] as? Int ?? 0,frames/40,"Replay must actually traverse the floor")
                     XCTAssertGreaterThan(completedMetrics["fieldSamples"] as? Int ?? 0,frames*9/10)
-                    XCTAssertEqual(completedMetrics["remoteBlockedSamples"] as? Int,0,"Synthetic peers are on another row")
-                    if mode != "native" {XCTAssertGreaterThan(completedMetrics["admittedPortSamples"] as? Int ?? 0,frames*9/10)}
+                    XCTAssertEqual(completedMetrics["remoteBlockedSamples"] as? Int,0,"Synthetic peers are outside the declared movement lane")
+                    if mode != "native",mode != "raw-native" {XCTAssertGreaterThan(completedMetrics["admittedPortSamples"] as? Int ?? 0,frames*9/10)}
                     if followerRequested {XCTAssertGreaterThan(completedMetrics["activeFollowerSamples"] as? Int ?? 0,frames*9/10)}
                     if env["BOUND_MOVEMENT_PIXEL_DIAGNOSTICS"]=="1" {
                         XCTAssertGreaterThan(pixelValidation["trainerChecks"] ?? 0,videoRows.count*9/10,"Require confident native trainer pixel evidence, not an empty diagnostic")
@@ -535,6 +859,12 @@ private final class MovementRuntimeFrames:@unchecked Sendable {
     }
     func close(){_=core.pause();BoundVBABattleBridge.setWorldMovementHost(Data());BoundVBABattleBridge.closeSoulLink();_=core.stop()}
     func preparePalletFixture() async throws {
+        // A valid exact-ROM capture can stop inside the native BWO writer.
+        // Resume that writer through the same bounded publication wait used
+        // below; never turn a partial saved page into an admitted snapshot.
+        if BoundMovementSnapshot(BoundVBABattleBridge.worldMovementSnapshot()) == nil {
+            try await advance(1)
+        }
         let initial=try snapshot()
         if initial.group==4 && [0,1].contains(initial.number) {
             // A fresh current-cartridge state starts in the bedroom. Use the

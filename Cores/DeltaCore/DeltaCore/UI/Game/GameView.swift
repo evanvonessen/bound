@@ -37,6 +37,18 @@ public enum SamplerMode
 public class GameView: UIView
 {
     public var isEnabled: Bool = true
+    #if DEBUG
+    private let frameTraceLock = NSLock()
+    private var frameTrace: (EmulatorFrameTrace, UInt64)?
+    func debugReceiveFrame(trace: EmulatorFrameTrace?, frame: UInt64) {
+        frameTraceLock.lock(); frameTrace = trace.map { ($0, frame) }; frameTraceLock.unlock()
+        trace?.record("view.input", frame: frame, detail: debugViewID)
+    }
+    private var debugViewID: UInt64 { UInt64(UInt(bitPattern: Unmanaged.passUnretained(self).toOpaque())) }
+    private var debugFrame: (EmulatorFrameTrace, UInt64)? {
+        frameTraceLock.lock(); defer { frameTraceLock.unlock() }; return frameTrace
+    }
+    #endif
     
     // Set to limit rendering to just a specific VideoManager.
     public weak var exclusiveVideoManager: VideoManager?
@@ -296,12 +308,25 @@ private extension GameView
         // Calling display when outputImage is nil may crash for OpenGLES-based rendering.
         guard self.isEnabled && self.outputImage != nil else { return }
         
+        #if DEBUG
+        let observation = debugFrame
+        let waiting = observation == nil ? 0 : ProcessInfo.processInfo.systemUptime
+        #endif
         os_unfair_lock_lock(&self.lock)
+        #if DEBUG
+        observation?.0.record("view.lock", frame: observation?.1, at: waiting,
+                              duration: ProcessInfo.processInfo.systemUptime - waiting, detail: debugViewID)
+        #endif
         defer { os_unfair_lock_unlock(&self.lock) }
         
         // layoutSubviews() must be called after setting self.eaglContext before we can display anything.
         // Otherwise, the app may crash due to race conditions when creating framebuffer from background thread.
-        guard self.didLayoutSubviews else { return }
+        guard self.didLayoutSubviews else {
+            #if DEBUG
+            observation?.0.record("view.layoutDrop", frame: observation?.1, detail: debugViewID)
+            #endif
+            return
+        }
 
         if !self.didRenderInitialFrame
         {
@@ -345,6 +370,12 @@ private extension GameView
 {
     func glkView(_ view: GLKView, drawIn rect: CGRect)
     {
+        #if DEBUG
+        let observation = debugFrame
+        let start = observation == nil ? 0 : ProcessInfo.processInfo.systemUptime
+        defer { observation?.0.record("view.gl.draw", frame: observation?.1, at: start,
+                                     duration: ProcessInfo.processInfo.systemUptime - start, detail: debugViewID) }
+        #endif
         glClearColor(0.0, 0.0, 0.0, 1.0)
         glClear(UInt32(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT))
         
@@ -365,10 +396,34 @@ extension GameView: MTKViewDelegate
     public func draw(in view: MTKView)
     {
         autoreleasepool {
+            #if DEBUG
+            let observation = debugFrame, viewID = debugViewID
+            let start = observation == nil ? 0 : ProcessInfo.processInfo.systemUptime
+            defer { observation?.0.record("view.metal.draw", frame: observation?.1, at: start,
+                                         duration: ProcessInfo.processInfo.systemUptime - start, detail: viewID) }
+            #endif
             guard let image = self.outputImage,
                   let commandBuffer = self.metalCommandQueue?.makeCommandBuffer(),
                   let currentDrawable = self.metalLayer?.nextDrawable()
-            else { return }
+            else {
+                #if DEBUG
+                observation?.0.record("view.metal.unavailable", frame: observation?.1, detail: viewID)
+                #endif
+                return
+            }
+            #if DEBUG
+            observation?.0.record("view.metal.drawable", frame: observation?.1, at: start,
+                                  duration: ProcessInfo.processInfo.systemUptime - start,
+                                  detail: viewID)
+            if let observation {
+                commandBuffer.addCompletedHandler { buffer in
+                    // This is completion of the presentation command buffer,
+                    // not drawable presentation, Core Image completion or scanout.
+                    observation.0.record("view.metal.presentCommandCompleted", frame: observation.1,
+                                         value: Double(buffer.status.rawValue), detail: viewID)
+                }
+            }
+            #endif
             
             let scaleX = view.drawableSize.width / image.extent.width
             let scaleY = view.drawableSize.height / image.extent.height
@@ -389,6 +444,9 @@ extension GameView: MTKViewDelegate
                 
                 commandBuffer.present(currentDrawable)
                 commandBuffer.commit()
+                #if DEBUG
+                observation?.0.record("view.metal.commit", frame: observation?.1, detail: viewID)
+                #endif
             }
             catch
             {

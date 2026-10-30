@@ -32,6 +32,7 @@ enum BoundVBABattleBridge {
     static func setWorldMovementHost(_ d:Data){}
     static func worldMovementSnapshot()->Data {Data()}
     static func worldMovementPublicationInProgress()->Bool {false}
+    static func worldMovementPublicationHeader()->Data {Data()}
     static func worldMovementTimeline()->UInt64 {0}
     static func requestWorldMovementRevocation(){}
 }

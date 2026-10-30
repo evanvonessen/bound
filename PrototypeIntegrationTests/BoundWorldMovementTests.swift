@@ -478,6 +478,185 @@ final class BoundWorldMovementTests:XCTestCase {
         XCTAssertEqual(pair.permit(pair.a),0)
         pair.bf=[];pair.ticks(4);XCTAssertEqual(pair.permit(pair.a),11)
     }
+    private func publication(_ sequence:UInt32,_ frame:UInt32,generation:UInt32=2)->BoundMovementPublication {
+        var data=Data(repeating:0,count:20)
+        for (at,value) in [(0,UInt32(0x314F5742)),(4,1),(8,sequence),(12,frame),(16,generation)] {
+            BoundMovementSnapshot.put(value,&data,at)
+        }
+        return BoundMovementPublication(data)!
+    }
+    func testAdvancingOddPublicationsDoNotRevokeAtFourthVideoPhase() {
+        let pair=Pair();var now:TimeInterval=0
+        var revocations=0
+        let probe=BoundMovementProbe(clock:{now},revoke:{revocations+=1})
+        probe.record(pair.snapshot(false,frame:1159,sequence:4894),timeline:7)
+        probe.publish(Data(repeating:0,count:1024));let epoch=probe.epoch()
+        for (i,sequence) in [UInt32(4897),4901,4905,4909].enumerated() {
+            now+=1.0/60
+            probe.record(nil,publicationInProgress:true,publication:publication(sequence,1160+UInt32(i)),timeline:7)
+            XCTAssertEqual(probe.read()?.frame,1159)
+            XCTAssertEqual(probe.epoch(),epoch)
+            XCTAssertNil(probe.frameInput(at:now))
+        }
+        XCTAssertEqual(revocations,0)
+        probe.record(pair.snapshot(false,frame:1163,sequence:4912),timeline:7)
+        XCTAssertEqual(probe.read()?.frame,1163)
+        XCTAssertEqual(probe.frameInput(at:now)?.count,1024)
+        XCTAssertEqual(probe.epoch(),epoch)
+    }
+    func testRepeatedSameOddHeaderStillRevokesOnFourthObservation() {
+        let pair=Pair(),probe=BoundMovementProbe(clock:{0})
+        probe.record(pair.snapshot(false,frame:10,sequence:22),timeline:7)
+        probe.publish(Data(repeating:0,count:1024));let epoch=probe.epoch()
+        for _ in 0..<3 {
+            probe.record(nil,publicationInProgress:true,publication:publication(23,11),timeline:7)
+            XCTAssertEqual(probe.epoch(),epoch);XCTAssertNil(probe.frameInput(at:0))
+        }
+        probe.record(nil,publicationInProgress:true,publication:publication(23,11),timeline:7)
+        XCTAssertNil(probe.read());XCTAssertNil(probe.hostInput());XCTAssertNotEqual(probe.epoch(),epoch)
+        XCTAssertEqual(probe.frameInput(at:0)?.count,0)
+    }
+    func testAdvancingOddPublicationDoesNotRefreshCoherentWallClockDeadline() {
+        let pair=Pair();var now:TimeInterval=0
+        let probe=BoundMovementProbe(clock:{now})
+        probe.record(pair.snapshot(false,frame:10,sequence:22),timeline:7)
+        for i in 1...10 {
+            now=Double(i)*0.015
+            probe.publish(Data(repeating:0,count:1024)) // Fresh desired input cannot refresh observation age.
+            probe.record(nil,publicationInProgress:true,publication:publication(23+UInt32(i)*2,10+UInt32(i)),timeline:7)
+            XCTAssertEqual(probe.read()?.frame,10);XCTAssertNil(probe.frameInput(at:now))
+        }
+        now=0.150001;probe.publish(Data(repeating:0,count:1024))
+        probe.record(nil,publicationInProgress:true,publication:publication(47,21),timeline:7)
+        XCTAssertNil(probe.read());XCTAssertNil(probe.hostInput());XCTAssertEqual(probe.frameInput(at:now)?.count,0)
+    }
+    func testAdvancingOddPublicationCannotExceedNativeLeaseFrameBound() {
+        let pair=Pair(),probe=BoundMovementProbe(clock:{0})
+        probe.record(pair.snapshot(false,frame:10,sequence:22),timeline:7)
+        probe.publish(Data(repeating:0,count:1024))
+        for i in 1...14 {
+            probe.record(nil,publicationInProgress:true,publication:publication(23+UInt32(i)*2,10+UInt32(i)),timeline:7)
+            XCTAssertEqual(probe.read()?.frame,10);XCTAssertNil(probe.frameInput(at:0))
+        }
+        probe.record(nil,publicationInProgress:true,publication:publication(53,25),timeline:7)
+        XCTAssertNil(probe.read());XCTAssertEqual(probe.frameInput(at:0)?.count,0)
+    }
+    func testOddProgressRejectsRollbackGenerationAndNonMonotonicClock() {
+        let pair=Pair()
+        for invalid in [publication(21,11),publication(25,9),publication(25,11,generation:3)] {
+            let probe=BoundMovementProbe(clock:{0});probe.record(pair.snapshot(false,frame:10,sequence:22),timeline:7)
+            probe.publish(Data(repeating:0,count:1024))
+            probe.record(nil,publicationInProgress:true,publication:invalid,timeline:7)
+            XCTAssertNil(probe.read());XCTAssertEqual(probe.frameInput(at:0)?.count,0)
+        }
+        for invalid in [publication(25,12),publication(29,11)] {
+            let probe=BoundMovementProbe(clock:{0});probe.record(pair.snapshot(false,frame:10,sequence:22),timeline:7)
+            probe.publish(Data(repeating:0,count:1024))
+            probe.record(nil,publicationInProgress:true,publication:publication(27,12),timeline:7)
+            probe.record(nil,publicationInProgress:true,publication:invalid,timeline:7)
+            XCTAssertNil(probe.read())
+        }
+        for invalid in [TimeInterval(-0.001),.infinity,.nan] {
+            var now:TimeInterval=0;let probe=BoundMovementProbe(clock:{now})
+            probe.record(pair.snapshot(false,frame:10,sequence:22),timeline:7)
+            probe.publish(Data(repeating:0,count:1024));now=invalid
+            probe.record(nil,publicationInProgress:true,publication:publication(23,11),timeline:7)
+            XCTAssertNil(probe.read())
+        }
+    }
+    func testOddProgressWrapUsesUnsignedForwardDistance() {
+        let pair=Pair(),probe=BoundMovementProbe(clock:{0})
+        probe.record(pair.snapshot(false,frame:UInt32.max-1,sequence:UInt32.max-1),timeline:7)
+        probe.publish(Data(repeating:0,count:1024));let epoch=probe.epoch()
+        for p in [publication(.max,.max),publication(1,0),publication(3,1),publication(5,2)] {
+            probe.record(nil,publicationInProgress:true,publication:p,timeline:7)
+            XCTAssertEqual(probe.epoch(),epoch);XCTAssertNil(probe.frameInput(at:0))
+        }
+        probe.record(pair.snapshot(false,frame:3,sequence:6),timeline:7)
+        XCTAssertEqual(probe.epoch(),epoch);XCTAssertEqual(probe.frameInput(at:0)?.count,1024)
+    }
+    func testCoherentResumeCannotRollBackAdvancingOddMetadata() {
+        let pair=Pair()
+        for (frame,sequence) in [(UInt32(14),UInt32(30)),(13,32),(14,32)] {
+            let probe=BoundMovementProbe(clock:{0})
+            probe.record(pair.snapshot(false,frame:10,sequence:22),timeline:7)
+            probe.publish(Data(repeating:0,count:1024))
+            probe.record(nil,publicationInProgress:true,publication:publication(31,14),timeline:7)
+            probe.record(pair.snapshot(false,frame:frame,sequence:sequence),timeline:7)
+            if frame==14 && sequence==32 {XCTAssertEqual(probe.read()?.frame,14)}
+            else {XCTAssertNil(probe.read());XCTAssertNil(probe.hostInput())}
+        }
+    }
+    func testCoherentGenerationChangeAndAmbiguousCounterDistanceRevoke() {
+        let pair=Pair()
+        for kind in 0..<3 {
+            let probe=BoundMovementProbe(clock:{0})
+            pair.bg=2;probe.record(pair.snapshot(false,frame:10,sequence:22),timeline:7)
+            probe.publish(Data(repeating:0,count:1024));let epoch=probe.epoch()
+            if kind==0 {
+                probe.record(nil,publicationInProgress:true,publication:publication(27,12),timeline:7)
+                pair.bg=3;probe.record(pair.snapshot(false,frame:13,sequence:28),timeline:7)
+                XCTAssertEqual(probe.read()?.generation,3)
+            } else {
+                probe.record(pair.snapshot(false,frame:kind==1 ? 0x8000000A:10,
+                                           sequence:kind==2 ? 0x80000016:22),timeline:7)
+            }
+            XCTAssertNotEqual(probe.epoch(),epoch);XCTAssertNil(probe.hostInput())
+            XCTAssertEqual(probe.frameInput(at:0)?.count,0)
+        }
+    }
+    func testOddProgressCannotWriteGrantOrReplayItAfterFreshCompletion() {
+        let pair=Pair();pair.br=pair.step(2,1,nonce:11)
+        let probe=BoundMovementProbe(clock:{0})
+        probe.record(pair.snapshot(false,frame:10,sequence:22),timeline:7)
+        var grant=Data(repeating:0,count:1024)
+        BoundMovementSnapshot.put(11,&grant,72);BoundMovementSnapshot.put(2,&grant,76)
+        BoundMovementSnapshot.putTile(.init(x:2,y:0),&grant,80)
+        BoundMovementSnapshot.putTile(.init(x:1,y:0),&grant,84)
+        BoundMovementSnapshot.put(1,&grant,88)
+        probe.publish(grant)
+        XCTAssertEqual(probe.frameInput(at:0).map{BoundMovementSnapshot.word($0,72)},11)
+        for i in 1...4 {
+            probe.record(nil,publicationInProgress:true,publication:publication(23+UInt32(i)*2,10+UInt32(i)),timeline:7)
+            probe.publish(grant)
+            XCTAssertNil(probe.frameInput(at:0));XCTAssertEqual(probe.read()?.completed,0)
+        }
+        pair.br=nil;pair.bdone=11;pair.bc = .init(x:1,y:0)
+        probe.record(pair.snapshot(false,frame:15,sequence:34),timeline:7)
+        XCTAssertEqual(probe.read()?.completed,11)
+        XCTAssertEqual(probe.frameInput(at:0).map{BoundMovementSnapshot.word($0,72)},0)
+        XCTAssertEqual(probe.frameInput(at:0)?.subdata(in:72..<92),Data(repeating:0,count:20))
+    }
+    func testOddProgressStillFailsClosedOnSceneTimelineAndProfileLoss() {
+        let pair=Pair()
+        for loss in 0..<3 {
+            let probe=BoundMovementProbe(clock:{0})
+            probe.record(pair.snapshot(false,frame:10,sequence:22),timeline:7)
+            probe.publish(Data(repeating:0,count:1024));let epoch=probe.epoch()
+            probe.record(nil,publicationInProgress:true,publication:publication(23,11),timeline:7)
+            switch loss {
+            case 0:probe.record(nil,publicationInProgress:false,timeline:7)
+            case 1:probe.record(nil,publicationInProgress:true,publication:publication(25,12),timeline:8)
+            default:probe.configure(core:nil)
+            }
+            XCTAssertNil(probe.read());XCTAssertNil(probe.hostInput());XCTAssertNotEqual(probe.epoch(),epoch)
+            probe.publish(Data(repeating:0,count:1024),epoch:epoch)
+            XCTAssertNil(probe.hostInput());XCTAssertEqual(probe.frameInput(at:0)?.count,0)
+        }
+    }
+    func testOddProgressMetadataRejectsInvalidHeaders() {
+        var valid=Data(repeating:0,count:20)
+        for (offset,value) in [(0,UInt32(0x314F5742)),(4,1),(8,23),(12,10),(16,2)] {
+            BoundMovementSnapshot.put(value,&valid,offset)
+        }
+        XCTAssertNotEqual(BoundMovementPublication(valid),nil)
+        XCTAssertNil(BoundMovementPublication(Data(valid.prefix(19))))
+        XCTAssertNil(BoundMovementPublication(valid+Data([0])))
+        for (offset,value) in [(0,UInt32(0)),(4,2),(8,0),(8,24)] {
+            var invalid=valid;BoundMovementSnapshot.put(value,&invalid,offset)
+            XCTAssertNil(BoundMovementPublication(invalid))
+        }
+    }
     func testOrdinaryOddPublicationPreservesCommittedSnapshotAndDoesNotRewriteHost() {
         let pair=Pair(),probe=BoundMovementProbe(clock:{0})
         probe.record(pair.snapshot(false,frame:10,sequence:22),timeline:7)

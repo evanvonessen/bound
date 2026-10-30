@@ -22,8 +22,8 @@ ELIMINATION_ROOT = ROOT / 'PrototypeConfiguration/game-profiles/native-eliminati
 ELIMINATION_MANIFEST = 'f629e5ecdf167290a3b4871ec2c4be3b2f42b1bcf93d758356cc95660d19230a'
 ELIMINATION_HEADER = '909b6fe2f8c877c878a82cbd3f8ac4c703010fc6f9e9495760b47aeb0b1f23a0'
 # Reviewed together when importing a new exact ROM; never infer its library ID.
-CURRENT_ROM = 'a215add233d8d2f119e29b435605d3af99d063180d6b77310f178dfcdebf0ba2'
-CURRENT_GAME_ID = '6f70ce7b70d142cee2fbcaa197f48c58fc18f2f2'
+CURRENT_ROM = 'e5490e5c58ef86d55cc0d06052806ca727edc44c822d5240fb99d593af24ed43'
+CURRENT_GAME_ID = 'd245b88c8ad9fdc58ff9427f8cd4da3bfa8bd201'
 
 def generate():
     pre_runtime_root = ROOT / "PrototypeConfiguration/game-profiles/pre-runtime-interface"

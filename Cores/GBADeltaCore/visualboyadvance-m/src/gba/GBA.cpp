@@ -130,6 +130,8 @@ int captureNumber = 0;
 int armOpcodeCount = 0;
 int thumbOpcodeCount = 0;
 
+#include "BoundQAGuestTiming.inc"
+
 const int TIMER_TICKS[4] = {
     0,
     6,
@@ -617,6 +619,9 @@ bool CPUWriteMemState(char* memory, int available, long& reserved)
 
 bool CPUReadState(const uint8_t* data, unsigned size)
 {
+#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
+    BoundQAGuestTimingInvalidate();
+#endif
     // Don't really care about version.
     int version = utilReadIntMem(data);
     if (version != SAVE_GAME_VERSION)
@@ -1381,6 +1386,9 @@ bool CPUIsELF(const char* file)
 
 void CPUCleanUp()
 {
+#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
+    BoundQAGuestTimingInvalidate();
+#endif
 #ifdef PROFILING
     if (profilingTicksReload) {
         profCleanup();
@@ -3410,6 +3418,9 @@ void SetSaveType(int st)
 
 void CPUReset()
 {
+#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
+    BoundQAGuestTimingInvalidate();
+#endif
     if (gbaSaveType == 0) {
         if (eepromInUse)
             gbaSaveType = 3;
@@ -3716,8 +3727,12 @@ void CPULoop(int ticks)
                     return;
             }
             clockTicks = 0;
-        } else
+        } else {
             clockTicks = CPUUpdateTicks();
+#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
+            BoundQAGuestTimingIdle(clockTicks);
+#endif
+        }
 
         cpuTotalTicks += clockTicks;
 
@@ -3737,6 +3752,9 @@ void CPULoop(int ticks)
             cpuTotalTicks = 0;
 
         updateLoop:
+#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
+            BoundQAGuestTimingAdvance(clockTicks);
+#endif
 
             if (IRQTicks) {
                 IRQTicks -= clockTicks;
@@ -3786,6 +3804,9 @@ void CPULoop(int ticks)
                         lcdTicks += 1008;
                         DISPSTAT &= 0xFFFD;
                         if (VCOUNT == 160) {
+#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
+                            BoundQAGuestTimingVideo();
+#endif
                             count++;
                             systemFrame();
 
@@ -4130,6 +4151,9 @@ void CPULoop(int ticks)
                     clockTicks = cpuNextEvent;
                 else
                     clockTicks = cpuDmaTicksToUpdate;
+#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
+                BoundQAGuestTimingDMA(clockTicks);
+#endif
                 cpuDmaTicksToUpdate -= clockTicks;
                 if (cpuDmaTicksToUpdate < 0)
                     cpuDmaTicksToUpdate = 0;
@@ -4149,6 +4173,9 @@ void CPULoop(int ticks)
                 if (res) {
                     if (intState) {
                         if (!IRQTicks) {
+#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
+                            BoundQAGuestTimingInterrupt(remainingTicks);
+#endif
                             CPUInterrupt();
                             intState = false;
                             holdState = false;
@@ -4162,6 +4189,9 @@ void CPULoop(int ticks)
                             if (cpuNextEvent > IRQTicks)
                                 cpuNextEvent = IRQTicks;
                         } else {
+#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
+                            BoundQAGuestTimingInterrupt(remainingTicks);
+#endif
                             CPUInterrupt();
                             holdState = false;
                             stopState = false;

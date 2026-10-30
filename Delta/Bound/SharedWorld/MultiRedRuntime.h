@@ -5,11 +5,22 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include "BoundLegacyRuntimeBindings.h"
 // The host's native link/player/save hooks operate only on this exact underlying
 // native engine. Versioned restoration records permit new cartridge-owned code
 // and hook targets, never an unchecked engine/address-layout substitution.
 constexpr unsigned BoundRuntimeOffset=0x1FE4000,BoundRuntimeSize=0x4000;
 static unsigned runtimeWord(const uint8_t *p){return p[0]|unsigned(p[1])<<8|unsigned(p[2])<<16|unsigned(p[3])<<24;}
+template<size_t Count>
+static bool runtimeBindingsMatch(const uint8_t *table,const GameBaseDefinition (&bindings)[Count]) {
+    if(runtimeWord(table+20)!=Count||64+24*Count>BoundRuntimeSize)return false;
+    for(size_t i=0;i<Count;i++) {
+        const auto *row=table+64+i*24;const auto &known=bindings[i];
+        if(runtimeWord(row)!=known.offset||runtimeWord(row+4)!=known.size||known.size>16
+           ||memcmp(row+8,known.bytes,sizeof(known.bytes)))return false;
+    }
+    return true;
+}
 static void runtimeRestore(uint8_t *p) {
     const auto *table=p+BoundRuntimeOffset;
     for(unsigned i=0;i<runtimeWord(table+20);i++) {
@@ -30,14 +41,10 @@ static const MultiRedNativeProfile *runtimeProfile(const uint8_t *p,bool revalid
     if(!p||memcmp(p+BoundRuntimeOffset,"BRUNTIME",8))return nullptr;
     const auto *table=p+BoundRuntimeOffset;
     if(runtimeWord(table+8)!=1||runtimeWord(table+12)!=31||runtimeWord(table+16)!=GameSaveStateLayout)return nullptr;
-    unsigned count=runtimeWord(table+20);
-    if(count!=sizeof(GameBaseDefinitions)/sizeof(*GameBaseDefinitions)||64+24*count>BoundRuntimeSize)return nullptr;
-    // Pin every host-displaced native binding, not a complete release image.
-    for(unsigned i=0;i<count;i++) {
-        const auto *row=table+64+i*24;const auto &known=GameBaseDefinitions[i];
-        if(runtimeWord(row)!=known.offset||runtimeWord(row+4)!=known.size||known.size>16
-           ||memcmp(row+8,known.bytes,known.size))return nullptr;
-    }
+    // Admit one complete reviewed binding set. A current ABI import must not
+    // retire previously admitted cartridges or permit mixed/subset tables.
+    if(!runtimeBindingsMatch(table,GameBaseDefinitions)
+       &&!runtimeBindingsMatch(table,BoundLegacyRuntimeBindings))return nullptr;
     for(unsigned i=0;i<128;i++) {
         if(i>=20&&i<36)continue; // A new ruleset still needs identical host functions/layout.
         if(p[GameDescriptorOffset+i]!=GameDescriptor[i])return nullptr;

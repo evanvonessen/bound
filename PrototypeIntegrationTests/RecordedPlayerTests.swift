@@ -3,12 +3,675 @@ import UIKit
 import CryptoKit
 @preconcurrency import DeltaCore
 @testable import Delta
+@testable import class Delta.GameViewController
 
 private struct ReplayGame: GameProtocol {
     let fileURL: URL
     let gameSaveURL: URL
     var type: GameType { .gba }
 }
+
+#if DEBUG && targetEnvironment(simulator)
+/// Only native input and bounded numeric observation. The production coordinator
+/// retains its complete callback chain, transport, reader and presentation owners.
+private final class HostMovementTraceTape: @unchecked Sendable {
+    private let lock = NSLock()
+    private let movement: BoundMovementProbe
+    private let soul: BoundSoulProbe
+    private let scene: BoundVBAPlayerStateProbe
+    private let faintedParty: Bool
+    private var finalSoulMetrics: [String:UInt64]?
+    private var afterStartupSoulMetrics: [String:UInt64]?
+    private var finalSceneMetrics: [String:UInt64]?
+    private var afterStartupSceneMetrics: [String:UInt64]?
+    private let portDiagnostics = ProcessInfo.processInfo.environment["BOUND_HOST_PORT_DIAGNOSTICS"] == "1"
+    private var limit = 0, count = 0, direction = 32, mask = 0
+    private var moving = false, running = true, vertical = false
+    init(movement: BoundMovementProbe, soul: BoundSoulProbe, scene: BoundVBAPlayerStateProbe, faintedParty: Bool = false) {
+        self.movement = movement; self.soul = soul; self.scene = scene; self.faintedParty = faintedParty
+    }
+    func arm(frames: Int, moving: Bool, running: Bool, vertical: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        limit = frames; count = 0; self.moving = moving; self.running = running; self.vertical = vertical
+        direction = vertical ? 128:32; mask = 0
+    }
+    var finished: Bool { lock.lock(); defer { lock.unlock() }; return limit > 0 && count >= limit }
+    var soulMetricsAtEnd: [String:UInt64]? { lock.lock(); defer { lock.unlock() }; return finalSoulMetrics }
+    var soulMetricsAfterStartup: [String:UInt64]? { lock.lock(); defer { lock.unlock() }; return afterStartupSoulMetrics }
+    var sceneMetricsAtEnd: [String:UInt64]? { lock.lock(); defer { lock.unlock() }; return finalSceneMetrics }
+    var sceneMetricsAfterStartup: [String:UInt64]? { lock.lock(); defer { lock.unlock() }; return afterStartupSceneMetrics }
+    /// Preserve the actual installed host policies and native runtime for
+    /// bounded discovery. Only called while paused, outside the measured tape;
+    /// never restore these buffers or mix them into another ROM/core state.
+    @MainActor static func captureNativeContext(_ core: EmulatorCore, output: URL, sourceHash: String) throws {
+        XCTAssertEqual(core.state,.paused)
+        _ = try XCTUnwrap(core.state == .paused ? true:nil)
+        let directory=output.appendingPathComponent("native-context",isDirectory:true)
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:false)
+        var files=[String:[String:Any]]()
+        func preserve(_ name:String,_ data:Data) throws {
+            try data.write(to:directory.appendingPathComponent(name),options:.withoutOverwriting)
+            files[name] = ["bytes":data.count,"sha256":SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()]
+        }
+        for (name,size) in [("rom",0x2000000),("workRAM",0x40000),("internalRAM",0x8000),
+                            ("ioMem",0x400),("paletteRAM",0x400),("vram",0x20000),("oam",0x400)] {
+            let symbol=try XCTUnwrap(dlsym(UnsafeMutableRawPointer(bitPattern:-2),name))
+            var owner=Dl_info()
+            XCTAssertNotEqual(dladdr(symbol,&owner),0)
+            let path=String(cString:try XCTUnwrap(owner.dli_fname))
+            XCTAssertTrue(path.hasSuffix("/GBADeltaCore.framework/GBADeltaCore"))
+            _ = try XCTUnwrap(path.hasSuffix("/GBADeltaCore.framework/GBADeltaCore") ? true:nil)
+            let pointer=try XCTUnwrap(symbol.assumingMemoryBound(to:UnsafeMutablePointer<UInt8>?.self).pointee)
+            try preserve(name+".bin",Data(bytes:pointer,count:size))
+        }
+        let state=MultiRedAdapter.captureState()
+        _ = try XCTUnwrap(state.isEmpty ? nil:true)
+        try preserve("exact-runtime.state",state)
+        let manifest:[String:Any] = ["schema":1,"sourceROM_SHA256":sourceHash,"files":files,
+            "scope":"Paused exact app/core runtime before measured input, after native setup and paired readiness. Resident ROM includes installed host policies and hooks. Artifact-only diagnostic; no guest writes, restore or performance acceptance."]
+        try JSONSerialization.data(withJSONObject:manifest,options:[.prettyPrinted,.sortedKeys])
+            .write(to:directory.appendingPathComponent("manifest.json"),options:.withoutOverwriting)
+    }
+    @MainActor static func writeSceneDiagnostics(_ value:(observed:Int,captures:[BoundVBAPlayerStateProbe.SceneFailureCapture]),
+                                                 output:URL,sourceHash:String) throws {
+        let directory=output.appendingPathComponent("scene-diagnostics",isDirectory:true)
+        try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:false)
+        var files=[String:[String:Any]]()
+        func preserve(_ name:String,_ data:Data) throws {
+            try data.write(to:directory.appendingPathComponent(name),options:.withoutOverwriting)
+            files[name]=["bytes":data.count,"sha256":SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined()]
+        }
+        for (index,capture) in value.captures.enumerated() {
+            let name="failure-\(index)"
+            try FileManager.default.createDirectory(at:directory.appendingPathComponent(name),withIntermediateDirectories:false)
+            try preserve(name+"/workRAM.bin",Data(capture.memory.workRAM))
+            try preserve(name+"/internalRAM.bin",Data(capture.memory.internalRAM))
+            try preserve(name+"/paletteRAM.bin",Data(try XCTUnwrap(capture.memory.paletteRAM)))
+            try preserve(name+"/decision.json",JSONSerialization.data(withJSONObject:capture.decision,options:[.prettyPrinted,.sortedKeys]))
+        }
+        let manifest:[String:Any] = ["schema":1,"sourceROM_SHA256":sourceHash,"observedFailures":value.observed,
+            "capturedCount":value.captures.count,"droppedFailures":value.observed-value.captures.count,"files":files,
+            "scope":"DEBUG completed-owner nil-scene diagnosis, measured frames61...requestedFrames only. First four failures retain the reader's already-owned RAM and exact presentation-cache prestate/decision. No guest writes; serialization occurs after pause. Diagnostic only, not performance acceptance."]
+        try JSONSerialization.data(withJSONObject:manifest,options:[.prettyPrinted,.sortedKeys])
+            .write(to:directory.appendingPathComponent("manifest.json"),options:.withoutOverwriting)
+    }
+    /// QA input uses the same tiny native object read in every mode. It does
+    /// not depend on the experimental feature's admitted/cached world probe.
+    static func rawTile(_ core: EmulatorCore) -> (x: Int, y: Int, group: Int, number: Int, cameraX:Int, cameraY:Int,
+                                                previousX:Int, previousY:Int, running:Int, transition:Int)? {
+        func bytes(_ at: Int, _ count: Int) -> [UInt8]? {
+            guard let data = core.deltaCore.emulatorBridge.readMemory?(at: at, size: count), data.count == count else { return nil }
+            return Array(data)
+        }
+        guard let avatar = bytes(0x8000+0x37078, 8), avatar[5] < 16,
+              let object = bytes(0x8000+0x36E38+Int(avatar[5])*36, 36),
+              BoundSceneBytes.word(object)&0x10001 == 0x10001, object[8] == 255,
+              let pointer = bytes(0x5008, 4) else { return nil }
+        let saveAddress = BoundSceneBytes.word(pointer)
+        guard (0x02000000...0x0203FFF4).contains(saveAddress), saveAddress&3 == 0,
+              let save = bytes(0x8000+saveAddress-0x02000000, 12) else { return nil }
+        return (BoundSceneBytes.signed(object,0x10)-7, BoundSceneBytes.signed(object,0x12)-7, Int(save[4]), Int(save[5]),
+                BoundSceneBytes.signed(save,0),BoundSceneBytes.signed(save,2),
+                BoundSceneBytes.signed(object,0x14)-7,BoundSceneBytes.signed(object,0x16)-7,Int(avatar[2]),Int(avatar[3]))
+    }
+    func receive(_ core: EmulatorCore) {
+        lock.lock(); defer { lock.unlock() }
+        guard limit > 0, count < limit else { return }
+        let trace = core.debugFrameTrace, started = ProcessInfo.processInfo.systemUptime
+        let soulStatus = BoundVBABattleBridge.qaSoulPolicyStatus()
+        trace?.record("qa.soulPolicy",value:Double(soulStatus&0xFFFFFFFF),detail:soulStatus>>32)
+        trace?.record("qa.soulFence.afterOwner",value:BoundVBABattleBridge.qaSoulFrameBlocked() ? 1:0)
+        if faintedParty,
+           let count = core.deltaCore.emulatorBridge.readMemory?(at:0x8000+0x24029,size:1)?.first,
+           let party = core.deltaCore.emulatorBridge.readMemory?(at:0x8000+0x24284,size:200), party.count == 200 {
+            let hp0 = UInt64(party[86]) | UInt64(party[87])<<8
+            let hp1 = UInt64(party[186]) | UInt64(party[187])<<8
+            trace?.record("qa.faintedParty",value:Double(count),detail:hp0<<16|hp1)
+        }
+        if portDiagnostics, let trace { Self.observePort(core,trace:trace,frame:trace.currentFrame,phase:"afterOwner") }
+        if let native = movement.read() {
+            trace?.record("probe.cachedGuest", value: Double(native.frame), detail: UInt64(native.flags))
+        }
+        if let host = movement.hostInput() {
+            trace?.record("probe.hostInput", value:Double(BoundMovementSnapshot.word(host,12)),detail:UInt64(BoundMovementSnapshot.word(host,68)))
+        }
+        if let native = Self.rawTile(core) {
+            trace?.record("native.tileX", value: Double(native.x))
+            trace?.record("native.tileY", value: Double(native.y))
+            trace?.record("native.map", value: Double(native.group), detail: UInt64(native.number))
+            if portDiagnostics {
+                trace?.record("native.cameraTileX",value:Double(native.cameraX))
+                trace?.record("native.cameraTileY",value:Double(native.cameraY))
+                trace?.record("native.previousTile",value:Double(native.previousX),detail:UInt64(bitPattern:Int64(native.previousY)))
+                trace?.record("native.movementState",value:Double(native.running),detail:UInt64(native.transition))
+            }
+            // Current is the committed step target; keep input held while that
+            // step finishes, then reverse on the verified horizontal or
+            // vertical field lane. The vertical endpoint stops before grass.
+            if vertical {
+                if native.y <= 20 { direction = 128 }
+                if native.y >= 22 { direction = 64 }
+            } else {
+                if native.x <= 33 { direction = 16 }
+                if native.x >= 36 { direction = 32 }
+            }
+        } else { trace?.record("native.tileMissing") }
+        if let data = core.deltaCore.emulatorBridge.readMemory?(at:0x8000+0x2008,size:16), data.count == 16 {
+            let raw = Array(data)
+            // Unfenced writer bytes, distinct from the retained admitted probe.
+            trace?.record("native.rawWorldFrame", value:Double(BoundSceneBytes.word(raw,4)),detail:UInt64(BoundSceneBytes.word(raw)))
+            trace?.record("native.rawWorldFlags", value:Double(BoundSceneBytes.word(raw,12)),detail:UInt64(BoundSceneBytes.word(raw)))
+        }
+        if let enabled = core.deltaCore.emulatorBridge.readMemory?(at:0x8000+0x3B25E,size:1)?.first,
+           let active = core.deltaCore.emulatorBridge.readMemory?(at:0x8000+0x3B818,size:1)?.first {
+            trace?.record("native.followerActive",value:enabled&0x20 != 0 && active == 1 ? 1:0)
+        }
+        count += 1
+        if count == 60 {
+            afterStartupSoulMetrics = soul.observationMetrics()
+            afterStartupSceneMetrics = scene.qaPlayerImageMetrics()
+        }
+        let next = count == limit || !moving ? 0 : direction | (running ? 2 : 0)
+        trace?.record("qa.input", value: Double(mask), detail: UInt64(next))
+        for bit in [2,16,32,64,128] where next & bit != mask & bit {
+            if next & bit != 0 { core.deltaCore.emulatorBridge.activateInput(bit, value: 1, playerIndex: 0) }
+            else { core.deltaCore.emulatorBridge.deactivateInput(bit, playerIndex: 0) }
+        }
+        mask = next
+        trace?.record("qa.controller", at: started, duration: ProcessInfo.processInfo.systemUptime - started)
+        if count == limit {
+            finalSoulMetrics = soul.observationMetrics()
+            finalSceneMetrics = scene.qaPlayerImageMetrics()
+            trace?.record("qa.measureEnd")
+        }
+    }
+    static func observeVideo(_ core: EmulatorCore, trace: EmulatorFrameTrace, frame: UInt64) {
+        let started = ProcessInfo.processInfo.systemUptime
+        func bytes(_ at: Int, _ count: Int) -> [UInt8]? {
+            guard let data = core.deltaCore.emulatorBridge.readMemory?(at: at, size: count), data.count == count else { return nil }
+            return Array(data)
+        }
+        func half(_ b: [UInt8], _ at: Int) -> Int { Int(b[at]) | Int(b[at+1]) << 8 }
+        guard let avatar = bytes(0x8000+0x37078, 8), avatar[4] < 64,
+              let sprite = bytes(0x8000+0x2063C+Int(avatar[4])*68, 68),
+              let scroll = bytes(0x14, 4) else { trace.record("native.videoMissing", frame: frame); return }
+        // Built sprite OAM, not live pos1/pos2. Same phase/registers as the
+        // prior bitmap-matched native diagnostic; wrap at the GBA OAM widths.
+        trace.record("native.builtX", frame: frame, value: Double(((half(sprite,2)&511)-Int(Int8(bitPattern:sprite[0x28])))&511))
+        trace.record("native.builtFootY", frame: frame, value: Double(((half(sprite,0)&255)-Int(Int8(bitPattern:sprite[0x29]))+16)&255))
+        trace.record("native.scrollX", frame: frame, value: Double(half(scroll,0)&255))
+        trace.record("native.scrollY", frame: frame, value: Double(half(scroll,2)&255))
+        trace.record("qa.videoObservation", frame: frame, at: started, duration: ProcessInfo.processInfo.systemUptime-started)
+    }
+    /// Read-only, exact native pinput/pauthority diagnostics for this pinned ROM.
+    /// No guest writes, relaxed guards or retained authority. Opt-in600-frame
+    /// discovery only; the ordinary host timing baseline does not run this scan.
+    static func observePort(_ core: EmulatorCore, trace: EmulatorFrameTrace, frame: UInt64, phase: String) {
+        let started = ProcessInfo.processInfo.systemUptime
+        let host = BoundVBABattleBridge.qaWorldMovementHost()
+        guard host.count == 1024,
+              let state = core.deltaCore.emulatorBridge.readMemory?(at:0x8000+0x2000,size:256),state.count == 256 else {
+            trace.record("qa.port.\(phase).missing",frame:frame);return
+        }
+        func word(_ data:Data,_ offset:Int)->UInt32 { BoundMovementSnapshot.word(data,offset) }
+        func half(_ data:Data,_ offset:Int)->UInt32 { UInt32(data[offset])|UInt32(data[offset+1])<<8 }
+        func key(_ data:Data,_ offset:Int)->UInt64 { UInt64(word(data,offset))|UInt64(word(data,offset+4))<<32 }
+        func record(_ stage:String,_ value:Double=0,_ detail:UInt64=0) { trace.record("qa.port.\(phase).\(stage)",frame:frame,value:value,detail:detail) }
+        var reject:UInt64=0
+        if word(host,0) != 0x31574C42 || half(host,4) != 1 || half(host,6) != 0 { reject |= 1 }
+        if word(host,8) == 0 || word(host,8)&1 != 0 { reject |= 2 }
+        let flags=word(host,12),lease=word(host,16),count=word(host,68)
+        if flags>3 || flags&1 == 0 || lease == 0 || lease>15 || count>2 { reject |= 4 }
+        if word(host,24) == 0 || word(host,28) == 0 { reject |= 8 }
+        var firstReserved:Int?
+        for range in [40..<48,56..<64,67..<68,92..<128,192..<1024] {
+            if let offset=range.first(where:{host[$0] != 0}) { firstReserved=firstReserved ?? offset;reject |= 16 }
+        }
+        if word(host,88)>3 { reject |= 32 }
+        var kindMask:UInt32=0
+        if count<=2 {
+            for i in 0..<Int(count) {
+                let offset=128+i*32,kind=UInt32(host[offset+13])
+                if word(host,offset)>1 || host[offset+12]>15 || kind>1 || half(host,offset+14) != 0 || word(host,offset+28) != 0 { reject |= 64 }
+                if kind<=1 { if kindMask&(1<<kind) != 0 { reject |= 128 };kindMask |= 1<<kind }
+                let current=BoundMovementSnapshot.tile(host,offset+4),previous=BoundMovementSnapshot.tile(host,offset+8)
+                if !current.valid || !previous.valid || current.distance(previous)>2 { reject |= 256 }
+                record("actor\(i)",Double(word(host,offset)),key(host,offset+4))
+                record("actor\(i)Meta",Double(half(host,offset+12)),key(host,offset+20))
+            }
+            for i in Int(count)..<2 where host[(128+i*32)..<(160+i*32)].contains(where:{$0 != 0}) { reject |= 512 }
+        }
+        var authority:UInt64=0
+        if word(state,136)==0 || word(state,180)==0 || word(state,128)==0 { authority |= 1 }
+        if word(host,20) != word(state,16) { authority |= 2 }
+        if key(host,32) != key(state,140) || key(host,48) != key(state,140) { authority |= 4 }
+        if word(host,64) != word(state,32)&0x00FFFFFF { authority |= 8 }
+        if word(host,24) != word(state,152) || word(host,28) != word(state,156) { authority |= 16 }
+        record("reject",Double(reject),UInt64(word(host,8)))
+        record("authority",Double(authority),UInt64(word(state,8)))
+        record("flags",Double(flags),UInt64(word(state,20)))
+        record("lease",Double(lease),UInt64(word(state,128)))
+        record("consumed",Double(word(state,132)),UInt64(word(state,76)))
+        record("input",Double(word(state,180)),UInt64(word(state,136)))
+        record("generation",Double(word(host,20)),UInt64(word(state,16)))
+        record("map",Double(word(host,64)),UInt64(word(state,32)))
+        record("ownEpoch",Double(word(host,24)),UInt64(word(state,152)))
+        record("peerEpoch",Double(word(host,28)),UInt64(word(state,156)))
+        record("ownKey",0,key(host,32));record("peerKey",0,key(host,48));record("nativeKey",0,key(state,140))
+        if let firstReserved { record("reserved",Double(firstReserved),UInt64(host[firstReserved])) }
+        trace.record("qa.port.\(phase).duration",frame:frame,at:started,duration:ProcessInfo.processInfo.systemUptime-started)
+    }
+}
+
+extension RecordedPlayerTests {
+    func testFullCoordinatorLocalHostFrameCadence() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard env["BOUND_HOST_TRACE"] == "1", let path = env["BOUND_MOVEMENT_ROM"],
+              let namespace = env["BOUND_PAIR_NAMESPACE"], UUID(uuidString: namespace) != nil,
+              let peer = env["BOUND_PAIR_PEER"], ["A","B"].contains(peer),
+              let port = env["BOUND_PAIR_PORT"].flatMap(Int.init), (1024...65535).contains(port),
+              env["BOUND_PAIR_PRESENCE_ONLY"] == "1" else { throw XCTSkip("Explicit localhost host-trace fixture required") }
+        let mode = env["BOUND_HOST_MODE"] ?? "no-peer"
+        guard ["off","no-peer","peer"].contains(mode) else { throw XCTSkip("Unknown host trace mode") }
+        let axis = env["BOUND_HOST_AXIS"] ?? "horizontal"
+        guard ["horizontal","vertical"].contains(axis) else { throw XCTSkip("Unknown host movement axis") }
+        let rate = Double(env["BOUND_HOST_RATE"] ?? "1") ?? 1
+        let frames = Int(env["BOUND_HOST_FRAMES"] ?? "1800") ?? 1800
+        guard [1.0,3.0].contains(rate), (120...21600).contains(frames) else { throw XCTSkip("Bounded1x/3x trace required") }
+        let portDiagnostics = env["BOUND_HOST_PORT_DIAGNOSTICS"] == "1"
+        let sceneDiagnostics = env["BOUND_HOST_SCENE_DIAGNOSTICS"] == "1"
+        let followerRequested = env["BOUND_HOST_FOLLOWER"] == "1"
+        let faintedPartyRequested = env["BOUND_HOST_FAINTED_PARTY"] == "1"
+        let soulPolicyOption = env["BOUND_HOST_SOUL_POLICY"] ?? "0"
+        guard ["0","1"].contains(soulPolicyOption) else { throw XCTSkip("Explicit Soul policy0/1 required") }
+        let soulPolicyRequested = soulPolicyOption == "1"
+        guard !portDiagnostics || frames<=600 else { throw XCTSkip("Port diagnostics are bounded to600 frames") }
+        let image = try Data(contentsOf: URL(fileURLWithPath: path))
+        let digest = SHA256.hash(data:image).map { String(format:"%02x",$0) }.joined()
+        XCTAssertEqual(digest, try XCTUnwrap(env["BOUND_MOVEMENT_SHA256"]))
+        _ = try BoundPlayerROMProfile(rom:image)
+        let oldEnabled = UserDefaults.standard.object(forKey: BoundMultiplayerFeatures.key)
+        let oldHUD = UserDefaults.standard.object(forKey: BoundPlayerStatePreferences.key)
+        UserDefaults.standard.set(mode != "off", forKey: BoundMultiplayerFeatures.key)
+        UserDefaults.standard.set(false, forKey: BoundPlayerStatePreferences.key)
+        defer {
+            UserDefaults.standard.set(oldEnabled, forKey: BoundMultiplayerFeatures.key)
+            UserDefaults.standard.set(oldHUD, forKey: BoundPlayerStatePreferences.key)
+        }
+        let output = FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0]
+            .appendingPathComponent("MovementHost-\(namespace)-\(peer)-\(mode)-\(rate)-"+UUID().uuidString)
+        try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+        let battery = output.appendingPathComponent("disposable.sav")
+        try Data(repeating:255,count:131072).write(to:battery)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let priorWindow = scene.windows.first(where:\.isKeyWindow), window = UIWindow(windowScene:scene)
+        XCTAssertEqual(BoundLocalPairedTransport.qaInstanceDiagnostics().filter{$0["running"] as? Bool == true}.count,0)
+        let owner = BoundCompanionCoordinator.makeHostTraceController()
+        window.rootViewController = owner; window.windowLevel = .alert+1
+        window.makeKeyAndVisible(); owner.loadViewIfNeeded()
+        let coordinator = owner.boundCompanionForTesting
+        XCTAssertTrue(coordinator.qaUsesLocalPairedFixture, "The explicit host-trace environment must select the local fixture")
+        guard coordinator.account.session == nil else { throw XCTSkip("A dedicated simulator without a production account is required") }
+        owner.game = ReplayGame(fileURL:URL(fileURLWithPath:path),gameSaveURL:battery)
+        owner.view.layoutIfNeeded()
+        let core = try XCTUnwrap(owner.emulatorCore)
+        _ = core.pause(); core.audioManager.isEnabled = false
+        var taskSoulConfigured = false
+        defer {
+            _ = core.pause(); core.debugFrameTrace = nil
+            BoundLocalPairedTransport.qaSetTrace(nil)
+            if taskSoulConfigured {
+                // This probe and ledger belong only to this disposable core.
+                // Flush/retire its actual policy before releasing the owner.
+                do { try coordinator.sharing.soulLink.probe.endRun() }
+                catch { XCTFail("Task Soul ledger teardown failed: \(error)") }
+                XCTAssertTrue(coordinator.sharing.soulLink.probe.configure(core:nil,url:nil))
+                BoundVBABattleBridge.closeSoulLink()
+                let status = BoundVBABattleBridge.qaSoulPolicyStatus()
+                XCTAssertEqual(status&13,0); XCTAssertEqual(status>>32,0)
+                let cleanup:[String:Any] = ["flags":status&0xFFFFFFFF,"sequence":status>>32,"taskPolicyClosed":status&13 == 0 && status>>32 == 0]
+                try? JSONSerialization.data(withJSONObject:cleanup,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("soul-teardown.json"))
+            }
+            _ = coordinator.stop(); _ = core.stop(); owner.game = nil
+            window.rootViewController = nil; window.isHidden = true; priorWindow?.makeKeyAndVisible()
+        }
+        XCTAssertFalse(core.gameViews.isEmpty, "Use the production GameViewController's actual GameViews")
+        let fullOwner = try XCTUnwrap(core.updateHandler)
+        var options = BoundMultiplayerSetupOptions()
+        options.name="RED"; options.gender=0; options.partnerName="BLUE"; options.partnerGender=0; options.rival="BLUE"
+        options.difficulty=0; options.minimalGrinding=false; options.species=0; options.randomMoves=false; options.randomAbilities=false
+        options.cheats=false; options.nicknames=true; options.debug=true; options.deleteSaveOnGameOver=true
+        let setup = NativePlayerSceneSetup(core:core,debugPlayer:1,
+            run:UUID(uuidString:"11111111-2222-3333-4444-555555555555")!,settings:options.settings,playerProfile:options.profile)
+        core.updateHandler = { core in setup.receive(core); fullOwner(core) }
+        core.rate = 8
+        if core.state == .stopped { XCTAssertTrue(core.start()) } else { XCTAssertTrue(core.resume()) }
+        let bootDeadline = ProcessInfo.processInfo.systemUptime+90
+        while !setup.isReady, ProcessInfo.processInfo.systemUptime < bootDeadline { try await Task.sleep(for:.milliseconds(20)) }
+        XCTAssertTrue(setup.isReady); XCTAssertTrue(core.pause())
+        if followerRequested || soulPolicyRequested || faintedPartyRequested {
+            let partyCount = try XCTUnwrap(core.deltaCore.emulatorBridge.readMemory?(at:0x8000+0x24029,size:1)?.first)
+            if partyCount == 0 {
+                XCTAssertTrue(BoundVBABattleBridge.qaStartNativePartyFixture())
+                XCTAssertTrue(core.resume()); try await Task.sleep(for:.milliseconds(500)); XCTAssertTrue(core.pause())
+            }
+        }
+        if faintedPartyRequested {
+            // Existing disposable battle fixture: preserve the native-created
+            // mon, add one distinct living sibling and faint slot zero.
+            // Configure before enabling the follower or starting the ledger.
+            XCTAssertTrue(BoundVBABattleBridge.qaConfigureBattleParty(2))
+        }
+        if followerRequested {
+            // Enable through the actual native service, as in the guest pixel
+            // replay. Keep the full coordinator owner active during setup.
+            func memory() throws -> BoundGBAMemorySnapshot {
+                try XCTUnwrap(BoundGBAMemorySnapshot.capture(readMemory:{core.deltaCore.emulatorBridge.readMemory?(at:$0,size:$1)}))
+            }
+            XCTAssertTrue(BoundVBABattleBridge.qaWarpViridianFollowerService())
+            XCTAssertTrue(core.resume()); try await Task.sleep(for:.seconds(1)); XCTAssertTrue(core.pause())
+            core.deltaCore.emulatorBridge.activateInput(64,value:1,playerIndex:0)
+            XCTAssertTrue(core.resume()); try await Task.sleep(for:.milliseconds(30))
+            core.deltaCore.emulatorBridge.deactivateInput(64,playerIndex:0)
+            try await Task.sleep(for:.milliseconds(100)); XCTAssertTrue(core.pause())
+            var active = false
+            for _ in 0..<14 {
+                core.deltaCore.emulatorBridge.activateInput(1,value:1,playerIndex:0)
+                XCTAssertTrue(core.resume()); try await Task.sleep(for:.milliseconds(100))
+                core.deltaCore.emulatorBridge.deactivateInput(1,playerIndex:0)
+                try await Task.sleep(for:.milliseconds(150)); XCTAssertTrue(core.pause())
+                let m = try memory()
+                active = m.workRAM[0x3B25E]&0x20 != 0 && m.workRAM[0x3B818] == 1
+                if active { break }
+            }
+            XCTAssertTrue(active,"The native service must enable the actual follower before host measurement")
+            if let png = core.videoManager.snapshot()?.pngData() {
+                try png.write(to:output.appendingPathComponent("follower-service.png"))
+            }
+        }
+        XCTAssertTrue(BoundVBABattleBridge.qaWarpViridianMartEntrance())
+        coordinator.romMultiplayer.probe.setVerified(true)
+        core.updateHandler = fullOwner; core.rate = 1
+        XCTAssertTrue(core.resume()); try await Task.sleep(for:.seconds(2)); XCTAssertTrue(core.pause())
+        if mode == "peer", peer == "B" {
+            // A distinct native row avoids a synthetic occupancy override or
+            // player collision changing A's continuous movement measurement.
+            core.deltaCore.emulatorBridge.activateInput(128,value:1,playerIndex:0)
+            XCTAssertTrue(core.resume())
+            let deadline = ProcessInfo.processInfo.systemUptime+6
+            while (coordinator.sharing.livePresence.movement.probe.read()?.current.y ?? 0) < 24,
+                  ProcessInfo.processInfo.systemUptime < deadline { try await Task.sleep(for:.milliseconds(8)) }
+            core.deltaCore.emulatorBridge.deactivateInput(128,playerIndex:0)
+            try await Task.sleep(for:.milliseconds(200)); XCTAssertTrue(core.pause())
+            XCTAssertEqual(coordinator.sharing.livePresence.movement.probe.read()?.current.y,24)
+        }
+        var soulSetup:[String:Any] = ["requested":soulPolicyRequested,"historyScope":"offlineNone"]
+        if soulPolicyRequested {
+            let soul = coordinator.sharing.soulLink.probe
+            let ledgerURL = output.appendingPathComponent("host-soul.json")
+            let gameID = UUID().uuidString
+            let run = try XCTUnwrap(UUID(uuidString:namespace))
+            let binding = SHA256.hash(data:Data("host-soul:\(namespace):\(peer):\(digest)".utf8)).map { String(format:"%02x",$0) }.joined()
+            _ = try XCTUnwrap(soul.configure(core:core,url:ledgerURL,gameID:gameID) ? true:nil,
+                              "The task Soul probe must own its explicit ledger before starting a policy")
+            taskSoulConfigured = true
+            soul.setVerified(true); soul.setNativeObservationAllowed(true)
+            try soul.startPreparedRun(run:run,binding:binding)
+            XCTAssertTrue(core.resume())
+            let deadline = ProcessInfo.processInfo.systemUptime+30
+            // Only fullOwner installs/observes/applies policy. Main reads its
+            // published durable receipt, never native bytes while it runs.
+            while ProcessInfo.processInfo.systemUptime < deadline {
+                let snapshot = soul.read()
+                if snapshot.error != nil || (snapshot.ready && !snapshot.mons.isEmpty && snapshot.ledger?.run == run
+                    && snapshot.ledger?.binding == binding && snapshot.ledger?.ended == false) { break }
+                try await Task.sleep(for:.milliseconds(20))
+            }
+            if core.state == .running { XCTAssertTrue(core.pause()) }
+            // A committed observation receipt can precede its next native
+            // owner application. Resume that same owner, without installing
+            // or forcing a policy from the test, until it has applied it.
+            while soul.read().error == nil && BoundVBABattleBridge.qaSoulPolicyStatus()&13 != 13,
+                  ProcessInfo.processInfo.systemUptime < deadline {
+                XCTAssertTrue(core.resume()); try await Task.sleep(for:.milliseconds(100)); XCTAssertTrue(core.pause())
+            }
+            if faintedPartyRequested && mode != "off" {
+                // Creating a fainted fixture legitimately creates a death
+                // notice. Acknowledge its exact native batch before timing
+                // steady field movement; never erase the durable notice.
+                let beforeNotice = try XCTUnwrap(soul.read().ledger)
+                let pending = try XCTUnwrap(beforeNotice.battleLosses?.pending)
+                var sawActive = false, sawAcknowledgment = false, completed = false, presses = 0
+                let noticeDeadline = ProcessInfo.processInfo.systemUptime+30
+                XCTAssertTrue(core.resume())
+                while ProcessInfo.processInfo.systemUptime < noticeDeadline {
+                    let snapshot = soul.read()
+                    if snapshot.nativeBattleLoss?.acknowledged == pending.id { sawAcknowledgment = true }
+                    if sawAcknowledgment && snapshot.nativeBattleLoss?.active == false
+                        && snapshot.ledger?.battleLosses?.notices.first(where:{$0.id == pending.id})?.announced == true {
+                        completed = true; break
+                    }
+                    if snapshot.error != nil { break }
+                    if snapshot.nativeBattleLoss?.active == true {
+                        sawActive = true; presses += 1
+                        core.deltaCore.emulatorBridge.activateInput(1,value:1,playerIndex:0)
+                        try await Task.sleep(for:.milliseconds(50))
+                        core.deltaCore.emulatorBridge.deactivateInput(1,playerIndex:0)
+                        try await Task.sleep(for:.milliseconds(100))
+                    } else { try await Task.sleep(for:.milliseconds(20)) }
+                }
+                core.deltaCore.emulatorBridge.deactivateInput(1,playerIndex:0)
+                XCTAssertTrue(core.pause())
+                let afterNotice = try XCTUnwrap(soul.read().ledger)
+                let retained = afterNotice.dead == beforeNotice.dead && afterNotice.records == beforeNotice.records
+                    && afterNotice.battleLosses?.notices.first(where:{$0.id == pending.id})?.slots == pending.slots
+                let noticeProof:[String:Any] = ["id":pending.id.uuidString,"sawActive":sawActive,
+                    "sawNativeAcknowledgment":sawAcknowledgment,"announced":completed,"nativeAPresses":presses,
+                    "deathAndRecordsRetained":retained]
+                try JSONSerialization.data(withJSONObject:noticeProof,options:[.prettyPrinted,.sortedKeys])
+                    .write(to:output.appendingPathComponent("death-notice-setup.json"))
+                guard sawActive && sawAcknowledgment && completed && retained else {
+                    XCTFail("Acknowledge the actual fixture loss without discarding its durable history")
+                    return
+                }
+                soulSetup["deathNoticeSetup"] = noticeProof
+            }
+            let ready = soul.read(), installed = BoundVBABattleBridge.qaSoulPolicyStatus()
+            soulSetup.merge(["gameID":gameID,"run":run.uuidString,"binding":binding,"ready":ready.ready,
+                "monCount":ready.mons.count,"error":ready.error as Any? ?? NSNull(),
+                "flags":installed&0xFFFFFFFF,"sequence":installed>>32,
+                "ledgerFile":"host-soul-ready.json","originalLedgerFile":"host-soul.json"]) { _,new in new }
+            if let data = try? Data(contentsOf:ledgerURL) {
+                try data.write(to:output.appendingPathComponent("host-soul-ready.json"))
+                soulSetup["ledgerSHA256"] = SHA256.hash(data:data).map { String(format:"%02x",$0) }.joined()
+                let ledger = try JSONDecoder().decode(BoundSoulLedger.self,from:data)
+                XCTAssertTrue(ledger.valid); XCTAssertEqual(ledger.run,run); XCTAssertEqual(ledger.binding,binding); XCTAssertFalse(ledger.ended)
+            } else { XCTFail("The actual Soul observation pipeline must persist its task ledger") }
+            try JSONSerialization.data(withJSONObject:soulSetup,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("soul-setup.json"))
+            XCTAssertTrue(ready.ready); XCTAssertGreaterThan(ready.mons.count,0); XCTAssertNil(ready.error)
+            XCTAssertEqual(installed&15,13); XCTAssertGreaterThan(installed>>32,0); XCTAssertEqual((installed>>32)&1,0)
+            _ = try XCTUnwrap(ready.ready && !ready.mons.isEmpty && ready.error == nil
+                             && installed&15 == 13 && installed>>32>0 && (installed>>32)&1 == 0 ? true:nil,
+                             "Do not measure before the actual Soul owner applies its durable receipt")
+        } else {
+            let status = BoundVBABattleBridge.qaSoulPolicyStatus()
+            soulSetup["flags"] = status&0xFFFFFFFF; soulSetup["sequence"] = status>>32
+            XCTAssertEqual(status&13,0); XCTAssertEqual(status>>32,0)
+        }
+        if mode != "off" {
+            let deadline = ProcessInfo.processInfo.systemUptime+30
+            while (!coordinator.sharing.joined || !coordinator.sharing.livePresence.connectionReaderCheck(at:ProcessInfo.processInfo.systemUptime).romVerified
+                   || (mode == "peer" && (coordinator.sharing.livePresence.receivedPackets < 3
+                       || coordinator.sharing.livePresence.movement.reconnecting
+                       || (coordinator.sharing.livePresence.movement.probe.read()?.flags ?? 0)&7 != 7))),
+                  ProcessInfo.processInfo.systemUptime < deadline {
+                if core.state == .paused { _ = core.resume() }
+                try await Task.sleep(for:.milliseconds(20))
+            }
+            if core.state == .running { XCTAssertTrue(core.pause()) }
+            XCTAssertTrue(coordinator.sharing.joined)
+            XCTAssertTrue(coordinator.sharing.livePresence.connectionReaderCheck(at:ProcessInfo.processInfo.systemUptime).romVerified)
+            if mode == "peer" {
+                XCTAssertNotNil(coordinator.sharing.livePresence.peerEpoch); XCTAssertGreaterThanOrEqual(coordinator.sharing.livePresence.receivedPackets,3)
+                XCTAssertFalse(coordinator.sharing.livePresence.movement.reconnecting)
+                XCTAssertEqual((coordinator.sharing.livePresence.movement.probe.read()?.flags ?? 0)&7,7)
+                XCTAssertNotNil(coordinator.sharing.livePresence.movement.probe.hostInput())
+            }
+        }
+        func rendezvous(_ phase: String) async throws {
+            let url = try XCTUnwrap(URL(string:"http://127.0.0.1:\(port)/\(phase)/\(namespace.uppercased())/\(peer)"))
+            var request = URLRequest(url:url); request.httpMethod = "PUT"; request.httpBody = Data()
+            let (_, response) = try await URLSession.shared.data(for:request)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode,200)
+            let deadline = ProcessInfo.processInfo.systemUptime+40
+            var bothReady = false
+            while !bothReady, ProcessInfo.processInfo.systemUptime < deadline {
+                let (data, _) = try await URLSession.shared.data(from:url)
+                let value = try JSONSerialization.jsonObject(with:data) as? [String:[String]]
+                bothReady = value?["ready"] == ["A","B"]
+                if !bothReady { try await Task.sleep(for:.milliseconds(50)) }
+            }
+            XCTAssertTrue(bothReady)
+        }
+        if mode == "peer" {
+            // A fresh namespace is required for every invocation. Both peers
+            // remain live until setup and the native control handshake finish.
+            XCTAssertTrue(core.resume()); try await rendezvous("ready"); XCTAssertTrue(core.pause())
+        }
+        let startTile = try XCTUnwrap(HostMovementTraceTape.rawTile(core))
+        let fixtureInstances = BoundLocalPairedTransport.qaInstanceDiagnostics()
+        XCTAssertEqual(fixtureInstances.filter{$0["running"] as? Bool == true}.count,1,"Exactly one fixture publisher may own this simulator process")
+        XCTAssertEqual(startTile.group,3); XCTAssertEqual(startTile.number,1)
+        XCTAssertEqual(startTile.x,36); XCTAssertEqual(startTile.y,mode == "peer" && peer == "B" ? 24:20)
+        if portDiagnostics { try HostMovementTraceTape.captureNativeContext(core,output:output,sourceHash:digest) }
+        // Long acceptance must cross the retained native deadline failure
+        // beyond frame13000. Keep a fixed upper bound and preserve every event;
+        // the existing dropped-event and per-frame gates still fail closed.
+        let trace = EmulatorFrameTrace(capacity:max(250_000,frames*72))
+        let soulMetricsBefore = coordinator.sharing.soulLink.probe.observationMetrics()
+        let sceneMetricsBefore = coordinator.playerStateDisplay.probe.qaPlayerImageMetrics()
+        let tape = HostMovementTraceTape(movement:coordinator.sharing.livePresence.movement.probe,
+                                         soul:coordinator.sharing.soulLink.probe,
+                                         scene:coordinator.playerStateDisplay.probe,
+                                         faintedParty:faintedPartyRequested)
+        trace.observeVideo = { [weak core, weak trace] frame in
+            if let core, let trace {
+                HostMovementTraceTape.observeVideo(core,trace:trace,frame:frame)
+                if portDiagnostics { HostMovementTraceTape.observePort(core,trace:trace,frame:frame,phase:"video") }
+            }
+        }
+        core.debugFrameTrace = trace
+        if portDiagnostics { BoundLocalPairedTransport.qaSetTrace(trace) }
+        core.updateHandler = { core in
+            core.debugFrameTrace?.record("qa.soulFence.beforeOwner",value:BoundVBABattleBridge.qaSoulFrameBlocked() ? 1:0)
+            if portDiagnostics, let trace=core.debugFrameTrace { HostMovementTraceTape.observePort(core,trace:trace,frame:trace.currentFrame,phase:"beforeOwner") }
+            fullOwner(core); tape.receive(core)
+        }
+        tape.arm(frames:frames,moving:peer == "A" || mode != "peer",running:env["BOUND_HOST_WALK"] != "1",vertical:axis == "vertical")
+        coordinator.playerStateDisplay.probe.qaConfigureSceneDiagnostics(frames:sceneDiagnostics ? 61...UInt64(frames):nil)
+        core.rate = rate
+        XCTAssertTrue(core.resume())
+        let deadline = ProcessInfo.processInfo.systemUptime+Double(frames)/rate/30+20
+        while !tape.finished, ProcessInfo.processInfo.systemUptime < deadline {
+            if portDiagnostics {
+                let now=ProcessInfo.processInfo.systemUptime
+                let presence=coordinator.sharing.livePresence, check=presence.connectionReaderCheck(at:now)
+                trace.record("main.reader.\(check.status)",value:check.localPoseFresh ? 1:0,
+                             detail:UInt64(check.lastReceiveAgeMS ?? 1_000_000))
+                trace.record("main.movement",value:presence.movement.reconnecting ? 1:0,
+                             detail:presence.movementContext(at:now) == nil ? 0:1)
+                trace.record("main.presence",value:Double(check.sent),detail:UInt64(check.received))
+            }
+            try await Task.sleep(for:.milliseconds(20))
+        }
+        _ = try XCTUnwrap(tape.finished ? true:nil,"Do not announce completion before the measured tape ends")
+        let finishRendezvousStartedAt = ProcessInfo.processInfo.systemUptime
+        XCTAssertEqual(core.state,.running)
+        if mode == "peer" {
+            // The faster peer must keep its real native/presence/control lane
+            // continuously running until both tapes finish. Even a brief pause
+            // publishes an inactive reader and can revoke the other peer's
+            // authority during its final measured frames. receive() is bounded
+            // by its tape limit and has already released this peer's input.
+            try await rendezvous("finished")
+        }
+        let finishRendezvousEndedAt = ProcessInfo.processInfo.systemUptime
+        XCTAssertEqual(core.state,.running)
+        let finalPauseStartedAt = ProcessInfo.processInfo.systemUptime
+        XCTAssertTrue(core.pause())
+        core.debugFrameTrace = nil
+        BoundLocalPairedTransport.qaSetTrace(nil)
+        if sceneDiagnostics {
+            try HostMovementTraceTape.writeSceneDiagnostics(coordinator.playerStateDisplay.probe.qaSceneDiagnostics(),
+                                                           output:output,sourceHash:digest)
+        }
+        try await Task.sleep(for:.milliseconds(300))
+        let events = trace.snapshot()
+        try JSONEncoder().encode(events).write(to:output.appendingPathComponent("events.json"))
+        let stages = Dictionary(grouping:events,by:\.stage).mapValues(\.count)
+        let activeHostSamples = events.filter{$0.stage == "probe.cachedGuest" && $0.detail&7 == 7}.count
+        let blockedSamples = events.filter{$0.stage == "probe.cachedGuest" && $0.detail&(32|64) != 0}.count
+        let report: [String:Any] = ["romSHA256":digest,"namespace":namespace,"peer":peer,"mode":mode,"axis":axis,"rate":rate,
+            "requestedFrames":frames,"finished":tape.finished,"droppedTraceEvents":trace.droppedEvents,"stages":stages,
+            "joined":coordinator.sharing.joined,"peerConfirmed":coordinator.sharing.livePresence.peerEpoch != nil,
+            "presenceSent":coordinator.sharing.livePresence.sentPackets,"presenceReceived":coordinator.sharing.livePresence.receivedPackets,
+            "nativeActiveHostSamples":activeHostSamples,"nativeBlockedSamples":blockedSamples,
+            "portDiagnostics":portDiagnostics,
+            "sceneDiagnostics":sceneDiagnostics,
+            "fixtureInstances":BoundLocalPairedTransport.qaInstanceDiagnostics(),
+            "gameViews":core.gameViews.count,"output":output.path,
+            "nativeFollowerRequested":followerRequested,"settings":options.settings.base64EncodedString(),
+            "faintedPartyRequested":faintedPartyRequested,
+            "finishLifecycle":["schema":1,"keptRunningThroughPeerFinish":mode == "peer",
+                "rendezvousStartedAt":finishRendezvousStartedAt,"rendezvousEndedAt":finishRendezvousEndedAt,
+                "finalPauseStartedAt":finalPauseStartedAt,
+                "scope":"No pause, trace detach, or owner replacement between the measured tape end and finished rendezvous. The exact measured interval ends at qa.measureEnd; later frame and asynchronous render events remain bounded and retained."],
+            "soulPolicyRequested":soulPolicyRequested,"soulPolicySetup":soulSetup,
+            "soulObservationBefore":soulMetricsBefore,"soulObservationAfter":try XCTUnwrap(tape.soulMetricsAtEnd),
+            "soulObservationAfterStartup":try XCTUnwrap(tape.soulMetricsAfterStartup),
+            "playerImageObservationBefore":sceneMetricsBefore,
+            "playerImageObservationAfterStartup":try XCTUnwrap(tape.sceneMetricsAfterStartup),
+            "playerImageObservationAfter":try XCTUnwrap(tape.sceneMetricsAtEnd),
+            "playerImageObservationScope":"DEBUG pending-image decoder counters at the same measured-owner boundaries as Soul metrics; scene and authority gates independently establish complete-frame acceptance.",
+            "soulObservationInterval":"Before trace, after measured owner60, and after the final measured owner; all before peer rendezvous/drain.",
+            "soulPolicyScope":"Optional production probe with a task-owned durable offline ledger; no paired battle history or backend admission. Status is observed after the full frame owner, not inferred from settings.",
+            "scope":"Production GameViewController/coordinator/updateHandler and GameView rendering; exact-ROM native input, published-ABI cold fixture, UUID-scoped localhost presence and ordered control packets including the real movement handshake. Requested follower uses native service dialogue and per-frame observation; otherwise it retains the cold-boot setting. No backend account/server-save admission or physical phone scanout. Metal presentCommandCompleted is presentation-command-buffer completion, not drawable presentation or Core Image completion; GL draw is handoff only. Crop frames at qa.measureEnd; probe.cachedGuest is admitted cached state, native.rawWorldFrame/Flags are unfenced with writer sequence in detail."]
+        try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("summary.json"))
+        XCTAssertTrue(tape.finished); XCTAssertEqual(trace.droppedEvents,0)
+        XCTAssertEqual(BoundLocalPairedTransport.qaInstanceDiagnostics().filter{$0["running"] as? Bool == true}.count,1)
+        if mode == "peer" { XCTAssertGreaterThan(activeHostSamples,frames*9/10); XCTAssertGreaterThan(stages["probe.hostInput"] ?? 0,frames*9/10) }
+        else { XCTAssertEqual(activeHostSamples,0) }
+        XCTAssertEqual(blockedSamples,0)
+        XCTAssertEqual(stages["native.tileX"],frames); XCTAssertEqual(stages["native.tileMissing"] ?? 0,0)
+        let stationary = mode == "peer" && peer == "B"
+        XCTAssertTrue(events.filter{$0.stage == "native.tileX"}.allSatisfy{
+            axis == "vertical" || stationary ? Int($0.value) == 36:(33...36).contains(Int($0.value))})
+        XCTAssertTrue(events.filter{$0.stage == "native.tileY"}.allSatisfy{
+            stationary ? Int($0.value) == 24:(axis == "vertical" ? (20...22).contains(Int($0.value)):Int($0.value) == 20)})
+        XCTAssertTrue(events.filter{$0.stage == "native.map"}.allSatisfy{$0.value == 3 && $0.detail == 1})
+        let measuredIDs = events.filter{$0.stage == "qa.input"}.map(\.frame)
+        let postStartup = Set(measuredIDs.dropFirst(60))
+        let soulRows = events.filter{$0.stage == "qa.soulPolicy" && postStartup.contains($0.frame)}
+        XCTAssertEqual(soulRows.map(\.frame),Array(measuredIDs.dropFirst(60)))
+        XCTAssertTrue(soulRows.allSatisfy { soulPolicyRequested
+            ? UInt64($0.value) == 13 && $0.detail>0 && $0.detail&1 == 0
+            : UInt64($0.value)&13 == 0 && $0.detail == 0 })
+        for stage in ["qa.soulFence.beforeOwner","qa.soulFence.afterOwner"] {
+            let rows = events.filter{$0.stage == stage && postStartup.contains($0.frame)}
+            XCTAssertEqual(rows.map(\.frame),Array(measuredIDs.dropFirst(60)))
+            XCTAssertTrue(rows.allSatisfy{$0.value == 0},"Routine field movement must not close the Soul frame fence")
+        }
+        if faintedPartyRequested {
+            let rows = events.filter{$0.stage == "qa.faintedParty" && postStartup.contains($0.frame)}
+            XCTAssertEqual(rows.map(\.frame),Array(measuredIDs.dropFirst(60)))
+            XCTAssertTrue(rows.allSatisfy{$0.value == 2 && $0.detail>>16 == 0 && $0.detail&0xFFFF>0})
+        }
+        for stage in ["owner.romService","owner.movement","owner.world","owner.reader","owner.cooperative","owner.soul","owner.battle","render.request","render.accept","view.input"] { XCTAssertGreaterThan(stages[stage] ?? 0,0,stage) }
+        XCTAssertGreaterThan((stages["view.metal.commit"] ?? 0)+(stages["view.gl.draw"] ?? 0),0)
+        print("MOVEMENT_HOST_TRACE",output.path)
+    }
+}
+#endif
 
 /// Current cartridges require Bound's admitted New Game data, not a legacy
 /// Continue button sequence. Only the published host ABI is written; the ROM

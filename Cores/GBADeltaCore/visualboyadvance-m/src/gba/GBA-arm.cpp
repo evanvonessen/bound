@@ -21,6 +21,7 @@
 #include "bios.h"
 #include "elf.h"
 #include "remote.h"
+#include "BoundQAGuestTiming.h"
 
 #ifdef PROFILING
 #include "prof/prof.h"
@@ -2836,6 +2837,9 @@ static void tester(void) {
 int armExecute()
 {
     do {
+#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
+        BoundQAGuestTimingInstruction();
+#endif
         if (cheatsEnabled) {
             cpuMasterCodeCheck();
         }

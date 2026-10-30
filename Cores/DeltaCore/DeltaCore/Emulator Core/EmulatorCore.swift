@@ -8,6 +8,58 @@
 
 import AVFoundation
 
+#if DEBUG
+/// Opt-in, bounded frame tracing. Install only while the core is paused.
+/// Numeric events stay in memory until QA exports them after playback stops.
+public final class EmulatorFrameTrace: @unchecked Sendable {
+    public struct Event: Codable, Sendable {
+        public let frame: UInt64
+        public let stage: String
+        public let time: TimeInterval
+        public let duration: TimeInterval
+        public let value: Double
+        public let detail: UInt64
+    }
+    private let lock = NSLock()
+    private let capacity: Int
+    private var frame: UInt64 = 0
+    private var events: [Event] = []
+    private var overflow = 0
+    /// Set before resuming. Runs synchronously on the native video owner.
+    public var observeVideo: ((UInt64) -> Void)?
+    public init(capacity: Int = 200_000) {
+        self.capacity = max(1, min(capacity, 2_000_000))
+        events.reserveCapacity(self.capacity)
+    }
+    public var currentFrame: UInt64 { lock.lock(); defer { lock.unlock() }; return frame }
+    public var droppedEvents: Int { lock.lock(); defer { lock.unlock() }; return overflow }
+    public func snapshot() -> [Event] { lock.lock(); defer { lock.unlock() }; return events }
+    @discardableResult public func beginFrame(renderGraphics: Bool) -> UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        frame &+= 1
+        append("frame.begin", frame: frame, time: ProcessInfo.processInfo.systemUptime,
+               duration: 0, value: renderGraphics ? 1 : 0, detail: 0)
+        return frame
+    }
+    public func record(_ stage: String, frame: UInt64? = nil, at time: TimeInterval? = nil,
+                       duration: TimeInterval = 0, value: Double = 0, detail: UInt64 = 0) {
+        let now = time ?? ProcessInfo.processInfo.systemUptime
+        lock.lock(); defer { lock.unlock() }
+        append(stage, frame: frame ?? self.frame, time: now, duration: duration, value: value, detail: detail)
+    }
+    private func append(_ stage: String, frame: UInt64, time: TimeInterval,
+                        duration: TimeInterval, value: Double, detail: UInt64) {
+        guard events.count < capacity else { overflow += 1; return }
+        events.append(.init(frame: frame, stage: stage, time: time, duration: duration, value: value, detail: detail))
+    }
+    public func measure<T>(_ stage: String, frame: UInt64? = nil, _ work: () throws -> T) rethrows -> T {
+        let start = ProcessInfo.processInfo.systemUptime
+        defer { record(stage, frame: frame, at: start, duration: ProcessInfo.processInfo.systemUptime - start) }
+        return try work()
+    }
+}
+#endif
+
 extension EmulatorCore
 {
     @objc public static let emulationDidQuitNotification = Notification.Name("com.rileytestut.DeltaCore.emulationDidQuit")
@@ -52,6 +104,9 @@ public final class EmulatorCore: NSObject
     
     public var updateHandler: ((EmulatorCore) -> Void)?
     public var saveHandler: ((EmulatorCore) -> Void)?
+    #if DEBUG
+    public var debugFrameTrace: EmulatorFrameTrace?
+    #endif
     
     public let audioManager: AudioManager
     public let videoManager: VideoManager
@@ -523,6 +578,9 @@ private extension EmulatorCore
                 
                 if framesToSkip > 0
                 {
+                    #if DEBUG
+                    self.debugFrameTrace?.record("loop.catchup", value: Double(framesToSkip), detail: self.rate == 1 ? 1 : 0)
+                    #endif
                     // Only actually skip frames if we're running at normal speed
                     if self.rate == 1.0
                     {
@@ -560,7 +618,17 @@ private extension EmulatorCore
     
     func runFrame(renderGraphics: Bool)
     {
+        #if DEBUG
+        let trace = self.debugFrameTrace
+        let tracedFrame = trace?.beginFrame(renderGraphics: renderGraphics) ?? 0
+        self.videoManager.debugBeginFrame(trace: trace, frame: tracedFrame)
+        let frameStarted = trace == nil ? 0 : ProcessInfo.processInfo.systemUptime
+        #endif
         self.deltaCore.emulatorBridge.runFrame(processVideo: renderGraphics)
+        #if DEBUG
+        trace?.record("frame.emulate", frame: tracedFrame, at: frameStarted,
+                      duration: ProcessInfo.processInfo.systemUptime - frameStarted)
+        #endif
         
         if renderGraphics
         {
@@ -572,7 +640,14 @@ private extension EmulatorCore
             dispatchGroup.leave()
         }
         
+        #if DEBUG
+        if let trace { trace.measure("frame.updateHandler", frame: tracedFrame) { self.updateHandler?(self) } }
+        else { self.updateHandler?(self) }
+        trace?.record("frame.end", frame: tracedFrame, at: frameStarted,
+                      duration: ProcessInfo.processInfo.systemUptime - frameStarted)
+        #else
         self.updateHandler?(self)
+        #endif
     }
 }
 

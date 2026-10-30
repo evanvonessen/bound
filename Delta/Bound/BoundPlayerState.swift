@@ -22,8 +22,8 @@ struct BoundPlayerState: Equatable, Sendable {
     let runningState: Int
     let tileTransitionState: Int
     var scene: BoundPlayerScene? = nil
-    // Presentation can observe the next object step before CameraMove updates
-    // the save coordinate. This anchor never grants interaction authority.
+    // A native step can update the object before CameraMove updates the save.
+    // This anchor only locates the rendered camera; collision uses native tiles.
     var cameraTile: Point? = nil
     var mapInstance: UInt64? = nil
     var dynamicWarp: DynamicWarp? = nil
@@ -203,9 +203,16 @@ enum BoundPlayerStateDecoder {
             previous = .init(x: previous.x + delta.x, y: previous.y + delta.y)
             rebasedAtBoundary = true
         }
-        let pendingCameraStep = presentationOnly && previous == cameraTile
+        // Native UpdateObjectEvents commits the next step before CameraMove.
+        // A completed emulator frame may interrupt that valid in-map phase.
+        // Read its fresh object coordinates without treating it as a reader
+        // failure (which would revoke both peers' movement channel). Authority
+        // never borrows a connected-map rebase or an out-of-map endpoint.
+        let pendingCameraStep = previous == cameraTile
             && abs(tile.x - cameraTile.x) + abs(tile.y - cameraTile.y) == 1
             && avatar[2] == 2 && avatar[3] == 2
+            && (presentationOnly || ((0..<width).contains(tile.x) && (0..<height).contains(tile.y)
+                && (0..<width).contains(previous.x) && (0..<height).contains(previous.y)))
         guard (tile == cameraTile || pendingCameraStep),
               (-7..<width + 7).contains(tile.x), (-7..<height + 7).contains(tile.y),
               avatar[2] <= 2, avatar[3] <= 2 else { return invalid("Coordinate or movement disagreement") }

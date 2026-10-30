@@ -398,7 +398,39 @@ bool writeNativeROM() {
 }
 #if DEBUG && TARGET_OS_SIMULATOR
 #include "SoulLink/BoundSoulQACode.h"
+#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
+#include "../../Cores/GBADeltaCore/visualboyadvance-m/src/gba/BoundQAGuestTiming.h"
+#endif
+extern uint32_t armNextPC;
 static uint8_t soulQAScriptBackup[128];
+namespace {
+constexpr unsigned MovementEntryOffsets[]={0x4B0,0x56578};
+constexpr uint8_t MovementNativeEntries[2][8]={
+    {0x00,0xB5,0x0A,0xF0,0x61,0xFE,0x00,0x06},
+    {0x00,0xB5,0x13,0xF0,0x95,0xFA,0x20,0xF0}
+};
+static __weak DLTAEmulatorCore *movementEntryCore;
+static uint8_t *movementEntryROM=nullptr;
+static uint8_t movementSavedEntries[2][8];
+static const MultiRedNativeProfile *movementEntryProfile=nullptr;
+static NSString *movementEntryNormalizedSHA=nil;
+#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
+static __weak DLTAEmulatorCore *guestTimingCore;
+static uint8_t *guestTimingROM=nullptr;
+static NSDictionary<NSString *,id> *guestTimingMetadata=nil;
+#endif
+NSString *movementEntryHash(const void *bytes,CC_LONG count) {
+    uint8_t hash[CC_SHA256_DIGEST_LENGTH];CC_SHA256(bytes,count,hash);
+    NSMutableString *text=[NSMutableString stringWithCapacity:64];
+    for(uint8_t byte:hash)[text appendFormat:@"%02x",byte];return text;
+}
+bool movementEntryPipelineClear() {
+    if(armNextPC<0x08000000||armNextPC>=0x0E000000)return true;
+    const unsigned offset=armNextPC&0x1FFFFFF;
+    for(unsigned at:MovementEntryOffsets)if(offset>=at-4&&offset<at+12)return false;
+    return true;
+}
+}
 #endif
 
 @implementation BoundVBABattleBridge
@@ -738,6 +770,18 @@ static uint8_t soulQAScriptBackup[128];
     const uint32_t sequence=word(p+8);
     if(word(p)!=0x314F5742||word(p+4)!=1||!sequence||(sequence&1))return [NSData data];
     NSData *copy=[NSData dataWithBytes:p length:256];
+    return sequence==word(p+8)?copy:[NSData data];
+}
++ (NSData *)worldMovementPublicationHeader {
+    const auto *profile=multiRedProfile(rom);
+    if(!rom||!workRAM||!profile||profile->presenceOutputSize!=256
+       ||profile->presenceOutputAddress<0x02000000||profile->presenceOutputAddress>0x0203FF00)return [NSData data];
+    const auto *p=workRAM+profile->presenceOutputAddress-0x02000000;
+    const uint32_t sequence=word(p+8);
+    if(word(p)!=0x314F5742||word(p+4)!=1||!(sequence&1))return [NSData data];
+    // This deliberately excludes every actor/request field. The frame owner
+    // may use progress only to wait, never to admit an uncommitted snapshot.
+    NSData *copy=[NSData dataWithBytes:p length:20];
     return sequence==word(p+8)?copy:[NSData data];
 }
 + (void)setWorldMovementHost:(NSData *)data {
@@ -1447,6 +1491,119 @@ static uint8_t soulQAScriptBackup[128];
 }
 
 #if DEBUG && TARGET_OS_SIMULATOR
++ (NSDictionary<NSString *,id> *)qaBeginGuestTiming:(DLTAEmulatorCore *)core expectedROM:(NSData *)image points:(NSArray<NSDictionary<NSString *,id> *> *)points maximumEvents:(NSUInteger)maximumEvents {
+#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
+    if(![NSThread isMainThread]||core.state!=StatePaused||guestTimingROM||movementEntryROM
+       ||image.length!=0x2000000||!ownsROMUI()||armed||inviteActive||installed
+       ||points.count<1||points.count>64||maximumEvents<1024||maximumEvents>262144)return nil;
+    const auto *profile=multiRedProfile(rom);
+    const auto *source=static_cast<const uint8_t *>(image.bytes);
+    if(!profile||!profile->matches(source))return nil;
+    // Only the existing host ABI pages are normalized. In particular, an
+    // unexpected entry patch or runtime shim cannot acquire a source-ROM name.
+    NSMutableData *expected=[image mutableCopy],*resident=[NSMutableData dataWithBytes:rom length:0x2000000];
+    profile->normalize(static_cast<uint8_t *>(expected.mutableBytes));
+    profile->normalize(static_cast<uint8_t *>(resident.mutableBytes));
+    if(![expected isEqualToData:resident])return nil;
+    uint32_t addresses[64]={},returns[64]={};
+    NSMutableArray *verified=[NSMutableArray arrayWithCapacity:points.count];
+    for(NSUInteger i=0;i<points.count;i++) {
+        NSDictionary *point=points[i];
+        if(![point isKindOfClass:[NSDictionary class]])return nil;
+        NSString *name=point[@"name"],*encoded=point[@"bytes"];
+        NSNumber *address=point[@"address"],*trackReturn=point[@"trackReturn"];
+        if(![name isKindOfClass:[NSString class]]||name.length<1||name.length>128
+           ||![encoded isKindOfClass:[NSString class]]||![address isKindOfClass:[NSNumber class]]
+           ||![trackReturn isKindOfClass:[NSNumber class]])return nil;
+        const uint64_t pc=address.unsignedLongLongValue,track=trackReturn.unsignedLongLongValue;
+        if(pc<0x08000000||pc>0x09FFFFF0||(pc&1)||track>1
+           ||address.doubleValue!=double(pc)||trackReturn.doubleValue!=double(track))return nil;
+        NSData *bytes=[[NSData alloc] initWithBase64EncodedString:encoded options:0];
+        if(bytes.length!=16||memcmp(source+pc-0x08000000,bytes.bytes,16)
+           ||memcmp(rom+pc-0x08000000,bytes.bytes,16))return nil;
+        addresses[i]=uint32_t(pc);returns[i]=uint32_t(track);
+        [verified addObject:@{@"name":name,@"address":@(pc),@"bytes":encoded,@"trackReturn":@(track)}];
+    }
+    if(!BoundQAGuestTimingStart(addresses,returns,points.count,maximumEvents))return nil;
+    guestTimingCore=core;guestTimingROM=rom;
+    guestTimingMetadata=@{@"enabled":@YES,@"schema":@1,@"sourceROM_SHA256":movementEntryHash(source,0x2000000),
+        @"points":verified,@"maximumEvents":@(maximumEvents),@"soulHooked":@(soulHooked()),@"soulResident":@(soulResident()),
+        @"scope":@"Opt-in host observer of guest interpreter cycles. No guest writes or added guest cycles; wall-clock performance and physical display acceptance excluded. Hardware event rows and instruction-complete rows have distinct boundaries and need not be globally timestamp ordered."};
+    return guestTimingMetadata;
+#else
+    return nil;
+#endif
+}
++ (NSDictionary<NSString *,id> *)qaEndGuestTiming:(DLTAEmulatorCore *)core {
+#if defined(BOUND_QA_GUEST_TIMING) && BOUND_QA_GUEST_TIMING
+    if(![NSThread isMainThread]||core.state!=StatePaused||!guestTimingROM||guestTimingCore!=core)return nil;
+    BoundQAGuestTimingSummary summary{};
+    const auto *records=BoundQAGuestTimingStop(&summary);
+    NSMutableDictionary *result=[guestTimingMetadata mutableCopy];
+    result[@"recordBytes"]=@(sizeof(BoundQAGuestTimingRecord));result[@"recordCount"]=@(summary.records);
+    result[@"dropped"]=@(summary.dropped);result[@"stackOverflows"]=@(summary.stackOverflows);
+    result[@"invalidated"]=@(summary.invalidated+(guestTimingROM!=rom?1:0));
+    result[@"cycles"]=@(summary.cycles);result[@"videoFrames"]=@(summary.videoFrames);
+    result[@"dmaCycles"]=@(summary.dmaCycles);result[@"idleCycles"]=@(summary.idleCycles);
+    result[@"openCalls"]=@(summary.openCalls);result[@"openInterrupts"]=@(summary.openInterrupts);
+    result[@"columns"]=@[@"kind",@"cycle",@"callID",@"pointIndex",@"pc",@"lr",@"sp",@"modeAndARM",@"vcount",@"dispstat",@"lcdTicksSigned",@"ie",@"if",@"ime",@"videoFrame",@"dmaCycles",@"idleCycles"];
+    result[@"kindNames"]=@{@"1":@"call",@"2":@"return",@"3":@"irq",@"4":@"irqReturn",@"5":@"video",@"6":@"start",@"7":@"stop",@"8":@"invalidated",@"9":@"marker"};
+    result[@"records"]=[NSData dataWithBytes:records length:summary.records*sizeof(BoundQAGuestTimingRecord)];
+    guestTimingCore=nil;guestTimingROM=nullptr;guestTimingMetadata=nil;
+    return result;
+#else
+    return nil;
+#endif
+}
++ (NSDictionary<NSString *,id> *)qaBeginNativeMovementEntries:(DLTAEmulatorCore *)core expectedROM:(NSData *)image {
+    // Exact two-entry ablation, never a general ROM or RAM write API. The
+    // paused core is passed explicitly so a running caller is rejected.
+    if(![NSThread isMainThread]||core.state!=StatePaused||movementEntryROM||image.length!=0x2000000
+       ||!ownsROMUI()||!overworld()||armed||inviteActive||installed||!movementEntryPipelineClear()) return nil;
+    const auto *profile=multiRedProfile(rom);
+    const auto *source=static_cast<const uint8_t *>(image.bytes);
+    if(!profile||!profile->matches(source))return nil;
+    NSMutableData *expected=[image mutableCopy],*resident=[NSMutableData dataWithBytes:rom length:0x2000000];
+    profile->normalize(static_cast<uint8_t *>(expected.mutableBytes));
+    profile->normalize(static_cast<uint8_t *>(resident.mutableBytes));
+    if(![expected isEqualToData:resident])return nil;
+    const uint8_t thunk[]={0x00,0x4B,0x18,0x47};
+    NSMutableArray *patches=[NSMutableArray array];
+    for(unsigned i=0;i<2;i++) {
+        const unsigned at=MovementEntryOffsets[i];const uint32_t target=word(source+at+4);
+        if(memcmp(source+at,thunk,4)||!(target&1)||target<0x08000000+profile->codeStart
+           ||target>=0x08000000+profile->codeEnd||memcmp(rom+at,source+at,8))return nil;
+        [patches addObject:@{@"offset":@(at),@"before":[[NSData dataWithBytes:source+at length:8] base64EncodedStringWithOptions:0],
+                            @"after":[[NSData dataWithBytes:MovementNativeEntries[i] length:8] base64EncodedStringWithOptions:0]}];
+    }
+    NSString *before=movementEntryHash(rom,0x2000000),*sourceHash=movementEntryHash(source,0x2000000);
+    movementEntryNormalizedSHA=movementEntryHash(expected.bytes,0x2000000);
+    NSMutableData *diagnostic=[image mutableCopy];
+    for(unsigned i=0;i<2;i++) {
+        const unsigned at=MovementEntryOffsets[i];memcpy(movementSavedEntries[i],rom+at,8);
+        memcpy(rom+at,MovementNativeEntries[i],8);
+        memcpy(static_cast<uint8_t *>(diagnostic.mutableBytes)+at,MovementNativeEntries[i],8);
+    }
+    movementEntryROM=rom;movementEntryCore=core;movementEntryProfile=profile;
+    return @{@"sourceROM_SHA256":sourceHash,@"diagnosticROM_SHA256":movementEntryHash(diagnostic.bytes,0x2000000),
+             @"residentBeforeSHA256":before,@"residentAfterSHA256":movementEntryHash(rom,0x2000000),
+             @"normalizedSourceSHA256":movementEntryNormalizedSHA,@"patches":patches,@"pausedNextPC":@(armNextPC),
+             @"scope":@"Private paused same-anchor main/field entry ablation. Host ABI pages are normalized only for identity verification; no RAM/BWO writes, no diagnostic saved-state compatibility or original whole-ROM claim."};
+}
++ (NSDictionary<NSString *,id> *)qaRestoreNativeMovementEntries:(DLTAEmulatorCore *)core {
+    if(![NSThread isMainThread]||core.state!=StatePaused)return nil;
+    if(!movementEntryROM)return @{@"restored":@YES,@"wasActive":@NO};
+    if(movementEntryROM!=rom||movementEntryCore!=core||!movementEntryProfile||!movementEntryPipelineClear())return nil;
+    for(unsigned i=0;i<2;i++)if(memcmp(rom+MovementEntryOffsets[i],MovementNativeEntries[i],8))return nil;
+    for(unsigned i=0;i<2;i++)memcpy(rom+MovementEntryOffsets[i],movementSavedEntries[i],8);
+    NSMutableData *resident=[NSMutableData dataWithBytes:rom length:0x2000000];
+    movementEntryProfile->normalize(static_cast<uint8_t *>(resident.mutableBytes));
+    NSString *normalized=movementEntryHash(resident.bytes,0x2000000);
+    const bool exact=[normalized isEqualToString:movementEntryNormalizedSHA];
+    movementEntryROM=nullptr;movementEntryCore=nil;movementEntryProfile=nullptr;movementEntryNormalizedSHA=nil;
+    return @{@"restored":@YES,@"wasActive":@YES,@"normalizedIdentityRestored":@(exact),
+             @"normalizedRestoredSHA256":normalized,@"residentRestoredSHA256":movementEntryHash(rom,0x2000000)};
+}
 // Frozen phase-5E pure observer used only as a byte/validation oracle in QA.
 + (NSDictionary<NSString *,id> *)qaSoulFaintAcknowledgementChecks {
     uint8_t ring[12+32*8]={};put32(ring,0x314C5342);put32(ring+4,1);put32(ring+12,17);put32(ring+16,42);
@@ -1503,6 +1660,23 @@ static uint8_t soulQAScriptBackup[128];
     const auto *profile=multiRedProfile(rom);
     return rom&&profile&&profile->eliminationHostSize==288
         ? [NSData dataWithBytes:rom+profile->eliminationHostOffset length:288] : [NSData data];
+}
++ (uint64_t)qaSoulPolicyStatus {
+    if(!rom)return 0;
+    uint32_t flags=soulHooked()?1u:(soulResident()?2u:0u),sequence=0;
+    const uint32_t count=word(rom+SoulPolicy+4);
+    if(word(rom+SoulPolicy)==0x314C5342&&count<=2048)flags|=4;
+    const auto *profile=multiRedProfile(rom);
+    if(profile&&profile->eliminationHostSize==288) {
+        const auto *in=rom+profile->eliminationHostOffset;sequence=word(in+8);
+        if(word(in)==0x31584C42&&word(in+4)==1&&sequence&&!(sequence&1)
+           &&word(in+12)==count&&word(in+16)==1&&!word(in+20)&&!word(in+24)&&!word(in+28))flags|=8;
+    }
+    return (uint64_t(sequence)<<32)|flags;
+}
++ (BOOL)qaSoulFrameBlocked {
+    auto &fence=soulFrameFence();std::lock_guard<std::mutex> lock(fence.lock);
+    return rom&&fence.cartridge==rom&&fence.blocked;
 }
 + (NSData *)qaWorldMovementHost {
     const auto *profile=multiRedProfile(rom);

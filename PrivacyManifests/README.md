@@ -2,6 +2,22 @@
 
 Reviewed 2026-10-06 against commit `4b971847ef6af8960e64a3bb446acb9bc7de3a29`. These are locally maintained declarations for the exact pinned sources, not manifests published by those SDK versions. No SDK version or runtime source changes accompany them.
 
+Rechecked 2026-10-30 for opt-in multiplayer movement diagnostics in
+`EmulatorCore.swift`, `VideoManager.swift`, and `GameView.swift`. The added
+`ProcessInfo.systemUptime` reads measure frame, renderer and command-buffer
+durations only inside `#if DEBUG`. The bounded event buffer stays in memory;
+the dedicated integration-test owner can export it to its local QA artifacts
+after pausing playback. The additions contain no network transmission. Normal
+Release compilation excludes the observer and its new time reads. Eliding the
+DEBUG branches preserves the prior Release token sequence in all three files;
+the ordinary Release build is also checked for observer symbols and macros.
+Only these three reviewed source hashes are refreshed. The existing system
+boot-time declaration and upstream dependency pins are unchanged. This is a
+required-reason API review, not a broader privacy or distribution attestation.
+The original backport's byte-identity statements below describe that earlier
+snapshot; these DEBUG-only source changes are recorded separately in
+`PrototypePatches/movement-qa-observers.patch`.
+
 Rechecked 2026-10-28 for retired-ROM deletion. The change in
 `GameCollectionViewController.swift` uses a separate deletion-conflict query
 while retaining the existing confirmation, revision checks, and per-game

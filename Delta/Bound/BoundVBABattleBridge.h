@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+@class DLTAEmulatorCore;
 NS_ASSUME_NONNULL_BEGIN
 /// Paused core or completed-frame owner only. Network callbacks never access RAM.
 @interface BoundVBABattleBridge : NSObject
@@ -37,6 +38,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)setROMMultiplayerHost:(NSData *)data;
 + (NSData *)worldMovementSnapshot;
 + (BOOL)worldMovementPublicationInProgress;
++ (NSData *)worldMovementPublicationHeader;
 + (uint64_t)worldMovementTimeline;
 + (void)requestWorldMovementRevocation;
 + (void)setWorldMovementHost:(NSData *)data;
@@ -100,9 +102,22 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)enforceSoulLink;
 + (void)closeSoulLink;
 #if DEBUG && TARGET_OS_SIMULATOR
+/// Read-only guest-cycle diagnostic, available only in an explicitly compiled
+/// BOUND_QA_GUEST_TIMING core. Configure/export while the explicit core is paused.
++ (nullable NSDictionary<NSString *,id> *)qaBeginGuestTiming:(DLTAEmulatorCore *)core expectedROM:(NSData *)image points:(NSArray<NSDictionary<NSString *,id> *> *)points maximumEvents:(NSUInteger)maximumEvents;
++ (nullable NSDictionary<NSString *,id> *)qaEndGuestTiming:(DLTAEmulatorCore *)core;
+/// Private causal diagnostic only. Main-thread paused core; restores exactly
+/// the native main/field entry bytes after a normal same-ROM fixture capture.
+/// No state captured under this diagnostic is a compatible saved game.
++ (nullable NSDictionary<NSString *,id> *)qaBeginNativeMovementEntries:(DLTAEmulatorCore *)core expectedROM:(NSData *)image;
++ (nullable NSDictionary<NSString *,id> *)qaRestoreNativeMovementEntries:(DLTAEmulatorCore *)core;
 + (NSData *)qaWorldMovementHost;
 + (NSData *)qaLinksMenuHost;
 + (NSData *)qaEliminationPolicy;
+/// Read-only frame-owner/paused-core observation: sequence in the high word;
+/// low bits: 1 hooked, 2 inert resident, 4 policy valid, 8 active elimination header.
++ (uint64_t)qaSoulPolicyStatus;
++ (BOOL)qaSoulFrameBlocked;
 + (NSDictionary<NSString *,id> *)qaUncachedSoulLinkSnapshot;
 + (NSDictionary<NSString *,id> *)qaSoulBoxCacheChecks;
 + (NSDictionary<NSString *,id> *)qaSoulFaintAcknowledgementChecks;
