@@ -1310,3 +1310,33 @@ remain unverified; simulator acceptance does not establish those conditions.
   second-batch strict checks pass. No checker threshold was weakened.
 - Simulator execution cannot prove physical iPhone scanout, thermals or WAN
   smoothness. Retain these limits even after local acceptance.
+
+## External TestFlight follow-up — October 30, 2026
+
+- [x] User requests the validated movement update for the external test group.
+  Confirm existing iPhone Group is external and its earlier build220 is approved.
+  Build226 is internal-only and cannot be converted. Preserve its receipt.
+- [x] Select published revision `057bcf890cf878baac46474bcab9a30d638dee1d`:
+  its only difference from validated app source6bd567cc is this checklist.
+  It has no prior accepted upload. Manual beta_external preflight passes and
+  an external-eligible archive/upload is running. Preserve existing Xcode edits.
+- [x] Manual Fastlane beta_external passes source/privacy/signature/local
+  export checks and Apple accepts revision057bcf89 at23:43:32Z. Both export
+  option files set testFlightInternalTestingOnly=false and retain managed
+  build numbering. Preserve its new per-revision receipt and attempt-_ui20usj
+  logs; the internal226 receipt remains untouched.
+- [x] Apple assigns external build227 (`8de33294-3c86-4dc8-8aec-50c7837e9b42`)
+  and confirms VALID processing. Preserve the complete processing read-backs.
+- [x] Fastlane Pilot distributes only that processed build at23:50:48Z,
+  adds movement test notes, submits beta review, enables automatic notification
+  and adds it to existing iPhone Group (`a1511c08-c165-4d15-80ae-a54e73ee5301`).
+  Existing review contact/test-account details are preserved; no prior build
+  or review is expired, rejected or removed.
+- [x] Fresh Apple read-back at23:51:05Z confirms group membership, APPROVED
+  beta review, and external IN_BETA_TESTING with autoNotifyEnabled=true.
+  External build227 is available. Internal226 and private ROM509 remain the
+  preceding delivery; the complete multiplayer fix still requires ROM509.
+- [x] Publish this final external delivery record as documentation only;
+  preserve both accepted upload receipts and do not upload either revision
+  again. Evidence: `../artifacts/multiplayer-isolation/` plus
+  `movement-external-testflight-20261030-2337/` (Apple read-backs and Fastlane logs).
