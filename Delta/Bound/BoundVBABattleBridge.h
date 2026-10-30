@@ -117,6 +117,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)qaWarpNuggetBridge:(NSUInteger)y;
 + (BOOL)qaWarpPalletEntrance;
 + (BOOL)qaWarpViridianMartEntrance;
++ (BOOL)qaWarpViridianFollowerService;
 + (BOOL)qaStopMapMusicRetainingTracks;
 + (BOOL)qaStartMusicPauseText;
 + (BOOL)qaHideMusicPauseText;

@@ -56,6 +56,324 @@ private final class ReplayReadings: @unchecked Sendable {
     func snapshot() -> [BoundPlayerStateReading] { lock.lock(); defer { lock.unlock() }; return values }
 }
 
+private final class PresenceVideoCadenceReadings: @unchecked Sendable {
+    private let lock=NSLock()
+    private var rows=[[String:Double]]()
+    private var start=0.0,origin=0.0,speed=0.0
+    func arm(start:Double,origin:Double,speed:Double) {
+        lock.lock();defer{lock.unlock()};rows=[];self.start=start;self.origin=origin;self.speed=speed
+    }
+    func append(_ reading:BoundPlayerStateReading,_ pose:BoundRecordedPlayerPose?,_ pixels:Int) {
+        let now=ProcessInfo.processInfo.systemUptime
+        lock.lock();defer{lock.unlock()}
+        guard now>=start+0.2 else{return}
+        var row:[String:Double]=["time":now,"elapsed":now-start,"pixels":Double(pixels),"scene":reading.player?.scene == nil ? 0:1]
+        if let pose {row["x"]=pose.x;row["y"]=pose.y;row["expectedX"]=origin+speed*(now-start-0.1)}
+        rows.append(row)
+    }
+    func snapshot()->[[String:Double]] {lock.lock();defer{lock.unlock()};return rows}
+    static func metrics(_ rows:[[String:Double]])->[String:Double] {
+        let poses=rows.filter{$0["x"] != nil},pairs=Array(zip(poses,poses.dropFirst()))
+        let repeated=pairs.filter{abs($0["x"]!-$1["x"]!)<0.00001}.count
+        let errors=poses.map{abs($0["x"]!-$0["expectedX"]!)}.sorted()
+        let steps=pairs.map{abs($1["x"]!-$0["x"]!)}.sorted()
+        func q(_ values:[Double],_ fraction:Double)->Double {values.isEmpty ? 0:values[Int(Double(values.count-1)*fraction)]}
+        return ["frames":Double(rows.count),"resolvedFrames":Double(poses.count),
+            "visibleFrames":Double(rows.filter{($0["pixels"] ?? 0)>0}.count),
+            "repeatedPositionRatio":Double(repeated)/Double(max(1,pairs.count)),
+            "p95PositionErrorPixels":q(errors,0.95),"maxPositionErrorPixels":errors.last ?? 0,
+            "p95StepPixels":q(steps,0.95),"maximumStepPixels":steps.last ?? 0]
+    }
+}
+
+private final class NativePresentationCacheFixture {
+    typealias Point=BoundPlayerState.Point
+    let cache=BoundNativePresentationCache(),core=NSObject(),profile=NSObject()
+    var scope:BoundNativePresentationScope {.init(core:ObjectIdentifier(core),profile:ObjectIdentifier(profile),timeline:1)}
+    func observe(_ proposed:Point = .init(x:16,y:-24),applied:Point = .init(x:40,y:8),
+                 desired:Point?=nil,coherent:Bool=true,live:Point = .init(x:120,y:72),built:Point = .init(x:120,y:72),
+                 map:BoundPlayerMapConnections.Map = .init(group:3,number:0),instance:UInt64=1,
+                 nativeTiles:BoundNativePresentationCache.NativeTiles?=nil,
+                 scope:BoundNativePresentationScope?=nil,
+                 project:(BoundPlayerMapConnections.Map,BoundPlayerMapConnections.Map)->Point? = {_,_ in nil})->Point? {
+        cache.camera(proposed:proposed,appliedScroll:applied,
+            desiredScroll:desired ?? .init(x:applied.x+(coherent ? 0:2),y:applied.y),
+            liveFoot:live,builtFoot:built,map:map,instance:instance,nativeTiles:nativeTiles,scope:scope ?? self.scope,project:project)
+    }
+}
+
+extension RecordedPlayerTests {
+    func testPresentationCameraUsesOnlyPreviousObservedTileSegmentForRenderedLag() {
+        let f=NativePresentationCacheFixture()
+        let walking=BoundNativePresentationCache.NativeTiles(current:.init(x:35,y:20),previous:.init(x:36,y:20))
+        let settled=BoundNativePresentationCache.NativeTiles(current:.init(x:35,y:20),previous:.init(x:35,y:20))
+        XCTAssertEqual(f.observe(.init(x:-452,y:-248),applied:.init(x:244,y:40),nativeTiles:walking),.init(x:-452,y:-248))
+        XCTAssertEqual(f.observe(applied:.init(x:242,y:40),coherent:false,nativeTiles:settled),.init(x:-450,y:-248),
+            "Actual foot570 still belongs to the observed35→36 segment when raw tiles collapse to35")
+        XCTAssertEqual(f.observe(applied:.init(x:240,y:40),coherent:false,
+            nativeTiles:.init(current:.init(x:34,y:20),previous:.init(x:35,y:20))),.init(x:-448,y:-248))
+        XCTAssertEqual(f.observe(.init(x:-446,y:-248),applied:.init(x:238,y:40),
+            nativeTiles:.init(current:.init(x:34,y:20),previous:.init(x:35,y:20))),.init(x:-446,y:-248))
+        f.cache.reset()
+        XCTAssertNotNil(f.observe(.init(x:-452,y:-248),applied:.init(x:244,y:40),nativeTiles:walking))
+        XCTAssertEqual(f.observe(applied:.init(x:242,y:40),coherent:false,nativeTiles:settled),.init(x:-450,y:-248))
+        XCTAssertEqual(f.observe(applied:.init(x:242,y:40),coherent:false,nativeTiles:settled),.init(x:-450,y:-248),
+            "An exact repeated framebuffer observation keeps its previously admitted foot")
+        XCTAssertEqual(f.observe(applied:.init(x:240,y:40),coherent:false,nativeTiles:settled),.init(x:-448,y:-248))
+        XCTAssertNil(f.observe(applied:.init(x:242,y:40),coherent:false,nativeTiles:settled),
+            "Reaching the current tile retires the old segment; it cannot admit a later backward foot")
+        f.cache.reset()
+        XCTAssertNotNil(f.observe(.init(x:-452,y:-248),applied:.init(x:244,y:40),nativeTiles:walking))
+        XCTAssertNotNil(f.observe(applied:.init(x:242,y:40),coherent:false,nativeTiles:settled))
+        XCTAssertNil(f.observe(applied:.init(x:242,y:40),coherent:false,
+            nativeTiles:.init(current:.init(x:34,y:20),previous:.init(x:34,y:20))),
+            "A changed native interval cannot borrow the identical-foot exception without current or prior segment evidence")
+    }
+
+    func testPresentationCameraRejectsFootOutsideCurrentAndPriorSegments() {
+        let f=NativePresentationCacheFixture()
+        let walking=BoundNativePresentationCache.NativeTiles(current:.init(x:35,y:20),previous:.init(x:36,y:20))
+        let settled=BoundNativePresentationCache.NativeTiles(current:.init(x:35,y:20),previous:.init(x:35,y:20))
+        XCTAssertNotNil(f.observe(.init(x:-452,y:-248),applied:.init(x:244,y:40),nativeTiles:walking))
+        XCTAssertNil(f.observe(applied:.init(x:262,y:40),coherent:false,nativeTiles:settled),"Foot590 lies outside both observed intervals")
+        XCTAssertNil(f.observe(applied:.init(x:242,y:40),coherent:false,nativeTiles:settled),"Rejection also retires old interval evidence")
+        XCTAssertNotNil(f.observe(.init(x:-452,y:-248),applied:.init(x:244,y:40),nativeTiles:walking))
+        XCTAssertNil(f.observe(applied:.init(x:242,y:40),coherent:false,built:.init(x:120,y:74),nativeTiles:settled),
+            "Horizontal segment history must not admit a different vertical coordinate")
+    }
+
+    func testPresentationCameraDoesNotBorrowOldSegmentForCoherentReseed() {
+        let f=NativePresentationCacheFixture()
+        let walking=BoundNativePresentationCache.NativeTiles(current:.init(x:35,y:20),previous:.init(x:36,y:20))
+        let settled=BoundNativePresentationCache.NativeTiles(current:.init(x:35,y:20),previous:.init(x:35,y:20))
+        XCTAssertNotNil(f.observe(.init(x:-452,y:-248),applied:.init(x:244,y:40),nativeTiles:walking))
+        XCTAssertNil(f.observe(.init(x:-450,y:-248),applied:.init(x:242,y:40),nativeTiles:settled),
+            "A fresh coherent origin requires its own current native interval")
+        XCTAssertEqual(f.observe(.init(x:-448,y:-248),applied:.init(x:240,y:40),nativeTiles:settled),.init(x:-448,y:-248))
+    }
+
+    func testPresentationCameraTranslatesPriorSegmentAcrossVerifiedSeam() {
+        let f=NativePresentationCacheFixture(),next=BoundPlayerMapConnections.Map(group:3,number:19)
+        XCTAssertNotNil(f.observe(.init(x:-452,y:-248),applied:.init(x:244,y:40),
+            nativeTiles:.init(current:.init(x:35,y:20),previous:.init(x:36,y:20))))
+        XCTAssertEqual(f.observe(applied:.init(x:242,y:40),coherent:false,map:next,instance:2,
+            nativeTiles:.init(current:.init(x:45,y:20),previous:.init(x:45,y:20)),project:{_,_ in .init(x:10,y:0)}),
+            .init(x:-610,y:-248),"The same verified map projection translates both camera and previous tile evidence")
+    }
+
+    func testPresentationCameraDropsTileEvidenceAcrossScopeMapAndLoadReset() {
+        let f=NativePresentationCacheFixture()
+        let walking=BoundNativePresentationCache.NativeTiles(current:.init(x:35,y:20),previous:.init(x:36,y:20))
+        let settled=BoundNativePresentationCache.NativeTiles(current:.init(x:35,y:20),previous:.init(x:35,y:20))
+        func seed(){f.cache.reset();XCTAssertNotNil(f.observe(.init(x:-452,y:-248),applied:.init(x:244,y:40),nativeTiles:walking))}
+        seed();f.cache.reset();XCTAssertNil(f.observe(applied:.init(x:242,y:40),coherent:false,nativeTiles:settled))
+        seed();XCTAssertNil(f.observe(applied:.init(x:242,y:40),coherent:false,instance:2,nativeTiles:settled))
+        seed();XCTAssertNil(f.observe(applied:.init(x:242,y:40),coherent:false,map:.init(group:5,number:4),nativeTiles:settled))
+        seed();XCTAssertNil(f.observe(applied:.init(x:242,y:40),coherent:false,nativeTiles:settled,
+            scope:.init(core:ObjectIdentifier(f.core),profile:ObjectIdentifier(f.profile),timeline:2)))
+    }
+
+    func testPresentationCameraSeedsOnlyFromCoherentNativeState() {
+        let f=NativePresentationCacheFixture()
+        XCTAssertNil(f.observe(coherent:false))
+        XCTAssertNil(f.observe(live:.init(x:122,y:72)))
+        XCTAssertNil(f.observe(live:.init(x:120,y:74)))
+        XCTAssertEqual(f.observe(desired:.init(x:296,y:264)),.init(x:16,y:-24),"Scroll coherence is modulo256")
+        XCTAssertEqual(f.observe(.init(x:18,y:-24),coherent:false),.init(x:16,y:-24),"An incomplete native update cannot move a stable rendered background")
+    }
+
+    func testPresentationCameraFollowsAppliedScrollThroughPartialFieldWrites() {
+        let f=NativePresentationCacheFixture()
+        XCTAssertEqual(f.observe(),.init(x:16,y:-24))
+        for wobble in [14,18,14,18] {
+            XCTAssertEqual(f.observe(.init(x:wobble,y:-24),coherent:false,live:.init(x:122,y:72)),.init(x:16,y:-24))
+        }
+        XCTAssertEqual(f.observe(.init(x:12,y:-24),applied:.init(x:42,y:8),coherent:false),.init(x:14,y:-24))
+        XCTAssertEqual(f.observe(.init(x:16,y:-24),applied:.init(x:42,y:8),coherent:false),.init(x:14,y:-24))
+        XCTAssertEqual(f.observe(.init(x:14,y:-24),applied:.init(x:42,y:8)),.init(x:14,y:-24))
+    }
+
+    func testPresentationCameraUnwrapsScrollAndPreservesPanning() {
+        let f=NativePresentationCacheFixture()
+        XCTAssertEqual(f.observe(.init(x:-464,y:-248),applied:.init(x:254,y:255)),.init(x:-464,y:-248))
+        XCTAssertEqual(f.observe(applied:.init(x:0,y:1),coherent:false),.init(x:-466,y:-250))
+        XCTAssertEqual(f.observe(applied:.init(x:254,y:255),coherent:false),.init(x:-464,y:-248))
+        XCTAssertEqual(f.observe(applied:.init(x:1,y:4),coherent:false),.init(x:-467,y:-253),"Applied camera panning remains visible on both axes")
+        XCTAssertEqual(f.observe(.init(x:2400,y:-1600),applied:.init(x:1,y:4)),.init(x:2400,y:-1600),"A coherent origin jump reseeds, without a smoothing clamp")
+    }
+
+    func testPresentationCameraProjectsConnectedMapSeamsInBothDirections() {
+        let f=NativePresentationCacheFixture(),pallet=BoundPlayerMapConnections.Map(group:3,number:0),route=BoundPlayerMapConnections.Map(group:3,number:19)
+        XCTAssertEqual(f.observe(map:pallet),.init(x:16,y:-24))
+        XCTAssertEqual(f.observe(applied:.init(x:42,y:8),coherent:false,map:route,instance:2,project:{next,old in
+            XCTAssertEqual(next,route);XCTAssertEqual(old,pallet);return .init(x:0,y:20)
+        }),.init(x:14,y:-344))
+        XCTAssertEqual(f.observe(applied:.init(x:40,y:8),coherent:false,map:pallet,instance:3,project:{next,old in
+            XCTAssertEqual(next,pallet);XCTAssertEqual(old,route);return .init(x:0,y:-20)
+        }),.init(x:16,y:-24))
+    }
+
+    func testPresentationCameraRejectsUnconnectedMapsAndReplacedInstances() {
+        let f=NativePresentationCacheFixture(),room=BoundPlayerMapConnections.Map(group:5,number:4)
+        XCTAssertNotNil(f.observe())
+        XCTAssertNil(f.observe(coherent:false,map:room,instance:2))
+        XCTAssertNil(f.observe(coherent:false),"An unconnected warp retires the old camera")
+        XCTAssertEqual(f.observe(.init(x:100,y:200),map:room,instance:2),.init(x:100,y:200))
+        XCTAssertNil(f.observe(coherent:false,map:room,instance:3),"A new same-map instance cannot inherit the preceding camera")
+        XCTAssertEqual(f.observe(.init(x:300,y:400),map:room,instance:3),.init(x:300,y:400))
+    }
+
+    func testPresentationCameraInvalidatesForCoreProfileLoadAndExplicitReset() {
+        let f=NativePresentationCacheFixture(),otherCore=NSObject(),otherProfile=NSObject()
+        let scopes:[BoundNativePresentationScope]=[
+            .init(core:ObjectIdentifier(otherCore),profile:ObjectIdentifier(f.profile),timeline:1),
+            .init(core:ObjectIdentifier(f.core),profile:ObjectIdentifier(otherProfile),timeline:1),
+            .init(core:ObjectIdentifier(f.core),profile:ObjectIdentifier(f.profile),timeline:2)]
+        for scope in scopes {
+            XCTAssertNotNil(f.observe())
+            XCTAssertNil(f.observe(coherent:false,scope:scope))
+            XCTAssertEqual(f.observe(.init(x:45000,y:-45000),scope:scope),.init(x:45000,y:-45000))
+        }
+        f.cache.reset();XCTAssertNil(f.observe(coherent:false,scope:scopes.last!))
+    }
+
+    func testPresentationCameraInvalidatesAfterAnUndecodableScene() throws {
+        let f=NativePresentationCacheFixture();XCTAssertNotNil(f.observe())
+        var memory=try XCTUnwrap(BoundGBAMemorySnapshot(copyingWorkRAM:Data(repeating:0,count:0x40000),internalRAM:Data(repeating:0,count:0x8000)))
+        memory.presentationObservation = .init(cache:f.cache,scope:f.scope)
+        XCTAssertNil(BoundPlayerSceneDecoder.read(player:try XCTUnwrap(reading(frame:1).player),memory:memory,
+            rom:{_,_ in nil},assets:BoundPlayerSceneAssets()))
+        XCTAssertNil(f.observe(coherent:false),"A missing scene must not reuse a camera across a fade/menu gap")
+    }
+
+    func testBuiltOAMCenterUnwrapsBothAxesWithoutClampingToLivePosition() {
+        func raw(center:BoundPlayerState.Point)->[UInt8] {
+            var bytes=[UInt8](repeating:0,count:68)
+            let x=(center.x-8)&511,y=(center.y-16)&255
+            bytes[0]=UInt8(y);bytes[2]=UInt8(x&255);bytes[3]=UInt8(x>>8)
+            bytes[0x28]=0xF8;bytes[0x29]=0xF0;return bytes
+        }
+        for point in [BoundPlayerState.Point(x:-4,y:-8),.init(x:520,y:260),.init(x:120,y:72)] {
+            XCTAssertEqual(BoundPlayerSceneDecoder.builtSpriteCenter(raw(center:point),live:.init(x:point.x+2,y:point.y-2)),point)
+        }
+    }
+
+    /// The same native core/ROM and presentation path compare a held UI pose
+    /// with the production immutable timeline. Samples are confirmed, past-only
+    /// 20 Hz observations; no network, future position or extrapolation is used.
+    func testActualVideoOwnerInterpolatesBetweenJitteredMainPublications() async throws {
+        let env=ProcessInfo.processInfo.environment
+        guard env["BOUND_MOVEMENT_PRESENTATION"]=="1" else {throw XCTSkip("Requires isolated exact-ROM video cadence fixture")}
+        continueAfterFailure=false
+        let rom=URL(fileURLWithPath:try XCTUnwrap(env["BOUND_MOVEMENT_ROM"]))
+        let image=try Data(contentsOf:rom),digest=SHA256.hash(data:image).map{String(format:"%02x",$0)}.joined()
+        XCTAssertEqual(digest,try XCTUnwrap(env["BOUND_MOVEMENT_SHA256"]))
+        let profile=try BoundPlayerROMProfile(rom:image)
+        XCTAssertEqual(try MultiRedAdapter(rom:image).profile.romSHA256,digest)
+        let output=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("MovementPresentation-"+UUID().uuidString)
+        try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+        let battery=output.appendingPathComponent("disposable.sav")
+        try Data(repeating:255,count:131072).write(to:battery)
+        let core=try XCTUnwrap(EmulatorCore(game:ReplayGame(fileURL:rom,gameSaveURL:battery),options:[.metal:true]))
+        var options=BoundMultiplayerSetupOptions()
+        options.name="RED";options.gender=0;options.partnerName="BLUE";options.partnerGender=0;options.rival="BLUE"
+        options.difficulty=0;options.minimalGrinding=false;options.species=0;options.randomMoves=false;options.randomAbilities=false
+        options.cheats=false;options.nicknames=true;options.debug=true;options.deleteSaveOnGameOver=true
+        let setup=NativePlayerSceneSetup(core:core,debugPlayer:1,run:UUID(uuidString:"11111111-2222-3333-4444-555555555555")!,
+            localSeed:0x12345678,partnerSeed:0x87654321,settings:options.settings,playerProfile:options.profile)
+        let probe=BoundVBAPlayerStateProbe(),compositor=BoundPresenceFrameCompositor(),frames=PresenceVideoCadenceReadings()
+        probe.configure(coreID:ObjectIdentifier(core),profile:profile,active:true,status:.waiting,detail:"Video cadence",sceneEnabled:true)
+        let scene=try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap{$0 as? UIWindowScene}.first)
+        let oldWindow=scene.windows.first(where:\.isKeyWindow),window=UIWindow(windowScene:scene)
+        let owner=UIViewController(),view=GameView()
+        window.rootViewController=owner;window.windowLevel = .alert+1;window.makeKeyAndVisible()
+        view.frame=CGRect(x:0,y:160,width:owner.view.bounds.width,height:owner.view.bounds.width*2/3)
+        owner.view.addSubview(view);core.add(view);core.audioManager.isEnabled=false
+        defer {
+            _=core.pause();compositor.observeFrame=nil;compositor.configure(profile:nil,pose:nil);_=core.stop()
+            window.isHidden=true;oldWindow?.makeKeyAndVisible()
+        }
+        let booted=expectation(description:"Exact-ROM field for native video owner")
+        var ready=false
+        core.updateHandler={core in
+            BoundFrameMemory.perform {
+                setup.receive(core);compositor.receive(core)
+                if let reading=probe.receive(core),!ready,setup.isReady,reading.player?.scene != nil {ready=true;booted.fulfill()}
+            }
+        }
+        core.rate=8;XCTAssertTrue(core.start());core.audioManager.isEnabled=false
+        await fulfillment(of:[booted],timeout:90);XCTAssertTrue(core.pause())
+        XCTAssertTrue(BoundVBABattleBridge.qaWarpViridianMartEntrance())
+        XCTAssertTrue(core.resume());try await Task.sleep(for:.seconds(1));XCTAssertTrue(core.pause())
+        let reading=try XCTUnwrap(probe.takeLatest()),player=try XCTUnwrap(reading.player)
+        XCTAssertEqual(player.mapGroup,3);XCTAssertEqual(player.mapNumber,1)
+        var base=try XCTUnwrap(BoundPresencePose(reading:reading));base.follower=nil;base.x-=40;base.y+=16
+        let anchor=MultiRedAdapter.captureState();XCTAssertFalse(anchor.isEmpty)
+        try anchor.write(to:output.appendingPathComponent("exact-ROM-anchor.state"))
+        if let png=core.videoManager.snapshot()?.pngData(){try png.write(to:output.appendingPathComponent("native-anchor.png"))}
+        let speed=16.0,duration=4.0,jitter=[0.010,0.024,0.012,0.031,0.013,0.028]
+        var summaries=[[String:Any]]()
+        for repetition in 0..<3 {
+            for rate in [1.0,3.0] {
+                var pair=[String:[String:Double]]()
+                for mode in repetition%2==0 ? ["held-ui-pose","frame-timeline"]:["frame-timeline","held-ui-pose"] {
+                    XCTAssertTrue(MultiRedAdapter.restoreState(anchor));core.rate=rate
+                    let started=ProcessInfo.processInfo.systemUptime
+                    frames.arm(start:started,origin:base.x,speed:speed)
+                    compositor.observeFrame={reading,pose,pixels in frames.append(reading,pose,pixels)}
+                    var refreshes=[[String:Double]]()
+                    func publish(at now:Double) {
+                        let newest=Int(floor((now-started)/0.05))
+                        let samples=(newest-7...newest).map { step -> BoundPresencePresentationSample in
+                            let time=started+Double(step)*0.05
+                            var pose=base;pose.x+=speed*(time-started)
+                            return .init(time:time,pose:pose,followerPresentation:nil)
+                        }
+                        let snapshot=BoundPresencePresentationSnapshot(needsReader:true,enabled:true,romVerified:true,
+                            lastPoseReceived:samples.last!.time,clockOffset:0,samples:samples,
+                            retainedPose:samples.last!.pose,retainedAt:samples.last!.time,sceneProfile:profile)
+                        compositor.configure(profile:profile,pose:mode=="held-ui-pose" ? snapshot.pose(at:now):nil,
+                            coreID:ObjectIdentifier(core),presentation:mode=="frame-timeline" ? snapshot:nil)
+                        refreshes.append(["time":now,"latestConfirmedSample":samples.last!.time])
+                    }
+                    publish(at:started);XCTAssertTrue(core.resume())
+                    var next=started,index=0
+                    while ProcessInfo.processInfo.systemUptime<started+duration {
+                        next+=jitter[index%jitter.count];index+=1
+                        let wait=max(0,next-ProcessInfo.processInfo.systemUptime)
+                        if wait>0 {try await Task.sleep(for:.seconds(wait))}
+                        let now=ProcessInfo.processInfo.systemUptime
+                        publish(at:now)
+                        if next<now-0.04 {next=now}
+                    }
+                    XCTAssertTrue(core.pause());compositor.observeFrame=nil
+                    let rows=frames.snapshot(),metrics=PresenceVideoCadenceReadings.metrics(rows)
+                    let name="repeat-\(repetition+1)-\(rate)-\(mode)"
+                    let report:[String:Any]=["name":name,"romSHA256":digest,"repeat":repetition+1,"rate":rate,"mode":mode,
+                        "metrics":metrics,"raw":rows,"mainPublications":refreshes,"output":output.path,
+                        "scope":"Actual VBA-M video renderer and composited pixels; synthetic confirmed 20Hz remote samples and jittered MainActor publication, no network or physical scanout"]
+                    try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent(name+".json"))
+                    if let png=core.videoManager.snapshot()?.pngData(){try png.write(to:output.appendingPathComponent(name+".png"))}
+                    summaries.append(report.filter{!["raw","mainPublications"].contains($0.key)});pair[mode]=metrics
+                    try JSONSerialization.data(withJSONObject:summaries,options:[.prettyPrinted,.sortedKeys]).write(to:output.appendingPathComponent("summary.json"))
+                    print("BOUND_MOVEMENT_PRESENTATION \(name) \(metrics) output=\(output.path)")
+                    XCTAssertGreaterThan(metrics["frames"] ?? 0,100,"The real native video owner must be exercised")
+                    XCTAssertGreaterThan(metrics["resolvedFrames"] ?? 0,(metrics["frames"] ?? 0)*0.95)
+                    XCTAssertGreaterThan(metrics["visibleFrames"] ?? 0,(metrics["frames"] ?? 0)*0.8,"The real compositor must draw visible pixels")
+                    XCTAssertTrue(refreshes.allSatisfy{$0["latestConfirmedSample"]! <= $0["time"]!},"No future samples may mask starvation")
+                }
+                let old=try XCTUnwrap(pair["held-ui-pose"]),fixed=try XCTUnwrap(pair["frame-timeline"])
+                XCTAssertGreaterThan(old["repeatedPositionRatio"] ?? 0,0.10,"The control must reproduce held-pose stutter")
+                XCTAssertLessThan(fixed["repeatedPositionRatio"] ?? 1,0.03,"Native-frame sampling must remove repeated moving poses")
+                XCTAssertLessThan(fixed["repeatedPositionRatio"] ?? 1,(old["repeatedPositionRatio"] ?? 0)*0.25)
+                XCTAssertLessThan(fixed["p95PositionErrorPixels"] ?? 999,0.5,"Native frames must follow the existing delayed interpolation clock")
+            }
+        }
+        let attachment=XCTAttachment(data:try JSONSerialization.data(withJSONObject:summaries,options:[.prettyPrinted,.sortedKeys]),uniformTypeIdentifier:"public.json")
+        attachment.name="actual-video-owner-cadence";attachment.lifetime = .keepAlways;add(attachment)
+    }
+}
+
 @MainActor
 final class RecordedPlayerTests: XCTestCase {
     private var previousExperimentalFeature: Any?
@@ -626,9 +944,14 @@ final class RecordedPlayerTests: XCTestCase {
     func testActualPalletRouteOneCrossingKeepsDecodedScene() async throws {
         let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(ProcessInfo.processInfo.environment["BOUND_NATIVE_FIXTURE_NAME"] ?? "MultiplayerValidation")
-        let romURL = root.appendingPathComponent("RadicalRed.gba")
+        let romURL = ProcessInfo.processInfo.environment["BOUND_MOVEMENT_ROM"].map { URL(fileURLWithPath:$0) }
+            ?? root.appendingPathComponent("RadicalRed.gba")
         guard FileManager.default.fileExists(atPath: romURL.path) else { throw XCTSkip("Requires owned ROM fixture") }
-        let profile = try BoundPlayerROMProfile(rom: Data(contentsOf: romURL))
+        let romImage=try Data(contentsOf:romURL)
+        if let expected=ProcessInfo.processInfo.environment["BOUND_MOVEMENT_SHA256"] {
+            XCTAssertEqual(SHA256.hash(data:romImage).map{String(format:"%02x",$0)}.joined(),expected)
+        }
+        let profile = try BoundPlayerROMProfile(rom:romImage)
         let output = root.appendingPathComponent("map-crossing-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         let battery = output.appendingPathComponent("work.sav")
@@ -726,7 +1049,7 @@ final class RecordedPlayerTests: XCTestCase {
         // one player waits in Pallet while the other walks into Route 1.
         for (index, reading) in crossings.enumerated() {
             let now = 20 + Double(index) / 60
-            let packet = BoundPresencePacket(version: 1, rom: BoundPlayerROMProfile.supportedSHA256,
+            let packet = BoundPresencePacket(version: 1, rom: profile.gameProfile.romSHA256,
                 sender: sender, receiver: receiver.epoch, sequence: UInt64(index + 1), time: now - 10,
                 pose: BoundPresencePose(reading: reading))
             receiver.receive(try XCTUnwrap(packet.encoded()), at: now)

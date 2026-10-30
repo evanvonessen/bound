@@ -87,6 +87,7 @@ struct BoundGBAMemorySnapshot: Sendable {
     let internalRAM: [UInt8]
     var paletteRAM: [UInt8]? = nil
     var followerObservation: BoundNativeFollowerObservation? = nil
+    var presentationObservation: BoundNativePresentationObservation? = nil
 
     init?(copyingWorkRAM work: Data, internalRAM internalData: Data) {
         guard work.count == 0x40000, internalData.count == 0x8000 else { return nil }
@@ -132,7 +133,10 @@ enum BoundPlayerStateDecoder {
     static func read(profile: BoundPlayerROMProfile, memory: BoundGBAMemorySnapshot, frame: UInt64,
                      includeScene: Bool = false, presentationOnly: Bool = false) -> BoundPlayerStateReading {
         let reading = decode(memory: memory, frame: frame, romBytes: profile.bytes, presentationOnly: presentationOnly)
-        guard includeScene, var player = reading.player else { return reading }
+        guard includeScene, var player = reading.player else {
+            memory.presentationObservation?.cache.reset()
+            return reading
+        }
         if let pointer = memory.bytes(at: 0x03005008, count: 4) {
             player.routeAccess = BoundFriendRouteAccess.capture(memory: memory, save: word(pointer),
                 currentMap: .init(group: player.mapGroup, number: player.mapNumber), rom: profile.bytes)

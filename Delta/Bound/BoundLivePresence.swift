@@ -126,6 +126,120 @@ struct BoundPresencePacket: Codable, Equatable, Sendable {
     }
 }
 
+/// Preserve the 20 Hz schedule through display callback jitter. A late callback
+/// publishes only the newest sample and skips missed slots; it never bursts.
+struct BoundPresencePublicationCadence: Sendable {
+    static let interval: TimeInterval = 0.05
+    private var next: TimeInterval?
+    mutating func reset() { next = nil }
+    mutating func admit(at now: TimeInterval, force: Bool = false) -> Bool {
+        guard now.isFinite, now >= 0,
+              force || next.map({ now >= $0 - 0.0001 }) ?? true else { return false }
+        if force || next == nil { next = now + Self.interval }
+        else if let deadline = next {
+            // A missed slot within the admission tolerance is also consumed;
+            // repeated callbacks at this time must not publish a second sample.
+            let skipped = floor(max(0, now - deadline + 0.0001) / Self.interval)
+            next = deadline + (skipped + 1) * Self.interval
+        }
+        return true
+    }
+}
+
+struct BoundPresencePresentationSample: Sendable {
+    let time: TimeInterval
+    let pose: BoundPresencePose
+    let followerPresentation: BoundPresenceFollower?
+    var presentation: BoundPresencePose {
+        var value = pose; value.follower = followerPresentation; return value
+    }
+}
+
+/// A bounded immutable copy crosses from the main-actor transport to the native
+/// video owner. Sample its interpolation clock for each presented emulator frame;
+/// a delayed UI timer must never freeze a moving peer between otherwise live frames.
+/// This contains presentation evidence only, never collision or interaction authority.
+struct BoundPresencePresentationSnapshot: Sendable {
+    static let timeout: TimeInterval = 0.75
+    static let visibilityGrace: TimeInterval = 60
+    let needsReader: Bool, enabled: Bool, romVerified: Bool
+    let lastPoseReceived: TimeInterval?, clockOffset: TimeInterval?
+    let samples: [BoundPresencePresentationSample]
+    let retainedPose: BoundPresencePose?, retainedAt: TimeInterval?
+    let sceneProfile: BoundPlayerROMProfile?
+    func pose(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundPresencePose? {
+        guard needsReader, let lastPoseReceived, now >= lastPoseReceived, now - lastPoseReceived <= Self.timeout,
+              let offset = clockOffset, let first = samples.first, let last = samples.last else {
+            guard enabled, romVerified, let retainedAt, now >= retainedAt,
+                  now - retainedAt < Self.visibilityGrace else { return nil }
+            return retainedPose
+        }
+        let target = now - offset - 0.1
+        if target <= first.time { return first.presentation }
+        for index in 1..<samples.count where target <= samples[index].time {
+            let a = samples[index - 1], b = samples[index]
+            // Discontinuity changes smoothing only. A confirmed position must
+            // never disappear because a movement step exceeds two tiles.
+            guard var pose = comparable(a.presentation, to: b.presentation), Self.continuous(pose, b.pose),
+                  b.time - a.time <= 0.2 else { return b.presentation }
+            let fraction = (target - a.time) / (b.time - a.time)
+            pose.x += (b.pose.x - pose.x) * fraction; pose.y += (b.pose.y - pose.y) * fraction
+            pose.follower=b.followerPresentation
+            if pose.follower?.identity != last.followerPresentation?.identity {pose.follower=last.followerPresentation}
+            // A missing follower observation is not a stationary observation.
+            // Interpolate between its real samples on the trainer's existing
+            // presentation clock, skipping brief reader gaps without adding
+            // latency or turning borrowed presentation into collision authority.
+            if let identity=pose.follower?.identity {
+                let followers=samples.compactMap { sample -> (TimeInterval, BoundPresenceFollower)? in
+                    guard let value=comparable(sample.pose,to:pose)?.follower,value.identity==identity else { return nil }
+                    return (sample.time,value)
+                }
+                for (before,after) in zip(followers,followers.dropFirst()) where before.0<=target && target<=after.0 {
+                    guard after.0>before.0,after.0-before.0<=0.3,
+                          abs(before.1.x-after.1.x)+abs(before.1.y-after.1.y)<=32 else { break }
+                    let weight=(target-before.0)/(after.0-before.0)
+                    var follower=after.1
+                    follower.x=before.1.x+(after.1.x-before.1.x)*weight
+                    follower.y=before.1.y+(after.1.y-before.1.y)*weight
+                    pose.follower=follower;break
+                }
+            }
+            pose.passing=last.pose.passing
+            return pose
+        }
+        // Freeze at the last confirmed position during a short packet gap.
+        // The session deadline above and explicit withdrawals still remove it.
+        return last.presentation
+    }
+    /// Smooth through real cardinal seams in one coordinate basis. A map ID
+    /// change alone must not jump ahead of the normal interpolation delay.
+    fileprivate func comparable(_ pose: BoundPresencePose, to target: BoundPresencePose) -> BoundPresencePose? {
+        if pose.mapGroup == target.mapGroup && pose.mapNumber == target.mapNumber { return pose }
+        guard let profile = sceneProfile,
+              let offset = profile.sceneAssets.mapOffset(fromGroup: target.mapGroup, number: target.mapNumber,
+                toGroup: pose.mapGroup, number: pose.mapNumber, rom: profile.bytes) else { return nil }
+        var result = pose
+        result.mapGroup = target.mapGroup; result.mapNumber = target.mapNumber
+        result.mapInstance=target.mapInstance
+        result.x += Double(offset.x * 16); result.y += Double(offset.y * 16)
+        if var follower=result.follower {
+            follower.x += Double(offset.x*16);follower.y += Double(offset.y*16)
+            follower.current = .init(x:follower.current.x+offset.x,y:follower.current.y+offset.y)
+            follower.previous = .init(x:follower.previous.x+offset.x,y:follower.previous.y+offset.y)
+            result.follower=follower
+        }
+        return result
+    }
+
+    /// Compares successive peer samples, never distance from the local player.
+    /// Discontinuous samples replace the interpolation buffer, not presence.
+    fileprivate static func continuous(_ a: BoundPresencePose, _ b: BoundPresencePose) -> Bool {
+        a.mapGroup == b.mapGroup && a.mapNumber == b.mapNumber && a.elevation == b.elevation && a.mapInstance==b.mapInstance
+        && abs(a.x - b.x) + abs(a.y - b.y) <= 32
+    }
+}
+
 /// Main-actor, bounded receive buffer driven by a monotonic wall clock, never by
 /// the viewer's emulated frame counter. Each transport/binding/restore gets a new
 /// challenge; live samples must acknowledge it before granting any authority.
@@ -134,9 +248,9 @@ struct BoundPresencePacket: Codable, Equatable, Sendable {
 final class BoundLivePresenceSession: ObservableObject {
     let movement=BoundWorldMovementSession()
     let connectionCheck = BoundPresenceConnectionCheck()
-    static let interval: TimeInterval = 0.05
-    static let timeout: TimeInterval = 0.75
-    static let visibilityGrace: TimeInterval = 60
+    static let interval = BoundPresencePublicationCadence.interval
+    static let timeout = BoundPresencePresentationSnapshot.timeout
+    static let visibilityGrace = BoundPresencePresentationSnapshot.visibilityGrace
     @Published private(set) var enabled = false
     @Published private(set) var connected = false
     @Published private(set) var status = "Join a ROM server"
@@ -155,7 +269,7 @@ final class BoundLivePresenceSession: ObservableObject {
     private var retainedAt: TimeInterval?
     private var send: ((Data) -> Bool)?
     private var sequence: UInt64 = 0
-    private var lastSent: TimeInterval?
+    private var publicationCadence = BoundPresencePublicationCadence()
     private var lastReceived: TimeInterval?
     private var lastPoseReceived: TimeInterval?
     private var peerPoseAvailable = false
@@ -176,14 +290,7 @@ final class BoundLivePresenceSession: ObservableObject {
     private var presentationCheck = BoundPresenceReaderCheck()
     private var lastPresentationAt: TimeInterval?
     private var lastPresentedPose: BoundPresencePose?
-    private struct Sample {
-        let time: TimeInterval
-        let pose: BoundPresencePose
-        let followerPresentation: BoundPresenceFollower?
-        var presentation: BoundPresencePose {
-            var value = pose; value.follower = followerPresentation; return value
-        }
-    }
+    private typealias Sample = BoundPresencePresentationSample
     private var samples: [Sample] = []
     private var lastFollowerPose: BoundPresencePose?
     private var lastFollowerAt: TimeInterval?
@@ -216,7 +323,7 @@ final class BoundLivePresenceSession: ObservableObject {
     private func resetTimeline(keepPresentation: Bool = false) {
         movement.reset()
         if !keepPresentation { retainedPose = nil; retainedAt = nil }
-        epoch = UUID(); sequence = 0; lastSent = nil
+        epoch = UUID(); sequence = 0; publicationCadence.reset()
         localPose = nil; localAt = nil; settledLocal = nil; settledLocalAt = nil
         peerEpoch = nil; proposedPeer = nil; proposalAt = nil; clearPeer()
     }
@@ -292,8 +399,8 @@ final class BoundLivePresenceSession: ObservableObject {
         publish(at: now)
     }
     private func publish(at now: TimeInterval, force: Bool = false, withdrawn: Bool = false) {
-        guard connected, let send, force || lastSent.map({ now - $0 >= Self.interval - 0.0001 }) ?? true else { return }
-        lastSent = now; sequence &+= 1
+        guard connected, let send, publicationCadence.admit(at: now, force: force) else { return }
+        sequence &+= 1
         let fresh = enabled && localAt.map { now - $0 <= 0.5 } ?? false
         let outgoing=fresh ? localPose:nil
         var packet = BoundPresencePacket(version: 1,
@@ -399,50 +506,13 @@ final class BoundLivePresenceSession: ObservableObject {
         return .init(localSession: epoch, peerSession: peerEpoch, local: local, peer: peer)
     }
 
+    func presentationSnapshot() -> BoundPresencePresentationSnapshot {
+        .init(needsReader: needsReader, enabled: enabled, romVerified: romVerified,
+              lastPoseReceived: lastPoseReceived, clockOffset: clockOffset, samples: samples,
+              retainedPose: retainedPose, retainedAt: retainedAt, sceneProfile: sceneProfile)
+    }
     func pose(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundPresencePose? {
-        guard needsReader, let lastPoseReceived, now >= lastPoseReceived, now - lastPoseReceived <= Self.timeout,
-              let offset = clockOffset, let first = samples.first, let last = samples.last else {
-            guard enabled, romVerified, let retainedAt, now >= retainedAt,
-                  now - retainedAt < Self.visibilityGrace else { return nil }
-            return retainedPose
-        }
-        let target = now - offset - 0.1
-        if target <= first.time { return first.presentation }
-        for index in 1..<samples.count where target <= samples[index].time {
-            let a = samples[index - 1], b = samples[index]
-            // Discontinuity changes smoothing only. A confirmed position must
-            // never disappear because a movement step exceeds two tiles.
-            guard var pose = comparable(a.presentation, to: b.presentation), Self.continuous(pose, b.pose),
-                  b.time - a.time <= 0.2 else { return b.presentation }
-            let fraction = (target - a.time) / (b.time - a.time)
-            pose.x += (b.pose.x - pose.x) * fraction; pose.y += (b.pose.y - pose.y) * fraction
-            pose.follower=b.followerPresentation
-            if pose.follower?.identity != last.followerPresentation?.identity {pose.follower=last.followerPresentation}
-            // A missing follower observation is not a stationary observation.
-            // Interpolate between its real samples on the trainer's existing
-            // presentation clock, skipping brief reader gaps without adding
-            // latency or turning borrowed presentation into collision authority.
-            if let identity=pose.follower?.identity {
-                let followers=samples.compactMap { sample -> (TimeInterval, BoundPresenceFollower)? in
-                    guard let value=comparable(sample.pose,to:pose)?.follower,value.identity==identity else { return nil }
-                    return (sample.time,value)
-                }
-                for (before,after) in zip(followers,followers.dropFirst()) where before.0<=target && target<=after.0 {
-                    guard after.0>before.0,after.0-before.0<=0.3,
-                          abs(before.1.x-after.1.x)+abs(before.1.y-after.1.y)<=32 else { break }
-                    let weight=(target-before.0)/(after.0-before.0)
-                    var follower=after.1
-                    follower.x=before.1.x+(after.1.x-before.1.x)*weight
-                    follower.y=before.1.y+(after.1.y-before.1.y)*weight
-                    pose.follower=follower;break
-                }
-            }
-            pose.passing=last.pose.passing
-            return pose
-        }
-        // Freeze at the last confirmed position during a short packet gap.
-        // The session deadline above and explicit withdrawals still remove it.
-        return last.presentation
+        presentationSnapshot().pose(at: now)
     }
     func collision(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> BoundPresenceCollision? {
         // Exact occupancy and overlap recovery have one owner: the frame
@@ -482,31 +552,11 @@ final class BoundLivePresenceSession: ObservableObject {
         return .init(localEpoch:epoch,peerEpoch:c.peer,mapInstance:c.instance,actor:actor,target:target,followerID:f.identity,generation:f.generation)
     }
 
-    /// Smooth through real cardinal seams in one coordinate basis. A map ID
-    /// change alone must not jump ahead of the normal interpolation delay.
     private func comparable(_ pose: BoundPresencePose, to target: BoundPresencePose) -> BoundPresencePose? {
-        if pose.mapGroup == target.mapGroup && pose.mapNumber == target.mapNumber { return pose }
-        guard let profile = sceneProfile,
-              let offset = profile.sceneAssets.mapOffset(fromGroup: target.mapGroup, number: target.mapNumber,
-                toGroup: pose.mapGroup, number: pose.mapNumber, rom: profile.bytes) else { return nil }
-        var result = pose
-        result.mapGroup = target.mapGroup; result.mapNumber = target.mapNumber
-        result.mapInstance=target.mapInstance
-        result.x += Double(offset.x * 16); result.y += Double(offset.y * 16)
-        if var follower=result.follower {
-            follower.x += Double(offset.x*16);follower.y += Double(offset.y*16)
-            follower.current = .init(x:follower.current.x+offset.x,y:follower.current.y+offset.y)
-            follower.previous = .init(x:follower.previous.x+offset.x,y:follower.previous.y+offset.y)
-            result.follower=follower
-        }
-        return result
+        presentationSnapshot().comparable(pose, to: target)
     }
-
-    /// Compares successive peer samples, never distance from the local player.
-    /// Discontinuous samples replace the interpolation buffer, not presence.
     private static func continuous(_ a: BoundPresencePose, _ b: BoundPresencePose) -> Bool {
-        a.mapGroup == b.mapGroup && a.mapNumber == b.mapNumber && a.elevation == b.elevation && a.mapInstance==b.mapInstance
-        && abs(a.x - b.x) + abs(a.y - b.y) <= 32
+        BoundPresencePresentationSnapshot.continuous(a, b)
     }
     private func updateStatus() {
         setStatus(!enabled ? "Live sprites are off" : connected ? "Waiting for friend presence" : "Join a ROM server")

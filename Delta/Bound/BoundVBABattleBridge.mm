@@ -1630,6 +1630,18 @@ static uint8_t soulQAScriptBackup[128];
     internalRAM[0xEA8]=0;internalRAM[0xF9C]=1;
     return YES;
 }
++ (BOOL)qaWarpViridianFollowerService {
+    if(!ownsROMUI()||!overworld()) return NO;
+    // Disposable QA only: hide the map's unused flag-0x200 placeholders and
+    // use native warp to face the original follower service. The native NPC
+    // dialogue, party selector and follower creation still run unchanged.
+    const uint8_t script[]={0x29,0x00,0x02,0x39,5,4,255,10,0,7,0,0x02};
+    memcpy(internalRAM+0x4280,script,sizeof(script));
+    memset(internalRAM+0xEB0,0,0x74);internalRAM[0xEB1]=1;put32(internalRAM+0xEB8,0x03004280);
+    put32(internalRAM+0xF0C,0x0815F9B4);put32(internalRAM+0xF10,0x0815FD08);
+    internalRAM[0xEA8]=0;internalRAM[0xF9C]=1;
+    return YES;
+}
 + (BOOL)qaStopMapMusicRetainingTracks {
     if(!ownsROMUI()||!overworld()) return NO;
     // Reproduce the MP2K state observed in the affected Mac checkpoint.

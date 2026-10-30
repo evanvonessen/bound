@@ -95,6 +95,106 @@ final class LivePresenceTests: XCTestCase {
         session.setEnabled(true); session.start { _ in true }; return session
     }
 
+    func testFrameClockInterpolatesSmoothlyThroughJitteredMainRefreshes() throws {
+        for hz in [60, 180] {
+            for speed in [160.0, 480.0] {
+                for phase in [0.001, 0.004, 0.009] {
+                    let session = session(), peer = UUID()
+                    session.receive(try packet(session, peer: peer, reading: reading()), at: 20)
+                    var snapshot = session.presentationSnapshot()
+                    var held = try XCTUnwrap(snapshot.pose(at: 20))
+                    var ticks: [Double] = []
+                    for index in 0..<400 {
+                        let jitter: Double = index % 2 == 0 ? -0.004 : 0.004
+                        let time = 20.0 + Double(index) / 60.0 + phase + jitter
+                        if time >= 20 { ticks.append(time) }
+                    }
+                    var nextTick = 0, received = 0
+                    var previous: Double?, previousHeld: Double?
+                    var heldUnevenSteps = 0
+                    for frame in hz..<(hz * 5) {
+                        let now = 20.0 + Double(frame) / Double(hz)
+                        while nextTick < ticks.count, ticks[nextTick] <= now {
+                            let tick = ticks[nextTick]
+                            let available = Int(floor((tick - 20.0 + 1e-9) / 0.05))
+                            while received < available {
+                                received += 1
+                                let elapsed = Double(received) * 0.05
+                                session.receive(try packet(session, peer: peer, sequence: UInt64(received + 1),
+                                    time: 10.0 + elapsed, reading: reading(x: 104 + Int((elapsed * speed).rounded()))),
+                                    at: 20.0 + elapsed)
+                            }
+                            snapshot = session.presentationSnapshot()
+                            held = try XCTUnwrap(snapshot.pose(at: tick))
+                            nextTick += 1
+                        }
+                        let pose = try XCTUnwrap(snapshot.pose(at: now))
+                        let expected = speed / Double(hz)
+                        if let previous { XCTAssertEqual(pose.x - previous, expected, accuracy: 0.000001) }
+                        if let previousHeld, abs(held.x - previousHeld - expected) > 0.1 { heldUnevenSteps += 1 }
+                        previous = pose.x; previousHeld = held.x
+                    }
+                    XCTAssertGreaterThan(heldUnevenSteps, 0, "The old main-timer pose must reproduce uneven steps")
+                }
+            }
+        }
+    }
+
+    func testPresentationSnapshotKeepsScopeAndOriginalExpiryAcrossLaterUpdates() throws {
+        let session = session(), peer = UUID()
+        session.receive(try packet(session, peer: peer, reading: reading()), at: 20)
+        session.receive(try packet(session, peer: peer, sequence: 2, time: 10.05, reading: reading(x: 112)), at: 20.05)
+        let snapshot = session.presentationSnapshot()
+        session.receive(try packet(session, peer: peer, sequence: 3, time: 10.1,
+                                   reading: reading(x: 1000, map: 4)), at: 20.1)
+        XCTAssertEqual(try XCTUnwrap(snapshot.pose(at: 20.125)).x, 108, accuracy: 0.000001)
+        XCTAssertEqual(snapshot.pose(at: 20.125)?.mapNumber, 3)
+        XCTAssertEqual(session.presentationSnapshot().pose(at: 20.125)?.mapNumber, 4)
+        XCTAssertEqual(snapshot.pose(at: 21)?.x, 112, "Stalled main refreshes stop at confirmed data")
+        XCTAssertNil(snapshot.pose(at: 81), "A frozen snapshot cannot renew retained presentation")
+        session.stop()
+        XCTAssertNil(session.presentationSnapshot().pose(at: 20.2))
+    }
+
+    func testJitteredPresencePublicationKeepsTwentyHzWithoutCatchupBursts() throws {
+        for jitter in [0.0004, 0.004] {
+            let session = session()
+            var outgoing: [BoundPresencePacket] = []
+            session.start { data in
+                if let packet = BoundPresencePacket.decode(data) { outgoing.append(packet) }
+                return true
+            }
+            for index in 0..<1200 {
+                let now = 20.0 + Double(index) / 60.0 + (index % 2 == 0 ? -jitter : jitter)
+                session.consume(reading(), at: now); session.tick(at: now)
+            }
+            XCTAssertEqual(outgoing.count, 400, "Callback jitter must not turn the 20 Hz publisher into 15 Hz")
+            for (a, b) in zip(outgoing, outgoing.dropFirst()) {
+                XCTAssertGreaterThanOrEqual(b.time - a.time, 0.039)
+                XCTAssertEqual(b.sequence, a.sequence + 1)
+            }
+            session.tick(at: 45); session.tick(at: 45); session.tick(at: 45.001)
+            XCTAssertEqual(outgoing.count, 401, "A stalled publisher emits one current sample, not its backlog")
+            session.setEnabled(false)
+            XCTAssertEqual(outgoing.count, 402)
+            XCTAssertEqual(outgoing.last?.withdrawn, true, "Opt-out must still publish its immediate withdrawal")
+            XCTAssertEqual(outgoing.last?.sequence, 1, "Opt-out starts a new fenced presence epoch")
+            session.stop()
+        }
+        var cadence = BoundPresencePublicationCadence()
+        XCTAssertTrue(cadence.admit(at: 10))
+        XCTAssertTrue(cadence.admit(at: 10.01, force: true))
+        XCTAssertFalse(cadence.admit(at: 10.02))
+        XCTAssertTrue(cadence.admit(at: 10.061))
+        XCTAssertFalse(cadence.admit(at: .nan))
+        cadence.reset()
+        XCTAssertTrue(cadence.admit(at: 10))
+        XCTAssertTrue(cadence.admit(at: 10.09995))
+        XCTAssertFalse(cadence.admit(at: 10.09995), "A delayed callback inside the next slot's tolerance consumes that slot too")
+        XCTAssertFalse(cadence.admit(at: 10.10))
+        XCTAssertTrue(cadence.admit(at: 10.15))
+    }
+
     func testFollowerUsesExistingClockAcrossMissingSamplesAndGenerationChanges() throws {
         let session=session(),peer=UUID()
         func sample(_ x:Int,followerX:Int?,generation:UInt32=1,map:Int=3) throws -> BoundPlayerStateReading {

@@ -37,6 +37,94 @@ struct BoundPlayerSceneObject: Equatable, Sendable {
     let appearance: BoundPlayerSprite
 }
 
+struct BoundNativePresentationScope: Equatable, Sendable {
+    let core: ObjectIdentifier
+    let profile: ObjectIdentifier
+    let timeline: UInt64
+}
+struct BoundNativePresentationObservation: Sendable {
+    let cache: BoundNativePresentationCache
+    let scope: BoundNativePresentationScope
+}
+
+/// Field callbacks can be interrupted between sprite animation, camera movement
+/// and OAM construction. Anchor once at a coherent boundary, then follow the
+/// applied BG scroll which belongs to the rendered frame, not those live writes.
+final class BoundNativePresentationCache: @unchecked Sendable {
+    typealias Point = BoundPlayerState.Point
+    typealias Map = BoundPlayerMapConnections.Map
+    struct NativeTiles: Equatable {
+        let current: Point, previous: Point
+        func contains(_ foot: Point) -> Bool {
+            (min(current.x, previous.x) * 16 + 8...max(current.x, previous.x) * 16 + 8).contains(foot.x)
+                && (min(current.y, previous.y) * 16 + 16...max(current.y, previous.y) * 16 + 16).contains(foot.y)
+        }
+        func translated(by offset: Point) -> Self {
+            .init(current: .init(x: current.x + offset.x, y: current.y + offset.y),
+                  previous: .init(x: previous.x + offset.x, y: previous.y + offset.y))
+        }
+    }
+    private struct State {
+        let scope: BoundNativePresentationScope, map: Map, instance: UInt64
+        let camera: Point, applied: Point
+        let nativeTiles: NativeTiles?
+        let acceptedFoot: Point?
+    }
+    private let lock = NSLock()
+    private var state: State?
+    func reset() { lock.lock(); state = nil; lock.unlock() }
+    private static func delta(_ value: Int) -> Int { ((value + 128) & 255) - 128 }
+
+    func camera(proposed: Point, appliedScroll: Point, desiredScroll: Point,
+                liveFoot: Point, builtFoot: Point, map: Map, instance: UInt64,
+                nativeTiles: NativeTiles? = nil,
+                scope: BoundNativePresentationScope, project: (Map, Map) -> Point?) -> Point? {
+        lock.lock(); defer { lock.unlock() }
+        let coherent = liveFoot == builtFoot && Self.delta(desiredScroll.x - appliedScroll.x) == 0
+            && Self.delta(desiredScroll.y - appliedScroll.y) == 0
+        if state?.scope != scope || (state?.map == map && state?.instance != instance) { state = nil }
+        let priorState = state
+        var result: Point?
+        var priorTiles = state?.nativeTiles
+        if let previous = state {
+            var origin = previous.camera
+            if previous.map != map {
+                if let offset = project(map, previous.map) {
+                    origin = .init(x: origin.x - offset.x * 16, y: origin.y - offset.y * 16)
+                    priorTiles = priorTiles?.translated(by: offset)
+                } else { state = nil; priorTiles = nil }
+            }
+            if state != nil {
+                result = .init(x: origin.x - Self.delta(appliedScroll.x - previous.applied.x),
+                               y: origin.y - Self.delta(appliedScroll.y - previous.applied.y))
+            }
+        }
+        // A fresh coherent origin also detects a same-map warp/reset that was
+        // not observed during its fade. Never integrate across that discontinuity.
+        if coherent { result = proposed }
+        guard let result else { state = nil; return nil }
+        let foot = Point(x: builtFoot.x - result.x, y: builtFoot.y + 16 - result.y)
+        if let nativeTiles {
+            // Native settlement can collapse current/previous before the last
+            // pixels of that step reach the framebuffer. Its prior observed
+            // segment remains valid evidence for this one presentation boundary.
+            // Never borrow it to admit a new coherent origin or after a reset.
+            let repeatedFrame = priorState.map {
+                $0.map == map && $0.instance == instance && $0.nativeTiles == nativeTiles && $0.acceptedFoot == foot
+                    && Self.delta(appliedScroll.x - $0.applied.x) == 0 && Self.delta(appliedScroll.y - $0.applied.y) == 0
+            } ?? false
+            // A repeated framebuffer may retain that already-admitted foot,
+            // but any changed pixels still need current/prior segment evidence.
+            guard nativeTiles.contains(foot) || (!coherent && (priorTiles?.contains(foot) == true || repeatedFrame)) else {
+                state = nil; return nil
+            }
+        }
+        state = .init(scope: scope, map: map, instance: instance, camera: result, applied: appliedScroll,
+                      nativeTiles: nativeTiles, acceptedFoot: nativeTiles == nil ? nil : foot)
+        return result
+    }
+}
+
 struct BoundPlayerBackground: Equatable, Sendable {
     struct Layer: Equatable, Sendable {
         let priority: Int
@@ -658,6 +746,16 @@ enum BoundSceneBytes {
 }
 
 enum BoundPlayerSceneDecoder {
+    /// OAM stores wrapped screen coordinates. Unwrap around the native live
+    /// position so offscreen actors retain their actual side of the viewport.
+    static func builtSpriteCenter(_ raw: [UInt8], live: BoundPlayerState.Point) -> BoundPlayerState.Point {
+        func unwrap(_ value: Int, near: Int, modulus: Int) -> Int {
+            near + ((value - near + modulus / 2) & (modulus - 1)) - modulus / 2
+        }
+        let x = (BoundSceneBytes.half(raw, 2) & 511) - Int(Int8(bitPattern: raw[0x28]))
+        let y = (BoundSceneBytes.half(raw) & 255) - Int(Int8(bitPattern: raw[0x29]))
+        return .init(x: unwrap(x, near: live.x, modulus: 512), y: unwrap(y, near: live.y, modulus: 256))
+    }
     private static func sprite(_ raw: [UInt8], memory: BoundGBAMemorySnapshot,
                                rom: (Int, Int) -> [UInt8]?, outsideOwnerCamera: Bool = false) -> BoundPlayerSprite? {
         let width = -Int(Int8(bitPattern: raw[0x28])) * 2, height = -Int(Int8(bitPattern: raw[0x29])) * 2
@@ -699,6 +797,8 @@ enum BoundPlayerSceneDecoder {
 
     static func read(player: BoundPlayerState, memory: BoundGBAMemorySnapshot,
                      rom: (Int, Int) -> [UInt8]?, assets: BoundPlayerSceneAssets) -> BoundPlayerScene? {
+        var completed = false
+        defer { if !completed { memory.presentationObservation?.cache.reset() } }
         // Script/control locks stop movement, not the visible field or its sprites.
         guard let avatar = memory.bytes(at: 0x02037078, count: 8), avatar[0] & 0x1E == 0,
               let raw = memory.bytes(at: 0x0202063C + Int(avatar[4]) * 68, count: 68),
@@ -713,12 +813,30 @@ enum BoundPlayerSceneDecoder {
                                              y: Int(Int32(bitPattern: UInt32(BoundSceneBytes.word(cameraBytes, 4)))))
         guard abs(residual.x) < 16, abs(residual.y) < 16 else { return nil }
         let offset = BoundPlayerState.Point(x: BoundSceneBytes.signed(offsetBytes), y: BoundSceneBytes.signed(offsetBytes, 2))
-        let camera = camera(save: player.cameraTile ?? player.tile, residual: residual,
+        var camera = camera(save: player.cameraTile ?? player.tile, residual: residual,
                             total: .init(x: BoundSceneBytes.signed(cameraBytes, 12), y: BoundSceneBytes.signed(cameraBytes, 8)), offset: offset)
-        let foot = BoundPlayerState.Point(x: BoundSceneBytes.wrap(BoundSceneBytes.signed(raw, 0x20) + offset.x) - camera.x,
-                                         y: BoundSceneBytes.wrap(BoundSceneBytes.signed(raw, 0x22) + offset.y) + 16 - camera.y)
-        guard (min(player.tile.x, player.previousTile.x) * 16 + 8...max(player.tile.x, player.previousTile.x) * 16 + 8).contains(foot.x),
-              (min(player.tile.y, player.previousTile.y) * 16 + 16...max(player.tile.y, player.previousTile.y) * 16 + 16).contains(foot.y) else { return nil }
+        let live = BoundPlayerState.Point(x: BoundSceneBytes.wrap(BoundSceneBytes.signed(raw, 0x20) + offset.x),
+                                         y: BoundSceneBytes.wrap(BoundSceneBytes.signed(raw, 0x22) + offset.y))
+        var center = live
+        let nativeTiles = BoundNativePresentationCache.NativeTiles(current: player.tile, previous: player.previousTile)
+        if let observation = memory.presentationObservation {
+            center = builtSpriteCenter(raw, live: live)
+            guard let field = memory.bytes(at: 0x03000E90, count: 12), let instance = player.mapInstance,
+                  let resolved = observation.cache.camera(proposed: camera,
+                    appliedScroll: .init(x: BoundSceneBytes.half(regs, 0x14), y: BoundSceneBytes.half(regs, 0x16)),
+                    desiredScroll: .init(x: Int(field[0]) + BoundSceneBytes.signed(field, 8),
+                                         y: Int(field[1]) + BoundSceneBytes.signed(field, 10) + 8),
+                    liveFoot: live, builtFoot: center,
+                    map: .init(group: player.mapGroup, number: player.mapNumber), instance: instance,
+                    nativeTiles: nativeTiles, scope: observation.scope,
+                    project: { next, previous in
+                        assets.mapOffset(fromGroup: next.group, number: next.number,
+                            toGroup: previous.group, number: previous.number, rom: rom)
+                    }) else { return nil }
+            camera = resolved
+        }
+        let foot = BoundPlayerState.Point(x: center.x - camera.x, y: center.y + 16 - camera.y)
+        guard memory.presentationObservation != nil || nativeTiles.contains(foot) else { return nil }
         var layers: [BoundPlayerBackground.Layer] = []
         for bg in 1...2 {
             if BoundSceneBytes.half(regs) & (1 << (8 + bg)) == 0 { continue }
@@ -752,8 +870,15 @@ enum BoundPlayerSceneDecoder {
                   let raw = memory.bytes(at: 0x0202063C + Int(object[4]) * 68, count: 68),
                   let appearance = sprite(raw, memory: memory, rom: rom,
                     outsideOwnerCamera: followerBinding?.objectID == slot && BoundSceneBytes.word(object) & (1 << 14) != 0) else { continue }
-            let x = BoundSceneBytes.wrap(BoundSceneBytes.signed(raw, 0x20) + BoundSceneBytes.signed(raw, 0x24) + offset.x)
-            let y = BoundSceneBytes.wrap(BoundSceneBytes.signed(raw, 0x22) + BoundSceneBytes.signed(raw, 0x26) + offset.y)
+            var center = BoundPlayerState.Point(
+                x: BoundSceneBytes.wrap(BoundSceneBytes.signed(raw, 0x20) + BoundSceneBytes.signed(raw, 0x24) + offset.x),
+                y: BoundSceneBytes.wrap(BoundSceneBytes.signed(raw, 0x22) + BoundSceneBytes.signed(raw, 0x26) + offset.y))
+            // Native OAM is not rebuilt for invisible/offscreen sprites. Their
+            // peer-visible follower still uses its independently valid live pose.
+            if memory.presentationObservation != nil, raw[0x3E] & 4 == 0 {
+                center = builtSpriteCenter(raw, live: center)
+            }
+            let x = center.x, y = center.y
             if raw[0x3E] & 4 == 0 {
                 objects.append(.init(origin: .init(x: x - appearance.width / 2, y: y - appearance.height / 2),
                                      footY: y + appearance.height / 2, appearance: appearance))
@@ -765,6 +890,7 @@ enum BoundPlayerSceneDecoder {
                     elevation:binding.elevation,facing:binding.facing,appearance:appearance)
             }
         }
+        completed = true
         return .init(worldFoot: foot, camera: camera, appearance: appearance,
                      background: .init(tiles: tiles, layers: layers), objects: objects,
                      follower:follower,mapInstance:player.mapInstance)

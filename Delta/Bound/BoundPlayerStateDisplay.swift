@@ -29,15 +29,20 @@ final class BoundPresenceFrameCompositor: @unchecked Sendable {
     private let lock = NSLock()
     private var profile: BoundPlayerROMProfile?
     private var pose: BoundPresencePose?
+    private var presentation: BoundPresencePresentationSnapshot?
     private var coreID: ObjectIdentifier?
     private var renderer: BoundPresenceVideoRenderer?
     private let followerCache=BoundNativeFollowerCache()
+    private let presentationCache = BoundNativePresentationCache()
     #if DEBUG
     // QA installs this while the core is paused; callbacks stay on its owner.
     var observeFrame: ((BoundPlayerStateReading, BoundRecordedPlayerPose?, Int) -> Void)?
     #endif
-    func configure(profile: BoundPlayerROMProfile?, pose: BoundPresencePose?, coreID: ObjectIdentifier? = nil) {
-        lock.lock(); self.profile = profile; self.pose = pose; self.coreID = coreID; lock.unlock()
+    func configure(profile: BoundPlayerROMProfile?, pose: BoundPresencePose?, coreID: ObjectIdentifier? = nil,
+                   presentation: BoundPresencePresentationSnapshot? = nil) {
+        lock.lock()
+        self.profile = profile; self.pose = pose; self.coreID = coreID; self.presentation = presentation
+        lock.unlock()
     }
     // Exclusively on the emulator owner, including after core restart replaces
     // its renderer. Retain the wrapper because bridges may weakly own delegates.
@@ -49,15 +54,25 @@ final class BoundPresenceFrameCompositor: @unchecked Sendable {
             guard let downstream = bridge.videoRenderer else { return }
             let wrapper = BoundPresenceVideoRenderer(core: core, downstream: downstream, compositor: self)
             renderer = wrapper; bridge.videoRenderer = wrapper
-        } else if let renderer {
-            if bridge.videoRenderer === renderer { bridge.videoRenderer = renderer.downstream }
-            self.renderer = nil
+        } else {
+            // Detached frames cannot advance this owner's applied-scroll origin.
+            presentationCache.reset()
+            if let renderer {
+                if bridge.videoRenderer === renderer { bridge.videoRenderer = renderer.downstream }
+                self.renderer = nil
+            }
         }
     }
     fileprivate func process(_ core: EmulatorCore, downstream: VideoRendering) {
-        lock.lock(); let profile = self.profile, pose = self.pose, expected = coreID; lock.unlock()
+        lock.lock()
+        let profile = self.profile, storedPose = self.pose, expected = coreID, presentation = self.presentation
+        lock.unlock()
+        // The main run loop publishes immutable samples, not a rendered pose.
+        // Interpolate on the actual frame clock, including at fast-forward rates.
+        let pose = presentation != nil ? presentation?.pose(at: ProcessInfo.processInfo.systemUptime) : storedPose
         guard expected == ObjectIdentifier(core), let profile,let pose,
               var memory = BoundGBAMemorySnapshot.capture(readMemory: { core.deltaCore.emulatorBridge.readMemory?(at: $0, size: $1) }) else {
+            presentationCache.reset()
             downstream.processFrame()
             #if DEBUG
             // Frame-level QA must count a missing configured pose too; otherwise
@@ -68,6 +83,9 @@ final class BoundPresenceFrameCompositor: @unchecked Sendable {
         }
         memory.followerObservation = .init(cache:followerCache,scope:.init(core:ObjectIdentifier(core),profile:ObjectIdentifier(profile),
             timeline:BoundVBABattleBridge.worldMovementTimeline()))
+        memory.presentationObservation = .init(cache: presentationCache,
+            scope: .init(core: ObjectIdentifier(core), profile: ObjectIdentifier(profile),
+                         timeline: BoundVBABattleBridge.worldMovementTimeline()))
         let reading = profile.adapter.readPlayer(profile, memory: memory, frame: 1, includeScene: true, presentationOnly: true)
         let rendered = reading.player.flatMap { viewer in pose.rendered(profile: profile, viewer: viewer) }
         let follower = reading.player.flatMap { viewer in pose.follower?.rendered(profile:profile,viewer:viewer,mapGroup:pose.mapGroup,mapNumber:pose.mapNumber) }
@@ -152,6 +170,7 @@ final class BoundVBAPlayerStateProbe: @unchecked Sendable {
     private var frame: UInt64 = 0
     private var tracker = BoundPlayerPresenceTracker()
     private let followerCache=BoundNativeFollowerCache()
+    private let presentationCache = BoundNativePresentationCache()
 
     func configure(coreID: ObjectIdentifier?, profile: BoundPlayerROMProfile?, active: Bool,
                    status: BoundPlayerStateReading.Status, detail: String, sceneEnabled: Bool = false) {
@@ -182,19 +201,24 @@ final class BoundVBAPlayerStateProbe: @unchecked Sendable {
         let epoch = generation, expectedID = self.coreID, currentProfile = profile, shouldRead = active
         let includeScene = sceneEnabled
         lock.unlock()
-        guard shouldRead, coreID == expectedID, let currentProfile else { return nil }
+        guard shouldRead, coreID == expectedID, let currentProfile else { presentationCache.reset(); return nil }
         guard workerLock.try() else { return nil }
         defer { workerLock.unlock() }
         if workerGeneration != epoch {
             workerGeneration = epoch; frame = 0; tracker = BoundPlayerPresenceTracker()
+            presentationCache.reset()
         }
         frame &+= 1
         let reading: BoundPlayerStateReading
         if var memory = BoundGBAMemorySnapshot.capture(readMemory: readMemory) {
             memory.followerObservation = .init(cache:followerCache,scope:.init(core:coreID,profile:ObjectIdentifier(currentProfile),
                 timeline:BoundVBABattleBridge.worldMovementTimeline()))
+            memory.presentationObservation = .init(cache: presentationCache,
+                scope: .init(core: coreID, profile: ObjectIdentifier(currentProfile),
+                             timeline: BoundVBABattleBridge.worldMovementTimeline()))
             reading = tracker.update(currentProfile.adapter.readPlayer(currentProfile, memory: memory, frame: frame, includeScene: includeScene))
         } else {
+            presentationCache.reset()
             reading = tracker.update(.inactive(.invalidMemory, "RAM capture unavailable", frame: frame))
         }
         lock.lock(); defer { lock.unlock() }
@@ -461,7 +485,8 @@ final class BoundPlayerStateDisplay {
 
     private func renderLivePresence() {
         let enabled = presence?.needsReader == true && !suspended && core?.state == .running
-        probe.compositor.configure(profile: enabled ? profile : nil, pose: enabled ? presence?.pose() : nil,coreID:core.map(ObjectIdentifier.init))
+        probe.compositor.configure(profile: enabled ? profile : nil, pose: nil, coreID: core.map(ObjectIdentifier.init),
+                                   presentation: enabled ? presence?.presentationSnapshot() : nil)
         let now = ProcessInfo.processInfo.systemUptime
         if let presence, let reading = currentReading, reading.status == .live,
            let lastFrameAt, now - lastFrameAt < BoundLivePresenceSession.visibilityGrace, let profile, let viewer = reading.player {

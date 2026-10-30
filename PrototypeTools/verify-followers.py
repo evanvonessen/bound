@@ -53,7 +53,9 @@ declarations+=read('Delta/Bound/BoundSoulExtras.swift')+read('Delta/Bound/BoundS
 follower=read('Delta/Bound/BoundPresenceFollower.swift')
 declarations+=follower[:follower.index('    func rendered(profile:')]+'}\n'
 presence=read('Delta/Bound/BoundLivePresence.swift')
-pose=cut(presence,'struct BoundPresencePose:','/// Main-actor, bounded receive buffer')
+# These fixtures exercise the wire pose/packet, not the frame interpolation
+# snapshot, which retains the native ROM profile omitted from this harness.
+pose=cut(presence,'struct BoundPresencePose:','/// Preserve the 20 Hz schedule')
 pose=pose[:pose.index('    func rendered(profile:')]+'}\n'+pose[pose.index('struct BoundPresenceCollision:'):]
 declarations+=pose
 friend=read('Delta/Bound/BoundFriendInteraction.swift')
