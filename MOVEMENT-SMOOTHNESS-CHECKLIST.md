@@ -8,7 +8,7 @@ their own character. The first cycle's narrower acceptance was insufficient.
 Continue from its evidence under
 `../artifacts/multiplayer-isolation/movement-smoothness-cycle2-20261029/`.
 
-**Current cycle status: local acceptance passed; delivery pending.**
+**Current cycle status: local acceptance passed; TestFlight226 and ROM509 delivered.**
 The validated pair fixes native field-update deadline overruns, unnecessary
 Soul Link pauses on routine friendship changes, and app reader interruptions
 during advancing native publications, camera steps and pending sprite images.
@@ -23,8 +23,11 @@ long vertical runs, with zero refusals. Final native-bitmap acceptance covers
 exactly zero added holds or progress loss in all eight matched comparisons.
 Native100,800 fresh plus129,600 controlled frames,99 camera/reader/image and63
 authority regressions,17 functional tests, both native battle variants and
-ordinary arm64 iPhone Release checks also pass. Physical phones, WAN and
-physical display scanout remain unverified. Commit/push and delivery are next.
+ordinary arm64 iPhone Release checks also pass. App source `6bd567cc` is
+published and available as TestFlight226; game source `f11ad0ff` is published
+as private ROM509, with verified counter receipt `f2fc4640`. Both updates are
+needed for the complete fix. Physical phones, WAN and physical display scanout
+remain unverified; simulator acceptance does not establish those conditions.
 
 ## Checked and established
 
@@ -1262,12 +1265,42 @@ physical display scanout remain unverified. Commit/push and delivery are next.
   100,800 fresh exact-ROM and129,600 controlled native frames,356,400 final
   host frames and57,600 final bitmap frames. This establishes tested simulator
   behavior; it does not claim physical-device or WAN parity.
-- [ ] Verify final source/stage boundaries; commit and push app to origin/main.
-- [ ] Upload the validated app through manual Fastlane beta; verify Apple
-  acceptance, processing and internal TestFlight availability separately.
-- [ ] After compatible TestFlight availability, commit and push the exact game
-  source; verify private Linode publication, read-back and build-counter receipt.
-- [ ] Commit the final delivery record without duplicating an accepted upload.
+- [x] Verify all19,164 app inputs,45 staged app files and23 frozen game files;
+  preserve the initial project/scheme/Info.plist changes and Package.resolved.
+  Confirm retired publisher/main-simulator services remain disabled/unloaded.
+  Commit app as `6bd567ccdf4ce48f588936bf3313f6130eebe598`, push with explicit
+  `HEAD:refs/heads/main`, and verify the exact remote commit. Start manual
+  Fastlane beta preflight for that published revision.
+- [x] Manual Fastlane beta archives the clean published app commit, passes
+  source/privacy/signature/export checks and receives Apple upload acceptance
+  at2026-10-30T18:57:58Z. Preserve the per-revision upload-accepted.json and
+  attempt-x9ozcfbq logs. Do not upload this accepted revision again.
+- [x] Verify Apple's assigned build226 (`f825e3ba-df99-4f98-8d05-166c4529c807`)
+  is VALID and IN_BETA_TESTING in Evan Only Internal Testing at19:03:46Z.
+  Preserve `candidate26-apple-build-check-04.json`; earlier processing polls
+  remain retained. Apple accepted vendor dSYM warnings without blocking upload.
+- [x] After compatible TestFlight availability, commit exact game source as
+  `f11ad0ff342a356c578005d5f3e43a2813d48c3d`, push with explicit
+  `HEAD:refs/heads/main`, and verify the remote source commit. Its private
+  publication workflow41112128340 is queued/running; no legacy publisher or
+  Xcode Cloud was invoked.
+- [x] Verify workflow41112128340 succeeds at19:07:58Z: uncached maintained
+  source compilation reproduces the accepted ROM, all8+11+20=39 checks pass,
+  restricted Linode receipt and independent inspect read-back equal the
+  publication manifest, and RRv4.1M509 is published at19:07:54Z with SHA256
+  `e5490e5c58ef86d55cc0d06052806ca727edc44c822d5240fb99d593af24ed43`.
+  Preserve `game-audit/candidate26-private-publication-review.json`, full
+  workflow logs and the source/export receipts. Read-only GitHub annotation
+  metadata lacked checks:read; raw workflow logs and committed publication
+  equality checks supplied the verified build/publication evidence.
+- [x] Verify receipt commit `f2fc46407ad1e48c6b4469eecefceb9be9c4c7d6`
+  descends from the exact game source and changes only distribution/build.json:
+  published509, next510, sourcef11ad0ff and exacte549 ROM hash. Fast-forward
+  local game main only to this verified receipt and confirm remote equality.
+- [x] Publish this final checklist as a documentation-only follow-up. Keep
+  the accepted app upload tied to6bd567cc and do not upload it again. Preserve
+  all failed evidence, unrelated Xcode changes, ordinary runs and task simulator
+  data; shut down only the two task-owned QA simulators after testing.
 - The first cycle's 48-case/86,400-frame simulation did not reproduce its
   earlier consecutive-frame freeze or presentation wobble, but its released
   input windows hid cumulative continuous-motion loss. That result is retained
